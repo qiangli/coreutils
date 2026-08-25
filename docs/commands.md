@@ -212,14 +212,15 @@ Certification evidence applies only to the exact staged profile manifest.
 Host fallback must be measured and recorded and never credited as a Bashy Go
 implementation.
 
-The generated [POSIX required-command interface
-reference](posix-required-command-interfaces.md) covers 116 configured required
-names, with effective Profile C/D ownership pinned to 78 Go-selected, 22
-shell-selected, and 16 external-provider names. There are 86 same-name Go
-implementations available, but the shell wins selection for `echo`, `false`,
-`kill`, `printf`, `pwd`, `test`, `true`, and its `time` keyword as well as the
-14 shell-only names. Availability and effective ownership are separate fields
-in the machine-readable manifest.
+The generated [POSIX required-command coverage
+map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
+contract: 116 configured names, with availability of 86 Go applets, 14
+shell-only names, and 16 pinned providers. Expanded interface claims live in a
+separate [evidence ledger](posix-required-command-interfaces.md), with effective
+Profile C/D ownership of 78 Go-selected, 22 shell-selected, and 16 provider
+commands. The ledger is explicitly incomplete and non-normative; it exposes
+verified, partial, and unverified states rather than treating placeholders as
+conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,

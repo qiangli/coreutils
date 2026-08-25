@@ -28,8 +28,11 @@ class ManifestValidationTest(unittest.TestCase):
 
     def changed(self, name: str, **changes: str) -> list[dict[str, str]]:
         rows = copy.deepcopy(self.rows)
-        next(item for item in rows if item["command"] == name).update(changes)
+        next(row for row in rows if row["command"] == name).update(changes)
         return rows
+
+    def row(self, name: str) -> dict[str, str]:
+        return next(row for row in self.rows if row["command"] == name)
 
     def assertRejected(self, rows: list[dict[str, str]], message: str) -> None:
         with self.assertRaisesRegex(manifest.ManifestError, message):
@@ -39,12 +42,26 @@ class ManifestValidationTest(unittest.TestCase):
         manifest.validate(self.rows, self.providers, self.packages, self.flagsets)
         rendered = manifest.render(self.rows)
         manifest.validate_rendered(rendered, self.rows)
-        self.assertEqual(manifest.GUIDE.name, "posix-required-command-interfaces.md")
         self.assertEqual(manifest.GUIDE.read_text(), rendered)
+        self.assertEqual(manifest.MANIFEST.name, "posix-required-command-interfaces.tsv")
 
-    def test_named_document_absent_fails_check(self) -> None:
+    def test_old_five_column_map_contract_is_unchanged(self) -> None:
+        rows = manifest.read_legacy_map()
+        self.assertEqual(len(rows), 116)
+        self.assertEqual(tuple(rows[0]), manifest.LEGACY_FIELDS)
+        self.assertNotIn("base_synopsis", rows[0])
+        self.assertNotEqual(manifest.LEGACY_MAP, manifest.MANIFEST)
+
+    def test_old_map_schema_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            absent = Path(directory) / "posix-required-command-interfaces.md"
+            path = Path(directory) / "old-map.tsv"
+            path.write_text("command\tavailability\ntrue\tgo\n")
+            with self.assertRaisesRegex(manifest.ManifestError, "five-column"):
+                manifest.read_legacy_map(path)
+
+    def test_named_generated_document_absence_fails_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            absent = Path(directory) / manifest.GUIDE.name
             with (
                 mock.patch.object(manifest, "GUIDE", absent),
                 mock.patch.object(sys, "argv", [str(SCRIPT), "--check"]),
@@ -52,60 +69,129 @@ class ManifestValidationTest(unittest.TestCase):
             ):
                 manifest.main()
 
-    def test_per_command_heading_count_must_be_116(self) -> None:
+    def test_heading_count_and_visible_states(self) -> None:
         rendered = manifest.render(self.rows)
         damaged = rendered.replace("## `alias`", "### `alias`", 1)
-        with self.assertRaisesRegex(manifest.ManifestError, "heading count/order drifted"):
+        with self.assertRaisesRegex(manifest.ManifestError, "heading count/order"):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
+        self.assertIn("| Evidence | Verified | 0 |", rendered)
+        self.assertIn("| Evidence | Partial | 2 |", rendered)
+        self.assertIn("| Evidence | Unverified | 114 |", rendered)
 
-    def test_every_rendered_section_field_is_required(self) -> None:
-        rendered = manifest.render(self.rows)
-        damaged = rendered.replace("**Environment:**", "**Environment omitted:**", 1)
-        with self.assertRaisesRegex(manifest.ManifestError, "missing field.*Environment"):
-            manifest.validate_rendered(damaged, self.rows)
+    def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
+        errors = manifest.completion_errors(self.rows)
+        self.assertTrue(any(error == "alias: state=unverified" for error in errors))
+        with (
+            mock.patch.object(sys, "argv", [str(SCRIPT), "--require-complete"]),
+            self.assertRaisesRegex(SystemExit, "completion blocked"),
+        ):
+            manifest.main()
 
-    def test_every_canonical_field_is_required(self) -> None:
+    def test_every_interface_field_is_required(self) -> None:
         for field in manifest.FIELDS:
             with self.subTest(field=field):
                 self.assertRejected(self.changed("true", **{field: ""}), "missing field")
 
-    def test_denominator_drift_fails(self) -> None:
-        self.assertRejected(self.rows[:-1], "denominator drifted")
-
-    def test_availability_axis_drift_fails(self) -> None:
+    def test_counts_and_selection_axes_are_exact(self) -> None:
         self.assertRejected(self.changed("echo", availability="shell_only"), "availability drift")
-
-    def test_effective_selection_axis_drift_fails(self) -> None:
         self.assertRejected(self.changed("echo", effective_owner="go"), "owner drift")
 
-    def test_invalid_applicability_fails(self) -> None:
-        self.assertRejected(self.changed("true", applicability="gnu"), "absent/invalid applicability")
-
-    def test_conditional_option_cannot_enter_mandatory_set(self) -> None:
-        self.assertRejected(self.changed("df", required_options="-k"), "mixed into mandatory")
-
-    def test_duplicate_option_fails(self) -> None:
-        self.assertRejected(self.changed("pwd", required_options="-L;-P;-L"), "duplicate mandatory")
-
-    def test_orphan_option_argument_fails(self) -> None:
-        self.assertRejected(self.changed("head", option_arguments="-x=<number>"), "undeclared option")
-
-    def test_missing_clause_fails(self) -> None:
-        self.assertRejected(self.changed("true", clause_ids="XCU:true:SYNOPSIS"), "missing clause ID")
-
-    def test_wrong_or_nonofficial_link_fails(self) -> None:
-        row = next(item for item in self.rows if item["command"] == "true")
+    def test_gnu_claims_are_out_of_scope(self) -> None:
+        self.assertNotIn("gnu_only_options", manifest.FIELDS)
         self.assertRejected(
-            self.changed("true", evidence_ids=row["evidence_ids"].replace("true.html", "false.html")),
-            "missing exact POSIX08-2016",
+            self.changed("true", compatibility_scope="GNU options complete"),
+            "GNU compatibility must remain explicitly out of scope",
         )
 
-    def test_malformed_conditional_synopsis_fails(self) -> None:
+    def test_fabricated_generic_prose_is_rejected(self) -> None:
         self.assertRejected(
-            self.changed("df", conditional_synopsis="gnu::df [-k]"),
-            "invalid conditional synopsis applicability",
+            self.changed("true", stdout="Write the required result format to standard output."),
+            "fabricated generic prose",
         )
+
+    def test_absent_or_unfocused_evidence_path_is_rejected(self) -> None:
+        self.assertRejected(
+            self.changed("pr", go_evidence="cmds/pr/not-present_test.go"),
+            "evidence path absent",
+        )
+        self.assertRejected(
+            self.changed("pr", go_evidence="cmds/pr/pr.go"),
+            "not a focused test",
+        )
+
+    def test_evidence_lanes_cannot_cross(self) -> None:
+        self.assertRejected(
+            self.changed("xargs", shell_evidence="cmds/xargs/xargs_test.go"),
+            "evidence crossed implementation lanes",
+        )
+
+    def test_state_laundering_is_rejected(self) -> None:
+        self.assertRejected(
+            self.changed("true", evidence_state="verified"),
+            "verified state launders",
+        )
+        self.assertRejected(
+            self.changed(
+                "basename", evidence_state="verified",
+                required_options="-Z", go_evidence="cmds/basename/basename_test.go",
+            ),
+            "verified state launders",
+        )
+
+    def test_parser_source_comparison_covers_every_go_selected_row(self) -> None:
+        go_rows = [row for row in self.rows if row["effective_owner"] == "go"]
+        self.assertEqual(len(go_rows), 78)
+        for row in go_rows:
+            with self.subTest(command=row["command"]):
+                recognized = manifest.recognized_go_options(row)
+                gaps = manifest.parser_gaps(row)
+                self.assertEqual(manifest.declared_options(row) - recognized, gaps)
+                recognized_arguments = manifest.recognized_go_option_arguments(row)
+                argument_gaps = manifest.option_argument_gaps(row)
+                self.assertEqual(
+                    set(manifest.declared_option_arguments(row)) - recognized_arguments,
+                    argument_gaps,
+                )
+                if gaps or argument_gaps:
+                    self.assertNotEqual(row["evidence_state"], "verified")
+
+    def test_fabricated_parser_option_is_reported_as_gap(self) -> None:
+        row = copy.deepcopy(self.row("basename"))
+        row["required_options"] = "-Z"
+        self.assertEqual(manifest.parser_gaps(row), {"-Z"})
+
+    def test_fabricated_option_argument_is_reported_as_gap(self) -> None:
+        row = copy.deepcopy(self.row("basename"))
+        row["required_options"] = "-Z"
+        row["option_arguments"] = "-Z=<fabricated>"
+        self.assertEqual(manifest.option_argument_gaps(row), {"-Z=<fabricated>"})
+
+    def test_optional_attached_pr_arguments_are_supported(self) -> None:
+        row = self.row("pr")
+        self.assertIn("-e[char][gap]", row["option_arguments"])
+        self.assertIn("-i[char][gap]", row["option_arguments"])
+        self.assertIn("-n[char][width]", row["option_arguments"])
+        self.assertIn("-s[char]", row["option_arguments"])
+        self.assertEqual(manifest.declared_options(row) & {"-e", "-i", "-n", "-s"}, {"-e", "-i", "-n", "-s"})
+
+    def test_known_guideline_10_exceptions_are_exact(self) -> None:
+        self.assertIn("does not recognize", self.row("echo")["special_tokens"])
+        self.assertIn("does not recognize", self.row("test")["special_tokens"])
+        self.assertNotIn("Guideline 10 end-of-options", self.row("pr")["special_tokens"])
+
+    def test_true_false_and_test_streams_are_exact(self) -> None:
+        for name in ("true", "false", "test"):
+            with self.subTest(command=name):
+                self.assertEqual(self.row(name)["stdout"], "Not used.")
+                self.assertIn(self.row(name)["stderr"], {"Not used.", "Used only for diagnostic messages."})
+
+    def test_xargs_stderr_and_distinct_statuses_are_exact(self) -> None:
+        row = self.row("xargs")
+        self.assertIn("-t", row["stderr"])
+        self.assertIn("-p", row["stderr"])
+        for status in ("1-125", "126", "127"):
+            self.assertIn(status, row["exit_status"])
 
 
 if __name__ == "__main__":

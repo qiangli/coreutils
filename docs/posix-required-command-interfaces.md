@@ -1,73 +1,84 @@
-# POSIX-required command interfaces for Profiles C/D
+# POSIX-required command interface evidence ledger
 
-Generated from the canonical machine-readable data in
-`docs/posix-required-commands.tsv` by `scripts/posix_manifest.py`.
-The 116 sections below preserve requirement applicability and keep
-mandatory base interfaces separate from XSI, software-development,
-other optional, and GNU-only material.
+Generated from `docs/posix-required-command-interfaces.tsv` by
+`scripts/posix_manifest.py`. This ledger is an audit aid, not a normative
+specification or a claim of complete POSIX conformance. `UNVERIFIED` means
+the command-specific Issue 7 semantics have not yet been transcribed and
+backed by focused repository evidence.
 
-### Availability axis
+GNU compatibility is explicitly out of scope and deferred.
 
-| Implementation available | Count |
-| --- | ---: |
-| Go same-name applet | 86 |
-| Shell-only name | 14 |
-| Pinned external provider | 16 |
+| Axis | Value | Count |
+| --- | --- | ---: |
+| Availability | Go | 86 |
+| Availability | Shell-only | 14 |
+| Availability | Provider | 16 |
+| Effective owner | Go | 78 |
+| Effective owner | Shell | 22 |
+| Effective owner | Provider | 16 |
+| Evidence | Verified | 0 |
+| Evidence | Partial | 2 |
+| Evidence | Unverified | 114 |
 
-### Effective Profile C/D selection axis
-
-| Selected implementation | Count |
-| --- | ---: |
-| Go | 78 |
-| Shell | 22 |
-| Pinned external provider | 16 |
-
-Availability and effective selection are independent: eight available Go
-applets are intentionally shadowed by shell interfaces.
+Completion is deliberately fail-closed: `scripts/posix_manifest.py
+--require-complete` fails until all 116 rows are verified and every
+Go-selected parser recognizes every declared required option and argument.
 
 ## `alias`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 alias [alias-name[=string]...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `alias-name; alias-name=string`. UNVERIFIED
 
-**Operands / arity / order:** alias-name; alias-name=string. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: alias-name;alias-name=string.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:alias`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:alias`; clauses `XCU:alias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [alias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/alias.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:alias`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:alias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [alias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/alias.html).
 
 ## `ar`
 
-**Requirement / applicability:** base; xsi; development.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi; development`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 ar -m -a [-v] posname archive file...
@@ -85,39 +96,49 @@ ar -r -i [-cuv] posname archive file...
 [xsi] ar -x [-v] [-sCT] archive [file...]
 ```
 
-**Mandatory base options:** `-a; -b; -c; -i; -m; -r; -u; -v`.
+**Issue 7 required-option candidate:** `-a; -b; -c; -i; -m; -r; -u; -v`.
 
-**Conditional / optional options:** `development:-d; xsi:-C,-p,-q,-s,-t,-T,-x`.
+**Issue 7 conditional-option candidate:** `development:-d; xsi:-C,-p,-q,-s,-t,-T,-x`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `archive; file; posname`. UNVERIFIED
 
-**Operands / arity / order:** archive; file; posname. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: archive;file;posname.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TMPDIR; TZ`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#ar`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#ar`; clauses `XCU:ar:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [ar](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ar.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#ar`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ar:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ar](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ar.html).
 
 ## `at`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 at [-m] [-f file] [-q queuename] -t time_arg
@@ -127,576 +148,726 @@ at -l -q queuename
 at -l [at_job_id...]
 ```
 
-**Mandatory base options:** `-f; -l; -m; -q; -r; -t`.
+**Issue 7 required-option candidate:** `-f; -l; -m; -q; -r; -t`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<file>; -q=<queuename>; -t=<time_arg>`.
 
-**Option arguments:** `-f=<file>; -q=<queuename>; -t=<time_arg>`.
+**Operands:** `at_job_id; timespec; time; midnight; noon; now; date; today; tomorrow; increment`. UNVERIFIED
 
-**Operands / arity / order:** at_job_id; timespec; time; midnight; noon; now; date; today; tomorrow; increment. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: at_job_id;timespec;time;midnight;noon;now;date;today;tomorrow;increment.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; LC_TIME; SHELL; TZ`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/at`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/at`; clauses `XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [at](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/at.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/at`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=-m; argument-form gaps=none; source `cmds/at`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [at](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/at.html).
 
 ## `awk`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 awk [-F sepstring] [-v assignment]... program [argument...]
 awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 ```
 
-**Mandatory base options:** `-F; -f; -v`.
+**Issue 7 required-option candidate:** `-F; -f; -v`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-F=<sepstring>; -f=<progfile>; -v=<assignment>`.
 
-**Option arguments:** `-F=<sepstring>; -f=<progfile>; -v=<assignment>`.
+**Operands:** `program; argument; file; assignment`. UNVERIFIED
 
-**Operands / arity / order:** program; argument; file; assignment. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: program;argument;file;assignment.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`custom`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/awk`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/awk`; clauses `XCU:awk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [awk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/awk.html).
+**Effective owner:** `go` (`custom`).
+
+**Implementation:** `cmds/awk`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/awk`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:awk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [awk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/awk.html).
 
 ## `basename`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 basename string [suffix]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `string; suffix`. UNVERIFIED
 
-**Operands / arity / order:** string; suffix. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: string;suffix.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/basename`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/basename`; clauses `XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [basename](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/basename.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/basename`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/basename`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [basename](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/basename.html).
 
 ## `batch`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 batch
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. UNVERIFIED
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; SHELL; TZ`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/batch`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/batch`; clauses `XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [batch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/batch.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/batch`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/batch`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [batch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/batch.html).
 
 ## `bc`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 bc [-l] [file...]
 ```
 
-**Mandatory base options:** `-l`.
+**Issue 7 required-option candidate:** `-l`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#bc`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#bc`; clauses `XCU:bc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [bc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/bc.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#bc`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:bc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [bc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/bc.html).
 
 ## `bg`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] bg [job_id...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `job_id`. UNVERIFIED
 
-**Operands / arity / order:** job_id. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: job_id.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:bg`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:bg`; clauses `XCU:bg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [bg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/bg.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:bg`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:bg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [bg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/bg.html).
 
 ## `cat`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 cat [-u] [file...]
 ```
 
-**Mandatory base options:** `-u`.
+**Issue 7 required-option candidate:** `-u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/cat`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/cat`; clauses `XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [cat](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cat.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/cat`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cat`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [cat](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cat.html).
 
 ## `cd`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 cd [-L|-P] [directory]
 cd -
 ```
 
-**Mandatory base options:** `-L; -P`.
+**Issue 7 required-option candidate:** `-L; -P`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `directory; -`. UNVERIFIED
 
-**Operands / arity / order:** directory; -. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: directory;-.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select the previous working directory; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `CDPATH; HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; OLDPWD; PWD`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:cd`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:cd`; clauses `XCU:cd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [cd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cd.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:cd`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [cd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cd.html).
 
 ## `chgrp`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 chgrp [-h] group file...
 chgrp -R [-H|-L|-P] group file...
 ```
 
-**Mandatory base options:** `-h; -H; -L; -P; -R`.
+**Issue 7 required-option candidate:** `-h; -H; -L; -P; -R`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `group; file`. UNVERIFIED
 
-**Operands / arity / order:** group; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: group;file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/chgrp`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/chgrp`; clauses `XCU:chgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [chgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chgrp.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/chgrp`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/chgrp`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:chgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [chgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chgrp.html).
 
 ## `chmod`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 chmod [-R] mode file...
 ```
 
-**Mandatory base options:** `-R`.
+**Issue 7 required-option candidate:** `-R`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `mode; file`. UNVERIFIED
 
-**Operands / arity / order:** mode; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: mode;file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/chmod`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/chmod`; clauses `XCU:chmod:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [chmod](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chmod.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/chmod`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/chmod`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:chmod:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [chmod](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chmod.html).
 
 ## `chown`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 chown [-h] owner[:group] file...
 chown -R [-H|-L|-P] owner[:group] file...
 ```
 
-**Mandatory base options:** `-h; -H; -L; -P; -R`.
+**Issue 7 required-option candidate:** `-h; -H; -L; -P; -R`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `owner[:group]; file`. UNVERIFIED
 
-**Operands / arity / order:** owner[:group]; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: owner[:group];file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/chown`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/chown`; clauses `XCU:chown:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [chown](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chown.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/chown`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/chown`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:chown:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [chown](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chown.html).
 
 ## `cksum`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 cksum [file...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/cksum`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/cksum`; clauses `XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [cksum](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cksum.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/cksum`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cksum`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [cksum](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cksum.html).
 
 ## `cmp`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 cmp [-l|-s] file1 file2
 ```
 
-**Mandatory base options:** `-l; -s`.
+**Issue 7 required-option candidate:** `-l; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file1; file2`. UNVERIFIED
 
-**Operands / arity / order:** file1; file2. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file1;file2.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 files identical; 1 files differ; greater than 1 on error.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** 0 files identical; 1 files differ; greater than 1 on error.
 
-**Implementation source:** `cmds/cmp`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/cmp`; clauses `XCU:cmp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [cmp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cmp.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/cmp`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cmp`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cmp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [cmp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cmp.html).
 
 ## `comm`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 comm [-123] file1 file2
 ```
 
-**Mandatory base options:** `-1; -2; -3`.
+**Issue 7 required-option candidate:** `-1; -2; -3`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file1; file2`. UNVERIFIED
 
-**Operands / arity / order:** file1; file2. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file1;file2.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/comm`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/comm`; clauses `XCU:comm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [comm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/comm.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/comm`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/comm`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:comm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [comm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/comm.html).
 
 ## `command`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 command [-p] command_name [argument...]
 command [-p][-v|-V] command_name
 ```
 
-**Mandatory base options:** `-p; -v; -V`.
+**Issue 7 required-option candidate:** `-p; -v; -V`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `argument; command_name`. UNVERIFIED
 
-**Operands / arity / order:** argument; command_name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: argument;command_name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:command`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:command`; clauses `XCU:command:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [command](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/command.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:command`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:command:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [command](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/command.html).
 
 ## `cp`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 cp [-Pfip] source_file target_file
@@ -704,155 +875,195 @@ cp [-Pfip] source_file... target
 cp -R [-H|-L|-P] [-fip] source_file... target
 ```
 
-**Mandatory base options:** `-f; -H; -i; -L; -P; -p; -R`.
+**Issue 7 required-option candidate:** `-f; -H; -i; -L; -P; -p; -R`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `source_file; target_file; target`. UNVERIFIED
 
-**Operands / arity / order:** source_file; target_file; target. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: source_file;target_file;target.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/cp`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/cp`; clauses `XCU:cp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [cp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cp.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/cp`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cp`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [cp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cp.html).
 
 ## `crontab`
 
-**Requirement / applicability:** base; optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 crontab [file]
 [optional] crontab [-e|-l|-r]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `optional:-e,-l,-r`.
+**Issue 7 conditional-option candidate:** `optional:-e,-l,-r`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `EDITOR; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/crontab`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/crontab`; clauses `XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [crontab](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/crontab.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/crontab`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/crontab`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [crontab](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/crontab.html).
 
 ## `csplit`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 csplit [-ks] [-f prefix] [-n number] file arg...
 ```
 
-**Mandatory base options:** `-f; -k; -n; -s`.
+**Issue 7 required-option candidate:** `-f; -k; -n; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<prefix>; -n=<number>`.
 
-**Option arguments:** `-f=<prefix>; -n=<number>`.
+**Operands:** `file; /rexp/[offset]; %rexp%[offset]; line_no; {num}`. UNVERIFIED
 
-**Operands / arity / order:** file; /rexp/[offset]; %rexp%[offset]; line_no; {num}. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file;/rexp/[offset];%rexp%[offset];line_no;{num}.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/csplit`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/csplit`; clauses `XCU:csplit:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [csplit](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/csplit.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/csplit`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/csplit`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:csplit:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [csplit](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/csplit.html).
 
 ## `ctags`
 
-**Requirement / applicability:** base; development.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; development`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 ctags -x pathname...
 [development] ctags [-a] [-f tagsfile] pathname...
 ```
 
-**Mandatory base options:** `-x`.
+**Issue 7 required-option candidate:** `-x`.
 
-**Conditional / optional options:** `development:-a,-f`.
+**Issue 7 conditional-option candidate:** `development:-a,-f`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<tagsfile>`.
 
-**Option arguments:** `-f=<tagsfile>`.
+**Operands:** `file.c; file.h; file.f`. UNVERIFIED
 
-**Operands / arity / order:** file.c; file.h; file.f. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.c;file.h;file.f.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#ctags`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#ctags`; clauses `XCU:ctags:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [ctags](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ctags.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#ctags`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ctags:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ctags](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ctags.html).
 
 ## `cut`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 cut -b list [-n] [file...]
@@ -860,534 +1071,674 @@ cut -c list [file...]
 cut -f list [-d delim] [-s] [file...]
 ```
 
-**Mandatory base options:** `-b; -c; -d; -f; -n; -s`.
+**Issue 7 required-option candidate:** `-b; -c; -d; -f; -n; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-b=<list>; -c=<list>; -d=<delim>; -f=<list>`.
 
-**Option arguments:** `-b=<list>; -c=<list>; -d=<delim>; -f=<list>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/cut`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/cut`; clauses `XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [cut](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cut.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/cut`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cut`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [cut](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cut.html).
 
 ## `date`
 
-**Requirement / applicability:** base; xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 date [-u] [+format]
 [xsi] date [-u] mmddhhmm[[cc]yy]
 ```
 
-**Mandatory base options:** `-u`.
+**Issue 7 required-option candidate:** `-u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `+format; mmddhhmm[[cc]yy]`. UNVERIFIED
 
-**Operands / arity / order:** +format; mmddhhmm[[cc]yy]. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: +format;mmddhhmm[[cc]yy].
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/date`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/date`; clauses `XCU:date:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [date](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/date.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/date`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/date`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:date:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [date](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/date.html).
 
 ## `dd`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 dd [operand...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `if=file; of=file; ibs=expr; obs=expr; bs=expr; cbs=expr; skip=n; seek=n; count=n; conv=value[,value ...]; ascii; ebcdic; ibm; block; unblock; lcase; ucase; swab; noerror; notrunc; sync`. UNVERIFIED
 
-**Operands / arity / order:** if=file; of=file; ibs=expr; obs=expr; bs=expr; cbs=expr; skip=n; seek=n; count=n; conv=value[,value ...]; ascii; ebcdic; ibm; block; unblock; lcase; ucase; swab; noerror; notrunc; sync. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: if=file;of=file;ibs=expr;obs=expr;bs=expr;cbs=expr;skip=n;seek=n;count=n;conv=value[,value ...];ascii;ebcdic;ibm;block;unblock;lcase;ucase;swab;noerror;notrunc;sync.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`custom`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/dd`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/dd`; clauses `XCU:dd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [dd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dd.html).
+**Effective owner:** `go` (`custom`).
+
+**Implementation:** `cmds/dd`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/dd`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:dd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [dd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dd.html).
 
 ## `df`
 
-**Requirement / applicability:** xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [xsi] df [-k] [-P|-t] [file...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `xsi:-k,-P,-t`.
+**Issue 7 conditional-option candidate:** `xsi:-k,-P,-t`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/df`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/df`; clauses `XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [df](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/df.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/df`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/df`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [df](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/df.html).
 
 ## `diff`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 ```
 
-**Mandatory base options:** `-b; -c; -C; -e; -f; -r; -u; -U`.
+**Issue 7 required-option candidate:** `-b; -c; -C; -e; -f; -r; -u; -U`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-C=<n>; -U=<n>`.
 
-**Option arguments:** `-C=<n>; -U=<n>`.
+**Operands:** `file1, file2`. UNVERIFIED
 
-**Operands / arity / order:** file1, file2. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file1, file2.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 no differences; 1 differences found; greater than 1 on error.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** 0 no differences; 1 differences found; greater than 1 on error.
 
-**Implementation source:** `cmds/diff`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/diff`; clauses `XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [diff](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/diff.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/diff`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=none; argument-form gaps=-C=<n>, -U=<n>; source `cmds/diff`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [diff](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/diff.html).
 
 ## `dirname`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 dirname string
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `string`. UNVERIFIED
 
-**Operands / arity / order:** string. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: string.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/dirname`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/dirname`; clauses `XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [dirname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dirname.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/dirname`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/dirname`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [dirname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dirname.html).
 
 ## `du`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 du [-a|-s] [-kx] [-H|-L] [file...]
 ```
 
-**Mandatory base options:** `-a; -H; -k; -L; -s; -x`.
+**Issue 7 required-option candidate:** `-a; -H; -k; -L; -s; -x`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/du`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/du`; clauses `XCU:du:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [du](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/du.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/du`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/du`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:du:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [du](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/du.html).
 
 ## `echo`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 echo [string...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `string; \a; \b; \c; \f; \n; \r; \t; \v; \\; \0num`. Zero or more string operands are separated by one space in output; XSI escape sequences in operands are interpreted.
 
-**Operands / arity / order:** string; \a; \b; \c; \f; \n; \r; \t; \v; \\; \0num. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: string;\a;\b;\c;\f;\n;\r;\t;\v;\\;\0num.
+**Special tokens:** The operand -- is data: echo does not recognize it as the Guideline 10 end-of-options delimiter. A lone - is also a string operand.
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** Write the string operands separated by single spaces and followed by a newline; with no operands, write only a newline. XSI escape processing can suppress that newline with \c.
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** Used only for diagnostic messages.
 
-**Availability:** Go same-name applet.
+**Effects:** `stdout_only`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** 0 for successful completion; greater than 0 if an error occurs.
 
-**Implementation source:** `shell:echo`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:echo`; clauses `XCU:echo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [echo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:echo`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:echo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [echo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html).
 
 ## `ed`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 ed [-p string] [-s] [file]
 ```
 
-**Mandatory base options:** `-p; -s`.
+**Issue 7 required-option candidate:** `-p; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-p=<string>`.
 
-**Option arguments:** `-p=<string>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#ed`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#ed`; clauses `XCU:ed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [ed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ed.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#ed`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ed.html).
 
 ## `env`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 env [-i] [name=value]... [utility [argument...]]
 ```
 
-**Mandatory base options:** `-i`.
+**Issue 7 required-option candidate:** `-i`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `name=value; utility; argument`. UNVERIFIED
 
-**Operands / arity / order:** name=value; utility; argument. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: name=value;utility;argument.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `process_or_shell_state;stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/env`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/env`; clauses `XCU:env:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [env](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/env.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/env`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/env`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:env:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [env](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/env.html).
 
 ## `ex`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] ex [-rR] [-s|-v] [-c command] [-t tagstring] [-w size] [file...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `optional:-c,-r,-R,-s,-t,-v,-w`.
+**Issue 7 conditional-option candidate:** `optional:-c,-r,-R,-s,-t,-v,-w`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-c=<command>; -t=<tagstring>; -w=<size>`.
 
-**Option arguments:** `-c=<command>; -t=<tagstring>; -w=<size>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `COLUMNS; EXINIT; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LINES; NLSPATH; PATH; SHELL; TERM`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#ex`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#ex`; clauses `XCU:ex:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [ex](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ex.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#ex`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ex:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ex](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ex.html).
 
 ## `expand`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 expand [-t tablist] [file...]
 ```
 
-**Mandatory base options:** `-t`.
+**Issue 7 required-option candidate:** `-t`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-t=<tablist>`.
 
-**Option arguments:** `-t=<tablist>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/expand`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/expand`; clauses `XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [expand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expand.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/expand`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/expand`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [expand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expand.html).
 
 ## `expr`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 expr operand...
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `operand`. UNVERIFIED
 
-**Operands / arity / order:** operand. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: operand.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 non-null/non-zero result; 1 null/zero result; greater than 1 on error.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`custom`).
+**Exit status:** 0 non-null/non-zero result; 1 null/zero result; greater than 1 on error.
 
-**Implementation source:** `cmds/expr`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/expr`; clauses `XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [expr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expr.html).
+**Effective owner:** `go` (`custom`).
+
+**Implementation:** `cmds/expr`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/expr`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [expr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expr.html).
 
 ## `false`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 false
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. No operands are specified.
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** Not used.
 
 **Environment:** `none`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** Not used.
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: Always greater than zero.
+**Standard error:** Not used.
 
-**Availability:** Go same-name applet.
+**Effects:** `status_only`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** Always greater than 0.
 
-**Implementation source:** `shell:false`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:false`; clauses `XCU:false:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [false](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:false`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:false:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [false](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html).
 
 ## `fc`
 
-**Requirement / applicability:** base; optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 fc -l [-nr] [first [last]]
@@ -1395,269 +1746,339 @@ fc -s [old=new] [first]
 [optional] fc [-r] [-e editor] [first [last]]
 ```
 
-**Mandatory base options:** `-l; -n; -r; -s`.
+**Issue 7 required-option candidate:** `-l; -n; -r; -s`.
 
-**Conditional / optional options:** `optional:-e`.
+**Issue 7 conditional-option candidate:** `optional:-e`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-e=<editor>`.
 
-**Option arguments:** `-e=<editor>`.
+**Operands:** `first, last; [+]number; -number; string; old=new`. UNVERIFIED
 
-**Operands / arity / order:** first, last; [+]number; -number; string; old=new. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: first, last;[+]number;-number;string;old=new.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `FCEDIT; HISTFILE; HISTSIZE; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:fc`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:fc`; clauses `XCU:fc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [fc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fc.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:fc`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:fc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [fc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fc.html).
 
 ## `fg`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] fg [job_id]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `job_id`. UNVERIFIED
 
-**Operands / arity / order:** job_id. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: job_id.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:fg`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:fg`; clauses `XCU:fg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [fg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fg.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:fg`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:fg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [fg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fg.html).
 
 ## `file`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 file [-dh] [-M file] [-m file] file...
 file -i [-h] file...
 ```
 
-**Mandatory base options:** `-d; -h; -i; -M; -m`.
+**Issue 7 required-option candidate:** `-d; -h; -i; -M; -m`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-M=<file>; -m=<file>`.
 
-**Option arguments:** `-M=<file>; -m=<file>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/file`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/file`; clauses `XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [file](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/file.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/file`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=-M, -d, -i; argument-form gaps=-M=<file>; source `cmds/file`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [file](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/file.html).
 
 ## `find`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 find [-H|-L] path... [operand_expression...]
 ```
 
-**Mandatory base options:** `-H; -L`.
+**Issue 7 required-option candidate:** `-H; -L`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `+n; n; -n; -name pattern; -path pattern; -nouser; -nogroup; -xdev; -prune; -perm [-]mode; -perm [-]onum; -type c; -links n; -user uname; -group gname; -size n[c]; -atime n; -ctime n; -mtime n; -exec utility_name [argument ...] ; ; -exec utility_name [argument ...] {} +; -ok utility_name [argument ...] ; ; -print; -newer file; -depth; ( expression ); ! expression; expression [-a] expression; expression -o expression`. UNVERIFIED
 
-**Operands / arity / order:** +n; n; -n; -name pattern; -path pattern; -nouser; -nogroup; -xdev; -prune; -perm [-]mode; -perm [-]onum; -type c; -links n; -user uname; -group gname; -size n[c]; -atime n; -ctime n; -mtime n; -exec utility_name [argument ...] ; ; -exec utility_name [argument ...] {} +; -ok utility_name [argument ...] ; ; -print; -newer file; -depth; ( expression ); ! expression; expression [-a] expression; expression -o expression. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: +n;n;-n;-name pattern;-path pattern;-nouser;-nogroup;-xdev;-prune;-perm [-]mode;-perm [-]onum;-type c;-links n;-user uname;-group gname;-size n[c];-atime n;-ctime n;-mtime n;-exec utility_name [argument ...] ;;-exec utility_name [argument ...] {} +;-ok utility_name [argument ...] ;;-print;-newer file;-depth;( expression );! expression;expression [-a] expression;expression -o expression.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`custom`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/find`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/find`; clauses `XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [find](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/find.html).
+**Effective owner:** `go` (`custom`).
+
+**Implementation:** `cmds/find`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/find`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [find](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/find.html).
 
 ## `fold`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 fold [-bs] [-w width] [file...]
 ```
 
-**Mandatory base options:** `-b; -s; -w`.
+**Issue 7 required-option candidate:** `-b; -s; -w`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-w=<width>`.
 
-**Option arguments:** `-w=<width>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/fold`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/fold`; clauses `XCU:fold:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [fold](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fold.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/fold`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/fold`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:fold:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [fold](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fold.html).
 
 ## `getconf`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 getconf [-v specification] system_var
 getconf [-v specification] path_var pathname
 ```
 
-**Mandatory base options:** `-v`.
+**Issue 7 required-option candidate:** `-v`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-v=<specification>`.
 
-**Option arguments:** `-v=<specification>`.
+**Operands:** `path_var; pathname; system_var`. UNVERIFIED
 
-**Operands / arity / order:** path_var; pathname; system_var. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: path_var;pathname;system_var.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/getconf`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/getconf`; clauses `XCU:getconf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [getconf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getconf.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/getconf`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/getconf`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:getconf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [getconf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getconf.html).
 
 ## `getopts`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 getopts optstring name [arg...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `optstring; name`. UNVERIFIED
 
-**Operands / arity / order:** optstring; name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: optstring;name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; OPTIND`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:getopts`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:getopts`; clauses `XCU:getopts:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [getopts](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getopts.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:getopts`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:getopts:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [getopts](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getopts.html).
 
 ## `grep`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 grep [-E|-F] [-c|-l|-q] [-insvx] -e pattern_list [-e pattern_list]... [-f pattern_file]... [file...]
@@ -1665,116 +2086,146 @@ grep [-E|-F] [-c|-l|-q] [-insvx] [-e pattern_list]... -f pattern_file [-f patter
 grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 ```
 
-**Mandatory base options:** `-E; -F; -c; -e; -f; -i; -l; -n; -q; -s; -v; -x`.
+**Issue 7 required-option candidate:** `-E; -F; -c; -e; -f; -i; -l; -n; -q; -s; -v; -x`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-e=<pattern_list>; -f=<pattern_file>`.
 
-**Option arguments:** `-e=<pattern_list>; -f=<pattern_file>`.
+**Operands:** `pattern_list; file`. UNVERIFIED
 
-**Operands / arity / order:** pattern_list; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: pattern_list;file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 selected lines found; 1 none found; greater than 1 on error.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** 0 selected lines found; 1 none found; greater than 1 on error.
 
-**Implementation source:** `cmds/grep`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/grep`; clauses `XCU:grep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [grep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/grep.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/grep`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/grep`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:grep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [grep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/grep.html).
 
 ## `hash`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 hash [utility...]
 hash -r
 ```
 
-**Mandatory base options:** `-r`.
+**Issue 7 required-option candidate:** `-r`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `utility`. UNVERIFIED
 
-**Operands / arity / order:** utility. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: utility.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:hash`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:hash`; clauses `XCU:hash:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [hash](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/hash.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:hash`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:hash:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [hash](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/hash.html).
 
 ## `head`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 head [-n number] [file...]
 ```
 
-**Mandatory base options:** `-n`.
+**Issue 7 required-option candidate:** `-n`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-n=<number>`.
 
-**Option arguments:** `-n=<number>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/head`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/head`; clauses `XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [head](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/head.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/head`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/head`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [head](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/head.html).
 
 ## `iconv`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 iconv [-cs] -f frommap -t tomap [file...]
@@ -1783,39 +2234,49 @@ iconv -t tocode [-cs] [-f fromcode] [file...]
 iconv -l
 ```
 
-**Mandatory base options:** `-c; -f; -l; -s; -t`.
+**Issue 7 required-option candidate:** `-c; -f; -l; -s; -t`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<fromcodeset>; -t=<tocodeset>`.
 
-**Option arguments:** `-f=<fromcodeset>; -t=<tocodeset>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/iconv`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/iconv`; clauses `XCU:iconv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [iconv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/iconv.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/iconv`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/iconv`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:iconv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [iconv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/iconv.html).
 
 ## `id`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 id [user]
@@ -1824,115 +2285,145 @@ id -g [-nr] [user]
 id -u [-nr] [user]
 ```
 
-**Mandatory base options:** `-G; -g; -n; -r; -u`.
+**Issue 7 required-option candidate:** `-G; -g; -n; -r; -u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `user`. UNVERIFIED
 
-**Operands / arity / order:** user. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: user.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/id`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/id`; clauses `XCU:id:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [id](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/id.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/id`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/id`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:id:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [id](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/id.html).
 
 ## `jobs`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] jobs [-l|-p] [job_id...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `optional:-l,-p`.
+**Issue 7 conditional-option candidate:** `optional:-l,-p`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `job_id`. UNVERIFIED
 
-**Operands / arity / order:** job_id. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: job_id.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:jobs`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:jobs`; clauses `XCU:jobs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [jobs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/jobs.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:jobs`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:jobs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [jobs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/jobs.html).
 
 ## `join`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] [-2 field] file1 file2
 ```
 
-**Mandatory base options:** `-a; -e; -o; -t; -v; -1; -2`.
+**Issue 7 required-option candidate:** `-a; -e; -o; -t; -v; -1; -2`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-a=<file_number>; -e=<string>; -o=<list>; -t=<char>; -v=<file_number>; -1=<field>; -2=<field>`.
 
-**Option arguments:** `-a=<file_number>; -e=<string>; -o=<list>; -t=<char>; -v=<file_number>; -1=<field>; -2=<field>`.
+**Operands:** `file1, file2`. UNVERIFIED
 
-**Operands / arity / order:** file1, file2. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file1, file2.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/join`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/join`; clauses `XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [join](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/join.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/join`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=none; argument-form gaps=-1=<field>, -2=<field>, -a=<file_number>, -e=<string>, -o=<list>, -t=<char>, -v=<file_number>; source `cmds/join`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [join](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/join.html).
 
 ## `kill`
 
-**Requirement / applicability:** base; xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 kill -s signal_name pid...
@@ -1941,345 +2432,435 @@ kill [-signal_number] pid...
 [xsi] kill [-signal_name] pid...
 ```
 
-**Mandatory base options:** `-l; -s; -<signal_number>`.
+**Issue 7 required-option candidate:** `-l; -s; -<signal_number>`.
 
-**Conditional / optional options:** `xsi:-<signal_name>`.
+**Issue 7 conditional-option candidate:** `xsi:-<signal_name>`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-s=<signal_name>`.
 
-**Option arguments:** `-s=<signal_name>`.
+**Operands:** `pid; exit_status`. UNVERIFIED
 
-**Operands / arity / order:** pid; exit_status. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: pid;exit_status.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:kill`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:kill`; clauses `XCU:kill:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [kill](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/kill.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:kill`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:kill:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [kill](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/kill.html).
 
 ## `ln`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 ln [-fs] [-L|-P] source_file target_file
 ln [-fs] [-L|-P] source_file... target_dir
 ```
 
-**Mandatory base options:** `-f; -L; -P; -s`.
+**Issue 7 required-option candidate:** `-f; -L; -P; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `source_file; target_file; target_dir`. UNVERIFIED
 
-**Operands / arity / order:** source_file; target_file; target_dir. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: source_file;target_file;target_dir.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/ln`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/ln`; clauses `XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [ln](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ln.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/ln`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/ln`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ln](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ln.html).
 
 ## `locale`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 locale [-a|-m]
 locale [-ck] name...
 ```
 
-**Mandatory base options:** `-a; -c; -k; -m`.
+**Issue 7 required-option candidate:** `-a; -c; -k; -m`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `name`. UNVERIFIED
 
-**Operands / arity / order:** name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/locale`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/locale`; clauses `XCU:locale:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [locale](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/locale.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/locale`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/locale`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:locale:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [locale](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/locale.html).
 
 ## `localedef`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 localedef [-c] [-f charmap] [-i sourcefile] [-u code_set_name] name
 ```
 
-**Mandatory base options:** `-c; -f; -i; -u`.
+**Issue 7 required-option candidate:** `-c; -f; -i; -u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<charmap>; -i=<inputfile>; -u=<code_set_name>`.
 
-**Option arguments:** `-f=<charmap>; -i=<inputfile>; -u=<code_set_name>`.
+**Operands:** `name`. UNVERIFIED
 
-**Operands / arity / order:** name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#localedef`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#localedef`; clauses `XCU:localedef:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [localedef](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/localedef.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#localedef`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:localedef:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [localedef](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/localedef.html).
 
 ## `logger`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 logger string...
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `string`. UNVERIFIED
 
-**Operands / arity / order:** string. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: string.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/logger`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/logger`; clauses `XCU:logger:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [logger](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/logger.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/logger`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/logger`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:logger:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [logger](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/logger.html).
 
 ## `logname`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 logname
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. UNVERIFIED
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/logname`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/logname`; clauses `XCU:logname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [logname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/logname.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/logname`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/logname`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:logname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [logname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/logname.html).
 
 ## `lp`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 ```
 
-**Mandatory base options:** `-c; -d; -m; -n; -o; -s; -t; -w`.
+**Issue 7 required-option candidate:** `-c; -d; -m; -n; -o; -s; -t; -w`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-d=<dest>; -n=<copies>; -o=<option>; -t=<title>`.
 
-**Option arguments:** `-d=<dest>; -n=<copies>; -o=<option>; -t=<title>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; LPDEST; NLSPATH; PRINTER; TZ`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#lp`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#lp`; clauses `XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [lp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/lp.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#lp`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [lp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/lp.html).
 
 ## `ls`
 
-**Requirement / applicability:** xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [xsi] ls [-ikqrs] [-glno] [-A|-a] [-C|-m|-x|-1]  [-F|-p] [-H|-L] [-R|-d] [-S|-f|-t] [-c|-u] [file...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `xsi:-A,-C,-F,-H,-L,-R,-S,-a,-c,-d,-f,-g,-i,-k,-l,-m,-n,-o,-p,-q,-r,-s,-t,-u,-x,-1`.
+**Issue 7 conditional-option candidate:** `xsi:-A,-C,-F,-H,-L,-R,-S,-a,-c,-d,-f,-g,-i,-k,-l,-m,-n,-o,-p,-q,-r,-s,-t,-u,-x,-1`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `COLUMNS; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/ls`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/ls`; clauses `XCU:ls:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [ls](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ls.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/ls`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/ls`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ls:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ls](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ls.html).
 
 ## `m4`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 m4 [-s] [-D name[=val]]... [-U name]... file...
 ```
 
-**Mandatory base options:** `-s; -D; -U`.
+**Issue 7 required-option candidate:** `-s; -D; -U`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-D=<name[=val]>; -U=<name>`.
 
-**Option arguments:** `-D=<name[=val]>; -U=<name>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#m4`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#m4`; clauses `XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [m4](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/m4.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#m4`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [m4](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/m4.html).
 
 ## `mailx`
 
-**Requirement / applicability:** base; optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 mailx [-s subject] address...
@@ -2288,612 +2869,772 @@ mailx -f [-HiNn] [-F] [file]
 [optional] mailx -e
 ```
 
-**Mandatory base options:** `-f; -F; -H; -i; -n; -N; -s; -u`.
+**Issue 7 required-option candidate:** `-f; -F; -H; -i; -n; -N; -s; -u`.
 
-**Conditional / optional options:** `optional:-e`.
+**Issue 7 conditional-option candidate:** `optional:-e`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-s=<subject>; -u=<user>`.
 
-**Option arguments:** `-s=<subject>; -u=<user>`.
+**Operands:** `address; file`. UNVERIFIED
 
-**Operands / arity / order:** address; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: address;file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `DEAD; EDITOR; HOME; LANG; LC_ALL; LC_CTYPE; LC_TIME; LC_MESSAGES; LISTER; MAILRC; MBOX; NLSPATH; PAGER; SHELL; TERM; TZ; VISUAL`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#mailx`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#mailx`; clauses `XCU:mailx:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [mailx](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mailx.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#mailx`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mailx:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [mailx](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mailx.html).
 
 ## `make`
 
-**Requirement / applicability:** development.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `development`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [development] make [-einpqrst] [-f makefile]... [-k|-S] [macro=value...] [target_name...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `development:-e,-f,-i,-k,-n,-p,-q,-r,-S,-s,-t`.
+**Issue 7 conditional-option candidate:** `development:-e,-f,-i,-k,-n,-p,-q,-r,-S,-s,-t`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<makefile>`.
 
-**Option arguments:** `-f=<makefile>`.
+**Operands:** `target_name; macro=value`. UNVERIFIED
 
-**Operands / arity / order:** target_name; macro=value. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: target_name;macro=value.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; MAKEFLAGS; NLSPATH; PROJECTDIR`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#make`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#make`; clauses `XCU:make:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [make](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/make.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#make`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:make:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [make](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/make.html).
 
 ## `man`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 man [-k] name...
 ```
 
-**Mandatory base options:** `-k`.
+**Issue 7 required-option candidate:** `-k`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `name`. UNVERIFIED
 
-**Operands / arity / order:** name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PAGER`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#man`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#man`; clauses `XCU:man:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [man](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/man.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#man`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:man:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [man](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/man.html).
 
 ## `mesg`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 mesg [y|n]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `y; n`. UNVERIFIED
 
-**Operands / arity / order:** y; n. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: y;n.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/mesg`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/mesg`; clauses `XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [mesg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mesg.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/mesg`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mesg`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [mesg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mesg.html).
 
 ## `mkdir`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 mkdir [-p] [-m mode] dir...
 ```
 
-**Mandatory base options:** `-m; -p`.
+**Issue 7 required-option candidate:** `-m; -p`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-m=<mode>`.
 
-**Option arguments:** `-m=<mode>`.
+**Operands:** `dir`. UNVERIFIED
 
-**Operands / arity / order:** dir. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: dir.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/mkdir`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/mkdir`; clauses `XCU:mkdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [mkdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkdir.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/mkdir`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mkdir`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mkdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [mkdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkdir.html).
 
 ## `mkfifo`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 mkfifo [-m mode] file...
 ```
 
-**Mandatory base options:** `-m`.
+**Issue 7 required-option candidate:** `-m`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-m=<mode>`.
 
-**Option arguments:** `-m=<mode>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/mkfifo`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/mkfifo`; clauses `XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [mkfifo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkfifo.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/mkfifo`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mkfifo`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [mkfifo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkfifo.html).
 
 ## `more`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] more [-ceisu] [-n number] [-p command] [-t tagstring] [file...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `optional:-c,-e,-i,-n,-p,-s,-t,-u`.
+**Issue 7 conditional-option candidate:** `optional:-c,-e,-i,-n,-p,-s,-t,-u`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-n=<number>; -p=<command>; -t=<tagstring>`.
 
-**Option arguments:** `-n=<number>; -p=<command>; -t=<tagstring>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `COLUMNS; EDITOR; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; LINES; MORE; TERM`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/more`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/more`; clauses `XCU:more:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [more](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/more.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/more`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=-i, -t; argument-form gaps=-p=<command>, -t=<tagstring>; source `cmds/more`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:more:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [more](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/more.html).
 
 ## `mv`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 mv [-if] source_file target_file
 mv [-if] source_file... target_dir
 ```
 
-**Mandatory base options:** `-f; -i`.
+**Issue 7 required-option candidate:** `-f; -i`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `source_file; target_file; target_dir`. UNVERIFIED
 
-**Operands / arity / order:** source_file; target_file; target_dir. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: source_file;target_file;target_dir.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/mv`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/mv`; clauses `XCU:mv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [mv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mv.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/mv`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mv`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [mv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mv.html).
 
 ## `newgrp`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 newgrp [-l] [group]
 ```
 
-**Mandatory base options:** `-l`.
+**Issue 7 required-option candidate:** `-l`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `group`. UNVERIFIED
 
-**Operands / arity / order:** group. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: group.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/newgrp`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/newgrp`; clauses `XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [newgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/newgrp.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/newgrp`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/newgrp`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [newgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/newgrp.html).
 
 ## `nice`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 nice [-n increment] utility [argument...]
 ```
 
-**Mandatory base options:** `-n`.
+**Issue 7 required-option candidate:** `-n`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-n=<increment>`.
 
-**Option arguments:** `-n=<increment>`.
+**Operands:** `utility; argument`. UNVERIFIED
 
-**Operands / arity / order:** utility; argument. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: utility;argument.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/nice`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/nice`; clauses `XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [nice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nice.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/nice`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/nice`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [nice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nice.html).
 
 ## `nm`
 
-**Requirement / applicability:** xsi; development.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `xsi; development`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [development] nm [-APv] [-g|-u] [-t format] file...
 [xsi] nm [-APv] [-efox] [-g|-u] [-t format] file...
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `development:-A,-g,-P,-t,-u,-v; xsi:-e,-f,-o,-x`.
+**Issue 7 conditional-option candidate:** `development:-A,-g,-P,-t,-u,-v; xsi:-e,-f,-o,-x`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-t=<format>`.
 
-**Option arguments:** `-t=<format>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#nm`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#nm`; clauses `XCU:nm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [nm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nm.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#nm`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:nm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [nm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nm.html).
 
 ## `nohup`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 nohup utility [argument...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `utility; argument`. UNVERIFIED
 
-**Operands / arity / order:** utility; argument. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: utility;argument.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/nohup`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/nohup`; clauses `XCU:nohup:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [nohup](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nohup.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/nohup`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/nohup`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:nohup:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [nohup](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nohup.html).
 
 ## `od`
 
-**Requirement / applicability:** base; xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 od [-v] [-A address_base] [-j skip] [-N count] [-t type_string]... [file...]
 [xsi] od [-bcdosx] [file] [[+]offset[.][b]]
 ```
 
-**Mandatory base options:** `-A; -j; -N; -t; -v`.
+**Issue 7 required-option candidate:** `-A; -j; -N; -t; -v`.
 
-**Conditional / optional options:** `xsi:-b,-c,-d,-o,-s,-x`.
+**Issue 7 conditional-option candidate:** `xsi:-b,-c,-d,-o,-s,-x`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-A=<address_base>; -j=<skip>; -N=<count>; -t=<type_string>`.
 
-**Option arguments:** `-A=<address_base>; -j=<skip>; -N=<count>; -t=<type_string>`.
+**Operands:** `file; [+]offset[.][b]`. UNVERIFIED
 
-**Operands / arity / order:** file; [+]offset[.][b]. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file;[+]offset[.][b].
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/od`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/od`; clauses `XCU:od:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [od](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/od.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/od`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/od`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:od:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [od](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/od.html).
 
 ## `paste`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 paste [-s] [-d list] file...
 ```
 
-**Mandatory base options:** `-d; -s`.
+**Issue 7 required-option candidate:** `-d; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-d=<list>`.
 
-**Option arguments:** `-d=<list>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/paste`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/paste`; clauses `XCU:paste:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [paste](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/paste.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/paste`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/paste`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:paste:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [paste](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/paste.html).
 
 ## `patch`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p num] [-r rejectfile] [file]
 ```
 
-**Mandatory base options:** `-b; -c; -d; -D; -e; -i; -l; -n; -N; -o; -p; -R; -r; -u`.
+**Issue 7 required-option candidate:** `-b; -c; -d; -D; -e; -i; -l; -n; -N; -o; -p; -R; -r; -u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-d=<dir>; -D=<define>; -i=<patchfile>; -o=<outfile>; -p=<num>; -r=<rejectfile>`.
 
-**Option arguments:** `-d=<dir>; -D=<define>; -i=<patchfile>; -o=<outfile>; -p=<num>; -r=<rejectfile>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; LC_TIME`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#patch`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#patch`; clauses `XCU:patch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [patch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/patch.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#patch`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:patch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [patch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/patch.html).
 
 ## `pathchk`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 pathchk [-p] [-P] pathname...
 ```
 
-**Mandatory base options:** `-p; -P`.
+**Issue 7 required-option candidate:** `-p; -P`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `pathname`. UNVERIFIED
 
-**Operands / arity / order:** pathname. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: pathname.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/pathchk`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/pathchk`; clauses `XCU:pathchk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [pathchk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pathchk.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/pathchk`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/pathchk`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pathchk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [pathchk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pathchk.html).
 
 ## `pax`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 pax [-dv] [-c|-n] [-H|-L] [-o options] [-f archive] [-s replstr]... [pattern...]
@@ -2902,344 +3643,434 @@ pax -w [-dituvX] [-H|-L] [-b blocksize] [[-a] [-f archive]] [-o options]... [-s 
 pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [file...] directory
 ```
 
-**Mandatory base options:** `-r; -w; -a; -b; -c; -d; -f; -H; -i; -k; -l; -L; -n; -o; -p; -s; -t; -u; -v; -x; -X`.
+**Issue 7 required-option candidate:** `-r; -w; -a; -b; -c; -d; -f; -H; -i; -k; -l; -L; -n; -o; -p; -s; -t; -u; -v; -x; -X`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-b=<blocksize>; -f=<archive>; -o=<options>; -p=<string>; -s=<replstr>; -x=<format>`.
 
-**Option arguments:** `-b=<blocksize>; -f=<archive>; -o=<options>; -p=<string>; -s=<replstr>; -x=<format>`.
+**Operands:** `directory; file; pattern`. UNVERIFIED
 
-**Operands / arity / order:** directory; file; pattern. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: directory;file;pattern.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TMPDIR; TZ`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/pax`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/pax`; clauses `XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [pax](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/pax`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=-H, -L, -X, -b, -o, -t; argument-form gaps=-b=<blocksize>, -o=<options>; source `cmds/pax`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [pax](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html).
 
 ## `pr`
 
-**Requirement / applicability:** base; xsi.
+**Evidence state:** `partial`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l lines] [-n[char][width]] [-o offset] [-s[char]] [-w width] [-fp] [file...]
 ```
 
-**Mandatory base options:** `+<page>; -<column>; -a; -d; -e; -f; -F; -h; -i; -m; -n; -o; -p; -r; -s; -t; -w`.
+**Issue 7 required-option candidate:** `+<page>; -<column>; -a; -d; -e; -f; -F; -h; -i; -m; -n; -o; -p; -r; -s; -t; -w`.
 
-**Conditional / optional options:** `xsi:-l`.
+**Issue 7 conditional-option candidate:** `xsi:-l`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-e[char][gap]; -h=<header>; -i[char][gap]; -l=<lines>; -n[char][width]; -o=<offset>; -s[char]; -w=<width>`.
 
-**Option arguments:** `-h=<header>; -l=<lines>; -o=<offset>; -w=<width>`.
+**Operands:** `file`. Read file operands in order; a missing file operand or a file operand of - selects standard input. +page selects the first output page and -column selects the column count.
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** A file operand of - selects standard input. pr is exempt from several Utility Syntax Guidelines; this interface makes no -- delimiter claim.
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** Read as a text file when no file operand is given or when a file operand is -; /dev/tty supplies -p responses.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** Write paginated input, including headers and trailers unless -t suppresses them; formatting is controlled by the declared page, column, tab, numbering, width, and merge options.
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** Used for diagnostics and to alert the terminal when -p is specified.
 
-**Availability:** Go same-name applet.
+**Effects:** `stdout_and_terminal_prompt`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** 0 for successful completion; greater than 0 if an error occurs.
 
-**Implementation source:** `cmds/pr`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/pr`; clauses `XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [pr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pr.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/pr`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=+<page>, -p; argument-form gaps=none; source `cmds/pr`.
+
+**Evidence lanes:** Go=`cmds/pr/pr_test.go`; shell=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [pr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pr.html).
 
 ## `printf`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 printf format [argument...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `format; argument`. UNVERIFIED
 
-**Operands / arity / order:** format; argument. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: format;argument.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:printf`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:printf`; clauses `XCU:printf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [printf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/printf.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:printf`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:printf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [printf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/printf.html).
 
 ## `ps`
 
-**Requirement / applicability:** xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [xsi] ps [-aA] [-defl] [-g grouplist] [-G grouplist] [-n namelist] [-o format]... [-p proclist] [-t termlist] [-u userlist] [-U userlist]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `xsi:-a,-A,-d,-e,-f,-g,-G,-l,-n,-o,-p,-t,-u,-U`.
+**Issue 7 conditional-option candidate:** `xsi:-a,-A,-d,-e,-f,-g,-G,-l,-n,-o,-p,-t,-u,-U`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-g=<grouplist>; -G=<grouplist>; -n=<namelist>; -o=<format>; -p=<proclist>; -t=<termlist>; -u=<userlist>; -U=<userlist>`.
 
-**Option arguments:** `-g=<grouplist>; -G=<grouplist>; -n=<namelist>; -o=<format>; -p=<proclist>; -t=<termlist>; -u=<userlist>; -U=<userlist>`.
+**Operands:** `none`. UNVERIFIED
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `COLUMNS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/ps`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/ps`; clauses `XCU:ps:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [ps](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ps.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/ps`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/ps`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ps:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [ps](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ps.html).
 
 ## `pwd`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 pwd [-L|-P]
 ```
 
-**Mandatory base options:** `-L; -P`.
+**Issue 7 required-option candidate:** `-L; -P`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. UNVERIFIED
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_MESSAGES; NLSPATH; PWD`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:pwd`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:pwd`; clauses `XCU:pwd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [pwd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pwd.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:pwd`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pwd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [pwd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pwd.html).
 
 ## `read`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 read [-r] var...
 ```
 
-**Mandatory base options:** `-r`.
+**Issue 7 required-option candidate:** `-r`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `var`. UNVERIFIED
 
-**Operands / arity / order:** var. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: var.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `IFS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PS2`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:read`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:read`; clauses `XCU:read:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [read](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/read.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:read`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:read:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [read](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/read.html).
 
 ## `renice`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 renice [-g|-p|-u] -n increment ID...
 ```
 
-**Mandatory base options:** `-g; -n; -p; -u`.
+**Issue 7 required-option candidate:** `-g; -n; -p; -u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-n=<increment>`.
 
-**Option arguments:** `-n=<increment>`.
+**Operands:** `ID`. UNVERIFIED
 
-**Operands / arity / order:** ID. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: ID.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/renice`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/renice`; clauses `XCU:renice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [renice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/renice.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/renice`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/renice`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:renice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [renice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/renice.html).
 
 ## `rm`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 rm [-iRr] file...
 rm -f [-iRr] [file...]
 ```
 
-**Mandatory base options:** `-f; -i; -R; -r`.
+**Issue 7 required-option candidate:** `-f; -i; -R; -r`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/rm`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/rm`; clauses `XCU:rm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [rm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rm.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/rm`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/rm`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:rm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [rm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rm.html).
 
 ## `rmdir`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 rmdir [-p] dir...
 ```
 
-**Mandatory base options:** `-p`.
+**Issue 7 required-option candidate:** `-p`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `dir`. UNVERIFIED
 
-**Operands / arity / order:** dir. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: dir.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/rmdir`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/rmdir`; clauses `XCU:rmdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [rmdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rmdir.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/rmdir`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/rmdir`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:rmdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [rmdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rmdir.html).
 
 ## `sed`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 sed [-n] script [file...]
@@ -3247,39 +4078,49 @@ sed [-n] -e script [-e script]... [-f script_file]... [file...]
 sed [-n] [-e script]... -f script_file [-f script_file]... [file...]
 ```
 
-**Mandatory base options:** `-e; -f; -n`.
+**Issue 7 required-option candidate:** `-e; -f; -n`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-e=<script>; -f=<script_file>`.
 
-**Option arguments:** `-e=<script>; -f=<script_file>`.
+**Operands:** `file; script`. UNVERIFIED
 
-**Operands / arity / order:** file; script. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file;script.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`custom`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/sed`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/sed`; clauses `XCU:sed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [sed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sed.html).
+**Effective owner:** `go` (`custom`).
+
+**Implementation:** `cmds/sed`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/sed`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [sed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sed.html).
 
 ## `sh`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 sh [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [command_file [argument...]]
@@ -3287,576 +4128,726 @@ sh -c [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... command_stri
 sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...]
 ```
 
-**Mandatory base options:** `-a; -b; -C; -e; -f; -h; -i; -m; -n; -u; -v; -x; -o; +a; +b; +C; +e; +f; +h; +i; +m; +n; +u; +v; +x; +o; -c; -s`.
+**Issue 7 required-option candidate:** `-a; -b; -C; -e; -f; -h; -i; -m; -n; -u; -v; -x; -o; +a; +b; +C; +e; +f; +h; +i; +m; +n; +u; +v; +x; +o; -c; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-o=<option>; +o=<option>`.
 
-**Option arguments:** `-o=<option>; +o=<option>`.
+**Operands:** `-; argument; command_file; command_name; command_string`. UNVERIFIED
 
-**Operands / arity / order:** -; argument; command_file; command_name; command_string. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: -;argument;command_file;command_name;command_string.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `ENV; FCEDIT; HISTFILE; HISTSIZE; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; MAIL; MAILCHECK; MAILPATH; NLSPATH; PATH; PWD`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:sh`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:sh`; clauses `XCU:sh:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [sh](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:sh`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sh:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [sh](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html).
 
 ## `sleep`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 sleep time
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `time`. UNVERIFIED
 
-**Operands / arity / order:** time. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: time.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/sleep`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/sleep`; clauses `XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [sleep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sleep.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/sleep`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/sleep`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [sleep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sleep.html).
 
 ## `sort`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 sort [-m] [-o output] [-bdfinru] [-t char] [-k keydef]... [file...]
 sort [-c|-C] [-bdfinru] [-t char] [-k keydef] [file]
 ```
 
-**Mandatory base options:** `-c; -C; -m; -o; -u; -d; -f; -i; -n; -r; -b; -t; -k`.
+**Issue 7 required-option candidate:** `-c; -C; -m; -o; -u; -d; -f; -i; -n; -r; -b; -t; -k`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-o=<output>; -t=<char>; -k=<keydef>`.
 
-**Option arguments:** `-o=<output>; -t=<char>; -k=<keydef>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/sort`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/sort`; clauses `XCU:sort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [sort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sort.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/sort`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/sort`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [sort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sort.html).
 
 ## `split`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 split [-l line_count] [-a suffix_length] [file [name]]
 split -b n[k|m] [-a suffix_length] [file [name]]
 ```
 
-**Mandatory base options:** `-a; -b; -l`.
+**Issue 7 required-option candidate:** `-a; -b; -l`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-a=<suffix_length>; -b=<n>; -l=<line_count>`.
 
-**Option arguments:** `-a=<suffix_length>; -b=<n>; -l=<line_count>`.
+**Operands:** `file; name`. UNVERIFIED
 
-**Operands / arity / order:** file; name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file;name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/split`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/split`; clauses `XCU:split:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [split](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/split.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/split`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/split`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:split:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [split](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/split.html).
 
 ## `strings`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 strings [-a] [-t format] [-n number] [file...]
 ```
 
-**Mandatory base options:** `-a; -n; -t`.
+**Issue 7 required-option candidate:** `-a; -n; -t`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-n=<number>; -t=<format>`.
 
-**Option arguments:** `-n=<number>; -t=<format>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/strings`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/strings`; clauses `XCU:strings:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [strings](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strings.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/strings`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/strings`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:strings:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [strings](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strings.html).
 
 ## `strip`
 
-**Requirement / applicability:** development.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `development`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [development] strip file...
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#strip`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#strip`; clauses `XCU:strip:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [strip](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strip.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#strip`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:strip:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [strip](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strip.html).
 
 ## `stty`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 stty [-a|-g]
 stty operand...
 ```
 
-**Mandatory base options:** `-a; -g`.
+**Issue 7 required-option candidate:** `-a; -g`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `parenb (-parenb); parodd (-parodd); cs5 cs6 cs7 cs8; number; ispeed number; ospeed number; hupcl (-hupcl); hup (-hup); cstopb (-cstopb); cread (-cread); clocal (-clocal); ignbrk (-ignbrk); brkint (-brkint); ignpar (-ignpar); parmrk (-parmrk); inpck (-inpck); istrip (-istrip); inlcr (-inlcr); igncr (-igncr); icrnl (-icrnl); ixon (-ixon); ixany (-ixany); ixoff (-ixoff); opost (-opost); onlcr (-onlcr); ocrnl (-ocrnl); onocr (-onocr); onlret (-onlret); ofill (-ofill); ofdel (-ofdel); cr0 cr1 cr2 cr3; nl0 nl1; tab0 tab1 tab2 tab3; tabs (-tabs); bs0 bs1; ff0 ff1; vt0 vt1; isig (-isig); icanon (-icanon); iexten (-iexten); echo (-echo); echoe (-echoe); echok (-echok); echonl (-echonl); noflsh (-noflsh); tostop (-tostop); <control>-character string; min number; time number; saved settings; evenp or parity; oddp; -parity, -evenp, or -oddp; raw (-raw or cooked); nl (-nl); ek; sane`. UNVERIFIED
 
-**Operands / arity / order:** parenb (-parenb); parodd (-parodd); cs5 cs6 cs7 cs8; number; ispeed number; ospeed number; hupcl (-hupcl); hup (-hup); cstopb (-cstopb); cread (-cread); clocal (-clocal); ignbrk (-ignbrk); brkint (-brkint); ignpar (-ignpar); parmrk (-parmrk); inpck (-inpck); istrip (-istrip); inlcr (-inlcr); igncr (-igncr); icrnl (-icrnl); ixon (-ixon); ixany (-ixany); ixoff (-ixoff); opost (-opost); onlcr (-onlcr); ocrnl (-ocrnl); onocr (-onocr); onlret (-onlret); ofill (-ofill); ofdel (-ofdel); cr0 cr1 cr2 cr3; nl0 nl1; tab0 tab1 tab2 tab3; tabs (-tabs); bs0 bs1; ff0 ff1; vt0 vt1; isig (-isig); icanon (-icanon); iexten (-iexten); echo (-echo); echoe (-echoe); echok (-echok); echonl (-echonl); noflsh (-noflsh); tostop (-tostop); <control>-character string; min number; time number; saved settings; evenp or parity; oddp; -parity, -evenp, or -oddp; raw (-raw or cooked); nl (-nl); ek; sane. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: parenb (-parenb);parodd (-parodd);cs5 cs6 cs7 cs8;number;ispeed number;ospeed number;hupcl (-hupcl);hup (-hup);cstopb (-cstopb);cread (-cread);clocal (-clocal);ignbrk (-ignbrk);brkint (-brkint);ignpar (-ignpar);parmrk (-parmrk);inpck (-inpck);istrip (-istrip);inlcr (-inlcr);igncr (-igncr);icrnl (-icrnl);ixon (-ixon);ixany (-ixany);ixoff (-ixoff);opost (-opost);onlcr (-onlcr);ocrnl (-ocrnl);onocr (-onocr);onlret (-onlret);ofill (-ofill);ofdel (-ofdel);cr0 cr1 cr2 cr3;nl0 nl1;tab0 tab1 tab2 tab3;tabs (-tabs);bs0 bs1;ff0 ff1;vt0 vt1;isig (-isig);icanon (-icanon);iexten (-iexten);echo (-echo);echoe (-echoe);echok (-echok);echonl (-echonl);noflsh (-noflsh);tostop (-tostop);<control>-character string;min number;time number;saved settings;evenp or parity;oddp;-parity, -evenp, or -oddp;raw (-raw or cooked);nl (-nl);ek;sane.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`custom`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/stty`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/stty`; clauses `XCU:stty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [stty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/stty.html).
+**Effective owner:** `go` (`custom`).
+
+**Implementation:** `cmds/stty`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/stty`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:stty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [stty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/stty.html).
 
 ## `tabs`
 
-**Requirement / applicability:** base; xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tabs [-T type] n[[sep[+]n]...]
 [xsi] tabs [-n|-a|-a2|-c|-c2|-c3|-f|-p|-s|-u] [-T type]
 ```
 
-**Mandatory base options:** `-T`.
+**Issue 7 required-option candidate:** `-T`.
 
-**Conditional / optional options:** `xsi:-<n>,-a,-a2,-c,-c2,-c3,-f,-p,-s,-u`.
+**Issue 7 conditional-option candidate:** `xsi:-<n>,-a,-a2,-c,-c2,-c3,-f,-p,-s,-u`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-T=<type>`.
 
-**Option arguments:** `-T=<type>`.
+**Operands:** `n[[sep[+]n]...]`. UNVERIFIED
 
-**Operands / arity / order:** n[[sep[+]n]...]. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: n[[sep[+]n]...].
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TERM`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tabs`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tabs`; clauses `XCU:tabs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tabs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tabs.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tabs`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=-<n>, -a2, -c2, -c3; argument-form gaps=none; source `cmds/tabs`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tabs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tabs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tabs.html).
 
 ## `tail`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tail [-f] [-c number|-n number] [file]
 ```
 
-**Mandatory base options:** `-c; -f; -n`.
+**Issue 7 required-option candidate:** `-c; -f; -n`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-c=<number>; -n=<number>`.
 
-**Option arguments:** `-c=<number>; -n=<number>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand as permitted by the synopsis.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tail`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tail`; clauses `XCU:tail:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tail](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tail.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tail`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tail`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tail:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tail](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tail.html).
 
 ## `talk`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] talk address [terminal]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `address; terminal`. UNVERIFIED
 
-**Operands / arity / order:** address; terminal. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: address;terminal.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TERM`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#talk`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#talk`; clauses `XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [talk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/talk.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#talk`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [talk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/talk.html).
 
 ## `tee`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tee [-ai] [file...]
 ```
 
-**Mandatory base options:** `-a; -i`.
+**Issue 7 required-option candidate:** `-a; -i`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tee`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tee`; clauses `XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tee](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tee.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tee`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tee`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tee](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tee.html).
 
 ## `test`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 test [expression]
 [ [expression] ]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `-b pathname; -c pathname; -d pathname; -e pathname; -f pathname; -g pathname; -h pathname; -L pathname; -n string; -p pathname; -r pathname; -S pathname; -s pathname; -t file_descriptor; -u pathname; -w pathname; -x pathname; -z string; string; s1 = s2; s1 != s2; n1 -eq n2; n1 -ne n2; n1 -gt n2; n1 -ge n2; n1 -lt n2; n1 -le n2; expression1 -a expression2; expression1 -o expression2; ! expression; ( expression )`. Evaluate the expression using the POSIX zero-through-four-argument rules and the specified primaries and operators.
 
-**Operands / arity / order:** -b pathname; -c pathname; -d pathname; -e pathname; -f pathname; -g pathname; -h pathname; -L pathname; -n string; -p pathname; -r pathname; -S pathname; -s pathname; -t file_descriptor; -u pathname; -w pathname; -x pathname; -z string; string; s1 = s2; s1 != s2; n1 -eq n2; n1 -ne n2; n1 -gt n2; n1 -ge n2; n1 -lt n2; n1 -le n2; expression1 -a expression2; expression1 -o expression2; ! expression; ( expression ). Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: -b pathname;-c pathname;-d pathname;-e pathname;-f pathname;-g pathname;-h pathname;-L pathname;-n string;-p pathname;-r pathname;-S pathname;-s pathname;-t file_descriptor;-u pathname;-w pathname;-x pathname;-z string;string;s1 = s2;s1 != s2;n1 -eq n2;n1 -ne n2;n1 -gt n2;n1 -ge n2;n1 -lt n2;n1 -le n2;expression1 -a expression2;expression1 -o expression2;! expression;( expression ).
+**Special tokens:** The operand -- is expression data: test does not recognize it as the Guideline 10 end-of-options delimiter. A lone - is likewise an expression operand.
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** Not used.
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 expression true; 1 expression false; greater than 1 on error.
+**Standard error:** Used only for diagnostic messages.
 
-**Availability:** Go same-name applet.
+**Effects:** `status_only`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** 0 if expression evaluates true; 1 if it evaluates false; greater than 1 on error or invalid expression.
 
-**Implementation source:** `shell:test`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:test`; clauses `XCU:test:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [test](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/test.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:test`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:test:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [test](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/test.html).
 
 ## `time`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 time [-p] utility [argument...]
 ```
 
-**Mandatory base options:** `-p`.
+**Issue 7 required-option candidate:** `-p`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `utility; argument`. UNVERIFIED
 
-**Operands / arity / order:** utility; argument. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: utility;argument.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_keyword`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:time`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:time`; clauses `XCU:time:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [time](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/time.html).
+**Effective owner:** `shell` (`shell_keyword`).
+
+**Implementation:** `shell:time`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:time:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [time](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/time.html).
 
 ## `touch`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 touch [-acm] [-r ref_file|-t time|-d date_time] file...
 ```
 
-**Mandatory base options:** `-a; -c; -d; -m; -r; -t`.
+**Issue 7 required-option candidate:** `-a; -c; -d; -m; -r; -t`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-d=<date_time>; -r=<ref_file>; -t=<time>`.
 
-**Option arguments:** `-d=<date_time>; -r=<ref_file>; -t=<time>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TZ`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/touch`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/touch`; clauses `XCU:touch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [touch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/touch.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/touch`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/touch`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:touch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [touch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/touch.html).
 
 ## `tput`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tput [-T type] operand...
 ```
 
-**Mandatory base options:** `-T`.
+**Issue 7 required-option candidate:** `-T`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-T=<type>`.
 
-**Option arguments:** `-T=<type>`.
+**Operands:** `clear; init; reset`. UNVERIFIED
 
-**Operands / arity / order:** clear; init; reset. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: clear;init;reset.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TERM`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tput`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tput`; clauses `XCU:tput:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tput](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tput.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tput`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tput`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tput:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tput](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tput.html).
 
 ## `tr`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tr [-c|-C] [-s] string1 string2
@@ -3865,534 +4856,674 @@ tr -d [-c|-C] string1
 tr -ds [-c|-C] string1 string2
 ```
 
-**Mandatory base options:** `-c; -C; -d; -s`.
+**Issue 7 required-option candidate:** `-c; -C; -d; -s`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `string1, string2`. UNVERIFIED
 
-**Operands / arity / order:** string1, string2. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: string1, string2.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tr`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tr`; clauses `XCU:tr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tr.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tr`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tr`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tr.html).
 
 ## `true`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 true
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. No operands are specified.
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** Not used.
 
 **Environment:** `none`.
 
-**Output / effects:** Write the specified result to standard output; diagnostics use standard error. Effects classification: `stdout_or_diagnostic`.
+**Standard output:** Not used.
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: Always zero.
+**Standard error:** Not used.
 
-**Availability:** Go same-name applet.
+**Effects:** `status_only`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** Always 0.
 
-**Implementation source:** `shell:true`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:true`; clauses `XCU:true:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [true](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:true`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:true:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [true](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html).
 
 ## `tsort`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tsort [file]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tsort`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tsort`; clauses `XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tsort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tsort.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tsort`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tsort`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tsort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tsort.html).
 
 ## `tty`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 tty
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. UNVERIFIED
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/tty`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/tty`; clauses `XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [tty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tty.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/tty`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tty`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [tty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tty.html).
 
 ## `umask`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 umask [-S] [mask]
 ```
 
-**Mandatory base options:** `-S`.
+**Issue 7 required-option candidate:** `-S`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `mask`. UNVERIFIED
 
-**Operands / arity / order:** mask. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: mask.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:umask`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:umask`; clauses `XCU:umask:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [umask](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/umask.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:umask`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:umask:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [umask](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/umask.html).
 
 ## `unalias`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 unalias alias-name...
 unalias -a
 ```
 
-**Mandatory base options:** `-a`.
+**Issue 7 required-option candidate:** `-a`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `alias-name`. UNVERIFIED
 
-**Operands / arity / order:** alias-name. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: alias-name.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:unalias`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:unalias`; clauses `XCU:unalias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [unalias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unalias.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:unalias`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:unalias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [unalias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unalias.html).
 
 ## `uname`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 uname [-amnrsv]
 ```
 
-**Mandatory base options:** `-a; -m; -n; -r; -s; -v`.
+**Issue 7 required-option candidate:** `-a; -m; -n; -r; -s; -v`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `none`. UNVERIFIED
 
-**Operands / arity / order:** none. No operands are specified; use exactly the option-only or operand-free synopsis.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/uname`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/uname`; clauses `XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/uname`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/uname`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html).
 
 ## `unexpand`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 unexpand [-a|-t tablist] [file...]
 ```
 
-**Mandatory base options:** `-a; -t`.
+**Issue 7 required-option candidate:** `-a; -t`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-t=<tablist>`.
 
-**Option arguments:** `-t=<tablist>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/unexpand`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/unexpand`; clauses `XCU:unexpand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [unexpand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unexpand.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/unexpand`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/unexpand`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:unexpand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [unexpand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unexpand.html).
 
 ## `uniq`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 uniq [-c|-d|-u] [-f fields] [-s char] [input_file [output_file]]
 ```
 
-**Mandatory base options:** `-c; -d; -f; -s; -u`.
+**Issue 7 required-option candidate:** `-c; -d; -f; -s; -u`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-f=<fields>; -s=<chars>`.
 
-**Option arguments:** `-f=<fields>; -s=<chars>`.
+**Operands:** `input_file; output_file`. UNVERIFIED
 
-**Operands / arity / order:** input_file; output_file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: input_file;output_file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/uniq`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/uniq`; clauses `XCU:uniq:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [uniq](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uniq.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/uniq`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/uniq`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uniq:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [uniq](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uniq.html).
 
 ## `uudecode`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 uudecode [-o outfile] [file]
 ```
 
-**Mandatory base options:** `-o`.
+**Issue 7 required-option candidate:** `-o`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-o=<outfile>`.
 
-**Option arguments:** `-o=<outfile>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/uudecode`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/uudecode`; clauses `XCU:uudecode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [uudecode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uudecode.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/uudecode`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/uudecode`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uudecode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [uudecode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uudecode.html).
 
 ## `uuencode`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 uuencode [-m] [file] decode_pathname
 ```
 
-**Mandatory base options:** `-m`.
+**Issue 7 required-option candidate:** `-m`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `decode_pathname; file`. UNVERIFIED
 
-**Operands / arity / order:** decode_pathname; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: decode_pathname;file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/uuencode`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/uuencode`; clauses `XCU:uuencode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [uuencode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uuencode.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/uuencode`.
+
+**Parser/source comparison:** INCOMPLETE: option gaps=-m; argument-form gaps=none; source `cmds/uuencode`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uuencode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [uuencode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uuencode.html).
 
 ## `vi`
 
-**Requirement / applicability:** optional.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `optional`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [optional] vi [-rR] [-c command] [-t tagstring] [-w size] [file...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `optional:-c,-r,-R,-t,-w`.
+**Issue 7 conditional-option candidate:** `optional:-c,-r,-R,-t,-w`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-c=<command>; -t=<tagstring>; -w=<size>`.
 
-**Option arguments:** `-c=<command>; -t=<tagstring>; -w=<size>`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `COLUMNS; EXINIT; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LINES; NLSPATH; PATH; SHELL; TERM`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `filesystem`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** pinned external provider.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** pinned external provider (`external`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `pkg/posixprovider/manifest.tsv#vi`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:pkg/posixprovider/manifest.tsv#vi`; clauses `XCU:vi:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `external_provider`.
 
-**Official Open Group Issue 7/2016 link:** [vi](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/vi.html).
+**Effective owner:** `external_provider` (`external`).
+
+**Implementation:** `pkg/posixprovider/manifest.tsv#vi`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:vi:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [vi](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/vi.html).
 
 ## `wait`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 wait [pid...]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `pid`. UNVERIFIED
 
-**Operands / arity / order:** pid. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: pid.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** shell-only interface.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** shell (`shell_builtin`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `shell:wait`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:SHELL:wait`; clauses `XCU:wait:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `shell_only`.
 
-**Official Open Group Issue 7/2016 link:** [wait](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wait.html).
+**Effective owner:** `shell` (`shell_builtin`).
+
+**Implementation:** `shell:wait`.
+
+**Parser/source comparison:** not a Go-selected parser; source `-`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:wait:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [wait](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wait.html).
 
 ## `wc`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 wc [-c|-m] [-lw] [file...]
 ```
 
-**Mandatory base options:** `-c; -l; -m; -w`.
+**Issue 7 required-option candidate:** `-c; -l; -m; -w`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `file`. UNVERIFIED
 
-**Operands / arity / order:** file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:select standard input in a file-operand position; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input for a '-' file operand and when no file operand is supplied.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/wc`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/wc`; clauses `XCU:wc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [wc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wc.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/wc`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/wc`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:wc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [wc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wc.html).
 
 ## `who`
 
-**Requirement / applicability:** base; xsi.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base; xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 who -q [file]
@@ -4402,106 +5533,134 @@ who am I
 [xsi] who [-mu] -s [-bHlprt] [file]
 ```
 
-**Mandatory base options:** `-q`.
+**Issue 7 required-option candidate:** `-q`.
 
-**Conditional / optional options:** `xsi:-a,-b,-d,-H,-l,-m,-p,-r,-s,-t,-T,-u`.
+**Issue 7 conditional-option candidate:** `xsi:-a,-b,-d,-H,-l,-m,-p,-r,-s,-t,-T,-u`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `am i, am I; file`. UNVERIFIED
 
-**Operands / arity / order:** am i, am I; file. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: am i, am I;file.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Output / effects:** Write the required result format to standard output. Effects classification: `stdout`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/who`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/who`; clauses `XCU:who:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [who](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/who.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/who`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/who`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:who:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [who](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/who.html).
 
 ## `write`
 
-**Requirement / applicability:** base.
+**Evidence state:** `unverified`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `base`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 write user_name [terminal]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `none`.
+**Issue 7 conditional-option candidate:** `none`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `none`.
 
-**Option arguments:** `none`.
+**Operands:** `user_name; terminal`. UNVERIFIED
 
-**Operands / arity / order:** user_name; terminal. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: user_name;terminal.
+**Special tokens:** UNVERIFIED
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. No command-specific standard-input use; the POSIX STDIN clause remains authoritative.
+**Standard input:** UNVERIFIED
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `terminal_or_peer_state`.
+**Standard output:** UNVERIFIED
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** UNVERIFIED
 
-**Availability:** Go same-name applet.
+**Effects:** `UNVERIFIED`.
 
-**Effective Profile C/D owner:** Go (`flagset`).
+**Exit status:** UNVERIFIED
 
-**Implementation source:** `cmds/write`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/write`; clauses `XCU:write:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [write](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/write.html).
+**Effective owner:** `go` (`flagset`).
+
+**Implementation:** `cmds/write`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/write`.
+
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:write:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [write](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/write.html).
 
 ## `xargs`
 
-**Requirement / applicability:** xsi.
+**Evidence state:** `partial`.
 
-**Normative POSIX synopsis:**
+**Applicability:** `xsi`.
+
+**Issue 7 synopsis candidate:**
 
 ```text
 [xsi] xargs [-ptx] [-E eofstr] [-I replstr|-L number|-n number] [-s size] [utility [argument...]]
 ```
 
-**Mandatory base options:** `none`.
+**Issue 7 required-option candidate:** `none`.
 
-**Conditional / optional options:** `xsi:-E,-I,-L,-n,-p,-s,-t,-x`.
+**Issue 7 conditional-option candidate:** `xsi:-E,-I,-L,-n,-p,-s,-t,-x`.
 
-**GNU-only material:** `none`.
+**Issue 7 option-argument candidate:** `-E=<eofstr>; -I=<replstr>; -L=<number>; -n=<number>; -s=<size>`.
 
-**Option arguments:** `-E=<eofstr>; -I=<replstr>; -L=<number>; -n=<number>; -s=<size>`.
+**Operands:** `utility; argument`. Use utility and each initial argument first, then append arguments constructed from logical lines read from standard input.
 
-**Operands / arity / order:** utility; argument. Use operands in the order and cardinality shown by each applicable synopsis; defined operand forms: utility;argument.
+**Special tokens:** -- ends xargs option parsing; a lone - begins the utility operand because it is not an xargs option.
 
-**Special `-` / `--` / standard input:** -:no command-specific operand meaning beyond the displayed synopsis; --:end options where POSIX Utility Syntax Guideline 10 applies. Read standard input when the applicable synopsis supplies no input-file operand.
+**Standard input:** Read logical lines and construct arguments using blank, newline, quote, and backslash rules; /dev/tty supplies -p responses.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Output / effects:** Produce the files, state changes, terminal/peer actions, or other effects specified by POSIX. Effects classification: `process_or_shell_state`.
+**Standard output:** Not used by xargs itself; the invoked utility can write to its inherited standard output.
 
-**Diagnostics / status:** Write diagnostics required by POSIX to standard error. Exit status: 0 on successful completion; greater than 0 on error, except where POSIX defines command-specific values.
+**Standard error:** Used for diagnostics, every generated command line under -t, and both the generated command line and prompt under -p.
 
-**Availability:** Go same-name applet.
+**Effects:** `invokes_utility`.
 
-**Effective Profile C/D owner:** Go (`manual`).
+**Exit status:** 0 if all utility invocations return 0; 1-125 if a command line cannot be assembled, an invocation returns non-zero, or another error occurs; 126 if utility is found but cannot be invoked; 127 if utility cannot be found.
 
-**Implementation source:** `cmds/xargs`.
+**Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Tests / evidence / state:** `scripts/posix_manifest_test.py;repository evidence named by evidence_ids`; `REPO:cmds/xargs`; clauses `XCU:xargs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`; state `specified`.
+**Availability:** `go`.
 
-**Official Open Group Issue 7/2016 link:** [xargs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/xargs.html).
+**Effective owner:** `go` (`manual`).
+
+**Implementation:** `cmds/xargs`.
+
+**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/xargs`.
+
+**Evidence lanes:** Go=`cmds/xargs/xargs_test.go;cmds/xargs/xargs_resolve_test.go`; shell=`-`; provider=`-`; clauses=`XCU:xargs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Issue 7 source:** [xargs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/xargs.html).

@@ -31,7 +31,7 @@ set -e
 cd "$(git rev-parse --show-toplevel)"
 
 scripts/applet-test-coverage.sh
-scripts/applet-matrix.py --check
+scripts/validate-posix-required-commands.sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/posix_manifest_test.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/posix_manifest.py --check
 

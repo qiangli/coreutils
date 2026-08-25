@@ -25,9 +25,10 @@ the canonical Go inventory supplies 86 names and is absent for 30. The shell
 supplies 14 of those 30 and a **pinned POSIX external provider** supplies the
 remaining 16, leaving no external-provider gaps in the assembled Bashy
 Profiles C/D surface.
-See the generated [complete required-command interface
-reference](docs/posix-required-command-interfaces.md); do not infer the
-coreutils gap from the smaller assembled-Bashy number.
+See the generated [required-command coverage
+map](docs/posix-required-commands.md) and its separate, explicitly incomplete
+[interface evidence ledger](docs/posix-required-command-interfaces.md); do not
+infer the coreutils gap from the smaller assembled-Bashy number.
 
 A provider is **not** a Go applet, and the matrix counts them separately so
 they can never be read as Go coverage: the multicall owns the NAME

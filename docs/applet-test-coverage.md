@@ -35,5 +35,6 @@ name-dependent parsing or diagnostics exist.
 
 See `applet-matrix.md` for the complete applet-by-applet GNU, POSIX-cert, alias,
 and package-test matrix; `applet-matrix.tsv` is its machine-readable counterpart.
-The separate generated `posix-required-command-interfaces.md` covers all 116
-configured required names, including names absent from this repository.
+The generated `posix-required-commands.md` preserves the 116-name harness
+coverage map. The separate `posix-required-command-interfaces.md` is an
+incomplete evidence ledger for those names; it does not claim conformance.
