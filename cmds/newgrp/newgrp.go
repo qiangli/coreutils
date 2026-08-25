@@ -140,6 +140,10 @@ type credentialPlan struct {
 	RealGID       string
 	EffectiveGID  string
 	Supplementary []string
+	// When true, the final supplementary entry is the POSIX best-effort
+	// append. A kernel-discovered capacity limit may omit that entry, but not
+	// the mandatory real/effective GID assignment or other list adjustments.
+	HasOptionalSupplementaryAppend bool
 }
 
 // errGroupChange marks a spawn failure caused by the credential change rather
@@ -287,12 +291,14 @@ func planGroupChange(current credentialState, target string) *credentialPlan {
 	groups := dedupeGroups(current.Supplementary)
 	oldInList := slices.Contains(groups, current.EffectiveGID)
 	newInList := slices.Contains(groups, target)
+	hasOptionalAppend := false
 
 	if oldInList {
 		// On systems that normally include the effective gid, retain the old
 		// list and add the new effective gid when there is room.
 		if !newInList && groupListHasRoom(groups, current.MaxSupplementary) {
 			groups = append(groups, target)
+			hasOptionalAppend = true
 		}
 	} else {
 		// On systems that normally exclude it, remove the new effective gid and
@@ -302,13 +308,15 @@ func planGroupChange(current credentialState, target string) *credentialPlan {
 		}
 		if !slices.Contains(groups, current.EffectiveGID) && groupListHasRoom(groups, current.MaxSupplementary) {
 			groups = append(groups, current.EffectiveGID)
+			hasOptionalAppend = true
 		}
 	}
 
 	return &credentialPlan{
-		RealGID:       target,
-		EffectiveGID:  target,
-		Supplementary: groups,
+		RealGID:                        target,
+		EffectiveGID:                   target,
+		Supplementary:                  groups,
+		HasOptionalSupplementaryAppend: hasOptionalAppend,
 	}
 }
 

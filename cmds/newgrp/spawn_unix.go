@@ -26,10 +26,16 @@ const defaultShell = "/bin/sh"
 // would silently re-credential every later command in that host — an effect
 // that outlives the invocation and that nothing reports.
 func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
-	ctx := rc.Ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	return spawnShellWithStarter(rc, spec, startExecShell)
+}
+
+type shellProcess interface {
+	Wait() error
+}
+
+type shellStarter func(context.Context, *tool.RunContext, shellSpec, *syscall.Credential) (shellProcess, error)
+
+func startExecShell(ctx context.Context, rc *tool.RunContext, spec shellSpec, credential *syscall.Credential) (shellProcess, error) {
 	c := exec.CommandContext(ctx, spec.Path)
 	c.Args = []string{spec.Argv0}
 	c.Dir = spec.Dir
@@ -41,16 +47,42 @@ func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 		c.Env = rc.Env
 	}
 	c.Stdin, c.Stdout, c.Stderr = rc.In, rc.Out, rc.Err
+	if credential != nil {
+		c.SysProcAttr = &syscall.SysProcAttr{Credential: credential}
+	}
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
 
+func spawnShellWithStarter(rc *tool.RunContext, spec shellSpec, start shellStarter) (int, error) {
+	ctx := rc.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var credential *syscall.Credential
 	if spec.Credential != nil {
-		cred, err := syscallCredential(spec.UID, spec.Credential)
+		var err error
+		credential, err = syscallCredential(spec.UID, spec.Credential)
 		if err != nil {
 			return 0, &errGroupChange{err}
 		}
-		c.SysProcAttr = &syscall.SysProcAttr{Credential: cred}
 	}
 
-	if err := c.Start(); err != nil {
+	process, err := start(ctx, rc, spec, credential)
+	if err != nil && shouldRetryWithoutOptionalSupplementary(err, spec.Credential) {
+		// An indeterminate NGROUPS_MAX can make a list that appeared to have
+		// room fail at setgroups. Retry once without only the best-effort final
+		// append; syscallCredential still carries the required UID and GID.
+		credential, credentialErr := syscallCredentialWithoutOptionalAppend(spec.UID, spec.Credential)
+		if credentialErr != nil {
+			return 0, &errGroupChange{credentialErr}
+		}
+		process, err = start(ctx, rc, spec, credential)
+	}
+	if err != nil {
 		if spec.Credential != nil && isCredentialStartFailure(err) {
 			// Start applies the credential in the child between fork and exec,
 			// so a refusal (EPERM, the normal case for a non-setuid build)
@@ -61,7 +93,7 @@ func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 		return 0, fmt.Errorf("cannot run %s: %w", spec.Path, err)
 	}
 
-	if err := c.Wait(); err != nil {
+	if err := process.Wait(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if code := ee.ExitCode(); code >= 0 {
@@ -80,6 +112,10 @@ func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 	return 0, nil
 }
 
+func shouldRetryWithoutOptionalSupplementary(err error, plan *credentialPlan) bool {
+	return plan != nil && plan.HasOptionalSupplementaryAppend && errors.Is(err, syscall.EINVAL)
+}
+
 func isCredentialStartFailure(err error) bool {
 	// These are the errors produced by setgroups/setgid in the child for a
 	// denied assignment or an over-capacity supplementary list. Errors such as
@@ -93,6 +129,17 @@ func isCredentialStartFailure(err error) bool {
 // setgid sets the real and effective IDs together. Rejecting unequal IDs here
 // makes that platform limitation explicit instead of pretending it was met.
 func syscallCredential(uid string, plan *credentialPlan) (*syscall.Credential, error) {
+	return syscallCredentialWithGroups(uid, plan, plan.Supplementary)
+}
+
+func syscallCredentialWithoutOptionalAppend(uid string, plan *credentialPlan) (*syscall.Credential, error) {
+	if !plan.HasOptionalSupplementaryAppend || len(plan.Supplementary) == 0 {
+		return nil, fmt.Errorf("credential plan has no optional supplementary group append")
+	}
+	return syscallCredentialWithGroups(uid, plan, plan.Supplementary[:len(plan.Supplementary)-1])
+}
+
+func syscallCredentialWithGroups(uid string, plan *credentialPlan, supplementary []string) (*syscall.Credential, error) {
 	if plan.RealGID != plan.EffectiveGID {
 		return nil, fmt.Errorf("cannot assign distinct real and effective group ids (%s and %s)", plan.RealGID, plan.EffectiveGID)
 	}
@@ -104,8 +151,8 @@ func syscallCredential(uid string, plan *credentialPlan) (*syscall.Credential, e
 	if err != nil {
 		return nil, err
 	}
-	groups := make([]uint32, 0, len(plan.Supplementary))
-	for _, group := range plan.Supplementary {
+	groups := make([]uint32, 0, len(supplementary))
+	for _, group := range supplementary {
 		value, err := parseCredentialID("supplementary group", group)
 		if err != nil {
 			return nil, err

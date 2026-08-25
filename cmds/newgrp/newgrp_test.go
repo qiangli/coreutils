@@ -298,9 +298,10 @@ func TestGroupOperandByName(t *testing.T) {
 
 func TestSupplementaryGroupChangeRules(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		current credentialState
-		want    []string
+		name               string
+		current            credentialState
+		want               []string
+		wantOptionalAppend bool
 	}{
 		{
 			name: "old and new present retains list",
@@ -312,19 +313,22 @@ func TestSupplementaryGroupChangeRules(t *testing.T) {
 			name: "old present and new absent adds new",
 			current: credentialState{EffectiveGID: "1000",
 				Supplementary: []string{"1000", "50"}},
-			want: []string{"1000", "50", "20"},
+			want:               []string{"1000", "50", "20"},
+			wantOptionalAppend: true,
 		},
 		{
 			name: "old absent and new present replaces new with old",
 			current: credentialState{EffectiveGID: "1000",
 				Supplementary: []string{"20", "50"}},
-			want: []string{"50", "1000"},
+			want:               []string{"50", "1000"},
+			wantOptionalAppend: true,
 		},
 		{
 			name: "old and new absent adds old",
 			current: credentialState{EffectiveGID: "1000",
 				Supplementary: []string{"12", "50"}},
-			want: []string{"12", "50", "1000"},
+			want:               []string{"12", "50", "1000"},
+			wantOptionalAppend: true,
 		},
 		{
 			name: "full list does not add",
@@ -340,6 +344,9 @@ func TestSupplementaryGroupChangeRules(t *testing.T) {
 			}
 			if !slices.Equal(plan.Supplementary, tc.want) {
 				t.Errorf("groups = %v, want %v", plan.Supplementary, tc.want)
+			}
+			if plan.HasOptionalSupplementaryAppend != tc.wantOptionalAppend {
+				t.Errorf("optional append = %v, want %v", plan.HasOptionalSupplementaryAppend, tc.wantOptionalAppend)
 			}
 		})
 	}

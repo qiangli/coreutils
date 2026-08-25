@@ -128,7 +128,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 3 | 31 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
-| `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 4 | 35 |
+| `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 50 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
