@@ -66,7 +66,7 @@ func mkTree(t *testing.T) string {
 func parseLines(t *testing.T, out string) (vals []int64, paths []string) {
 	t.Helper()
 	for _, ln := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
-		parts := strings.SplitN(ln, "\t", 2)
+		parts := strings.SplitN(ln, " ", 2)
 		if len(parts) != 2 {
 			t.Fatalf("malformed du line %q", ln)
 		}
@@ -84,8 +84,8 @@ func TestFileOperand(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", "hello")
 	out, _, code := runToolAt(t, dir, "-b", "f")
-	if code != 0 || out != "5\tf\n" {
-		t.Errorf("du -b f = (%q, %d), want (\"5\\tf\\n\", 0)", out, code)
+	if code != 0 || out != "5 f\n" {
+		t.Errorf("du -b f = (%q, %d), want (\"5 f\\n\", 0)", out, code)
 	}
 }
 
@@ -93,11 +93,11 @@ func TestApparentSizeDoesNotForceBytes(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", strings.Repeat("x", 1536))
 	out, _, code := runToolAt(t, dir, "-A", "f")
-	if code != 0 || out != "2\tf\n" {
-		t.Errorf("du -A f = (%q, %d), want apparent size in default 1K units", out, code)
+	if code != 0 || out != "3 f\n" {
+		t.Errorf("du -A f = (%q, %d), want apparent size in default 512-byte units", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "-b", "f")
-	if code != 0 || out != "1536\tf\n" {
+	if code != 0 || out != "1536 f\n" {
 		t.Errorf("du -b f = (%q, %d), want apparent bytes", out, code)
 	}
 }
@@ -106,11 +106,11 @@ func TestBlockSizeCluster(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", strings.Repeat("x", 1536))
 	out, errb, code := runToolAt(t, dir, "-A", "-BM", "f")
-	if code != 0 || errb != "" || out != "1\tf\n" {
+	if code != 0 || errb != "" || out != "1 f\n" {
 		t.Fatalf("du -A -BM f = (%q, %q, %d), want 1 MiB block", out, errb, code)
 	}
 	out, errb, code = runToolAt(t, dir, "-A", "-aBM", "f")
-	if code != 0 || errb != "" || out != "1\tf\n" {
+	if code != 0 || errb != "" || out != "1 f\n" {
 		t.Fatalf("du -A -aBM f = (%q, %q, %d), want leading flags preserved in cluster", out, errb, code)
 	}
 }
@@ -196,13 +196,13 @@ func TestSymlinkDereferenceModes(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("du -sb link code = %d", code)
 	}
-	if out == "7\tlink\n" {
+	if out == "7 link\n" {
 		t.Fatalf("du -sb link followed symlink by default: %q", out)
 	}
 
 	for _, flag := range []string{"-D", "-H", "--dereference-args"} {
 		out, _, code = runToolAt(t, dir, "-sb", flag, "link")
-		if code != 0 || out != "7\tlink\n" {
+		if code != 0 || out != "7 link\n" {
 			t.Errorf("du -sb %s link = (%q, %d), want dereferenced target", flag, out, code)
 		}
 	}
@@ -245,7 +245,7 @@ func TestCountLinks(t *testing.T) {
 func TestInodes(t *testing.T) {
 	dir := mkTree(t)
 	out, _, code := runToolAt(t, dir, "-s", "--inodes", "tree")
-	if code != 0 || out != "5\ttree\n" {
+	if code != 0 || out != "5 tree\n" {
 		t.Errorf("du -s --inodes tree = (%q, %d), want five filesystem entries", out, code)
 	}
 }
@@ -295,12 +295,12 @@ func TestHuman(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", strings.Repeat("x", 2048))
 	out, _, code := runToolAt(t, dir, "-h", "f")
-	if code != 0 || !regexp.MustCompile(`^\d+(\.\d)?[KMGTPE]?\tf\n$`).MatchString(out) {
+	if code != 0 || !regexp.MustCompile(`^\d+(\.\d)?[KMGTPE]? f\n$`).MatchString(out) {
 		t.Errorf("du -h f = (%q, %d)", out, code)
 	}
 }
 
-func TestDefaultUnitIs1K(t *testing.T) {
+func TestDefaultUnitIs512Bytes(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", strings.Repeat("x", 5000))
 	out, _, code := runToolAt(t, dir, "f")
@@ -308,10 +308,10 @@ func TestDefaultUnitIs1K(t *testing.T) {
 		t.Fatalf("du f code = %d", code)
 	}
 	vals, _ := parseLines(t, out)
-	// 5000 bytes is at least 5 1K-blocks but far fewer than 5000:
-	// proves the value is in 1024-byte units, not bytes.
-	if vals[0] < 5 || vals[0] > 64 {
-		t.Errorf("du f = %d 1K-blocks, want a small block count", vals[0])
+	// The platform allocation is at least ten 512-byte units but far fewer
+	// than 5000, proving the default is a block count rather than bytes.
+	if vals[0] < 10 || vals[0] > 128 {
+		t.Errorf("du f = %d 512-byte blocks, want a small block count", vals[0])
 	}
 }
 
@@ -331,7 +331,7 @@ func TestFiles0FromFileAndStdin(t *testing.T) {
 	}
 
 	out, _, code = runToolAtWithInput(t, dir, "b\x00", "-b", "--files0-from=-")
-	if code != 0 || out != "5\tb\n" {
+	if code != 0 || out != "5 b\n" {
 		t.Errorf("--files0-from stdin = (%q, %d)", out, code)
 	}
 
@@ -345,11 +345,11 @@ func TestNullOutputTerminator(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", "hello")
 	out, _, code := runToolAt(t, dir, "-0b", "f")
-	if code != 0 || out != "5\tf\x00" {
+	if code != 0 || out != "5 f\x00" {
 		t.Errorf("du -0b f = (%q, %d), want NUL-terminated line", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "--null", "-b", "f")
-	if code != 0 || out != "5\tf\x00" {
+	if code != 0 || out != "5 f\x00" {
 		t.Errorf("du --null -b f = (%q, %d), want NUL-terminated line", out, code)
 	}
 }
@@ -393,11 +393,11 @@ func TestThreshold(t *testing.T) {
 	write(t, dir, "small", strings.Repeat("s", 10))
 	write(t, dir, "big", strings.Repeat("b", 30))
 	out, _, code := runToolAt(t, dir, "-b", "-t", "20", "small", "big")
-	if code != 0 || out != "30\tbig\n" {
+	if code != 0 || out != "30 big\n" {
 		t.Errorf("du -b -t 20 = (%q, %d), want only big file", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "-b", "--threshold=-20", "small", "big")
-	if code != 0 || out != "10\tsmall\n" {
+	if code != 0 || out != "10 small\n" {
 		t.Errorf("du -b --threshold=-20 = (%q, %d), want only small file", out, code)
 	}
 }
@@ -423,19 +423,19 @@ func TestBlockSizeModes(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", strings.Repeat("x", 1536))
 	out, _, code := runToolAt(t, dir, "-b", "-B", "512", "f")
-	if code != 0 || out != "3\tf\n" {
+	if code != 0 || out != "3 f\n" {
 		t.Errorf("-b -B 512 = (%q, %d), want 3 blocks", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "-b", "-k", "f")
-	if code != 0 || out != "2\tf\n" {
+	if code != 0 || out != "2 f\n" {
 		t.Errorf("-b -k = (%q, %d), want 2 KiB blocks", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "-b", "-m", "f")
-	if code != 0 || out != "1\tf\n" {
+	if code != 0 || out != "1 f\n" {
 		t.Errorf("-b -m = (%q, %d), want 1 MiB block", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "-b", "--block-size=1K", "f")
-	if code != 0 || out != "2\tf\n" {
+	if code != 0 || out != "2 f\n" {
 		t.Errorf("--block-size=1K = (%q, %d), want 2 blocks", out, code)
 	}
 }
@@ -444,7 +444,7 @@ func TestSIHumanReadable(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", strings.Repeat("x", 1001))
 	out, _, code := runToolAt(t, dir, "-b", "--si", "f")
-	if code != 0 || out != "1.1K\tf\n" {
+	if code != 0 || out != "1.1K f\n" {
 		t.Errorf("du -b --si f = (%q, %d), want SI human output", out, code)
 	}
 }
@@ -490,7 +490,7 @@ func TestHelpAndVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, errb, code := runToolAt(t, dir, "-M", "f")
-	if code != 0 || errb != "" || !strings.HasPrefix(out, "1\tf\n") {
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "1 f\n") {
 		t.Errorf("du -M: code=%d err=%q out=%q", code, errb, out)
 	}
 	out, _, code = runTool(t, "--version")

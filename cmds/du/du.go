@@ -1,11 +1,11 @@
 // Portions adapted from https://github.com/u-root/u-root cmds/core/du/du.go (BSD-3-Clause).
 // Changes: rewired to the tool framework; GNU flag set -a -b -c -d -h -s
-// with GNU defaults (1024-byte block output, hard-link deduplication,
+// with POSIX defaults (512-byte block output, hard-link deduplication,
 // post-order per-directory reporting); Windows fallback to apparent size.
 
 // Package ducmd implements du(1) per the GNU coreutils manual for the
-// flag subset -a -b -c -d/--max-depth -h -s. As GNU documents, sizes
-// are disk usage reported in 1024-byte units by default (rounded up);
+// flag subset -a -b -c -d/--max-depth -h -s. POSIX requires sizes in
+// 512-byte units by default (rounded up); -k selects 1024-byte units;
 // -b switches to exact apparent sizes in bytes; -h prints
 // human-readable sizes. Hard-linked files are counted once per
 // invocation. Traversal does not follow symlinks.
@@ -212,7 +212,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case fs.Changed("max-depth"):
 		depth = *maxDepth
 	}
-	block := int64(1024)
+	block := int64(512)
 	apparent := *apparentSize || *bytesMode
 	if *bytesMode {
 		block = 1
@@ -431,7 +431,8 @@ func (d *duRun) print(n int64, path string, mod time.Time) {
 		fmt.Fprintf(d.rc.Out, "%s\t%s\t%s%s", d.fmtSize(n), d.fmtTime(mod), path, d.term)
 		return
 	}
-	fmt.Fprintf(d.rc.Out, "%s\t%s%s", d.fmtSize(n), path, d.term)
+	// POSIX specifies exactly one <space> between size and pathname.
+	fmt.Fprintf(d.rc.Out, "%s %s%s", d.fmtSize(n), path, d.term)
 }
 
 func (d *duRun) fmtSize(n int64) string {

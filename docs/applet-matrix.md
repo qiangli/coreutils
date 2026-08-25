@@ -77,7 +77,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `dir` | `cmds/dir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `dircolors` | `cmds/dircolors` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `dirname` | `cmds/dirname` | — | GNU Coreutils | yes | yes | 1 | 4 |
-| `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 1 | 26 |
+| `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 2 | 27 |
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
 | `ed` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
