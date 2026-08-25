@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build aix || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
 
 package ddcmd
 
@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -17,10 +16,6 @@ import (
 )
 
 var errInterrupted = errors.New("interrupted")
-
-var errUnsupportedInterruptibleNamedFIFOInput = errors.New(
-	"interruptible named FIFO input is not supported on " + runtime.GOOS,
-)
 
 // pollSliceMS bounds every wait on a descriptor. The self-pipe already sits in
 // each poll set, so cancellation does not depend on the timeout. The bounded
@@ -135,17 +130,6 @@ func (c *interruptContext) closePipe() {
 
 func interruptSignalNumber() int {
 	return int(syscall.SIGINT)
-}
-
-func moveDescriptor(fd int) int {
-	if fd >= 0 && fd < 10 {
-		nfd, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 10)
-		if err == nil {
-			_ = unix.Close(fd)
-			return nfd
-		}
-	}
-	return fd
 }
 
 // nonblockGuard remembers a descriptor's original O_NONBLOCK state. dd borrows
@@ -272,11 +256,11 @@ func (r *interruptReader) Read(p []byte) (int, error) {
 		}
 		if err == nil {
 			if r.awaitingFIFOWriter {
-				revents, err := pollDescriptorOrInterrupt(r.fd, unix.POLLIN|unix.POLLHUP, r.ctx)
+				revents, err := pollDescriptorOrInterrupt(r.fd, pollIn|pollHup, r.ctx)
 				if err != nil {
 					return 0, err
 				}
-				if revents&unix.POLLHUP == 0 {
+				if revents&pollHup == 0 {
 					// A non-blocking FIFO read returns zero before its first
 					// writer arrives. A bounded poll followed by another read
 					// preserves blocking-open semantics without stranding a
@@ -299,7 +283,7 @@ func (r *interruptReader) Read(p []byte) (int, error) {
 			// connected but has supplied no bytes. A later POLLHUP then
 			// distinguishes its close from the initial no-writer state.
 			r.awaitingFIFOWriter = false
-			if _, err := pollDescriptorOrInterrupt(r.fd, unix.POLLIN|unix.POLLHUP, r.ctx); err != nil {
+			if _, err := pollDescriptorOrInterrupt(r.fd, pollIn|pollHup, r.ctx); err != nil {
 				return 0, err
 			}
 		default:
@@ -368,7 +352,7 @@ func (w *interruptWriter) Write(p []byte) (int, error) {
 		case unix.EINTR:
 			continue
 		case unix.EAGAIN:
-			if _, err := pollDescriptorOrInterrupt(w.fd, unix.POLLOUT, w.ctx); err != nil {
+			if _, err := pollDescriptorOrInterrupt(w.fd, pollOut, w.ctx); err != nil {
 				return total, err
 			}
 		default:
@@ -381,10 +365,10 @@ func (w *interruptWriter) Write(p []byte) (int, error) {
 // waitDescriptorOrInterrupt waits for fd to become ready for events, for SIGINT
 // to arrive, or for the poll slice to expire. Expiry returns nil: the caller
 // retries the syscall, which either makes progress or blocks again here.
-func pollDescriptorOrInterrupt(fd int, events int16, sigctx *interruptContext) (int16, error) {
+func pollDescriptorOrInterrupt(fd int, events pollEvents, sigctx *interruptContext) (pollEvents, error) {
 	fds := []unix.PollFd{{Fd: int32(fd), Events: events}}
 	if sigctx.pipe[0] >= 0 {
-		fds = append(fds, unix.PollFd{Fd: int32(sigctx.pipe[0]), Events: unix.POLLIN})
+		fds = append(fds, unix.PollFd{Fd: int32(sigctx.pipe[0]), Events: pollIn})
 	}
 	for {
 		if sigctx.Interrupted() {
@@ -417,7 +401,7 @@ func waitForInterrupt(sigctx *interruptContext, timeoutMS int) error {
 		time.Sleep(time.Duration(timeoutMS) * time.Millisecond)
 		return nil
 	}
-	fds := []unix.PollFd{{Fd: int32(sigctx.pipe[0]), Events: unix.POLLIN}}
+	fds := []unix.PollFd{{Fd: int32(sigctx.pipe[0]), Events: pollIn}}
 	for {
 		if sigctx.Interrupted() {
 			return errInterrupted
@@ -436,16 +420,6 @@ func waitForInterrupt(sigctx *interruptContext, timeoutMS int) error {
 	}
 }
 
-// interruptibleOpenRead opens Linux FIFO input non-blocking so cancellation
-// never leaves a goroutine stranded in open(2). interruptReader preserves the
-// blocking-open boundary by waiting through initial zero-byte reads until
-// Linux's latched POLLHUP proves that a writer connected and then closed.
-//
-// XNU does not retain an observable writer transition when the writer opens
-// and closes between our non-blocking open and first read. In that state EOF is
-// indistinguishable from "no writer has arrived", and a blocking open cannot
-// be cancelled safely after unlink or rename. Other kernels are left disabled
-// until the same transition and cancellation properties are proved there.
 func interruptibleOpenRead(path string, sigctx *interruptContext) (*os.File, bool, error) {
 	fi, statErr := os.Stat(path)
 	isFIFO := statErr == nil && fi.Mode()&os.ModeNamedPipe != 0
@@ -453,26 +427,8 @@ func interruptibleOpenRead(path string, sigctx *interruptContext) (*os.File, boo
 		f, err := os.Open(path)
 		return f, false, err
 	}
-	if runtime.GOOS != "linux" {
-		return nil, true, errUnsupportedInterruptibleNamedFIFOInput
-	}
-	if sigctx.Interrupted() {
-		return nil, true, errInterrupted
-	}
-	for {
-		fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-		if err == unix.EINTR {
-			if sigctx.Interrupted() {
-				return nil, true, errInterrupted
-			}
-			continue
-		}
-		if err != nil {
-			return nil, true, &os.PathError{Op: "open", Path: path, Err: err}
-		}
-		fd = moveDescriptor(fd)
-		return os.NewFile(uintptr(fd), path), true, nil
-	}
+	f, err := interruptibleOpenNamedFIFORead(path, sigctx)
+	return f, true, err
 }
 
 // interruptibleOpenWrite opens path for writing. A FIFO reports "no reader yet"

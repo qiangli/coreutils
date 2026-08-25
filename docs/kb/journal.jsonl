@@ -6,5 +6,3 @@
 {"op":"add","slug":"build-tag-target-specific-x-sys-queries","tool":"codex-gpt5.6-sol-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T02:53:27.410359Z"}
 {"op":"add","slug":"xargs-issue-7-i-replacement-limits","tool":"codex-gpt5.6-luna-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T03:13:14.086458Z"}
 {"op":"validate","slug":"xargs-issue-7-i-replacement-limits","tool":"codex-gpt5.6-sol-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T03:21:49.9315Z"}
-{"op":"add","slug":"interruptible-fifo-input-needs-a-provable-writer-transition-boun","tool":"codex-gpt5.6-sol-g","host":"dragon","episode":"weave-issue-683","at":"2026-08-25T08:18:55.074427Z"}
-{"op":"validate","slug":"interruptible-fifo-input-needs-a-provable-writer-transition-boun","tool":"codex-gpt5.6-sol-g","host":"dragon","episode":"weave-issue-683","at":"2026-08-25T08:19:01.990315Z"}

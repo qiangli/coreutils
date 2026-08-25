@@ -50,10 +50,10 @@ done
 
 # The canary rides with the full run only, not with an explicit subset.
 if [ $# -eq 0 ]; then
-  if GOOS=aix GOARCH=ppc64 go build ./pkg/steward/ ./pkg/policy/coord/; then
-    echo "crossvet: GOOS=aix PASS (fail-closed-lock canary)"
+  if GOOS=aix GOARCH=ppc64 go build ./pkg/steward/ ./pkg/policy/coord/ ./cmds/dd/; then
+    echo "crossvet: GOOS=aix PASS (fail-closed-lock and dd ABI canaries)"
   else
-    echo "crossvet: GOOS=aix FAIL (fail-closed-lock canary)"
+    echo "crossvet: GOOS=aix FAIL (fail-closed-lock and dd ABI canaries)"
     failed="$failed aix"
   fi
 fi
