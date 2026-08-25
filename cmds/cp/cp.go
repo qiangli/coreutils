@@ -9,8 +9,6 @@
 package cpcmd
 
 import (
-	"github.com/qiangli/coreutils/pkg/locale"
-
 	"bufio"
 	"errors"
 	"fmt"
