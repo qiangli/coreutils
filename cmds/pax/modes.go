@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +177,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	}
 
 	tr2 := tar.NewReader(bytes.NewReader(data))
+	var pendingDirs []pendingDirectoryAttributes
 	for index := 0; ; index++ {
 		h, err := tr2.Next()
 		if err == io.EOF {
@@ -189,63 +191,136 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		if !ok {
 			continue
 		}
-		if err := extractOne(rc, o, h, tr2, target); err != nil {
+		pending, err := extractOne(rc, o, h, tr2, target)
+		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %s: %v\n", h.Name, err)
 			status = 1
 			continue
+		}
+		if pending != nil {
+			pendingDirs = append(pendingDirs, *pending)
 		}
 		if o.verbose {
 			fmt.Fprintln(rc.Err, h.Name)
 		}
 	}
+	// Children change their containing directory's times, so directory
+	// attributes are finalized deepest-first only after all members exist.
+	if finalizePendingDirectories(rc, o, pendingDirs) {
+		status = 1
+	}
 	return status
 }
 
-func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, target string) error {
+type pendingDirectoryAttributes struct {
+	name, path string
+	attrs      preservedAttributes
+	normalMode os.FileMode
+}
+
+func finalizePendingDirectories(rc *tool.RunContext, o *options, pending []pendingDirectoryAttributes) bool {
+	// A later archive member for the same directory supersedes an earlier one.
+	// Sort distinct paths by depth because archive member order is unrestricted.
+	byPath := make(map[string]pendingDirectoryAttributes, len(pending))
+	for _, p := range pending {
+		byPath[p.path] = p
+	}
+	pending = pending[:0]
+	for _, p := range byPath {
+		pending = append(pending, p)
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return strings.Count(filepath.Clean(pending[i].path), string(filepath.Separator)) >
+			strings.Count(filepath.Clean(pending[j].path), string(filepath.Separator))
+	})
+	failed := false
+	for _, p := range pending {
+		var errs []error
+		if !o.preservation.mode {
+			if err := chmodExtractedFn(p.path, p.normalMode.Perm()); err != nil {
+				errs = append(errs, fmt.Errorf("set creation mode: %w", err))
+			}
+		}
+		if err := applyPreservedAttributes(p.path, p.attrs, o.preservation, false); err != nil {
+			errs = append(errs, err)
+		}
+		if err := errors.Join(errs...); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %s: %v\n", p.name, err)
+			failed = true
+		}
+	}
+	return failed
+}
+
+func attributesFromHeader(h *tar.Header) preservedAttributes {
+	return preservedAttributes{
+		uid: h.Uid, gid: h.Gid, mode: h.FileInfo().Mode(),
+		atime: h.AccessTime, mtime: h.ModTime,
+	}
+}
+
+func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, target string) (*pendingDirectoryAttributes, error) {
 	// -k: an existing destination is never replaced.
 	if o.noOverwrite {
 		if _, err := os.Lstat(target); err == nil {
-			return nil
+			return nil, nil
 		}
 	}
 	// -u: only replace a destination older than the archive member.
 	if o.newerOnly {
 		if fi, err := os.Lstat(target); err == nil && !h.ModTime.After(fi.ModTime()) {
-			return nil
+			return nil, nil
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+	if err := mkdirAllNormal(filepath.Dir(target), intermediateDirMode(rc)); err != nil {
+		return nil, err
 	}
+	attrs := attributesFromHeader(h)
+	symlink := false
 	switch h.Typeflag {
 	case tar.TypeDir:
-		return os.MkdirAll(target, h.FileInfo().Mode().Perm())
+		normalMode := normalCreationMode(rc, attrs.mode)
+		if err := prepareOutputDirectory(target, normalMode); err != nil {
+			return nil, err
+		}
+		return &pendingDirectoryAttributes{name: h.Name, path: target, attrs: attrs, normalMode: normalMode}, nil
 	case tar.TypeSymlink:
 		_ = os.Remove(target)
-		return os.Symlink(h.Linkname, target)
+		if err := os.Symlink(h.Linkname, target); err != nil {
+			return nil, err
+		}
+		symlink = true
 	case tar.TypeLink:
 		_ = os.Remove(target)
-		return os.Link(filepath.Join(rootOf(target, h.Name), h.Linkname), target)
+		if err := os.Link(filepath.Join(rootOf(target, h.Name), h.Linkname), target); err != nil {
+			return nil, err
+		}
 	case tar.TypeReg:
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, h.FileInfo().Mode().Perm())
+		_, statErr := os.Lstat(target)
+		isNew := os.IsNotExist(statErr)
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := io.Copy(f, r); err != nil {
 			f.Close()
-			return err
+			return nil, err
 		}
 		if err := f.Close(); err != nil {
-			return err
+			return nil, err
 		}
-		// -p m: do not restore the archive's mtime.
-		if !strings.Contains(o.preserve, "m") {
-			_ = os.Chtimes(target, h.AccessTime, h.ModTime)
+		if isNew {
+			if err := os.Chmod(target, normalCreationMode(rc, attrs.mode)); err != nil {
+				return nil, err
+			}
 		}
-		return nil
 	default:
-		return fmt.Errorf("unsupported member type %q", string(h.Typeflag))
+		return nil, fmt.Errorf("unsupported member type %q", string(h.Typeflag))
 	}
+	if err := applyPreservedAttributes(target, attrs, o.preservation, symlink); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // rootOf recovers the extraction root from a target and its member name, so a
@@ -743,6 +818,9 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			return sourceTraversalErr(err)
 		}
 		h.Format = tarFormat(o.format)
+		if atime, ok := sourceAccessTimeFn(fi); ok {
+			h.AccessTime = atime
+		}
 		id := identityOf(fi)
 		// A second name for an already-archived inode becomes a hardlink
 		// member rather than a second copy of the data, which is what makes
@@ -926,6 +1004,7 @@ var linkSourceFn = defaultLinkSource
 func linkCopyMode(rc *tool.RunContext, o *options, files []string, root string) int {
 	status := 0
 	stop := false
+	var pendingDirs []pendingDirectoryAttributes
 	for _, name := range files {
 		diagnosed, err := walkOperand(rc, o, name, func(e walkEntry) error {
 			out := applySubstitutions(o.subst, e.member, rc.Err)
@@ -953,8 +1032,19 @@ func linkCopyMode(rc *tool.RunContext, o *options, files []string, root string) 
 					return nil
 				}
 			}
-			if err := copyOneByLink(e, target); err != nil {
+			attrErr, err := copyOneByLink(rc, o, e, target)
+			if err != nil {
 				return err
+			}
+			if e.fi.IsDir() {
+				pendingDirs = append(pendingDirs, pendingDirectoryAttributes{
+					name: out, path: target, attrs: attributesFromWalkEntry(e),
+					normalMode: normalCreationMode(rc, e.fi.Mode()),
+				})
+			}
+			if attrErr != nil {
+				fmt.Fprintf(rc.Err, "pax: %s: %v\n", out, attrErr)
+				status = 1
 			}
 			if o.verbose {
 				fmt.Fprintln(rc.Err, out)
@@ -973,6 +1063,9 @@ func linkCopyMode(rc *tool.RunContext, o *options, files []string, root string) 
 		if stop {
 			break
 		}
+	}
+	if finalizePendingDirectories(rc, o, pendingDirs) {
+		status = 1
 	}
 	return status
 }
@@ -1002,18 +1095,32 @@ func safeCopyTarget(root, name string) (string, error) {
 	return "", fmt.Errorf("refusing invalid destination name %q", name)
 }
 
-func copyOneByLink(e walkEntry, target string) error {
-	if e.fi.IsDir() {
-		return os.MkdirAll(target, e.fi.Mode().Perm())
+func attributesFromWalkEntry(e walkEntry) preservedAttributes {
+	id := identityOf(e.fi)
+	attrs := preservedAttributes{mode: e.fi.Mode(), mtime: e.fi.ModTime()}
+	if id.ok {
+		attrs.uid, attrs.gid = int(id.uid), int(id.gid)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+	if atime, ok := sourceAccessTimeFn(e.fi); ok {
+		attrs.atime = atime
+	}
+	return attrs
+}
+
+// copyOneByLink returns preservation failures separately from copy failures so
+// the caller can diagnose them, retain the copied file, and continue traversal.
+func copyOneByLink(rc *tool.RunContext, o *options, e walkEntry, target string) (error, error) {
+	if e.fi.IsDir() {
+		return nil, prepareOutputDirectory(target, normalCreationMode(rc, e.fi.Mode()))
+	}
+	if err := mkdirAllNormal(filepath.Dir(target), intermediateDirMode(rc)); err != nil {
+		return nil, err
 	}
 	source := e.abs
 	if e.followed {
 		resolved, err := filepath.EvalSymlinks(source)
 		if err != nil {
-			return sourceTraversalErr(err)
+			return nil, sourceTraversalErr(err)
 		}
 		source = resolved
 	}
@@ -1024,16 +1131,21 @@ func copyOneByLink(e walkEntry, target string) error {
 		sourceInfo, sourceErr := os.Lstat(source)
 		targetInfo, targetErr := os.Lstat(target)
 		if sourceErr == nil && targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
-			return fmt.Errorf("source and destination are the same file")
+			return nil, fmt.Errorf("source and destination are the same file")
 		}
 		if err := os.Remove(target); err != nil {
-			return err
+			return nil, err
 		}
 	} else if !os.IsNotExist(err) {
-		return err
+		return nil, err
 	}
-	if err := linkSourceFn(source, target); err == nil {
-		return nil
+	// Without preserved ownership, a set-ID source must be copied so the new
+	// inode can have those bits cleared without mutating the live source inode.
+	canLink := o.preservation.owner || e.fi.Mode()&(os.ModeSetuid|os.ModeSetgid) == 0
+	if canLink {
+		if err := linkSourceFn(source, target); err == nil {
+			return nil, nil
+		}
 	}
 	// POSIX says "whenever possible": a cross-device filesystem or a platform
 	// that cannot hard-link symlinks falls back to the normal copy semantics.
@@ -1041,33 +1153,39 @@ func copyOneByLink(e walkEntry, target string) error {
 	case e.fi.Mode().IsRegular():
 		in, err := os.Open(source)
 		if err != nil {
-			return sourceTraversalErr(err)
+			return nil, sourceTraversalErr(err)
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, e.fi.Mode().Perm())
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			in.Close()
-			return err
+			return nil, err
 		}
 		copyErr := copySourceFile(out, in)
 		closeOutErr := out.Close()
 		closeInErr := in.Close()
 		if copyErr != nil {
-			return copyErr
+			return nil, copyErr
 		}
 		if closeOutErr != nil {
-			return closeOutErr
+			return nil, closeOutErr
 		}
 		if closeInErr != nil {
-			return sourceTraversalErr(closeInErr)
+			return nil, sourceTraversalErr(closeInErr)
 		}
-		return nil
+		if err := os.Chmod(target, normalCreationMode(rc, e.fi.Mode())); err != nil {
+			return nil, err
+		}
 	case e.fi.Mode()&os.ModeSymlink != 0 && !e.followed:
 		link, err := os.Readlink(source)
 		if err != nil {
-			return sourceTraversalErr(err)
+			return nil, sourceTraversalErr(err)
 		}
-		return os.Symlink(link, target)
+		if err := os.Symlink(link, target); err != nil {
+			return nil, err
+		}
 	default:
-		return fmt.Errorf("unsupported source type %s", e.fi.Mode())
+		return nil, fmt.Errorf("unsupported source type %s", e.fi.Mode())
 	}
+	attrs := attributesFromWalkEntry(e)
+	return applyPreservedAttributes(target, attrs, o.preservation, e.fi.Mode()&os.ModeSymlink != 0 && !e.followed), nil
 }

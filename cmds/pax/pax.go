@@ -20,9 +20,9 @@ var cmd = &tool.Tool{
 	Name:     "pax",
 	Synopsis: "Portable archive interchange.",
 	Usage: `pax [-cdnv] [-H|-L] [-f archive] [-s replstr] [pattern...]
-  pax -r [-cdiknuv] [-H|-L] [-f archive] [-p string] [-s replstr] [pattern...]
+  pax -r [-cdiknuv] [-H|-L] [-f archive] [-p string]... [-s replstr] [pattern...]
   pax -w [-dituvX] [-H|-L] [-b blocksize] [-a] [-f archive] [-s replstr] [-x format] [file...]
-  pax -r -w [-diklntuvX] [-H|-L] [-p string] [-s replstr] file... directory`,
+  pax -r -w [-diklntuvX] [-H|-L] [-p string]... [-s replstr] file... directory`,
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -32,7 +32,7 @@ type options struct {
 	archive         string
 	verbose         bool
 	format          string
-	preserve        string
+	preservation    preservation
 	subst           []substitution
 	interactive     bool
 	link            bool // -l (copy mode only)
@@ -86,7 +86,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.StringVarP(&o.archive, "file", "f", "", "archive pathname (default stdin/stdout)")
 	fs.BoolVarP(&o.verbose, "verbose", "v", false, "verbose output")
 	fs.StringVarP(&o.format, "format", "x", "pax", "archive format: pax, ustar, or cpio")
-	fs.StringVarP(&o.preserve, "preserve", "p", "", "preserve file attributes")
+	preserve := fs.StringArrayP("preserve", "p", nil, "preserve file attributes (ordered characters a, e, m, o, p; repeatable)")
 	subst := fs.StringArrayP("subst", "s", nil, "rewrite member names with an ed-style substitution")
 	fs.BoolVarP(&o.interactive, "interactive", "i", false, "rename members interactively")
 	fs.BoolVarP(&o.link, "link", "l", false, "hard-link rather than copy where possible")
@@ -115,6 +115,17 @@ func run(rc *tool.RunContext, args []string) int {
 	isList := !o.read && !o.write
 	isRead := o.read && !o.write
 	isWrite := !o.read && o.write
+	o.preservation = defaultPreservation()
+	if fs.Changed("preserve") {
+		if !o.read {
+			return tool.UsageError(rc, cmd, "-p is valid only in read or copy mode")
+		}
+		policy, err := parsePreservation(*preserve)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "%v", err)
+		}
+		o.preservation = policy
+	}
 
 	if fs.Changed("blocksize") {
 		if !isWrite {
