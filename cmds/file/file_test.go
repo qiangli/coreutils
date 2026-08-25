@@ -296,6 +296,10 @@ func TestMagicFileErrorsAreDiagnostics(t *testing.T) {
 		{"bad-type", "0 float 1 nope\n", "unsupported magic type"},
 		{"orphan", ">0 byte 1 nope\n", "continuation has no preceding"},
 		{"bad-escape", "0 string \\q nope\n", "unsupported magic escape"},
+		{"signed-offset", "+0 string x nope\n", "invalid magic offset"},
+		{"signed-width", "0 u+1 1 nope\n", "unsupported magic type width"},
+		{"signed-mask", "0 uC&+1 1 nope\n", "invalid magic mask"},
+		{"bad-message-escape", "0 string x bad\\q\n", "unsupported magic message escape"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			put(t, dir, "magic", []byte(tc.contents))
@@ -311,9 +315,10 @@ func TestRequiredProgramTextAndRunContextLocale(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "shell", []byte("#!/bin/sh\necho ok\n"))
 	put(t, dir, "source.c", []byte("#include <stdio.h>\nint main(void) { return 0; }\n"))
+	put(t, dir, "source.f", []byte("      PROGRAM HELLO\n      END\n"))
 	put(t, dir, "utf8", []byte("héllo\n"))
-	out, errb, code := invokeEnv(t, dir, "", []string{"LANG=C.UTF-8", "LC_CTYPE=C", "LC_ALL=C.UTF-8"}, "shell", "source.c", "utf8")
-	want := "shell: /bin/sh commands text\nsource.c: c program text\nutf8: Unicode text, UTF-8 text\n"
+	out, errb, code := invokeEnv(t, dir, "", []string{"LANG=C.UTF-8", "LC_CTYPE=C", "LC_ALL=C.UTF-8"}, "shell", "source.c", "source.f", "utf8")
+	want := "shell: /bin/sh commands text\nsource.c: c program text\nsource.f: fortran program text\nutf8: Unicode text, UTF-8 text\n"
 	if out != want || errb != "" || code != 0 {
 		t.Fatalf("UTF-8 locale = (%q, %q, %d), want %q", out, errb, code, want)
 	}
@@ -326,6 +331,23 @@ func TestRequiredProgramTextAndRunContextLocale(t *testing.T) {
 	out, errb, code = invokeEnv(t, dir, "", []string{"LC_CTYPE=C", "LC_CTYPE=C.UTF-8"}, "utf8")
 	if out != "utf8: Unicode text, UTF-8 text\n" || errb != "" || code != 0 {
 		t.Fatalf("RunContext LC_CTYPE = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestMagicMessageUsesPrintfFormatSemantics(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "data", []byte{7})
+	put(t, dir, "escaped", []byte(`A\nB\cTAIL`))
+	put(t, dir, "magic", []byte("0\tuC\tx\tvalue=%03u\\tfirst=%u second=%u\\012\n"))
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "data")
+	want := "data: value=007\tfirst=0 second=0\n\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("file magic printf message = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	put(t, dir, "magic", []byte("0\tstring\tA\\\\nB\\\\cTAIL\tdecoded=%b SHOULD-NOT-PRINT\n"))
+	out, errb, code = invoke(t, dir, "", "-M", "magic", "escaped")
+	if want := "escaped: decoded=A\nB\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("file magic %%b message = (%q, %q, %d), want %q", out, errb, code, want)
 	}
 }
 

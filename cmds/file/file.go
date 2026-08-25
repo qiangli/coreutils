@@ -259,6 +259,9 @@ func classifyContext(data []byte, utf8Locale bool) string {
 		if looksLikeC(text) {
 			return "c program text"
 		}
+		if looksLikeFortran(text) {
+			return "fortran program text"
+		}
 		return "ASCII text"
 	}
 	if utf8Locale && utf8.Valid(data) && isText(data) {
@@ -272,6 +275,24 @@ func looksLikeC(text string) bool {
 	return strings.Contains(compact, "#include") ||
 		strings.Contains(compact, "int main(") || strings.Contains(compact, "int main (") ||
 		(strings.Contains(compact, "#define") && strings.Contains(compact, "{"))
+}
+
+func looksLikeFortran(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "!") {
+			continue
+		}
+		fields := strings.Fields(strings.ToLower(line))
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "program", "subroutine", "function":
+			return len(fields) > 1
+		}
+	}
+	return false
 }
 
 func localeAllowsUTF8(rc *tool.RunContext) bool {

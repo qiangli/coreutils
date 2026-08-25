@@ -146,6 +146,9 @@ func parseMagicLine(line string) (magicTest, error) {
 	if offsetField == "" || strings.HasPrefix(offsetField, ">") {
 		return magicTest{}, fmt.Errorf("invalid magic offset %q", offsetField)
 	}
+	if !isUnsignedMagicNumber(offsetField) {
+		return magicTest{}, fmt.Errorf("invalid magic offset %q", offsetField)
+	}
 	offset, err := strconv.ParseUint(offsetField, 0, 64)
 	if err != nil {
 		return magicTest{}, fmt.Errorf("invalid magic offset %q", offsetField)
@@ -242,6 +245,9 @@ func parseMagicType(field string) (magicType, error) {
 	rest := field[1:]
 	if before, after, found := strings.Cut(rest, "&"); found {
 		rest = before
+		if !isUnsignedMagicNumber(after) {
+			return magicType{}, fmt.Errorf("invalid magic mask %q", after)
+		}
 		mask, err := strconv.ParseUint(after, 0, 64)
 		if err != nil {
 			return magicType{}, fmt.Errorf("invalid magic mask %q", after)
@@ -265,6 +271,9 @@ func parseMagicType(field string) (magicType, error) {
 	case "L":
 		t.size = cLongSize()
 	default:
+		if !isDecimalDigits(rest) {
+			return magicType{}, fmt.Errorf("unsupported magic type width %q", rest)
+		}
 		size, err := strconv.Atoi(rest)
 		if err != nil || size < 1 || size > 8 {
 			return magicType{}, fmt.Errorf("unsupported magic type width %q", rest)
@@ -272,6 +281,45 @@ func parseMagicType(field string) (magicType, error) {
 		t.size = size
 	}
 	return t, nil
+}
+
+func isDecimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := range len(value) {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isUnsignedMagicNumber(value string) bool {
+	digits := value
+	base := byte(10)
+	if strings.HasPrefix(digits, "0x") || strings.HasPrefix(digits, "0X") {
+		digits, base = digits[2:], 16
+	} else if len(digits) > 1 && digits[0] == '0' {
+		base = 8
+	}
+	if digits == "" {
+		return false
+	}
+	for i := range len(digits) {
+		c := digits[i]
+		if c >= '0' && c <= '7' {
+			continue
+		}
+		if base == 10 && (c == '8' || c == '9') {
+			continue
+		}
+		if base == 16 && ((c >= '8' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func cIntSize() int { return 4 }
@@ -440,7 +488,17 @@ func (t magicTest) messageArg(value uint64) any {
 
 func renderMagicMessage(message string, arg any) (string, error) {
 	var out strings.Builder
+	usedArgument := false
 	for i := 0; i < len(message); {
+		if message[i] == '\\' {
+			value, consumed, err := magicFormatEscape(message[i:])
+			if err != nil {
+				return "", err
+			}
+			out.WriteByte(value)
+			i += consumed
+			continue
+		}
 		if message[i] != '%' {
 			out.WriteByte(message[i])
 			i++
@@ -468,7 +526,7 @@ func renderMagicMessage(message string, arg any) (string, error) {
 		for i < len(message) && strings.ContainsRune("hljztL", rune(message[i])) {
 			i++
 		}
-		if i >= len(message) || !strings.ContainsRune("cdiouxXs", rune(message[i])) {
+		if i >= len(message) || !strings.ContainsRune("bcdiouxXs", rune(message[i])) {
 			return "", fmt.Errorf("unsupported magic message format near %q", message[start:])
 		}
 		conv := message[i]
@@ -480,7 +538,13 @@ func renderMagicMessage(message string, arg any) (string, error) {
 			spec = spec[:len(spec)-1] + "d"
 		}
 		formatArg := arg
-		if number, ok := arg.(magicNumberArg); ok {
+		if usedArgument {
+			if strings.ContainsRune("bcs", rune(conv)) {
+				formatArg = ""
+			} else {
+				formatArg = uint64(0)
+			}
+		} else if number, ok := arg.(magicNumberArg); ok {
 			switch conv {
 			case 'd', 'i':
 				if number.signed {
@@ -494,8 +558,90 @@ func renderMagicMessage(message string, arg any) (string, error) {
 				formatArg = number.value
 			}
 		}
+		if conv == 'b' {
+			value, halt, err := magicBString(formatArg)
+			if err != nil {
+				return "", err
+			}
+			spec = spec[:len(spec)-1] + "s"
+			out.WriteString(fmt.Sprintf(spec, value))
+			if halt {
+				return out.String(), nil
+			}
+			usedArgument = true
+			i++
+			continue
+		}
 		out.WriteString(fmt.Sprintf(spec, formatArg))
+		usedArgument = true
 		i++
 	}
 	return out.String(), nil
+}
+
+func magicBString(arg any) (string, bool, error) {
+	var input string
+	switch value := arg.(type) {
+	case string:
+		input = value
+	case magicNumberArg:
+		if value.signed {
+			input = strconv.FormatInt(signExtend(value.value, value.size), 10)
+		} else {
+			input = strconv.FormatUint(value.value, 10)
+		}
+	default:
+		input = fmt.Sprint(value)
+	}
+	var out strings.Builder
+	for i := 0; i < len(input); {
+		if input[i] != '\\' {
+			out.WriteByte(input[i])
+			i++
+			continue
+		}
+		if i+1 >= len(input) {
+			return "", false, fmt.Errorf("trailing backslash in %%b magic argument")
+		}
+		if input[i+1] == 'c' {
+			return out.String(), true, nil
+		}
+		if input[i+1] == '0' {
+			end := i + 2
+			for end < len(input) && end < i+5 && input[end] >= '0' && input[end] <= '7' {
+				end++
+			}
+			n, _ := strconv.ParseUint(input[i+2:end], 8, 8)
+			out.WriteByte(byte(n))
+			i = end
+			continue
+		}
+		value, consumed, err := magicFormatEscape(input[i:])
+		if err != nil {
+			return "", false, err
+		}
+		out.WriteByte(value)
+		i += consumed
+	}
+	return out.String(), false, nil
+}
+
+func magicFormatEscape(value string) (byte, int, error) {
+	if len(value) < 2 {
+		return 0, 0, fmt.Errorf("trailing backslash in magic message")
+	}
+	if value[1] >= '0' && value[1] <= '7' {
+		end := 2
+		for end < len(value) && end < 4 && value[end] >= '0' && value[end] <= '7' {
+			end++
+		}
+		n, _ := strconv.ParseUint(value[1:end], 8, 8)
+		return byte(n), end, nil
+	}
+	escapes := map[byte]byte{'\\': '\\', 'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v'}
+	b, ok := escapes[value[1]]
+	if !ok {
+		return 0, 0, fmt.Errorf("unsupported magic message escape \\%c", value[1])
+	}
+	return b, 2, nil
 }
