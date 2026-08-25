@@ -112,7 +112,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 22 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 22 |
-| `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 8 |
+| `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 48 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
@@ -192,7 +192,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `tsort` | `cmds/tsort` | — | GNU Coreutils | yes | yes | 1 | 7 |
-| `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 13 |
+| `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 14 |
 | `tz` | `cmds/tz` | — | Bashy/other extension | no | no | 1 | 2 |
 | `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 10 |
 | `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 2 | 21 |
