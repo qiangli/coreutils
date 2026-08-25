@@ -3,6 +3,7 @@ package pathchkcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,17 +122,69 @@ func TestPathchkPosixPathLimitIncludesTerminator(t *testing.T) {
 }
 
 func TestPathchkDefaultPathLimitIncludesTerminator(t *testing.T) {
-	limit := defaultPathMax()
+	const limit = 32
+	limits := func(string) (int, int, error) { return limit, 255, nil }
 	pathAtLimit := strings.Repeat("a"+string(filepath.Separator), limit/2)
-	code, errText := runPathchk(t, t.TempDir(), pathAtLimit)
+	dir := t.TempDir()
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: io.Discard, Err: &errOut}}
+	ok := checkDefaultWith(rc, pathAtLimit, limits)
+	code, errText := 0, errOut.String()
+	if !ok {
+		code = 1
+	}
 	if code != 1 || !strings.Contains(errText, "exceeds limit") {
 		t.Fatalf("code=%d stderr=%q", code, errText)
 	}
 
 	pathBelowLimit := pathAtLimit[:len(pathAtLimit)-1]
-	code, errText = runPathchk(t, t.TempDir(), pathBelowLimit)
+	errOut.Reset()
+	ok = checkDefaultWith(rc, pathBelowLimit, limits)
+	code, errText = 0, errOut.String()
+	if !ok {
+		code = 1
+	}
 	if code != 0 || errText != "" {
 		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+}
+
+func TestPathchkDefaultUsesContainingDirectoryNameLimit(t *testing.T) {
+	dir := t.TempDir()
+	child := filepath.Join(dir, "child")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var queried []string
+	limits := func(path string) (int, int, error) {
+		queried = append(queried, path)
+		if path == child {
+			return 4096, 3, nil
+		}
+		return 4096, 255, nil
+	}
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: io.Discard, Err: &errOut}}
+	if checkDefaultWith(rc, "child/long", limits) || !strings.Contains(errOut.String(), "exceeds limit 3") {
+		t.Fatalf("queries=%q err=%q", queried, errOut.String())
+	}
+	if len(queried) < 2 || queried[0] != dir || queried[1] != child {
+		t.Fatalf("limit queries=%q, want containing directories %q then %q", queried, dir, child)
+	}
+}
+
+func TestPathchkDefaultPreservesResolutionSyntax(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, operand := range []string{"file/", "file/..", "file/../child"} {
+		code, errText := runPathchk(t, dir, operand)
+		if code != 1 || !strings.Contains(errText, "not a directory") {
+			t.Fatalf("operand=%q code=%d err=%q", operand, code, errText)
+		}
 	}
 }
 

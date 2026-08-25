@@ -1,10 +1,10 @@
 package pathchkcmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -58,76 +58,98 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func checkDefault(rc *tool.RunContext, p string) bool {
+	return checkDefaultWith(rc, p, filesystemLimits)
+}
+
+type limitLookup func(string) (pathMax, nameMax int, err error)
+
+func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
 	if p == "" {
 		fmt.Fprintf(rc.Err, "pathchk: %q: No such file or directory\n", p)
 		return false
 	}
-	limit := defaultPathMax()
-	nameLimit := 255
-	// PATH_MAX includes the terminating NUL byte, unlike NAME_MAX.
-	if len(p) >= limit {
-		fmt.Fprintf(rc.Err, "pathchk: path %q has length %d; exceeds limit %d\n", p, len(p), limit)
+	base, components, trailing := pathParts(rc, p)
+	pathLimit, nameLimit, err := limits(base)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pathchk: %q: cannot determine filesystem limits: %v\n", p, err)
 		return false
 	}
-	for _, c := range strings.Split(p, string(filepath.Separator)) {
+	// PATH_MAX includes the terminating NUL byte, unlike NAME_MAX.
+	if len(p) >= pathLimit {
+		fmt.Fprintf(rc.Err, "pathchk: path %q has length %d; exceeds limit %d\n", p, len(p), pathLimit)
+		return false
+	}
+	current := base
+	missing := false
+	for i, c := range components {
+		if c == "" {
+			continue
+		}
+		if !missing {
+			if _, searchErr := os.Stat(filepath.Join(current, ".")); searchErr != nil {
+				fmt.Fprintf(rc.Err, "pathchk: %q: directory is not searchable at %q\n", p, current)
+				return false
+			}
+		}
 		if len(c) > nameLimit {
 			fmt.Fprintf(rc.Err, "pathchk: name %q has length %d; exceeds limit %d\n", c, len(c), nameLimit)
 			return false
 		}
-	}
-	if bad, reason := invalidDirectoryPrefix(filepath.Dir(rc.Path(p))); bad != "" {
-		fmt.Fprintf(rc.Err, "pathchk: %q: %s at %q\n", p, reason, bad)
-		return false
+		if missing {
+			continue
+		}
+		candidate := filepath.Join(current, c)
+		st, lstatErr := os.Lstat(candidate)
+		if os.IsNotExist(lstatErr) {
+			missing = true
+			continue
+		}
+		if lstatErr != nil {
+			if errors.Is(lstatErr, os.ErrPermission) {
+				fmt.Fprintf(rc.Err, "pathchk: %q: directory is not searchable at %q\n", p, current)
+				return false
+			}
+			fmt.Fprintf(rc.Err, "pathchk: %q: byte sequence is not valid or component cannot be accessed at %q: %v\n", p, candidate, lstatErr)
+			return false
+		}
+		last := i == len(components)-1 && !trailing
+		if last {
+			continue
+		}
+		st, statErr := os.Stat(candidate)
+		if statErr != nil {
+			fmt.Fprintf(rc.Err, "pathchk: %q: cannot access directory at %q: %v\n", p, candidate, statErr)
+			return false
+		}
+		if !st.IsDir() {
+			fmt.Fprintf(rc.Err, "pathchk: %q: not a directory at %q\n", p, candidate)
+			return false
+		}
+		current = candidate
+		_, nameLimit, err = limits(current)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pathchk: %q: cannot determine filesystem limits at %q: %v\n", p, current, err)
+			return false
+		}
 	}
 	return true
 }
 
-func defaultPathMax() int {
-	switch runtime.GOOS {
-	case "windows":
-		return 260
-	case "darwin", "dragonfly", "freebsd", "ios", "netbsd", "openbsd":
-		return 1024
-	default:
-		return 4096
-	}
-}
-
-// invalidDirectoryPrefix checks existing prefixes from the root down. Once a
-// prefix does not exist, the rest of the pathname is valid if those missing
-// directories were to be created, so there is nothing further to inspect.
-func invalidDirectoryPrefix(dir string) (path, reason string) {
-	var prefixes []string
-	for dir != "" && dir != "." {
-		prefixes = append(prefixes, dir)
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	for i := len(prefixes) - 1; i >= 0; i-- {
-		prefix := prefixes[i]
-		if _, err := os.Lstat(prefix); os.IsNotExist(err) {
-			return "", ""
-		} else if err != nil {
-			return prefix, "cannot access directory"
-		}
-		st, err := os.Stat(prefix)
-		if err != nil {
-			return prefix, "cannot access directory"
-		}
-		if !st.IsDir() {
-			return prefix, "not a directory"
-		}
-		// Looking up "." requires search permission on prefix without
-		// requiring read permission to enumerate it.
-		searchProbe := prefix + string(filepath.Separator) + "."
-		if _, err := os.Stat(searchProbe); err != nil {
-			return prefix, "directory is not searchable"
+func pathParts(rc *tool.RunContext, p string) (base string, components []string, trailing bool) {
+	separator := string(filepath.Separator)
+	normalized := filepath.FromSlash(p)
+	trailing = strings.HasSuffix(normalized, separator)
+	if filepath.IsAbs(normalized) {
+		volume := filepath.VolumeName(normalized)
+		base = volume + separator
+		normalized = strings.TrimPrefix(normalized[len(volume):], separator)
+	} else {
+		base = rc.Dir
+		if base == "" {
+			base = "."
 		}
 	}
-	return "", ""
+	return base, strings.Split(normalized, separator), trailing
 }
 
 func checkPOSIX(rc *tool.RunContext, p string) bool {
