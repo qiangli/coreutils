@@ -495,7 +495,7 @@ modified** (`spawn_unix.go:29-32,61`).
 
 | Element | Class | Source evidence | Test evidence | Detail |
 |---|---|---|---|---|
-| `-l` (login environment: dash-argv0 + home dir) | verified | `cmds/newgrp/newgrp.go:171-182` | `cmds/newgrp/newgrp_test.go#TestLoginShellArgv0AndDirectory`, `#TestNonLoginShellArgv0AndDirectory`, `#TestLoginFlagSurvivesARefusedChange` | env scrub left to shell login profiles; spec text is vague |
+| `-l` login environment | implementation_gap | `cmds/newgrp/newgrp.go:171-182`; `cmds/newgrp/spawn_unix.go:41-45` | `cmds/newgrp/newgrp_test.go#TestLoginShellArgv0AndDirectory`, `#TestNonLoginShellArgv0AndDirectory`, `#TestLoginFlagSurvivesARefusedChange` only cover argv0/cwd | `-l` prefixes argv0 with `-` and changes cwd, but passes `rc.Env` unchanged. Optional shell profiles do not guarantee the login-expected environment required by Issue 7 |
 | group operand by name | verified | `cmds/newgrp/newgrp.go:213`, `cmds/newgrp/db.go:92-96` | `cmds/newgrp/newgrp_test.go#TestGroupOperandByName` | |
 | Numeric operand: group *name* precedence (getgrnam rule) | verified | `cmds/newgrp/newgrp.go:214-220` | `#TestNumericOperandPrefersTheGroupName` | |
 | No operand → revert to primary group from user entry | verified | `cmds/newgrp/newgrp.go:205-210` | `#TestNoOperandRevertsToThePrimaryGroup` | |
@@ -526,6 +526,9 @@ modified** (`spawn_unix.go:29-32,61`).
 - Supplementary-group manipulation: no probe possible unprivileged; the
   gap is established from source (`cmds/newgrp/spawn_unix.go:61`
   `NoSetGroups: true`, no setgroups call in the package).
+- `-l` environment reset: source-established. `newgrp.go:171-182` changes
+  only argv0 and cwd, while `spawn_unix.go:41-45` forwards `rc.Env`
+  unchanged; the focused tests likewise assert only argv0 and cwd.
 
 ---
 
@@ -599,7 +602,7 @@ not affect invocation or exit status (`nice.go:188-190`). Non-unix:
 | Exit 127 not found | verified | `cmds/nice/nice.go:176-177,180-183` | `cmds/nice/nice_posix_test.go#TestNiceCommandExitStatuses` + probe | |
 | Exit 126 found-not-invokable | verified | `cmds/nice/nice.go:185-186` | `#TestNiceCommandExitStatuses` + probe | |
 | Utility exit status propagated (incl. 128+signal) | verified | `cmds/nice/nice.go:191-203`, `cmds/nice/waitstatus_unix.go:13-19` | `cmds/nice/nice_resolve_test.go#TestNiceChildExitPropagates`, `cmds/nice/nice_priority_test.go#TestNiceReportsSignalExitCode` | |
-| Utility actually runs at the adjusted nice value | evidence_gap | `cmds/nice/nice.go:188`, `cmds/nice/priority_unix.go:15-17` | — | `#TestNiceDoesNotAlterOwnPriority` only asserts nice's *own* priority; no test reads the child's. Also: priority is set on the child *after* Start — a momentary window at the old niceness (design consequence of never touching the host process). Missing: a child-priority readback test |
+| Utility actually runs at the adjusted nice value | implementation_gap | `cmds/nice/nice.go:179,188`; `cmds/nice/priority_unix.go:15-17` | — | The child is started before `setpriority`; it can execute or exit at the old niceness. Issue 7 requires the utility to be invoked at the altered value, so this is a real race, not merely missing evidence |
 | Privilege rule: warning to stderr, invocation and exit status unaffected | evidence_gap | `cmds/nice/nice.go:188-190` | — | Probe-confirmed conformant (`nice --10 …` → warning + output + exit 0); no repo test pins it |
 | Obsolete `-NUM`/`--NUM`/`-+NUM` forms | verified (extension) | `cmds/nice/nice.go:69-72,156-165` | `#TestParseNiceOptions` (obsolete positive/plus/negative) | Not Issue 7; matches GNU's obsolete forms; non-colliding |
 | `--adjustment` long option + prefix abbreviation, `--help/--version` | verified (extension) | `cmds/nice/nice.go:28,89-112` | `#TestParseNiceOptions` (long separate/equals/abbreviation) | |
@@ -608,13 +611,16 @@ not affect invocation or exit status (`nice.go:188-190`). Non-unix:
 
 ### Confirmed gaps (probe transcripts)
 
-No conformance-breaking gap found. Probes: `nice -n 5 /bin/echo hi` →
+One conformance-breaking source gap: `rc.StartCommand` starts the child at
+`nice.go:179`, and only afterward does `setPriority` run at `nice.go:188`.
+The child can execute or exit before adjustment. Other probes:
+`nice -n 5 /bin/echo hi` →
 `hi`, exit 0; `nice -n 5` → `nice: a command must be given with an
 adjustment`, exit 125; `nice -n bogus echo` → exit 125; missing command →
 127; mode-644 script → 126; `nice --10 /bin/echo hi` → warning `nice:
 cannot set niceness: permission denied` + `hi` + exit 0 (privilege rule
-holds). The two evidence gaps (child's actual niceness; privilege-warning
-behavior) lack focused tests.
+holds). The privilege-warning behavior remains an evidence gap lacking a
+focused test.
 
 ---
 
@@ -995,10 +1001,10 @@ to `rc.Err`; exit 0/1; missing operand → UsageError exit 2
 | Element | Class | Source evidence | Test evidence | Detail |
 |---|---|---|---|---|
 | Synopsis / `-p -P` parsing, `-pP` cluster, `--` terminator | verified | `cmds/pathchk/pathchk.go:27-31` | `cmds/pathchk/pathchk_test.go#TestPathchkRejectsLeadingHyphen` (`-P` + `./-bad`); probes `-pP ok` → 0, `-P -- -foo` → 1 | pflag handles clusters and `--` |
-| Default: {PATH_MAX} length check | verified | `cmds/pathchk/pathchk.go:65-71,85-94` | `cmds/pathchk/pathchk_test.go#TestPathchkDefaultPathLimitIncludesTerminator` | Static per-OS constant, not pathconf; equals `getconf PATH_MAX` on shipped targets (darwin 1024 ✓); NUL-inclusive boundary test-pinned |
-| Default: {NAME_MAX} component check | evidence_gap | `cmds/pathchk/pathchk.go:66,72-77` | — | Probe: 256-byte component → diagnostic + exit 1; 255 → 0. Hardcoded 255, not per-containing-directory pathconf (see gap note below). No repo test exercises the default component limit |
+| Default: {PATH_MAX} length check | implementation_gap | `cmds/pathchk/pathchk.go:65-71,85-94` | `cmds/pathchk/pathchk_test.go#TestPathchkDefaultPathLimitIncludesTerminator` pins only the host-wide constant | The implementation uses a compile-time per-OS value instead of the underlying filesystem's limit and can misjudge paths on mounted filesystems with different limits |
+| Default: {NAME_MAX} component check | implementation_gap | `cmds/pathchk/pathchk.go:66,72-77` | — | Hardcoded 255 rather than querying each component's containing directory; filesystems with a smaller or larger limit are misjudged |
 | Default: unsearchable directory component | verified | `cmds/pathchk/pathchk.go:99-131` | `cmds/pathchk/pathchk_unix_test.go#TestPathchkRejectsUnsearchableDirectoryPrefix`, `#TestPathchkRejectsNonDirectoryPrefix`, `#TestPathchkRejectsDanglingSymlinkPrefix` | |
-| Default: invalid byte sequence in containing directory | evidence_gap | no code (`checkDefault` has no charset check) | — | Vacuous on POSIX filesystems (all bytes except NUL and `/` valid), so behaviorally conformant on shipped targets; nothing implements or tests the clause |
+| Default: invalid byte sequence in containing directory | implementation_gap | no code (`checkDefault` has no charset or filesystem byte-validity check) | — | Issue 7 requires the containing-filesystem check. Assuming it is vacuous on selected hosts neither implements nor proves the required behavior |
 | Default: missing components are not an error | verified | `cmds/pathchk/pathchk.go:110-112` | `cmds/pathchk/pathchk_test.go#TestPathchkAllowsMissingDirectoryPrefix` | Probe `missing/child` → 0 |
 | `-p`: {_POSIX_PATH_MAX} 256 | verified | `cmds/pathchk/pathchk.go:141-144` | `cmds/pathchk/pathchk_test.go#TestPathchkPosixPathLimitIncludesTerminator` | Matches GNU's NUL-inclusive reading |
 | `-p`: {_POSIX_NAME_MAX} 14 | evidence_gap | `cmds/pathchk/pathchk.go:145-149` | — | Probes: 15-char component → exit 1; 14-char → 0. Missing focused test |
@@ -1013,16 +1019,15 @@ to `rc.Err`; exit 0/1; missing operand → UsageError exit 2
 
 ### Confirmed gaps (probe transcripts)
 
-No implementation_gap probes fired — `""` → 1, `-P ""` → 1, `-P -- -foo`
-→ 1, `-p -- -foo` → 0, `-p` 15-char → 1 / 14-char → 0, `-p 'aü'` → 1,
-256-byte component → 1 / 255 → 0, `plain/child` → "not a directory" exit
-1, `missing/child` → 0 — all POSIX-conformant. One spec-letter deviation
-recorded without a runnable probe on this host: the default-mode limits
-are compile-time constants (`cmds/pathchk/pathchk.go:66,85-94`), never
-`pathconf(3)` of the containing directory — correct on
-darwin/linux/windows defaults, but would misjudge filesystems with a
-smaller NAME_MAX (FAT-like). Everything else here is an evidence gap
-(missing focused tests), not behavior.
+Three source-established implementation gaps have no runnable probe on this
+host: default-mode PATH_MAX and NAME_MAX are compile-time constants
+(`cmds/pathchk/pathchk.go:66,85-94`) rather than filesystem/containing-directory
+queries, and byte-sequence validity is never checked. The ordinary-host probes
+still pass — `""` → 1, `-P ""` → 1, `-P -- -foo` → 1, `-p -- -foo` → 0,
+`-p` 15-char → 1 / 14-char → 0, `-p 'aü'` → 1, 256-byte component → 1 /
+255 → 0, `plain/child` → "not a directory" exit 1, `missing/child` → 0 —
+but they do not exercise a filesystem whose constraints differ from the
+hardcoded assumptions.
 
 ---
 
@@ -1158,7 +1163,7 @@ list).
 | cpio format reading/listing | implementation_gap | `cmds/pax/pax.go:139` / `cmds/pax/modes.go:35-44` (tar-only readers) | — | Probe: `pax -f x.cpio` → `pax: archive/tar: invalid tar header`, exit 1. POSIX pax must read the formats it supports; cpio is write-only here |
 | Write mode: pathname list from stdin when no operands | implementation_gap | `cmds/pax/modes.go:193-199` loops over `files` only; rc.In never read in `-w` | — | Probe: `printf 'dir/a.txt\n' \| pax -w -f stdin.tar` → exit 0, archive **empty** (silent) |
 | Continue-after-member-error + exit >0 | evidence_gap | `cmds/pax/modes.go:100-104` (status=1, continue) | — | conformant shape; no focused test |
-| Escaping-member handling | verified (documented deviation) | `cmds/pax/modes.go:47-67` | `#TestEscapingMemberRejectsArchiveWithoutWritingAnything` | STRICTER than POSIX: whole archive rejected instead of skip-and-continue; deliberate security posture |
+| Escaping-member handling | implementation_gap | `cmds/pax/modes.go:47-67` | `#TestEscapingMemberRejectsArchiveWithoutWritingAnything` pins the deviation | Any escaping member condemns the whole archive before safe members are extracted. Issue 7 requires a diagnostic, nonzero status, and continued processing after a member cannot be created; the deliberate security posture is still a conformance gap |
 | Exit statuses 0/>0 (usage 2, repo deviation) | verified | `cmds/pax/pax.go:83-98` | `#TestWriteThenListThenExtractRoundTrips` et al. | unknown flags exit 2 loudly |
 
 ### Confirmed gaps (probe transcripts)
@@ -1185,6 +1190,10 @@ list).
   the stdin pathname list is never read.
 - `pax -v -f a.tar` → `-rw-r--r--  1                          6 Aug 24
   18:53 dir/a.txt` — owner/group blank, nlink hardcoded.
+- An archive containing one escaping and one safe member is rejected in
+  full at `cmds/pax/modes.go:47-67`; `#TestEscapingMemberRejectsArchiveWithoutWritingAnything`
+  pins that whole-archive abort instead of Issue 7's diagnose, fail, and
+  continue-after-member-error behavior.
 
 ---
 
@@ -1532,16 +1541,29 @@ touches and whether the gap is silent (wrong answer) or loud (exit 2).
     unregistered (three advertised in its own usage), `-i/-l/-n` and
     `-s`'s `p` silent no-ops, `-p` honors only `m`, `-a` silently loses
     the appended member, cpio write-only, `-s` uses Go regexp not BRE,
-    `-d` ignored outside write mode (`cmds/pax/pax.go`,
-    `modes.go`, `select.go`). Large gap count, but pax was not among
+    `-d` ignored outside write mode, and one escaping member aborts the
+    whole archive instead of diagnosing it and continuing with safe members
+    (`cmds/pax/pax.go`, `modes.go`, `select.go`). Large gap count, but pax was not among
     the measured deltas; the silent no-ops (`-i -l -n`, `-a` data loss)
     still violate the repo's never-silent rule and deserve loud
     refusals ahead of full implementations.
-11. **newgrp supplementary-group handling** — the no-operand restore and
-    the add/delete rules never happen (`cmds/newgrp/spawn_unix.go:61`);
-    the password prompt goes to the tty rather than stderr. Requires
-    privilege to observe; PCTS runs unprivileged — negligible TP impact.
-12. **ps** — default selection, `-a/-d/-t/-g` axes, `-u/-U` conflation,
+11. **newgrp environment and supplementary-group handling** — `-l` changes
+    argv0 and cwd but forwards `rc.Env` unchanged (`newgrp.go:171-182`,
+    `spawn_unix.go:41-45`); the no-operand supplementary-list restore and
+    add/delete rules never happen (`spawn_unix.go:61`); the password prompt
+    goes to the tty rather than stderr. The `-l` gap is unprivileged and
+    directly observable; supplementary-group gaps require privilege.
+12. **nice child-priority race** — the child starts at `nice.go:179`, then
+    `setPriority` runs at `nice.go:188`; a fast child can execute or exit at
+    the original niceness. A priority-readback TP can observe it, but nice is
+    in the low measured tail.
+13. **pathchk filesystem-specific checks** — default PATH_MAX and NAME_MAX
+    are hardcoded rather than queried from the underlying/containing
+    filesystem, and byte-sequence validity is absent (`pathchk.go:60-94`).
+    Silent wrong answers are possible on mounts whose constraints differ
+    from the host defaults, though the ordinary certification filesystem is
+    unlikely to expose the gap.
+14. **ps** — default selection, `-a/-d/-t/-g` axes, `-u/-U` conflation,
     `-f`/`-l` column sets, `TT`/`COMMAND` headers, etime/time shapes,
     hardcoded pcpu, glued columns, silent `!linux` degradation
     (`cmds/ps/ps.go`, `process_other.go`). The largest gap count in
