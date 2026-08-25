@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -41,11 +42,87 @@ type options struct {
 }
 
 type dumpFormat struct {
-	kind string
-	size int
+	kind     string
+	size     int
+	floatEnc floatEncoding
+}
+
+type floatEncoding uint8
+
+const (
+	floatNone floatEncoding = iota
+	floatIEEE32
+	floatIEEE64
+	floatX87
+	floatIEEE128
+)
+
+type cABI struct {
+	charSize, shortSize, intSize, longSize int
+	floatSize, doubleSize, longDoubleSize  int
+	longDoubleEncoding                     floatEncoding
+}
+
+type platformProfile struct {
+	abi       cABI
+	endian    binary.ByteOrder
+	openInput func(string) (io.ReadCloser, error)
+}
+
+func runtimeProfile() platformProfile {
+	return platformProfile{
+		abi:    abiFor(runtime.GOOS, runtime.GOARCH),
+		endian: nativeEndianFor(runtime.GOARCH),
+		openInput: func(path string) (io.ReadCloser, error) {
+			return os.Open(path)
+		},
+	}
+}
+
+func abiFor(goos, goarch string) cABI {
+	abi := cABI{charSize: 1, shortSize: 2, intSize: 4, floatSize: 4, doubleSize: 8}
+	if goos == "windows" || goarch == "386" || goarch == "arm" || goarch == "wasm" || goarch == "mips" || goarch == "mipsle" {
+		abi.longSize = 4
+	} else {
+		abi.longSize = 8
+	}
+	switch {
+	case goos == "windows":
+		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
+	case goos == "darwin" && goarch == "arm64":
+		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
+	case (goos == "linux" || goos == "darwin" || goos == "freebsd" || goos == "solaris" || goos == "openbsd" || goos == "netbsd" || goos == "dragonfly") && goarch == "amd64":
+		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatX87
+	case (goos == "linux" || goos == "freebsd") && goarch == "386":
+		abi.longDoubleSize, abi.longDoubleEncoding = 12, floatX87
+	case goarch == "arm":
+		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
+	case goarch == "arm64" || goarch == "riscv64" || goarch == "s390x" || goarch == "mips64" || goarch == "mips64le" || goarch == "wasm":
+		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
+	// ppc64 ABIs commonly use IBM double-double. Leave it unsupported
+	// until that representation has a real decoder rather than guessing.
+	default:
+		abi.longDoubleSize, abi.longDoubleEncoding = 0, floatNone
+	}
+	return abi
+}
+
+func nativeEndianFor(goarch string) binary.ByteOrder {
+	switch goarch {
+	case "mips", "mips64", "ppc64", "s390x", "sparc64":
+		return binary.BigEndian
+	case "386", "amd64", "arm", "arm64", "loong64", "mipsle", "mips64le", "ppc64le", "riscv64", "wasm":
+		return binary.LittleEndian
+	default:
+		return nil
+	}
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithProfile(rc, args, runtimeProfile())
+}
+
+func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile) int {
 	args = expandFormatArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	addrRadix := fs.StringP("address-radix", "A", "o", "select offset radix: d, o, x, or n")
@@ -53,7 +130,7 @@ func run(rc *tool.RunContext, args []string) int {
 	limitText := fs.StringP("read-bytes", "N", "", "limit dump to BYTES input bytes")
 	skipText := fs.StringP("skip-bytes", "j", "0", "skip BYTES input bytes first")
 	width := fs.IntP("width", "w", 16, "output BYTES bytes per line")
-	endianText := fs.String("endian", "little", "select byte order for multi-byte formats: little or big")
+	endianText := fs.String("endian", "", "select byte order for multi-byte formats: little or big (default: native)")
 	stringsText := fs.StringP("strings", "S", "", "output printable strings at least BYTES long")
 	namedChars := fs.BoolP("named-chars", "a", false, "same as -t a")
 	octalBytes := fs.BoolP("octal-bytes", "b", false, "same as -t o1")
@@ -63,17 +140,17 @@ func run(rc *tool.RunContext, args []string) int {
 	hexWords := fs.BoolP("hex-2", "x", false, "same as -t x2")
 	showAll := fs.BoolP("output-duplicates", "v", false, "do not use * to mark line suppression")
 	traditional := fs.Bool("traditional", false, "accept arguments in third traditional form")
-	unsignedInt := fs.BoolP("unsigned-int", "D", false, "same as -t u4")
-	floatDouble := fs.BoolP("float-double", "F", false, "same as -t f8")
-	hexInt := fs.BoolP("hex-int", "H", false, "same as -t x4")
-	decimalInt := fs.BoolP("decimal-int", "I", false, "same as -t d4")
-	decimalLong := fs.BoolP("decimal-long", "L", false, "same as -t d8")
-	octalInt := fs.BoolP("octal-int", "O", false, "same as -t o4")
-	hexCap := fs.BoolP("hex-cap", "X", false, "same as -t x4")
-	floatDoubleShort := fs.BoolP("float-double-short", "e", false, "same as -t f8")
-	floatSingle := fs.BoolP("float-single", "f", false, "same as -t f4")
-	signedInt := fs.BoolP("signed-int", "i", false, "same as -t d4")
-	signedLong := fs.BoolP("signed-long", "l", false, "same as -t d8")
+	unsignedInt := fs.BoolP("unsigned-int", "D", false, "same as -t uI")
+	floatDouble := fs.BoolP("float-double", "F", false, "same as -t fD")
+	hexInt := fs.BoolP("hex-int", "H", false, "same as -t xI")
+	decimalInt := fs.BoolP("decimal-int", "I", false, "same as -t dI")
+	decimalLong := fs.BoolP("decimal-long", "L", false, "same as -t dL")
+	octalInt := fs.BoolP("octal-int", "O", false, "same as -t oI")
+	hexCap := fs.BoolP("hex-cap", "X", false, "same as -t xI")
+	floatDoubleShort := fs.BoolP("float-double-short", "e", false, "same as -t fD")
+	floatSingle := fs.BoolP("float-single", "f", false, "same as -t fF")
+	signedInt := fs.BoolP("signed-int", "i", false, "same as -t dI")
+	signedLong := fs.BoolP("signed-long", "l", false, "same as -t dL")
 	signedShort := fs.BoolP("signed-short", "s", false, "same as -t d2")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -134,17 +211,17 @@ func run(rc *tool.RunContext, args []string) int {
 		{*unsignedDecimal, "u2"},
 		{*octalWords, "o2"},
 		{*hexWords, "x2"},
-		{*unsignedInt, "u4"},
-		{*floatDouble, "f8"},
-		{*hexInt, "x4"},
-		{*decimalInt, "d4"},
-		{*decimalLong, "d8"},
-		{*octalInt, "o4"},
-		{*hexCap, "x4"},
-		{*floatDoubleShort, "f8"},
-		{*floatSingle, "f4"},
-		{*signedInt, "d4"},
-		{*signedLong, "d8"},
+		{*unsignedInt, "uI"},
+		{*floatDouble, "fD"},
+		{*hexInt, "xI"},
+		{*decimalInt, "dI"},
+		{*decimalLong, "dL"},
+		{*octalInt, "oI"},
+		{*hexCap, "xI"},
+		{*floatDoubleShort, "fD"},
+		{*floatSingle, "fF"},
+		{*signedInt, "dI"},
+		{*signedLong, "dL"},
 		{*signedShort, "d2"},
 	} {
 		if choice.on {
@@ -154,7 +231,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(selectedFormats) == 0 {
 		selectedFormats = []string{"o2"}
 	}
-	parsedFormats, err := parseFormats(selectedFormats)
+	parsedFormats, err := parseFormats(selectedFormats, profile.abi)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
@@ -171,13 +248,19 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil || skip < 0 {
 		return tool.UsageError(rc, cmd, "invalid skip count: %q", *skipText)
 	}
-	var byteOrder binary.ByteOrder = binary.LittleEndian
+	byteOrder := profile.endian
 	switch *endianText {
+	case "":
 	case "little":
+		byteOrder = binary.LittleEndian
 	case "big":
 		byteOrder = binary.BigEndian
 	default:
 		return tool.UsageError(rc, cmd, "invalid endian: %q", *endianText)
+	}
+	if byteOrder == nil {
+		fmt.Fprintf(rc.Err, "od: native byte order is not supported on %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		return 1
 	}
 	minString := 0
 	if fs.Lookup("strings").Changed {
@@ -198,28 +281,27 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "invalid output width: %d", o.width)
 	}
 
-	r, closers, exit := openInputs(rc, operands)
-	defer func() {
-		for _, c := range closers {
-			c.Close()
+	r, closers, exit := openInputs(rc, operands, profile.openInput)
+	if r != nil {
+		w := bufio.NewWriter(rc.Out)
+		if err := dump(r, w, o); err != nil {
+			if errors.Is(err, errSkipPastEOF) {
+				fmt.Fprintf(rc.Err, "od: %v\n", err)
+			} else {
+				fmt.Fprintf(rc.Err, "od: %v\n", tool.SysErr(err))
+			}
+			exit = 1
 		}
-	}()
-	if exit != 0 && r == nil {
-		return exit
-	}
-
-	w := bufio.NewWriter(rc.Out)
-	if err := dump(r, w, o); err != nil {
-		if errors.Is(err, errSkipPastEOF) {
-			fmt.Fprintf(rc.Err, "od: %v\n", err)
-		} else {
-			fmt.Fprintf(rc.Err, "od: %v\n", tool.SysErr(err))
+		if err := w.Flush(); err != nil {
+			fmt.Fprintf(rc.Err, "od: write error: %v\n", err)
+			exit = 1
 		}
-		exit = 1
 	}
-	if err := w.Flush(); err != nil {
-		fmt.Fprintf(rc.Err, "od: write error: %v\n", err)
-		return 1
+	for _, c := range closers {
+		if err := c.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "od: %s: close error: %v\n", c.name, tool.SysErr(err))
+			exit = 1
+		}
 	}
 	return exit
 }
@@ -236,8 +318,8 @@ const aliasMark = "\x00"
 // token in place instead of collecting the flags after parsing.
 var formatAliasFlags = map[byte]string{
 	'a': "a", 'b': "o1", 'c': "c", 'd': "u2", 'o': "o2", 's': "d2", 'x': "x2",
-	'D': "u4", 'F': "f8", 'H': "x4", 'I': "d4", 'L': "d8", 'O': "o4", 'X': "x4",
-	'e': "f8", 'f': "f4", 'i': "d4", 'l': "d8",
+	'D': "uI", 'F': "fD", 'H': "xI", 'I': "dI", 'L': "dL", 'O': "oI", 'X': "xI",
+	'e': "fD", 'f': "fF", 'i': "dI", 'l': "dL",
 }
 
 // longFormatAliasFlags are the exact long spellings of the same format
@@ -245,10 +327,10 @@ var formatAliasFlags = map[byte]string{
 var longFormatAliasFlags = map[string]string{
 	"--named-chars": "a", "--octal-bytes": "o1", "--characters": "c",
 	"--unsigned-decimal-2": "u2", "--octal-2": "o2", "--hex-2": "x2",
-	"--unsigned-int": "u4", "--float-double": "f8", "--hex-int": "x4",
-	"--decimal-int": "d4", "--decimal-long": "d8", "--octal-int": "o4",
-	"--hex-cap": "x4", "--float-double-short": "f8", "--float-single": "f4",
-	"--signed-int": "d4", "--signed-long": "d8", "--signed-short": "d2",
+	"--unsigned-int": "uI", "--float-double": "fD", "--hex-int": "xI",
+	"--decimal-int": "dI", "--decimal-long": "dL", "--octal-int": "oI",
+	"--hex-cap": "xI", "--float-double-short": "fD", "--float-single": "fF",
+	"--signed-int": "dI", "--signed-long": "dL", "--signed-short": "d2",
 }
 
 // valueShorthands are od's short options that take an option-argument;
@@ -305,7 +387,12 @@ func expandShortBundle(arg string) ([]string, bool) {
 	return out, true
 }
 
-func openInputs(rc *tool.RunContext, operands []string) (io.Reader, []io.Closer, int) {
+type namedCloser struct {
+	name string
+	io.Closer
+}
+
+func openInputs(rc *tool.RunContext, operands []string, openInput func(string) (io.ReadCloser, error)) (io.Reader, []namedCloser, int) {
 	if len(operands) == 0 {
 		if rc.In == nil {
 			return strings.NewReader(""), nil, 0
@@ -313,7 +400,7 @@ func openInputs(rc *tool.RunContext, operands []string) (io.Reader, []io.Closer,
 		return rc.In, nil, 0
 	}
 	var readers []io.Reader
-	var closers []io.Closer
+	var closers []namedCloser
 	exit := 0
 	for _, name := range operands {
 		if name == "-" {
@@ -324,14 +411,14 @@ func openInputs(rc *tool.RunContext, operands []string) (io.Reader, []io.Closer,
 			}
 			continue
 		}
-		f, err := os.Open(rc.Path(name))
+		f, err := openInput(rc.Path(name))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "od: %s: %v\n", name, tool.SysErr(err))
 			exit = 1
 			continue
 		}
 		readers = append(readers, f)
-		closers = append(closers, f)
+		closers = append(closers, namedCloser{name: name, Closer: f})
 	}
 	if len(readers) == 0 {
 		return nil, closers, exit
@@ -465,6 +552,8 @@ func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.Byte
 		for _, v := range words(b, 8, order) {
 			fmt.Fprintf(w, " %.14g", math.Float64frombits(v))
 		}
+	case "f12", "f16":
+		return writeLongDoubles(w, b, format, order)
 	case "c":
 		for _, c := range b {
 			fmt.Fprintf(w, " %3s", cChar(c))
@@ -475,6 +564,99 @@ func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.Byte
 		}
 	}
 	return nil
+}
+
+func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.ByteOrder) error {
+	for i := 0; i < len(b); i += format.size {
+		item := make([]byte, format.size)
+		copy(item, b[i:min(i+format.size, len(b))])
+		var value float64
+		switch format.floatEnc {
+		case floatX87:
+			value = decodeX87(item, order)
+		case floatIEEE128:
+			value = decodeIEEE128(item, order)
+		default:
+			return fmt.Errorf("unsupported %d-byte long double representation", format.size)
+		}
+		if _, err := fmt.Fprintf(w, " %.18g", value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeX87 converts the 80 significant bits of an x87 extended value.
+// SysV amd64 stores them as a little-endian 64-bit explicit significand
+// followed by a sign/exponent word and six padding bytes. Reversing a
+// big-endian item first also handles --endian=big's byte-swapped form.
+func decodeX87(item []byte, order binary.ByteOrder) float64 {
+	if order == binary.BigEndian {
+		reverseBytes(item)
+	}
+	if len(item) < 10 {
+		return math.NaN()
+	}
+	sig := binary.LittleEndian.Uint64(item[:8])
+	se := binary.LittleEndian.Uint16(item[8:10])
+	negative := se&0x8000 != 0
+	exponent := int(se & 0x7fff)
+	var value float64
+	switch exponent {
+	case 0:
+		value = math.Ldexp(float64(sig), 1-16383-63)
+	case 0x7fff:
+		if sig == uint64(1)<<63 {
+			value = math.Inf(1)
+		} else {
+			value = math.NaN()
+		}
+	default:
+		value = math.Ldexp(float64(sig), exponent-16383-63)
+	}
+	if negative {
+		value = math.Copysign(value, -1)
+	}
+	return value
+}
+
+func decodeIEEE128(item []byte, order binary.ByteOrder) float64 {
+	if len(item) < 16 {
+		return math.NaN()
+	}
+	var hi, lo uint64
+	if order == binary.BigEndian {
+		hi, lo = binary.BigEndian.Uint64(item[:8]), binary.BigEndian.Uint64(item[8:])
+	} else {
+		lo, hi = binary.LittleEndian.Uint64(item[:8]), binary.LittleEndian.Uint64(item[8:])
+	}
+	negative := hi>>63 != 0
+	exponent := int((hi >> 48) & 0x7fff)
+	fracHi := hi & (uint64(1)<<48 - 1)
+	fraction := math.Ldexp(float64(fracHi), -48) + math.Ldexp(float64(lo), -112)
+	var value float64
+	switch exponent {
+	case 0:
+		value = math.Ldexp(fraction, 1-16383)
+	case 0x7fff:
+		if fracHi == 0 && lo == 0 {
+			value = math.Inf(1)
+		} else {
+			value = math.NaN()
+		}
+	default:
+		value = math.Ldexp(1+fraction, exponent-16383)
+	}
+	if negative {
+		value = math.Copysign(value, -1)
+	}
+	return value
+}
+
+func reverseBytes(b []byte) {
+	for left, right := 0, len(b)-1; left < right; left, right = left+1, right-1 {
+		b[left], b[right] = b[right], b[left]
+	}
 }
 
 func writeInts(w *bufio.Writer, b []byte, size int, signed bool, base int, order binary.ByteOrder) {
@@ -508,12 +690,9 @@ func words(b []byte, size int, order binary.ByteOrder) []uint64 {
 	for i := 0; i < len(b); i += size {
 		var buf [8]byte
 		chunk := b[i:min(i+size, len(b))]
-		n := len(chunk)
-		if order == binary.BigEndian {
-			copy(buf[size-n:size], chunk)
-		} else {
-			copy(buf[:], chunk)
-		}
+		// POSIX null-extends a partial trailing item by appending bytes to
+		// the input. It is never numeric left-padding, even on big endian.
+		copy(buf[:], chunk)
 		switch size {
 		case 1:
 			out = append(out, uint64(buf[0]))
@@ -560,15 +739,16 @@ func isStringByte(c byte) bool {
 	return c >= 32 && c <= 126
 }
 
-func parseFormats(values []string) ([]dumpFormat, error) {
+func parseFormats(values []string, abi cABI) ([]dumpFormat, error) {
 	var formats []dumpFormat
 	for _, value := range values {
+		before := len(formats)
 		// First split by spaces/commas/tabs (explicit separators)
 		for _, token := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
 			// Check if the entire token is a format alias first
 			if alias, ok := formatAliases[token]; ok {
 				// It's a format alias like "char" -> "c"
-				fmts, err := parseConcatenatedFormats(alias)
+				fmts, err := parseConcatenatedFormats(alias, abi)
 				if err != nil {
 					return nil, err
 				}
@@ -576,11 +756,14 @@ func parseFormats(values []string) ([]dumpFormat, error) {
 				continue
 			}
 			// Then parse concatenated format strings within each token
-			fmts, err := parseConcatenatedFormats(token)
+			fmts, err := parseConcatenatedFormats(token, abi)
 			if err != nil {
 				return nil, err
 			}
 			formats = append(formats, fmts...)
+		}
+		if len(formats) == before {
+			return nil, fmt.Errorf("unsupported output format: %q", value)
 		}
 	}
 	return formats, nil
@@ -588,7 +771,7 @@ func parseFormats(values []string) ([]dumpFormat, error) {
 
 // parseConcatenatedFormats handles multiple format specs concatenated together,
 // e.g., "x1x2" → [x1, x2], or "x1o1c" → [x1, o1, c], or "octal1hex1" → [o1, x1]
-func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
+func parseConcatenatedFormats(s string, abi cABI) ([]dumpFormat, error) {
 	var formats []dumpFormat
 	i := 0
 	for i < len(s) {
@@ -607,9 +790,9 @@ func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
 				}
 				sizeText := s[start:i]
 				if sizeText == "" {
-					formats = append(formats, parseFormatWithDefault(string(typeChar)))
+					formats = append(formats, parseFormatWithDefault(string(typeChar), abi))
 				} else {
-					f, err := formatForType(typeChar, sizeText, s)
+					f, err := formatForType(typeChar, sizeText, s, abi)
 					if err != nil {
 						return nil, err
 					}
@@ -648,7 +831,7 @@ func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
 		}
 		if namedSize != "" {
 			i += len(namedSize)
-			f, err := formatForType(typeChar, namedSize, s)
+			f, err := formatForType(typeChar, namedSize, s, abi)
 			if err != nil {
 				return nil, err
 			}
@@ -666,10 +849,10 @@ func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
 		}
 		sizeText := s[start:i]
 		if sizeText == "" {
-			formats = append(formats, parseFormatWithDefault(string(typeChar)))
+			formats = append(formats, parseFormatWithDefault(string(typeChar), abi))
 			continue
 		}
-		f, err := formatForType(typeChar, sizeText, s)
+		f, err := formatForType(typeChar, sizeText, s, abi)
 		if err != nil {
 			return nil, err
 		}
@@ -681,59 +864,77 @@ func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
 
 // formatForType builds the dump format for one type letter with an
 // explicit size modifier; spec is the whole type_string, for errors.
-func formatForType(typeChar byte, sizeText, spec string) (dumpFormat, error) {
+func formatForType(typeChar byte, sizeText, spec string, abi cABI) (dumpFormat, error) {
 	if typeChar != 'x' && typeChar != 'o' && typeChar != 'u' && typeChar != 'd' && typeChar != 'f' {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
 	}
-	if n, ok := sizeFromLetter(typeChar, sizeText); ok {
+	if typeChar == 'f' {
+		size, enc, ok := floatSize(sizeText, abi)
+		if !ok {
+			return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
+		}
+		return dumpFormat{kind: "f" + strconv.Itoa(size), size: size, floatEnc: enc}, nil
+	}
+	if n, ok := integerSize(sizeText, abi); ok {
 		sizeText = strconv.Itoa(n)
 	}
 	size, err := strconv.Atoi(sizeText)
 	if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
 	}
-	if typeChar == 'f' && size != 4 && size != 8 {
-		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
-	}
 	return dumpFormat{kind: string(typeChar) + strconv.Itoa(size), size: size}, nil
 }
 
-// sizeFromLetter resolves the POSIX size letters: after f only F, D,
-// or L (float, double, long double); after d/o/u/x only C, S, I, or L
-// (char, short, int, long), plus their word spellings (extension).
-// long double maps to 8 bytes: Go has no wider float type and
-// sizeof(long double) is 8 on this implementation's primary targets.
-func sizeFromLetter(typeChar byte, mod string) (int, bool) {
-	if typeChar == 'f' {
-		switch mod {
-		case "F":
-			return 4, true
-		case "D", "L":
-			return 8, true
-		}
-		return 0, false
-	}
+// integerSize resolves POSIX C/S/I/L against the target C ABI rather than
+// assuming LP64. In particular, long is four bytes on Windows/wasm/32-bit.
+func integerSize(mod string, abi cABI) (int, bool) {
 	switch mod {
 	case "C", "char":
-		return 1, true
+		return abi.charSize, true
 	case "S", "short":
-		return 2, true
+		return abi.shortSize, true
 	case "I", "int":
-		return 4, true
+		return abi.intSize, true
 	case "L", "long":
-		return 8, true
+		return abi.longSize, true
 	}
 	return 0, false
 }
 
-func parseFormatWithDefault(prefix string) dumpFormat {
+func floatSize(mod string, abi cABI) (int, floatEncoding, bool) {
+	switch mod {
+	case "F":
+		return abi.floatSize, floatIEEE32, abi.floatSize == 4
+	case "D":
+		return abi.doubleSize, floatIEEE64, abi.doubleSize == 8
+	case "L":
+		return abi.longDoubleSize, abi.longDoubleEncoding,
+			abi.longDoubleSize > 0 && abi.longDoubleEncoding != floatNone
+	}
+	size, err := strconv.Atoi(mod)
+	if err != nil || size <= 0 {
+		return 0, floatNone, false
+	}
+	switch {
+	case size == abi.floatSize && size == 4:
+		return size, floatIEEE32, true
+	case size == abi.doubleSize && size == 8:
+		return size, floatIEEE64, true
+	case size == abi.longDoubleSize && abi.longDoubleEncoding != floatNone:
+		return size, abi.longDoubleEncoding, true
+	default:
+		return 0, floatNone, false
+	}
+}
+
+func parseFormatWithDefault(prefix string, abi cABI) dumpFormat {
 	switch prefix {
 	case "f":
-		return dumpFormat{kind: "f8", size: 8} // double
+		return dumpFormat{kind: "f" + strconv.Itoa(abi.doubleSize), size: abi.doubleSize, floatEnc: floatIEEE64}
 	case "a", "c":
 		return dumpFormat{kind: prefix, size: 1}
 	default:
-		return dumpFormat{kind: prefix + "4", size: 4} // int
+		return dumpFormat{kind: prefix + strconv.Itoa(abi.intSize), size: abi.intSize}
 	}
 }
 
@@ -745,8 +946,8 @@ var formatAliases = map[string]string{
 	"char":     "c",
 	"ascii":    "a",
 	"named":    "a",
-	"float":    "f8",
-	"double":   "f8",
+	"float":    "fF",
+	"double":   "fD",
 	"octal":    "o",
 	"hex":      "x",
 	"signed":   "d",

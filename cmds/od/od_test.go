@@ -3,6 +3,9 @@ package odcmd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,10 @@ import (
 )
 
 func runOD(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	return runODProfile(t, runtimeProfile(), dir, stdin, args...)
+}
+
+func runODProfile(t *testing.T, profile platformProfile, dir, stdin string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
@@ -19,7 +26,7 @@ func runOD(t *testing.T, dir, stdin string, args ...string) (string, string, int
 		Dir:   dir,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
-	code := cmd.Run(rc, args)
+	code := runWithProfile(rc, args, profile)
 	return out.String(), errb.String(), code
 }
 
@@ -680,6 +687,132 @@ func TestODDashMixedWithFiles(t *testing.T) {
 	out, errb, code := runOD(t, dir, "B", "-A", "n", "-t", "c", "f1", "-", "f2")
 	if want := "   A   B   C\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("od f1 - f2 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestODDefaultUsesNativeByteOrder(t *testing.T) {
+	profile := runtimeProfile()
+	profile.abi, profile.endian = abiFor("linux", "s390x"), binary.BigEndian
+	out, errb, code := runODProfile(t, profile, t.TempDir(), "AB", "-A", "n", "-t", "x2")
+	if want := " 4142\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("big-endian native od = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+	out, errb, code = runODProfile(t, profile, t.TempDir(), "AB", "-A", "n", "-t", "x2", "--endian=little")
+	if want := " 4241\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("explicit little od = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+	if nativeEndianFor("s390x") != binary.BigEndian || nativeEndianFor("amd64") != binary.LittleEndian {
+		t.Fatal("target byte-order table does not distinguish big- and little-endian architectures")
+	}
+}
+
+func TestODCTypeSizesFollowTargetABI(t *testing.T) {
+	linux := abiFor("linux", "amd64")
+	windows := abiFor("windows", "amd64")
+	if linux.longSize != 8 || windows.longSize != 4 {
+		t.Fatalf("C long sizes: linux/amd64=%d windows/amd64=%d, want 8 and 4", linux.longSize, windows.longSize)
+	}
+	f, err := formatForType('x', "L", "xL", windows)
+	if err != nil || f.size != 4 {
+		t.Fatalf("windows xL = (%+v, %v), want size 4", f, err)
+	}
+	f, err = formatForType('d', "I", "dI", windows)
+	if err != nil || f.size != 4 {
+		t.Fatalf("windows dI = (%+v, %v), want size 4", f, err)
+	}
+	for _, goos := range []string{"linux", "darwin", "freebsd", "solaris", "openbsd", "netbsd", "dragonfly"} {
+		abi := abiFor(goos, "amd64")
+		if abi.longDoubleSize != 16 || abi.longDoubleEncoding != floatX87 {
+			t.Errorf("%s/amd64 long double = (%d, %d), want 16-byte x87", goos, abi.longDoubleSize, abi.longDoubleEncoding)
+		}
+	}
+}
+
+// The 16 bytes for 1.0L below are the oracle produced by
+//
+//	long double v = 1.0L; fwrite(&v, sizeof v, 1, stdout);
+//
+// on Ubuntu amd64 (sizeof(long double)==16, x87 80-bit payload), whose
+// value GNU od -An -t fL renders as 1. This pins the representation and
+// size, not merely an fD-compatible first eight bytes.
+func TestODUbuntuAMD64LongDoubleGNUOracleAndPortableTargets(t *testing.T) {
+	profile := runtimeProfile()
+	profile.abi, profile.endian = abiFor("linux", "amd64"), binary.LittleEndian
+	one := []byte{0, 0, 0, 0, 0, 0, 0, 0x80, 0xff, 0x3f, 0, 0, 0, 0, 0, 0}
+	out, errb, code := runODProfile(t, profile, t.TempDir(), string(one), "-A", "n", "-t", "fL")
+	if want := " 1\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("linux/amd64 fL = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+	big := append([]byte(nil), one...)
+	reverseBytes(big)
+	out, errb, code = runODProfile(t, profile, t.TempDir(), string(big), "-A", "n", "-t", "fL", "--endian=big")
+	if want := " 1\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("big-endian x87 fL = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+
+	profile.abi, profile.endian = abiFor("linux", "arm64"), binary.LittleEndian
+	quadOne := make([]byte, 16)
+	binary.LittleEndian.PutUint64(quadOne[8:], uint64(0x3fff)<<48)
+	out, errb, code = runODProfile(t, profile, t.TempDir(), string(quadOne), "-A", "n", "-t", "fL")
+	if want := " 1\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("linux/arm64 fL = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+
+	profile.abi, profile.endian = abiFor("linux", "ppc64"), binary.BigEndian
+	_, errb, code = runODProfile(t, profile, t.TempDir(), string(make([]byte, 16)), "-t", "fL")
+	if code != 2 || !strings.Contains(errb, "unsupported output format") {
+		t.Fatalf("unsupported long-double ABI = (stderr %q, code %d), want loud usage error", errb, code)
+	}
+}
+
+func TestODPartialItemAppendsNullBytes(t *testing.T) {
+	out, errb, code := runOD(t, t.TempDir(), "A", "-A", "n", "-t", "x2", "--endian=big")
+	if want := " 4100\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("big-endian partial x2 = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+}
+
+func TestODExactTypeGrammar(t *testing.T) {
+	profile := runtimeProfile()
+	profile.abi, profile.endian = abiFor("linux", "amd64"), binary.LittleEndian
+	for _, format := range []string{"", "a1", "cC", "fI", "fLD", "dD", "xF", "x0", "f3"} {
+		_, errb, code := runODProfile(t, profile, t.TempDir(), "0123456789abcdef", "-t", format)
+		if code != 2 || !strings.Contains(errb, "unsupported output format") {
+			t.Errorf("od -t %s = (stderr %q, code %d), want grammar error/code 2", format, errb, code)
+		}
+	}
+	if _, err := parseFormats([]string{"f16dI"}, profile.abi); err != nil {
+		t.Fatalf("valid concatenated f16dI rejected: %v", err)
+	}
+}
+
+type failingODWriter struct{ err error }
+
+func (w failingODWriter) Write([]byte) (int, error) { return 0, w.err }
+
+type errorReadCloser struct {
+	io.Reader
+	err error
+}
+
+func (r errorReadCloser) Close() error { return r.err }
+
+func TestODOutputAndCloseErrorsSetStatus(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{
+		In: strings.NewReader("A"), Out: failingODWriter{err: errors.New("broken output")}, Err: &errb,
+	}}
+	if code := cmd.Run(rc, []string{"-A", "n", "-t", "x1"}); code != 1 || !strings.Contains(errb.String(), "write error: broken output") {
+		t.Fatalf("output failure = (stderr %q, code %d), want write diagnostic/code 1", errb.String(), code)
+	}
+
+	profile := runtimeProfile()
+	profile.openInput = func(string) (io.ReadCloser, error) {
+		return errorReadCloser{Reader: strings.NewReader("A"), err: errors.New("broken close")}, nil
+	}
+	out, errText, code := runODProfile(t, profile, t.TempDir(), "", "-A", "n", "-t", "x1", "input")
+	if out != " 41\n" || code != 1 || !strings.Contains(errText, "input: close error:") || !strings.Contains(errText, "roken close") {
+		t.Fatalf("close failure = (%q, %q, %d), want data plus close diagnostic/code 1", out, errText, code)
 	}
 }
 
