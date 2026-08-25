@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `4c3d133`
+This report reconciles the Sprint 79 interface ledger through coreutils `1a27ec0`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -104,12 +104,12 @@ lower-ranked edges.
 | 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add privileged clock-set integration coverage, leap-second rendering, additional platform setters, and a complete installed-locale `LC_TIME` matrix with mutation-after-validation checks. |
 | 2 | `getconf` | platform integration | Accepted source now inventories every mandatory sysconf/pathconf/confstr/minimum name, routes pathname and system queries, distinguishes undefined results, validates programming environments, and propagates path/output errors. Remaining: privileged/kernel-limit products, a non-Linux/Darwin runtime provider, and broader native platform certification fixtures. |
 | 2 | `file` | `OPTIONS`, `STDOUT` | Add complete magic-file grammar and required type-string tests, including `-d`, `-i`, `-M`, symlink policy, stdin, inaccessible operands, and locale effects. |
-| 2 | `find` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Reject the omitted-path extension in POSIX mode or document a gated route; add all primary/action products, real ownership databases, locale `-ok`/pattern behavior, filesystem failures, and `-exec` side effects. |
+| 2 | `find` | platform/locale integration | Accepted source now requires a path operand whenever `POSIXLY_CORRECT` is present while preserving the default-`.` extension outside POSIX mode. Focused products cover every required primary/action/operator, real and seam-backed ownership cases, locale precedence for patterns and `-ok`, `-exec` side effects/batching, traversal failures, and aggregate status. Remaining: cross-mount positive `-xdev`, non-Unix identity providers, and locale/filesystem breadth outside the carried corpus. |
 | 2 | `id` | `STDOUT` | Add named-user default/group output, lookup-failure fallbacks, a real set-ID process fixture, and executable non-Unix behavior or an explicit platform conformance disposition. |
 | 2 | `logname` | `STDOUT`, `EXIT_STATUS` | Current tests prove no effective/environment-user fallback, required no-login failure, RunContext isolation, and output/short-write errors. A real login-session fixture is still required on each supported non-Linux platform; Linux also needs a session where getlogin succeeds without audit loginuid. |
-| 2 | `od` | `ENVIRONMENT_VARIABLES`, `STDOUT` | Add a non-C `LC_CTYPE` `-c` rendering fixture and non-C `LC_NUMERIC` floating-format fixture across all required type strings and ABI sizes. |
+| 2 | `od` | locale-provider integration | Accepted source now applies invocation-owned `LC_CTYPE` to `-t c`, including printable UTF-8 first-byte/`**` continuation fields across output groups, exact Latin-1 bytes, malformed/nonprintable octals, and bounded streaming lookahead. `LC_NUMERIC` controls the radix across all required floating type strings and carried ABIs. Remaining: the locale corpus and Unicode printability tables are bounded and translated catalogs are absent. |
 | 2 | `paste` | locale-provider integration | Accepted source now splits `-d LIST` into delimiter characters per invocation `LC_CTYPE` (carried C/POSIX, their UTF-8 aliases, and `de_DE.ISO-8859-1`, original bytes preserved, unsupported locales failing before any operand opens), and has focused tests for repeated `-` under `-s`, the twelve-operand minimum, the `\\` escape, serial `\0`, mid-file read errors, and stdout write/short-write failures. Remaining: locale codeset discovery is a bounded carried corpus rather than `nl_langinfo(CODESET)`; unqualified installed locales outside that corpus fail closed. |
-| 2 | `pathchk` | `OPERANDS`, `EXIT_STATUS` | Current source queries containing-filesystem limits and preserves symlink-before-`..` resolution, with focused tests for both. Still implement and test the required default invalid-byte-sequence check, pathconf failure/indeterminate results, differing mounted limits, and required diagnostics/statuses. |
+| 2 | `pathchk` | filesystem/platform integration | Accepted source now handles failed and indeterminate containing-filesystem limit queries, differing limits at depth, diagnostics, and aggregate status. Linux runtime evidence proves filesystem-valid non-UTF-8 component bytes are not incorrectly rejected by a UTF-8 locale. Remaining: a side-effect-free provider for missing-name syntax on filesystems with additional encoding restrictions and non-Linux/Darwin runtime coverage. |
 | 2 | `pr` | `OPTIONS`, `ENVIRONMENT_VARIABLES`, `STDOUT` | Add exact Issue 7 optional-argument grammar, every column/merge/page interaction, locale date/header width, terminal pause/interruption, input/output failure, and status matrix. |
 | 2 | `tty` | `STDOUT`, `EXIT_STATUS` | Linux and Darwin now have real terminal-name tests; Windows console behavior, silent mode, invalid descriptors, output errors, and short writes are covered. Add truthful terminal pathname lookup on the remaining POSIX targets and the specified POSIX-locale nonterminal output before verification. |
 | 2 | `more` | `ENVIRONMENT_VARIABLES`, terminal integration | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are unavailable UTF-8 collation providers and terminal-capability/platform integration—not absent translated catalogs or unsupported `-i`, `-p`, or `-t`. |
@@ -157,7 +157,7 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `94a4a7b`. It credits the accepted command
+This report is reconciled through canonical `1a27ec0`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -170,7 +170,9 @@ through `e461654` and matrix refresh `c354351`; `getconf` through
 `e038148` and matrix refresh `befd0dc`; `cut` through `185851f` and matrix
 refresh `110c1f4`; and `paste` through `7a93e44` and matrix refresh `94a4a7b`;
 and `cat` read-error/special-file evidence through `a843aea` and review
-amendment `4c3d133`.
+amendment `4c3d133`; `od` locale rendering through `231f687`; `pathchk`
+filesystem-limit handling through `eb4c01c`; and `find` POSIX operand routing
+and clause evidence through `1a27ec0`.
 
 The machine-readable evidence lanes name the exact current test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,

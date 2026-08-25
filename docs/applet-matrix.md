@@ -89,7 +89,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
 | `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 34 |
-| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 8 | 56 |
+| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 10 | 68 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 2 | 22 |
@@ -136,10 +136,10 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `nproc` | `cmds/nproc` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `ntp` | `cmds/ntp` | — | Bashy/other extension | no | no | 1 | 4 |
 | `numfmt` | `cmds/numfmt` | — | GNU Coreutils | yes | no | 1 | 14 |
-| `od` | `cmds/od` | — | GNU Coreutils | yes | yes | 1 | 46 |
+| `od` | `cmds/od` | — | GNU Coreutils | yes | yes | 1 | 54 |
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `patch` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
-| `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 2 | 17 |
+| `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 24 |
 | `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 10 | 151 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 3 | 20 |
