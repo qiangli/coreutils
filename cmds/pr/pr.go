@@ -28,6 +28,7 @@ package prcmd
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,8 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/qiangli/coreutils/cmds/internal/tzenv"
+	sharedlocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -86,6 +89,8 @@ type options struct {
 	outputTabWidth int
 	merge          bool
 	pager          *pager // nil unless -p or -f actually needs to pause (stdout is a terminal)
+	timeFormatter  sharedlocale.TimeFormatter
+	location       *time.Location
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -214,6 +219,13 @@ func run(rc *tool.RunContext, args []string) int {
 		o.bodyLines = o.pageLength
 	} else {
 		o.bodyLines = o.pageLength - linesPerHeader - linesPerTrailer
+		formatter, err := sharedlocale.ResolveTime(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pr: %v\n", err)
+			return 1
+		}
+		o.timeFormatter = formatter
+		o.location = tzenv.Location(rc.Env)
 	}
 	if o.doubleSpace {
 		o.bodyLines /= 2
@@ -221,15 +233,33 @@ func run(rc *tool.RunContext, args []string) int {
 			o.bodyLines = 1
 		}
 	}
-	if o.columns > 1 {
+	// POSIX: "The options -e and -i shall be assumed for multiple
+	// text-column output", which -m produces as much as -column does.
+	if o.columns > 1 || o.merge {
 		o.expandTabs = true
 		o.outputTabs = true
 	}
 	// -p pauses before every emitted page; -f (XSI) pauses before only the
 	// first. Both apply only when standard output is a terminal: elsewhere
 	// -p is a no-op and -f is a plain alias of -F, per POSIX.
-	if (*pauseFlag || *formFeedLower) && isTerminalFn(rc) {
+	stdoutTerminal := isTerminalFn(rc)
+	if (*pauseFlag || *formFeedLower) && stdoutTerminal {
 		o.pager = &pager{errW: rc.Err, each: *pauseFlag, first: *formFeedLower}
+	}
+	// POSIX: when standard output is a terminal, diagnostic messages are
+	// deferred until processing completes (and an interrupt flushes whatever
+	// accumulated). The -p <alert> is not a diagnostic and stays immediate.
+	diag := io.Writer(rc.Err)
+	var deferredDiag *bytes.Buffer
+	if stdoutTerminal {
+		deferredDiag = &bytes.Buffer{}
+		diag = deferredDiag
+	}
+	flushDiag := func() {
+		if deferredDiag != nil && deferredDiag.Len() > 0 {
+			_, _ = rc.Err.Write(deferredDiag.Bytes())
+			deferredDiag.Reset()
+		}
 	}
 
 	// The GNU/POSIX +FIRST[:LAST] operand is an alternative page range.
@@ -255,14 +285,16 @@ func run(rc *tool.RunContext, args []string) int {
 
 	w := bufio.NewWriter(rc.Out)
 	if o.merge {
-		return runMerge(rc, files, w, o)
+		code := runMerge(rc, diag, files, w, o)
+		flushDiag()
+		return code
 	}
 	exit := 0
 	for _, name := range files {
 		r, closer, label, stamp, err := open(rc, name)
 		if err != nil {
 			if !o.noFileWarnings {
-				fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
+				fmt.Fprintf(diag, "pr: %s: %v\n", name, tool.SysErr(err))
 			}
 			exit = 1
 			continue
@@ -272,10 +304,13 @@ func run(rc *tool.RunContext, args []string) int {
 				closer.Close()
 			}
 			if errors.Is(err, errPauseInterrupted) {
-				w.Flush()
-				return 0
+				_ = w.Flush()
+				// POSIX ASYNCHRONOUS EVENTS: an interrupt while writing to a
+				// terminal flushes accumulated diagnostics before termination.
+				flushDiag()
+				return interruptExit
 			}
-			fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
+			fmt.Fprintf(diag, "pr: %s: %v\n", name, tool.SysErr(err))
 			exit = 1
 			continue
 		}
@@ -284,15 +319,17 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if err := w.Flush(); err != nil {
-		fmt.Fprintf(rc.Err, "pr: write error: %v\n", err)
+		fmt.Fprintf(diag, "pr: write error: %v\n", err)
+		flushDiag()
 		return 1
 	}
+	flushDiag()
 	return exit
 }
 
 // runMerge opens every input before emitting rows, since -m consumes one
 // corresponding line from each file at a time.
-func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) int {
+func runMerge(rc *tool.RunContext, diag io.Writer, files []string, w *bufio.Writer, o options) int {
 	readers := make([]io.Reader, 0, len(files))
 	closers := make([]io.Closer, 0, len(files))
 	exit := 0
@@ -300,7 +337,7 @@ func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) i
 		r, closer, _, _, err := open(rc, name)
 		if err != nil {
 			if !o.noFileWarnings {
-				fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
+				fmt.Fprintf(diag, "pr: %s: %v\n", name, tool.SysErr(err))
 			}
 			exit = 1
 			continue
@@ -318,16 +355,16 @@ func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) i
 	if err := printMerge(readers, w, o); err != nil {
 		if errors.Is(err, errPauseInterrupted) {
 			if flushErr := w.Flush(); flushErr != nil {
-				fmt.Fprintf(rc.Err, "pr: write error: %v\n", flushErr)
+				fmt.Fprintf(diag, "pr: write error: %v\n", flushErr)
 				return 1
 			}
-			return 0
+			return interruptExit
 		}
-		fmt.Fprintf(rc.Err, "pr: merge: %v\n", tool.SysErr(err))
+		fmt.Fprintf(diag, "pr: merge: %v\n", tool.SysErr(err))
 		return 1
 	}
 	if err := w.Flush(); err != nil {
-		fmt.Fprintf(rc.Err, "pr: write error: %v\n", err)
+		fmt.Fprintf(diag, "pr: write error: %v\n", err)
 		return 1
 	}
 	return exit
@@ -987,11 +1024,13 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 
 // headerLine builds the POSIX header text line in the POSIX locale.
 func headerLine(label string, stamp time.Time, page int, o options) string {
-	format := "Jan _2 15:04 2006"
-	if o.dateFormat != "" {
-		format = strftimeLayout(o.dateFormat)
+	if o.location != nil {
+		stamp = stamp.In(o.location)
 	}
-	date := stamp.Format(format)
+	date := fmt.Sprintf("%s %04d", o.timeFormatter.FormatMonthDayTime(stamp), stamp.Year())
+	if o.dateFormat != "" {
+		date = stamp.Format(strftimeLayout(o.dateFormat))
+	}
 	return strings.Repeat(" ", o.indent) + fmt.Sprintf("%s %s Page %d", date, label, page)
 }
 
@@ -1202,11 +1241,12 @@ var (
 )
 
 // errPauseInterrupted signals that a -p/-f pause ended because pr received
-// an interrupt while waiting on /dev/tty rather than because the user
-// supplied the required carriage return. Callers treat it as a clean early
-// stop (exit 0), matching cmds/write's interrupt convention, not a
-// diagnosed error.
+// SIGINT while waiting on /dev/tty rather than because the user supplied the
+// required carriage return. The library entry point cannot re-deliver the
+// signal to itself, so callers return the conventional shell status 128+2.
 var errPauseInterrupted = errors.New("pr: interrupted while waiting for the terminal")
+
+const interruptExit = 130
 
 // pager decides, at each emitted-page boundary, whether pr must pause: -p
 // pauses before every page, -f (XSI) only before the first. It is
