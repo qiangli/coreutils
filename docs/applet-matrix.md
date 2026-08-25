@@ -97,7 +97,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 | `gzip` | `cmds/gzip` | — | Bashy/other extension | no | no | 1 | 10 |
-| `head` | `cmds/head` | — | GNU Coreutils | yes | yes | 1 | 8 |
+| `head` | `cmds/head` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `hexdump` | `cmds/hexdump` | — | Bashy/other extension | no | no | 1 | 6 |
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |
@@ -164,7 +164,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `sha512sum` | `cmds/sha512sum` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `shred` | `cmds/shred` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `shuf` | `cmds/shuf` | — | GNU Coreutils | yes | no | 1 | 12 |
-| `sleep` | `cmds/sleep` | — | GNU Coreutils | yes | yes | 1 | 5 |
+| `sleep` | `cmds/sleep` | — | GNU Coreutils | yes | yes | 1 | 6 |
 | `sntp` | `cmds/ntp` | ntp | Bashy/other extension | no | no | 1 | 4 |
 | `sort` | `cmds/sort` | — | GNU Coreutils | yes | yes | 4 | 24 |
 | `split` | `cmds/split` | — | GNU Coreutils | yes | yes | 1 | 13 |
@@ -180,7 +180,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 2 | 21 |
 | `talk` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
-| `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 2 | 17 |
+| `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 18 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
 | `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 15 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |

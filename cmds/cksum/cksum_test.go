@@ -50,6 +50,11 @@ func TestCKSumStdinAndFiles(t *testing.T) {
 	if out != "1219131554 3 a.txt\n" || code != 0 {
 		t.Fatalf("file = (%q, %d)", out, code)
 	}
+	out, errb, code := runTool(t, dir, "", "missing", "a.txt")
+	if out != "1219131554 3 a.txt\n" || code != 1 ||
+		!strings.Contains(errb, "cksum: missing:") {
+		t.Fatalf("failed then successful file = (%q, %q, %d)", out, errb, code)
+	}
 }
 
 func TestCKSumReportsStandardOutputWriteError(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type headFailWriter struct{ err error }
+
+func (w headFailWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -181,6 +186,25 @@ func TestHeadErrors(t *testing.T) {
 	_, errb, code = runTool(t, "", "", "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: err=%q code=%d", errb, code)
+	}
+}
+
+func TestHeadWriteError(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("line\n"),
+			Out: headFailWriter{err: io.ErrClosedPipe},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("write failure exit = %d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "head: write error:") ||
+		!strings.Contains(got, "closed pipe") {
+		t.Fatalf("write failure diagnostic = %q", got)
 	}
 }
 

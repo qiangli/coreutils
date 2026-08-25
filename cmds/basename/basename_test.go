@@ -40,6 +40,10 @@ func TestBasename(t *testing.T) {
 		{[]string{"--suffix=", "any/str1", "any/str2"}, "str1\nstr2\n", 0},
 		{[]string{"/usr/lib/"}, "lib\n", 0},
 		{[]string{"/"}, "/\n", 0},
+		{[]string{"////"}, "/\n", 0},
+		{[]string{"//"}, "/\n", 0}, // permitted implementation-defined choice
+		{[]string{""}, "\n", 0},    // permitted unspecified empty-string choice
+		{[]string{"name", ".x"}, "name\n", 0},
 		{[]string{"-a", "a", "b", "c"}, "a\nb\nc\n", 0},
 		{[]string{"-z", "a/b"}, "b\x00", 0},
 		// Options must precede operands; after NAME, --zero is the suffix.

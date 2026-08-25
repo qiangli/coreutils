@@ -107,6 +107,13 @@ func TestCatFiles(t *testing.T) {
 	if out != "one\nin\n" || code != 0 {
 		t.Errorf("cat file - = (%q, %d)", out, code)
 	}
+
+	// Repeated '-' operands continue reading the same standard-input stream;
+	// they must not close or reopen it.
+	out, _, code = runTool(t, dir, "once\n", "-", "-")
+	if out != "once\n" || code != 0 {
+		t.Errorf("cat - - = (%q, %d)", out, code)
+	}
 }
 
 func TestCatLineStateAcrossFiles(t *testing.T) {

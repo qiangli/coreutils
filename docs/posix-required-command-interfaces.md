@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 0 |
-| Evidence | Partial | 2 |
-| Evidence | Unverified | 114 |
+| Evidence | Partial | 12 |
+| Evidence | Unverified | 104 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -251,7 +251,7 @@ awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 
 ## `basename`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -267,21 +267,21 @@ basename string [suffix]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `string; suffix`. UNVERIFIED
+**Operands:** `string; suffix`. Treat string as a pathname: apply the permitted null-string and exactly // choices; reduce an all-slash string to /; remove trailing slashes and the prefix through the last remaining slash; then remove suffix only when it is a matching non-whole suffix.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing so an option-like string can be supplied as the first operand.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write the resulting string followed by a newline.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No files are modified.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 for successful completion; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -293,7 +293,7 @@ basename string [suffix]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/basename`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/basename/basename_test.go#TestBasename;cmds/basename/basename_test.go#TestBasenameErrors;cmds/basename/basename_test.go#TestBasenameWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [basename](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/basename.html).
 
@@ -443,7 +443,7 @@ bc [-l] [file...]
 
 ## `cat`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -459,21 +459,21 @@ cat [-u] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Read file operands in order; no operands selects standard input; every - operand reads the same continuing standard-input stream; -u writes each byte without delay; any input file type is accepted.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a file operand of - selects standard input and may occur more than once.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used when no file operands are given and at each - operand, without closing or reopening the stream.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write exactly the sequence of bytes read from the inputs and nothing else; the implementation may reject a regular output file that is also an input file.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads inputs without modifying them; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 only when all input files are output successfully; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -485,7 +485,7 @@ cat [-u] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cat`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cat/cat_test.go#TestCat;cmds/cat/cat_test.go#TestCatFiles;cmds/cat/cat_test.go#TestCatUnbufferedFlushesBeforeEOF;cmds/cat/cat_test.go#TestCatErrors;cmds/cat/cat_test.go#TestCatSameFile;cmds/cat/cat_test.go#TestCatWriteError;cmds/cat/cat_fifo_test.go#TestCatFIFOSymlink`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cat](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cat.html).
 
@@ -686,7 +686,7 @@ chown -R [-H|-L|-P] owner[:group] file...
 
 ## `cksum`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -702,21 +702,21 @@ cksum [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. For every operand in order, calculate the Issue 7 Ethernet-polynomial CRC including the encoded file length and count its octets; no operands selects standard input; process later operands after an earlier error.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used when no file operand is supplied and for each - operand; otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** For each successful named file write checksum, octet count, pathname, and newline separated by spaces; omit pathname and its leading space for no-operand standard input.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads inputs without modifying them; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 only when all files are processed successfully; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -728,7 +728,7 @@ cksum [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cksum`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cksum/cksum_test.go#TestCKSumStdinAndFiles;cmds/cksum/cksum_test.go#TestCKSumErrors;cmds/cksum/cksum_test.go#TestCKSumReportsStandardOutputWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cksum](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cksum.html).
 
@@ -1510,7 +1510,7 @@ ed [-p string] [-s] [file]
 
 ## `env`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1526,21 +1526,21 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `name=value; utility; argument`. UNVERIFIED
+**Operands:** `name=value; utility; argument`. Start with the inherited environment or, under -i, an empty environment; apply leading name=value operands in order; the first non-assignment names the utility and all later operands are its arguments; search with the resulting PATH.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends env option parsing; after the first non-option operand all remaining strings belong to the assignment or utility operand sequence; Issue 7 leaves a first argument of - unspecified.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not read by env; when utility is present, pass standard input through to that utility.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** With no utility, write each resulting name=value entry followed by a newline; with a utility, env writes nothing and passes through the utility standard output.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for env diagnostics; an invoked utility inherits standard error.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Writes the resulting environment or invokes utility directly with that environment and the supplied arguments.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** With utility, return its exit status; otherwise 0 on success, 1-125 for an env error, 126 when utility is found but cannot be invoked, and 127 when it cannot be found.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1552,7 +1552,7 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/env`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:env:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/env/env_test.go#TestEnv;cmds/env/env_test.go#TestEnvRunsCommandWithModifiedEnvironment;cmds/env/env_test.go#TestEnvCommandStdioAndExitStatus;cmds/env/env_test.go#TestEnvCommandNotFoundAndNotExecutable;cmds/env/env_test.go#TestEnvWriteErrorDiagnostic;cmds/env/env_exec_test.go#TestEnvExecPassesArgvVerbatimWithoutShell;cmds/env/env_exec_test.go#TestEnvExecChildEnvironmentOrdering;cmds/env/env_exec_test.go#TestEnvExecStdioPassthroughAndSilence;cmds/env/env_exec_test.go#TestEnvExecEmptyPathSearchesWorkingDirectoryOnly;cmds/env/env_exec_test.go#TestEnvDoubleDashEndsOptions`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:env:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [env](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/env.html).
 
@@ -2189,7 +2189,7 @@ hash -r
 
 ## `head`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2205,21 +2205,21 @@ head [-n number] [file...]
 
 **Issue 7 option-argument candidate:** `-n=<number>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Copy the first number lines of every file operand, or 10 lines when -n is absent; copy an entire shorter file without error; no operands selects standard input; process multiple operands in order.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used when no file operand is supplied and for each - operand; otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write each designated input portion; with multiple operands prefix the first with ==> pathname <== and later ones with a preceding newline before the same header form.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads inputs without modifying them; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 for successful completion; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2231,7 +2231,7 @@ head [-n number] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/head`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/head/head_test.go#TestHead;cmds/head/head_test.go#TestHeadHeaders;cmds/head/head_test.go#TestHeadErrors;cmds/head/head_test.go#TestHeadWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [head](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/head.html).
 
@@ -4034,7 +4034,7 @@ rm -f [-iRr] [file...]
 
 ## `rmdir`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4050,21 +4050,21 @@ rmdir [-p] dir...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `dir`. UNVERIFIED
+**Operands:** `dir`. Process each dir pathname in operand order and remove its empty directory entry as by rmdir(); under -p, after removing a multi-component operand, repeatedly remove its dirname ancestors until completion or the first failure.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a lone - after it is a literal directory pathname, not standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Removes each named empty directory and, with -p, removable pathname ancestors.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 only when every directory entry specified by an operand is removed successfully; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4076,7 +4076,7 @@ rmdir [-p] dir...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/rmdir`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:rmdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/rmdir/rmdir_test.go#TestRmdirEmpty;cmds/rmdir/rmdir_test.go#TestRmdirParents;cmds/rmdir/rmdir_test.go#TestRmdirParentsStopsOnNonEmpty;cmds/rmdir/rmdir_test.go#TestRmdirContinuesPastErrors;cmds/rmdir/rmdir_test.go#TestRmdirDoubleDashOperand;cmds/rmdir/rmdir_test.go#TestRmdirDashOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:rmdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [rmdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rmdir.html).
 
@@ -4182,7 +4182,7 @@ sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...
 
 ## `sleep`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4198,21 +4198,21 @@ sleep time
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `time`. UNVERIFIED
+**Operands:** `time`. Accept the Issue 7 time operand as a non-negative decimal integer and suspend execution for at least that many integral seconds.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; Issue 7 defines no command-specific special token.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Suspends the invoking execution for at least time seconds; SIGALRM may complete successfully, be ignored, or take its default action, and other signals take their standard action.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 after a successful suspension of at least time seconds or an allowed successful SIGALRM disposition; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4224,7 +4224,7 @@ sleep time
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sleep`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/sleep/sleep_test.go#TestSleepZeroish;cmds/sleep/sleep_test.go#TestSleepIssue7IntegralDuration;cmds/sleep/sleep_test.go#TestSleepErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [sleep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sleep.html).
 
@@ -4618,7 +4618,7 @@ tail [-f] [-c number|-n number] [file]
 
 ## `tee`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4634,21 +4634,21 @@ tee [-ai] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Copy standard input without buffering to standard output and every file operand; without -a create or truncate named files, with -a append; support at least 13 file operands; after a write failure on one opened file diagnose it and continue the other opened files and standard output.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a file operand of - always names a literal file called -, never standard output.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read as a byte stream of any type and copy without buffering.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write an exact copy of standard input.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages, including non-signal output errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Creates or truncates each named output file by default, appends under -a, and ignores SIGINT while -i is active.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 only when standard input is copied successfully to standard output and all output files; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4660,7 +4660,7 @@ tee [-ai] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tee`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tee/tee_test.go#TestTeeStdoutOnly;cmds/tee/tee_test.go#TestTeeWritesFiles;cmds/tee/tee_test.go#TestTeeTruncatesByDefault;cmds/tee/tee_test.go#TestTeeAppend;cmds/tee/tee_test.go#TestTeeOpenErrorContinues;cmds/tee/tee_test.go#TestTeeDashIsLiteralFileName;cmds/tee/tee_test.go#TestTeeStdoutWriteErrorPOSIX;cmds/tee/run_signal_test.go#TestTeeIgnoreInterruptsActual;cmds/tee/tee_posix_linux_test.go#TestTeeIssue7FileWriteFailureContinues`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tee](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tee.html).
 
@@ -4958,7 +4958,7 @@ true
 
 ## `tsort`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4974,21 +4974,21 @@ tsort [file]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Read blank-separated pairs of non-empty items; unequal items impose first-before-second ordering and identical items declare presence; write every item once in a total order consistent with all imposed relations.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used when file is omitted or is -; otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write a text file containing one total ordering consistent with the partial-order input.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads the input without modifying it; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 for successful completion; greater than 0 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5000,13 +5000,13 @@ tsort [file]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tsort`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tsort/tsort_test.go#TestTsort;cmds/tsort/tsort_test.go#TestTsortFileOperand;cmds/tsort/tsort_test.go#TestTsortErrors;cmds/tsort/tsort_test.go#TestTsortPOSIXExample`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tsort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tsort.html).
 
 ## `tty`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -5022,21 +5022,21 @@ tty
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `none`. UNVERIFIED
+**Operands:** `none`. No operands are accepted; examine standard input to determine whether it is a terminal and, if so, obtain a ttyname()-equivalent pathname.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; Issue 7 specifies no tty options or operands.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Examined but not read to determine terminal status and name.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** For a terminal write its ttyname()-equivalent pathname and newline; otherwise write an informative message, exactly not a tty followed by newline in the POSIX locale.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Examines the standard-input descriptor without consuming input or modifying files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when standard input is a terminal; 1 when it is not; greater than 1 if an error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5048,7 +5048,7 @@ tty
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tty`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tty/tty_posix_test.go#TestTTYTerminalName;cmds/tty/tty_test.go#TestTTYNotAFile;cmds/tty/tty_test.go#TestTTYWriteError;cmds/tty/tty_test.go#TestTTYErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tty.html).
 

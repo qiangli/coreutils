@@ -6,7 +6,7 @@
 // Changes: rewired to the tool framework; per-file open and write
 // errors are diagnosed and skipped with exit status 1 (GNU behavior)
 // instead of aborting the whole copy. POSIX default behavior makes
-// standard-output write errors fatal and silent, while GNU
+// standard-output write errors fatal and diagnosed, while GNU
 // --output-error modes (and the -p shorthand) diagnose or exit on
 // non-pipe errors and ignore pipe errors. -i ignores interrupt signals.
 package teecmd
@@ -169,8 +169,10 @@ const (
 // POSIX treats stdout specially: write errors there are fatal and silent.
 func (m outputErrorMode) writeBehavior(isStdout, isPipe bool) (diagnose, exit bool) {
 	if isStdout && m == modePOSIX {
-		// POSIX: stdout errors are fatal and must not be diagnosed.
-		return false, true
+		// POSIX gives only successfully opened file operands the special
+		// continue-after-write-error rule. Other errors use the Utility
+		// Description Defaults: diagnose the error and fail.
+		return true, true
 	}
 	switch m {
 	case modePOSIX:

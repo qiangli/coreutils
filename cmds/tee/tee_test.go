@@ -200,15 +200,15 @@ func runToolRaw(t *testing.T, dir string, in io.Reader, out, errOut io.Writer, a
 }
 
 func TestTeeStdoutWriteErrorPOSIX(t *testing.T) {
-	// POSIX default: an error writing to standard output is fatal and
-	// must not produce a diagnostic on standard error.
+	// POSIX default: an error writing to standard output is fatal and uses
+	// the Utility Description Defaults, which require a diagnostic.
 	var errb bytes.Buffer
 	code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), errWriter{errors.New("broken")}, &errb)
 	if code != 1 {
 		t.Errorf("stdout error: code=%d, want 1", code)
 	}
-	if errb.String() != "" {
-		t.Errorf("stdout error: stderr=%q, want empty", errb.String())
+	if !strings.Contains(errb.String(), "tee: standard output: Broken") {
+		t.Errorf("stdout error: stderr=%q, want diagnostic", errb.String())
 	}
 }
 

@@ -57,6 +57,17 @@ func TestSleepSuffixMath(t *testing.T) {
 	}
 }
 
+func TestSleepIssue7IntegralDuration(t *testing.T) {
+	start := time.Now()
+	out, errb, code := runTool(t, context.Background(), "1")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf("sleep 1 = (%q, %q, %d), want clean success", out, errb, code)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Fatalf("sleep 1 returned early after %v", elapsed)
+	}
+}
+
 func TestSleepCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
