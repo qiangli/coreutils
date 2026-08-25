@@ -3,6 +3,7 @@ package batchcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,10 @@ import (
 	"github.com/qiangli/coreutils/pkg/schedule"
 	"github.com/qiangli/coreutils/tool"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 func runBatch(t *testing.T, ctx context.Context, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -71,6 +76,26 @@ func TestBatchSubmissionStdoutEmpty(t *testing.T) {
 	}
 	if out != "" {
 		t.Errorf("stdout must be empty on success, got %q", out)
+	}
+}
+
+func TestBatchAuthenticatedRecipientAndWriteError(t *testing.T) {
+	setupBatchState(t)
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE"), "LOGNAME=attacker"},
+		Stdio: tool.Stdio{In: strings.NewReader("true\n"), Out: &bytes.Buffer{}, Err: failingWriter{}},
+	}
+	if code := cmd.Run(rc, nil); code == 0 {
+		t.Fatal("batch succeeded despite failed confirmation write")
+	}
+	jobs, loadErr := schedule.LoadJobs()
+	if loadErr != nil || len(jobs) != 1 || jobs[0].OwnerUID != identity.UID || jobs[0].MailTo != identity.Name || jobs[0].MailTo == "attacker" {
+		t.Fatalf("trusted identity: jobs=%v err=%v", jobs, loadErr)
 	}
 }
 

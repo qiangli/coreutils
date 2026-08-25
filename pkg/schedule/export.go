@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	posixlocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
@@ -81,6 +82,13 @@ func ParseAtTimespec(s string, now time.Time) (time.Time, error) {
 // explicit trailing "utc" overrides loc. The accepted grammar covers numeric
 // and meridian times, named dates/weekdays, today/tomorrow, and increments.
 func ParseAtTimespecInLocation(s string, now time.Time, loc *time.Location) (time.Time, error) {
+	formatter, _ := posixlocale.ResolveTime(nil)
+	return ParseAtTimespecInLocationWithLocale(s, now, loc, formatter)
+}
+
+// ParseAtTimespecInLocationWithLocale parses month and weekday names through
+// the caller's bounded LC_TIME provider.
+func ParseAtTimespecInLocationWithLocale(s string, now time.Time, loc *time.Location, formatter posixlocale.TimeFormatter) (time.Time, error) {
 	orig := normalizeAtTimespec(s)
 	if orig == "" {
 		return time.Time{}, fmt.Errorf("invalid timespec %q", orig)
@@ -125,7 +133,7 @@ func ParseAtTimespecInLocation(s string, now time.Time, loc *time.Location) (tim
 		fields = append(fields[:consumed], fields[consumed+1:]...)
 	}
 	dateFields := fields[consumed:]
-	when, explicitDate, err := parseAtDate(dateFields, hour, minute, now, loc)
+	when, explicitDate, err := parseAtDate(dateFields, hour, minute, now, loc, formatter)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid timespec %q: %w", orig, err)
 	}
@@ -143,9 +151,10 @@ type atIncrement struct {
 var (
 	incrementRe     = regexp.MustCompile(`(?i)^(.*)\+\s*([0-9]+)\s*(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*$`)
 	nextIncrementRe = regexp.MustCompile(`(?i)^(.*)\bnext\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*$`)
-	adjacentAMPMRe  = regexp.MustCompile(`(?i)^([0-9]{1,2}(?::[0-9]{1,2})?)(am|pm)([[:alpha:]].*)$`)
+	adjacentAMPMRe  = regexp.MustCompile(`(?i)^([0-9]{4}|[0-9]{1,2}(?::[0-9]{1,2})?)(am|pm)([[:alpha:]].*)$`)
 	adjacentMonthRe = regexp.MustCompile(`(?i)\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)([0-9]{1,2})(,?)\b`)
 	looseColonRe    = regexp.MustCompile(`(?i)^([0-9]{1,2})\s+:\s*([0-9]{1,2}.*)$`)
+	adjacentUTCRe   = regexp.MustCompile(`(?i)^([0-9]{1,4}(?::[0-9]{1,2})?)utc(.*)$`)
 )
 
 func normalizeAtTimespec(s string) string {
@@ -158,6 +167,9 @@ func normalizeAtTimespec(s string) string {
 	}
 	if m := adjacentAMPMRe.FindStringSubmatch(s); m != nil {
 		s = m[1] + " " + m[2] + " " + m[3]
+	}
+	if m := adjacentUTCRe.FindStringSubmatch(s); m != nil {
+		s = m[1] + " utc " + m[2]
 	}
 	s = adjacentMonthRe.ReplaceAllString(s, "$1 $2$3")
 	return s
@@ -299,7 +311,7 @@ var months = map[string]time.Month{
 	"dec": time.December, "december": time.December,
 }
 
-func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Location) (time.Time, bool, error) {
+func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Location, formatter posixlocale.TimeFormatter) (time.Time, bool, error) {
 	makeTime := func(year int, month time.Month, day int) (time.Time, error) {
 		t := time.Date(year, month, day, hour, minute, 0, 0, loc)
 		if t.Year() != year || t.Month() != month || t.Day() != day {
@@ -321,7 +333,7 @@ func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Loc
 			out, err := makeTime(t.Year(), t.Month(), t.Day())
 			return out, true, err
 		}
-		if weekday, ok := weekdays[strings.ToLower(fields[0])]; ok {
+		if weekday, ok := formatter.ParseWeekday(fields[0]); ok {
 			days := (int(weekday) - int(now.Weekday()) + 7) % 7
 			candidate := now.AddDate(0, 0, days)
 			out, err := makeTime(candidate.Year(), candidate.Month(), candidate.Day())
@@ -334,7 +346,7 @@ func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Loc
 		return time.Time{}, false, fmt.Errorf("invalid date")
 	}
 
-	month, ok := months[strings.ToLower(strings.TrimSuffix(fields[0], ","))]
+	month, ok := formatter.ParseMonth(fields[0])
 	if !ok {
 		return time.Time{}, false, fmt.Errorf("invalid month")
 	}

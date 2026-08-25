@@ -60,9 +60,12 @@ type Job struct {
 	// output was produced and no provider exists.
 	MailCompletion bool   `json:"mail_completion,omitempty"`
 	MailTo         string `json:"mail_to,omitempty"`
-	// BatchLoad marks jobs submitted through batch(1). The scheduler currently
-	// records the required load-governed semantics but does not claim a precise
-	// host load implementation.
+	// OwnerUID is the authenticated submitting account. OwnerName is retained
+	// for diagnostics and trusted mail addressing; authorization uses OwnerUID.
+	OwnerUID  string `json:"owner_uid,omitempty"`
+	OwnerName string `json:"owner_name,omitempty"`
+	// BatchLoad marks jobs submitted through batch(1) or at -q b. Such jobs are
+	// claimed only when the scheduler's load provider reports an acceptable load.
 	BatchLoad bool      `json:"batch_load,omitempty"`
 	Prompt    string    `json:"prompt,omitempty"`
 	Context   string    `json:"context,omitempty"`
@@ -75,6 +78,12 @@ type Job struct {
 var ErrMailDeliveryUnsupported = errors.New("scheduled output mail delivery is not supported by this host")
 
 type MailDelivery func(recipient string, content []byte) error
+
+// LoadProvider returns the host's one-minute load average. Batch jobs wait
+// while it is above BatchLoadLimit; errors leave those jobs pending.
+type LoadProvider func() (float64, error)
+
+const BatchLoadLimit = 1.5
 
 type store struct {
 	Jobs          []*Job `json:"jobs"`
@@ -220,6 +229,7 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 		return fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
 	}
 	c := commandWithUmask(j.Command, j.Umask, j.UmaskSet)
+	applyJobProcAttrs(c)
 	c.Dir = j.Dir
 	if j.EnvSet {
 		c.Env = append([]string(nil), j.Env...)
@@ -441,7 +451,8 @@ func runCmd() *cobra.Command {
 			if j == nil {
 				return fmt.Errorf("no such job %q", args[0])
 			}
-			if err = j.fire(os.Stdout); err != nil {
+			deliver, _ := DiscoverMailDelivery()
+			if err = j.fireWithMail(os.Stdout, deliver); err != nil {
 				return err
 			}
 			j.LastRun = time.Now()
@@ -464,9 +475,13 @@ func tickCmd() *cobra.Command {
 			}
 			if scheduleOutputJSON(cmd) {
 				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "tick", "fired": fired})
-				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), string(b)); err != nil {
+					return err
+				}
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "tick: fired %d job(s)\n", len(fired))
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "tick: fired %d job(s)\n", len(fired)); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -479,18 +494,45 @@ func tickOnce(now time.Time, w *os.File) ([]string, error) {
 }
 
 func tickOnceWithMail(now time.Time, w io.Writer, deliver MailDelivery) ([]string, error) {
+	return tickOnceWithProviders(now, w, deliver, nil)
+}
+
+func tickOnceWithProviders(now time.Time, w io.Writer, deliver MailDelivery, load LoadProvider) ([]string, error) {
 	var fired []string
 	var due []*Job
+	var selectionErrs []error
+	loadRead := false
+	var currentLoad float64
+	var loadErr error
 	err := UpdateJobs(func(jobs []*Job) ([]*Job, error) {
 		for _, j := range jobs {
 			if !j.Enabled || j.NextRun.IsZero() || j.NextRun.After(now) {
 				continue
 			}
 			if err := validateJobPlatform(j); err != nil {
-				return nil, fmt.Errorf("job %s: %w", j.ID, err)
+				selectionErrs = append(selectionErrs, fmt.Errorf("job %s: %w", j.ID, err))
+				continue
 			}
 			if j.MailCompletion && deliver == nil {
-				return nil, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
+				selectionErrs = append(selectionErrs, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))
+				continue
+			}
+			if j.BatchLoad {
+				if !loadRead {
+					loadRead = true
+					if load == nil {
+						loadErr = errors.New("host load provider is unavailable")
+					} else {
+						currentLoad, loadErr = load()
+					}
+				}
+				if loadErr != nil {
+					selectionErrs = append(selectionErrs, fmt.Errorf("job %s: cannot read host load: %w", j.ID, loadErr))
+					continue
+				}
+				if currentLoad > BatchLoadLimit {
+					continue
+				}
 			}
 			j.LastRun = now
 			fired = append(fired, j.ID)
@@ -517,16 +559,24 @@ func tickOnceWithMail(now time.Time, w io.Writer, deliver MailDelivery) ([]strin
 	var fireErrs []error
 	for _, j := range due {
 		if err := j.fireWithMail(w, deliver); err != nil {
-			fmt.Fprintln(w, err)
+			if _, writeErr := fmt.Fprintln(w, err); writeErr != nil {
+				fireErrs = append(fireErrs, writeErr)
+			}
 			fireErrs = append(fireErrs, err)
 		}
 	}
-	return fired, errors.Join(fireErrs...)
+	return fired, errors.Join(append(selectionErrs, fireErrs...)...)
 }
 
 // TickOnceWithMail fires due jobs using an explicit mail provider.
 func TickOnceWithMail(now time.Time, w io.Writer, deliver MailDelivery) ([]string, error) {
 	return tickOnceWithMail(now, w, deliver)
+}
+
+// TickOnceWithProviders is the fully injectable scheduler tick used by hosts
+// and tests that provide output mail and load-average facilities.
+func TickOnceWithProviders(now time.Time, w io.Writer, deliver MailDelivery, load LoadProvider) ([]string, error) {
+	return tickOnceWithProviders(now, w, deliver, load)
 }
 
 func daemonCmd() *cobra.Command {
@@ -545,7 +595,9 @@ func daemonCmd() *cobra.Command {
 					_ = os.Remove(p)
 				}
 			}()
-			fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: ticking every %s (state %s)\n", interval, statePath())
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: ticking every %s (state %s)\n", interval, statePath()); err != nil {
+				return err
+			}
 			t := time.NewTicker(interval)
 			defer t.Stop()
 			for {
@@ -553,8 +605,14 @@ func daemonCmd() *cobra.Command {
 				case <-cmd.Context().Done():
 					return nil
 				case <-t.C:
-					if _, err := tickOnce(time.Now(), os.Stdout); err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: %v\n", err)
+					deliver, mailErr := DiscoverMailDelivery()
+					if mailErr != nil {
+						deliver = nil
+					}
+					if _, err := tickOnceWithProviders(time.Now(), os.Stdout, deliver, HostLoadAverage); err != nil {
+						if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: %v\n", err); writeErr != nil {
+							return writeErr
+						}
 					}
 				}
 			}

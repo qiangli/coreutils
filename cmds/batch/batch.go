@@ -34,6 +34,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if code := checkBatchAccess(rc); code != 0 {
 		return code
 	}
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
+		return 1
+	}
 
 	cwd := rc.Dir
 	if cwd == "" {
@@ -69,7 +74,9 @@ func run(rc *tool.RunContext, args []string) int {
 		Enabled:        true,
 		MailOutput:     true,
 		MailCompletion: true,
-		MailTo:         mailRecipient(rc),
+		MailTo:         identity.Name,
+		OwnerUID:       identity.UID,
+		OwnerName:      identity.Name,
 		BatchLoad:      true,
 		CreatedAt:      now,
 		NextRun:        when,
@@ -90,7 +97,9 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted)
+	if _, err := fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -104,13 +113,4 @@ func formatJobTime(rc *tool.RunContext, t time.Time) (string, error) {
 		return "", err
 	}
 	return formatter.FormatAtJobTime(t.In(loc)), nil
-}
-
-func mailRecipient(rc *tool.RunContext) string {
-	for _, name := range []string{"LOGNAME", "USER"} {
-		if v := rc.Getenv(name); v != "" {
-			return v
-		}
-	}
-	return ""
 }

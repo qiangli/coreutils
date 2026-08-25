@@ -91,18 +91,27 @@ func run(rc *tool.RunContext, args []string) int {
 	if code := checkAtAccess(rc); code != 0 {
 		return code
 	}
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
+		return 1
+	}
 
 	loc, err := atLocation(rc.Getenv("TZ"))
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
 	now := time.Now().In(loc)
+	formatter, err := posixlocale.ResolveTime(rc.Env)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "%v", err)
+	}
 	timespec := strings.Join(operands, " ")
 	var when time.Time
 	if *touchTime != "" {
 		when, err = schedule.ParseAtTouchTime(*touchTime, now, loc)
 	} else {
-		when, err = schedule.ParseAtTimespecInLocation(timespec, now, loc)
+		when, err = schedule.ParseAtTimespecInLocationWithLocale(timespec, now, loc, formatter)
 	}
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
@@ -154,7 +163,10 @@ func run(rc *tool.RunContext, args []string) int {
 		Enabled:        true,
 		MailOutput:     true,
 		MailCompletion: *mailCompletion,
-		MailTo:         mailRecipient(rc),
+		MailTo:         identity.Name,
+		OwnerUID:       identity.UID,
+		OwnerName:      identity.Name,
+		BatchLoad:      queueOrDefault(*queue) == "b",
 		CreatedAt:      now,
 		NextRun:        when,
 	}
@@ -174,18 +186,25 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted)
+	if _, err := fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted); err != nil {
+		return 1
+	}
 	return 0
 }
 
 func listJobs(rc *tool.RunContext, ids []string, queue string) int {
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
+		return 1
+	}
 	jobs, err := schedule.StoreFor(rc.Dir, rc.Env).LoadJobs()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
 		return 1
 	}
 	for _, j := range jobs {
-		if j.Kind != "at" || !j.Enabled {
+		if j.Kind != "at" || !j.Enabled || j.OwnerUID != identity.UID {
 			continue
 		}
 		if queue != "" && queueOrDefault(j.Queue) != queue {
@@ -199,7 +218,9 @@ func listJobs(rc *tool.RunContext, ids []string, queue string) int {
 			fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
 			return 1
 		}
-		fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatted)
+		if _, err := fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatted); err != nil {
+			return 1
+		}
 	}
 	return 0
 }
@@ -227,15 +248,6 @@ func formatJobTime(rc *tool.RunContext, t time.Time) (string, error) {
 	return formatter.FormatAtJobTime(t.In(loc)), nil
 }
 
-func mailRecipient(rc *tool.RunContext) string {
-	for _, name := range []string{"LOGNAME", "USER"} {
-		if v := rc.Getenv(name); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func containsID(ids []string, id, name string) bool {
 	for _, candidate := range ids {
 		if candidate == id || candidate == name {
@@ -250,6 +262,11 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 		return tool.UsageError(rc, cmd, "missing job ID for -r")
 	}
 	missing := false
+	identity, identityErr := schedule.AuthenticatedIdentity()
+	if identityErr != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, identityErr)
+		return 1
+	}
 	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		// Validate all operands before mutating the store. An unsuccessful
 		// removal is an error, and must not leave a partially removed set whose
@@ -257,7 +274,7 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 		for _, id := range ids {
 			found := false
 			for _, job := range jobs {
-				if job.Kind == "at" && (job.ID == id || job.Name == id) {
+				if job.Kind == "at" && job.OwnerUID == identity.UID && (job.ID == id || job.Name == id) {
 					found = true
 					break
 				}
@@ -272,7 +289,7 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 		}
 		for _, id := range ids {
 			for i := len(jobs) - 1; i >= 0; i-- {
-				if jobs[i].Kind == "at" && (jobs[i].ID == id || jobs[i].Name == id) {
+				if jobs[i].Kind == "at" && jobs[i].OwnerUID == identity.UID && (jobs[i].ID == id || jobs[i].Name == id) {
 					jobs = append(jobs[:i], jobs[i+1:]...)
 				}
 			}

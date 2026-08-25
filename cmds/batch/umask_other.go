@@ -1,5 +1,5 @@
-//go:build windows
+//go:build !unix
 
-package atcmd
+package batchcmd
 
 func processUmask() (uint32, bool) { return 0, false }

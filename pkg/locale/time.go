@@ -15,6 +15,7 @@ type TimeFormatter struct {
 	months   [12]string
 	weekdays [7]string
 	latin1   bool
+	locale   string
 }
 
 var (
@@ -33,9 +34,9 @@ func ResolveTime(env []string) (TimeFormatter, error) {
 	base, codeset := splitName(name)
 	switch base {
 	case "C", "POSIX":
-		return TimeFormatter{months: posixMonths, weekdays: posixWeekdays}, nil
+		return TimeFormatter{months: posixMonths, weekdays: posixWeekdays, locale: "POSIX"}, nil
 	case "de_DE":
-		f := TimeFormatter{months: germanMonths, weekdays: germanDays}
+		f := TimeFormatter{months: germanMonths, weekdays: germanDays, locale: "de_DE"}
 		switch {
 		case isUTF8Name(codeset):
 			return f, nil
@@ -49,6 +50,48 @@ func ResolveTime(env []string) (TimeFormatter, error) {
 	return TimeFormatter{}, fmt.Errorf(
 		"LC_TIME locale %q is unavailable: embedded time data is limited to C/POSIX and de_DE",
 		name)
+}
+
+var englishMonthNames = [12]string{"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
+var germanMonthNames = [12]string{"Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"}
+var englishWeekdayNames = [7]string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+var germanWeekdayNames = [7]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"}
+
+// ParseMonth and ParseWeekday recognize only names supplied by this bounded
+// locale provider. They intentionally do not consult the host locale database.
+func (f TimeFormatter) ParseMonth(word string) (time.Month, bool) {
+	word = strings.TrimSuffix(word, ",")
+	full := englishMonthNames
+	if f.locale == "de_DE" {
+		full = germanMonthNames
+	}
+	for i := range f.months {
+		short, long := f.months[i], full[i]
+		if f.latin1 {
+			short, long = toLatin1(short), toLatin1(long)
+		}
+		if strings.EqualFold(word, short) || strings.EqualFold(word, long) {
+			return time.Month(i + 1), true
+		}
+	}
+	return 0, false
+}
+
+func (f TimeFormatter) ParseWeekday(word string) (time.Weekday, bool) {
+	full := englishWeekdayNames
+	if f.locale == "de_DE" {
+		full = germanWeekdayNames
+	}
+	for i := range f.weekdays {
+		short, long := f.weekdays[i], full[i]
+		if f.latin1 {
+			short, long = toLatin1(short), toLatin1(long)
+		}
+		if strings.EqualFold(word, short) || strings.EqualFold(word, long) {
+			return time.Weekday(i), true
+		}
+	}
+	return 0, false
 }
 
 // FormatMonthDayTime renders the who(1) POSIX-locale time field shape,

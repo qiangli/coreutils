@@ -3,6 +3,7 @@ package atcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,10 @@ import (
 	"github.com/qiangli/coreutils/pkg/schedule"
 	"github.com/qiangli/coreutils/tool"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 func runAT(t *testing.T, ctx context.Context, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -30,6 +35,15 @@ func setupATState(t *testing.T) string {
 	t.Setenv("BASHY_SCHEDULE_STATE", p)
 	allowAtForTest(t)
 	return p
+}
+
+func testIdentity(t *testing.T) schedule.Identity {
+	t.Helper()
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
 }
 
 func TestAtHelp(t *testing.T) {
@@ -163,8 +177,9 @@ func TestAtRemoveNonexistent(t *testing.T) {
 func TestAtRemoveMixedIDsIsAtomic(t *testing.T) {
 	state := setupATState(t)
 	now := time.Now()
+	identity := testIdentity(t)
 	if err := schedule.SaveJobs([]*schedule.Job{
-		{ID: "keep", Kind: "at", Queue: "a", Enabled: true, NextRun: now.Add(time.Hour)},
+		{ID: "keep", Kind: "at", Queue: "a", OwnerUID: identity.UID, OwnerName: identity.Name, Enabled: true, NextRun: now.Add(time.Hour)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -355,11 +370,99 @@ func TestAtMailCompletionState(t *testing.T) {
 	}
 }
 
+func TestAtQueueBIsLoadGovernedAndUsesAuthenticatedRecipient(t *testing.T) {
+	setupATState(t)
+	identity := testIdentity(t)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE"), "LOGNAME=attacker", "USER=attacker"},
+		Stdio: tool.Stdio{In: strings.NewReader("true\n"), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"-q", "b", "-m", "now"}); code != 0 {
+		t.Fatalf("at -q b -m now: code=%d stderr=%q", code, errb.String())
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	j := jobs[0]
+	if j.Queue != "b" || !j.BatchLoad || !j.MailOutput || !j.MailCompletion || j.OwnerUID != identity.UID || j.MailTo != identity.Name || j.MailTo == "attacker" {
+		t.Fatalf("at -q b -m identity/load semantics: %+v", j)
+	}
+}
+
+func TestAtOwnerIsolation(t *testing.T) {
+	setupATState(t)
+	identity := testIdentity(t)
+	now := time.Now().Add(time.Hour)
+	if err := schedule.SaveJobs([]*schedule.Job{
+		{ID: "mine", Kind: "at", Queue: "a", OwnerUID: identity.UID, OwnerName: identity.Name, Enabled: true, NextRun: now},
+		{ID: "theirs", Kind: "at", Queue: "a", OwnerUID: "other-uid", OwnerName: "other", Enabled: true, NextRun: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, stderr, code := runATNoStdin(t, context.Background(), "-l")
+	if code != 0 || stderr != "" || !strings.Contains(out, "mine") || strings.Contains(out, "theirs") {
+		t.Fatalf("owner list: code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	_, stderr, code = runATNoStdin(t, context.Background(), "-r", "theirs")
+	if code == 0 || !strings.Contains(stderr, "no job") {
+		t.Fatalf("foreign removal: code=%d stderr=%q", code, stderr)
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("foreign job mutated: jobs=%v err=%v", jobs, err)
+	}
+}
+
+func TestAtOutputWriteErrorsFail(t *testing.T) {
+	setupATState(t)
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE")},
+		Stdio: tool.Stdio{In: strings.NewReader("true\n"), Out: &bytes.Buffer{}, Err: failingWriter{}},
+	}
+	if code := cmd.Run(rc, []string{"now", "+", "1", "hour"}); code == 0 {
+		t.Fatal("submission succeeded despite failed confirmation write")
+	}
+	identity := testIdentity(t)
+	if err := schedule.SaveJobs([]*schedule.Job{{ID: "listed", Kind: "at", OwnerUID: identity.UID, Enabled: true, NextRun: time.Now().Add(time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	rc.Stdio = tool.Stdio{In: strings.NewReader(""), Out: failingWriter{}, Err: &bytes.Buffer{}}
+	if code := cmd.Run(rc, []string{"-l"}); code == 0 {
+		t.Fatal("listing succeeded despite failed stdout write")
+	}
+}
+
+func TestAtLCTimeParsingAndUnsupportedLocale(t *testing.T) {
+	setupATState(t)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE"), "LC_TIME=de_DE.UTF-8", "TZ=UTC"},
+		Stdio: tool.Stdio{In: strings.NewReader("true\n"), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"08:15", "Mär", "24", "2027"}); code != 0 {
+		t.Fatalf("German LC_TIME parse: code=%d stderr=%q", code, errb.String())
+	}
+	jobs, _ := schedule.LoadJobs()
+	if len(jobs) != 1 || !jobs[0].NextRun.Equal(time.Date(2027, time.March, 24, 8, 15, 0, 0, time.UTC)) {
+		t.Fatalf("localized job=%+v", jobs)
+	}
+	rc.Env = []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE"), "LC_TIME=fr_FR.UTF-8", "TZ=UTC"}
+	if code := cmd.Run(rc, []string{"08:15", "Jan", "24", "2027"}); code != 2 || !strings.Contains(errb.String(), "unavailable") {
+		t.Fatalf("unsupported LC_TIME: code=%d stderr=%q", code, errb.String())
+	}
+}
+
 func TestAtListUsesInvocationTZAndLCTIME(t *testing.T) {
 	setupATState(t)
+	identity := testIdentity(t)
 	when := time.Date(2029, time.March, 1, 2, 3, 4, 0, time.UTC)
 	if err := schedule.SaveJobs([]*schedule.Job{{
-		ID: "tz1", Kind: "at", Queue: "a", Enabled: true, NextRun: when,
+		ID: "tz1", Kind: "at", Queue: "a", OwnerUID: identity.UID, OwnerName: identity.Name, Enabled: true, NextRun: when,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -443,6 +546,8 @@ func TestParseLicensedAtGrammar(t *testing.T) {
 		{"17 utc+ 30minutes", time.Date(2026, 6, 1, 17, 30, 0, 0, time.UTC)},
 		{"17 utc Jan 24", time.Date(2027, 1, 24, 17, 0, 0, 0, time.UTC)},
 		{"8:15amjan24", time.Date(2027, 1, 24, 8, 15, 0, 0, time.UTC)},
+		{"0815amjan24", time.Date(2027, 1, 24, 8, 15, 0, 0, time.UTC)},
+		{"17utc", time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC)},
 		{"now next hour", time.Date(2026, 6, 1, 13, 30, 45, 0, time.UTC)},
 		{"8 :15amjan24", time.Date(2027, 1, 24, 8, 15, 0, 0, time.UTC)},
 		{"1:00 Tuesday", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},

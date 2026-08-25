@@ -289,6 +289,88 @@ func TestTickWithoutMailProviderDoesNotClaimCronJob(t *testing.T) {
 	}
 }
 
+func TestBatchLoadGatingAndMailFailureDoNotStarveJobs(t *testing.T) {
+	state := withState(t)
+	now := time.Now()
+	dir := t.TempDir()
+	batchMarker := filepath.Join(dir, "batch")
+	normalMarker := filepath.Join(dir, "normal")
+	jobs := []*Job{
+		{ID: "batch", Kind: "at", Command: []string{"sh", "-c", "touch " + batchMarker}, Enabled: true, NextRun: now.Add(-time.Minute), BatchLoad: true, MailOutput: true, MailCompletion: true, MailTo: "recipient"},
+		{ID: "normal", Kind: "at", Command: []string{"sh", "-c", "touch " + normalMarker}, Enabled: true, NextRun: now.Add(-time.Minute)},
+	}
+	if err := NewStore(state).SaveJobs(jobs); err != nil {
+		t.Fatal(err)
+	}
+	deliveries := 0
+	deliver := func(string, []byte) error { deliveries++; return nil }
+	fired, err := TickOnceWithProviders(now, io.Discard, deliver, func() (float64, error) { return BatchLoadLimit + 1, nil })
+	if err != nil || !reflect.DeepEqual(fired, []string{"normal"}) {
+		t.Fatalf("high-load tick=(%v,%v)", fired, err)
+	}
+	if _, err := os.Stat(normalMarker); err != nil {
+		t.Fatalf("normal job starved: %v", err)
+	}
+	if _, err := os.Stat(batchMarker); !os.IsNotExist(err) {
+		t.Fatalf("batch ran under high load: %v", err)
+	}
+	fired, err = TickOnceWithProviders(now.Add(time.Second), io.Discard, deliver, func() (float64, error) { return BatchLoadLimit, nil })
+	if err != nil || !reflect.DeepEqual(fired, []string{"batch"}) || deliveries != 1 {
+		t.Fatalf("low-load tick=(%v,%v) deliveries=%d", fired, err, deliveries)
+	}
+	if _, err := os.Stat(batchMarker); err != nil {
+		t.Fatalf("batch did not run at permitted load: %v", err)
+	}
+}
+
+func TestUnavailableMailDoesNotStarveUnrelatedDueJob(t *testing.T) {
+	withState(t)
+	now := time.Now()
+	marker := filepath.Join(t.TempDir(), "normal")
+	if err := SaveJobs([]*Job{
+		{ID: "needs-mail", Kind: "at", Command: []string{"sh", "-c", "exit 99"}, Enabled: true, NextRun: now.Add(-time.Minute), BatchLoad: true, MailOutput: true, MailCompletion: true, MailTo: "recipient"},
+		{ID: "normal", Kind: "at", Command: []string{"sh", "-c", "touch " + marker}, Enabled: true, NextRun: now.Add(-time.Minute)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fired, err := TickOnceWithProviders(now, io.Discard, nil, func() (float64, error) { return 0, nil })
+	if !errors.Is(err, ErrMailDeliveryUnsupported) || !reflect.DeepEqual(fired, []string{"normal"}) {
+		t.Fatalf("tick=(%v,%v)", fired, err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("unrelated job was starved: %v", statErr)
+	}
+	loaded, _ := LoadJobs()
+	if mail := loaded[0]; !mail.Enabled || !mail.LastRun.IsZero() {
+		t.Fatalf("undeliverable job was claimed: %+v", mail)
+	}
+}
+
+func TestSendmailDeliveryDiscoveryAndInvocation(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "js" {
+		t.Skip("requires a POSIX executable script")
+	}
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "message")
+	sendmail := filepath.Join(dir, "sendmail")
+	if err := os.WriteFile(sendmail, []byte("#!/bin/sh\n/bin/cat > \"$SENDMAIL_CAPTURE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("SENDMAIL_CAPTURE", capture)
+	deliver, err := DiscoverMailDelivery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deliver("trusted-user", []byte("job output\n")); err != nil {
+		t.Fatal(err)
+	}
+	message, err := os.ReadFile(capture)
+	if err != nil || !strings.Contains(string(message), "To: trusted-user\n") || !strings.HasSuffix(string(message), "\n\njob output\n") {
+		t.Fatalf("message=%q err=%v", message, err)
+	}
+}
+
 func TestStatePathForUsesOnlyInvocationContext(t *testing.T) {
 	dir := t.TempDir()
 	if got, want := StatePathFor(dir, []string{"BASHY_SCHEDULE_STATE=relative/state.json"}), filepath.Join(dir, "relative", "state.json"); got != want {
