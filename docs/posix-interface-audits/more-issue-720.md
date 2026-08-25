@@ -49,9 +49,10 @@ platform-specific controlling-terminal tests.
   unspecified; this implementation diagnoses them.
 - Diagnostics are invariant English strings; translated `LC_MESSAGES` and
   `NLSPATH` catalogs are not shipped.
-- Historical underline/bold overstrikes are normalized to their displayed
-  glyph. The implementation does not recreate terminal-specific visual
-  attributes when no portable terminal capability API is available.
+- Historical underline/bold overstrikes produce zero-width ANSI rendition on
+  terminals already treated as ANSI-capable for prompts and clearing. On
+  `TERM=dumb`, where those capabilities are unavailable, they reduce to the
+  displayed glyph without emitting control sequences.
 - Tag lookup supports the standard numeric and search-pattern ctags addresses
   in the local `tags` file. Implementation-specific ctags extensions are not a
   POSIX claim.

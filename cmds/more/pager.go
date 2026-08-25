@@ -111,7 +111,7 @@ func (d *document) loadLine() {
 		d.total += len(b)
 		line := len(d.lines) + 1
 		d.lines = append(d.lines, string(b))
-		normalized, boundaries := normalizeTerminalLineMapped(b, d.o.plain, d.o.charMode)
+		normalized, boundaries := normalizeTerminalLineMapped(b, d.o.plain, d.o.charMode, d.o.style)
 		blank := string(normalized) == "\n"
 		if !(d.o.squeeze && blank && d.lastBlank) {
 			for _, part := range foldLineMapped(normalized, boundaries, d.width, d.o.plain, d.o.charMode) {
@@ -129,11 +129,11 @@ func (d *document) loadLine() {
 }
 
 func normalizeTerminalLine(line []byte, plain bool) []byte {
-	normalized, _ := normalizeTerminalLineMapped(line, plain, charactersUTF8)
+	normalized, _ := normalizeTerminalLineMapped(line, plain, charactersUTF8, false)
 	return normalized
 }
 
-func normalizeTerminalLineMapped(line []byte, plain bool, mode characterMode) ([]byte, []int) {
+func normalizeTerminalLineMapped(line []byte, plain bool, mode characterMode, style bool) ([]byte, []int) {
 	if plain {
 		var out []byte
 		var boundaries []int
@@ -166,7 +166,7 @@ func normalizeTerminalLineMapped(line []byte, plain bool, mode characterMode) ([
 		j := i + size
 		if matchByteCount(line, j, '\b', width) && matchByteCount(line, j+width, '_', width) {
 			end := j + 2*width
-			appendMapped(&out, &boundaries, line[i:i+size], end)
+			appendStyled(&out, &boundaries, line[i:i+size], end, style, "\x1b[4m", "\x1b[24m")
 			i = end
 			continue
 		}
@@ -182,7 +182,7 @@ func normalizeTerminalLineMapped(line []byte, plain bool, mode characterMode) ([
 				r2, size2 := decodeDisplayRune(line[next:], mode)
 				if next < len(line) && displayRuneWidth(r2, mode) == underscores {
 					end := next + size2
-					appendMapped(&out, &boundaries, line[next:end], end)
+					appendStyled(&out, &boundaries, line[next:end], end, style, "\x1b[4m", "\x1b[24m")
 					i = end
 					continue
 				}
@@ -200,7 +200,7 @@ func normalizeTerminalLineMapped(line []byte, plain bool, mode characterMode) ([
 			end = next + size2
 		}
 		if end > j {
-			appendMapped(&out, &boundaries, line[i:i+size], end)
+			appendStyled(&out, &boundaries, line[i:i+size], end, style, "\x1b[1m", "\x1b[22m")
 			i = end
 			continue
 		}
@@ -260,6 +260,16 @@ func appendMapped(out *[]byte, boundaries *[]int, data []byte, sourceEnd int) {
 		*boundaries = append(*boundaries, sourceEnd)
 	}
 }
+
+func appendStyled(out *[]byte, boundaries *[]int, glyph []byte, sourceEnd int, style bool, start, reset string) {
+	if !style {
+		appendMapped(out, boundaries, glyph, sourceEnd)
+		return
+	}
+	appendMapped(out, boundaries, []byte(start), sourceEnd)
+	appendMapped(out, boundaries, glyph, sourceEnd)
+	appendMapped(out, boundaries, []byte(reset), sourceEnd)
+}
 func (d *document) ensure(n int) {
 	for len(d.rows) < n && !d.eof {
 		d.loadLine()
@@ -289,16 +299,26 @@ func foldLineMapped(line []byte, boundaries []int, width int, plain bool, mode c
 		width = 80
 	}
 	var rows []foldedRow
-	start, col := 0, 0
+	start, col, pendingStyle := 0, 0, -1
 	for i := 0; i < len(line); {
 		var r rune
 		size := 1
-		if mode == charactersByte {
+		styleSequence := ansiSGRLen(line[i:])
+		if styleSequence > 0 {
+			size = styleSequence
+			r = 0
+			if string(line[i:i+size]) == "\x1b[1m" || string(line[i:i+size]) == "\x1b[4m" {
+				pendingStyle = i
+			}
+		} else if mode == charactersByte {
 			r = rune(line[i])
 		} else {
 			r, size = utf8.DecodeRune(line[i:])
 		}
 		advance := runewidth.RuneWidth(r)
+		if styleSequence > 0 {
+			advance = 0
+		}
 		if advance < 0 || plain && advance == 0 && r != '\n' {
 			advance = 1
 		}
@@ -321,13 +341,22 @@ func foldLineMapped(line []byte, boundaries []int, width int, plain bool, mode c
 			}
 		}
 		if col+advance > width && i > start {
-			rows = append(rows, foldedRow{append([]byte(nil), line[start:i]...), boundaries[i-1]})
-			start, col = i, 0
-			if r == '\t' {
-				advance = 8
+			split := i
+			if pendingStyle >= start {
+				split = pendingStyle
+			}
+			if split > start {
+				rows = append(rows, foldedRow{append([]byte(nil), line[start:split]...), boundaries[split-1]})
+				start, col = split, 0
+				if r == '\t' {
+					advance = 8
+				}
 			}
 		}
 		col += advance
+		if styleSequence == 0 && advance > 0 {
+			pendingStyle = -1
+		}
 		if r == '\n' {
 			rows = append(rows, foldedRow{append([]byte(nil), line[start:i+size]...), boundaries[i+size-1]})
 			start, col = i+size, 0
@@ -338,6 +367,21 @@ func foldLineMapped(line []byte, boundaries []int, width int, plain bool, mode c
 		rows = append(rows, foldedRow{append([]byte(nil), line[start:]...), boundaries[len(line)-1]})
 	}
 	return rows
+}
+
+func ansiSGRLen(data []byte) int {
+	if len(data) < 3 || data[0] != 0x1b || data[1] != '[' {
+		return 0
+	}
+	for i := 2; i < len(data); i++ {
+		if data[i] == 'm' {
+			return i + 1
+		}
+		if (data[i] < '0' || data[i] > '9') && data[i] != ';' {
+			return 0
+		}
+	}
+	return 0
 }
 
 func flushWriter(w io.Writer) error {

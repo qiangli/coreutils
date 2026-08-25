@@ -264,6 +264,41 @@ func TestNormalizeTerminalLineMultiColumnUnderlineAndRepeatedBold(t *testing.T) 
 	}
 }
 
+func TestTerminalStylesPOSIXOverstrikesWhenCapable(t *testing.T) {
+	input := "a\b_\n_\ba\na\ba\ba\n界\b\b__\n__\b\b界\n界\b\b界\b\b界\n"
+	underline := "\x1b[4m"
+	underlineOff := "\x1b[24m"
+	bold := "\x1b[1m"
+	boldOff := "\x1b[22m"
+	want := underline + "a" + underlineOff + "\n" +
+		underline + "a" + underlineOff + "\n" +
+		bold + "a" + boldOff + "\n" +
+		underline + "界" + underlineOff + "\n" +
+		underline + "界" + underlineOff + "\n" +
+		bold + "界" + boldOff + "\n"
+	out, errb, code := runMoreEnv(t, t.TempDir(), input, []string{"TERM=xterm", "LC_ALL=de_DE.UTF-8"})
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("styled overstrikes=(%q,%q,%d), want %q", out, errb, code, want)
+	}
+	out, errb, code = runMoreEnv(t, t.TempDir(), input, []string{"TERM=dumb", "LC_ALL=de_DE.UTF-8"})
+	if code != 0 || errb != "" || strings.Contains(out, "\x1b[") {
+		t.Fatalf("TERM=dumb overstrikes=(%q,%q,%d)", out, errb, code)
+	}
+	out, errb, code = runMoreEnv(t, t.TempDir(), input, []string{"TERM=xterm", "LC_ALL=de_DE.UTF-8"}, "-u")
+	if code != 0 || errb != "" || strings.Contains(out, "\x1b[") || !strings.Contains(out, "^H") {
+		t.Fatalf("-u overstrikes=(%q,%q,%d)", out, errb, code)
+	}
+}
+
+func TestStyledGlyphFoldingKeepsSGRWithGlyphAndByteBoundary(t *testing.T) {
+	d := newDocument("fixture", strings.NewReader("xa\b_\n"), nil, 1, options{style: true, charMode: charactersUTF8})
+	d.all()
+	if len(d.rows) != 2 || string(d.rows[0].data) != "x" ||
+		string(d.rows[1].data) != "\x1b[4ma\x1b[24m\n" || d.rows[0].byteEnd != 1 || d.rows[1].byteEnd != 5 {
+		t.Fatalf("styled folded rows=%+v", d.rows)
+	}
+}
+
 func TestPlainModeRendersBackspaceAndCarriageReturnVisibly(t *testing.T) {
 	d := newDocument("fixture", strings.NewReader("\b\r\n"), nil, 2, options{plain: true, charMode: charactersUTF8})
 	d.all()

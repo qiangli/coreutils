@@ -45,6 +45,7 @@ type options struct {
 	command     string // -p: more-command run at each new file's first screen
 	ignoreCase  bool   // -i: case-insensitive interactive BRE searches
 	tag         string // -t: initial ctags entry
+	style       bool   // terminal supports ANSI underline/bold rendition
 	charMode    characterMode
 	ctypeName   string
 	collateName string
@@ -192,6 +193,7 @@ func run(rc *tool.RunContext, args []string) int {
 		command:     *command,
 		ignoreCase:  *ignoreCase,
 		tag:         *tag,
+		style:       terminal && rc.Getenv("TERM") != "dumb",
 		charMode:    charMode,
 		ctypeName:   ctypeName,
 		collateName: collateName,
