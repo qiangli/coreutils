@@ -11,12 +11,10 @@ import (
 // 64-bit build honestly supports only the LP64 ones, and claiming otherwise
 // would report this environment's numbers under a different name.
 func knownSpecification(s string) bool {
-	switch s {
-	case "POSIX_V7_LP64_OFF64", "POSIX_V6_LP64_OFF64", "XBS5_LP64_OFF64",
-		"POSIX_V7_LPBIG_OFFBIG", "POSIX_V6_LPBIG_OFFBIG":
-		return strconv.IntSize == 64
-	}
-	return false
+	// A programming environment is a libc contract, not a property of Go's
+	// word size.  In particular Darwin's current libc advertises V6 LP64 only;
+	// Windows advertises none.  Ask the platform adapter rather than inferring.
+	return platformSpecification(s)
 }
 
 // sysVars are the system configuration variables. A value of -1 with no errno
@@ -86,19 +84,60 @@ var pathVars = map[string]int{
 	"_POSIX_VDISABLE":         pcVdisable,
 }
 
+// registerInventory is deliberately separate from values.  These are the
+// POSIX.1-2016 mandatory spellings, retained from the independently verified
+// name audit.  A known spelling is permitted to be undefined: manufacturing a
+// number is worse than saying the platform cannot determine it without libc.
+func init() {
+	for _, name := range []string{
+		"AIO_LISTIO_MAX", "AIO_MAX", "AIO_PRIO_DELTA_MAX", "ATEXIT_MAX", "BC_DIM_MAX", "BC_SCALE_MAX", "COLL_WEIGHTS_MAX", "DELAYTIMER_MAX", "EXPR_NEST_MAX", "HOST_NAME_MAX", "IOV_MAX", "LOGIN_NAME_MAX", "MQ_OPEN_MAX", "MQ_PRIO_MAX", "PTHREAD_DESTRUCTOR_ITERATIONS", "PTHREAD_KEYS_MAX", "PTHREAD_STACK_MIN", "PTHREAD_THREADS_MAX", "RTSIG_MAX", "SEM_NSEMS_MAX", "SEM_VALUE_MAX", "SIGQUEUE_MAX", "SS_REPL_MAX", "STREAM_MAX", "TIMER_MAX", "TRACE_EVENT_NAME_MAX", "TRACE_NAME_MAX", "TRACE_SYS_MAX", "TRACE_USER_EVENT_MAX", "TTY_NAME_MAX", "TZNAME_MAX",
+		"_POSIX_ADVISORY_INFO", "_POSIX_ASYNCHRONOUS_IO", "_POSIX_BARRIERS", "_POSIX_CLOCK_SELECTION", "_POSIX_CPUTIME", "_POSIX_FSYNC", "_POSIX_IPV6", "_POSIX_JOB_CONTROL", "_POSIX_MAPPED_FILES", "_POSIX_MEMLOCK", "_POSIX_MEMLOCK_RANGE", "_POSIX_MEMORY_PROTECTION", "_POSIX_MESSAGE_PASSING", "_POSIX_MONOTONIC_CLOCK", "_POSIX_PRIORITIZED_IO", "_POSIX_PRIORITY_SCHEDULING", "_POSIX_RAW_SOCKETS", "_POSIX_READER_WRITER_LOCKS", "_POSIX_REALTIME_SIGNALS", "_POSIX_REGEXP", "_POSIX_SAVED_IDS", "_POSIX_SEMAPHORES", "_POSIX_SHARED_MEMORY_OBJECTS", "_POSIX_SHELL", "_POSIX_SPAWN", "_POSIX_SPIN_LOCKS", "_POSIX_SPORADIC_SERVER", "_POSIX_SS_REPL_MAX", "_POSIX_SYNCHRONIZED_IO", "_POSIX_THREADS", "_POSIX_THREAD_ATTR_STACKADDR", "_POSIX_THREAD_ATTR_STACKSIZE", "_POSIX_THREAD_CPUTIME", "_POSIX_THREAD_PRIO_INHERIT", "_POSIX_THREAD_PRIO_PROTECT", "_POSIX_THREAD_PRIORITY_SCHEDULING", "_POSIX_THREAD_PROCESS_SHARED", "_POSIX_THREAD_SAFE_FUNCTIONS", "_POSIX_THREAD_SPORADIC_SERVER", "_POSIX_TIMEOUTS", "_POSIX_TIMERS", "_POSIX_TRACE", "_POSIX_TRACE_EVENT_FILTER", "_POSIX_TRACE_INHERIT", "_POSIX_TRACE_LOG", "_POSIX_TYPED_MEMORY_OBJECTS", "_POSIX_V6_ILP32_OFF32", "_POSIX_V6_ILP32_OFFBIG", "_POSIX_V6_LP64_OFF64", "_POSIX_V6_LPBIG_OFFBIG", "_POSIX_V7_ILP32_OFF32", "_POSIX_V7_ILP32_OFFBIG", "_POSIX_V7_LP64_OFF64", "_POSIX_V7_LPBIG_OFFBIG",
+		"_POSIX2_C_BIND", "_POSIX2_C_DEV", "_POSIX2_CHAR_TERM", "_POSIX2_FORT_DEV", "_POSIX2_FORT_RUN", "_POSIX2_LOCALEDEF", "_POSIX2_PBS", "_POSIX2_PBS_ACCOUNTING", "_POSIX2_PBS_CHECKPOINT", "_POSIX2_PBS_LOCATE", "_POSIX2_PBS_MESSAGE", "_POSIX2_PBS_TRACK", "_POSIX2_SW_DEV", "_POSIX2_UPE", "_XOPEN_CRYPT", "_XOPEN_ENH_I18N", "_XOPEN_REALTIME", "_XOPEN_REALTIME_THREADS", "_XOPEN_SHM", "_XOPEN_STREAMS", "_XOPEN_UNIX", "_XOPEN_UUCP",
+		"CHAR_BIT", "CHAR_MAX", "CHAR_MIN", "INT_MIN", "LLONG_MAX", "LLONG_MIN", "LONG_BIT", "LONG_MAX", "LONG_MIN", "MB_LEN_MAX", "NL_ARGMAX", "NL_LANGMAX", "NL_MSGMAX", "NL_NMAX", "NL_SETMAX", "NL_TEXTMAX", "NZERO", "SCHAR_MAX", "SCHAR_MIN", "SHRT_MAX", "SHRT_MIN", "SSIZE_MAX", "UCHAR_MAX", "UINT_MAX", "ULLONG_MAX", "ULONG_MAX", "USHRT_MAX", "WORD_BIT",
+		"_POSIX_AIO_LISTIO_MAX", "_POSIX_AIO_MAX", "_POSIX_CLOCKRES_MIN", "_POSIX_DELAYTIMER_MAX", "_POSIX_HOST_NAME_MAX", "_POSIX_LOGIN_NAME_MAX", "_POSIX_MQ_OPEN_MAX", "_POSIX_MQ_PRIO_MAX", "_POSIX_RE_DUP_MAX", "_POSIX_RTSIG_MAX", "_POSIX_SEM_NSEMS_MAX", "_POSIX_SEM_VALUE_MAX", "_POSIX_SIGQUEUE_MAX", "_POSIX_SS_REPL_MAX", "_POSIX_SYMLINK_MAX", "_POSIX_SYMLOOP_MAX", "_POSIX_THREAD_DESTRUCTOR_ITERATIONS", "_POSIX_THREAD_KEYS_MAX", "_POSIX_THREAD_THREADS_MAX", "_POSIX_TIMER_MAX", "_POSIX_TRACE_EVENT_NAME_MAX", "_POSIX_TRACE_NAME_MAX", "_POSIX_TRACE_SYS_MAX", "_POSIX_TRACE_USER_EVENT_MAX", "_POSIX_TTY_NAME_MAX", "_POSIX2_CHARCLASS_NAME_MAX", "_XOPEN_IOV_MAX", "_XOPEN_NAME_MAX", "_XOPEN_PATH_MAX",
+	} {
+		if _, ok := sysVars[name]; !ok {
+			sysVars[name] = undefinedVal
+		}
+	}
+	for _, name := range []string{"FILESIZEBITS", "POSIX2_SYMLINKS", "POSIX_ALLOC_SIZE_MIN", "POSIX_REC_INCR_XFER_SIZE", "POSIX_REC_MAX_XFER_SIZE", "POSIX_REC_MIN_XFER_SIZE", "POSIX_REC_XFER_ALIGN", "SYMLINK_MAX", "_POSIX_ASYNC_IO", "_POSIX_PRIO_IO", "_POSIX_SYNC_IO", "_POSIX_TIMESTAMP_RESOLUTION"} {
+		pathVars[name] = pcUndefined
+	}
+}
+
+const pcUndefined = -1
+
+var confstrVars = []string{
+	"PATH", "POSIX_V6_ILP32_OFF32_CFLAGS", "POSIX_V6_ILP32_OFF32_LDFLAGS", "POSIX_V6_ILP32_OFF32_LIBS", "POSIX_V6_ILP32_OFFBIG_CFLAGS", "POSIX_V6_ILP32_OFFBIG_LDFLAGS", "POSIX_V6_ILP32_OFFBIG_LIBS", "POSIX_V6_LP64_OFF64_CFLAGS", "POSIX_V6_LP64_OFF64_LDFLAGS", "POSIX_V6_LP64_OFF64_LIBS", "POSIX_V6_LPBIG_OFFBIG_CFLAGS", "POSIX_V6_LPBIG_OFFBIG_LDFLAGS", "POSIX_V6_LPBIG_OFFBIG_LIBS", "POSIX_V6_WIDTH_RESTRICTED_ENVS", "V6_ENV", "POSIX_V7_ILP32_OFF32_CFLAGS", "POSIX_V7_ILP32_OFF32_LDFLAGS", "POSIX_V7_ILP32_OFF32_LIBS", "POSIX_V7_ILP32_OFFBIG_CFLAGS", "POSIX_V7_ILP32_OFFBIG_LDFLAGS", "POSIX_V7_ILP32_OFFBIG_LIBS", "POSIX_V7_LP64_OFF64_CFLAGS", "POSIX_V7_LP64_OFF64_LDFLAGS", "POSIX_V7_LP64_OFF64_LIBS", "POSIX_V7_LPBIG_OFFBIG_CFLAGS", "POSIX_V7_LPBIG_OFFBIG_LDFLAGS", "POSIX_V7_LPBIG_OFFBIG_LIBS", "POSIX_V7_THREADS_CFLAGS", "POSIX_V7_THREADS_LDFLAGS", "POSIX_V7_WIDTH_RESTRICTED_ENVS", "V7_ENV",
+}
+
+func isConfstrName(name string) bool {
+	for _, n := range confstrVars {
+		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
 func constVal(v int64) func() (string, bool) {
 	return func() (string, bool) { return strconv.FormatInt(v, 10), true }
 }
 
+func undefinedVal() (string, bool) { return undefined, true }
+
 // systemValue resolves a system variable. The second result reports whether the
 // NAME is known at all — distinct from a known name whose value is undefined.
 func systemValue(name string) (string, bool) {
-	if s, ok := confstrValue(name); ok {
+	if s, ok := platformConfstrValue(name); ok {
 		return s, true
 	}
 	f, ok := sysVars[name]
 	if !ok {
 		return "", false
+	}
+	if s, handled := platformValue(name); handled {
+		return s, true
 	}
 	return f()
 }
@@ -109,6 +148,9 @@ func pathValue(rc *tool.RunContext, name, path string) (string, bool) {
 	key, ok := pathVars[name]
 	if !ok {
 		return "", false
+	}
+	if key == pcUndefined {
+		return undefined, true
 	}
 	return pathconfStr(rc, key, path)
 }

@@ -36,17 +36,9 @@ func symloopMaxStr() (string, bool) { return undefined, true }
 
 func pathconfStr(*tool.RunContext, int, string) (string, bool) { return undefined, true }
 
-func confstrValue(name string) (string, bool) {
-	switch name {
-	case "PATH", "CS_PATH":
-		return "/bin:/usr/bin", true
-	}
-	return "", false
-}
-
-// Windows makes no POSIX conformance claim of its own; report the revision this
-// implementation targets rather than inventing a platform claim.
+// Kept only so the shared inventory compiles; platformValue intercepts these
+// names before a value can be emitted on Windows.
 const (
-	posixVersion  = 200809
-	posix2Version = 200809
+	posixVersion  = 0
+	posix2Version = 0
 )

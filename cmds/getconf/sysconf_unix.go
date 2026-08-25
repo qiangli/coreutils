@@ -51,14 +51,3 @@ func rlimitStr(res int) (string, bool) {
 	}
 	return strconv.FormatUint(uint64(rl.Cur), 10), true
 }
-
-// confstrValue answers the string-valued variables. PATH here is the default
-// search path for a standards-conforming utility environment, deliberately NOT
-// the caller's $PATH — reporting the caller's would defeat its purpose.
-func confstrValue(name string) (string, bool) {
-	switch name {
-	case "PATH", "CS_PATH":
-		return "/bin:/usr/bin", true
-	}
-	return "", false
-}

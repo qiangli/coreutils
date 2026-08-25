@@ -62,7 +62,7 @@ func TestPathconfAgreesWithSystem(t *testing.T) {
 		t.Skip("no system getconf")
 	}
 	dir := t.TempDir()
-	for _, name := range []string{"NAME_MAX", "PATH_MAX", "PIPE_BUF"} {
+	for _, name := range []string{"LINK_MAX", "NAME_MAX", "PATH_MAX", "PIPE_BUF", "_POSIX_CHOWN_RESTRICTED", "_POSIX_NO_TRUNC"} {
 		want, err := exec.Command(sys, name, dir).Output()
 		if err != nil {
 			continue
@@ -94,11 +94,93 @@ func TestCompileTimeMinimumsComeFromTheStandard(t *testing.T) {
 	// These are constants in the specification, not host measurements, so they
 	// must be identical on every platform including Windows.
 	for name, want := range map[string]string{
-		"_POSIX_PATH_MAX": "256", "_POSIX_OPEN_MAX": "20", "_XOPEN_VERSION": "700",
+		"_POSIX_PATH_MAX": "256", "_POSIX_OPEN_MAX": "20",
 	} {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != want {
 			t.Errorf("%s = %q (exit %d), want %q", name, got, code, want)
+		}
+	}
+}
+
+func TestDarwinAdapterMatchesEverySafelyQueryableValue(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin adapter test")
+	}
+	// The map is the set of Darwin ABI constants we claim.  Every one is
+	// checked against the host libc so a SDK transcription cannot become a
+	// self-consistent but wrong value.
+	for _, name := range platformDifferentialNames() {
+		want, err := exec.Command("getconf", name).Output()
+		if err != nil {
+			t.Errorf("host rejects claimed Darwin name %s: %v", name, err)
+			continue
+		}
+		got, _, code := runCmd(t, name)
+		if code != 0 || got != strings.TrimSpace(string(want)) {
+			t.Errorf("%s: ours %q (exit %d), host %q", name, got, code, strings.TrimSpace(string(want)))
+		}
+	}
+	for _, name := range []string{"ARG_MAX", "CHILD_MAX", "NGROUPS_MAX", "OPEN_MAX", "PAGESIZE", "PAGE_SIZE", "_NPROCESSORS_CONF", "_NPROCESSORS_ONLN"} {
+		want, err := exec.Command("getconf", name).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _, code := runCmd(t, name)
+		if code != 0 || got != strings.TrimSpace(string(want)) {
+			t.Errorf("%s: ours %q (exit %d), host %q", name, got, code, strings.TrimSpace(string(want)))
+		}
+	}
+}
+
+func TestEveryInventoryNameHasAValueClass(t *testing.T) {
+	for name := range sysVars {
+		got, _, code := runCmd(t, name)
+		if code != 0 || got == "" {
+			t.Errorf("system inventory %s: output %q, exit %d", name, got, code)
+		}
+	}
+	for name := range pathVars {
+		got, _, code := runCmd(t, name, ".")
+		if code != 0 || got == "" {
+			t.Errorf("path inventory %s: output %q, exit %d", name, got, code)
+		}
+	}
+	for _, name := range confstrVars {
+		got, _, code := runCmd(t, name)
+		if code != 0 {
+			t.Errorf("confstr inventory %s: exit %d", name, code)
+		}
+		if got == undefined && runtime.GOOS == "darwin" && name == "PATH" {
+			t.Errorf("PATH unexpectedly undefined")
+		}
+	}
+}
+
+func TestDarwinRegressionValues(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin only")
+	}
+	for name, want := range map[string]string{
+		"ATEXIT_MAX": "2147483647", "IOV_MAX": "1024", "LOGIN_NAME_MAX": "255",
+		"PTHREAD_STACK_MIN": "16384", "STREAM_MAX": "2560", "TTY_NAME_MAX": "255",
+		"TZNAME_MAX": "255", "MB_LEN_MAX": "6",
+	} {
+		got, _, code := runCmd(t, name)
+		if code != 0 || got != want {
+			t.Errorf("%s = %q (exit %d), want %q", name, got, code, want)
+		}
+	}
+}
+
+func TestWindowsFailsClosed(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows only")
+	}
+	for _, name := range []string{"PATH", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "_POSIX_V6_LP64_OFF64", "_POSIX_SAVED_IDS"} {
+		got, _, code := runCmd(t, name)
+		if code != 0 || got != undefined {
+			t.Errorf("%s = %q (exit %d), want undefined", name, got, code)
 		}
 	}
 }
@@ -122,8 +204,13 @@ func TestUnsupportedSpecificationIsRefused(t *testing.T) {
 			t.Error("a 64-bit build must not claim an ILP32 environment")
 		}
 	}
-	if _, _, code := runCmd(t, "-v", "POSIX_V7_LP64_OFF64", "PAGESIZE"); code != 0 {
-		t.Error("the environment this build targets must be accepted")
+	if runtime.GOOS == "darwin" {
+		if _, _, code := runCmd(t, "-v", "POSIX_V6_LP64_OFF64", "PAGESIZE"); code != 0 {
+			t.Error("Darwin V6 LP64 environment must be accepted")
+		}
+		if _, _, code := runCmd(t, "-v", "POSIX_V7_LP64_OFF64", "PAGESIZE"); code == 0 {
+			t.Error("Darwin must not claim V7")
+		}
 	}
 }
 

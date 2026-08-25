@@ -63,10 +63,11 @@ func run(rc *tool.RunContext, args []string) int {
 		if len(operands) > 0 {
 			return tool.UsageError(rc, cmd, "-a takes no operands")
 		}
-		names := make([]string, 0, len(sysVars))
+		names := make([]string, 0, len(sysVars)+len(confstrVars))
 		for n := range sysVars {
 			names = append(names, n)
 		}
+		names = append(names, confstrVars...)
 		sort.Strings(names)
 		for _, n := range names {
 			v, ok := systemValue(n)
