@@ -10,7 +10,7 @@ import (
 
 // apply on Windows fails loudly: there is no uid/gid ownership model,
 // and approximating one would change the documented meaning.
-func apply(rc *tool.RunContext, _ string, _ []string, _, _, _, _, _, _, _, _, _ bool, _, _ int) int {
+func apply(rc *tool.RunContext, _ string, _ options) int {
 	fmt.Fprintf(rc.Err, "chown: not supported on windows: no POSIX uid/gid ownership exists on this platform\n")
 	return 1
 }
@@ -23,7 +23,7 @@ func statFile(*tool.RunContext, string) (*refFileInfo, error) {
 
 type refFileInfo struct{}
 
-func (*refFileInfo) ownerStr() string { return "" }
+func (*refFileInfo) ids() (uid, gid int) { return -1, -1 }
 
 func statusError(rc *tool.RunContext, format string, a ...any) int {
 	fmt.Fprintf(rc.Err, "chown: "+format+"\n", a...)

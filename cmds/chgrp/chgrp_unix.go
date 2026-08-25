@@ -6,173 +6,152 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/user"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/qiangli/coreutils/cmds/internal/hierwalk"
 	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 )
 
 var isFilesystemRoot = rootguard.IsRoot
 
-type derefMode int
-
-const (
-	derefNever derefMode = iota
-	derefCmdLine
-	derefAlways
+// lookupUser and lookupGroup are seams for the name-before-numeric
+// resolution order: a host cannot be made to hold an account whose name
+// is a decimal number, and that is exactly the case POSIX pins down.
+var (
+	lookupUser  = user.Lookup
+	lookupGroup = user.LookupGroup
 )
 
+// changeGroup is the seam for the ownership syscall itself. Only root
+// can move a file into a group the caller is not a member of, so tests
+// substitute it to observe which call each file takes — chown for a
+// referent, lchown for a link — and to prove no call is issued when
+// nothing would change. The real syscall path stays covered by the
+// self-chgrp tests.
+var changeGroup = func(path string, gid int, follow bool) error {
+	if follow {
+		return os.Chown(path, -1, gid)
+	}
+	return os.Lchown(path, -1, gid)
+}
+
 type chgrpOpts struct {
-	recursive    bool
-	verbose      bool
-	changes      bool
-	silent       bool
-	preserveRoot bool
-	deref        derefMode
-	targetGid    int
-	fromUid      int
-	fromGid      int
+	options
+	gid int
 }
 
-func computeDeref(followLOrDeref, cmdLineH bool) derefMode {
-	if followLOrDeref {
-		return derefAlways
-	}
-	if cmdLineH {
-		return derefCmdLine
-	}
-	return derefNever
-}
-
-func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose, changes, silent, preserveRoot, noDereference, noTraverse, cmdLineH, followLOrDeref bool, fromUid, fromGid int) int {
-	opts := chgrpOpts{
-		recursive:    recursive,
-		verbose:      verbose || changes,
-		changes:      changes,
-		silent:       silent,
-		preserveRoot: preserveRoot,
-		deref:        computeDeref(followLOrDeref, cmdLineH),
-		fromUid:      fromUid,
-		fromGid:      fromGid,
-	}
-	if noDereference || noTraverse {
-		opts.deref = derefNever
-	}
-
-	gid := -1
-	g, err := user.LookupGroup(spec)
-	if err == nil {
-		if gid, err = strconv.Atoi(g.Gid); err != nil {
-			statusError(rc, "invalid group: '%s'", spec)
-			return 1
+func apply(rc *tool.RunContext, spec string, opts options) int {
+	gid := opts.refGid
+	if !opts.hasRef {
+		var err error
+		if gid, err = parseGroup(spec); err != nil {
+			return statusError(rc, "%v", err)
 		}
-	} else {
-		id, aerr := strconv.Atoi(spec)
-		if aerr != nil || id < 0 {
-			statusError(rc, "invalid group: '%s'", spec)
-			return 1
-		}
-		gid = id
 	}
-	opts.targetGid = gid
+	state := chgrpOpts{options: opts, gid: gid}
+	state.verbose = opts.verbose || opts.changes
 
 	exit := 0
-	for _, name := range files {
+	for _, name := range opts.files {
 		path := rc.Path(name)
-		if opts.recursive && opts.preserveRoot && isFilesystemRoot(path, opts.deref != derefNever) {
-			fmt.Fprintf(rc.Err, "chgrp: it is dangerous to operate recursively on '%s'%s\n",
-				name, rootguard.AliasSuffix(name, path))
-			fmt.Fprintf(rc.Err, "chgrp: use --no-preserve-root to override this failsafe\n")
+		// An operand that is a symbolic link is only resolved for the
+		// guard when the traversal would resolve it too.
+		if opts.recursive && opts.preserveRoot && isFilesystemRoot(path, opts.mode != hierwalk.Physical) {
+			reportRoot(rc, name, path)
 			exit = 1
 			continue
 		}
-		if !chgrpTree(rc, path, name, opts) {
+		if !chgrpTree(rc, path, name, state) {
 			exit = 1
 		}
 	}
 	return exit
 }
 
+// chgrpTree walks one operand hierarchy. Every file is attempted: a
+// failure anywhere sets the exit status without stopping the walk, as
+// POSIX requires.
 func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 	ok := true
-
-	if !opts.recursive {
-		changed, err := chgrpOne(root, opts, opts.deref != derefNever)
-		if err != nil {
-			chgrpReport(rc, display, opts, err)
+	walker := &hierwalk.Walker{
+		Mode:      opts.mode,
+		Recursive: opts.recursive,
+		Visit: func(path, name string, isLink bool) {
+			changed, statErr, chgrpErr := chgrpOne(path, opts)
+			switch {
+			case statErr != nil:
+				reportUnreachable(rc, name, isLink && opts.affectReferent, opts, statErr)
+				ok = false
+			case chgrpErr != nil:
+				reportChange(rc, name, opts, chgrpErr)
+				ok = false
+			default:
+				chgrpVerbose(rc.Out, name, changed, opts)
+			}
+		},
+		StatError: func(_, name string, err error) {
+			reportUnreachable(rc, name, false, opts, err)
+			ok = false
+		},
+		ReadError: func(_, name string, err error) {
+			if !opts.silent {
+				fmt.Fprintf(rc.Err, "chgrp: cannot read directory '%s': %v\n", name, unwrapPathError(err))
+			}
+			ok = false
+		},
+		Cycle: func(_, name string) {
+			reportCycle(rc, name, opts)
+			ok = false
+		},
+		EnterDir: func(path, name string, followed bool) bool {
+			if !opts.preserveRoot || !isFilesystemRoot(path, followed) {
+				return true
+			}
+			reportRoot(rc, name, path)
+			ok = false
 			return false
-		}
-		chgrpVerbose(rc.Out, display, changed, opts)
-		return true
+		},
 	}
-
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			chgrpReport(rc, path, opts, err)
-			ok = false
-			return nil
-		}
-		isSymlink := d.Type()&fs.ModeSymlink != 0
-
-		useChown := true
-		if opts.deref == derefNever && isSymlink {
-			useChown = false
-		}
-
-		var changed bool
-		var cerr error
-		if useChown {
-			changed, cerr = chgrpOne(path, opts, true)
-		} else {
-			changed, cerr = chgrpOne(path, opts, false)
-		}
-
-		if cerr != nil {
-			chgrpReport(rc, path, opts, cerr)
-			ok = false
-		} else {
-			chgrpVerbose(rc.Out, path, changed, opts)
-		}
-		return nil
-	})
-	if walkErr != nil {
-		chgrpReport(rc, display, opts, walkErr)
-		ok = false
-	}
+	walker.Walk(root, display)
 	return ok
 }
 
-func chgrpOne(path string, opts chgrpOpts, follow bool) (changed bool, err error) {
-	stat := os.Stat
-	chown := os.Chown
-	if !follow {
-		stat = os.Lstat
-		chown = os.Lchown
+// chgrpOne applies the change to one file. Reading the current
+// ownership and changing it fail with different diagnostics, so they
+// are returned separately.
+func chgrpOne(path string, opts chgrpOpts) (changed bool, statErr, chgrpErr error) {
+	stat := os.Lstat
+	if opts.affectReferent {
+		stat = os.Stat
 	}
-	fi, statErr := stat(path)
-	if statErr != nil {
-		return false, statErr
+	fi, err := stat(path)
+	if err != nil {
+		return false, err, nil
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if ok {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		if opts.fromUid >= 0 && int(st.Uid) != opts.fromUid {
-			return false, nil
+			return false, nil, nil
 		}
 		if opts.fromGid >= 0 && int(st.Gid) != opts.fromGid {
-			return false, nil
+			return false, nil, nil
 		}
-		if int(st.Gid) == opts.targetGid {
-			return false, nil
+		// chown(2) clears the set-user-ID and set-group-ID bits of an
+		// executable it changes, even when the id it writes is the one
+		// already there. A file that already has the requested group
+		// must therefore be left alone entirely.
+		if int(st.Gid) == opts.gid {
+			return false, nil, nil
 		}
 	}
-	err = chown(path, -1, opts.targetGid)
-	return err == nil, err
+	if err := changeGroup(path, opts.gid, opts.affectReferent); err != nil {
+		return false, nil, err
+	}
+	return true, nil, nil
 }
 
 func chgrpVerbose(out io.Writer, name string, changed bool, opts chgrpOpts) {
@@ -185,35 +164,75 @@ func chgrpVerbose(out io.Writer, name string, changed bool, opts chgrpOpts) {
 	if changed {
 		fmt.Fprintf(out, "changed group of '%s'\n", name)
 	} else if !opts.changes {
-		fmt.Fprintf(out, "group of '%s' retained as %d\n", name, opts.targetGid)
+		fmt.Fprintf(out, "group of '%s' retained as %d\n", name, opts.gid)
 	}
 }
 
-func chgrpReport(rc *tool.RunContext, name string, opts chgrpOpts, err error) {
+// reportUnreachable diagnoses a file whose current ownership could not
+// be read. A symbolic link whose referent is what the change would
+// reach gets the dereference wording GNU uses, because the link itself
+// is present and the operand is not what is missing.
+func reportUnreachable(rc *tool.RunContext, name string, dereferencing bool, opts chgrpOpts, err error) {
 	if opts.silent {
 		return
 	}
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(rc.Err, "chgrp: cannot access '%s': %v\n", name, err)
+	if dereferencing {
+		fmt.Fprintf(rc.Err, "chgrp: cannot dereference '%s': %v\n", name, unwrapPathError(err))
 		return
 	}
-	fmt.Fprintf(rc.Err, "chgrp: changing group of '%s': %v\n", name, err)
+	fmt.Fprintf(rc.Err, "chgrp: cannot access '%s': %v\n", name, unwrapPathError(err))
 }
 
-func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
-	fi, err := os.Stat(rc.Path(path))
-	if err != nil {
-		return nil, err
+func reportChange(rc *tool.RunContext, name string, opts chgrpOpts, err error) {
+	if opts.silent {
+		return
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("cannot stat %s", path)
+	fmt.Fprintf(rc.Err, "chgrp: changing group of '%s': %v\n", name, unwrapPathError(err))
+}
+
+func reportRoot(rc *tool.RunContext, name, path string) {
+	fmt.Fprintf(rc.Err, "chgrp: it is dangerous to operate recursively on '%s'%s\n",
+		name, rootguard.AliasSuffix(name, path))
+	fmt.Fprintf(rc.Err, "chgrp: use --no-preserve-root to override this failsafe\n")
+}
+
+// reportCycle diagnoses a directory that is its own ancestor without a
+// symbolic link having been followed to reach it — a hierarchy that
+// cannot be walked to an end.
+func reportCycle(rc *tool.RunContext, name string, opts chgrpOpts) {
+	if opts.silent {
+		return
 	}
-	return &refFileInfo{gid: st.Gid}, nil
+	fmt.Fprintf(rc.Err, "chgrp: WARNING: Circular directory structure.\n")
+	fmt.Fprintf(rc.Err, "This almost certainly means that you have a corrupted file system.\n")
+	fmt.Fprintf(rc.Err, "NOTIFY YOUR SYSTEM ADMINISTRATOR.\n")
+	fmt.Fprintf(rc.Err, "The following directory is part of the cycle:\n  %s\n", name)
+}
+
+func unwrapPathError(err error) error {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
+}
+
+// parseGroup resolves the GROUP operand. POSIX requires it to be looked
+// up as a group name first and read as a numeric id only when no such
+// group exists.
+func parseGroup(spec string) (int, error) {
+	if g, err := lookupGroup(spec); err == nil {
+		gid, cerr := strconv.Atoi(g.Gid)
+		if cerr != nil {
+			return -1, fmt.Errorf("invalid group: '%s'", spec)
+		}
+		return gid, nil
+	}
+	id, err := strconv.Atoi(spec)
+	if err != nil || id < 0 {
+		return -1, fmt.Errorf("invalid group: '%s'", spec)
+	}
+	return id, nil
 }
 
 func parseFromSpec(spec string) (uid, gid int, err error) {
@@ -223,7 +242,7 @@ func parseFromSpec(spec string) (uid, gid int, err error) {
 	}
 	ownerStr, groupStr, hasColon := strings.Cut(spec, ":")
 	if ownerStr != "" {
-		u, uerr := user.Lookup(ownerStr)
+		u, uerr := lookupUser(ownerStr)
 		switch {
 		case uerr == nil:
 			if uid, err = strconv.Atoi(u.Uid); err != nil {
@@ -237,36 +256,37 @@ func parseFromSpec(spec string) (uid, gid int, err error) {
 			uid = id
 		}
 	}
-	if !hasColon {
+	if !hasColon || groupStr == "" {
 		return uid, gid, nil
 	}
-	if groupStr == "" {
-		return uid, gid, nil
-	}
-	g, gerr := user.LookupGroup(groupStr)
-	if gerr == nil {
-		if gid, err = strconv.Atoi(g.Gid); err != nil {
-			return -1, -1, fmt.Errorf("invalid group: '%s'", spec)
-		}
-		return uid, gid, nil
-	}
-	id, aerr := strconv.Atoi(groupStr)
-	if aerr != nil || id < 0 {
+	gid, err = parseGroup(groupStr)
+	if err != nil {
 		return -1, -1, fmt.Errorf("invalid group: '%s'", spec)
 	}
-	return uid, id, nil
+	return uid, gid, nil
+}
+
+// statFile reads the --reference file's ids. They are carried as
+// numbers, never re-spelled as a GROUP operand: a numeric id must not
+// be looked up as a name, or a host with a group literally named "20"
+// would silently redirect the change.
+func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
+	fi, err := os.Stat(rc.Path(path))
+	if err != nil {
+		return nil, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("cannot stat %s", path)
+	}
+	return &refFileInfo{gid: int(st.Gid)}, nil
 }
 
 type refFileInfo struct {
-	gid uint32
+	gid int
 }
 
-func (r *refFileInfo) gidStr() string {
-	if r == nil {
-		return ""
-	}
-	return strconv.FormatUint(uint64(r.gid), 10)
-}
+func (r *refFileInfo) ids() (uid, gid int) { return -1, r.gid }
 
 func statusError(rc *tool.RunContext, format string, a ...any) int {
 	fmt.Fprintf(rc.Err, "chgrp: "+format+"\n", a...)
