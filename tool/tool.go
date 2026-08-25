@@ -60,6 +60,14 @@ type RunContext struct {
 	// GNU tool performs, which never builds that string at all.
 	DirIsProcessCwd bool
 
+	// DedicatedProcess is true only when this invocation owns the lifetime of
+	// the current OS process (for example, the standalone multicall binary).
+	// Embedded callers must leave it false. Commands whose upstream semantics
+	// give special meaning to process ID 0 use this distinction to avoid
+	// mutating the long-lived embedding host as though it were a disposable
+	// command process.
+	DedicatedProcess bool
+
 	// ExitSignal is the process-boundary channel for a command wrapper
 	// (env, timeout, …) that ran a COMMAND which was terminated by a
 	// signal. When non-zero after Run returns, it is that signal's number.
