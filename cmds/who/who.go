@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/cmds/internal/session"
+	"github.com/qiangli/coreutils/cmds/internal/tzenv"
+	posixlocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -21,7 +22,7 @@ func run(rc *tool.RunContext, args []string) int {
 	all := fs.BoolP("all", "a", false, "same as -b -d --login -p -r -t -T -u")
 	heading := fs.BoolP("heading", "H", false, "print line of column headings")
 	count := fs.BoolP("count", "q", false, "all login names and number of users logged on")
-	_ = fs.BoolP("short", "s", false, "short format")
+	short := fs.BoolP("short", "s", false, "short format")
 	usersOnly := fs.BoolP("users", "u", false, "list users logged in")
 	mesg := fs.BoolP("mesg", "T", false, "add user's message status as +, - or ?")
 	boot := fs.BoolP("boot", "b", false, "time of last system boot")
@@ -119,13 +120,14 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	showMesg := *mesg || *writable || *all || *message
-	showIdle := *usersOnly || *all
-	loc, err := timeLocation(rc)
+	shortMode := *short && !*all
+	showIdle := (*usersOnly || *all) && !shortMode
+	loc := tzenv.Location(rc.Env)
+	timeFmt, err := posixlocale.ResolveTime(rc.Env)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "who: %v\n", err)
 		return 1
 	}
-	timeFmt := posixTimeLayout
 
 	for _, r := range live {
 		if isDead(r) && !r.ExitKnown {
@@ -151,8 +153,17 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
+	haveStateField := false
+	for _, r := range live {
+		if stateFieldExists(r) {
+			haveStateField = true
+			break
+		}
+	}
 	if *heading {
-		if showMesg && !showIdle {
+		if showMesg && !showIdle && !haveStateField {
+			fmt.Fprintln(rc.Out, "NAME     LINE         TIME")
+		} else if showMesg && !showIdle {
 			// The -T short form has no idle/pid columns.
 			fmt.Fprintln(rc.Out, "NAME     S LINE         TIME")
 		} else if showMesg {
@@ -172,13 +183,18 @@ func run(rc *tool.RunContext, args []string) int {
 		name := displayName(r)
 		tty := displayTTY(r)
 
-		// POSIX -T short form: exactly "%s %c %s %s\n"
-		// (name, terminal-state, line, time). Applies when the message
-		// status is requested without the -u idle/pid columns.
+		// POSIX -T is exactly name, terminal-state, line and time.
+		// LOGIN_PROCESS and INIT_PROCESS have no state field. Only the
+		// independently mandatory dead-process exit data may follow this form;
+		// optional host and process comments do not belong in it.
 		if showMesg && !showIdle {
-			fmt.Fprintf(rc.Out, "%s %c %s %s", name, terminalState(r), tty, formatTime(r.Time, loc, timeFmt))
-			if comment := lineComment(r, *onlyMe); comment != "" {
-				fmt.Fprintf(rc.Out, " %s", comment)
+			if stateFieldExists(r) {
+				fmt.Fprintf(rc.Out, "%s %c %s %s", name, terminalState(r), tty, formatTime(r.Time, loc, timeFmt))
+			} else {
+				fmt.Fprintf(rc.Out, "%s %s %s", name, tty, formatTime(r.Time, loc, timeFmt))
+			}
+			if isDead(r) {
+				fmt.Fprintf(rc.Out, " %s", exitStatus(r))
 			}
 			fmt.Fprintln(rc.Out)
 			continue
@@ -190,8 +206,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		comment := lineComment(r, *onlyMe)
 
-		if showMesg {
+		if showMesg && stateFieldExists(r) {
 			fmt.Fprintf(rc.Out, "%-8s %c   %-12s %-16s", name, terminalState(r), tty, formatTime(r.Time, loc, timeFmt))
+		} else if showMesg {
+			fmt.Fprintf(rc.Out, "%-8s     %-12s %-16s", name, tty, formatTime(r.Time, loc, timeFmt))
 		} else {
 			fmt.Fprintf(rc.Out, "%-8s %-12s %-16s", name, tty, formatTime(r.Time, loc, timeFmt))
 		}
@@ -203,7 +221,7 @@ func run(rc *tool.RunContext, args []string) int {
 				fmt.Fprintf(rc.Out, "      ")
 			}
 		}
-		if !showIdle && processRecord(r) && r.PID > 0 {
+		if !showIdle && !shortMode && processRecord(r) && r.PID > 0 {
 			fmt.Fprintf(rc.Out, " %5d", r.PID)
 		}
 		if comment != "" {
@@ -267,13 +285,23 @@ func terminalState(r session.Record) byte {
 	case "DEAD_PROCESS", "dead", "8",
 		"BOOT_TIME", "boot", "2",
 		"RUN_LVL", "runlevel", "1",
-		"NEW_TIME", "time", "3", "OLD_TIME", "4":
+		"NEW_TIME", "time", "3", "OLD_TIME", "4",
+		"LOGIN_PROCESS", "login", "6",
+		"INIT_PROCESS", "init", "5":
 		return ' '
 	}
 	if r.TTY == "" {
 		return '?'
 	}
 	return messageStatus(r.TTY)
+}
+
+func stateFieldExists(r session.Record) bool {
+	switch r.Type {
+	case "LOGIN_PROCESS", "login", "6", "INIT_PROCESS", "init", "5":
+		return false
+	}
+	return true
 }
 
 // lineComment is the trailing COMMENT field: the origin host for a normal
@@ -327,9 +355,9 @@ func runLevel(pid int) (current, previous byte) {
 	return current, previous
 }
 
-func writeRunLevel(rc *tool.RunContext, r session.Record, loc *time.Location, layout string) {
+func writeRunLevel(rc *tool.RunContext, r session.Record, loc *time.Location, formatter posixlocale.TimeFormatter) {
 	current, previous := runLevel(r.PID)
-	fmt.Fprintf(rc.Out, "run-level %c  %s", current, formatTime(r.Time, loc, layout))
+	fmt.Fprintf(rc.Out, "run-level %c  %s", current, formatTime(r.Time, loc, formatter))
 	if previous != '?' {
 		fmt.Fprintf(rc.Out, " last=%c", previous)
 	}
@@ -359,132 +387,17 @@ func ttyMatch(recordTTY, stdinTTY string) bool {
 	return record != "" && stdin != "" && record == stdin
 }
 
-// timeLocation resolves the zone from the invocation's TZ (rc.Env — never
-// the host process's zone). It accepts both IANA names ("America/New_York")
-// and supported fixed-offset POSIX TZ strings ("UTC0", "<+08>-8"). Named
-// zones, including EST5EDT where installed, obtain DST transitions from
-// zoneinfo. Unsupported explicit rule strings fail closed rather than
-// silently rendering standard time during DST.
-func timeLocation(rc *tool.RunContext) (*time.Location, error) {
-	tz := rc.Getenv("TZ")
-	if tz == "" {
-		return time.Local, nil
-	}
-	if loc, err := time.LoadLocation(tz); err == nil {
-		return loc, nil
-	}
-	if loc := posixTZ(tz); loc != nil {
-		return loc, nil
-	}
-	return nil, fmt.Errorf("unsupported TZ value %q", tz)
-}
-
-// posixTZ parses a fixed-offset POSIX TZ string into a fixed zone. Any
-// trailing DST name/rule is rejected; timeLocation first gives installed
-// zoneinfo names the opportunity to supply correct transition rules.
-func posixTZ(tz string) *time.Location {
-	if strings.HasPrefix(tz, ":") {
-		return nil // ":<path>" implementation-defined form: unsupported
-	}
-	name, rest := parseTZName(tz)
-	if name == "" {
-		return nil
-	}
-	secs, ok := parseTZOffset(rest)
-	if !ok {
-		return nil
-	}
-	// POSIX offset is the value ADDED to local time to reach UTC, so a zone
-	// east of UTC is the negation.
-	return time.FixedZone(name, -secs)
-}
-
-func parseTZName(s string) (name, rest string) {
-	if s == "" {
-		return "", ""
-	}
-	if s[0] == '<' {
-		if j := strings.IndexByte(s, '>'); j > 1 {
-			return s[1:j], s[j+1:]
-		}
-		return "", ""
-	}
-	i := 0
-	for i < len(s) && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z')) {
-		i++
-	}
-	if i < 3 {
-		return "", ""
-	}
-	return s[:i], s[i:]
-}
-
-func parseTZOffset(s string) (secs int, ok bool) {
-	if s == "" {
-		return 0, false
-	}
-	sign := 1
-	switch s[0] {
-	case '+':
-		s = s[1:]
-	case '-':
-		sign = -1
-		s = s[1:]
-	}
-	hh, s, ok := scanInt(s)
-	if !ok {
-		return 0, false
-	}
-	total := hh * 3600
-	if strings.HasPrefix(s, ":") {
-		mm, r, ok := scanInt(s[1:])
-		if !ok || mm > 59 {
-			return 0, false
-		}
-		total += mm * 60
-		s = r
-		if strings.HasPrefix(s, ":") {
-			ss, r, ok := scanInt(s[1:])
-			if !ok || ss > 59 {
-				return 0, false
-			}
-			total += ss
-			s = r
-		}
-	}
-	return sign * total, s == "" && hh <= 24
-}
-
-func scanInt(s string) (n int, rest string, ok bool) {
-	i := 0
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	if i == 0 {
-		return 0, s, false
-	}
-	v, err := strconv.Atoi(s[:i])
-	if err != nil {
-		return 0, s, false
-	}
-	return v, s[i:], true
-}
-
-func formatTime(t time.Time, loc *time.Location, layout string) string {
+// formatTime keeps timezone and locale selection invocation-local: loc comes
+// from tzenv and formatter from the bounded LC_TIME provider.
+func formatTime(t time.Time, loc *time.Location, formatter posixlocale.TimeFormatter) string {
 	if t.IsZero() {
 		return ""
 	}
 	if loc == nil {
 		loc = time.Local
 	}
-	if layout == "" {
-		layout = posixTimeLayout
-	}
-	return t.In(loc).Format(layout)
+	return formatter.FormatMonthDayTime(t.In(loc))
 }
-
-// posixTimeLayout is who's C/POSIX-locale time field: strftime "%b %e %H:%M".
-const posixTimeLayout = "Jan _2 15:04"
 
 func formatIdle(tty string, loginTime time.Time) string {
 	path := session.TTYPath(tty)

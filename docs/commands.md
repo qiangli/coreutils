@@ -137,7 +137,7 @@ Environment, system, misc:
 | stty | uutils parity | terminal status, size, selected modes/settings; platform terminal support required |
 | tabs | written fresh | POSIX preset formats (-a, -a2, -c, -c2, -c3, -f, -p, -s, -u), the repetitive -n spec (-0 clears; multi-digit accepted as every historic implementation does), explicit strictly-ascending lists with `+` increments, `+m[n]` / `+[n]` left margin, `-T`; renders through the shared pure-Go terminfo reader (cmds/internal/terminfo). Deviations: the POSIX <blank> separator IS accepted (BSD tabs rejects it), and a margin the terminal cannot set is reported AND carried into a nonzero exit rather than warned about at exit 0 |
 | users | uutils parity | utmp-backed logged-in user list; optional FILE |
-| who | uutils parity | utmp-backed listing with main flags, count and heading modes; optional FILE / ARG1 ARG2 |
+| who | uutils parity | native Linux/Darwin session databases; POSIX selectors, `-s` suppression, count/heading modes, optional FILE / `am i`; full POSIX TZ rules via the shared provider; LC_TIME uses the bounded C/POSIX and de_DE UTF-8/ISO-8859-1 corpus and fails closed by locale name when other time data is requested |
 
 Checksums and encoding:
 

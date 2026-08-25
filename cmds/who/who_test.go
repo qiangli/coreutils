@@ -3,6 +3,7 @@ package whocmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -85,18 +86,16 @@ func TestWhoWritable(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--writable: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
-	// -T short form uses the exact POSIX "%s %c %s %s\n" layout.
+	state := byte('+')
 	if runtime.GOOS == "windows" {
-		// Windows has no Unix tty group-write permission model, so the
-		// writable status is unknowable ('?'), and os.Chmod cannot flip
-		// it (chmod only toggles the read-only attribute).
-		if !strings.Contains(out.String(), "bob ? "+tty) {
-			t.Fatalf("expected writable status '?' for bob on windows, got %q", out.String())
-		}
-		return
+		state = '?'
 	}
-	if !strings.Contains(out.String(), "bob + "+tty) {
-		t.Fatalf("expected writable status '+' for bob, got %q", out.String())
+	want := fmt.Sprintf("bob %c %s %s\n", state, tty, time.Unix(1, 0).Local().Format("Jan _2 15:04"))
+	if out.String() != want {
+		t.Fatalf("-T exact output=%q, want %q", out.String(), want)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 
 	// Remove group write: status should flip to '-'.
@@ -108,8 +107,9 @@ func TestWhoWritable(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--writable after chmod: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "bob - "+tty) {
-		t.Fatalf("expected writable status '-' for bob, got %q", out.String())
+	want = fmt.Sprintf("bob - %s %s\n", tty, time.Unix(1, 0).Local().Format("Jan _2 15:04"))
+	if out.String() != want {
+		t.Fatalf("-T exact output after chmod=%q, want %q", out.String(), want)
 	}
 }
 
@@ -364,42 +364,6 @@ func TestWhoHonorsTZ(t *testing.T) {
 	}
 }
 
-// TestPosixTZ pins the standard-time parsing of POSIX TZ strings that are not
-// IANA zoneinfo names, independent of the host's tzdata.
-func TestPosixTZ(t *testing.T) {
-	cases := []struct {
-		tz     string
-		name   string
-		offset int // seconds east of UTC
-		ok     bool
-	}{
-		{"EST5EDT", "", 0, false},
-		{"PST8PDT", "", 0, false},
-		{"GMT0", "GMT", 0, true},
-		{"<+08>-8", "+08", 8 * 3600, true},
-		{"IST-5:30", "IST", 5*3600 + 30*60, true},
-		{"CET-1CEST", "", 0, false},
-		{"", "", 0, false},
-		{":/etc/localtime", "", 0, false},
-	}
-	for _, tc := range cases {
-		loc := posixTZ(tc.tz)
-		if !tc.ok {
-			if loc != nil {
-				t.Fatalf("posixTZ(%q)=%v, want nil", tc.tz, loc)
-			}
-			continue
-		}
-		if loc == nil {
-			t.Fatalf("posixTZ(%q)=nil, want zone", tc.tz)
-		}
-		name, off := time.Now().In(loc).Zone()
-		if name != tc.name || off != tc.offset {
-			t.Fatalf("posixTZ(%q)=(%q,%d), want (%q,%d)", tc.tz, name, off, tc.name, tc.offset)
-		}
-	}
-}
-
 func mustLoad(t *testing.T, name string) *time.Location {
 	t.Helper()
 	loc, err := time.LoadLocation(name)
@@ -442,20 +406,84 @@ func TestWhoDeadWithTIncludesExit(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	if code := run(rc, []string{"-T", "-d", "utmp"}); code != 0 || !strings.Contains(out.String(), "id=ts/9 term=9 exit=3") {
+	want := "ghost   pts/9 Jul  3 09:46 id=ts/9 term=9 exit=3\n"
+	if code := run(rc, []string{"-T", "-d", "utmp"}); code != 0 || out.String() != want {
 		t.Fatalf("-T -d: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
 }
 
-func TestWhoUnsupportedDSTRulesFailClosed(t *testing.T) {
+func TestWhoTExactNoOptionalComment(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("alice pts/7 1700000000 remote.example USER_PROCESS pid=333\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC", "LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"-T", "utmp"}); code != 0 || out.String() != "alice ? pts/7 Nov 14 22:13\n" {
+		t.Fatalf("-T exact fields: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
+func TestWhoTLoginHasNoStateField(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("LOGIN tty2 1700000000 host LOGIN_PROCESS id=ty2 pid=222\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC", "LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"-T", "-l", "utmp"}); code != 0 || out.String() != "LOGIN tty2 Nov 14 22:13\n" {
+		t.Fatalf("-T -l exact fields: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run(rc, []string{"-H", "-T", "-l", "utmp"}); code != 0 || out.String() != "NAME     LINE         TIME\nLOGIN tty2 Nov 14 22:13\n" {
+		t.Fatalf("-H -T -l exact fields: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	if stateFieldExists(session.Record{Type: "LOGIN_PROCESS"}) || stateFieldExists(session.Record{Type: "INIT_PROCESS"}) {
+		t.Fatal("LOGIN_PROCESS and INIT_PROCESS must not expose a state field")
+	}
+}
+
+func TestWhoShortSuppressesUserActivityAndPID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("alice pts/missing 1700000000 remote USER_PROCESS pid=333\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC", "LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	want := "NAME     LINE         TIME             COMMENT\n" +
+		"alice    pts/missing  Nov 14 22:13     (remote)\n"
+	if code := run(rc, []string{"-H", "-s", "-u", "utmp"}); code != 0 || out.String() != want {
+		t.Fatalf("-s -u exact suppression: code=%d out=%q want=%q err=%q", code, out.String(), want, errb.String())
+	}
+}
+
+func TestWhoLCtimeProviderAndFailClosedResidual(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("alice pts/7 1709251200 host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	invoke := func(env []string) (int, string, string) {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: env, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+		return run(rc, []string{"utmp"}), out.String(), errb.String()
+	}
+	if code, out, errout := invoke([]string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}); code != 0 || out != "alice    pts/7        Mär  1 00:00     (host)\n" {
+		t.Fatalf("German LC_TIME: code=%d out=%q err=%q", code, out, errout)
+	}
+	if code, out, errout := invoke([]string{"TZ=UTC", "LC_TIME=fr_FR.UTF-8"}); code == 0 || out != "" || !strings.Contains(errout, `LC_TIME locale "fr_FR.UTF-8" is unavailable`) {
+		t.Fatalf("unsupported LC_TIME residual: code=%d out=%q err=%q", code, out, errout)
+	}
+}
+
+func TestWhoHonorsPOSIXDSTRules(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("bob pts/1 1720000000 host\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=XXX3YYY,M1.1.0,M12.1.0"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	if code := run(rc, []string{"utmp"}); code == 0 || !strings.Contains(errb.String(), "unsupported TZ") {
-		t.Fatalf("DST rule must fail closed: code=%d out=%q err=%q", code, out.String(), errb.String())
+	if code := run(rc, []string{"utmp"}); code != 0 || out.String() != "bob      pts/1        Jul  3 07:46     (host)\n" {
+		t.Fatalf("POSIX DST rule: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
 }
 

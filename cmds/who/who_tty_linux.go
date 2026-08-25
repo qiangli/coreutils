@@ -33,5 +33,5 @@ func accessTime(path string) (time.Time, bool) {
 	if err := unix.Stat(path, &st); err != nil {
 		return time.Time{}, false
 	}
-	return time.Unix(st.Atim.Sec, st.Atim.Nsec), true
+	return time.Unix(int64(st.Atim.Sec), int64(st.Atim.Nsec)), true
 }
