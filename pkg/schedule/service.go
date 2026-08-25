@@ -219,6 +219,7 @@ func daemonStopRequested(identity daemonIdentity) bool {
 }
 
 type serviceCommandFactory func(executable string, args ...string) *exec.Cmd
+type serviceLockAcquire func(string, lockfile.Holder) (*lockfile.Lock, error)
 
 const (
 	serviceReadyTimeout = 5 * time.Second
@@ -325,11 +326,21 @@ func StopService() ServiceStatus {
 }
 
 func stopService(timeout time.Duration) ServiceStatus {
+	return stopServiceWith(timeout, lockfile.Acquire)
+}
+
+func stopServiceWith(timeout time.Duration, acquire serviceLockAcquire) ServiceStatus {
 	p := servicePidPath()
-	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
+	startLock, err := acquire(serviceStartLockPath(), lockfile.Holder{
 		Name: "bashy-schedule", Intent: "stop schedule daemon",
 	})
 	if err != nil {
+		// Failure to enter the lifecycle critical section conveys no authority to
+		// mutate or stop anything. Preserve a verified live generation in the
+		// result instead of falsely reporting that it is stopped.
+		if st := ServiceStatusOf(); st.Running {
+			return st
+		}
 		return ServiceStatus{PidFile: p}
 	}
 	defer startLock.Release()

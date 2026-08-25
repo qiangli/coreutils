@@ -3,6 +3,7 @@
 package schedule
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -446,6 +447,36 @@ func TestAbnormalDaemonExitStaleCleanupRemovesGenerationStop(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("stale artifact %s survived cleanup: %v", path, err)
 		}
+	}
+}
+
+func TestStopLifecycleAcquireFailurePreservesVerifiedLiveDaemon(t *testing.T) {
+	withState(t)
+	started, err := startService(time.Hour, managedDaemonCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer StopService()
+	identity, err := readIdentity(servicePidPath())
+	if err != nil || !identityIsLive(identity) {
+		t.Fatalf("managed daemon identity=%+v err=%v", identity, err)
+	}
+
+	forced := errors.New("forced lifecycle lock open failure")
+	st := stopServiceWith(time.Millisecond, func(path string, holder lockfile.Holder) (*lockfile.Lock, error) {
+		if path != serviceStartLockPath() || holder.Intent != "stop schedule daemon" {
+			t.Fatalf("unexpected acquire request path=%q holder=%+v", path, holder)
+		}
+		return nil, forced
+	})
+	if !st.Running || st.PID != started.PID || st.PidFile != servicePidPath() {
+		t.Fatalf("acquire failure falsely reported stopped: %+v", st)
+	}
+	if !identityIsLive(identity) {
+		t.Fatal("acquire failure mutated or stopped the live daemon")
+	}
+	if _, err := os.Stat(serviceStopPath(identity)); !os.IsNotExist(err) {
+		t.Fatalf("acquire failure created a stop token: %v", err)
 	}
 }
 
