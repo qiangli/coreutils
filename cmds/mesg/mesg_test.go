@@ -125,4 +125,3 @@ func TestMesgOutputWriteError(t *testing.T) {
 		t.Fatalf("mesg query stdout write error = (%q, %d), want status 2", errb.String(), code)
 	}
 }
-

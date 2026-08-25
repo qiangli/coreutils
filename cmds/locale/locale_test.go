@@ -360,20 +360,17 @@ func TestRefusalIsPerCategory(t *testing.T) {
 
 // --- -a and -m -------------------------------------------------------------------
 
-func withFixtureDirs(t *testing.T) (localeDir, charmapDir string) {
+func withFixtureCharmapDir(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	localeDir = filepath.Join(root, "locales")
-	charmapDir = filepath.Join(root, "charmaps")
-	for _, d := range []string{localeDir, charmapDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	charmapDir := filepath.Join(root, "charmaps")
+	if err := os.MkdirAll(charmapDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	oldL, oldC := localeDirs, charmapDirs
-	localeDirs, charmapDirs = []string{localeDir}, []string{charmapDir}
-	t.Cleanup(func() { localeDirs, charmapDirs = oldL, oldC })
-	return localeDir, charmapDir
+	oldC := charmapDirs
+	charmapDirs = []string{charmapDir}
+	t.Cleanup(func() { charmapDirs = oldC })
+	return charmapDir
 }
 
 func touch(t *testing.T, dir, name string) {
@@ -389,41 +386,24 @@ func touch(t *testing.T, dir, name string) {
 }
 
 func TestAllLocales(t *testing.T) {
-	localeDir, _ := withFixtureDirs(t)
-	for _, n := range []string{"en_US", "de_DE", "locale-archive", ".hidden"} {
-		touch(t, localeDir, n)
-	}
-
 	out, errOut, code := runCmd(t, nil, "-a")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	got := lines(out)
-	want := []string{"C", "POSIX", "de_DE", "en_US"}
+	want := []string{"C", "POSIX"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("locale -a = %v, want %v (sorted, C and POSIX always present,\n"+
-			"locale-archive and dotfiles excluded)", got, want)
+		t.Errorf("locale -a = %v, want exactly supported public locales %v", got, want)
 	}
-}
-
-// C and POSIX exist whether or not any locale directory does: they are required
-// by the standard and are not something a host installs.
-func TestAllLocalesWithNoDirectories(t *testing.T) {
-	oldL := localeDirs
-	localeDirs = []string{filepath.Join(t.TempDir(), "absent")}
-	t.Cleanup(func() { localeDirs = oldL })
-
-	out, _, code := runCmd(t, nil, "-a")
-	if code != 0 {
-		t.Fatalf("exit %d", code)
-	}
-	if strings.Join(lines(out), ",") != "C,POSIX" {
-		t.Errorf("locale -a = %v, want just C and POSIX", lines(out))
+	for _, name := range got {
+		if _, errOut, code := runCmd(t, []string{"LC_ALL=" + name}, "-k", "decimal_point"); code != 0 {
+			t.Errorf("locale -a advertised unusable locale %q: stderr=%q code=%d", name, errOut, code)
+		}
 	}
 }
 
 func TestCharmaps(t *testing.T) {
-	_, charmapDir := withFixtureDirs(t)
+	charmapDir := withFixtureCharmapDir(t)
 	// Charmap files are conventionally gzipped; the compression is not part of
 	// the name a caller can pass to localedef.
 	for _, n := range []string{"UTF-8.gz", "ANSI_X3.4-1968.gz", "ISO-8859-1"} {
@@ -575,4 +555,3 @@ func containsLine(out, want string) bool {
 	}
 	return false
 }
-

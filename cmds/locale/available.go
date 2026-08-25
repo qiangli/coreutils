@@ -11,29 +11,11 @@ import (
 // locales the developer's machine happens to have installed, and the test
 // would assert nothing repeatable.
 var (
-	// localeDirs are the conventional homes of locale definitions (the source
-	// forms under /usr/share/i18n) and compiled locales (/usr/lib/locale on
-	// glibc systems, /usr/share/locale on the BSDs and macOS).
-	localeDirs = []string{
-		"/usr/share/i18n/locales",
-		"/usr/lib/locale",
-		"/usr/share/locale",
-	}
 	// charmapDirs holds charmap definitions, commonly gzipped.
 	charmapDirs = []string{
 		"/usr/share/i18n/charmaps",
 	}
 )
-
-// nonLocaleEntries are files that live alongside locale directories but are not
-// locales. locale-archive in particular is a single packed file holding many
-// compiled locales; listing it as a locale name would offer the caller a
-// setting that cannot be selected.
-var nonLocaleEntries = map[string]bool{
-	"locale-archive":      true,
-	"locale-archive.tmpl": true,
-	"locale.alias":        true,
-}
 
 // availableLocales lists the locale names this host can offer.
 //
@@ -42,17 +24,10 @@ var nonLocaleEntries = map[string]bool{
 // directory exists would report a host that cannot run a conforming program,
 // which is the opposite of the truth.
 func availableLocales() []string {
-	seen := map[string]bool{"C": true, "POSIX": true}
-	for _, dir := range localeDirs {
-		for _, e := range readDir(dir) {
-			name := e.Name()
-			if strings.HasPrefix(name, ".") || nonLocaleEntries[name] {
-				continue
-			}
-			seen[name] = true
-		}
-	}
-	return sortedKeys(seen)
+	// This pure-Go implementation can fully answer every category only for
+	// the two mandatory public locales. Do not advertise arbitrary host
+	// locale-directory names that localeData cannot subsequently serve.
+	return []string{"C", "POSIX"}
 }
 
 // availableCharmaps lists the charmap names this host can offer. Charmap files

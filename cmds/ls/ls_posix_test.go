@@ -608,4 +608,3 @@ func containsLine(lines []string, target string) bool {
 	}
 	return false
 }
-
