@@ -747,6 +747,10 @@ func parseMagicPrintfInteger(value string, conv byte) (any, error) {
 
 func magicIntegerPrefix(value string) (prefix string, negative bool, complete bool) {
 	i := 0
+	for i < len(value) && isMagicIntegerSpace(value[i]) {
+		i++
+	}
+	numberStart := i
 	if i < len(value) && (value[i] == '+' || value[i] == '-') {
 		negative = value[i] == '-'
 		i++
@@ -768,7 +772,16 @@ func magicIntegerPrefix(value string) (prefix string, negative bool, complete bo
 	if digitsStart == i && !(base == 8 && digitsStart > 0 && value[digitsStart-1] == '0') {
 		return "", negative, false
 	}
-	return value[:i], negative, i == len(value)
+	return value[numberStart:i], negative, i == len(value)
+}
+
+func isMagicIntegerSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func magicDigitInBase(c, base byte) bool {

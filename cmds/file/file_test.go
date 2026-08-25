@@ -722,24 +722,49 @@ func TestMagicNumericConversionErrorsPreserveAccumulatedValues(t *testing.T) {
 	}
 }
 
+func TestMagicNumericConversionSkipsLeadingWhitespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, format, arg, want string
+		wantErr                 bool
+	}{
+		{"signed", "%d", " \t\n\v\f\r-12", "-12", false},
+		{"unsigned", "%u", " \t\n\v\f\r-1", "18446744073709551615", false},
+		{"signed-whitespace-only", "%i", " \t\n\v\f\r", "0", true},
+		{"unsigned-whitespace-only", "%x", " \t\n\v\f\r", "0", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := renderMagicMessage(tc.format, tc.arg)
+			if got != tc.want || (err != nil) != tc.wantErr {
+				t.Fatalf("render %q as %q = (%q, %v), want (%q, error=%v)", tc.arg, tc.format, got, err, tc.want, tc.wantErr)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "is not a valid integer") {
+				t.Fatalf("render %q diagnostic = %q, want invalid-integer diagnostic", tc.arg, err)
+			}
+		})
+	}
+}
+
 func TestMagicNumericConversionErrorsSetStatusWithoutBecomingOpenErrors(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "huge", []byte("18446744073709551615"))
 	put(t, dir, "partial", []byte("12x"))
+	put(t, dir, "spaces", []byte(" \t"))
 	put(t, dir, "magic", []byte(strings.Join([]string{
 		"0\tstring\t18446744073709551615\tvalue=%d;done",
 		"0\tstring\t12x\tvalue=%u;done",
+		"0\tstring\t\\ \\t\tvalue=%u;done",
 	}, "\n")+"\n"))
 
-	out, errb, code := invoke(t, dir, "", "-M", "magic", "huge", "missing", "partial")
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "huge", "missing", "partial", "spaces")
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if len(lines) != 3 || lines[0] != "huge: value=9223372036854775807;done" ||
+	if len(lines) != 4 || lines[0] != "huge: value=9223372036854775807;done" ||
 		!strings.Contains(lines[1], "missing: cannot open") || lines[2] != "partial: value=12;done" ||
-		code != 1 || strings.Count(errb, "file: magic message") != 2 ||
+		lines[3] != "spaces: value=0;done" || code != 1 || strings.Count(errb, "file: magic message") != 3 ||
 		!strings.Contains(errb, "outside the signed integer range") ||
 		!strings.Contains(errb, "was not completely converted") ||
+		!strings.Contains(errb, "is not a valid integer") ||
 		strings.Contains(out, "%!") || strings.Contains(out, "huge: cannot open") || strings.Contains(out, "partial: cannot open") {
-		t.Fatalf("runtime conversion errors = (%q, %q, %d), want saturated/partial output and two diagnostics", out, errb, code)
+		t.Fatalf("runtime conversion errors = (%q, %q, %d), want saturated/partial output and three diagnostics", out, errb, code)
 	}
 }
 
