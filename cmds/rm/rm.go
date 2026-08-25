@@ -152,7 +152,11 @@ func (r *remover) remove(op string) {
 			r.removeFile(op)
 			return
 		}
-		if r.interactive && !r.confirm(op) {
+		// POSIX requires the write-protection prompt before descending into a
+		// directory.  Waiting until after removeTree would let a negative reply
+		// preserve the directory only after its children had already been
+		// removed.
+		if r.shouldPrompt(rp) && !r.confirm(op) {
 			return
 		}
 		r.removeTree(op)
@@ -204,7 +208,9 @@ func (r *remover) removeTree(op string) {
 		r.remove(child)
 	}
 
-	if r.shouldPrompt(r.rc.Path(op)) && !r.confirm(op) {
+	// The second directory prompt is specific to -i.  The implicit
+	// write-protection prompt was already issued before descent.
+	if r.interactive && !r.confirm(op) {
 		return
 	}
 
@@ -232,6 +238,10 @@ func (r *remover) confirm(op string) bool {
 	if err != nil && line == "" {
 		return false
 	}
+	// This is the C/POSIX locale's affirmative expression.  The repository
+	// does not yet provide a reusable LC_MESSAGES yesexpr matcher (the find
+	// implementation has command-local locale handling), so locale-specific
+	// affirmative responses remain a separately tracked POSIX gap.
 	line = strings.TrimSpace(line)
 	return line == "y" || line == "Y" || strings.EqualFold(line, "yes")
 }
@@ -347,11 +357,16 @@ func (r *remover) shouldPrompt(rp string) bool {
 	if r.interactive {
 		return true
 	}
-	if r.isTerminal && !isWritable(rp) {
+	if r.isTerminal && !writableForPrompt(rp) {
 		return true
 	}
 	return false
 }
+
+// Indirection keeps permission-sensitive prompt tests hermetic when the test
+// process has privileges (notably root) that make access(2) succeed despite
+// write bits being clear.
+var writableForPrompt = isWritable
 
 var isTerminal = func(r io.Reader) bool {
 	if f, ok := r.(interface{ Fd() uintptr }); ok {

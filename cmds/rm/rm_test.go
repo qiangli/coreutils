@@ -435,8 +435,13 @@ func TestRmImplicitPromptForUnwritable(t *testing.T) {
 	}
 
 	oldIsTerminal := isTerminal
-	t.Cleanup(func() { isTerminal = oldIsTerminal })
+	oldWritableForPrompt := writableForPrompt
+	t.Cleanup(func() {
+		isTerminal = oldIsTerminal
+		writableForPrompt = oldWritableForPrompt
+	})
 	isTerminal = func(r io.Reader) bool { return true }
+	writableForPrompt = func(string) bool { return false }
 
 	// Test 1: terminal is true, file unwritable, no -f, input 'y' -> removes
 	_, errb, code := runToolIn(t, dir, "y\n", "unwritable")
@@ -493,6 +498,40 @@ func TestRmImplicitPromptForUnwritable(t *testing.T) {
 	}
 	if _, err := os.Stat(d); os.IsNotExist(err) {
 		t.Error("directory removed after 'n' to implicit prompt")
+	}
+}
+
+func TestRmImplicitDirectoryPromptPrecedesDescent(t *testing.T) {
+	dir := t.TempDir()
+	protected := filepath.Join(dir, "protected")
+	if err := os.Mkdir(protected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(protected, "child")
+	write(t, child, "must survive")
+	if err := os.Chmod(protected, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(protected, 0o755) })
+
+	oldIsTerminal := isTerminal
+	oldWritableForPrompt := writableForPrompt
+	t.Cleanup(func() {
+		isTerminal = oldIsTerminal
+		writableForPrompt = oldWritableForPrompt
+	})
+	isTerminal = func(io.Reader) bool { return true }
+	writableForPrompt = func(path string) bool { return path != protected }
+
+	_, errb, code := runToolIn(t, dir, "n\n", "-r", "protected")
+	if code != 0 {
+		t.Fatalf("declining implicit directory prompt: code=%d stderr=%q", code, errb)
+	}
+	if !strings.Contains(errb, "remove 'protected'?") {
+		t.Fatalf("missing pre-descent prompt: %q", errb)
+	}
+	if got, err := os.ReadFile(child); err != nil || string(got) != "must survive" {
+		t.Fatalf("child changed before declined directory prompt: content=%q err=%v", got, err)
 	}
 }
 
