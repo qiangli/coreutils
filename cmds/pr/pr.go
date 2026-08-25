@@ -62,10 +62,14 @@ type options struct {
 	columns        int
 	across         bool
 	separator      string
+	outputTabs     bool
+	outputTabChar  rune
+	outputTabWidth int
 	merge          bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = protectPlusOperands(args)
 	args = scanColumnOption(args)
 	fs := tool.NewFlags(cmd.Name)
 	pageLength := fs.IntP("length", "l", 66, "set page length to PAGE_LENGTH lines (<= 10 implies -t)")
@@ -149,6 +153,10 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "invalid expand-tabs value: %q", *expandTabs)
 	}
+	outputTabChar, outputTabWidth, err := parseOptionalCharNumber(*outputTabs, '\t', 8)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "invalid output-tabs value: %q", *outputTabs)
+	}
 
 	o := options{
 		pageLength: *pageLength,
@@ -158,6 +166,7 @@ func run(rc *tool.RunContext, args []string) int {
 		numberLines: fs.Changed("number-lines"), numberSep: string(numberSep), numberWidth: numberWidth,
 		indent: *indent, noFileWarnings: *noFileWarnings,
 		expandTabs: fs.Changed("expand-tabs"), expandChar: expandChar, expandWidth: expandWidth,
+		outputTabs: fs.Changed("output-tabs"), outputTabChar: outputTabChar, outputTabWidth: outputTabWidth,
 		formFeed:  *formFeed || *formFeedLower,
 		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
@@ -168,12 +177,14 @@ func run(rc *tool.RunContext, args []string) int {
 		o.separator = *sepString
 	}
 	_ = joinLines
-	_ = outputTabs
 	if fs.Changed("page-width") {
 		// -W sets the page width and enables line truncation; plain -w
 		// never truncates single-column output (GNU semantics).
 		o.width = *pageWidth
 		o.truncate = true
+	}
+	if o.separator != "" && !fs.Changed("width") && !fs.Changed("page-width") {
+		o.width = 512
 	}
 	// A page too short to hold the 5-line header and 5-line trailer
 	// implies -t (GNU: page length <= 10).
@@ -189,11 +200,19 @@ func run(rc *tool.RunContext, args []string) int {
 			o.bodyLines = 1
 		}
 	}
+	if o.columns > 1 {
+		o.expandTabs = true
+		o.outputTabs = true
+	}
 
 	// The GNU/POSIX +FIRST[:LAST] operand is an alternative page range.
 	var files []string
 	for _, op := range operands {
-		if strings.HasPrefix(op, "+") {
+		protectedPlus := strings.HasPrefix(op, plusOperandSentinel)
+		if protectedPlus {
+			op = strings.TrimPrefix(op, plusOperandSentinel)
+		}
+		if !protectedPlus && strings.HasPrefix(op, "+") {
 			start, end, err := parsePages(op[1:])
 			if err != nil || op == "+" {
 				return tool.UsageError(rc, cmd, "invalid page range: %q", op)
@@ -241,16 +260,15 @@ func run(rc *tool.RunContext, args []string) int {
 func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) int {
 	readers := make([]io.Reader, 0, len(files))
 	closers := make([]io.Closer, 0, len(files))
+	exit := 0
 	for _, name := range files {
 		r, closer, _, _, err := open(rc, name)
 		if err != nil {
 			if !o.noFileWarnings {
-				fmt.Fprintf(rc.Err, "pr: %s: %v\\n", name, tool.SysErr(err))
+				fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
 			}
-			for _, c := range closers {
-				c.Close()
-			}
-			return 1
+			exit = 1
+			continue
 		}
 		readers = append(readers, r)
 		if closer != nil {
@@ -263,14 +281,32 @@ func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) i
 		}
 	}()
 	if err := printMerge(readers, w, o); err != nil {
-		fmt.Fprintf(rc.Err, "pr: merge: %v\\n", tool.SysErr(err))
+		fmt.Fprintf(rc.Err, "pr: merge: %v\n", tool.SysErr(err))
 		return 1
 	}
 	if err := w.Flush(); err != nil {
-		fmt.Fprintf(rc.Err, "pr: write error: %v\\n", err)
+		fmt.Fprintf(rc.Err, "pr: write error: %v\n", err)
 		return 1
 	}
-	return 0
+	return exit
+}
+
+const plusOperandSentinel = "\x00pr-protected-plus\x00"
+
+func protectPlusOperands(args []string) []string {
+	out := make([]string, 0, len(args))
+	protected := false
+	for _, arg := range args {
+		if protected && strings.HasPrefix(arg, "+") {
+			out = append(out, plusOperandSentinel+arg)
+			continue
+		}
+		out = append(out, arg)
+		if arg == "--" {
+			protected = true
+		}
+	}
+	return out
 }
 
 // scanColumnOption recognizes pr's standalone -N column shorthand. It is
@@ -327,6 +363,26 @@ func scanColumnOption(args []string) []string {
 		if len(arg) > 1 && arg[0] == '-' && strings.Trim(arg[1:], "0123456789") == "" {
 			out = append(out, "--columns="+arg[1:])
 			continue
+		}
+		if len(arg) > 2 && arg[0] == '-' && arg[1] >= '0' && arg[1] <= '9' {
+			j := 1
+			for j < len(arg) && arg[j] >= '0' && arg[j] <= '9' {
+				j++
+			}
+			if j < len(arg) {
+				rest := arg[j:]
+				validRest := true
+				for _, r := range rest {
+					if !strings.ContainsRune("adFfJmrtT", r) {
+						validRest = false
+						break
+					}
+				}
+				if validRest {
+					out = append(out, "--columns="+arg[1:j], "-"+rest)
+					continue
+				}
+			}
 		}
 		out = append(out, arg)
 	}
@@ -508,7 +564,7 @@ func printSingleColumn(r io.Reader, w *bufio.Writer, label string, stamp time.Ti
 		}
 		for _, line := range chunk {
 			if emit {
-				if _, err := w.WriteString(formatLine(line, lineNo, o)); err != nil {
+				if _, err := w.WriteString(tabifyLine(formatLine(line, lineNo, o), o)); err != nil {
 					return err
 				}
 				if o.doubleSpace {
@@ -667,6 +723,7 @@ func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
 				if o.numberLines {
 					line = formatLine(line, lineNo, o)
 				}
+				line = tabifyLine(line, o)
 				if _, err := w.WriteString(line); err != nil {
 					return err
 				}
@@ -729,7 +786,7 @@ func mergeLine(pages [][][]string, page, row int, o options) string {
 			line = strings.TrimSuffix(inputPages[page][row], "\n")
 		}
 		limit := columnWidth
-		if columns > 1 {
+		if columns > 1 && o.separator == "" {
 			limit--
 		}
 		if limit < 0 {
@@ -740,17 +797,12 @@ func mergeLine(pages [][][]string, page, row int, o options) string {
 		}
 		b.WriteString(line)
 		if col < columns-1 {
-			// GNU emits tabs for padding where a tab stop fits before the next
-			// column boundary; retaining that detail matters for byte-for-byte
-			// merge output, including when -s is present.
-			padTo := (col + 1) * columnWidth
-			if o.separator != "" {
-				padTo--
-			}
-			writeMergePadding(&b, col*columnWidth+len(line), padTo)
 			if o.separator != "" {
 				b.WriteString(o.separator)
+				continue
 			}
+			padTo := (col + 1) * columnWidth
+			writeMergePadding(&b, col*columnWidth+len(line), padTo)
 		}
 	}
 	return b.String() + "\n"
@@ -811,7 +863,7 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 	for i, inputLine := range chunk {
 		line := formatLine(inputLine, *lineNo+i, cellOptions)
 		line = strings.TrimSuffix(line, "\n")
-		if o.separator == "" && len(line) > columnWidth {
+		if len(line) > columnWidth {
 			line = line[:columnWidth]
 		}
 		formatted[i] = line
@@ -821,9 +873,8 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 		if !emit {
 			continue
 		}
-		if _, err := w.WriteString(strings.Repeat(" ", o.indent)); err != nil {
-			return err
-		}
+		var rowText strings.Builder
+		rowText.WriteString(strings.Repeat(" ", o.indent))
 		for col := 0; col < o.columns; col++ {
 			index := row + col*rows
 			if o.across {
@@ -841,18 +892,14 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 				line = line[:columnWidth-1]
 			}
 			if col > 0 {
-				if _, err := w.WriteString(o.separator); err != nil {
-					return err
-				}
+				rowText.WriteString(o.separator)
 			}
 			if o.separator == "" && col < o.columns-1 && nextIndex < len(formatted) {
 				line += strings.Repeat(" ", columnWidth-len(line))
 			}
-			if _, err := w.WriteString(line); err != nil {
-				return err
-			}
+			rowText.WriteString(line)
 		}
-		if _, err := w.WriteString("\n"); err != nil {
+		if _, err := w.WriteString(tabifyLine(rowText.String()+"\n", o)); err != nil {
 			return err
 		}
 		if o.doubleSpace {
@@ -872,29 +919,14 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 	return nil
 }
 
-// headerLine builds the GNU header text line: margin, date at the left,
-// the file name (or -h string) centered, and "Page N" at the right,
-// filling the page width.
+// headerLine builds the POSIX header text line in the POSIX locale.
 func headerLine(label string, stamp time.Time, page int, o options) string {
-	format := "2006-01-02 15:04"
+	format := "Jan _2 15:04 2006"
 	if o.dateFormat != "" {
 		format = strftimeLayout(o.dateFormat)
 	}
 	date := stamp.Format(format)
-	pageText := fmt.Sprintf("Page %d", page)
-	avail := o.width - len(date) - len(label) - len(pageText)
-	if avail < 0 {
-		avail = 0
-	}
-	lhs := avail / 2
-	rhs := avail - lhs
-	if lhs < 1 {
-		lhs = 1
-	}
-	if rhs < 1 {
-		rhs = 1
-	}
-	return strings.Repeat(" ", o.indent) + date + strings.Repeat(" ", lhs) + label + strings.Repeat(" ", rhs) + pageText
+	return strings.Repeat(" ", o.indent) + fmt.Sprintf("%s %s Page %d", date, label, page)
 }
 
 func formatLine(line string, lineNo int, o options) string {
@@ -910,9 +942,47 @@ func formatLine(line string, lineNo int, o options) string {
 		line = strings.Repeat(" ", o.indent) + line
 	}
 	if hasNL {
-		return line + "\n"
+		line += "\n"
 	}
 	return line
+}
+
+func tabifyLine(line string, o options) string {
+	if !o.outputTabs {
+		return line
+	}
+	hasNL := strings.HasSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\n")
+	var b strings.Builder
+	col, pending := 0, 0
+	flushSpaces := func() {
+		for pending > 0 {
+			next := o.outputTabWidth - col%o.outputTabWidth
+			if pending >= next && next > 1 {
+				b.WriteRune(o.outputTabChar)
+				col += next
+				pending -= next
+			} else {
+				b.WriteByte(' ')
+				col++
+				pending--
+			}
+		}
+	}
+	for _, r := range line {
+		if r == ' ' {
+			pending++
+			continue
+		}
+		flushSpaces()
+		b.WriteRune(r)
+		col++
+	}
+	flushSpaces()
+	if hasNL {
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // readSegments reads all input lines, splitting into segments at input
@@ -1013,8 +1083,11 @@ func parseOptionalCharNumber(spec string, defaultChar rune, defaultNumber int) (
 		}
 	}
 	n, err := strconv.Atoi(digits)
-	if err != nil || n <= 0 {
+	if err != nil || n < 0 {
 		return 0, 0, fmt.Errorf("not positive")
+	}
+	if n == 0 {
+		n = defaultNumber
 	}
 	return char, n, nil
 }

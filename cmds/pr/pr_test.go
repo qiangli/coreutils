@@ -5,7 +5,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +66,7 @@ func TestPRDefaultPageStructure(t *testing.T) {
 	if errb != "" || code != 0 {
 		t.Fatalf("pr default = (%q, %d)", errb, code)
 	}
-	header := "2020-01-02 03:04" + strings.Repeat(" ", 24) + "in" + strings.Repeat(" ", 24) + "Page 1"
+	header := "Jan  2 03:04 2020 in Page 1"
 	want := "\n\n" + header + "\n\n\n" + "l1\nl2\nl3\n" + strings.Repeat("\n", 58)
 	if out != want {
 		t.Fatalf("pr default page = %q, want %q", out, want)
@@ -222,6 +224,15 @@ func TestPRPlusOperandPageRange(t *testing.T) {
 	}
 }
 
+func TestPRDoubleDashProtectsPlusOperand(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "+2", "protected\n")
+	out, errb, code := runPR(t, dir, "", "-t", "--", "+2")
+	if out != "protected\n" || errb != "" || code != 0 {
+		t.Fatalf("pr -- +2 = (%q, %q, %d), want protected file content", out, errb, code)
+	}
+}
+
 func TestPRFormFeedTrailer(t *testing.T) {
 	tests := []struct {
 		name string
@@ -336,6 +347,13 @@ func TestPRAcrossColumns(t *testing.T) {
 	}
 }
 
+func TestPRClusteredColumnWithFlags(t *testing.T) {
+	out, errb, code := runPR(t, t.TempDir(), "a\nb\nc\nd\n", "-t", "-w", "10", "-3d")
+	if want := "a  c\n\nb  d\n\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -3d = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
 func TestPRVerticalColumnsInteractions(t *testing.T) {
 	out, errb, code := runPR(t, t.TempDir(), "a\nb\n", "-t", "-w", "10", "-o", "2", "-s:", "-2")
 	if want := "  a:b\n"; out != want || errb != "" || code != 0 {
@@ -348,11 +366,20 @@ func TestPRVerticalColumnsInteractions(t *testing.T) {
 	}
 }
 
-func TestPRCustomSeparatorDoesNotTruncateColumns(t *testing.T) {
+func TestPRCustomSeparatorTruncatesColumns(t *testing.T) {
 	line := strings.Repeat("x", 20)
 	out, errb, code := runPR(t, t.TempDir(), line+"\n"+line+"\n", "-t", "-w", "10", "-sX", "-2", "-a")
-	if want := line + "X" + line + "\n"; out != want || errb != "" || code != 0 {
-		t.Fatalf("pr -sX = (%q, %q, %d), want untruncated columns %q", out, errb, code, want)
+	if want := "xxxxXxxxx\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -sX = (%q, %q, %d), want truncated columns %q", out, errb, code, want)
+	}
+}
+
+func TestPRSeparatorDefaultWidthIs512(t *testing.T) {
+	line := strings.Repeat("x", 300)
+	out, errb, code := runPR(t, t.TempDir(), line+"\n"+line+"\n", "-t", "-s:", "-2", "-a")
+	want := strings.Repeat("x", 255) + ":" + strings.Repeat("x", 255) + "\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -s default width = len %d err %q code %d, want len %d", len(out), errb, code, len(want))
 	}
 }
 
@@ -361,12 +388,42 @@ func TestPRMerge(t *testing.T) {
 	writeFixed(t, dir, "left", "a\nbb\nc\n")
 	writeFixed(t, dir, "right", "1\n")
 	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "20", "-s:", "left", "right")
-	if want := "a\t :1\nbb\t :\nc\t :\n"; out != want || errb != "" || code != 0 {
+	if want := "a:1\nbb:\nc:\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("pr -m = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
 	}
 	_, errb, code = runPR(t, dir, "", "-m", "-2", "left", "right")
 	if code != 1 || !strings.Contains(errb, "cannot specify number of columns") {
 		t.Fatalf("pr -m -2 code=%d err=%q", code, errb)
+	}
+}
+
+func TestPRMergeSeparatorOddWidthDoesNotReservePadding(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "left", "1234567890\n")
+	writeFixed(t, dir, "right", "x\n")
+	for _, tt := range []struct {
+		width string
+		want  string
+	}{
+		{width: "19", want: "123456789:x\n"},
+		{width: "21", want: "1234567890:x\n"},
+	} {
+		out, errb, code := runPR(t, dir, "", "-m", "-t", "-s:", "-w", tt.width, "left", "right")
+		if out != tt.want || errb != "" || code != 0 {
+			t.Fatalf("pr -m -s -w %s = (%q, %q, %d), want (%q, \"\", 0)", tt.width, out, errb, code, tt.want)
+		}
+	}
+}
+
+func TestPRMergeOpenErrorContinuesAndNewline(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "left", "a\n")
+	out, errb, code := runPR(t, dir, "", "-m", "-t", "left", "missing")
+	if out != "a\n" || code != 1 {
+		t.Fatalf("pr -m missing = (%q, %q, %d), want readable file and exit 1", out, errb, code)
+	}
+	if !strings.HasSuffix(errb, "\n") || strings.Contains(errb, `\n`) || !strings.Contains(errb, "missing") {
+		t.Fatalf("pr -m missing diagnostic malformed: %q", errb)
 	}
 }
 
@@ -448,6 +505,36 @@ func TestPROptionalExpandArgument(t *testing.T) {
 	}
 }
 
+func TestPROptionalGapZeroMeansDefault(t *testing.T) {
+	for _, tt := range []struct {
+		arg  string
+		want string
+	}{
+		{arg: "-e0", want: "a       b\n"},
+		{arg: "-eX0", want: "a\tb     c\n"},
+		{arg: "-i0", want: "a\tb\n"},
+		{arg: "-iX0", want: "aXb\n"},
+	} {
+		input := "a\tb\n"
+		if strings.HasPrefix(tt.arg, "-i") {
+			input = "a       b\n"
+		} else if strings.HasPrefix(tt.arg, "-eX") {
+			input = "a\tbXc\n"
+		}
+		out, errb, code := runPR(t, t.TempDir(), input, "-t", tt.arg)
+		if out != tt.want || errb != "" || code != 0 {
+			t.Fatalf("pr %s = (%q, %q, %d), want (%q, \"\", 0)", tt.arg, out, errb, code, tt.want)
+		}
+	}
+}
+
+func TestPRMultiColumnImpliesExpandAndOutputTabs(t *testing.T) {
+	out, errb, code := runPR(t, t.TempDir(), "a\tb\nc       d\n", "-t", "-2", "-w", "20")
+	if want := "a\tb c\t  d\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr multicolumn implied tab handling = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+}
+
 func TestPROptionalNumberArgument(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -518,5 +605,42 @@ func TestPRNewFlagAliases(t *testing.T) {
 	out, _, code = runPR(t, t.TempDir(), "a\n", "-i", "-t")
 	if out != "a\n" || code != 0 {
 		t.Fatalf("pr -i = (%q, %d)", out, code)
+	}
+}
+
+func TestPRPOSIXLYCorrectDifferentials(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("GNU POSIXLY_CORRECT differential is only required on Linux/Ubuntu hosts")
+	}
+	if out, err := exec.Command("/usr/bin/pr", "--version").CombinedOutput(); err != nil || !strings.Contains(string(out), "GNU coreutils") {
+		t.Skip("GNU pr reference not available")
+	}
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", "a\nbb\n")
+	writeFixed(t, dir, "two", "1\n")
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+	}{
+		{name: "header", args: []string{"one"}},
+		{name: "merge-s", args: []string{"-m", "-t", "-w", "20", "-s:", "one", "two"}},
+		{name: "columns", stdin: "a\tb\nc       d\n", args: []string{"-t", "-2", "-w", "20"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wantCmd := exec.Command("/usr/bin/pr", tc.args...)
+			wantCmd.Dir = dir
+			wantCmd.Stdin = strings.NewReader(tc.stdin)
+			wantCmd.Env = append(os.Environ(), "POSIXLY_CORRECT=1", "LC_ALL=C")
+			want, err := wantCmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("GNU pr failed: %v output=%q", err, want)
+			}
+			out, errb, code := runPR(t, dir, tc.stdin, tc.args...)
+			if code != 0 || errb != "" || out != string(want) {
+				t.Fatalf("candidate differs from GNU POSIXLY_CORRECT:\nout=%q\nerr=%q\ncode=%d\nwant=%q", out, errb, code, want)
+			}
+		})
 	}
 }
