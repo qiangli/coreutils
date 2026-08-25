@@ -122,3 +122,23 @@ func TestAwkLocaleLifecycle(t *testing.T) {
 		t.Fatalf("close=(%q,%d) close=%d", errOut, code, provider.closeCalls)
 	}
 }
+
+// TestAwkLocaleEquivalenceClassMatches pins POSIX XBD 9.3.5 for awk, which has
+// no BRE mode: every awk ERE went through the compiler that dropped the locale
+// equivalence table, so `/[[=a=]]/` under a non-C LC_CTYPE silently matched
+// nothing — the literal 'a' included — with no diagnostic and exit 0.
+func TestAwkLocaleEquivalenceClassMatches(t *testing.T) {
+	for _, tc := range []struct{ name, program, input, want string }{
+		{"equivalence-member", `/[[=a=]]/ { print "yes" }`, "bab\n", "yes\n"},
+		{"equivalence-nonmember", `/[[=a=]]/ { print "yes" }`, "bbb\n", ""},
+		{"collating-element", `/[[.a.]]/ { print "yes" }`, "bab\n", "yes\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &fakeAwkCType{}
+			out, errOut, code := runAwkLocale([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader(tc.input), []string{tc.program}, func(string) (ctypeProvider, error) { return provider, nil })
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("got=(%q,%q,%d) want=%q", out, errOut, code, tc.want)
+			}
+		})
+	}
+}

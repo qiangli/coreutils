@@ -211,3 +211,31 @@ func TestSedLocaleCompileFailsBeforeOperandIO(t *testing.T) {
 		}
 	}
 }
+
+// TestSedLocaleEquivalenceClassMatchesInBothGrammars pins POSIX XBD 9.3.5 at
+// the command surface: `[[=a=]]` and `[[.a.]]` mean the same thing to sed
+// whether the script is a BRE or (-E) an ERE. The ERE compiler used to drop
+// the locale equivalence table, so `sed -E 's/[[=a=]]/X/'` under a non-C
+// LC_CTYPE exited 0, printed no diagnostic, and matched nothing at all — not
+// even the literal 'a' that is always a member of its own class.
+func TestSedLocaleEquivalenceClassMatchesInBothGrammars(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"bre-equivalence", []string{`s/[[=a=]]/X/`}, "bXb\n"},
+		{"ere-equivalence", []string{"-E", `s/[[=a=]]/X/`}, "bXb\n"},
+		{"bre-collating", []string{`s/[[.a.]]/X/`}, "bXb\n"},
+		{"ere-collating", []string{"-E", `s/[[.a.]]/X/`}, "bXb\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &fakeSedCType{}
+			var out bytes.Buffer
+			errOut, code := runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader("bab\n"), &out, tc.args, func(string) (ctypeProvider, error) { return provider, nil })
+			if code != 0 || errOut != "" || out.String() != tc.want {
+				t.Fatalf("got=(%q,%q,%d) want=%q", out.String(), errOut, code, tc.want)
+			}
+		})
+	}
+}

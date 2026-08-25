@@ -9,10 +9,7 @@ import (
 // compileLocaleByteERE compiles the consuming subset of POSIX ERE over
 // locale-classified bytes. Like the BRE variant, it is unexported and unrouted.
 func compileLocaleByteERE(pattern []byte, input bytePatternTables, foldCase bool) (*localeBytePattern, error) {
-	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), fold: input.fold, dotAll: input.dotAll, multi: input.multi}
-	for name, class := range input.classes {
-		tables.classes[name] = class
-	}
+	tables := input.snapshot()
 	word, ok := tables.classes["word"]
 	if !ok {
 		return nil, fmt.Errorf("locale byte tables lack word class")

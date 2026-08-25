@@ -22,14 +22,24 @@ type localeBytePattern struct {
 	re    *regexp.Regexp
 }
 
+// snapshot returns a compile-owned copy of t. The class map is the only
+// reference type in bytePatternTables, so every other field copies with the
+// struct; duplicating this by hand in each grammar's compiler is what let the
+// equivalence table reach BRE but not ERE, so both compilers call this instead.
+func (t bytePatternTables) snapshot() bytePatternTables {
+	out := t
+	out.classes = make(map[string][256]bool, len(t.classes))
+	for name, class := range t.classes {
+		out.classes[name] = class
+	}
+	return out
+}
+
 // compileLocaleBytePattern compiles the consuming subset of POSIX BRE over
 // locale-classified bytes. It is an unrouted substrate: public Regexp and all
 // command consumers continue to use their existing engines.
 func compileLocaleBytePattern(pattern []byte, input bytePatternTables, foldCase bool) (*localeBytePattern, error) {
-	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), equivalent: input.equivalent, fold: input.fold, dotAll: input.dotAll, multi: input.multi}
-	for name, class := range input.classes {
-		tables.classes[name] = class
-	}
+	tables := input.snapshot()
 	word, ok := tables.classes["word"]
 	if !ok {
 		return nil, fmt.Errorf("locale byte tables lack word class")
