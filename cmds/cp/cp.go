@@ -53,15 +53,12 @@ type copier struct {
 	removeDest   bool
 	interactive  bool
 	verbose      bool
-	// messagesGerman selects the provisioned de_DE LC_MESSAGES yesexpr
-	// for -i replies; every other supported locale uses C/POSIX "^[yY]".
-	messagesGerman bool
-	failed         bool
-	in             *bufio.Reader
-	rootDev        devID
-	haveRootDev    bool
-	dirStack       []os.FileInfo
-	umask          os.FileMode
+	failed       bool
+	in           *bufio.Reader
+	rootDev      devID
+	haveRootDev  bool
+	dirStack     []os.FileInfo
+	umask        os.FileMode
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -162,9 +159,7 @@ func run(rc *tool.RunContext, args []string) int {
 		removeDest:   *removeDest,
 		interactive:  *interactive,
 		verbose:      *verbose,
-		messagesGerman: strings.HasPrefix(
-			strings.ToLower(locale.Resolve(rc.Env, locale.Messages)), "de_de"),
-		in: inputReader(rc.In),
+		in:           inputReader(rc.In),
 	}
 	if c.recursive {
 		c.umask = invocationUmask(rc)

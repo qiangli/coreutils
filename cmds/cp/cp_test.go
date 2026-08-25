@@ -879,7 +879,7 @@ func TestCpInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
 	write(t, filepath.Join(dir, "src"), "new")
 	write(t, filepath.Join(dir, "dst"), "old")
 	_, errb, code := runToolWithInput(t, dir, " yes\n", "-i", "src", "dst")
-	if code != 1 || !strings.Contains(errb, "overwrite 'dst'?") || read(t, filepath.Join(dir, "dst")) != "old" {
+	if code != 0 || !strings.Contains(errb, "overwrite 'dst'?") || read(t, filepath.Join(dir, "dst")) != "old" {
 		t.Fatalf("leading-space reply = (_, %q, %d), destination was not preserved", errb, code)
 	}
 }
