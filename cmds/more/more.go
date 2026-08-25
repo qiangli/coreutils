@@ -184,7 +184,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if o.screenful < 1 {
 			o.screenful = 1
 		}
-		p := &pager{rc: rc, w: w, cmds: bufio.NewReader(ch.cmds), o: o, files: files}
+		p := &pager{rc: rc, w: w, cmds: newCmdReader(ch.cmds), o: o, files: files}
 		exit := p.run()
 		if err := w.Flush(); err != nil {
 			fmt.Fprintf(rc.Err, "more: write error: %v\n", err)

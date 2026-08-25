@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -31,16 +33,13 @@ func mockTerminal(out io.Writer, mockTTYChannel *ttyChannel, size func() (int, i
 		}
 		return 80, 24, nil
 	}
-	
+
 	return func() {
 		isTerminal = origIsTerm
 		openTTY = origOpenTTY
 		getTerminalSize = origGetSize
 	}
 }
-
-type errWriter struct{ err error }
-func (w errWriter) Write(p []byte) (n int, err error) { return 0, w.err }
 
 func TestPagerSizing(t *testing.T) {
 	rc := &tool.RunContext{
@@ -50,45 +49,49 @@ func TestPagerSizing(t *testing.T) {
 			Err: new(bytes.Buffer),
 		},
 	}
-	
+
 	// Default size
 	cleanup := mockTerminal(rc.Out, &ttyChannel{cmds: strings.NewReader("q"), hasFd: true, close: func() error { return nil }}, nil)
 	defer cleanup()
-	
+
 	// -n
 	r, w := terminalSize(rc, nil, 10)
-	if r != 10 || w != 80 { t.Errorf("expected 10,80 got %d,%d", r, w) }
-	
+	if r != 10 || w != 80 {
+		t.Errorf("expected 10,80 got %d,%d", r, w)
+	}
+
 	// LINES / COLUMNS
 	rc.Env = []string{"LINES=15", "COLUMNS=40"}
 	r, w = terminalSize(rc, nil, 0)
-	if r != 15 || w != 40 { t.Errorf("expected 15,40 got %d,%d", r, w) }
+	if r != 15 || w != 40 {
+		t.Errorf("expected 15,40 got %d,%d", r, w)
+	}
 }
 
 func TestPagerFirstNextPages(t *testing.T) {
 	out := new(bytes.Buffer)
 	errOut := new(bytes.Buffer)
 	rc := &tool.RunContext{
-		Ctx: context.Background(),
+		Ctx:   context.Background(),
 		Stdio: tool.Stdio{Out: out, Err: errOut},
 	}
-	
+
 	// 3 lines per screenful
 	cleanup := mockTerminal(rc.Out, &ttyChannel{cmds: strings.NewReader(" q"), hasFd: true, close: func() error { return nil }}, func() (int, int, error) {
 		return 80, 4, nil
 	})
 	defer cleanup()
-	
+
 	dir := t.TempDir()
 	rc.Dir = dir
 	f := filepath.Join(dir, "f1")
 	os.WriteFile(f, []byte("1\n2\n3\n4\n5\n"), 0644)
-	
+
 	code := run(rc, []string{f})
 	if code != 0 {
 		t.Errorf("expected 0, got %d", code)
 	}
-	
+
 	expected := "1\n2\n3\n\x1b[7m--More--\x1b[m\r\x1b[K4\n5\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
 	if out.String() != expected {
 		t.Errorf("got %q, expected %q", out.String(), expected)
@@ -365,3 +368,192 @@ func (blockingReader) Read(p []byte) (n int, err error) {
 	select {}
 }
 
+// TestPagerNewlineDeferred pins that <newline> — a more(1) command that
+// scrolls ONE line, not a screenful — is refused as deferred rather than
+// quietly aliased to <space>. Answering a different command than the one
+// typed is the silent-approximation failure the contract forbids.
+func TestPagerNewlineDeferred(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "f", "a\nb\n")
+
+	// rows=2 -> screenful=1: the prompt fires after "a\n".
+	out, errb, code := runPager(t, 2, 80, true, "\nq", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 {
+		t.Fatalf("newline deferred: code=%d", code)
+	}
+	if !strings.Contains(errb, "more: newline: command not supported yet (deferred)") {
+		t.Fatalf("newline deferred: want deferred diagnostic, got %q", errb)
+	}
+	// The prompt is cleared and reissued; "b" is never reached, because
+	// newline did not advance the screen.
+	p := "\x1b[7m--More--\x1b[m"
+	want := "a\n" + p + "\r\x1b[K" + p + "\r\x1b[K"
+	if out != want {
+		t.Fatalf("newline deferred:\n got %q\nwant %q", out, want)
+	}
+}
+
+// TestPagerDeferredVsUnknown separates the two refusals: a POSIX more
+// command this slice has not implemented is named as deferred, while a key
+// that is no more(1) command at all is named as unknown. Both are loud.
+func TestPagerDeferredVsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "f", "a\n")
+
+	_, errb, code := runPager(t, 24, 80, true, "b\x06zq", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 {
+		t.Fatalf("deferred vs unknown: code=%d", code)
+	}
+	for _, want := range []string{
+		"more: b: command not supported yet (deferred)",
+		"more: ^F: command not supported yet (deferred)",
+		"more: unknown command: z (deferred)",
+	} {
+		if !strings.Contains(errb, want) {
+			t.Fatalf("deferred vs unknown: missing %q in %q", want, errb)
+		}
+	}
+}
+
+// TestPagerFoldsLongLine checks plain-character column accounting: a line
+// longer than the screen width folds at the margin and the folded segment
+// costs the screenful a line.
+func TestPagerFoldsLongLine(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "f", "abcdefgh\n")
+
+	out, errb, code := runPager(t, 24, 4, true, "q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 || errb != "" {
+		t.Fatalf("fold: code=%d err=%q", code, errb)
+	}
+	want := "abcd\nefgh\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
+	if out != want {
+		t.Fatalf("fold:\n got %q\nwant %q", out, want)
+	}
+}
+
+// TestPagerTabColumnAccounting checks that a tab advances to the next
+// 8-column stop and that overflowing the margin folds AND counts a line.
+func TestPagerTabColumnAccounting(t *testing.T) {
+	dir := t.TempDir()
+
+	// The fold costs the screenful a line: with screenful=1 it is the
+	// wrapped tab, not a newline, that makes the next character prompt.
+	f := writeFile(t, dir, "f", strings.Repeat("a", 17)+"\tX\n")
+	out, errb, code := runPager(t, 2, 20, true, " q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 || errb != "" {
+		t.Fatalf("tab accounting: code=%d err=%q", code, errb)
+	}
+	want := strings.Repeat("a", 17) + "\n\t" +
+		"\x1b[7m--More--\x1b[m\r\x1b[K" + "X\n" +
+		"\x1b[7m--More--(END)\x1b[m\r\x1b[K"
+	if out != want {
+		t.Fatalf("tab accounting:\n got %q\nwant %q", out, want)
+	}
+
+	// And the column the fold lands on is exact: 17 columns + a tab stops
+	// at 24, which is 4 columns past a 20-column margin, so exactly 16
+	// more characters fit on the folded line before the next fold.
+	f2 := writeFile(t, dir, "f2", strings.Repeat("a", 17)+"\t"+strings.Repeat("b", 17)+"\n")
+	out, errb, code = runPager(t, 24, 20, true, "q", []string{f2}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 || errb != "" {
+		t.Fatalf("tab fold column: code=%d err=%q", code, errb)
+	}
+	want = strings.Repeat("a", 17) + "\n\t" + strings.Repeat("b", 16) + "\nb\n" +
+		"\x1b[7m--More--(END)\x1b[m\r\x1b[K"
+	if out != want {
+		t.Fatalf("tab fold column:\n got %q\nwant %q", out, want)
+	}
+}
+
+// TestPagerBackspaceColumnAccounting contrasts the default rendering —
+// backspace moves the cursor back a column — with -u, where it is just
+// another printable character and so pushes the line over the margin.
+func TestPagerBackspaceColumnAccounting(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "f", "ab\bcde\n")
+
+	out, errb, code := runPager(t, 24, 4, true, "q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 || errb != "" {
+		t.Fatalf("backspace accounting: code=%d err=%q", code, errb)
+	}
+	if want := "ab\bcde\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"; out != want {
+		t.Fatalf("backspace accounting:\n got %q\nwant %q", out, want)
+	}
+
+	out, errb, code = runPager(t, 24, 4, true, "q", []string{"-u", f}, func(rc *tool.RunContext) { rc.Dir = dir })
+	if code != 0 || errb != "" {
+		t.Fatalf("-u backspace accounting: code=%d err=%q", code, errb)
+	}
+	if want := "ab\bc\nde\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"; out != want {
+		t.Fatalf("-u backspace accounting:\n got %q\nwant %q", out, want)
+	}
+}
+
+// promptWatcher is an out sink that closes seen once the prompt has been
+// flushed to it, so a test can act at the exact moment the pager is parked
+// on the command channel.
+type promptWatcher struct {
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	seen chan struct{}
+	once sync.Once
+}
+
+func (w *promptWatcher) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	if strings.Contains(w.buf.String(), "--More--") {
+		w.once.Do(func() { close(w.seen) })
+	}
+	return n, err
+}
+
+func (w *promptWatcher) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestPagerCancelWhileAwaitingCommand is the no-hang guarantee: the pager
+// is parked on a command channel that will never produce a keystroke (what
+// a real terminal looks like while nobody types), and cancellation alone
+// must unblock it.
+func TestPagerCancelWhileAwaitingCommand(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "f", "a\nb\n")
+
+	out := &promptWatcher{seen: make(chan struct{})}
+	errOut := new(bytes.Buffer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := &tool.RunContext{
+		Ctx:   ctx,
+		Dir:   dir,
+		Stdio: tool.Stdio{Out: out, Err: errOut},
+	}
+	ch := &ttyChannel{cmds: blockingReader{}, hasFd: true, close: func() error { return nil }}
+	cleanup := mockTerminal(rc.Out, ch, func() (int, int, error) { return 80, 2, nil })
+	defer cleanup()
+
+	go func() {
+		<-out.seen
+		cancel()
+	}()
+
+	done := make(chan int, 1)
+	go func() { done <- run(rc, []string{f}) }()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("cancel while awaiting command: code=%d err=%q", code, errOut.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancel while awaiting command: more did not return — the command channel read ignored cancellation")
+	}
+	if got := out.String(); !strings.HasPrefix(got, "a\n\x1b[7m--More--\x1b[m") {
+		t.Fatalf("cancel while awaiting command: got %q", got)
+	}
+}

@@ -2,6 +2,7 @@ package morecmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -75,10 +76,80 @@ func terminalSize(rc *tool.RunContext, ch *ttyChannel, nLines int) (rows, width 
 	return rows, width
 }
 
+// cmdReader adapts the controlling-terminal command channel to a
+// cancellable read. A terminal read blocks until the operator types, so a
+// plain Read would ignore a canceled context until a keystroke arrived —
+// the pager must be able to give up without one.
+type cmdReader struct {
+	runes <-chan cmdRune
+}
+
+type cmdRune struct {
+	r   rune
+	err error
+}
+
+func newCmdReader(r io.Reader) *cmdReader {
+	br := bufio.NewReader(r)
+	ch := make(chan cmdRune)
+	go func() {
+		defer close(ch)
+		for {
+			c, _, err := br.ReadRune()
+			ch <- cmdRune{r: c, err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return &cmdReader{runes: ch}
+}
+
+func (c *cmdReader) read(ctx context.Context) (rune, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case v, ok := <-c.runes:
+		if !ok {
+			return 0, io.EOF
+		}
+		return v.r, v.err
+	}
+}
+
+// recognizedCommands lists the more(1) commands POSIX defines beyond the
+// <space>/quit pair this slice implements, plus the digits that prefix a
+// count. A command in this set is refused as explicitly deferred; anything
+// outside it is refused as unknown. Either way it is never silently
+// treated as some other command.
+const recognizedCommands = "0123456789 hfbjkdusgGnNmrRvqQZ=.:?/'\n\r" +
+	"\x02\x04\x05\x06\x07\x0c\x0e\x10\x15\x19\x7f"
+
+// commandName renders a command key for a diagnostic.
+func commandName(r rune) string {
+	switch r {
+	case ' ':
+		return "space"
+	case '\n':
+		return "newline"
+	case '\r':
+		return "carriage return"
+	case 0x7f:
+		return "^?"
+	}
+	if r < 0x20 {
+		return fmt.Sprintf("^%c", r+'@')
+	}
+	return string(r)
+}
+
 type pager struct {
 	rc    *tool.RunContext
 	w     *bufio.Writer
-	cmds  *bufio.Reader
+	cmds  *cmdReader
 	o     options
 	files []string
 
@@ -87,9 +158,23 @@ type pager struct {
 	exitCode     int
 }
 
+func (p *pager) canceled() bool {
+	return p.rc.Ctx != nil && p.rc.Ctx.Err() != nil
+}
+
+// refuse reports a command this slice does not implement. Recognized
+// more(1) commands are named as deferred; the rest as unknown.
+func (p *pager) refuse(r rune) {
+	if strings.ContainsRune(recognizedCommands, r) {
+		fmt.Fprintf(p.rc.Err, "more: %s: command not supported yet (deferred)\n", commandName(r))
+		return
+	}
+	fmt.Fprintf(p.rc.Err, "more: unknown command: %s (deferred)\n", commandName(r))
+}
+
 func (p *pager) run() int {
 	for i, name := range p.files {
-		if p.rc.Ctx.Err() != nil {
+		if p.canceled() {
 			return p.exitCode
 		}
 
@@ -154,6 +239,16 @@ func (p *pager) run() int {
 	return p.exitCode
 }
 
+// wrap accounts for a column overflow: the terminal would move to the next
+// line, so fold the output there and charge the screenful a line.
+func (p *pager) wrap() {
+	for p.col > p.o.width {
+		p.linesPrinted++
+		p.col -= p.o.width
+		p.w.WriteString("\n")
+	}
+}
+
 func (p *pager) printLine(line string) bool {
 	for _, r := range line {
 		if p.linesPrinted >= p.o.screenful {
@@ -162,41 +257,30 @@ func (p *pager) printLine(line string) bool {
 			}
 		}
 
-		if p.rc.Ctx.Err() != nil {
+		if p.canceled() {
 			return false
 		}
 
-		if r == '\b' && !p.o.plain {
+		switch {
+		case r == '\b' && !p.o.plain:
 			if p.col > 0 {
 				p.col--
 			}
 			p.w.WriteRune(r)
-		} else if r == '\r' && !p.o.plain {
+		case r == '\r' && !p.o.plain:
 			p.col = 0
 			p.w.WriteRune(r)
-		} else if r == '\t' {
-			spaces := 8 - (p.col % 8)
-			p.col += spaces
-			if p.col > p.o.width {
-				p.linesPrinted++
-				p.col = spaces - (p.col - p.o.width)
-				if p.col < 0 {
-					p.col = 0
-				}
-				p.w.WriteString("\n")
-			}
+		case r == '\t':
+			p.col += 8 - (p.col % 8)
+			p.wrap()
 			p.w.WriteRune(r)
-		} else if r == '\n' {
+		case r == '\n':
 			p.linesPrinted++
 			p.col = 0
 			p.w.WriteRune(r)
-		} else {
+		default:
 			p.col++
-			if p.col > p.o.width {
-				p.linesPrinted++
-				p.col = 1
-				p.w.WriteString("\n")
-			}
+			p.wrap()
 			p.w.WriteRune(r)
 		}
 	}
@@ -205,43 +289,53 @@ func (p *pager) printLine(line string) bool {
 
 func (p *pager) prompt(msg string) bool {
 	p.w.WriteString("\x1b[7m" + msg + "\x1b[m")
-	p.w.Flush()
+	if err := p.w.Flush(); err != nil {
+		// The prompt never reached the screen; reading a reply to a
+		// prompt nobody can see would be a hang in all but name. The
+		// caller's final Flush reports the error and sets the exit code.
+		return false
+	}
 
 	for {
-		if p.rc.Ctx.Err() != nil {
+		if p.canceled() {
 			return false
 		}
-		r, _, err := p.cmds.ReadRune()
+		r, err := p.cmds.read(p.rc.Ctx)
 		if err != nil {
 			return false
 		}
 
-		if r == ' ' || r == '\n' || r == '\r' {
+		switch r {
+		case ' ':
 			p.w.WriteString("\r\x1b[K")
 			p.linesPrinted = 0
 			return true
-		} else if r == 'q' || r == 'Q' {
+		case 'q', 'Q':
 			p.w.WriteString("\r\x1b[K")
 			return false
-		} else {
+		default:
 			p.w.WriteString("\r\x1b[K")
-			fmt.Fprintf(p.rc.Err, "more: unknown command: %c (deferred)\n", r)
+			p.refuse(r)
 			p.w.WriteString("\x1b[7m" + msg + "\x1b[m")
-			p.w.Flush()
+			if err := p.w.Flush(); err != nil {
+				return false
+			}
 		}
 	}
 }
 
+// processCommand runs the -p command at a new file's first screen. It sees
+// the same command set as the interactive prompt: <space> (a no-op before
+// any output) and quit, with everything else refused rather than guessed at.
 func (p *pager) processCommand(cmd string) bool {
-	cmd = strings.TrimSpace(cmd)
-	for _, r := range cmd {
-		if r == ' ' || r == '\n' || r == '\r' {
+	for _, r := range strings.TrimSpace(cmd) {
+		switch r {
+		case ' ':
 			p.linesPrinted = 0
-			return true
-		} else if r == 'q' || r == 'Q' {
+		case 'q', 'Q':
 			return false
-		} else {
-			fmt.Fprintf(p.rc.Err, "more: unknown command: %c (deferred)\n", r)
+		default:
+			p.refuse(r)
 		}
 	}
 	return true
