@@ -25,6 +25,7 @@ import (
 
 	"github.com/qiangli/coreutils/cmds/sed/internal/gosed"
 	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
 	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/nudge"
@@ -42,7 +43,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	// A failed sed is where a BSD idiom shows up (`sed -i ''` leaves the
 	// real script read as a filename). Hint on the ERROR PATH only.
-	code := runCommandWithCType(rc, args, openCType)
+	code := runCommandWithLocales(rc, args, openCType, openCollate)
 	if code != 0 {
 		nudge.OnFailure(rc.Err, append([]string{cmd.Name}, args...), rc.Env)
 	}
@@ -50,7 +51,7 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runCommand(rc *tool.RunContext, args []string) int {
-	return runCommandWithCType(rc, args, openCType)
+	return runCommandWithLocales(rc, args, openCType, openCollate)
 }
 
 type ctypeProvider interface {
@@ -60,9 +61,52 @@ type ctypeProvider interface {
 
 type ctypeOpener func(string) (ctypeProvider, error)
 
-func openCType(name string) (ctypeProvider, error) { return ctype.Open(name) }
+type collateProvider interface {
+	bre.ByteEquivalence
+	bre.ByteEquivalenceValidity
+	bre.ByteCollationWeights
+	bre.ByteCollatingElements
+	Close() error
+}
+
+type collateOpener func(string) (collateProvider, error)
+
+func openCType(name string) (ctypeProvider, error)     { return ctype.Open(name) }
+func openCollate(name string) (collateProvider, error) { return collate.Open(name) }
 
 func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
+	return runCommandWithLocales(rc, args, opener, func(string) (collateProvider, error) {
+		return identityCollation{}, nil
+	})
+}
+
+type identityCollation struct{}
+
+func (identityCollation) Equivalents(value byte) ([]byte, error) { return []byte{value}, nil }
+func (identityCollation) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := range result {
+		result[i] = true
+	}
+	return result, nil
+}
+func (identityCollation) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	return result, nil
+}
+func (identityCollation) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := range result {
+		result[i] = true
+	}
+	return result, nil
+}
+func (identityCollation) Close() error { return nil }
+
+func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
 	// GNU's -i takes an optional attached suffix (`-i.bak`), which pflag
 	// cannot model without displaying an internal sentinel in --help.
 	// Extract every supported spelling before ordinary flag parsing.
@@ -151,13 +195,16 @@ func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener)
 
 	opts := gosed.Options{ExtendedRegex: *ereE || *ereR}
 	lcCType := locale.Resolve(rc.Env, locale.CType)
+	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	var tables *bre.LocaleByteTables
 	if lcCType != "C" && lcCType != "POSIX" {
-		provider, err := opener(lcCType)
+		provider, err := ctypeOpen(lcCType)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, err)
 			return 2
 		}
-		tables, snapshotErr := bre.SnapshotLocaleByteTables(provider)
+		var snapshotErr error
+		tables, snapshotErr = bre.SnapshotLocaleByteCtypeTables(provider)
 		closeErr := provider.Close()
 		if snapshotErr != nil {
 			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
@@ -167,6 +214,28 @@ func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener)
 			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, closeErr)
 			return 2
 		}
+	} else {
+		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
+	}
+	if lcCollate != "C" && lcCollate != "POSIX" {
+		provider, err := collateOpen(lcCollate)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sed: LC_COLLATE %q: %v\n", lcCollate, err)
+			return 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = tables.WithCollation(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "sed: LC_COLLATE %q: %v\n", lcCollate, snapshotErr)
+			return 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "sed: LC_COLLATE %q: %v\n", lcCollate, closeErr)
+			return 2
+		}
+	}
+	if lcCType != "C" && lcCType != "POSIX" || lcCollate != "C" && lcCollate != "POSIX" {
 		opts.LocaleTables = tables
 	}
 

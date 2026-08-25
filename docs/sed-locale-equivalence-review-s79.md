@@ -9,6 +9,33 @@ Reviewed surface: `pkg/bre/byte_pattern.go`, `pkg/bre/byte_pattern_ere.go`,
 `pkg/bre/byte_regexp.go`, `pkg/ctype/ctype_glibc.go`, `pkg/ctype/ctype_stub.go`,
 and the `cmds/sed` / `cmds/awk` locale plumbing.
 
+## Resolution update
+
+F2–F5 and F7 below are retained as the adversarial record of the pre-fix
+state. They are resolved by the Sprint 79 locale correction:
+
+- `sed` and `awk` now resolve `LC_CTYPE` and `LC_COLLATE` independently.
+  Character classes and case conversion use the former; equivalence classes,
+  collating symbols, and ranges use the latter.
+- The partial German hand table was removed from `pkg/ctype`. On supported
+  glibc systems, `pkg/collate` snapshots every valid single-byte equivalence
+  class from the installed locale's POSIX regex provider and copies glibc's
+  single-byte collation sequence for ranges. There is no shell-out and no
+  imported libc/GNU source or table.
+- A non-C collation provider must supply complete equivalence, range-weight,
+  and collating-element data. Missing or malformed data is an initialization
+  error, not an identity fallback.
+- Single-byte `[.x.]` elements are checked against provider validity and may be
+  range endpoints. Multi-character collating elements remain unsupported and
+  fail closed before input is read.
+
+The bounded implementation remains deliberately limited to glibc on
+Linux amd64/arm64 and the installed `de_DE.ISO-8859-1` aliases. Other non-C
+locales/platforms fail closed. The normative references are POSIX.1-2008 Issue
+7, 2016 edition [XBD 9.3.5](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/basedefs/V1_chap09.html#tag_09_03_05),
+[sed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sed.html),
+and [awk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/awk.html).
+
 Authority: POSIX.1 Issue 7 (2016) XBD 9.3.5 (RE Bracket Expression) and the
 `sed`/`awk` ENVIRONMENT sections, per `docs/reference-policy.md`.
 

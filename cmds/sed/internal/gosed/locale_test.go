@@ -45,7 +45,7 @@ func (sedTestCtype) ToLower(in []byte) ([]byte, error) {
 
 func sedLocaleTables(t *testing.T) *bre.LocaleByteTables {
 	t.Helper()
-	tables, err := bre.SnapshotLocaleByteTables(sedTestCtype{})
+	tables, err := bre.SnapshotLocaleByteCtypeTables(sedTestCtype{})
 	if err != nil {
 		t.Fatal(err)
 	}

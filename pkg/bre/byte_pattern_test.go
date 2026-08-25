@@ -39,11 +39,17 @@ func syntheticBytePatternTables() bytePatternTables {
 	}
 	fold[0xc9] = 0xe9
 	var equivalent [256][256]bool
+	var equivValid [256]bool
+	var collseq [256]byte
+	var collating [256]bool
 	for i := range equivalent {
 		equivalent[i][i] = true
+		equivValid[i] = true
+		collseq[i] = byte(i)
+		collating[i] = true
 	}
 	equivalent['a'][0xe9] = true
-	return bytePatternTables{classes: classes, equivalent: equivalent, fold: fold}
+	return bytePatternTables{classes: classes, equivalent: equivalent, equivValid: equivValid, collseq: collseq, collating: collating, fold: fold}
 }
 
 func compileSyntheticBytePattern(t *testing.T, pattern []byte, fold bool) *localeBytePattern {
@@ -179,6 +185,39 @@ func TestLocaleBytePatternClasses(t *testing.T) {
 	}
 }
 
+func TestLocaleBytePatternRangesUseCollationOrder(t *testing.T) {
+	tables := syntheticBytePatternTables()
+	// Put the synthetic high byte between a and b in collation order.
+	tables.collseq['a'], tables.collseq[0xe9], tables.collseq['b'] = 10, 11, 12
+	for _, pattern := range []string{`[a-b]`, `[[.a.]-[.b.]]`} {
+		p, err := compileLocaleBytePattern([]byte(pattern), tables, false)
+		if err != nil {
+			t.Fatalf("compile %q: %v", pattern, err)
+		}
+		for _, input := range []byte{'a', 0xe9, 'b'} {
+			if got, err := p.findSubmatchIndex([]byte{input}); err != nil || got == nil {
+				t.Errorf("%q input %#x: indices=%v err=%v", pattern, input, got, err)
+			}
+		}
+	}
+}
+
+func TestCollatingAndEquivalenceValidityAreIndependent(t *testing.T) {
+	tables := syntheticBytePatternTables()
+	tables.equivValid[1] = false
+	tables.equivalent[1] = [256]bool{}
+	if _, err := compileLocaleBytePattern([]byte{'[', '[', '=', 1, '=', ']', ']'}, tables, false); err == nil {
+		t.Fatal("provider-invalid equivalence class was accepted")
+	}
+	p, err := compileLocaleBytePattern([]byte{'[', '[', '.', 1, '.', ']', ']'}, tables, false)
+	if err != nil {
+		t.Fatalf("valid single-byte collating element: %v", err)
+	}
+	if got, err := p.findSubmatchIndex([]byte{1}); err != nil || got == nil {
+		t.Fatalf("collating element match=%v err=%v", got, err)
+	}
+}
+
 func TestLocaleBytePatternGroupsAlternationAndRepeats(t *testing.T) {
 	for _, tc := range []struct {
 		pattern string
@@ -218,7 +257,7 @@ func TestLocaleBytePatternTablesAreSnapshot(t *testing.T) {
 func TestLocaleBytePatternFailsClosed(t *testing.T) {
 	patterns := []string{
 		`\1`, `\b`, `\B`, `\<`, `\>`,
-		`[a-z]`, `[[=ab=]]`, `[[.ab.]]`, `[[:bogus:]]`, `[[:alpha:]`,
+		`[[=ab=]]`, `[[.ab.]]`, `[[:bogus:]]`, `[[:alpha:]`,
 		`\{2\}`, `\}`, `a**`, `\q`, `\`,
 	}
 	for _, pattern := range patterns {

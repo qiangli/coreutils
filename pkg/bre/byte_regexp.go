@@ -21,11 +21,22 @@ type ByteCtype interface {
 	ToLower([]byte) ([]byte, error)
 }
 
-// ByteEquivalence is the optional locale collation surface used for POSIX
-// [=x=] bracket expressions. Providers that do not implement it retain the
-// C-locale behavior where every single byte is equivalent only to itself.
+// ByteEquivalence is the locale collation surface used for POSIX [=x=]
+// bracket expressions.
 type ByteEquivalence interface {
 	Equivalents(byte) ([]byte, error)
+}
+
+type ByteEquivalenceValidity interface {
+	EquivalenceClasses() ([]bool, error)
+}
+
+type ByteCollationWeights interface {
+	CollationWeights() ([]byte, error)
+}
+
+type ByteCollatingElements interface {
+	CollatingElements() ([]bool, error)
 }
 
 // ByteRegexpSyntax selects the POSIX expression grammar.
@@ -62,9 +73,9 @@ type LocaleByteTables struct {
 	tables bytePatternTables
 }
 
-// SnapshotLocaleByteTables reads each of the twelve CType classifications for
-// all 256 bytes and one exact 256-byte lowercase mapping. It retains no
-// reference to provider.
+// SnapshotLocaleByteTables is the legacy single-provider convenience. A
+// non-C provider must implement the complete collation surface; missing data
+// is an error, never an identity fallback.
 func SnapshotLocaleByteTables(provider ByteCtype) (*LocaleByteTables, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("locale byte regexp: nil CType provider")
@@ -72,6 +83,91 @@ func SnapshotLocaleByteTables(provider ByteCtype) (*LocaleByteTables, error) {
 	tables, err := buildBytePatternTables(provider)
 	if err != nil {
 		return nil, err
+	}
+	return (&LocaleByteTables{tables: tables}).WithCollation(provider)
+}
+
+// SnapshotLocaleByteCtypeTables snapshots LC_CTYPE independently and seeds C
+// collation. Pass nil for the C/POSIX LC_CTYPE category.
+func SnapshotLocaleByteCtypeTables(provider ByteCtype) (*LocaleByteTables, error) {
+	var tables bytePatternTables
+	var err error
+	if provider == nil {
+		tables = buildCBytePatternTables()
+	} else {
+		tables, err = buildBytePatternTables(provider)
+		if err != nil {
+			return nil, err
+		}
+	}
+	seedCCollation(&tables)
+	return &LocaleByteTables{tables: tables}, nil
+}
+
+// WithCollation returns a snapshot whose LC_COLLATE half comes from provider.
+// Nil selects C/POSIX collation. Every non-nil provider must supply complete
+// equivalence, range-order, and valid-collating-element data.
+func (t *LocaleByteTables) WithCollation(provider any) (*LocaleByteTables, error) {
+	if t == nil {
+		return nil, fmt.Errorf("locale byte regexp: nil locale byte tables")
+	}
+	tables := t.tables.snapshot()
+	seedCCollation(&tables)
+	if provider == nil {
+		return &LocaleByteTables{tables: tables}, nil
+	}
+	equivalence, okEq := provider.(ByteEquivalence)
+	equivalenceValidity, okEqValidity := provider.(ByteEquivalenceValidity)
+	weights, okWeights := provider.(ByteCollationWeights)
+	elements, okElements := provider.(ByteCollatingElements)
+	if !okEq || !okEqValidity || !okWeights || !okElements {
+		return nil, fmt.Errorf("locale byte regexp: non-C collation provider lacks complete equivalence/range/element data")
+	}
+	for value := 0; value < 256; value++ {
+		members, err := equivalence.Equivalents(byte(value))
+		if err != nil {
+			return nil, fmt.Errorf("locale byte regexp: equivalence class for byte %#02x: %w", value, err)
+		}
+		tables.equivalent[value] = [256]bool{}
+		for _, member := range members {
+			tables.equivalent[value][member] = true
+		}
+	}
+	equivalenceValid, err := equivalenceValidity.EquivalenceClasses()
+	if err != nil || len(equivalenceValid) != 256 {
+		return nil, fmt.Errorf("locale byte regexp: invalid equivalence-class validity: len=%d err=%v", len(equivalenceValid), err)
+	}
+	copy(tables.equivValid[:], equivalenceValid)
+	order, err := weights.CollationWeights()
+	if err != nil || len(order) != 256 {
+		return nil, fmt.Errorf("locale byte regexp: invalid collation weights: len=%d err=%v", len(order), err)
+	}
+	copy(tables.collseq[:], order)
+	valid, err := elements.CollatingElements()
+	if err != nil || len(valid) != 256 {
+		return nil, fmt.Errorf("locale byte regexp: invalid collating elements: len=%d err=%v", len(valid), err)
+	}
+	copy(tables.collating[:], valid)
+	for value := 0; value < 256; value++ {
+		if !tables.equivValid[value] {
+			for _, member := range tables.equivalent[value] {
+				if member {
+					return nil, fmt.Errorf("locale byte regexp: invalid collating byte %#02x has a non-empty equivalence class", value)
+				}
+			}
+			continue
+		}
+		if !tables.collating[value] || !tables.equivalent[value][value] {
+			return nil, fmt.Errorf("locale byte regexp: equivalence class for byte %#02x is not reflexive", value)
+		}
+		for member, equivalent := range tables.equivalent[value] {
+			if !equivalent {
+				continue
+			}
+			if !tables.collating[member] || tables.equivalent[member] != tables.equivalent[value] {
+				return nil, fmt.Errorf("locale byte regexp: inconsistent equivalence classes for bytes %#02x and %#02x", value, member)
+			}
+		}
 	}
 	return &LocaleByteTables{tables: tables}, nil
 }
@@ -152,21 +248,52 @@ func buildBytePatternTables(provider ByteCtype) (bytePatternTables, error) {
 		return bytePatternTables{}, fmt.Errorf("locale byte regexp: lowercase table has %d bytes, want 256", len(lower))
 	}
 	copy(tables.fold[:], lower)
+	return tables, nil
+}
+
+func seedCCollation(tables *bytePatternTables) {
+	tables.equivalent = [256][256]bool{}
+	tables.equivValid = [256]bool{}
 	for value := 0; value < 256; value++ {
 		tables.equivalent[value][value] = true
+		tables.equivValid[value] = true
+		tables.collseq[value] = byte(value)
+		tables.collating[value] = value != 0
 	}
-	if provider, ok := provider.(ByteEquivalence); ok {
-		for value := 0; value < 256; value++ {
-			members, err := provider.Equivalents(byte(value))
-			if err != nil {
-				return bytePatternTables{}, fmt.Errorf("locale byte regexp: equivalence class for byte %#02x: %w", value, err)
-			}
-			for _, member := range members {
-				tables.equivalent[value][member] = true
-			}
+}
+
+func buildCBytePatternTables() bytePatternTables {
+	tables := bytePatternTables{classes: make(map[string][256]bool, 13)}
+	var alpha, alnum, blank, cntrl, digit, graph, lower, printc, punct, space, upper, xdigit [256]bool
+	for value := 0; value < 256; value++ {
+		b := byte(value)
+		upper[b] = b >= 'A' && b <= 'Z'
+		lower[b] = b >= 'a' && b <= 'z'
+		alpha[b] = upper[b] || lower[b]
+		digit[b] = b >= '0' && b <= '9'
+		alnum[b] = alpha[b] || digit[b]
+		blank[b] = b == ' ' || b == '\t'
+		cntrl[b] = b < 0x20 || b == 0x7f
+		printc[b] = b >= 0x20 && b <= 0x7e
+		graph[b] = b >= 0x21 && b <= 0x7e
+		space[b] = b == ' ' || (b >= '\t' && b <= '\r')
+		punct[b] = graph[b] && !alnum[b]
+		xdigit[b] = digit[b] || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')
+		tables.fold[b] = b
+		if upper[b] {
+			tables.fold[b] = b + ('a' - 'A')
 		}
 	}
-	return tables, nil
+	tables.classes["alpha"], tables.classes["alnum"] = alpha, alnum
+	tables.classes["blank"], tables.classes["cntrl"] = blank, cntrl
+	tables.classes["digit"], tables.classes["graph"] = digit, graph
+	tables.classes["lower"], tables.classes["print"] = lower, printc
+	tables.classes["punct"], tables.classes["space"] = punct, space
+	tables.classes["upper"], tables.classes["xdigit"] = upper, xdigit
+	word := alnum
+	word['_'] = true
+	tables.classes["word"] = word
+	return tables
 }
 
 // FindSubmatchIndex returns the leftmost-longest match and submatches as raw

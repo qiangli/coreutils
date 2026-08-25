@@ -67,6 +67,8 @@ var (
 
 	// ErrClosed is returned by Compare after the provider has been closed.
 	ErrClosed = errors.New("collate: provider is closed")
+
+	ErrInvalidCollatingElement = errors.New("collate: byte is not a valid single-byte collating element")
 )
 
 // normalizeLocale validates a requested locale name and, on success, returns the

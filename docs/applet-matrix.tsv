@@ -6,7 +6,7 @@ ast	cmds/ast		Bashy/other extension	no	no	1	6
 at	cmds/at		POSIX/Unix utility	no	yes	5	22
 atq	cmds/atq		Bashy/other extension	no	no	1	2
 atrm	cmds/atrm		Bashy/other extension	no	no	1	2
-awk	cmds/awk		POSIX/Unix utility	no	yes	3	21
+awk	cmds/awk		POSIX/Unix utility	no	yes	3	22
 b2sum	cmds/b2sum		GNU Coreutils	yes	no	1	5
 base32	cmds/base32		GNU Coreutils	yes	no	1	7
 base64	cmds/base64		GNU Coreutils	yes	no	2	9
@@ -115,7 +115,7 @@ realpath	cmds/realpath		GNU Coreutils	yes	no	1	10
 renice	cmds/renice		POSIX/Unix utility	no	yes	3	7
 rm	cmds/rm		GNU Coreutils	yes	yes	1	24
 rmdir	cmds/rmdir		GNU Coreutils	yes	yes	1	20
-sed	cmds/sed		POSIX/Unix utility	no	yes	4	62
+sed	cmds/sed		POSIX/Unix utility	no	yes	4	63
 seq	cmds/seq		GNU Coreutils	yes	no	1	3
 sha1sum	cmds/sha1sum		GNU Coreutils	yes	no	1	4
 sha224sum	cmds/sha224sum		GNU Coreutils	yes	no	1	4

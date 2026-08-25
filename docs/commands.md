@@ -156,7 +156,7 @@ Extensions (beyond coreutils, prior art in tree):
 | Command | Sources | Notes |
 |---|---|---|
 | grep | aict, u-root | -r, -i, -l, -n, -v, -E, -F, -c, -q, -m, -A/-B/-C context, ordered --include/--exclude |
-| sed | Go.Sed engine (MIT), GNU compatibility adaptations | GNU BRE/ERE scripts, addr,+N ranges, -i[SUFFIX] temporary-file in-place editing |
+| sed | Go.Sed engine (MIT), GNU compatibility adaptations | GNU BRE/ERE scripts, addr,+N ranges, -i[SUFFIX] temporary-file in-place editing; POSIX single-byte locale classes, equivalence classes, collating elements, and LC_COLLATE-ordered ranges for the bounded de_DE ISO-8859-1 provider (multi-character collating elements fail closed) |
 | find | aict, u-root | POSIX stream closed 2026-08: -H/-L/-P (and `--` closing them), -name/-iname/-path (matched in the C locale: byte-wise, ASCII classes, no LC_*/LANG variance), -type, -atime/-ctime/-mtime, -newer, -size, -empty, -perm (octal + symbolic, -/ prefixes), -user/-group/-nouser/-nogroup, -links, -xdev, -depth, -prune, -maxdepth/-mindepth, -print/-print0, **-exec ; and -exec {} +, interactive -ok** (command-wrapper tier: running the utility is find's specified behavior; argv built directly, never through a shell). Still NO: -execdir/-okdir/-delete |
 | diff | aict | -u, -r, -q (unified output) |
 | jq | gojq | pure-Go JSON filters; initial flags -c, -e, -n, -r |

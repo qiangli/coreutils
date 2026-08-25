@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -22,11 +23,43 @@ type fakeByteCtype struct {
 
 type fakeByteEquivalence struct{ *fakeByteCtype }
 
+type incompleteCollation struct{}
+
+func (incompleteCollation) Equivalents(value byte) ([]byte, error) { return []byte{value}, nil }
+
 func (p fakeByteEquivalence) Equivalents(value byte) ([]byte, error) {
-	if value == 'a' {
+	if value == 'a' || value == 0xe4 {
 		return []byte{'a', 0xe4}, nil
 	}
 	return []byte{value}, nil
+}
+
+func (p *fakeByteCtype) Equivalents(value byte) ([]byte, error) {
+	return []byte{value}, nil
+}
+
+func (p *fakeByteCtype) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := range result {
+		result[i] = true
+	}
+	return result, nil
+}
+
+func (p *fakeByteCtype) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	return result, nil
+}
+
+func (p *fakeByteCtype) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := range result {
+		result[i] = true
+	}
+	return result, nil
 }
 
 func newFakeByteCtype() *fakeByteCtype {
@@ -143,6 +176,16 @@ func TestCompileLocaleByteRegexpProviderErrors(t *testing.T) {
 	}
 	if _, err := CompileLocaleByteRegexpTables([]byte("a"), nil, ByteRegexpOptions{}); err == nil {
 		t.Fatal("nil tables accepted")
+	}
+}
+
+func TestNonCCollationFailsClosedWithoutEverySurface(t *testing.T) {
+	tables, err := SnapshotLocaleByteCtypeTables(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tables.WithCollation(incompleteCollation{}); err == nil || !strings.Contains(err.Error(), "lacks complete") {
+		t.Fatalf("incomplete provider error=%v", err)
 	}
 }
 

@@ -21,6 +21,40 @@ type fakeSedCType struct {
 	closeErr   error
 }
 
+type fakeSedCollate struct{ closeCalls int }
+
+func (p *fakeSedCollate) Equivalents(value byte) ([]byte, error) {
+	if value == 0 {
+		return nil, nil
+	}
+	if value == 'e' || value == 'E' || value == 0xe9 || value == 0xc9 {
+		return []byte{'E', 'e', 0xc9, 0xe9}, nil
+	}
+	return []byte{value}, nil
+}
+func (p *fakeSedCollate) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeSedCollate) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	return result, nil
+}
+func (p *fakeSedCollate) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeSedCollate) Close() error { p.closeCalls++; return nil }
+
 func (p *fakeSedCType) classify(b byte, member bool) (bool, error) {
 	p.classCalls++
 	if p.classErr != nil {
@@ -140,6 +174,31 @@ func TestSedCTypeResolverLifecycleAndBypass(t *testing.T) {
 	}
 }
 
+func TestSedResolvesCTypeAndCollateIndependently(t *testing.T) {
+	tests := []struct {
+		name, ctypeName, collateName, want string
+	}{
+		{"locale-ctype-c-collation", "de_DE.iso88591", "C", "A\n"},
+		{"c-ctype-locale-collation", "C", "de_DE.iso88591", "E\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LANG=C", "LC_CTYPE=" + tc.ctypeName, "LC_COLLATE=" + tc.collateName}, Stdio: tool.Stdio{In: strings.NewReader(string([]byte{0xe9, '\n'})), Out: &out, Err: &errOut}}
+			ctypeFake := &fakeSedCType{}
+			collateFake := &fakeSedCollate{}
+			code := runCommandWithLocales(rc, []string{`s/[[:alpha:]]/A/; s/[[=e=]]/E/`}, func(string) (ctypeProvider, error) {
+				return ctypeFake, nil
+			}, func(string) (collateProvider, error) {
+				return collateFake, nil
+			})
+			if code != 0 || errOut.String() != "" || out.String() != tc.want {
+				t.Fatalf("got=(%q,%q,%d), want %q", out.String(), errOut.String(), code, tc.want)
+			}
+		})
+	}
+}
+
 func TestSedCTypeBypassesOnEarlyExit(t *testing.T) {
 	opener := func(string) (ctypeProvider, error) { panic("provider opened on early exit") }
 	for _, args := range [][]string{{"--help"}, {"--version"}, {}, {"-i", "s/a/b/"}} {
@@ -199,7 +258,7 @@ func TestSedCTypeConcurrentInvocationEnvironments(t *testing.T) {
 }
 
 func TestSedLocaleCompileFailsBeforeOperandIO(t *testing.T) {
-	unsupported := []string{`s/\b/x/`, `s/\1/x/`, `s/[a-z]/x/`, `s/[[=ab=]]/x/`, `s/[[.ab.]]/x/`, `s/a\{1001\}/x/`}
+	unsupported := []string{`s/\b/x/`, `s/\1/x/`, `s/[[=ab=]]/x/`, `s/[[.ab.]]/x/`, `s/a\{1001\}/x/`}
 	for _, script := range unsupported {
 		provider := &fakeSedCType{}
 		errOut, code := runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, panicReader{}, panicWriter{}, []string{script, "definitely-missing"}, func(string) (ctypeProvider, error) { return provider, nil })

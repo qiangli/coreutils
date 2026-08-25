@@ -24,5 +24,13 @@ func Open(name string) (*Provider, error) {
 // here, so a non-nil receiver cannot exist through the public API.
 func (p *Provider) Compare(a, b string) (int, error) { return 0, ErrUnsupportedPlatform }
 
+func (p *Provider) Equivalents(c byte) ([]byte, error) { return nil, ErrUnsupportedPlatform }
+
+func (p *Provider) EquivalenceClasses() ([]bool, error) { return nil, ErrUnsupportedPlatform }
+
+func (p *Provider) CollationWeights() ([]byte, error) { return nil, ErrUnsupportedPlatform }
+
+func (p *Provider) CollatingElements() ([]bool, error) { return nil, ErrUnsupportedPlatform }
+
 // Close is a no-op on the stub.
 func (p *Provider) Close() error { return nil }

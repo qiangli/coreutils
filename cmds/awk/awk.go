@@ -15,6 +15,7 @@ import (
 	"github.com/benhoyt/goawk/parser"
 	awkregex "github.com/benhoyt/goawk/regex"
 	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
 	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
@@ -33,7 +34,7 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithCType(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) })
+	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) { return collate.Open(name) })
 }
 
 type ctypeProvider interface {
@@ -43,7 +44,49 @@ type ctypeProvider interface {
 
 type ctypeOpener func(string) (ctypeProvider, error)
 
+type collateProvider interface {
+	bre.ByteEquivalence
+	bre.ByteEquivalenceValidity
+	bre.ByteCollationWeights
+	bre.ByteCollatingElements
+	Close() error
+}
+
+type collateOpener func(string) (collateProvider, error)
+
 func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
+	return runWithLocales(rc, args, opener, func(string) (collateProvider, error) {
+		return identityCollation{}, nil
+	})
+}
+
+type identityCollation struct{}
+
+func (identityCollation) Equivalents(value byte) ([]byte, error) { return []byte{value}, nil }
+func (identityCollation) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := range result {
+		result[i] = true
+	}
+	return result, nil
+}
+func (identityCollation) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	return result, nil
+}
+func (identityCollation) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := range result {
+		result[i] = true
+	}
+	return result, nil
+}
+func (identityCollation) Close() error { return nil }
+
+func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
 	fs := tool.NewFlags(cmd.Name)
 	// Option processing ends at the first operand (the program text or,
 	// with -f, the first input file) — anything after it is a file operand
@@ -88,13 +131,16 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 
 	compiler := awkERECompiler{}
 	lcCType := locale.Resolve(rc.Env, locale.CType)
+	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	var tables *bre.LocaleByteTables
 	if lcCType != "C" && lcCType != "POSIX" {
-		provider, err := opener(lcCType)
+		provider, err := ctypeOpen(lcCType)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, err)
 			return 2
 		}
-		tables, snapshotErr := bre.SnapshotLocaleByteTables(provider)
+		var snapshotErr error
+		tables, snapshotErr = bre.SnapshotLocaleByteCtypeTables(provider)
 		closeErr := provider.Close()
 		if snapshotErr != nil {
 			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
@@ -104,6 +150,28 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, closeErr)
 			return 2
 		}
+	} else {
+		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
+	}
+	if lcCollate != "C" && lcCollate != "POSIX" {
+		provider, err := collateOpen(lcCollate)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, err)
+			return 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = tables.WithCollation(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, snapshotErr)
+			return 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, closeErr)
+			return 2
+		}
+	}
+	if lcCType != "C" && lcCType != "POSIX" || lcCollate != "C" && lcCollate != "POSIX" {
 		compiler.tables = tables
 	}
 	if len(progFiles) > 0 {

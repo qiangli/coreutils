@@ -7,12 +7,70 @@ package collate
 
 import (
 	"errors"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
 
 	"github.com/ebitengine/purego"
 )
+
+func TestEquivalenceSnapshotIsCompleteAndCaseConsistent(t *testing.T) {
+	p := openProvider(t)
+	t.Cleanup(func() { _ = p.Close() })
+
+	valid, err := p.CollatingElements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(valid) != 256 || valid[0] {
+		t.Fatalf("collating validity len=%d NUL=%v", len(valid), valid[0])
+	}
+	equivalenceValid, err := p.EquivalenceClasses()
+	if err != nil || len(equivalenceValid) != 256 {
+		t.Fatalf("equivalence validity len=%d err=%v", len(equivalenceValid), err)
+	}
+	for source := 1; source < 256; source++ {
+		members, err := p.Equivalents(byte(source))
+		if err != nil {
+			t.Fatalf("Equivalents(%#x): %v", source, err)
+		}
+		if equivalenceValid[source] && !containsByte(members, byte(source)) {
+			t.Errorf("valid byte %#x absent from its own equivalence class %x", source, members)
+		}
+		if equivalenceValid[source] && !valid[source] {
+			t.Errorf("equivalence byte %#x is not a valid collating element", source)
+		}
+		for _, member := range members {
+			reverse, err := p.Equivalents(member)
+			if err != nil || !containsByte(reverse, byte(source)) {
+				t.Errorf("asymmetric equivalence %#x -> %#x; reverse=%x err=%v", source, member, reverse, err)
+			}
+		}
+	}
+	for upper := byte('A'); upper <= 'Z'; upper++ {
+		upperMembers, _ := p.Equivalents(upper)
+		lowerMembers, _ := p.Equivalents(upper + ('a' - 'A'))
+		if !reflect.DeepEqual(upperMembers, lowerMembers) {
+			t.Errorf("letter %c/%c equivalence differs: %x vs %x", upper, upper+('a'-'A'), upperMembers, lowerMembers)
+		}
+	}
+	for _, member := range []byte{'E', 'e', 0xc8, 0xc9, 0xca, 0xcb, 0xe8, 0xe9, 0xea, 0xeb} {
+		members, _ := p.Equivalents('e')
+		if !containsByte(members, member) {
+			t.Errorf("German ISO-8859-1 [=e=] missing %#x: %x", member, members)
+		}
+	}
+}
+
+func containsByte(values []byte, want byte) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 // --- an independent oracle -------------------------------------------------
 //

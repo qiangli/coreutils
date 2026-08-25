@@ -6,6 +6,7 @@
 package collate
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -23,7 +24,12 @@ const (
 
 	// codesetItem is nl_langinfo's CODESET item on glibc (langinfo.h). Its value
 	// has been 14 for the life of glibc's ABI.
-	codesetItem = 14
+	codesetItem   = 14
+	collseqMBItem = (3 << 16) | 16
+	regExtended   = 1
+	regNoSub      = 1 << 3
+	regNoMatch    = 1
+	regECollate   = 3
 
 	// codesetLimit bounds the CODESET copy: glibc's codeset names are short
 	// static strings, so a NUL must appear well within this window. If it does
@@ -44,6 +50,10 @@ type libcBinding struct {
 	newlocale     func(mask int32, locale string, base uintptr) uintptr
 	freelocale    func(loc uintptr)
 	strcollL      func(a, b string, loc uintptr) int32
+	uselocale     func(loc uintptr) uintptr
+	regcomp       func(preg unsafe.Pointer, pattern *byte, flags int32) int32
+	regexec       func(preg unsafe.Pointer, subject *byte, nmatch uintptr, matches unsafe.Pointer, flags int32) int32
+	regfree       func(preg unsafe.Pointer)
 	nlLanginfoL   func(item int32, loc uintptr) *byte
 	errnoLocation func() *int32
 }
@@ -124,6 +134,18 @@ func loadLibcWith(libName string, ops libcLoaderOps) (*libcBinding, error) {
 	if err := bindFuncWith(&b.strcollL, handle, "strcoll_l", ops); err != nil {
 		return fail()
 	}
+	if err := bindFuncWith(&b.uselocale, handle, "uselocale", ops); err != nil {
+		return fail()
+	}
+	if err := bindFuncWith(&b.regcomp, handle, "regcomp", ops); err != nil {
+		return fail()
+	}
+	if err := bindFuncWith(&b.regexec, handle, "regexec", ops); err != nil {
+		return fail()
+	}
+	if err := bindFuncWith(&b.regfree, handle, "regfree", ops); err != nil {
+		return fail()
+	}
 	if err := bindFuncWith(&b.nlLanginfoL, handle, "nl_langinfo_l", ops); err != nil {
 		return fail()
 	}
@@ -153,8 +175,13 @@ type Provider struct {
 	locale string
 	lib    *libcBinding
 
-	collate uintptr // locale_t with LC_COLLATE set
-	ctype   uintptr // locale_t with LC_CTYPE set
+	collate     uintptr // locale_t with LC_COLLATE set
+	ctype       uintptr // locale_t with LC_CTYPE set
+	regexLocale uintptr // locale_t with LC_CTYPE and LC_COLLATE set
+	equivalent  [256][256]bool
+	equivValid  [256]bool
+	collseq     [256]byte
+	collating   [256]bool
 
 	mu     sync.RWMutex
 	closed bool
@@ -177,22 +204,30 @@ func Open(name string) (*Provider, error) {
 		return nil, err
 	}
 
-	collate, ctype, err := lib.newLocales(canonical)
+	collate, ctype, regexLocale, err := lib.newLocales(canonical)
 	if err != nil {
 		return nil, err
 	}
 	if err := lib.verifyCodeset(ctype); err != nil {
 		lib.freelocale(collate)
 		lib.freelocale(ctype)
+		lib.freelocale(regexLocale)
 		return nil, err
 	}
-	return &Provider{locale: canonical, lib: lib, collate: collate, ctype: ctype}, nil
+	equivalent, equivValid, collseq, collating, err := lib.snapshotRegexCollation(regexLocale, regexLocale)
+	if err != nil {
+		lib.freelocale(collate)
+		lib.freelocale(ctype)
+		lib.freelocale(regexLocale)
+		return nil, err
+	}
+	return &Provider{locale: canonical, lib: lib, collate: collate, ctype: ctype, regexLocale: regexLocale, equivalent: equivalent, equivValid: equivValid, collseq: collseq, collating: collating}, nil
 }
 
 // newLocales builds the two independent locale_t handles. errno is cleared and
 // read around each newlocale on a locked OS thread, because glibc's errno is
 // thread-local and newlocale reports failure only through it plus a NULL return.
-func (b *libcBinding) newLocales(name string) (collate, ctype uintptr, err error) {
+func (b *libcBinding) newLocales(name string) (collate, ctype, regexLocale uintptr, err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -201,7 +236,7 @@ func (b *libcBinding) newLocales(name string) (collate, ctype uintptr, err error
 	*errno = 0
 	collate = b.newlocale(lcCollateMask, name, 0)
 	if collate == 0 {
-		return 0, 0, classifyNewlocaleErrno(*errno)
+		return 0, 0, 0, classifyNewlocaleErrno(*errno)
 	}
 
 	*errno = 0
@@ -209,9 +244,17 @@ func (b *libcBinding) newLocales(name string) (collate, ctype uintptr, err error
 	if ctype == 0 {
 		e := *errno
 		b.freelocale(collate)
-		return 0, 0, classifyNewlocaleErrno(e)
+		return 0, 0, 0, classifyNewlocaleErrno(e)
 	}
-	return collate, ctype, nil
+	*errno = 0
+	regexLocale = b.newlocale(lcCollateMask|lcCtypeMask, name, 0)
+	if regexLocale == 0 {
+		e := *errno
+		b.freelocale(collate)
+		b.freelocale(ctype)
+		return 0, 0, 0, classifyNewlocaleErrno(e)
+	}
+	return collate, ctype, regexLocale, nil
 }
 
 // classifyNewlocaleErrno maps a newlocale errno to a sentinel. ENOENT/EINVAL are
@@ -239,6 +282,79 @@ func (b *libcBinding) verifyCodeset(ctype uintptr) error {
 		return ErrCodeset
 	}
 	return nil
+}
+
+// snapshotRegexCollation asks glibc's POSIX regex implementation for every
+// single-byte equivalence class in the requested locale. This avoids embedding
+// an incomplete, locale-specific table: glibc's installed locale provider is
+// the sole source of truth. The LC_COLLATE sequence is copied from the same
+// locale object for bracket-range expansion.
+func (b *libcBinding) snapshotRegexCollation(regexLocale, collate uintptr) ([256][256]bool, [256]bool, [256]byte, [256]bool, error) {
+	var equivalent [256][256]bool
+	var equivValid [256]bool
+	var order [256]byte
+	var valid [256]bool
+
+	seq := b.nlLanginfoL(collseqMBItem, collate)
+	if seq == nil {
+		return equivalent, equivValid, order, valid, ErrInitFailure
+	}
+	copy(order[:], unsafe.Slice(seq, len(order)))
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	previous := b.uselocale(regexLocale)
+	if previous == 0 {
+		return equivalent, equivValid, order, valid, ErrInitFailure
+	}
+	defer b.uselocale(previous)
+
+	for source := 1; source < 256; source++ {
+		equivalencePattern := [8]byte{'[', '[', '=', byte(source), '=', ']', ']', 0}
+		collatingPattern := [8]byte{'[', '[', '.', byte(source), '.', ']', ']', 0}
+		// regex_t is opaque. This aligned buffer is deliberately larger than
+		// glibc's public regex_t on every supported ABI; regfree sees the same
+		// address that regcomp initialized.
+		var compiled, collatingCompiled [128]uintptr
+		equivalenceCode := b.regcomp(unsafe.Pointer(&compiled[0]), &equivalencePattern[0], regExtended|regNoSub)
+		collatingCode := b.regcomp(unsafe.Pointer(&collatingCompiled[0]), &collatingPattern[0], regExtended|regNoSub)
+		if collatingCode == 0 {
+			valid[source] = true
+			b.regfree(unsafe.Pointer(&collatingCompiled[0]))
+		} else if collatingCode != regECollate {
+			if equivalenceCode == 0 {
+				b.regfree(unsafe.Pointer(&compiled[0]))
+			}
+			return equivalent, equivValid, order, valid, fmt.Errorf("%w: byte %#02x collating regcomp=%d", ErrInitFailure, source, collatingCode)
+		}
+		if equivalenceCode == regECollate {
+			continue
+		}
+		if equivalenceCode != 0 {
+			return equivalent, equivValid, order, valid, fmt.Errorf("%w: byte %#02x equivalence regcomp=%d", ErrInitFailure, source, equivalenceCode)
+		}
+		if !valid[source] {
+			b.regfree(unsafe.Pointer(&compiled[0]))
+			return equivalent, equivValid, order, valid, fmt.Errorf("%w: byte %#02x has equivalence but no collating element", ErrInitFailure, source)
+		}
+		equivValid[source] = true
+		for candidate := 1; candidate < 256; candidate++ {
+			subject := [2]byte{byte(candidate), 0}
+			switch match := b.regexec(unsafe.Pointer(&compiled[0]), &subject[0], 0, nil, 0); match {
+			case 0:
+				equivalent[source][candidate] = true
+			case regNoMatch:
+			default:
+				b.regfree(unsafe.Pointer(&compiled[0]))
+				return equivalent, equivValid, order, valid, fmt.Errorf("%w: equivalence byte %#02x candidate %#02x regexec=%d", ErrInitFailure, source, candidate, match)
+			}
+		}
+		b.regfree(unsafe.Pointer(&compiled[0]))
+		if !equivalent[source][source] {
+			return equivalent, equivValid, order, valid, fmt.Errorf("%w: non-reflexive equivalence byte %#02x", ErrInitFailure, source)
+		}
+	}
+	return equivalent, equivValid, order, valid, nil
 }
 
 // goStringBounded copies a NUL-terminated C string into a Go string, reading at
@@ -287,6 +403,56 @@ func (p *Provider) Compare(a, b string) (int, error) {
 	}
 }
 
+// Equivalents returns the complete single-byte equivalence class for c.
+func (p *Provider) Equivalents(c byte) ([]byte, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return nil, ErrClosed
+	}
+	if !p.equivValid[c] {
+		return nil, nil
+	}
+	result := make([]byte, 0, 8)
+	for candidate, member := range p.equivalent[c] {
+		if member {
+			result = append(result, byte(candidate))
+		}
+	}
+	return result, nil
+}
+
+func (p *Provider) EquivalenceClasses() ([]bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return nil, ErrClosed
+	}
+	return append([]bool(nil), p.equivValid[:]...), nil
+}
+
+// CollationWeights returns glibc's single-byte LC_COLLATE sequence.
+func (p *Provider) CollationWeights() ([]byte, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return nil, ErrClosed
+	}
+	return append([]byte(nil), p.collseq[:]...), nil
+}
+
+// CollatingElements reports which individual bytes glibc accepts as named
+// collating elements. NUL is always false because POSIX regex strings cannot
+// represent it.
+func (p *Provider) CollatingElements() ([]bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return nil, ErrClosed
+	}
+	return append([]bool(nil), p.collating[:]...), nil
+}
+
 // Close frees the provider's locale_t handles. It is safe to call more than once
 // and safe against concurrent Compare calls: the write lock waits for in-flight
 // comparisons to finish, and the closed flag stops later ones deterministically.
@@ -304,6 +470,10 @@ func (p *Provider) Close() error {
 	if p.ctype != 0 {
 		p.lib.freelocale(p.ctype)
 		p.ctype = 0
+	}
+	if p.regexLocale != 0 {
+		p.lib.freelocale(p.regexLocale)
+		p.regexLocale = 0
 	}
 	return nil
 }

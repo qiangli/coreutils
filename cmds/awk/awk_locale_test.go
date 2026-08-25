@@ -17,6 +17,40 @@ type fakeAwkCType struct {
 	closeCalls int
 }
 
+type fakeAwkCollate struct{ closeCalls int }
+
+func (p *fakeAwkCollate) Equivalents(value byte) ([]byte, error) {
+	if value == 0 {
+		return nil, nil
+	}
+	if value == 'e' || value == 'E' || value == 0xe9 || value == 0xc9 {
+		return []byte{'E', 'e', 0xc9, 0xe9}, nil
+	}
+	return []byte{value}, nil
+}
+func (p *fakeAwkCollate) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeAwkCollate) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	return result, nil
+}
+func (p *fakeAwkCollate) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeAwkCollate) Close() error { p.closeCalls++; return nil }
+
 func (p *fakeAwkCType) classify(b byte, member bool) (bool, error) {
 	if p.classErr != nil {
 		return false, p.classErr
@@ -88,6 +122,32 @@ func TestAwkLocaleRegexEveryEndpoint(t *testing.T) {
 			out, errOut, code := runAwkLocale([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader(tc.input), []string{tc.program}, func(string) (ctypeProvider, error) { return provider, nil })
 			if code != 0 || errOut != "" || out != tc.want || provider.closeCalls != 1 {
 				t.Fatalf("got=(%q,%q,%d) close=%d want=%q", out, errOut, code, provider.closeCalls, tc.want)
+			}
+		})
+	}
+}
+
+func TestAwkResolvesCTypeAndCollateIndependently(t *testing.T) {
+	tests := []struct {
+		name, ctypeName, collateName, want string
+	}{
+		{"locale-ctype-c-collation", "de_DE.iso88591", "C", "1 0\n"},
+		{"c-ctype-locale-collation", "C", "de_DE.iso88591", "0 1\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LANG=C", "LC_CTYPE=" + tc.ctypeName, "LC_COLLATE=" + tc.collateName}, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}}
+			ctypeFake := &fakeAwkCType{}
+			collateFake := &fakeAwkCollate{}
+			program := `BEGIN { s="\351"; print (s ~ "[[:alpha:]]"), (s ~ "[[=e=]]") }`
+			code := runWithLocales(rc, []string{program}, func(string) (ctypeProvider, error) {
+				return ctypeFake, nil
+			}, func(string) (collateProvider, error) {
+				return collateFake, nil
+			})
+			if code != 0 || errOut.String() != "" || out.String() != tc.want {
+				t.Fatalf("got=(%q,%q,%d), want %q", out.String(), errOut.String(), code, tc.want)
 			}
 		})
 	}
