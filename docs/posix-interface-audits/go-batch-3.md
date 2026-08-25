@@ -254,7 +254,6 @@ follow `LC_TIME`.
 
 Evidence:
 - `cmds/ls/ls_test.go#TestDefaultSortAndOnePerLine`
-- `cmds/ls/ls_test.go#TestBareUser`
 - `cmds/ls/ls_posix_test.go#TestHideControlChars`
 - `cmds/ls/ls_posix_test.go#TestOrderLongAndOneFormat`
 - `cmds/ls/ls_test.go#TestLongFormat`
