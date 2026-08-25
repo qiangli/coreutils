@@ -193,6 +193,19 @@ func TestXargsReplaceUsesWholeLine(t *testing.T) {
 	}
 }
 
+func TestXargsReplaceIssue7Limits(t *testing.T) {
+	_, errOut, code := runXargs(t, "value\n", "-I{}", "echo", "{}", "{}", "{}", "{}", "{}", "{}")
+	if code == 0 || !strings.Contains(errOut, "five arguments") {
+		t.Fatalf("-I replacement argument limit: code=%d stderr=%q", code, errOut)
+	}
+
+	long := strings.Repeat("x", 256)
+	_, errOut, code = runXargs(t, long+"\n", "-I{}", "echo", "{}")
+	if code == 0 || !strings.Contains(errOut, "255 bytes") {
+		t.Fatalf("-I constructed argument limit: code=%d stderr=%q", code, errOut)
+	}
+}
+
 func TestXargsReplaceIgnoresOnlyLeadingUnquotedUnescapedBlanks(t *testing.T) {
 	input := " \tplain\n'  'quoted\n\\ escaped\n"
 	out, errOut, code := runXargs(t, input, "-I{}", "echo", "[{}]")
@@ -238,6 +251,17 @@ func TestXargsDefaultSizeBatchesBeforeExecLimit(t *testing.T) {
 	out, errOut, code := runXargsEnv(t, t.TempDir(), nil, "aaa bbb ccc\n", "echo")
 	if code != 0 || errOut != "" || out != "aaa\nbbb\nccc\n" {
 		t.Fatalf("default size batching: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsSizeLimitAppliesToEmptyInvocation(t *testing.T) {
+	original := systemArgMax
+	t.Cleanup(func() { systemArgMax = original })
+	systemArgMax = func() int { return argMaxHeadroom + 3 }
+
+	_, errOut, code := runXargsEnv(t, t.TempDir(), nil, "", "echo", "fixed")
+	if code == 0 || !strings.Contains(errOut, "command exceeds -s size limit") {
+		t.Fatalf("empty-input command size: code=%d stderr=%q", code, errOut)
 	}
 }
 

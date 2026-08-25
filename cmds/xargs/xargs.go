@@ -561,11 +561,23 @@ func unescapeDelim(s string) rune {
 func plan(command []string, items []inputItem, o options) ([][]string, error) {
 	// Replace mode: one invocation per item, substituting the replace-str.
 	if o.replace != "" {
+		replacementArgs := 0
+		for _, a := range command {
+			if strings.Contains(a, o.replace) {
+				replacementArgs++
+			}
+		}
+		if replacementArgs > 5 {
+			return nil, fmt.Errorf("-I replacement occurs in more than five arguments")
+		}
 		var batches [][]string
 		for _, it := range items {
 			argv := make([]string, len(command))
 			for k, a := range command {
 				argv[k] = strings.ReplaceAll(a, o.replace, it.value)
+				if strings.Contains(a, o.replace) && len(argv[k]) > 255 {
+					return nil, fmt.Errorf("constructed argument exceeds 255 bytes")
+				}
 			}
 			if argvSize(argv) > o.maxChars {
 				return nil, fmt.Errorf("constructed command exceeds size limit")
@@ -575,15 +587,18 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 		return batches, nil // empty items ⇒ no invocations
 	}
 
+	baseSize := argvSize(command)
 	if len(items) == 0 {
 		if o.noRunEmpty {
 			return nil, nil
+		}
+		if o.maxChars > 0 && baseSize > o.maxChars {
+			return nil, fmt.Errorf("command exceeds -s size limit")
 		}
 		return [][]string{append([]string(nil), command...)}, nil // run once, no extra args
 	}
 
 	var batches [][]string
-	baseSize := argvSize(command)
 	if o.maxChars > 0 && baseSize > o.maxChars {
 		return nil, fmt.Errorf("command exceeds -s size limit")
 	}

@@ -211,7 +211,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
 | `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 2 | 29 |
-| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 35 |
+| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 37 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 
