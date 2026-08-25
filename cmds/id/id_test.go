@@ -313,12 +313,42 @@ func TestIDDefaultReportsRealAndEffectiveWhenDifferent(t *testing.T) {
 	}
 }
 
+// Current-process group reporting comes from getgroups(2), not from the
+// account database. The process may have changed its supplementary vector
+// after login, so querying user.Current().GroupIds() would be stale.
+func TestIDCurrentGroupsUseLiveProcessVector(t *testing.T) {
+	oldIDs, oldGroups := processIDsFn, processGroupIDsFn
+	t.Cleanup(func() { processIDsFn, processGroupIDsFn = oldIDs, oldGroups })
+	processIDsFn = func(real bool) (uid, gid string) {
+		if real {
+			return "1000", "2000"
+		}
+		return "1000", "3000"
+	}
+	processGroupIDsFn = func() ([]string, error) {
+		return []string{"7000", "7001", "7000"}, nil
+	}
+
+	out, errb, code := runTool(t, "-G")
+	if code != 0 || errb != "" || strings.TrimSpace(out) != "3000 2000 7000 7001" {
+		t.Fatalf("id -G: code=%d out=%q err=%q", code, out, errb)
+	}
+	out, errb, code = runTool(t)
+	if code != 0 || errb != "" {
+		t.Fatalf("id: code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, " groups=7000,7001") {
+		t.Fatalf("default report did not use process groups: %q", out)
+	}
+}
+
 // When the effective IDs equal the real IDs (the ordinary, non-setuid case),
 // no euid=/egid= fields appear.
 func TestIDDefaultOmitsEffectiveWhenEqual(t *testing.T) {
-	old := processIDsFn
-	t.Cleanup(func() { processIDsFn = old })
+	oldIDs, oldGroups := processIDsFn, processGroupIDsFn
+	t.Cleanup(func() { processIDsFn, processGroupIDsFn = oldIDs, oldGroups })
 	processIDsFn = func(real bool) (uid, gid string) { return "1000", "1000" }
+	processGroupIDsFn = func() ([]string, error) { return nil, nil }
 	out, _, code := runTool(t)
 	if code != 0 {
 		t.Fatalf("code=%d", code)
@@ -326,7 +356,7 @@ func TestIDDefaultOmitsEffectiveWhenEqual(t *testing.T) {
 	if strings.Contains(out, "euid=") || strings.Contains(out, "egid=") {
 		t.Errorf("no euid=/egid= expected when effective equals real: %q", out)
 	}
-	if !strings.HasPrefix(out, "uid=1000 gid=1000 groups=") {
+	if strings.Contains(out, "groups=") || !strings.HasPrefix(out, "uid=1000 gid=1000\n") {
 		t.Errorf("default output %q malformed", out)
 	}
 }

@@ -31,6 +31,12 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 // the default format's euid=/egid= reporting — without actually being setuid.
 var processIDsFn = processIDs
 
+// processGroupIDsFn returns the invoking process's supplementary groups. It
+// deliberately does not query the passwd/group database: the live process may
+// have had its group vector changed since login. Tests replace the seam to
+// model that distinction without mutating their own credentials.
+var processGroupIDsFn = processGroupIDs
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	uFlag := fs.BoolP("user", "u", false, "print only the effective user ID")
@@ -138,7 +144,7 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 		results = append(results, val)
 		return results, nil
 	case GFlag:
-		gids, err := groupIDs(u)
+		gids, err := allGroupIDs(u, current, rFlag)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
 		}
@@ -177,10 +183,12 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 			fmt.Fprintf(&b, " egid=%s", decorate(egid, lookupGroupName(egid)))
 		}
 	}
-	b.WriteString(" groups=")
-	gids, err := groupIDs(u)
+	gids, err := supplementaryGroupIDs(u, current)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
+	}
+	if len(gids) > 0 {
+		b.WriteString(" groups=")
 	}
 	for i, gid := range gids {
 		if i > 0 {
@@ -192,18 +200,68 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 	return results, nil
 }
 
-func groupIDs(u *user.User) ([]string, error) {
+// allGroupIDs implements POSIX id -G. For the invoking process the effective
+// and real groups are followed by the actual getgroups(2) vector. For a USER
+// operand, the account's primary group and database memberships are used.
+func allGroupIDs(u *user.User, current, realFirst bool) ([]string, error) {
+	if current {
+		_, rgid := processIDsFn(true)
+		_, egid := processIDsFn(false)
+		ordered := []string{egid, rgid}
+		if realFirst {
+			ordered[0], ordered[1] = ordered[1], ordered[0]
+		}
+		gids, err := processGroupIDsFn()
+		if err != nil {
+			return nil, err
+		}
+		return uniqueNonempty(append(ordered, gids...)), nil
+	}
 	gids, err := u.GroupIds()
 	if err != nil {
 		return nil, err
 	}
-	ordered := []string{u.Gid}
-	for _, g := range gids {
-		if g != u.Gid {
-			ordered = append(ordered, g)
+	return uniqueNonempty(append([]string{u.Gid}, gids...)), nil
+}
+
+// supplementaryGroupIDs implements the groups= field of the default report.
+// Unlike -G, POSIX places only supplementary/multiple memberships here; the
+// real and effective primary group IDs already have gid=/egid= fields.
+func supplementaryGroupIDs(u *user.User, current bool) ([]string, error) {
+	if current {
+		gids, err := processGroupIDsFn()
+		if err != nil {
+			return nil, err
+		}
+		return uniqueNonempty(gids), nil
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(gids))
+	for _, gid := range gids {
+		if gid != u.Gid {
+			result = append(result, gid)
 		}
 	}
-	return ordered, nil
+	return uniqueNonempty(result), nil
+}
+
+func uniqueNonempty(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
 }
 
 // idUserName resolves the user name for a numeric uid, used for the effective

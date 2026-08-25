@@ -13,3 +13,15 @@ func processIDs(real bool) (uid, gid string) {
 	}
 	return strconv.Itoa(os.Geteuid()), strconv.Itoa(os.Getegid())
 }
+
+func processGroupIDs() ([]string, error) {
+	gids, err := os.Getgroups()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(gids))
+	for i, gid := range gids {
+		result[i] = strconv.Itoa(gid)
+	}
+	return result, nil
+}

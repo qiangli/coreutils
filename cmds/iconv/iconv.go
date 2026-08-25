@@ -14,6 +14,7 @@
 package iconvcmd
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -106,15 +107,31 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 0
 	}
+	// POSIX leaves the result undefined when both -f and -t are omitted. This
+	// implementation fails closed instead of guessing that an accidental bare
+	// invocation meant a locale-to-itself copy.
+	if !fs.Changed("from-code") && !fs.Changed("to-code") {
+		return tool.UsageError(rc, cmd, "at least one of -f FROMCODE or -t TOCODE is required")
+	}
 	// POSIX synopsis: -f and -t may each be omitted, in which case the codeset
 	// of the current locale (LC_CTYPE) is used. This is not a usage error.
 	fromCode := *fromName
 	if fromCode == "" {
-		fromCode = localeCodeset(rc.Env)
+		var err error
+		fromCode, err = localeCodeset(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "iconv: %v\n", err)
+			return 1
+		}
 	}
 	toCode := *toName
 	if toCode == "" {
-		toCode = localeCodeset(rc.Env)
+		var err error
+		toCode, err = localeCodeset(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "iconv: %v\n", err)
+			return 1
+		}
 	}
 
 	from, err := lookupEncoding(fromCode)
@@ -146,7 +163,23 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	newDecoder := func() transform.Transformer {
 		if *discardInvalid {
-			return transform.Chain(from.NewDecoder(), dropReplacement{})
+			switch encodingClass(fromCode) {
+			case "utf8":
+				return transform.Chain(discardInvalidUTF8{}, from.NewDecoder())
+			case "utf16":
+				return transform.Chain(&discardInvalidUTF16{}, from.NewDecoder())
+			case "utf16be":
+				return transform.Chain(&discardInvalidUTF16{order: byteOrderBE, fixed: true}, from.NewDecoder())
+			case "utf16le":
+				return transform.Chain(&discardInvalidUTF16{order: byteOrderLE, fixed: true}, from.NewDecoder())
+			case "gb18030":
+				return &discardInvalidGB18030Decoder{enc: from}
+			default:
+				// These carried encodings cannot represent U+FFFD. Therefore any
+				// replacement rune emitted by their lenient decoder necessarily
+				// denotes malformed source input, not a literal character.
+				return transform.Chain(from.NewDecoder(), dropReplacement{})
+			}
 		}
 		return from.NewDecoder()
 	}
@@ -194,16 +227,47 @@ func run(rc *tool.RunContext, args []string) int {
 
 // localeCodeset returns the codeset iconv uses for an omitted -f/-t, per the
 // POSIX synopsis: the codeset of the current locale's LC_CTYPE category. A
-// name of the form "lang_TERR.CODESET[@mod]" yields CODESET; the C/POSIX
-// locale (or a name with no codeset) yields US-ASCII, the codeset of the
-// portable character set, matching the deterministic LC_ALL=C contract.
-func localeCodeset(env []string) string {
+// name of the form "lang_TERR.CODESET[@mod]" yields CODESET. C/POSIX maps to
+// US-ASCII, C.UTF-8 to UTF-8, and the carried unqualified de_DE locale to
+// ISO-8859-1. Any other unqualified locale fails closed.
+func localeCodeset(env []string) (string, error) {
 	name := locale.Resolve(env, locale.CType)
 	name, _, _ = strings.Cut(name, "@")
-	if _, cs, ok := strings.Cut(name, "."); ok && cs != "" {
-		return cs
+	base, cs, hasCodeset := strings.Cut(name, ".")
+	if hasCodeset && cs != "" {
+		if base == "C" && encodingClass(cs) == "utf8" {
+			return "UTF-8", nil
+		}
+		return cs, nil
 	}
-	return "US-ASCII"
+	switch base {
+	case "C", "POSIX":
+		return "US-ASCII", nil
+	case "de_DE":
+		// The unqualified de_DE locale in the embedded certification corpus
+		// is the carried ISO-8859-1 locale, matching pkg/locale's providers.
+		return "ISO-8859-1", nil
+	default:
+		return "", fmt.Errorf("LC_CTYPE locale %q has no carried default codeset", name)
+	}
+}
+
+func encodingClass(name string) string {
+	n := strings.ToUpper(strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.TrimSpace(name)))
+	switch n {
+	case "UTF8":
+		return "utf8"
+	case "UTF16":
+		return "utf16"
+	case "UTF16BE":
+		return "utf16be"
+	case "UTF16LE":
+		return "utf16le"
+	case "GB18030":
+		return "gb18030"
+	default:
+		return ""
+	}
 }
 
 // dropInvalid wraps a transform.Transformer so that a malformed-input or
@@ -243,9 +307,196 @@ func (d dropInvalid) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err
 				size = 1
 			}
 			nSrc += size
-			d.t.Reset()
 		}
 	}
+}
+
+// discardInvalidUTF8 omits only malformed UTF-8 encodings. In particular, a
+// valid literal U+FFFD (EF BF BD) passes through unchanged; filtering decoded
+// replacement runes cannot make that distinction.
+type discardInvalidUTF8 struct{}
+
+func (discardInvalidUTF8) Reset() {}
+
+func (discardInvalidUTF8) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+	for nSrc < len(src) {
+		if !utf8.FullRune(src[nSrc:]) {
+			if !atEOF {
+				return nDst, nSrc, transform.ErrShortSrc
+			}
+			nSrc++ // incomplete trailing encoding
+			continue
+		}
+		_, size := utf8.DecodeRune(src[nSrc:])
+		if size == 1 && src[nSrc] >= utf8.RuneSelf {
+			nSrc++ // malformed encoding, not a literal RuneError
+			continue
+		}
+		if nDst+size > len(dst) {
+			return nDst, nSrc, transform.ErrShortDst
+		}
+		copy(dst[nDst:], src[nSrc:nSrc+size])
+		nDst += size
+		nSrc += size
+	}
+	return nDst, nSrc, nil
+}
+
+type byteOrder uint8
+
+const (
+	byteOrderUnknown byteOrder = iota
+	byteOrderBE
+	byteOrderLE
+)
+
+// discardInvalidUTF16 validates UTF-16 code units before x/text's lenient
+// decoder. The zero order means BOM-selected UTF-16; fixed orders implement
+// UTF-16BE/LE. Invalid or incomplete surrogate units are omitted while valid
+// U+FFFD units are preserved.
+type discardInvalidUTF16 struct {
+	order byteOrder
+	fixed bool
+}
+
+func (d *discardInvalidUTF16) Reset() {
+	if !d.fixed {
+		d.order = byteOrderUnknown
+	}
+}
+
+func (d *discardInvalidUTF16) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+	order := d.order
+	if order == byteOrderUnknown {
+		if len(src) < 2 {
+			if !atEOF {
+				return 0, 0, transform.ErrShortSrc
+			}
+			return 0, len(src), nil
+		}
+		switch {
+		case src[0] == 0xfe && src[1] == 0xff:
+			order = byteOrderBE
+		case src[0] == 0xff && src[1] == 0xfe:
+			order = byteOrderLE
+		default:
+			// Let the downstream ExpectBOM decoder issue its normal error.
+			if len(dst) < 2 {
+				return 0, 0, transform.ErrShortDst
+			}
+			copy(dst, src[:2])
+			return 2, 2, nil
+		}
+		d.order = order
+		if len(dst) < 2 {
+			return 0, 0, transform.ErrShortDst
+		}
+		copy(dst, src[:2])
+		nDst, nSrc = 2, 2
+	}
+	unit := func(p []byte) uint16 {
+		if order == byteOrderLE {
+			return uint16(p[0]) | uint16(p[1])<<8
+		}
+		return uint16(p[0])<<8 | uint16(p[1])
+	}
+	for nSrc < len(src) {
+		if len(src)-nSrc < 2 {
+			if !atEOF {
+				return nDst, nSrc, transform.ErrShortSrc
+			}
+			return nDst, len(src), nil
+		}
+		u := unit(src[nSrc:])
+		size := 2
+		if u >= 0xd800 && u <= 0xdbff {
+			if len(src)-nSrc < 4 {
+				if !atEOF {
+					return nDst, nSrc, transform.ErrShortSrc
+				}
+				nSrc += 2
+				continue
+			}
+			lo := unit(src[nSrc+2:])
+			if lo < 0xdc00 || lo > 0xdfff {
+				nSrc += 2
+				continue
+			}
+			size = 4
+		} else if u >= 0xdc00 && u <= 0xdfff {
+			nSrc += 2
+			continue
+		}
+		if nDst+size > len(dst) {
+			return nDst, nSrc, transform.ErrShortDst
+		}
+		copy(dst[nDst:], src[nSrc:nSrc+size])
+		nDst += size
+		nSrc += size
+	}
+	return nDst, nSrc, nil
+}
+
+// discardInvalidGB18030Decoder decodes one stateless GB18030 character at a
+// time. That lets it distinguish a genuine encoded U+FFFD from an undefined
+// code point that x/text's lenient decoder also renders as U+FFFD.
+type discardInvalidGB18030Decoder struct{ enc encoding.Encoding }
+
+func (d *discardInvalidGB18030Decoder) Reset() {}
+
+func (d *discardInvalidGB18030Decoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+	for nSrc < len(src) {
+		b := src[nSrc]
+		size := 0
+		switch {
+		case b <= 0x80: // ASCII plus GB18030's single-byte euro extension
+			size = 1
+		case b >= 0x81 && b <= 0xfe:
+			if len(src)-nSrc < 2 {
+				if !atEOF {
+					return nDst, nSrc, transform.ErrShortSrc
+				}
+				nSrc++
+				continue
+			}
+			b2 := src[nSrc+1]
+			switch {
+			case (b2 >= 0x40 && b2 <= 0x7e) || (b2 >= 0x80 && b2 <= 0xfe):
+				size = 2
+			case b2 >= 0x30 && b2 <= 0x39:
+				if len(src)-nSrc < 4 {
+					if !atEOF {
+						return nDst, nSrc, transform.ErrShortSrc
+					}
+					nSrc++
+					continue
+				}
+				if src[nSrc+2] >= 0x81 && src[nSrc+2] <= 0xfe && src[nSrc+3] >= 0x30 && src[nSrc+3] <= 0x39 {
+					size = 4
+				}
+			}
+		}
+		if size == 0 {
+			nSrc++
+			continue
+		}
+		var decoded [utf8.UTFMax]byte
+		n, consumed, decodeErr := d.enc.NewDecoder().Transform(decoded[:], src[nSrc:nSrc+size], true)
+		if decodeErr != nil || consumed != size || (bytes.Equal(decoded[:n], []byte("�")) && !bytes.Equal(src[nSrc:nSrc+size], []byte{0x84, 0x31, 0xa4, 0x37})) {
+			if consumed < 1 {
+				consumed = 1
+			}
+			nSrc += consumed
+			continue
+		}
+		if nDst+n > len(dst) {
+			return nDst, nSrc, transform.ErrShortDst
+		}
+		copy(dst[nDst:], decoded[:n])
+		nDst += n
+		nSrc += size
+	}
+	return nDst, nSrc, nil
 }
 
 // dropReplacement removes U+FFFD runes from a UTF-8 stream. Under iconv -c it

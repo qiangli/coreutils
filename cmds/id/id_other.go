@@ -11,3 +11,11 @@ func processIDs(bool) (uid, gid string) {
 	}
 	return u.Uid, u.Gid
 }
+
+func processGroupIDs() ([]string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return nil, err
+	}
+	return u.GroupIds()
+}

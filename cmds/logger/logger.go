@@ -100,11 +100,14 @@ func run(rc *tool.RunContext, args []string) (status int) {
 	// connection). A finalization failure means the log may not hold what
 	// logger reported it sent, so it must surface in the exit status rather
 	// than be dropped by a bare `defer s.Close()`. The named return lets this
-	// run after every exit path while never masking an earlier failure.
+	// run after every exit path. A close failure is always diagnosed; when an
+	// earlier operation has already failed it retains the same non-zero status.
 	defer func() {
-		if cerr := s.Close(); cerr != nil && status == 0 {
+		if cerr := s.Close(); cerr != nil {
 			fmt.Fprintf(rc.Err, "logger: %v\n", cerr)
-			status = 1
+			if status == 0 {
+				status = 1
+			}
 		}
 	}()
 

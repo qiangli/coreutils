@@ -64,7 +64,8 @@ func loginName() string {
 // loginNameFromLoginUID resolves the session login user on Linux from
 // /proc/self/loginuid, the kernel's audit record of who logged in. This
 // value persists across su/sudo, matching getlogin(). An unset login uid
-// (4294967295) or an absent /proc yields "" so the caller can fall back.
+// (4294967295) or an absent /proc yields "" so logname can report the POSIX
+// required failure; it must not substitute the process's effective account.
 func loginNameFromLoginUID() string {
 	if runtime.GOOS != "linux" {
 		return ""

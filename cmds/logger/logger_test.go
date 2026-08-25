@@ -334,8 +334,8 @@ func TestCloseFailureIsReported(t *testing.T) {
 	}
 }
 
-// A Close() failure must not overwrite an earlier, more specific diagnostic:
-// a send failure already set exit 1, and its message is the one that matters.
+// A Close() failure must be diagnosed even after an earlier failure. The
+// earlier non-zero status is retained, and neither failure is hidden.
 func TestSendFailureIsNotMaskedByClose(t *testing.T) {
 	f := install(t, nil)
 	f.sendErr = errors.New("write failed")
@@ -347,8 +347,8 @@ func TestSendFailureIsNotMaskedByClose(t *testing.T) {
 	if !strings.Contains(errOut, "write failed") {
 		t.Errorf("stderr = %q, want the send error preserved", errOut)
 	}
-	if strings.Contains(errOut, "flush failed") {
-		t.Errorf("stderr = %q, close error must not mask the send error", errOut)
+	if !strings.Contains(errOut, "flush failed") {
+		t.Errorf("stderr = %q, want the close error diagnosed too", errOut)
 	}
 }
 

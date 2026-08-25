@@ -3,6 +3,7 @@ package iconvcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -130,10 +131,10 @@ func TestOmittedEncodingUsesLocaleCodeset(t *testing.T) {
 	if code != 0 || errout != "" || string(out) != "abc" {
 		t.Fatalf("omitted -t: code=%d out=%q err=%q", code, string(out), errout)
 	}
-	// Both omitted: US-ASCII round-trip.
+	// POSIX leaves both omitted undefined; this implementation fails closed.
 	code, out, errout = invoke(t, "abc")
-	if code != 0 || errout != "" || string(out) != "abc" {
-		t.Fatalf("both omitted: code=%d out=%q err=%q", code, string(out), errout)
+	if code != 2 || len(out) != 0 || !strings.Contains(errout, "at least one") {
+		t.Fatalf("both omitted must fail closed: code=%d out=%q err=%q", code, string(out), errout)
 	}
 	// The default OUTPUT codeset is genuinely US-ASCII, not a silent UTF-8: a
 	// non-ASCII character has no ASCII representation and fails to encode.
@@ -154,6 +155,75 @@ func TestOmittedEncodingHonorsLocaleCodeset(t *testing.T) {
 	// Omitted -f resolves to ISO-8859-1, so 0xe9 decodes to é and encodes as UTF-8.
 	if code := run(rc, []string{"-t", "UTF-8"}); code != 0 || out.String() != "é" {
 		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errout.String())
+	}
+}
+
+func TestOmittedEncodingLocaleMappingAndFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		in   string
+		args []string
+		want string
+	}{
+		{"C.UTF-8", []string{"LC_CTYPE=C.UTF-8"}, "é", []string{"-t", "UTF-8"}, "é"},
+		{"C.utf8 alias", []string{"LC_CTYPE=C.utf8"}, "é", []string{"-t", "UTF-8"}, "é"},
+		{"unqualified de_DE", []string{"LC_CTYPE=de_DE"}, string([]byte{0xe9}), []string{"-t", "UTF-8"}, "é"},
+		{"explicit codeset on otherwise uncarried locale", []string{"LC_CTYPE=fr_FR.UTF-8"}, "é", []string{"-t", "UTF-8"}, "é"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: tc.env,
+				Stdio: tool.Stdio{In: strings.NewReader(tc.in), Out: &out, Err: &errout}}
+			if code := run(rc, tc.args); code != 0 || out.String() != tc.want || errout.Len() != 0 {
+				t.Fatalf("code=%d out=%q err=%q", code, out.String(), errout.String())
+			}
+		})
+	}
+
+	var errout bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"LC_CTYPE=en_US"},
+		Stdio: tool.Stdio{In: panicReader{}, Out: panicWriter{}, Err: &errout}}
+	if code := run(rc, []string{"-t", "UTF-8"}); code != 1 || !strings.Contains(errout.String(), "en_US") || !strings.Contains(errout.String(), "no carried default codeset") {
+		t.Fatalf("unsupported unqualified locale: code=%d err=%q", code, errout.String())
+	}
+}
+
+type oneByteReader struct{ io.Reader }
+
+func (r oneByteReader) Read(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	return r.Reader.Read(p)
+}
+
+func TestDiscardInvalidPreservesLiteralReplacementAndStreamingState(t *testing.T) {
+	for _, tc := range []struct {
+		name, from string
+		input      []byte
+	}{
+		{"UTF-8", "UTF-8", append(append([]byte("x�"), 0xff), 'y')},
+		{"UTF-16BE", "UTF-16BE", []byte{0, 'x', 0xff, 0xfd, 0xd8, 0, 0, 'y'}},
+		{"GB18030", "GB18030", []byte{'x', 0x84, 0x31, 0xa4, 0x37, 0xff, 'y'}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(),
+				Stdio: tool.Stdio{In: oneByteReader{bytes.NewReader(tc.input)}, Out: &out, Err: &errout}}
+			if code := run(rc, []string{"-c", "-f", tc.from, "-t", "UTF-8"}); code != 0 || out.String() != "x�y" || errout.Len() != 0 {
+				t.Fatalf("code=%d out=%q err=%q", code, out.String(), errout.String())
+			}
+		})
+	}
+
+	code, encoded, errout := invoke(t, "日本€日本", "-c", "-f", "UTF-8", "-t", "ISO-2022-JP")
+	if code != 0 || errout != "" {
+		t.Fatalf("stateful encode: code=%d err=%q", code, errout)
+	}
+	code, decoded, errout := invoke(t, string(encoded), "-f", "ISO-2022-JP", "-t", "UTF-8")
+	if code != 0 || string(decoded) != "日本日本" || errout != "" {
+		t.Fatalf("stateful round trip: code=%d out=%q err=%q encoded=%x", code, decoded, errout, encoded)
 	}
 }
 
