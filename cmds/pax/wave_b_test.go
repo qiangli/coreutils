@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -216,6 +217,194 @@ func TestWriteUpdateSupersedesOnlyNewerNames(t *testing.T) {
 	}
 }
 
+func TestExtractRegularHardlinkUpdateTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		headers    []*tar.Header
+		bodies     []string
+		want       string
+		wantLinked bool
+	}{
+		{
+			name: "regular-to-hardlink",
+			headers: []*tar.Header{
+				{Name: "source", Typeflag: tar.TypeReg, Mode: 0o644, Size: 6},
+				{Name: "updated", Typeflag: tar.TypeReg, Mode: 0o644, Size: 5},
+				{Name: "updated", Typeflag: tar.TypeLink, Linkname: "source", Mode: 0o644},
+			},
+			bodies:     []string{"shared", "stale", ""},
+			want:       "shared",
+			wantLinked: true,
+		},
+		{
+			name: "hardlink-to-regular",
+			headers: []*tar.Header{
+				{Name: "source", Typeflag: tar.TypeReg, Mode: 0o644, Size: 6},
+				{Name: "updated", Typeflag: tar.TypeLink, Linkname: "source", Mode: 0o644},
+				{Name: "updated", Typeflag: tar.TypeReg, Mode: 0o644, Size: 6},
+			},
+			bodies: []string{"shared", "", "newest"},
+			want:   "newest",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			tw := tar.NewWriter(&archive)
+			for i, h := range tc.headers {
+				if err := tw.WriteHeader(h); err != nil {
+					t.Fatal(err)
+				}
+				if tc.bodies[i] != "" {
+					if _, err := tw.Write([]byte(tc.bodies[i])); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			d := t.TempDir()
+			arc := filepath.Join(d, "history.tar")
+			if err := os.WriteFile(arc, archive.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, errs, code := exec(t, d, "", "-f", arc)
+			if code != 0 || strings.Join(strings.Fields(out), ",") != "source,updated,updated" {
+				t.Fatalf("list: code=%d out=%q err=%q", code, out, errs)
+			}
+			dest := t.TempDir()
+			if _, errs, code := exec(t, dest, "", "-r", "-f", arc); code != 0 {
+				t.Fatalf("extract: %d %s", code, errs)
+			}
+			if got := string(mustRead(t, filepath.Join(dest, "updated"))); got != tc.want {
+				t.Fatalf("updated content = %q, want %q", got, tc.want)
+			}
+			if tc.wantLinked {
+				source, err := os.Stat(filepath.Join(dest, "source"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				updated, err := os.Stat(filepath.Join(dest, "updated"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(source, updated) {
+					t.Fatal("newest hardlink occurrence was not materialized as a hardlink")
+				}
+			}
+		})
+	}
+}
+
+func TestWriteUpdateCanMoveHardlinkDataCarrier(t *testing.T) {
+	d := t.TempDir()
+	arc := filepath.Join(d, "archive.tar")
+	first := writeFileAt(t, d, "first", "old")
+	second := filepath.Join(d, "second")
+	if err := os.Link(first, second); err != nil {
+		t.Skipf("hardlinks unsupported here: %v", err)
+	}
+	base := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(first, base, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := exec(t, d, "", "-w", "-f", arc, "first", "second"); code != 0 {
+		t.Fatalf("create: %d %s", code, errs)
+	}
+
+	// Reverse the inode group's operand order during the update. The original
+	// data carrier (first) becomes a hardlink occurrence, and the original
+	// hardlink (second) becomes the new regular data carrier.
+	if err := os.WriteFile(first, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(first, base.Add(time.Hour), base.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := exec(t, d, "", "-w", "-u", "-f", arc, "second", "first"); code != 0 {
+		t.Fatalf("update: %d %s", code, errs)
+	}
+	if out, errs, code := exec(t, d, "", "-f", arc); code != 0 || strings.Join(strings.Fields(out), ",") != "first,second,second,first" {
+		t.Fatalf("list: code=%d out=%q err=%q", code, out, errs)
+	}
+
+	dest := t.TempDir()
+	if _, errs, code := exec(t, dest, "", "-r", "-f", arc); code != 0 {
+		t.Fatalf("extract: %d %s", code, errs)
+	}
+	if got := string(mustRead(t, filepath.Join(dest, "first"))); got != "new" {
+		t.Fatalf("first content = %q", got)
+	}
+	if got := string(mustRead(t, filepath.Join(dest, "second"))); got != "new" {
+		t.Fatalf("second content = %q", got)
+	}
+	firstInfo, err := os.Stat(filepath.Join(dest, "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInfo, err := os.Stat(filepath.Join(dest, "second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(firstInfo, secondInfo) {
+		t.Fatal("updated inode group was not restored as hardlinks")
+	}
+}
+
+func TestRegularHardlinkCompatibilityKeepsOtherTypeChangesAndUnsafeTargetsAtomic(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers []*tar.Header
+		want    string
+	}{
+		{
+			name: "regular-to-symlink",
+			headers: []*tar.Header{
+				{Name: "innocent", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+				{Name: "changed", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+				{Name: "changed", Typeflag: tar.TypeSymlink, Linkname: "innocent"},
+			},
+			want: "duplicate destination",
+		},
+		{
+			name: "unsafe-hardlink-target",
+			headers: []*tar.Header{
+				{Name: "innocent", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+				{Name: "changed", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+				{Name: "changed", Typeflag: tar.TypeLink, Linkname: "../escape"},
+			},
+			want: "hardlink target",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			tw := tar.NewWriter(&archive)
+			for _, h := range tc.headers {
+				if err := tw.WriteHeader(h); err != nil {
+					t.Fatal(err)
+				}
+				if h.Size != 0 {
+					if _, err := tw.Write(bytes.Repeat([]byte("x"), int(h.Size))); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			dest := t.TempDir()
+			_, errs, code := exec(t, dest, string(archive.Bytes()), "-r")
+			if code == 0 || !strings.Contains(errs, tc.want) || !strings.Contains(errs, "nothing was extracted") {
+				t.Fatalf("extract: code=%d stderr=%q, want atomic %q rejection", code, errs, tc.want)
+			}
+			if _, err := os.Lstat(filepath.Join(dest, "innocent")); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("rejected archive mutated destination: %v", err)
+			}
+		})
+	}
+}
+
 // -u compares the name the member will carry IN THE ARCHIVE, so a -s rewrite
 // has to be applied before the mtime lookup or every rewritten member would
 // look new.
@@ -372,6 +561,137 @@ func TestAppendReportsTruncateAndCloseFailures(t *testing.T) {
 			_, errs, code := exec(t, d, "", "-w", "-a", "-f", arc, "second")
 			if code == 0 || !strings.Contains(errs, tc.want) {
 				t.Fatalf("append: code=%d stderr=%q, want %q", code, errs, tc.want)
+			}
+		})
+	}
+}
+
+type appendFaultSink struct {
+	archiveSink
+	seekErr       error
+	readErr       error
+	writeErr      error
+	shortWrite    bool
+	closeErr      error
+	seekCalls     int
+	truncateCalls int
+}
+
+func (s *appendFaultSink) Seek(offset int64, whence int) (int64, error) {
+	s.seekCalls++
+	if s.seekErr != nil {
+		return 0, s.seekErr
+	}
+	return s.archiveSink.Seek(offset, whence)
+}
+
+func (s *appendFaultSink) Read(p []byte) (int, error) {
+	if s.readErr != nil {
+		return 0, s.readErr
+	}
+	return s.archiveSink.Read(p)
+}
+
+func (s *appendFaultSink) Write(p []byte) (int, error) {
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+	if s.shortWrite {
+		return len(p) - 1, nil
+	}
+	return s.archiveSink.Write(p)
+}
+
+func (s *appendFaultSink) Truncate(size int64) error {
+	s.truncateCalls++
+	return s.archiveSink.Truncate(size)
+}
+
+func (s *appendFaultSink) Close() error {
+	err := s.archiveSink.Close()
+	if s.closeErr != nil {
+		return s.closeErr
+	}
+	return err
+}
+
+func TestAppendPreparationAndWriteFailuresAreReportedWithoutExtraMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(*appendFaultSink)
+		want []string
+	}{
+		{
+			name: "seek-and-close",
+			wrap: func(s *appendFaultSink) {
+				s.seekErr = errors.New("injected seek failure")
+				s.closeErr = errors.New("injected close after seek failure")
+			},
+			want: []string{"injected seek failure", "injected close after seek failure"},
+		},
+		{
+			name: "prefix-read",
+			wrap: func(s *appendFaultSink) {
+				s.readErr = errors.New("injected prefix read failure")
+			},
+			want: []string{"injected prefix read failure"},
+		},
+		{
+			name: "write",
+			wrap: func(s *appendFaultSink) {
+				s.writeErr = errors.New("injected physical write failure")
+			},
+			want: []string{"injected physical write failure"},
+		},
+		{
+			name: "short-write",
+			wrap: func(s *appendFaultSink) {
+				s.shortWrite = true
+			},
+			want: []string{io.ErrShortWrite.Error()},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := t.TempDir()
+			arc := filepath.Join(d, "archive.tar")
+			writeFileAt(t, d, "empty", "")
+			writeFileAt(t, d, "second", "payload")
+			if _, errs, code := exec(t, d, "", "-w", "-x", "ustar", "-b", "1024", "-f", arc, "empty"); code != 0 {
+				t.Fatalf("create: %d %s", code, errs)
+			}
+			before := mustRead(t, arc)
+			end, _, err := scanTar(before)
+			if err != nil || end%1024 == 0 {
+				t.Fatalf("test archive must have a nonaligned end: end=%d err=%v", end, err)
+			}
+
+			original := openArchiveSink
+			var fault *appendFaultSink
+			openArchiveSink = func(path string, flags int, perm os.FileMode) (archiveSink, error) {
+				sink, err := original(path, flags, perm)
+				if err != nil {
+					return nil, err
+				}
+				fault = &appendFaultSink{archiveSink: sink}
+				tc.wrap(fault)
+				return fault, nil
+			}
+			defer func() { openArchiveSink = original }()
+
+			_, errs, code := exec(t, d, "", "-w", "-a", "-x", "ustar", "-b", "1024", "-f", arc, "second")
+			if code == 0 {
+				t.Fatalf("append unexpectedly succeeded: %q", errs)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(errs, want) {
+					t.Fatalf("stderr=%q, want %q", errs, want)
+				}
+			}
+			if fault.truncateCalls != 0 {
+				t.Fatalf("failed append called Truncate %d times", fault.truncateCalls)
+			}
+			if after := mustRead(t, arc); !bytes.Equal(before, after) {
+				t.Fatal("failure before a successful physical write mutated the archive")
 			}
 		})
 	}

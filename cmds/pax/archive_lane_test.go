@@ -185,21 +185,139 @@ func TestAppendKeepsArchiveBlockAlignment(t *testing.T) {
 
 func TestBlockWriterHonorsNonBlockStartOffset(t *testing.T) {
 	var out recordingWriter
-	w := newBlockWriter(&out, 1024, 512)
+	prefix := bytes.Repeat([]byte("p"), 512)
+	w := newBlockWriter(&out, 1024, prefix)
 	if _, err := w.Write(bytes.Repeat([]byte("a"), 1024)); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Starting 512 bytes into a 1024-byte block, the first physical write must
-	// close that block (512 bytes) and the rest must be whole blocks.
-	want := []int{512, 1024}
+	// Starting 512 bytes into a 1024-byte block, the preserved prefix and new
+	// bytes are rewritten together. Every physical write is exactly -b bytes.
+	want := []int{1024, 1024}
 	if fmt.Sprint(out.writes) != fmt.Sprint(want) {
 		t.Fatalf("writes = %v, want %v", out.writes, want)
 	}
-	if (512+out.Len())%1024 != 0 {
-		t.Fatalf("archive offset %d is not block aligned", 512+out.Len())
+	if !bytes.Equal(out.Bytes()[:len(prefix)], prefix) {
+		t.Fatal("first physical block did not preserve its existing prefix")
+	}
+	if out.Len()%1024 != 0 {
+		t.Fatalf("archive output %d is not block aligned", out.Len())
+	}
+}
+
+func TestBlockWriterAlignedStartUsesExactPhysicalWrites(t *testing.T) {
+	var out recordingWriter
+	w := newBlockWriter(&out, 1024, nil)
+	if _, err := w.Write(bytes.Repeat([]byte("a"), 1024)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{1024}; fmt.Sprint(out.writes) != fmt.Sprint(want) {
+		t.Fatalf("writes = %v, want %v", out.writes, want)
+	}
+}
+
+type writeRecordingSink struct {
+	archiveSink
+	writes []int
+}
+
+func (s *writeRecordingSink) Write(p []byte) (int, error) {
+	s.writes = append(s.writes, len(p))
+	return s.archiveSink.Write(p)
+}
+
+func TestAppendAndUpdateUseOnlyCompletePhysicalWrites(t *testing.T) {
+	for _, format := range []string{"pax", "ustar"} {
+		for _, update := range []bool{false, true} {
+			for _, aligned := range []bool{false, true} {
+				name := fmt.Sprintf("%s-update=%t-aligned=%t", format, update, aligned)
+				t.Run(name, func(t *testing.T) {
+					d := t.TempDir()
+					arc := filepath.Join(d, "archive.tar")
+					first := filepath.Join(d, "first")
+					base := time.Unix(1_700_000_000, 0)
+					formatArgs := []string{"-x", format, "-b", "1024"}
+
+					// Crossing a 512-byte data-record boundary toggles the end-marker
+					// offset modulo 1024. Find the requested case without depending on
+					// whether pax extended headers were needed on this platform.
+					found := false
+					for _, size := range []int{0, 1, 513, 1025, 1537} {
+						if err := os.WriteFile(first, bytes.Repeat([]byte("x"), size), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Chtimes(first, base, base); err != nil {
+							t.Fatal(err)
+						}
+						args := append([]string{"-w"}, formatArgs...)
+						args = append(args, "-f", arc, "first")
+						if _, errs, code := exec(t, d, "", args...); code != 0 {
+							t.Fatalf("create: %d %s", code, errs)
+						}
+						end, _, err := scanTar(mustRead(t, arc))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if (end%1024 == 0) == aligned {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Fatal("could not construct requested append alignment")
+					}
+
+					operand := "second"
+					mode := "-a"
+					if update {
+						operand = "first"
+						mode = "-u"
+						if err := os.WriteFile(first, []byte("newer"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Chtimes(first, base.Add(time.Hour), base.Add(time.Hour)); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := os.WriteFile(filepath.Join(d, operand), []byte("appended"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+
+					original := openArchiveSink
+					var recorded *writeRecordingSink
+					openArchiveSink = func(path string, flags int, perm os.FileMode) (archiveSink, error) {
+						sink, err := original(path, flags, perm)
+						if err != nil {
+							return nil, err
+						}
+						recorded = &writeRecordingSink{archiveSink: sink}
+						return recorded, nil
+					}
+					defer func() { openArchiveSink = original }()
+
+					args := append([]string{"-w", mode}, formatArgs...)
+					args = append(args, "-f", arc, operand)
+					if _, errs, code := exec(t, d, "", args...); code != 0 {
+						t.Fatalf("extend: %d %s", code, errs)
+					}
+					if recorded == nil || len(recorded.writes) == 0 {
+						t.Fatal("append made no physical writes")
+					}
+					for i, n := range recorded.writes {
+						if n != 1024 {
+							t.Fatalf("physical writes = %v; write %d is short", recorded.writes, i)
+						}
+					}
+					if got := len(mustRead(t, arc)) % 1024; got != 0 {
+						t.Fatalf("final archive is misaligned by %d bytes", got)
+					}
+				})
+			}
+		}
 	}
 }
 

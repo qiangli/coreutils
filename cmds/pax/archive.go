@@ -81,25 +81,22 @@ func scanTar(data []byte) (endOffset int64, paxFormat bool, err error) {
 	}
 }
 
-// blockWriter turns the logical archive byte stream into whole physical
-// blocks. It tracks the offset WITHIN THE ARCHIVE (not within this writer), so
-// an append that resumes at a non-block offset still emits block-aligned
-// physical writes and still ends on a block boundary.
+// blockWriter turns the logical archive byte stream into complete physical
+// writes. For a nonaligned append, prefix contains the bytes before the
+// logical append point in its containing physical block; those bytes are
+// emitted again as part of the first complete block rather than as a short
+// write.
 type blockWriter struct {
 	w    io.Writer
 	size int
-	pos  int64 // archive offset at which the buffered bytes begin
 	buf  []byte
 	err  error
 }
 
-func newBlockWriter(w io.Writer, size int, base int64) *blockWriter {
-	return &blockWriter{w: w, size: size, pos: base, buf: make([]byte, 0, size)}
-}
-
-// chunk is how many bytes the current physical block still spans.
-func (w *blockWriter) chunk() int {
-	return w.size - int(w.pos%int64(w.size))
+func newBlockWriter(w io.Writer, size int, prefix []byte) *blockWriter {
+	buf := make([]byte, len(prefix), size)
+	copy(buf, prefix)
+	return &blockWriter{w: w, size: size, buf: buf}
 }
 
 func (w *blockWriter) Write(p []byte) (int, error) {
@@ -108,14 +105,14 @@ func (w *blockWriter) Write(p []byte) (int, error) {
 	}
 	written := 0
 	for len(p) > 0 {
-		need := w.chunk() - len(w.buf)
+		need := w.size - len(w.buf)
 		if need > len(p) {
 			need = len(p)
 		}
 		w.buf = append(w.buf, p[:need]...)
 		p = p[need:]
 		written += need
-		if len(w.buf) == w.chunk() {
+		if len(w.buf) == w.size {
 			if err := w.flushBlock(); err != nil {
 				return written, err
 			}
@@ -133,7 +130,6 @@ func (w *blockWriter) flushBlock() error {
 		w.err = err
 		return err
 	}
-	w.pos += int64(len(w.buf))
 	w.buf = w.buf[:0]
 	return nil
 }
@@ -147,7 +143,7 @@ func (w *blockWriter) Close() error {
 	if len(w.buf) == 0 {
 		return nil
 	}
-	w.buf = append(w.buf, make([]byte, w.chunk()-len(w.buf))...)
+	w.buf = append(w.buf, make([]byte, w.size-len(w.buf))...)
 	return w.flushBlock()
 }
 

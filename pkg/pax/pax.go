@@ -175,12 +175,15 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 
 	// Repeated destinations split into two very different cases.
 	//
-	// Different KINDS under one name is the type-substitution attack: a later
-	// symlink silently replacing the directory an earlier member created, or
-	// the reverse. Archive order must not decide what lands on disk, so the
-	// whole group is rejected and the archive is unusable.
+	// Different effective KINDS under one name is the type-substitution attack:
+	// a later symlink silently replacing the directory an earlier member
+	// created, or the reverse. Archive order must not decide what lands on disk,
+	// so the whole group is rejected and the archive is unusable.
 	//
-	// The same kind repeated is an ordinary archive update - pax -w -u appends
+	// A regular member and a hardlink member are the same effective kind here:
+	// both materialize a regular file, and an update can legitimately change
+	// which name in an inode group carries the data. The same effective kind
+	// repeated is an ordinary archive update - pax -w -u appends
 	// a newer copy of a member under its existing name, and POSIX says the
 	// later member is the one that counts. Rejecting those made every updated
 	// archive unextractable. The last occurrence is planned; the earlier ones
@@ -191,10 +194,10 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 		if len(indexes) < 2 {
 			continue
 		}
-		kind := entries[indexes[0]].member.Kind
+		kind := effectiveUpdateKind(entries[indexes[0]].member.Kind)
 		uniform := true
 		for _, i := range indexes {
-			if entries[i].member.Kind != kind {
+			if effectiveUpdateKind(entries[i].member.Kind) != kind {
 				uniform = false
 				break
 			}
@@ -273,6 +276,18 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 	plan.Unsafe = len(plan.Rejected) != 0
 	plan.Formats = sortedFormats(plan.FormatsBy)
 	return plan, nil
+}
+
+// effectiveUpdateKind classifies only the duplicate-name transition that is
+// safe during archive updates. A tar hardlink materializes a regular file, so
+// regular->hardlink and hardlink->regular histories are compatible. No other
+// kinds are collapsed: in particular, links are never interchangeable with
+// symlinks and directories are never interchangeable with files.
+func effectiveUpdateKind(kind Kind) Kind {
+	if kind == KindHardlink {
+		return KindFile
+	}
+	return kind
 }
 
 type candidate struct {

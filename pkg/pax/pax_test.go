@@ -88,6 +88,63 @@ func TestPlanExtractionSupersedesSameKindDuplicatesAndRejectsKindConflicts(t *te
 	}
 }
 
+func TestPlanExtractionTreatsRegularHardlinkTransitionsAsFileUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers []*tar.Header
+		kind    Kind
+	}{
+		{
+			name: "regular-to-hardlink",
+			headers: []*tar.Header{
+				{Name: "source", Typeflag: tar.TypeReg, Size: 1},
+				{Name: "updated", Typeflag: tar.TypeReg, Size: 1},
+				{Name: "updated", Typeflag: tar.TypeLink, Linkname: "source"},
+			},
+			kind: KindHardlink,
+		},
+		{
+			name: "hardlink-to-regular",
+			headers: []*tar.Header{
+				{Name: "source", Typeflag: tar.TypeReg, Size: 1},
+				{Name: "updated", Typeflag: tar.TypeLink, Linkname: "source"},
+				{Name: "updated", Typeflag: tar.TypeReg, Size: 1},
+			},
+			kind: KindFile,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := PlanExtraction(bytes.NewReader(makeArchive(t, tc.headers)), t.TempDir(), OSFS{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Unsafe || len(plan.Rejected) != 0 {
+				t.Fatalf("compatible file history rejected: %#v", plan.Rejected)
+			}
+			if len(plan.Superseded) != 1 || plan.Superseded[0].Path != "updated" {
+				t.Fatalf("superseded = %#v", plan.Superseded)
+			}
+			if len(plan.Members) != 2 || plan.Members[1].Index != 2 || plan.Members[1].Kind != tc.kind {
+				t.Fatalf("members = %#v", plan.Members)
+			}
+		})
+	}
+}
+
+func TestPlanExtractionRegularHardlinkHistoryDoesNotLaunderUnsafeTarget(t *testing.T) {
+	archive := makeArchive(t, []*tar.Header{
+		{Name: "updated", Typeflag: tar.TypeLink, Linkname: "../escape"},
+		{Name: "updated", Typeflag: tar.TypeReg, Size: 1},
+	})
+	plan, err := PlanExtraction(bytes.NewReader(archive), t.TempDir(), OSFS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Unsafe || len(plan.Rejected) != 1 || !strings.Contains(plan.Rejected[0].Reason, "hardlink target") {
+		t.Fatalf("unsafe hardlink was laundered by update: %#v", plan)
+	}
+}
+
 // A superseded occurrence must not launder a safety verdict: if the earlier
 // copy was rejected on its own merits, the rejection is still reported.
 func TestPlanExtractionSupersedeKeepsEarlierRejections(t *testing.T) {

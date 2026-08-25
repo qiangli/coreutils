@@ -234,6 +234,7 @@ func rootOf(target, name string) string {
 // failures - the paths that decide whether a half-rewritten archive is
 // reported or silently accepted - are reachable from tests.
 type archiveSink interface {
+	io.Reader
 	io.Writer
 	io.Seeker
 	Truncate(size int64) error
@@ -309,10 +310,7 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 
 	var out io.Writer = rc.Out
 	var file archiveSink
-	// base is the archive offset at which this run starts writing. It is
-	// non-zero only when appending, and it is what keeps physical blocking
-	// aligned to the archive rather than to this invocation.
-	var base int64
+	var blockPrefix []byte
 	if archivePath != "" {
 		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 		if appendExisting && len(existing) != 0 {
@@ -327,23 +325,44 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		if appendExisting && len(existing) != 0 {
 			end, _, scanErr := scanTar(existing)
 			if scanErr != nil {
-				_ = file.Close()
 				fmt.Fprintf(rc.Err, "pax: %v\n", scanErr)
+				if closeErr := file.Close(); closeErr != nil {
+					fmt.Fprintf(rc.Err, "pax: %v\n", closeErr)
+				}
 				return 1
 			}
-			if _, err = file.Seek(end, io.SeekStart); err != nil {
-				_ = file.Close()
+			blockStart := end - end%int64(o.blockBytes)
+			if _, err = file.Seek(blockStart, io.SeekStart); err != nil {
 				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				if closeErr := file.Close(); closeErr != nil {
+					fmt.Fprintf(rc.Err, "pax: %v\n", closeErr)
+				}
 				return 1
 			}
-			base = end
+			blockPrefix = make([]byte, int(end-blockStart))
+			if len(blockPrefix) != 0 {
+				if _, err = io.ReadFull(file, blockPrefix); err != nil {
+					fmt.Fprintf(rc.Err, "pax: %v\n", err)
+					if closeErr := file.Close(); closeErr != nil {
+						fmt.Fprintf(rc.Err, "pax: %v\n", closeErr)
+					}
+					return 1
+				}
+				if _, err = file.Seek(blockStart, io.SeekStart); err != nil {
+					fmt.Fprintf(rc.Err, "pax: %v\n", err)
+					if closeErr := file.Close(); closeErr != nil {
+						fmt.Fprintf(rc.Err, "pax: %v\n", closeErr)
+					}
+					return 1
+				}
+			}
 		}
 		out = file
 	}
 
 	// POSIX pax always writes whole physical blocks; blockBytes is either the
 	// explicit -b or the format default, never zero.
-	blocker := newBlockWriter(out, o.blockBytes, base)
+	blocker := newBlockWriter(out, o.blockBytes, blockPrefix)
 	out = blocker
 	if o.format == "cpio" {
 		if writeStatus := writeCPIOMode(rc, o, out, files); writeStatus != 0 {
@@ -367,7 +386,10 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		status = 1
 	}
 	if file != nil {
-		if appendExisting && len(existing) != 0 {
+		// A failed physical write may have changed bytes already, but truncating
+		// after it would compound the damage. Preparation failures above happen
+		// before the first write and therefore leave the archive untouched.
+		if appendExisting && len(existing) != 0 && blocker.err == nil {
 			if pos, err := file.Seek(0, io.SeekCurrent); err != nil {
 				fmt.Fprintf(rc.Err, "pax: %v\n", err)
 				status = 1
