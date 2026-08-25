@@ -31,19 +31,19 @@ gap or a test that asserts non-POSIX output.
 
 | Command | Overall classification | Decisive reason |
 | --- | --- | --- |
-| `at` | `implementation_gap` | Required `-m` is absent; empty/blank programs are rejected; `next`/locale time grammar and removal-error status are wrong. |
+| `at` | `implementation_gap` | Required `-m` is absent; empty/blank programs are rejected; time grammar/locale handling and removal-error status are wrong. |
 | `awk` | `implementation_gap` | `LC_COLLATE` and `LC_NUMERIC` are not applied to the language engine. |
 | `basename` | `evidence_gap` | Core transformation is covered, but null/`//` choices and locale/diagnostic behavior are not explicitly pinned. |
-| `batch` | `implementation_gap` | Empty/blank programs are rejected and it is not equivalent to `at -q b -m now`; access control and mail semantics are absent. |
+| `batch` | `implementation_gap` | Empty/blank programs are rejected and it is not equivalent to `at -q b -m now`; access, mail, locale, and timezone semantics are absent. |
 | `cat` | `evidence_gap` | Required byte copying and `-u` are covered; repeated `-` and arbitrary file-type behavior are not fully covered. |
 | `chgrp` | `implementation_gap` | Recursive `-H`/`-L`, last-option-wins, and same-ID `chown()` effects are absent. |
 | `chmod` | `evidence_gap` | Main mode grammar is covered; timestamp, set-ID edge cases, and recursive error consequences lack focused evidence. |
 | `chown` | `implementation_gap` | Recursive `-H`/`-L`, last-option-wins, and same-ID `chown()` effects are absent. |
 | `cksum` | `evidence_gap` | Source appears compatible, but special-file and mixed valid/missing continuation evidence is incomplete. |
 | `cmp` | `implementation_gap` | Default POSIX output requires `char`; implementation and test require `byte`. |
-| `comm` | `evidence_gap` | Source has Flush/error handling, but no failing stdout-writer or injected read-error test proves it. |
+| `comm` | `implementation_gap` | Every non-C/POSIX locale except two ISO-8859-1 aliases is rejected, and the provider is unavailable off Linux amd64/arm64. |
 | `cp` | `implementation_gap` | Declining `-i` returns failure; affirmative matching ignores locale; new recursive-directory mode loses the umask. |
-| `crontab` | `implementation_gap` | `%` splitting, clean scheduled-job environment, mail, and XSI access control are absent. |
+| `crontab` | `implementation_gap` | `%` splitting, invocation-independent mandated job defaults, mail, and XSI access control are absent. |
 
 ## `at`
 
@@ -64,6 +64,8 @@ Required interface:
   include `midnight`, `noon`, `now`, `today`, `tomorrow`, case-insensitive
   locale month/day names and AM/PM, case-insensitive `utc`, `+ number` plus singular/plural
   `minute|hour|day|week|month|year`, and `next` plus one of those units.
+  The grammar permits tokens to be adjacent where they remain unambiguous, and
+  a timezone name is part of `time`, before an optional `date` or increment.
   `time_arg` has the `touch -t` form `[[CC]YY]MMDDhhmm[.SS]`.
 - Unless `-f` is given, stdin is a text file of shell command language. The
   job runs in a separate shell/process group without a controlling terminal,
@@ -91,8 +93,12 @@ Source comparison:
 - `pkg/schedule/export.go` implements much of the POSIX-locale grammar and
   `touch -t`, but `splitIncrement` only accepts `+ N unit`; it rejects required
   `next unit`. Its month, weekday, and AM/PM tables are fixed English tokens,
-  so `LC_TIME` does not determine accepted names. The mandated timezone token
-  is trailing case-insensitive `utc`.
+  so `LC_TIME` does not determine accepted names. It recognizes
+  case-insensitive `utc` only as the final whitespace-separated field, not in
+  its required position within `time` before an optional date. The
+  whitespace-based parser also rejects required unambiguous adjacent-token
+  forms illustrated by the standard, such as `17 utc+ 30minutes` and
+  `8:15amjan24`.
 - `cmds/at/access_unix.go` implements the XSI allow/deny precedence on Unix;
   `cmds/at/access_windows.go` unconditionally allows access.
 - `cmds/at/at.go` accepts some cross-family combinations as extensions; these
@@ -100,7 +106,9 @@ Source comparison:
 - `removeJobs` writes `no job` for an unknown ID but still returns 0. That ID
   was not successfully removed, so the required success/error status split is
   violated. `listJobs` formats the stored `time.Time` directly instead of
-  adjusting it to `TZ` from the listing invocation.
+  adjusting it to `TZ` from the listing invocation. Both listing and submission
+  format dates with a fixed English Go layout, so `LC_TIME` does not determine
+  the format and contents of written date strings.
 
 Behavioral evidence: `cmds/at/at_test.go` covers create/list/remove, queue
 filtering, `-t`, stdin and `-f`, shell-program/cwd/environment/umask capture,
@@ -108,12 +116,13 @@ diagnostics, errors, and a substantial time grammar. `TestParseLicensedAtGrammar
 does not cover `next`. `cmds/at/at_daemon_unix_test.go` covers retained
 submission context; `cmds/at/access_unix_test.go` covers allow/deny precedence.
 `TestAtRemoveNonexistent` explicitly requires the contradictory status 0.
-There is no `-m`, mail-delivery, locale-name, listing-timezone, or empty/blank
-shell-program test.
+There is no `-m`, mail-delivery, locale-name, UTC-before-date, adjacent-token,
+written-`LC_TIME`, listing-timezone, or empty/blank shell-program test.
 
 Missing features: `-m`; completion/output mail delivery; `next` increments;
-locale-derived names; nonzero status for unsuccessful removal; listing timezone
-adjustment; and Windows XSI access control.
+locale-derived names and output; the required UTC placement and adjacent-token
+grammar; nonzero status for unsuccessful removal; listing timezone adjustment;
+and Windows XSI access control.
 
 ## `awk`
 
@@ -232,19 +241,20 @@ programs, although POSIX permits empty shell text. It retains environment, cwd,
 and umask, stores a one-shot job, emits confirmation on stderr, and returns
 nonzero on errors. It schedules `now + 1 second` with empty queue rather than
 implementing the required `at -q b -m now` equivalence; it has no
-mail/completion state and never invokes `checkAtAccess`. Its acceptance of `-f`
-and extra operands is an extension, not a POSIX defect, when `--` shields
-operands.
+mail/completion state and never invokes `checkAtAccess`. Its `time.Now()` and
+fixed English Go layout ignore invocation `TZ` and `LC_TIME` when writing the
+confirmation date. Its acceptance of `-f` and extra operands is an extension,
+not a POSIX defect, when `--` shields operands.
 
 Behavioral evidence: `cmds/batch/batch_test.go` covers stdout silence, stderr
-confirmation format, empty stdin, persisted shell text/context, and unknown
-flags. The persisted-job test asserts `Kind == "at"` but does not require queue
-`b`, mail behavior, access checks, load scheduling, operand rejection, or
-locale/timezone output.
+confirmation format, the contradictory rejection of empty stdin, persisted
+shell text/context, and unknown flags. The persisted-job test asserts
+`Kind == "at"` but does not require queue `b`, mail behavior, access checks,
+load scheduling, operand rejection, or locale/timezone output.
 
-Missing features: rejection of empty or blank shell programs, reserved queue
-`b`, `-m`-equivalent notification, XSI access control, and load-based
-scheduling.
+Missing features: acceptance and scheduling of empty or blank shell programs;
+reserved queue `b`; `-m`-equivalent notification; XSI access control;
+load-based scheduling; and `LC_TIME`/`TZ`-correct confirmation dates.
 
 ## `cat`
 
@@ -421,9 +431,9 @@ Required interface:
   and reports the octet count.
 - Environment: `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, and XSI
   `NLSPATH`.
-- Per successful file stdout is `%u %d %s\n`; with no operand, omit the leading
-  space and pathname. Stderr is diagnostics only. Exit 0 means all files were
-  processed; greater than zero means error.
+- Per successful file stdout is `%u %d %s\n`; with no operand, omit the pathname
+  and its leading space. Stderr is diagnostics only. Exit 0 means all files
+  were processed; greater than zero means error.
 
 Source comparison: the default `crc` path in `cmds/cksum/cksum.go` is distinct
 from GNU digest extensions. `cksumOperand` implements the required polynomial
@@ -482,7 +492,7 @@ Missing feature: the exact POSIX-locale default `char` output token.
 
 Normative source: [Open Group Issue 7/2016 `comm`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/comm.html).
 
-Classification: `evidence_gap`.
+Classification: `implementation_gap`.
 
 Required interface:
 
@@ -501,11 +511,14 @@ Required interface:
   were output as specified; greater than zero means error.
 
 Source comparison: `cmds/comm/comm.go` pre-parses clustered `-123`, enforces
-two operands, uses one stdin, streams three columns, initializes a collator
-from the invocation locale (with a C/POSIX byte-order fast path), checks and
-reports I/O/output failures, and returns nonzero on failures. Its source Flush
-handling appears compatible, but focused failure injection is incomplete. Extra
-GNU flags are separable extensions.
+two operands, uses one stdin, streams three columns, checks and reports
+I/O/output failures, and returns nonzero on failures. C/POSIX use the required
+byte-order fast path. For every other `LC_COLLATE`, however, it calls
+`pkg/collate.Open`; that provider accepts only the two `de_DE` ISO-8859-1
+aliases and is implemented only on Linux amd64/arm64. Consequently `comm`
+returns status 2 instead of comparing under any other valid installed locale,
+and every non-C/POSIX locale fails on other platforms. Extra GNU flags are
+separable extensions.
 
 Behavioral evidence: `cmds/comm/comm_test.go` covers every suppression
 combination, exact tab layout, duplicate/empty lines, stdin in either position,
@@ -514,10 +527,13 @@ failing stdout-writer test and no injected read-error test, despite source Flush
 handling.
 `TestCommUsesInvocationCollatorForMergeAndOrderChecks`,
 `TestCommLocaleInitFailsBeforeInputOpen`, and `TestCommCAndPOSIXBypassCollator`
-cover locale selection and failure behavior.
+cover routing, the deliberately narrow locale provider, and its failure
+behavior.
 
-No source contradiction was found in the focused POSIX interface, but output
-writer and injected read-error evidence is missing.
+Missing feature: `LC_COLLATE` operation for valid installed locales other than
+the two accepted ISO-8859-1 aliases, including all non-C/POSIX locale operation
+off Linux amd64/arm64. Failing-output-writer and injected-read-error tests also
+remain evidence gaps.
 
 ## `cp`
 
@@ -623,9 +639,10 @@ Source comparison:
 - `parseCronTab` and `splitCronLine` preserve the entire sixth field but never
   interpret unescaped `%` or backslash escapes and never create command stdin.
 - `installCronLines` stores the invocation's whole environment and selects
-  `SHELL` from it, plus invocation cwd/umask. That directly contradicts the
-  required clean default `HOME`, `LOGNAME`, `PATH`, and `SHELL=sh` environment
-  independent of installation values.
+  `SHELL` from it, plus invocation cwd/umask. POSIX does not require an
+  otherwise-clean environment, but it does require default `HOME`, `LOGNAME`,
+  `PATH`, and `SHELL=sh` values that are independent of their values when
+  `crontab` is invoked; the stored invocation values contradict that mandate.
 - No `cron.allow`/`cron.deny` access check or output-mail delivery exists.
   `editCron` reads process-global `os.Getenv("EDITOR")` rather than
   `rc.Getenv`, so embedded Bashy invocations can ignore their invocation
@@ -636,8 +653,8 @@ stdin and file replacement, comments, round-trip text, conflicting modes,
 atomic rejection, schedule validation, whitespace, silence, and persistence.
 `TestCrontabPersistsShellProgramAndContext` affirmatively expects captured
 invocation environment/umask, exposing the environment contradiction. There
-is no `%`/backslash stdin split, clean execution environment, mail, access, or
-`EDITOR` RunContext test.
+is no `%`/backslash stdin split, invocation-independent mandated-default
+environment, mail, access, or `EDITOR` RunContext test.
 
 Missing features: command `%`/backslash translation and command stdin;
 required independent default job environment and `sh`; output/error mail;
@@ -664,12 +681,15 @@ an `evidence_gap` into a predicted failure.
 5. **`cp` interactive and recursive-directory semantics** — declined `-i`
    status, locale affirmative matching, and umask loss are independent likely
    TP failures.
-6. **`batch` equivalence contract** — queue `b`, forced mail, access control,
+6. **`comm` locale coverage** — nearly every non-C/POSIX `LC_COLLATE` is
+   rejected rather than used for comparison, which can affect every
+   locale-sensitive merge and ordering case.
+7. **`batch` equivalence contract** — queue `b`, forced mail, access control,
    and load scheduling are missing, though batch coverage is likely narrower
    than `at`/`crontab`.
-7. **`cmp` exact default output token** — highly deterministic and likely one
+8. **`cmp` exact default output token** — highly deterministic and likely one
    direct output-format failure (`byte` versus `char`), but with limited fanout.
 
 `basename`, `cat`, and `chmod` are not ranked because their open items are
-evidence gaps, not confirmed failures. `cksum` and `comm` have no confirmed
+evidence gaps, not confirmed failures. `cksum` has no confirmed
 required-interface gap in this audit.
