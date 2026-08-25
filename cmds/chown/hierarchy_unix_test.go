@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -115,20 +116,39 @@ func TestChownTraversalModes(t *testing.T) {
 // root may change a file to another owner, so this is how an
 // unprivileged test can see which call each file would take; the real
 // syscall is still exercised by the self-chown tests.
-func recordChanges(t *testing.T) *[]string {
+type recordedChange struct {
+	path   string
+	uid    int
+	gid    int
+	follow bool
+}
+
+func (c recordedChange) String() string {
+	call := "lchown"
+	if c.follow {
+		call = "chown"
+	}
+	return call + " " + filepath.Base(c.path) + " " + strconv.Itoa(c.uid) + " " + strconv.Itoa(c.gid)
+}
+
+func recordChanges(t *testing.T) *[]recordedChange {
 	t.Helper()
-	var calls []string
+	var calls []recordedChange
 	restore := changeOwner
 	changeOwner = func(path string, uid, gid int, follow bool) error {
-		call := "lchown"
-		if follow {
-			call = "chown"
-		}
-		calls = append(calls, call+" "+filepath.Base(path)+" "+strconv.Itoa(uid))
+		calls = append(calls, recordedChange{path: path, uid: uid, gid: gid, follow: follow})
 		return nil
 	}
 	t.Cleanup(func() { changeOwner = restore })
 	return &calls
+}
+
+func joinedChanges(calls []recordedChange) string {
+	parts := make([]string, 0, len(calls))
+	for _, call := range calls {
+		parts = append(parts, call.String())
+	}
+	return strings.Join(parts, "; ")
 }
 
 func TestChownSymbolicLinkTargetOfTheChange(t *testing.T) {
@@ -141,18 +161,18 @@ func TestChownSymbolicLinkTargetOfTheChange(t *testing.T) {
 	}{
 		// A physical -R walk cannot reach a referent, so POSIX has it
 		// change the link itself.
-		{"-R changes the link", []string{"-R"}, "lchown link " + other},
-		{"-R -P changes the link", []string{"-R", "-P"}, "lchown link " + other},
+		{"-R changes the link", []string{"-R"}, "lchown link " + other + " -1"},
+		{"-R -P changes the link", []string{"-R", "-P"}, "lchown link " + other + " -1"},
 		// -L reaches referents, so an interior link's referent is what
 		// changes unless -h says otherwise.
-		{"-L changes the referent", []string{"-R", "-L"}, "chown link " + other},
-		{"-L -h changes the link", []string{"-R", "-L", "-h"}, "lchown link " + other},
+		{"-L changes the referent", []string{"-R", "-L"}, "chown link " + other + " -1"},
+		{"-L -h changes the link", []string{"-R", "-L", "-h"}, "lchown link " + other + " -1"},
 		// Without -R the default is still to follow the operand link.
-		{"no -R follows the link", nil, "chown link " + other},
-		{"-h changes the link", []string{"-h"}, "lchown link " + other},
+		{"no -R follows the link", nil, "chown link " + other + " -1"},
+		{"-h changes the link", []string{"-h"}, "lchown link " + other + " -1"},
 		// The last of -h/--dereference wins, as it does for -H/-L/-P.
-		{"--dereference after -h", []string{"-h", "--dereference"}, "chown link " + other},
-		{"-h after --dereference", []string{"--dereference", "-h"}, "lchown link " + other},
+		{"--dereference after -h", []string{"-h", "--dereference"}, "chown link " + other + " -1"},
+		{"-h after --dereference", []string{"--dereference", "-h"}, "lchown link " + other + " -1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,18 +187,17 @@ func TestChownSymbolicLinkTargetOfTheChange(t *testing.T) {
 			if code != 0 || errb != "" {
 				t.Fatalf("chown %v: code=%d err=%q", tc.args, code, errb)
 			}
-			if got := strings.Join(*calls, "; "); got != tc.want {
+			if got := joinedChanges(*calls); got != tc.want {
 				t.Errorf("chown %v issued %q, want %q", tc.args, got, tc.want)
 			}
 		})
 	}
 }
 
-// POSIX has chown(2) clear an executable's set-user-ID and set-group-ID
-// bits, and says nothing about exempting a call that writes the ids a
-// file already has. A file that needs no change must therefore see no
-// call at all.
-func TestChownUnchangedOwnershipIssuesNoCall(t *testing.T) {
+// POSIX requires an action equivalent to chown() for every selected file,
+// even when it already has the requested ownership. The equality check
+// controls reporting only; it must not suppress the ownership syscall.
+func TestChownUnchangedOwnershipStillCallsChown(t *testing.T) {
 	u := currentUser(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "d"), 0o755); err != nil {
@@ -193,21 +212,25 @@ func TestChownUnchangedOwnershipIssuesNoCall(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("chown -R self: code=%d err=%q", code, errb)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("chown to the ids already held issued %v", *calls)
+	wantCalls := "lchown setuid " + u.Uid + " " + u.Gid + "; lchown d " + u.Uid + " " + u.Gid
+	if got := joinedChanges(*calls); got != wantCalls {
+		t.Errorf("chown to the ids already held issued %q, want %q", got, wantCalls)
 	}
 
-	// The same run against the real syscall, on a file carrying the
-	// set-user-ID bit: the bit has to survive.
-	if err := os.Chmod(setuid, os.ModeSetuid|0o755); err != nil {
+	// The same run against the real syscall must have chown(2)'s observable
+	// side effect for an unprivileged caller: clearing both set-ID bits.
+	if err := os.Chmod(setuid, os.ModeSetuid|os.ModeSetgid|0o755); err != nil {
 		t.Skipf("set-user-ID is unavailable: %v", err)
 	}
 	fi, err := os.Stat(setuid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode()&os.ModeSetuid == 0 {
-		t.Skip("the filesystem dropped the set-user-ID bit")
+	if fi.Mode()&(os.ModeSetuid|os.ModeSetgid) != os.ModeSetuid|os.ModeSetgid {
+		t.Skip("the filesystem dropped a set-ID bit")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("set-ID clearing is implementation-defined for privileged callers")
 	}
 	changeOwner = func(path string, uid, gid int, follow bool) error {
 		if follow {
@@ -221,8 +244,8 @@ func TestChownUnchangedOwnershipIssuesNoCall(t *testing.T) {
 	if fi, err = os.Stat(setuid); err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode()&os.ModeSetuid == 0 {
-		t.Error("chown to the ids already held cleared the set-user-ID bit")
+	if fi.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 {
+		t.Errorf("chown to the ids already held left set-ID mode %v", fi.Mode()&(os.ModeSetuid|os.ModeSetgid))
 	}
 }
 
@@ -384,18 +407,18 @@ func TestChownNameIsPreferredOverNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct{ spec, want string }{
-		{"42", "chown f 7"},     // the account named "42"
-		{"43", "chown f 43"},    // no such account: a numeric id
-		{"42:", "chown f 7"},    // the named account's login group
-		{"43:99", "chown f 43"}, // group named "99" resolves to 9
-		{":99", "chown f -1"},   // group only, owner untouched
+		{"42", "chown f 7 -1"},    // the account named "42"
+		{"43", "chown f 43 -1"},   // no such account: a numeric id
+		{"42:", "chown f 7 8"},    // the named account's login group
+		{"43:99", "chown f 43 9"}, // group named "99" resolves to 9
+		{":99", "chown f -1 9"},   // group only, owner untouched
 	}
 	for _, tc := range cases {
 		calls := recordChanges(t)
 		if _, errb, code := runTool(t, dir, tc.spec, "f"); code != 0 || errb != "" {
 			t.Fatalf("chown %s: code=%d err=%q", tc.spec, code, errb)
 		}
-		if got := strings.Join(*calls, "; "); got != tc.want {
+		if got := joinedChanges(*calls); got != tc.want {
 			t.Errorf("chown %s issued %q, want %q", tc.spec, got, tc.want)
 		}
 	}
@@ -421,10 +444,19 @@ func TestChownReferenceIdsAreNotLookedUpAsNames(t *testing.T) {
 	if _, errb, code := runTool(t, dir, "--reference=ref", "f"); code != 0 || errb != "" {
 		t.Fatalf("chown --reference: code=%d err=%q", code, errb)
 	}
-	// The reference file is the caller's own, so the ids match and
-	// nothing is issued at all.
-	if len(*calls) != 0 {
-		t.Errorf("--reference to the ids already held issued %v", *calls)
+	// The reference file is the caller's own, so the ids match, but POSIX
+	// still requires the ownership operation to be performed with both ids.
+	fi, err := os.Stat(filepath.Join(dir, "ref"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("reference stat did not expose syscall.Stat_t")
+	}
+	want := "chown f " + strconv.FormatUint(uint64(st.Uid), 10) + " " + strconv.FormatUint(uint64(st.Gid), 10)
+	if got := joinedChanges(*calls); got != want {
+		t.Errorf("--reference issued %q, want %q", got, want)
 	}
 }
 
@@ -482,6 +514,7 @@ func atoi(t *testing.T, s string) int {
 func TestChownTraversalAndDereferenceAreOrthogonal(t *testing.T) {
 	u := currentUser(t)
 	other := strconv.Itoa(atoi(t, u.Uid) + 1)
+	ownerOnly := other + " -1"
 	cases := []struct {
 		name string
 		args []string
@@ -489,24 +522,24 @@ func TestChownTraversalAndDereferenceAreOrthogonal(t *testing.T) {
 	}{
 		// -P reaches only the operand link, and cannot reach a
 		// referent, so the link itself is what changes.
-		{"-R -P", []string{"-R", "-P"}, "lchown toplink " + other},
+		{"-R -P", []string{"-R", "-P"}, "lchown toplink " + ownerOnly},
 		// -H follows the operand link for the traversal. The change
 		// still defaults to the referent, for the operand link and for
 		// the interior link the walk does not follow.
 		{"-R -H", []string{"-R", "-H"},
-			"chown link " + other + "; chown f " + other + "; chown sub " + other + "; chown toplink " + other},
+			"chown link " + ownerOnly + "; chown f " + ownerOnly + "; chown sub " + ownerOnly + "; chown toplink " + ownerOnly},
 		// -h moves every one of those changes onto the link, without
 		// changing which files the walk reached.
 		{"-R -H -h", []string{"-R", "-H", "-h"},
-			"lchown link " + other + "; lchown f " + other + "; lchown sub " + other + "; lchown toplink " + other},
+			"lchown link " + ownerOnly + "; lchown f " + ownerOnly + "; lchown sub " + ownerOnly + "; lchown toplink " + ownerOnly},
 		// -L additionally follows the interior link, so d/sub is
 		// reached twice — once through the link, once by its name.
 		{"-R -L", []string{"-R", "-L"},
-			"chown f " + other + "; chown link " + other + "; chown f " + other +
-				"; chown sub " + other + "; chown toplink " + other},
+			"chown f " + ownerOnly + "; chown link " + ownerOnly + "; chown f " + ownerOnly +
+				"; chown sub " + ownerOnly + "; chown toplink " + ownerOnly},
 		{"-R -L -h", []string{"-R", "-L", "-h"},
-			"lchown f " + other + "; lchown link " + other + "; lchown f " + other +
-				"; lchown sub " + other + "; lchown toplink " + other},
+			"lchown f " + ownerOnly + "; lchown link " + ownerOnly + "; lchown f " + ownerOnly +
+				"; lchown sub " + ownerOnly + "; lchown toplink " + ownerOnly},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -516,7 +549,7 @@ func TestChownTraversalAndDereferenceAreOrthogonal(t *testing.T) {
 			if code != 0 || errb != "" {
 				t.Fatalf("chown %v: code=%d err=%q", tc.args, code, errb)
 			}
-			if got := strings.Join(*calls, "; "); got != tc.want {
+			if got := joinedChanges(*calls); got != tc.want {
 				t.Errorf("chown %v issued\n %q, want\n %q", tc.args, got, tc.want)
 			}
 		})

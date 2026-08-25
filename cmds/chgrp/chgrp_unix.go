@@ -30,9 +30,8 @@ var (
 // changeGroup is the seam for the ownership syscall itself. Only root
 // can move a file into a group the caller is not a member of, so tests
 // substitute it to observe which call each file takes — chown for a
-// referent, lchown for a link — and to prove no call is issued when
-// nothing would change. The real syscall path stays covered by the
-// self-chgrp tests.
+// referent, lchown for a link. The real syscall path stays covered by
+// the self-chgrp tests.
 var changeGroup = func(path string, gid int, follow bool) error {
 	if follow {
 		return os.Chown(path, -1, gid)
@@ -127,6 +126,10 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 // change was made, which is what the -v report has to name: with
 // --from in play that is not the requested group.
 func chgrpOne(path string, opts chgrpOpts) (changed bool, held int, statErr, chgrpErr error) {
+	// If the platform does not expose syscall.Stat_t, conservatively report
+	// that the requested operation changed the file. The syscall is required
+	// either way; changed only controls -c/-v reporting.
+	changed = true
 	stat := os.Lstat
 	if opts.affectReferent {
 		stat = os.Stat
@@ -143,18 +146,12 @@ func chgrpOne(path string, opts chgrpOpts) (changed bool, held int, statErr, chg
 		if opts.fromGid >= 0 && held != opts.fromGid {
 			return false, held, nil, nil
 		}
-		// chown(2) clears the set-user-ID and set-group-ID bits of an
-		// executable it changes, even when the id it writes is the one
-		// already there. A file that already has the requested group
-		// must therefore be left alone entirely.
-		if held == opts.gid {
-			return false, held, nil, nil
-		}
+		changed = held != opts.gid
 	}
 	if err := changeGroup(path, opts.gid, opts.affectReferent); err != nil {
 		return false, held, nil, err
 	}
-	return true, opts.gid, nil, nil
+	return changed, opts.gid, nil, nil
 }
 
 // chgrpVerbose reports one file. held is the group the file kept, not

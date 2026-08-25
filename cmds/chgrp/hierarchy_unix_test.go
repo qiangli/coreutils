@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -177,11 +178,10 @@ func TestChgrpSymbolicLinkTargetOfTheChange(t *testing.T) {
 	}
 }
 
-// POSIX has chown(2) clear an executable's set-user-ID and set-group-ID
-// bits, and says nothing about exempting a call that writes the id a
-// file already has. A file that needs no change must therefore see no
-// call at all.
-func TestChgrpUnchangedGroupIssuesNoCall(t *testing.T) {
+// POSIX requires an action equivalent to chown() for every selected file,
+// even when it already has the requested group. The equality check controls
+// reporting only; it must not suppress the ownership syscall.
+func TestChgrpUnchangedGroupStillCallsChown(t *testing.T) {
 	gid := currentGroup(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "d"), 0o755); err != nil {
@@ -195,12 +195,13 @@ func TestChgrpUnchangedGroupIssuesNoCall(t *testing.T) {
 	if _, errb, code := runTool(t, dir, "-R", gid, "d"); code != 0 || errb != "" {
 		t.Fatalf("chgrp -R self: code=%d err=%q", code, errb)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("chgrp to the group already held issued %v", *calls)
+	wantCalls := "lchown setgid " + gid + "; lchown d " + gid
+	if got := strings.Join(*calls, "; "); got != wantCalls {
+		t.Errorf("chgrp to the group already held issued %q, want %q", got, wantCalls)
 	}
 
-	// The same run against the real syscall, on a file carrying the
-	// set-group-ID bit: the bit has to survive.
+	// The same run against the real syscall must have chown(2)'s observable
+	// side effect for an unprivileged caller: clearing set-group-ID.
 	if err := os.Chmod(setgid, os.ModeSetgid|0o755); err != nil {
 		t.Skipf("set-group-ID is unavailable: %v", err)
 	}
@@ -210,6 +211,9 @@ func TestChgrpUnchangedGroupIssuesNoCall(t *testing.T) {
 	}
 	if fi.Mode()&os.ModeSetgid == 0 {
 		t.Skip("the filesystem dropped the set-group-ID bit")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("set-ID clearing is implementation-defined for privileged callers")
 	}
 	changeGroup = func(path string, gid int, follow bool) error {
 		if follow {
@@ -223,8 +227,8 @@ func TestChgrpUnchangedGroupIssuesNoCall(t *testing.T) {
 	if fi, err = os.Stat(setgid); err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode()&os.ModeSetgid == 0 {
-		t.Error("chgrp to the group already held cleared the set-group-ID bit")
+	if fi.Mode()&os.ModeSetgid != 0 {
+		t.Error("chgrp to the group already held did not clear the set-group-ID bit")
 	}
 }
 
@@ -387,10 +391,19 @@ func TestChgrpReferenceIdIsNotLookedUpAsAName(t *testing.T) {
 	if _, errb, code := runTool(t, dir, "--reference=ref", "f"); code != 0 || errb != "" {
 		t.Fatalf("chgrp --reference: code=%d err=%q", code, errb)
 	}
-	// The reference file's group is the one f already has, so nothing
-	// is issued at all.
-	if len(*calls) != 0 {
-		t.Errorf("--reference to the group already held issued %v", *calls)
+	// The reference file's group is the one f already has, but POSIX still
+	// requires the ownership operation to be performed.
+	fi, err := os.Stat(filepath.Join(dir, "ref"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("reference stat did not expose syscall.Stat_t")
+	}
+	want := "chown f " + strconv.FormatUint(uint64(st.Gid), 10)
+	if got := strings.Join(*calls, "; "); got != want {
+		t.Errorf("--reference issued %q, want %q", got, want)
 	}
 }
 

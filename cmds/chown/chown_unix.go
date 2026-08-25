@@ -29,9 +29,8 @@ var (
 
 // changeOwner is the seam for the ownership syscall itself. Only root
 // can change a file to another owner, so tests substitute it to observe
-// which call each file takes — chown for a referent, lchown for a link
-// — and to prove no call is issued when nothing would change. The real
-// syscall path stays covered by the self-chown tests.
+// which call each file takes — chown for a referent, lchown for a link.
+// The real syscall path stays covered by the self-chown tests.
 var changeOwner = func(path string, uid, gid int, follow bool) error {
 	if follow {
 		return os.Chown(path, uid, gid)
@@ -125,6 +124,10 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
 // ownership and changing it fail with different diagnostics, so they
 // are returned separately.
 func chownOne(path string, opts chownOpts) (changed bool, statErr, chownErr error) {
+	// If the platform does not expose syscall.Stat_t, conservatively report
+	// that the requested operation changed the file. The syscall is required
+	// either way; changed only controls -c/-v reporting.
+	changed = true
 	stat := os.Lstat
 	if opts.affectReferent {
 		stat = os.Stat
@@ -140,20 +143,13 @@ func chownOne(path string, opts chownOpts) (changed bool, statErr, chownErr erro
 		if opts.fromGid >= 0 && int(st.Gid) != opts.fromGid {
 			return false, nil, nil
 		}
-		// chown(2) clears the set-user-ID and set-group-ID bits of an
-		// executable it changes, even when the ids it writes are the
-		// ones already there. A file that already has the requested
-		// ownership must therefore be left alone entirely.
-		wanted := (opts.uid >= 0 && int(st.Uid) != opts.uid) ||
+		changed = (opts.uid >= 0 && int(st.Uid) != opts.uid) ||
 			(opts.gid >= 0 && int(st.Gid) != opts.gid)
-		if !wanted {
-			return false, nil, nil
-		}
 	}
 	if err := changeOwner(path, opts.uid, opts.gid, opts.affectReferent); err != nil {
 		return false, nil, err
 	}
-	return true, nil, nil
+	return changed, nil, nil
 }
 
 func chownVerbose(out io.Writer, name string, changed bool, opts chownOpts) {
