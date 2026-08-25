@@ -63,7 +63,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 3 | 29 |
 | `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 10 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
-| `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 1 | 12 |
+| `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 14 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 14 |
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 4 | 47 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 2 | 23 |
@@ -101,7 +101,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `hexdump` | `cmds/hexdump` | — | Bashy/other extension | no | no | 1 | 6 |
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |
-| `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 1 | 16 |
+| `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 2 | 18 |
 | `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 21 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 8 |
@@ -185,7 +185,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 15 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
-| `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 27 |
+| `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 4 | 28 |
 | `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 1 | 18 |
 | `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
@@ -194,7 +194,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tsort` | `cmds/tsort` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 13 |
 | `tz` | `cmds/tz` | — | Bashy/other extension | no | no | 1 | 2 |
-| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 1 | 7 |
+| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 2 | 9 |
 | `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 1 | 15 |
 | `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 1 | 4 |
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |

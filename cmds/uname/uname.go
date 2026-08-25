@@ -95,35 +95,68 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
-	// Issue 7: -a behaves as though -mnrsv were specified. It selects
-	// nothing else: -o, -p, and -i are extensions and stay opt-in.
-	var parts []string
-	if *kernelName || *all {
-		parts = append(parts, info.sysname)
-	}
-	if *nodename || *all {
-		parts = append(parts, info.nodename)
-	}
-	if *release || *all {
-		parts = append(parts, info.release)
-	}
-	if *kernelVersion || (*all && info.version != "") {
-		parts = append(parts, info.version)
-	}
-	if *machine || *all {
-		parts = append(parts, info.machine)
-	}
-	if *processor {
-		parts = append(parts, info.processor)
-	}
-	if *hardwarePlatform {
-		parts = append(parts, info.hardwarePlatform)
-	}
-	if *osFlag {
-		parts = append(parts, operatingSystem())
-	}
+	parts := assemble(info, selection{
+		all:              *all,
+		sysname:          *kernelName,
+		nodename:         *nodename,
+		release:          *release,
+		version:          *kernelVersion,
+		machine:          *machine,
+		processor:        *processor,
+		hardwarePlatform: *hardwarePlatform,
+		operatingSystem:  *osFlag,
+	})
 	fmt.Fprintf(rc.Out, "%s\n", strings.Join(parts, " "))
 	return 0
+}
+
+// selection records which output symbols were requested.
+type selection struct {
+	all              bool
+	sysname          bool
+	nodename         bool
+	release          bool
+	version          bool
+	machine          bool
+	processor        bool
+	hardwarePlatform bool
+	operatingSystem  bool
+}
+
+// assemble builds the output fields in the fixed Issue 7 order
+// (sysname nodename release version machine), independent of the order
+// the flags were typed. -a behaves as though -mnrsv were specified and
+// selects nothing else: -o, -p, and -i are extensions and stay opt-in.
+// A platform with no kernel-version symbol (Windows) reports version
+// as ""; that field is skipped everywhere so that -a -v remains
+// byte-identical to -a and no empty field is joined into the line.
+func assemble(info sysinfo, sel selection) []string {
+	var parts []string
+	if sel.sysname || sel.all {
+		parts = append(parts, info.sysname)
+	}
+	if sel.nodename || sel.all {
+		parts = append(parts, info.nodename)
+	}
+	if sel.release || sel.all {
+		parts = append(parts, info.release)
+	}
+	if (sel.version || sel.all) && info.version != "" {
+		parts = append(parts, info.version)
+	}
+	if sel.machine || sel.all {
+		parts = append(parts, info.machine)
+	}
+	if sel.processor {
+		parts = append(parts, info.processor)
+	}
+	if sel.hardwarePlatform {
+		parts = append(parts, info.hardwarePlatform)
+	}
+	if sel.operatingSystem {
+		parts = append(parts, operatingSystem())
+	}
+	return parts
 }
 
 // operatingSystem maps GOOS to the GNU -o spelling.

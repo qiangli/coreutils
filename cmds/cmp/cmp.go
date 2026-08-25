@@ -104,7 +104,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case sil:
 		return cmpSilent(rc, s1, s2, limit)
 	case listAll:
-		return cmpVerbose(rc, name1, name2, s1, s2, size1, size2, limit, *printBytes)
+		return cmpVerbose(rc, name1, name2, s1, s2, size1, size2, limit, *printBytes, envPresent(rc.Env, "POSIXLY_CORRECT"))
 	default:
 		return cmpFirstDiff(rc, name1, name2, s1, s2, limit, *printBytes)
 	}
@@ -249,8 +249,10 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 // cmpVerbose is -l: print every difference as "OFFSET OCT1 OCT2".
 // The offset column is right-aligned to the width of the largest
 // possible byte number — min(file sizes) when both are regular files,
-// else the width of the largest off_t, matching GNU.
-func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, size2, limit int64, printBytes bool) int {
+// else the width of the largest off_t, matching GNU. In POSIX mode
+// (POSIXLY_CORRECT set) the Issue 7 STDOUT format "%d %o %o" is
+// emitted exactly, with no column padding.
+func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, size2, limit int64, printBytes, posix bool) int {
 	width := 19 // digits in max int64, GNU's fallback for unseekable inputs
 	if size1 >= 0 && size2 >= 0 {
 		m := size1
@@ -293,9 +295,12 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 		if limit < 0 || pos <= limit {
 			if b1 != b2 {
 				differed = true
-				if printBytes {
+				switch {
+				case printBytes:
 					fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2))
-				} else {
+				case posix:
+					fmt.Fprintf(rc.Out, "%d %o %o\n", pos, b1, b2)
+				default:
 					fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
 				}
 			}
@@ -454,4 +459,16 @@ func multiplier(suf string) (int64, bool) {
 
 func sysErr(err error) error {
 	return tool.SysErr(err)
+}
+
+// envPresent reports whether key is assigned in the invocation environment,
+// even to an empty value; POSIXLY_CORRECT takes effect on presence alone.
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }

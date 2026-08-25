@@ -290,9 +290,19 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 {
 		return time.Time{}, errBad
 	}
-	t := time.Date(year, time.Month(month), day, hour, minute, sec, 0, now.Location())
+	// Issue 7: SS is [00,60]; an SS of 60 that is not a real leap second
+	// means one second after SS=59, so build the time at :59 (keeping the
+	// month/day validation meaningful at 23:59) and add the second after.
+	baseSecond := sec
+	if sec == 60 {
+		baseSecond = 59
+	}
+	t := time.Date(year, time.Month(month), day, hour, minute, baseSecond, 0, now.Location())
 	if t.Month() != time.Month(month) || t.Day() != day {
 		return time.Time{}, errBad
+	}
+	if sec == 60 {
+		t = t.Add(time.Second)
 	}
 	// Keep -t within the portable signed-32-bit time_t range. Some file
 	// systems silently clamp older values while reporting success; in that

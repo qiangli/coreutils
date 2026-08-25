@@ -387,7 +387,11 @@ func (d *discardInvalidUTF16) Transform(dst, src []byte, atEOF bool) (nDst, nSrc
 			if !atEOF {
 				return 0, 0, transform.ErrShortSrc
 			}
-			d.discarded.any = len(src) != 0
+			// Never clear a discard recorded by an earlier operand:
+			// the state is shared across the whole invocation.
+			if len(src) != 0 {
+				d.discarded.any = true
+			}
 			return 0, len(src), nil
 		}
 		switch {
@@ -493,6 +497,7 @@ func (d *discardInvalidGB18030Decoder) Transform(dst, src []byte, atEOF bool) (n
 						return nDst, nSrc, transform.ErrShortSrc
 					}
 					nSrc++
+					d.discarded.any = true
 					continue
 				}
 				if src[nSrc+2] >= 0x81 && src[nSrc+2] <= 0xfe && src[nSrc+3] >= 0x30 && src[nSrc+3] <= 0x39 {
