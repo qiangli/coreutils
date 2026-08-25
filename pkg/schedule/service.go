@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +39,24 @@ func writePid(path string, pid int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".schedule-daemon-pid-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(strconv.Itoa(pid)); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func readPid(path string) (int, error) {
@@ -62,14 +81,61 @@ func ServiceStatusOf() ServiceStatus {
 	return st
 }
 
-// StartService launches `schedule daemon` detached in the background. Idempotent:
-// a no-op when the daemon is already running (so the supervisor's 30s restart poll
-// never spawns a duplicate).
-func StartService(interval time.Duration) (ServiceStatus, error) {
+var (
+	serviceExecutable = os.Executable
+	serviceCommand    = exec.Command
+)
+
+func serviceStartLockPath() string {
+	return filepath.Join(filepath.Dir(statePath()), "schedule-daemon-start.lock")
+}
+
+// claimDaemonPID publishes the foreground daemon under the same lifecycle
+// lock used by StartService. A child launched by StartService sees its own PID
+// already published; an independently launched second daemon is refused.
+func claimDaemonPID() (pidPath string, retErr error) {
+	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
+		Name: "bashy-schedule", Intent: "publish schedule daemon pid",
+	})
+	if err != nil {
+		return "", err
+	}
+	defer func() { retErr = errors.Join(retErr, startLock.Release()) }()
+
+	p := servicePidPath()
+	if pid, err := readPid(p); err == nil && pid > 0 && pid != os.Getpid() && processAlive(pid) {
+		return "", fmt.Errorf("schedule daemon already running as pid %d", pid)
+	}
+	if err := writePid(p, os.Getpid()); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// StartService launches `schedule daemon` detached in the background. The
+// start lock covers status inspection, stale-pid cleanup, spawn, and atomic
+// pidfile publication, so concurrent processes cannot both become the managed
+// daemon.
+func StartService(interval time.Duration) (status ServiceStatus, retErr error) {
+	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
+		Name: "bashy-schedule", Intent: "start schedule daemon",
+	})
+	if err != nil {
+		return ServiceStatus{}, err
+	}
+	defer func() { retErr = errors.Join(retErr, startLock.Release()) }()
+
 	if st := ServiceStatusOf(); st.Running {
 		return st, nil
 	}
-	exe, err := os.Executable()
+	// A dead, malformed, or partially published pidfile carries no authority.
+	// Remove it while holding the start lock before publishing a replacement.
+	p := servicePidPath()
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return ServiceStatus{}, err
+	}
+
+	exe, err := serviceExecutable()
 	if err != nil {
 		return ServiceStatus{}, err
 	}
@@ -77,23 +143,31 @@ func StartService(interval time.Duration) (ServiceStatus, error) {
 	if interval > 0 {
 		args = append(args, "--interval", interval.String())
 	}
-	cmd := exec.Command(exe, args...)
+	cmd := serviceCommand(exe, args...)
 	applyBackgroundProcAttrs(cmd)
 	if err := cmd.Start(); err != nil {
 		return ServiceStatus{}, err
 	}
 	pid := cmd.Process.Pid
-	_ = cmd.Process.Release()
-	p := servicePidPath()
 	if err := writePid(p, pid); err != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
 		return ServiceStatus{}, err
 	}
+	_ = cmd.Process.Release()
 	return ServiceStatus{Running: true, PID: pid, PidFile: p}, nil
 }
 
 // StopService signals the daemon's process group to stop and clears the pidfile.
 func StopService() ServiceStatus {
 	p := servicePidPath()
+	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
+		Name: "bashy-schedule", Intent: "stop schedule daemon",
+	})
+	if err != nil {
+		return ServiceStatus{PidFile: p}
+	}
+	defer startLock.Release()
 	if pid, err := readPid(p); err == nil && pid > 0 && processAlive(pid) {
 		_ = signalStop(pid)
 	}
