@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 56 |
-| Evidence | Unverified | 58 |
+| Evidence | Partial | 59 |
+| Evidence | Unverified | 55 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -1192,7 +1192,7 @@ dd [operand...]
 
 **Operands:** `if=file; of=file; ibs=expr; obs=expr; bs=expr; cbs=expr; skip=n; seek=n; count=n; conv=value[,value ...]; ascii; ebcdic; ibm; block; unblock; lcase; ucase; swab; noerror; notrunc; sync`. KEY=VALUE operands select files, blocks, limits, offsets, and conversions; invalid numbers/conversion conflicts fail before copying; bs overrides ibs/obs.
 
-**Special tokens:** if=- and of=- select standard streams.
+**Special tokens:** Omitting if= selects standard input and omitting of= selects standard output; a value of - is a literal pathname, not a stream alias.
 
 **Standard input:** Read stdin when if is absent.
 
@@ -1366,7 +1366,7 @@ dirname string
 
 ## `du`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1382,21 +1382,21 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Each file operand is a path whose hierarchy is walked depth-first with every subdirectory reported in post-order before its parent; with no operand the hierarchy rooted at . is used. File operands that cannot be accessed are diagnosed on stderr and do not abort other operands.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; - and + prefixes on numeric-like arguments are not applicable because du takes no numeric option arguments; option clustering follows the utility syntax guidelines.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used; no operand reads standard input.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** For each visited directory and, with -a, each non-directory file: one line of the form "%d %s", <blocks> <space> <path>, where the default block size is 512 bytes, rounded up, and -k selects 1024-byte units; -s emits exactly one such line per operand.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostics only: inaccessible operands, unreadable directories, and write failures on standard output.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `None; du is read-only and writes no files or other state.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every operand was processed; greater than 0 when any operand or subdirectory could not be accessed or read, or the write to standard output failed.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1408,7 +1408,7 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/du`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:du:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/du/issue7_test.go#TestDuIssue7DefaultOperandIsWorkingDirectory;cmds/du/issue7_test.go#TestDuIssue7StdoutFormatRoundsUpToBlocks;cmds/du/issue7_test.go#TestDuIssue7SummarizeFileOperand;cmds/du/issue7_test.go#TestDuIssue7OneFileSystemKeepsSameDeviceEntries;cmds/du/issue7_test.go#TestDuIssue7SymlinkNotFollowedByDefault`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:du:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [du](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/du.html).
 
@@ -1848,7 +1848,7 @@ fc -s [old=new] [first]
 
 ## `file`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1865,21 +1865,21 @@ file -i [-h] file...
 
 **Issue 7 option-argument candidate:** `-M=<file>; -m=<file>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Each file operand is classified in argument order; at least one operand is required and its absence is a usage error. The operand - names standard input. An operand that is a symbolic link is followed by default; -h (with no -L) classifies the link itself.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; the operand - reads standard input; -d/-m/-M order their test sources position-sensitively.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when and only when an operand is exactly -, under that name.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** One line per operand of the form "%s: %s\n", <file> colon <space> <type>. A nonexistent, unreadable, or undetermined operand still produces its line containing "cannot open" and does not by itself change the exit status.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics, including invalid magic-file syntax and standard-output write errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `None; file is read-only and writes no files or other state.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on success; greater than 0 when a usage error occurs or a write fails. Per the Issue 7 file page, operands that cannot be opened or classified do not by themselves affect the exit status.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1891,13 +1891,13 @@ file -i [-h] file...
 
 **Conservative source-token audit:** token gaps: options=-M, -d, -m; argument-form gaps=-M=<file>, -m=<file>; source `cmds/file`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [file](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/file.html).
 
 ## `find`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1913,21 +1913,21 @@ find [-H|-L] path... [operand_expression...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `+n; n; -n; -name pattern; -path pattern; -nouser; -nogroup; -xdev; -prune; -perm [-]mode; -perm [-]onum; -type c; -links n; -user uname; -group gname; -size n[c]; -atime n; -ctime n; -mtime n; -exec utility_name [argument ...] ; ; -exec utility_name [argument ...] {} +; -ok utility_name [argument ...] ; ; -print; -newer file; -depth; ( expression ); ! expression; expression [-a] expression; expression -o expression`. UNVERIFIED
+**Operands:** `+n; n; -n; -name pattern; -path pattern; -nouser; -nogroup; -xdev; -prune; -perm [-]mode; -perm [-]onum; -type c; -links n; -user uname; -group gname; -size n[c]; -atime n; -ctime n; -mtime n; -exec utility_name [argument ...] ; ; -exec utility_name [argument ...] {} +; -ok utility_name [argument ...] ; ; -print; -newer file; -depth; ( expression ); ! expression; expression [-a] expression; expression -o expression`. One or more path operands name the hierarchies to search; with no path operand . is used. Everything after the first expression-looking token is the expression, evaluated in preorder for each path, with operator precedence ! > -a (implicit between adjacent primaries) > -o. A missing start point is diagnosed on stderr; later operands continue.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends the leading -H/-L/-P option scan; ( ) ! -a -o are grammar tokens; +n is more than n, -n less than n, bare n exactly n; {} in -exec/-ok is replaced by the current path; a lone ; terminates -exec/-ok arguments and {} + requests batched invocation.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used by any primary except -ok, which reads one affirmative reply line per invocation from standard input.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Each matching path is written by -print (the default action when the expression contains no other action), one per line, spelled as it was reached from the path operand.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostics: unreachable start points, unreadable directories, -ok affirmations, and write failures.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `None by default; -exec and -ok run the named utility with the matched path substituted for {}, which is the only documented side effect.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every operand was processed; greater than 0 when a start point cannot be descended, -ok is declined, an -exec {} + invocation exits non-zero, or a write error occurs; 2 for syntax and usage errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1939,7 +1939,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/find`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/find/issue7_test.go#TestFindIssue7OperatorPrecedence;cmds/find/issue7_test.go#TestFindIssue7NameLeadingPeriodNotSpecial;cmds/find/issue7_test.go#TestFindIssue7NumericArgumentTrichotomy;cmds/find/issue7_test.go#TestFindIssue7FollowOptionsOnlyLeading;cmds/find/issue7_test.go#TestFindIssue7DoubleDashEndsLeadingOptions;cmds/find/issue7_test.go#TestFindIssue7NouserUnownedPositivePath`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [find](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/find.html).
 

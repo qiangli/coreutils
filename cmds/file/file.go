@@ -114,6 +114,9 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 				_, _ = fmt.Fprintf(rc.Err, "file: %v\n", formatErr)
 				status = 1
 			} else {
+				// XCU file: nonexistent, unreadable, or undetermined
+				// operands SHALL NOT affect the exit status; the
+				// standard-output line carries "cannot open".
 				typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
 			}
 		}

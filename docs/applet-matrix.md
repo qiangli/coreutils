@@ -77,7 +77,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `dir` | `cmds/dir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `dircolors` | `cmds/dircolors` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `dirname` | `cmds/dirname` | — | GNU Coreutils | yes | yes | 1 | 5 |
-| `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 2 | 30 |
+| `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 3 | 35 |
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
 | `ed` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
@@ -88,8 +88,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
-| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 2 | 31 |
-| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 6 | 50 |
+| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 34 |
+| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 7 | 56 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 1 | 13 |
