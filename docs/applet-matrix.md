@@ -170,7 +170,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `split` | `cmds/split` | — | GNU Coreutils | yes | yes | 1 | 13 |
 | `stat` | `cmds/stat` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `stdbuf` | `cmds/stdbuf` | — | GNU Coreutils | yes | no | 1 | 5 |
-| `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 1 | 5 |
+| `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 1 | 7 |
 | `strip` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `stty` | `cmds/stty` | — | GNU Coreutils | yes | yes | 3 | 12 |
 | `sum` | `cmds/sum` | — | GNU Coreutils | yes | no | 1 | 2 |
