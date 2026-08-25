@@ -3,6 +3,7 @@ package ducmd
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -14,9 +15,9 @@ import (
 
 // TestDuIssue7DefaultOperandIsWorkingDirectory pins the OPERANDS clause: with
 // no file operand, du processes the file hierarchy rooted in the current
-// working directory, reporting the subdirectory in post-order followed by "."
-// itself. A regression to "error on missing operand" or a wrong default name
-// fails the exact path list.
+// working directory and reports every directory in that hierarchy. POSIX does
+// not prescribe record order, so the assertion compares the path set. A
+// regression to "error on missing operand" or an incomplete hierarchy fails.
 //
 // Test-control note: -b (apparent bytes) is a non-POSIX GNU extension used
 // only as a deterministic size control; the POSIX surface under test is the
@@ -36,8 +37,9 @@ func TestDuIssue7DefaultOperandIsWorkingDirectory(t *testing.T) {
 		paths = append(paths, parts[1])
 	}
 	// mkTree builds dir/tree/{...}, so "." expands to the full hierarchy.
-	if strings.Join(paths, " ") != "./tree/sub ./tree ." {
-		t.Errorf("du (no operands) paths = %v, want [./tree/sub ./tree .]", paths)
+	sort.Strings(paths)
+	if strings.Join(paths, " ") != ". ./tree ./tree/sub" {
+		t.Errorf("du (no operands) paths = %v, want the complete hierarchy", paths)
 	}
 }
 

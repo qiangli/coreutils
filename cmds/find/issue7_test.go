@@ -11,7 +11,8 @@ import (
 // remaining normative grammar axes: operator precedence with implicit -a,
 // the -name leading-period rule, the +n|-n|n numeric-argument trichotomy,
 // the -H/-L restriction to the option position, and the leading-option "--"
-// end token.
+// end token. Bashy's no-path default is an extension and is not used as POSIX
+// evidence here.
 
 // TestFindIssue7OperatorPrecedence pins the OPERANDS grammar precedence,
 // '!' > implicit -a > -o, with a truth table that actually discriminates.

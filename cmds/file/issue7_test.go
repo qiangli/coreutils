@@ -18,9 +18,11 @@ import (
 // exception overriding the Utility Description Defaults: nonexistent,
 // unreadable, or undetermined operands SHALL NOT affect the exit status, and
 // the standard-output "<file>: <type>" line carries "cannot open". So an
-// inaccessible operand in the middle leaves the status 0, writes nothing to
-// stderr, keeps its stdout line in operand order, and processing continues
-// with later operands.
+// inaccessible operand in the middle leaves the status 0, keeps its stdout
+// line in operand order, and processing continues with later operands. The
+// absence of a second stderr diagnostic and the exact ASCII/directory labels
+// below pin Bashy's deterministic choices; POSIX does not require those
+// particular classification strings or forbid an additional diagnostic.
 func TestFileIssue7OperandOrderPreserved(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "good", []byte("hello\n"))
@@ -49,10 +51,11 @@ func TestFileIssue7OperandOrderPreserved(t *testing.T) {
 	}
 }
 
-// TestFileIssue7StdinOperandUsedByName pins the STDIN clause: standard input
-// is inspected only when a file operand is exactly "-", reported under that
-// name, interleaved in operand order with named operands, and stdin is left
-// untouched when no "-" operand is present.
+// TestFileIssue7StdinOperandUsedByName pins Bashy's documented implementation
+// choice for the POSIX implementation-defined "-" operand: standard input is
+// inspected, reported under that name, and interleaved in operand order with
+// named operands. This is compatibility evidence, not a mandatory POSIX
+// interpretation of "-".
 func TestFileIssue7StdinOperandUsedByName(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "named", []byte("file text\n"))
@@ -67,9 +70,9 @@ func TestFileIssue7StdinOperandUsedByName(t *testing.T) {
 	}
 }
 
-// TestFileIssue7MissingOperandIsUsageError pins the OPERANDS clause: at least
-// one file operand is required; the omission is a usage failure, not a silent
-// no-op or a stdin default.
+// TestFileIssue7MissingOperandIsUsageError pins the required operand arity.
+// Status 2 is Bashy's repository-wide usage convention; POSIX requires only a
+// greater-than-zero error status for this invalid invocation.
 func TestFileIssue7MissingOperandIsUsageError(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := invoke(t, dir, "ignored\n")

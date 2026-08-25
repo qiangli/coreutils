@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 59 |
-| Evidence | Unverified | 55 |
+| Evidence | Partial | 63 |
+| Evidence | Unverified | 51 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -1382,7 +1382,7 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. Each file operand is a path whose hierarchy is walked depth-first with every subdirectory reported in post-order before its parent; with no operand the hierarchy rooted at . is used. File operands that cannot be accessed are diagnosed on stderr and do not abort other operands.
+**Operands:** `file`. Each file operand is a path whose hierarchy is processed and reported; POSIX does not prescribe record order. With no operand the hierarchy rooted at . is used. File operands that cannot be accessed are diagnosed on stderr and do not abort other operands.
 
 **Special tokens:** -- ends option parsing; - and + prefixes on numeric-like arguments are not applicable because du takes no numeric option arguments; option clustering follows the utility syntax guidelines.
 
@@ -1865,11 +1865,11 @@ file -i [-h] file...
 
 **Issue 7 option-argument candidate:** `-M=<file>; -m=<file>`.
 
-**Operands:** `file`. Each file operand is classified in argument order; at least one operand is required and its absence is a usage error. The operand - names standard input. An operand that is a symbolic link is followed by default; -h (with no -L) classifies the link itself.
+**Operands:** `file`. Each file operand is classified in argument order; at least one operand is required and its absence is a usage error. Bashy treats the operand - as standard input, an implementation-defined POSIX choice. An operand that is a symbolic link is followed by default; -h (with no -L) classifies the link itself.
 
-**Special tokens:** -- ends option parsing; the operand - reads standard input; -d/-m/-M order their test sources position-sensitively.
+**Special tokens:** -- ends option parsing; Bashy's implementation-defined - operand reads standard input; -d/-m/-M order their test sources position-sensitively.
 
-**Standard input:** Read when and only when an operand is exactly -, under that name.
+**Standard input:** Bashy reads standard input when and only when an operand is exactly -, reporting it under that name; POSIX permits this implementation-defined interpretation.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
@@ -1913,7 +1913,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `+n; n; -n; -name pattern; -path pattern; -nouser; -nogroup; -xdev; -prune; -perm [-]mode; -perm [-]onum; -type c; -links n; -user uname; -group gname; -size n[c]; -atime n; -ctime n; -mtime n; -exec utility_name [argument ...] ; ; -exec utility_name [argument ...] {} +; -ok utility_name [argument ...] ; ; -print; -newer file; -depth; ( expression ); ! expression; expression [-a] expression; expression -o expression`. One or more path operands name the hierarchies to search; with no path operand . is used. Everything after the first expression-looking token is the expression, evaluated in preorder for each path, with operator precedence ! > -a (implicit between adjacent primaries) > -o. A missing start point is diagnosed on stderr; later operands continue.
+**Operands:** `+n; n; -n; -name pattern; -path pattern; -nouser; -nogroup; -xdev; -prune; -perm [-]mode; -perm [-]onum; -type c; -links n; -user uname; -group gname; -size n[c]; -atime n; -ctime n; -mtime n; -exec utility_name [argument ...] ; ; -exec utility_name [argument ...] {} +; -ok utility_name [argument ...] ; ; -print; -newer file; -depth; ( expression ); ! expression; expression [-a] expression; expression -o expression`. One or more path operands are required by Issue 7 and name the hierarchies to search; an expression-first invocation is unspecified. Bashy's no-path default of . is an upstream extension, not POSIX evidence. Everything after the first expression-looking token is the expression, evaluated in preorder for each path, with operator precedence ! > -a (implicit between adjacent primaries) > -o. A missing start point is diagnosed on stderr; later operands continue.
 
 **Special tokens:** -- ends the leading -H/-L/-P option scan; ( ) ! -a -o are grammar tokens; +n is more than n, -n less than n, bare n exactly n; {} in -exec/-ok is replaced by the current path; a lone ; terminates -exec/-ok arguments and {} + requests batched invocation.
 
@@ -1927,7 +1927,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Effects:** `None by default; -exec and -ok run the named utility with the matched path substituted for {}, which is the only documented side effect.`.
 
-**Exit status:** 0 when every operand was processed; greater than 0 when a start point cannot be descended, -ok is declined, an -exec {} + invocation exits non-zero, or a write error occurs; 2 for syntax and usage errors.
+**Exit status:** 0 when every operand was processed, including when an -ok reply declines an invocation; greater than 0 when a start point cannot be descended, an -exec {} + invocation exits non-zero, or a write error occurs; 2 for syntax and usage errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1939,7 +1939,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/find`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/find/issue7_test.go#TestFindIssue7OperatorPrecedence;cmds/find/issue7_test.go#TestFindIssue7NameLeadingPeriodNotSpecial;cmds/find/issue7_test.go#TestFindIssue7NumericArgumentTrichotomy;cmds/find/issue7_test.go#TestFindIssue7FollowOptionsOnlyLeading;cmds/find/issue7_test.go#TestFindIssue7DoubleDashEndsLeadingOptions;cmds/find/issue7_test.go#TestFindIssue7NouserUnownedPositivePath`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/find/issue7_test.go#TestFindIssue7OperatorPrecedence;cmds/find/issue7_test.go#TestFindIssue7NameLeadingPeriodNotSpecial;cmds/find/issue7_test.go#TestFindIssue7NumericArgumentTrichotomy;cmds/find/issue7_test.go#TestFindIssue7FollowOptionsOnlyLeading;cmds/find/issue7_test.go#TestFindIssue7DoubleDashEndsLeadingOptions;cmds/find/issue7_unix_test.go#TestFindIssue7NouserUnownedPositivePath`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [find](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/find.html).
 
@@ -3745,7 +3745,7 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 ## `printf`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3761,21 +3761,21 @@ printf format [argument...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `format; argument`. UNVERIFIED
+**Operands:** `format; argument`. A format operand is required. Interpret its ordinary characters, backslash escapes, and conversion specifications; consume arguments in order, reuse the format until all arguments are consumed, and supply zero or empty-string values for missing arguments as required by the conversion.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** In the format, \\ddd is an octet escape; in a %b argument, \\0ddd is an octet escape and \\c stops all further output. %% writes a literal percent. A leading single or double quote on a numeric operand selects the value of the following character. Empty %c output is POSIX-unspecified; Bashy's NUL choice is retained as Bash compatibility, not POSIX evidence.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write the expanded format, reusing it as necessary, with no implicit newline beyond one present in the format.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for a missing format, invalid conversion or numeric operand, and standard-output write failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No files or shell state are modified; only standard output is written.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when formatting and output succeed; greater than 0 for an operand, conversion, or output error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3787,7 +3787,7 @@ printf format [argument...]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRoutePrintf`; provider=`-`; clauses=`XCU:printf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestPrintfIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRoutePrintf`; provider=`-`; clauses=`XCU:printf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [printf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/printf.html).
 
@@ -3889,7 +3889,7 @@ pwd [-L|-P]
 
 ## `read`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3905,21 +3905,21 @@ read [-r] var...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `var`. UNVERIFIED
+**Operands:** `var`. One or more valid variable-name operands receive fields from one logical input line. IFS controls field splitting; excess variables become empty and the last variable receives the remaining fields and separators according to Issue 7.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Without -r, an unescaped backslash escapes the following character and backslash-newline continues the logical line; -r makes backslashes literal. Omitting every var and assigning REPLY is a Bash extension, not POSIX evidence.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read one logical line from standard input.
 
 **Environment:** `IFS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PS2`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used by read itself.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for option, variable-name, assignment, and input diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Assign the requested variables in the current shell execution environment; no files are modified.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when a complete logical line is read and assigned; greater than 0 on end-of-file or error. Behavior for a non-text unterminated final line is retained as Bash compatibility outside the POSIX input domain.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3931,7 +3931,7 @@ read [-r] var...
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteRead`; provider=`-`; clauses=`XCU:read:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestReadIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteRead`; provider=`-`; clauses=`XCU:read:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [read](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/read.html).
 
@@ -4666,7 +4666,7 @@ tee [-ai] [file...]
 
 ## `test`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4709,7 +4709,7 @@ test [expression]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTest`; provider=`-`; clauses=`XCU:test:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestTestIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTest`; provider=`-`; clauses=`XCU:test:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [test](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/test.html).
 
@@ -5054,7 +5054,7 @@ tty
 
 ## `umask`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -5070,21 +5070,21 @@ umask [-S] [mask]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `mask`. UNVERIFIED
+**Operands:** `mask`. With mask, accept an octal or symbolic file-creation mask and replace the current shell mask. With no mask, write a representation reusable as a subsequent umask operand; POSIX leaves its default style unspecified. -S selects symbolic output.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Symbolic clauses describe permissions that remain enabled, the complement of the mask bits. Bashy's default four-digit octal display is an allowed Bash-compatible output choice; the round-trip property is normative.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** With no mask, write the current mask in reusable default or -S symbolic form followed by a newline; otherwise write nothing.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for invalid options or mask operands and output failures.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Update the file-creation mask of the current shell execution environment, inherited by subsequently invoked utilities; no files are directly modified.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the mask is displayed or set successfully; greater than 0 on an invalid option/operand or output error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5096,7 +5096,7 @@ umask [-S] [mask]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteUmask`; provider=`-`; clauses=`XCU:umask:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestUmaskIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteUmask`; provider=`-`; clauses=`XCU:umask:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [umask](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/umask.html).
 
