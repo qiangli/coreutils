@@ -97,12 +97,12 @@ class ManifestValidationTest(unittest.TestCase):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
         self.assertIn("| Evidence | Verified | 2 |", rendered)
-        self.assertIn("| Evidence | Partial | 93 |", rendered)
-        self.assertIn("| Evidence | Unverified | 21 |", rendered)
+        self.assertIn("| Evidence | Partial | 98 |", rendered)
+        self.assertIn("| Evidence | Unverified | 16 |", rendered)
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)
-        self.assertTrue(any(error == "bg: state=unverified" for error in errors))
+        self.assertTrue(any(error == "bg: state=partial" for error in errors))
         with (
             mock.patch.object(sys, "argv", [str(SCRIPT), "--require-complete"]),
             self.assertRaisesRegex(SystemExit, "completion blocked"),
@@ -127,7 +127,7 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertFalse(
             any(error.split(":", 1)[0] in provider_names for error in owned_errors)
         )
-        self.assertTrue(any(error == "bg: state=unverified" for error in owned_errors))
+        self.assertTrue(any(error == "bg: state=partial" for error in owned_errors))
         self.assertTrue(any(error == "xargs: state=partial" for error in owned_errors))
         with (
             mock.patch.object(
@@ -211,6 +211,12 @@ class ManifestValidationTest(unittest.TestCase):
             )
             for command, suffix in route_tests.items()
         }
+        expected["sh"] = ";".join((
+            "bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteSh",
+            "bashy:internal/cli/main_test.go#TestStrictPosixEngagedByArgv0Sh",
+            "bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go"
+            "#TestProfileBShUtilityEntrypointContract",
+        ))
         actual = {
             row["command"]: row["shell_routing_evidence"]
             for row in self.rows if row["shell_routing_evidence"] != "-"
@@ -328,6 +334,7 @@ class ManifestValidationTest(unittest.TestCase):
         changes = self.completed_semantics("bg")
         changes.update(
             evidence_state="verified",
+            shell_evidence="-",
             shell_routing_evidence=routing,
         )
         with mock.patch.object(
@@ -390,6 +397,20 @@ class ManifestValidationTest(unittest.TestCase):
             self.changed("true", **changes),
             "shell evidence must use sh:<repo-path>#<test-ID> contract",
         )
+
+    def test_only_process_level_sh_contract_can_use_bashy_semantic_lane(self) -> None:
+        approved = (
+            "bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go"
+            "#TestProfileBShUtilityEntrypointContract"
+        )
+        with mock.patch.object(Path, "is_file", return_value=True), mock.patch.object(
+            manifest, "_test_is_declared", return_value=True,
+        ):
+            self.assertTrue(
+                manifest._bashy_sh_semantic_evidence_ref("sh", approved, manifest.ROOT)
+            )
+            with self.assertRaisesRegex(manifest.ManifestError, "approved only"):
+                manifest._bashy_sh_semantic_evidence_ref("bg", approved, manifest.ROOT)
 
     def test_ar_cannot_substitute_pr_test_as_provider_evidence(self) -> None:
         changes = self.completed_semantics("ar")
@@ -456,7 +477,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_state_laundering_is_rejected(self) -> None:
         self.assertRejected(
-            self.changed("bg", evidence_state="verified"),
+            self.changed("bg", evidence_state="verified", effects="UNVERIFIED"),
             "verified state launders",
         )
 

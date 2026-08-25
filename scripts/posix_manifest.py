@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -101,9 +102,18 @@ SHELL_EVIDENCE_REF = re.compile(
 SHELL_ROUTING_EVIDENCE_REF = re.compile(
     r"^bashy:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
 )
+BASHY_SEMANTIC_EVIDENCE_REF = re.compile(
+    r"^bashy:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
+)
 BASHY_ROUTING_TEST_ROOTS = (
     Path("internal/cli"),
 )
+BASHY_SH_SEMANTIC_TESTS = frozenset({
+    (
+        Path("internal/cli/profile_b_sh_entrypoint_unix_test.go"),
+        "TestProfileBShUtilityEntrypointContract",
+    ),
+})
 GENERIC_PROSE = (
     "where POSIX Utility Syntax Guideline 10 applies",
     "POSIX STDIN clause remains authoritative",
@@ -397,12 +407,37 @@ def _shell_evidence_ref(command: str, raw: str, root: Path) -> bool:
     if relative.is_absolute() or ".." in relative.parts:
         raise ManifestError(f"{command}: shell evidence path escapes the sh repository")
     shell_root = root.parent / "sh"
+    if root == ROOT:
+        shell_root = Path(os.environ.get("POSIX_SH_EVIDENCE_ROOT", shell_root))
     path = shell_root / relative
     if not path.is_file() or not _test_is_declared(path, match.group("test")):
         return False
     if not _command_test_name(command, match.group("test")):
         raise ManifestError(f"{command}: shell evidence test ID is not command-specific")
     return True
+
+
+def _bashy_sh_semantic_evidence_ref(command: str, raw: str, root: Path) -> bool:
+    match = BASHY_SEMANTIC_EVIDENCE_REF.fullmatch(raw)
+    if not match:
+        raise ManifestError(
+            f"{command}: malformed bashy sh semantic evidence reference"
+        )
+    relative = Path(match.group("path"))
+    test = match.group("test")
+    if command != "sh" or (relative, test) not in BASHY_SH_SEMANTIC_TESTS:
+        raise ManifestError(
+            f"{command}: bashy semantic evidence is approved only for the "
+            "process-level sh entrypoint contract"
+        )
+    bashy_root = root.parent / "bashy"
+    if root == ROOT:
+        bashy_root = Path(os.environ.get("POSIX_BASHY_EVIDENCE_ROOT", bashy_root))
+    bashy_root = bashy_root.resolve()
+    path = (bashy_root / relative).resolve()
+    if not path.is_relative_to(bashy_root):
+        raise ManifestError(f"{command}: bashy semantic evidence escapes its repository")
+    return path.is_file() and _test_is_declared(path, test)
 
 
 def _shell_routing_evidence_ref(command: str, raw: str, root: Path) -> bool:
@@ -421,7 +456,10 @@ def _shell_routing_evidence_ref(command: str, raw: str, root: Path) -> bool:
         raise ManifestError(
             f"{command}: shell routing evidence is outside approved bashy integration paths"
         )
-    bashy_root = (root.parent / "bashy").resolve()
+    bashy_root = root.parent / "bashy"
+    if root == ROOT:
+        bashy_root = Path(os.environ.get("POSIX_BASHY_EVIDENCE_ROOT", bashy_root))
+    bashy_root = bashy_root.resolve()
     path = (bashy_root / relative).resolve()
     if not path.is_relative_to(bashy_root):
         raise ManifestError(
@@ -447,7 +485,12 @@ def _validate_evidence(
     explicit = True
     for ref in refs:
         if lane == "shell_evidence":
-            available = _shell_evidence_ref(row["command"], ref, root) and available
+            if ref.startswith("bashy:"):
+                available = _bashy_sh_semantic_evidence_ref(
+                    row["command"], ref, root,
+                ) and available
+            else:
+                available = _shell_evidence_ref(row["command"], ref, root) and available
         elif lane == "shell_routing_evidence":
             available = _shell_routing_evidence_ref(
                 row["command"], ref, root,
@@ -709,7 +752,10 @@ def render(rows: list[dict[str, str]]) -> str:
         "source-token audit; finding a token is never proof of runtime behavior.", "",
         "Evidence is lane-specific. Go references stay in `cmds/<command>`; provider",
         "references name a command-specific test in `cmds/posixproviders`; shell semantic",
-        "references use `sh:<path>#<TestID>` against the sibling sh repository. Shell",
+        "references normally use `sh:<path>#<TestID>` against the sibling sh repository.",
+        "The sole approved exception is the process-level Bashy sh-entrypoint contract,",
+        "recorded as `bashy:<path>#<TestID>` on the `sh` row because it proves behavior",
+        "that exists only at the selected executable boundary. Shell",
         "routing references separately use `bashy:<approved-path>#<TestID>` against the",
         "sibling bashy repository and are legal only for shell-selected rows. Verified",
         "shell rows require both lanes: routing evidence can never substitute for semantic",
