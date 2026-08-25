@@ -8,9 +8,12 @@
 // implementation is rejected rather than approximated. POSIX -c omits input
 // characters that cannot be converted (invalid in the input codeset or with no
 // representation in the output codeset), while preserving the conversion's
-// non-zero status as POSIX requires. When -f or -t is
-// omitted the codeset of the current locale (LC_CTYPE, defaulting to the
-// POSIX-locale US-ASCII) is used, per the Issue 7 synopsis. Suffixes such as
+// non-zero status as POSIX requires. Without -c, malformed source characters
+// are likewise omitted while conversion continues, but produce a diagnostic;
+// an input character with no output representation stops conversion. -s
+// suppresses those character diagnostics, never file or device errors. When
+// -f or -t is omitted the codeset of the current locale (LC_CTYPE, defaulting
+// to the POSIX-locale US-ASCII) is used, per the Issue 7 synopsis. Suffixes such as
 // //IGNORE or //TRANSLIT are explicitly rejected.
 package iconvcmd
 
@@ -25,6 +28,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/ianaindex"
 	unicodeenc "golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
@@ -67,6 +71,8 @@ var supportedEncodings = []string{
 	"windows-1258",
 	"IBM437",
 	"IBM850",
+	"CP858",
+	"IBM00858",
 	"IBM852",
 	"IBM855",
 	"IBM860",
@@ -87,6 +93,14 @@ var supportedEncodings = []string{
 	"HZ-GB-2312",
 	"Big5",
 	"EUC-KR",
+	// Explicit spelling aliases are values too: -l must not advertise only
+	// their canonical targets while lookup accepts these additional tokens.
+	"UTF8", "UTF_8",
+	"ASCII", "USASCII", "US_ASCII",
+	"LATIN1", "LATIN-1", "LATIN_1",
+	"UTF16", "UTF_16", "UTF16BE", "UTF_16BE", "UTF16LE", "UTF_16LE",
+	"CP1250", "CP1251", "CP1252", "CP1253", "CP1254", "CP1255", "CP1256", "CP1257", "CP1258",
+	"CP437", "CP850", "CP852", "CP855", "CP860", "CP862", "CP863", "CP865", "CP866", "CP037", "CP1047",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -133,6 +147,24 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 	}
+	if len(files) == 0 {
+		files = []string{"-"}
+	}
+	for _, codeName := range []string{fromCode, toCode} {
+		if strings.Contains(codeName, "//") {
+			fmt.Fprintf(rc.Err, "iconv: unsupported encoding %q\n", codeName)
+			return 1
+		}
+	}
+	fromMap := strings.ContainsRune(fromCode, '/')
+	toMap := strings.ContainsRune(toCode, '/')
+	if fromMap || toMap {
+		if !fromMap || !toMap {
+			fmt.Fprintln(rc.Err, "iconv: charmap pathname conversion requires both -f and -t charmaps")
+			return 1
+		}
+		return runCharmapConversion(rc, fromCode, toCode, files, *discardInvalid, *silent)
+	}
 
 	from, err := lookupEncoding(fromCode)
 	if err != nil {
@@ -144,17 +176,10 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "iconv: %v\n", err)
 		return 1
 	}
-	if len(files) == 0 {
-		files = []string{"-"}
-	}
-
-	// -c omits input characters that cannot be converted. The x/text decoders
-	// are lenient — a byte invalid in the input codeset becomes U+FFFD rather
-	// than an error — so the two conversion-loss paths are handled separately:
-	// on the decode side dropReplacement omits those U+FFFD substitutions
-	// (bytes invalid in the input codeset), and on the encode side dropInvalid
-	// omits runes with no representation in the output codeset, which is the
-	// path that actually errors.
+	// x/text decoders are lenient — malformed source bytes become U+FFFD. The
+	// decode lane therefore validates with or without -c so that -c cannot
+	// change status. The encode lane needs its skipping wrapper only for -c;
+	// without -c, an unrepresentable output character remains a hard error.
 	discarded := &discardState{}
 	newEncoder := func() transform.Transformer {
 		if *discardInvalid {
@@ -163,26 +188,26 @@ func run(rc *tool.RunContext, args []string) int {
 		return to.NewEncoder()
 	}
 	newDecoder := func() transform.Transformer {
-		if *discardInvalid {
-			switch encodingClass(fromCode) {
-			case "utf8":
-				return transform.Chain(discardInvalidUTF8{discarded}, from.NewDecoder())
-			case "utf16":
-				return transform.Chain(&discardInvalidUTF16{discarded: discarded}, from.NewDecoder())
-			case "utf16be":
-				return transform.Chain(&discardInvalidUTF16{order: byteOrderBE, fixed: true, discarded: discarded}, from.NewDecoder())
-			case "utf16le":
-				return transform.Chain(&discardInvalidUTF16{order: byteOrderLE, fixed: true, discarded: discarded}, from.NewDecoder())
-			case "gb18030":
-				return &discardInvalidGB18030Decoder{enc: from, discarded: discarded}
-			default:
-				// These carried encodings cannot represent U+FFFD. Therefore any
-				// replacement rune emitted by their lenient decoder necessarily
-				// denotes malformed source input, not a literal character.
-				return transform.Chain(from.NewDecoder(), dropReplacement{discarded})
-			}
+		// x/text decoders intentionally replace malformed source bytes. POSIX
+		// nevertheless requires -c not to change status, so validate on both
+		// lanes and use the documented omit-on-error result when -c is absent.
+		switch encodingClass(fromCode) {
+		case "utf8":
+			return transform.Chain(discardInvalidUTF8{discarded}, from.NewDecoder())
+		case "utf16":
+			return transform.Chain(&discardInvalidUTF16{discarded: discarded}, from.NewDecoder())
+		case "utf16be":
+			return transform.Chain(&discardInvalidUTF16{order: byteOrderBE, fixed: true, discarded: discarded}, from.NewDecoder())
+		case "utf16le":
+			return transform.Chain(&discardInvalidUTF16{order: byteOrderLE, fixed: true, discarded: discarded}, from.NewDecoder())
+		case "gb18030":
+			return &discardInvalidGB18030Decoder{enc: from, discarded: discarded}
+		default:
+			// These carried encodings cannot represent U+FFFD. Therefore any
+			// replacement rune emitted by their lenient decoder necessarily
+			// denotes malformed source input, not a literal character.
+			return transform.Chain(from.NewDecoder(), dropReplacement{discarded})
 		}
-		return from.NewDecoder()
 	}
 
 	// Keep one encoder across all operands: iconv concatenates FILE inputs into
@@ -202,17 +227,31 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		_, copyErr := io.Copy(out, transform.NewReader(in, newDecoder()))
-		if closeErr := closeInput(); copyErr == nil {
-			copyErr = closeErr
-		}
+		trackedIn := &errorTrackingReader{r: in}
+		wasDiscarded := discarded.any
+		_, copyErr := io.Copy(out, transform.NewReader(trackedIn, newDecoder()))
+		closeErr := closeInput()
 		if copyErr != nil {
 			// -s suppresses diagnostics about invalid/unrepresentable
 			// characters only; an output-device error must remain visible.
 			if trackedOut.err != nil {
 				fmt.Fprintf(rc.Err, "iconv: write error: %v\n", trackedOut.err)
+			} else if trackedIn.err != nil {
+				fmt.Fprintf(rc.Err, "iconv: %s: %v\n", displayName(name), trackedIn.err)
 			} else if !*silent {
 				fmt.Fprintf(rc.Err, "iconv: %s: %v\n", displayName(name), copyErr)
+			}
+			status = 1
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "iconv: %s: %v\n", displayName(name), closeErr)
+			status = 1
+		}
+		if !wasDiscarded && discarded.any {
+			// This implementation documents -c as omitting quietly; -s is still
+			// meaningful without -c, where it suppresses conversion diagnostics.
+			if !*discardInvalid && !*silent {
+				fmt.Fprintf(rc.Err, "iconv: %s: invalid character sequence\n", displayName(name))
 			}
 			status = 1
 		}
@@ -564,6 +603,19 @@ type errorTrackingWriter struct {
 	err error
 }
 
+type errorTrackingReader struct {
+	r   io.Reader
+	err error
+}
+
+func (r *errorTrackingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if err != nil && err != io.EOF {
+		r.err = err
+	}
+	return n, err
+}
+
 func (w *errorTrackingWriter) Write(p []byte) (int, error) {
 	n, err := w.w.Write(p)
 	if err != nil {
@@ -598,9 +650,17 @@ func lookupEncoding(name string) (encoding.Encoding, error) {
 		switch num {
 		case "1250", "1251", "1252", "1253", "1254", "1255", "1256", "1257", "1258":
 			name = "windows-" + num
-		case "437", "850", "852", "855", "858", "860", "862", "863", "865", "866", "037", "1047":
+		case "858":
+			return charmap.CodePage858, nil
+		case "437", "850", "852", "855", "860", "862", "863", "865", "866", "037", "1047":
 			name = "ibm" + num
 		}
+	}
+	if strings.EqualFold(name, "IBM00858") {
+		return charmap.CodePage858, nil
+	}
+	if !isAdvertisedEncoding(name) {
+		return nil, fmt.Errorf("unsupported encoding %q", raw)
 	}
 	if strings.EqualFold(name, "UTF-8") {
 		return unicodeenc.UTF8, nil
@@ -613,6 +673,15 @@ func lookupEncoding(name string) (encoding.Encoding, error) {
 		return nil, fmt.Errorf("encoding %q is registered but not supported", raw)
 	}
 	return enc, nil
+}
+
+func isAdvertisedEncoding(name string) bool {
+	for _, supported := range supportedEncodings {
+		if strings.EqualFold(name, supported) {
+			return true
+		}
+	}
+	return false
 }
 
 func openInput(rc *tool.RunContext, name string) (io.Reader, func() error, error) {
