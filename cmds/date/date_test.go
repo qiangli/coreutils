@@ -34,6 +34,14 @@ func runToolEnv(t *testing.T, env []string, args ...string) (stdout, stderr stri
 	return out.String(), errb.String(), code
 }
 
+func runToolClock(t *testing.T, env []string, now time.Time, setter clockSetter, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: env, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}}
+	code = runWithClock(rc, args, func() time.Time { return now }, setter)
+	return out.String(), errb.String(), code
+}
+
 func TestDateFormats(t *testing.T) {
 	// All anchored at a fixed instant in UTC for determinism.
 	cases := []struct {
@@ -156,8 +164,7 @@ func TestDateTZ(t *testing.T) {
 		{"EST5EDT", []string{"-d", "@1755000000", "+%Z %z"}, "EDT -0400\n"},
 		// Quoted designation, sub-hour east-of-Greenwich offset.
 		{"<+0530>-5:30", []string{"-d", "@0", "+%H:%M %Z %z"}, "05:30 +0530 +0530\n"},
-		// Null and unusable TZ: UTC.
-		{"", []string{"-d", "@0", "+%H %Z"}, "00 UTC\n"},
+		// An unusable nonempty TZ follows the shared resolver's UTC fallback.
 		{"bogus", []string{"-d", "@0", "+%H %Z"}, "00 UTC\n"},
 		// -u wins over TZ.
 		{"EST5", []string{"-u", "-d", "@0", "+%H %Z"}, "00 UTC\n"},
@@ -169,6 +176,12 @@ func TestDateTZ(t *testing.T) {
 		if code != 0 || errb != "" || out != c.want {
 			t.Errorf("TZ=%q date %q = (%q, %q, %d), want %q", c.tz, c.args, out, errb, code, c.want)
 		}
+	}
+	if got := dateLocation([]string{"TZ="}); got != time.Local {
+		t.Fatalf("null TZ location=%v, want system default %v", got, time.Local)
+	}
+	if got := dateLocation(nil); got != time.Local {
+		t.Fatalf("unset TZ location=%v, want system default %v", got, time.Local)
 	}
 }
 
@@ -199,6 +212,36 @@ func TestDateLCTimePrecedence(t *testing.T) {
 				t.Fatalf("date locale env=%q = (%q, %q, %d), want %q", tc.env, out, errb, code, tc.want)
 			}
 		})
+	}
+}
+
+func TestDateLCTimeCompleteFormatsAndUnsupported(t *testing.T) {
+	args := []string{"-u", "-d", "2026-03-06 13:45:09", "+%c|%x|%X|%r|%p|%h"}
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"C", []string{"LC_TIME=C"}, "Fri Mar  6 13:45:09 2026|03/06/26|13:45:09|01:45:09 PM|PM|Mar\n"},
+		{"German UTF-8", []string{"LC_TIME=de_DE.UTF-8"}, "Fr 06 Mär 2026 13:45:09 UTC|06.03.2026|13:45:09|01:45:09 ||Mär\n"},
+		{"German Latin-1", []string{"LC_TIME=de_DE.iso88591"}, "Fr 06 M\xe4r 2026 13:45:09 UTC|06.03.2026|13:45:09|01:45:09 ||M\xe4r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runToolEnv(t, tc.env, args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("output=(%q,%q,%d), want %q", out, errOut, code, tc.want)
+			}
+		})
+	}
+	out, errOut, code := runToolEnv(t, []string{"LC_TIME=de_DE.UTF-8"}, "-u", "-d", "2026-03-06 13:45:09", "+%Ec|%Ex|%EX|%Od|%OH")
+	if code != 0 || errOut != "" || out != "Fr 06 Mär 2026 13:45:09 UTC|06.03.2026|13:45:09|06|13\n" {
+		t.Fatalf("German alternative forms=(%q,%q,%d)", out, errOut, code)
+	}
+
+	called := false
+	_, errOut, code = runToolClock(t, []string{"LC_TIME=fr_FR.UTF-8"}, time.Unix(0, 0), func(time.Time) error { called = true; return nil }, "01010000")
+	if code != 1 || called || !strings.Contains(errOut, "LC_TIME") {
+		t.Fatalf("unsupported locale=(code %d, setter called %v, stderr %q)", code, called, errOut)
 	}
 }
 
@@ -280,34 +323,73 @@ func TestDateReference(t *testing.T) {
 	}
 }
 
-// The XSI synopsis `date [-u] mmddhhmm[[cc]yy]` sets the system clock. That is
-// a privileged, host-mutating operation outside the agent userland's scope, so
-// it is refused loudly (exit 2) with a diagnostic naming the specific XSI
-// operand — never silently ignored and never a silent wrong answer.
-func TestDateXSISetDateOperandRefusedLoudly(t *testing.T) {
-	// Every accepted length of the grammar: mmddhhmm, +yy, +ccyy.
-	for _, op := range []string{"12011030", "1201103099", "120110302099"} {
-		out, errb, code := runTool(t, op)
-		if code != 2 {
-			t.Errorf("date %q: code=%d, want 2", op, code)
-		}
-		if out != "" {
-			t.Errorf("date %q: stdout=%q, want empty", op, out)
-		}
-		if !strings.Contains(errb, "mmddhhmm[[cc]yy]") || !strings.Contains(errb, "not supported") {
-			t.Errorf("date %q: stderr=%q, want the XSI set-date operand named as unsupported", op, errb)
+func TestDateXSISetDateOperand(t *testing.T) {
+	now := time.Date(2026, time.July, 8, 9, 10, 11, 0, time.UTC)
+	tests := []struct {
+		name      string
+		env, args []string
+		want      time.Time
+		wantOut   string
+	}{
+		{"current year", []string{"TZ=UTC0"}, []string{"01020304"}, time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC), "Fri Jan  2 03:04:00 UTC 2026\n"},
+		{"two digit 69", []string{"TZ=UTC0"}, []string{"0102030469"}, time.Date(1969, 1, 2, 3, 4, 0, 0, time.UTC), ""},
+		{"two digit 68", []string{"TZ=UTC0"}, []string{"0102030468"}, time.Date(2068, 1, 2, 3, 4, 0, 0, time.UTC), ""},
+		{"four digit year", []string{"TZ=UTC0"}, []string{"022923042024"}, time.Date(2024, 2, 29, 23, 4, 0, 0, time.UTC), ""},
+		{"timezone controls wall clock", []string{"TZ=EST5"}, []string{"010203042026"}, time.Date(2026, 1, 2, 3, 4, 0, 0, time.FixedZone("EST", -5*3600)), "Fri Jan  2 03:04:00 EST 2026\n"},
+		{"u overrides timezone", []string{"TZ=EST5"}, []string{"-u", "010203042026"}, time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC), "Fri Jan  2 03:04:00 UTC 2026\n"},
+		{"localized result", []string{"TZ=UTC0", "LC_TIME=de_DE.UTF-8"}, []string{"030613452026"}, time.Date(2026, 3, 6, 13, 45, 0, 0, time.UTC), "Fr Mär  6 13:45:00 UTC 2026\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []time.Time
+			out, errOut, code := runToolClock(t, tt.env, now, func(at time.Time) error { got = append(got, at); return nil }, tt.args...)
+			if code != 0 || errOut != "" || len(got) != 1 || !got[0].Equal(tt.want) {
+				t.Fatalf("result=(out %q, err %q, code %d, calls %v), want one call %v", out, errOut, code, got, tt.want)
+			}
+			if out == "" {
+				t.Fatal("successful set-date did not write the resulting date")
+			}
+			if tt.wantOut != "" && out != tt.wantOut {
+				t.Fatalf("stdout=%q, want %q", out, tt.wantOut)
+			}
+		})
+	}
+}
+
+func TestDateXSISetDateRejectsBeforeMutationAndPropagatesFailure(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, args := range [][]string{{"not-a-date"}, {"13010000"}, {"023000002024"}, {"01012400"}, {"01010060"}, {"01010000", "+%Y"}, {"-d", "@0", "01010000"}, {"-I", "01010000"}, {"--debug", "01010000"}} {
+		called := false
+		out, errOut, code := runToolClock(t, []string{"TZ=UTC0", "LC_ALL=C"}, now, func(time.Time) error { called = true; return nil }, args...)
+		if code == 0 || called || out != "" || errOut == "" {
+			t.Errorf("date %q=(out %q, err %q, code %d, called %v), want pre-mutation failure", args, out, errOut, code, called)
 		}
 	}
-	// -u may precede the operand, exactly as the XSI synopsis allows.
-	_, errb, code := runTool(t, "-u", "12011030")
-	if code != 2 || !strings.Contains(errb, "mmddhhmm[[cc]yy]") {
-		t.Errorf("date -u <setdate>: code=%d err=%q", code, errb)
+
+	wantErr := os.ErrPermission
+	out, errOut, code := runToolClock(t, []string{"TZ=UTC0", "LC_ALL=C"}, now, func(time.Time) error { return wantErr }, "01010000")
+	if code != 1 || out != "" || !strings.Contains(errOut, "cannot set date") || !strings.Contains(errOut, wantErr.Error()) {
+		t.Fatalf("setter failure=(%q,%q,%d)", out, errOut, code)
 	}
-	// A non-format operand that is NOT the set-date grammar still fails loudly,
-	// but with the generic set-date diagnostic rather than the XSI-operand one.
-	_, errb, code = runTool(t, "not-a-format")
-	if code != 2 || !strings.Contains(errb, "not supported") || strings.Contains(errb, "mmddhhmm") {
-		t.Errorf("date <garbage>: code=%d err=%q", code, errb)
+}
+
+func TestDateXSIYearDefaultUsesSelectedTimezone(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC) // still 2025 in EST5
+	for _, tc := range []struct {
+		name string
+		args []string
+		year int
+	}{
+		{"TZ wall clock", []string{"01010000"}, 2025},
+		{"u UTC wall clock", []string{"-u", "01010000"}, 2026},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got time.Time
+			_, errOut, code := runToolClock(t, []string{"TZ=EST5", "LC_ALL=C"}, now, func(at time.Time) error { got = at; return nil }, tc.args...)
+			if code != 0 || errOut != "" || got.Year() != tc.year {
+				t.Fatalf("result=(%v,%q,%d), want year %d", got, errOut, code, tc.year)
+			}
+		})
 	}
 }
 
@@ -323,11 +405,6 @@ func TestDateErrors(t *testing.T) {
 	_, errb, code = runTool(t, "-d", "@0", "-r", "x")
 	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
 		t.Errorf("-d with -r: code=%d err=%q", code, errb)
-	}
-	// Set-date operand mode is documented-but-unsupported.
-	_, errb, code = runTool(t, "12011030")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Errorf("set-date: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, "--set", "@0")
 	if code != 2 || !strings.Contains(errb, "not supported") {
@@ -357,7 +434,7 @@ func TestDateInvalidUsageDiagnostics(t *testing.T) {
 		{"-f", "no-such-file"},         // unreadable date file
 		{"-r", "no-such-file"},         // unreadable reference file
 		{"+%Y", "+%m"},                 // extra operand
-		{"12011030"},                   // set-date operand form (unsupported)
+		{"13311030"},                   // invalid set-date operand fields
 		{"--set", "@0"},                // set-date option (unsupported)
 		{"-d", "@0", "-r", "x"},        // mutually exclusive date sources
 		{"--resolution", "+%Y"},        // --resolution excludes formatting

@@ -1,5 +1,5 @@
-// Package datecmd implements date(1) per the GNU coreutils manual
-// (C locale): print the current (or specified) time in the default
+// Package datecmd implements date(1) per POSIX Issue 7 plus documented GNU
+// extensions: print the current (or specified) time in the default
 // format or per a +FORMAT operand built from strftime directives.
 //
 // Supported directives: %Y %m %d %H %M %S %y %j %a %A %b %h %B %e %T
@@ -16,7 +16,8 @@
 //
 // -d STRING parses a documented subset (RFC 3339, @EPOCH,
 // "YYYY-MM-DD [HH:MM[:SS]]"); anything else is a clear error. Setting
-// the system date is documented-but-unsupported.
+// the system date through the XSI mmddhhmm[[cc]yy] operand is supported
+// through a platform clock setter; the GNU -s extension remains separate.
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/date/date.go (BSD-3-Clause).
 // Changes: rewired to the tool framework; strftime rewritten as a
@@ -34,18 +35,25 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/cmds/internal/tzenv"
+	sharedlocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
 var cmd = &tool.Tool{
 	Name:     "date",
-	Synopsis: "Display date and time in the given FORMAT (C locale).",
-	Usage:    "date [OPTION]... [+FORMAT]",
+	Synopsis: "Display or set date and time using the selected locale.",
+	Usage:    "date [-u] [+FORMAT]\n       date [-u] mmddhhmm[[cc]yy]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithClock(rc, args, time.Now, setSystemClock)
+}
+
+type clockSetter func(time.Time) error
+
+func runWithClock(rc *tool.RunContext, args []string, now func() time.Time, setClock clockSetter) int {
 	fs := tool.NewFlags(cmd.Name)
 	utc := fs.BoolP("utc", "u", false, "print in Coordinated Universal Time (UTC)")
 	universal := fs.Bool("universal", false, "same as --utc")
@@ -73,8 +81,12 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.NotSupported(rc, cmd, "setting the system date")
 	}
 
-	loc := tzenv.Location(rc.Env)
-	names := selectDateLocale(rc.Env)
+	loc := dateLocation(rc.Env)
+	names, err := selectDateLocale(rc.Env)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "date: %v\n", err)
+		return 1
+	}
 	if *utc || *universal || *uct {
 		loc = time.UTC
 	}
@@ -93,6 +105,24 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "--resolution is mutually exclusive with date formatting")
 		}
 		return writeOutput(rc, "0.000000001\n")
+	}
+	if len(operands) > 0 && !strings.HasPrefix(operands[0], "+") {
+		if len(operands) > 1 {
+			return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
+		}
+		formatOption := fs.Changed("iso-8601") || *rfc3339 != "" || *rfcEmail || *rfc822 || *rfc2822
+		if sources != 0 || formatOption || *debug {
+			return tool.UsageError(rc, cmd, "the XSI set-date operand cannot be combined with a date source or output-format option")
+		}
+		target, err := parseXSISetDate(operands[0], now().In(loc), loc)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "invalid XSI set-date operand %q: %v", operands[0], err)
+		}
+		if err := setClock(target); err != nil {
+			fmt.Fprintf(rc.Err, "date: cannot set date: %v\n", err)
+			return 1
+		}
+		return writeOutput(rc, strftime(target.In(loc), "%a %b %e %H:%M:%S %Z %Y", names)+"\n")
 	}
 	format, code := selectFormat(rc, operands, *iso8601, fs.Changed("iso-8601"), *rfc3339, *rfcEmail || *rfc822 || *rfc2822)
 	if code >= 0 {
@@ -122,7 +152,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return status
 	}
 
-	t := time.Now()
+	t := now()
 	switch {
 	case *ref != "":
 		fi, err := os.Stat(rc.Path(*ref))
@@ -166,16 +196,7 @@ func selectFormat(rc *tool.RunContext, operands []string, iso string, isoSet boo
 			return "", tool.UsageError(rc, cmd, "extra operand %q", operands[1])
 		}
 		if !strings.HasPrefix(operands[0], "+") {
-			// The XSI synopsis `date [-u] mmddhhmm[[cc]yy]` sets the system
-			// clock. Recognize that operand grammar so the refusal names the
-			// specific interface; any other non-format operand is refused with
-			// the generic set-date message. Setting the system clock is a
-			// privileged, host-mutating operation outside the agent userland's
-			// scope, so it is a documented loud refusal, never a silent no-op.
-			if isSetDateOperand(operands[0]) {
-				return "", tool.NotSupported(rc, cmd, "the XSI set-date operand mmddhhmm[[cc]yy] (setting the system clock)")
-			}
-			return "", tool.NotSupported(rc, cmd, "setting the system date")
+			return "", tool.UsageError(rc, cmd, "invalid date operand %q", operands[0])
 		}
 		format = operands[0][1:]
 		formatCount++
@@ -222,6 +243,57 @@ func isSetDateOperand(s string) bool {
 		}
 	}
 	return true
+}
+
+// parseXSISetDate parses mmddhhmm[[cc]yy]. When the year is omitted it uses
+// the current year in the selected timezone. A two-digit year follows the
+// Issue 7 mapping: 69..99 => 1969..1999 and 00..68 => 2000..2068.
+func parseXSISetDate(s string, now time.Time, loc *time.Location) (time.Time, error) {
+	if !isSetDateOperand(s) {
+		return time.Time{}, fmt.Errorf("expected mmddhhmm, mmddhhmmyy, or mmddhhmmccyy")
+	}
+	field := func(start int) int {
+		n, _ := strconv.Atoi(s[start : start+2])
+		return n
+	}
+	month, day, hour, minute := field(0), field(2), field(4), field(6)
+	year := now.Year()
+	switch len(s) {
+	case 10:
+		yy := field(8)
+		if yy >= 69 {
+			year = 1900 + yy
+		} else {
+			year = 2000 + yy
+		}
+	case 12:
+		cc, yy := field(8), field(10)
+		year = cc*100 + yy
+	}
+	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 {
+		return time.Time{}, fmt.Errorf("field outside its permitted range")
+	}
+	t := time.Date(year, time.Month(month), day, hour, minute, 0, 0, loc)
+	if t.Year() != year || int(t.Month()) != month || t.Day() != day || t.Hour() != hour || t.Minute() != minute {
+		return time.Time{}, fmt.Errorf("date does not exist in the selected timezone")
+	}
+	return t, nil
+}
+
+// dateLocation applies date's stricter Issue 7 TZ rule: an unset or null TZ
+// selects the system default. Other values use the shared pure-Go POSIX/IANA
+// resolver. The generic resolver intentionally gives null TZ UTC semantics for
+// glibc-shaped callers, so date must preserve this utility-specific rule here.
+func dateLocation(env []string) *time.Location {
+	for i := len(env) - 1; i >= 0; i-- {
+		if value, ok := strings.CutPrefix(env[i], "TZ="); ok {
+			if value == "" {
+				return time.Local
+			}
+			return tzenv.FromValue(value)
+		}
+	}
+	return time.Local
 }
 
 func isoFormat(rc *tool.RunContext, spec string) (string, int) {
@@ -316,6 +388,7 @@ type dateLocale struct {
 	months        [12]string
 	monthsShort   [12]string
 	latin1        bool
+	german        bool
 }
 
 var germanDateLocale = dateLocale{
@@ -323,38 +396,34 @@ var germanDateLocale = dateLocale{
 	weekdaysShort: [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"},
 	months:        [12]string{"Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"},
 	monthsShort:   [12]string{"Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"},
+	german:        true,
 }
 
 // selectDateLocale applies POSIX locale precedence for the LC_TIME category:
 // a non-empty LC_ALL, then LC_TIME, then LANG. C/POSIX and an absent locale
 // use Go's C-locale names; de_DE is embedded so standalone binaries do not
 // depend on host locale archives, which are routinely absent in containers.
-func selectDateLocale(env []string) dateLocale {
-	name := ""
-	for _, key := range []string{"LC_ALL", "LC_TIME", "LANG"} {
-		if value := lookupLastEnv(env, key); value != "" {
-			name = value
-			break
+func selectDateLocale(env []string) (dateLocale, error) {
+	name := sharedlocale.Resolve(env, sharedlocale.Time)
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ := strings.Cut(name, ".")
+	normalized := strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset))
+	if base == "C" || base == "POSIX" {
+		if normalized == "" || normalized == "UTF8" {
+			return dateLocale{}, nil
 		}
+		return dateLocale{}, fmt.Errorf("LC_TIME locale %q is unavailable", name)
 	}
-	lower := strings.ToLower(name)
-	if !strings.HasPrefix(lower, "de_de") {
-		return dateLocale{}
+	if base != "de_DE" {
+		return dateLocale{}, fmt.Errorf("LC_TIME locale %q is unavailable: embedded date data is limited to C/POSIX and de_DE", name)
+	}
+	if normalized != "" && normalized != "UTF8" && normalized != "ISO88591" {
+		return dateLocale{}, fmt.Errorf("LC_TIME locale %q is unavailable", name)
 	}
 	loc := germanDateLocale
-	charset := strings.NewReplacer("-", "", "_", "").Replace(lower)
-	loc.latin1 = strings.Contains(charset, "iso88591")
-	return loc
-}
-
-func lookupLastEnv(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			return env[i][len(prefix):]
-		}
-	}
-	return ""
+	// The unqualified certification locale is the ISO-8859-1 corpus.
+	loc.latin1 = normalized == "" || normalized == "ISO88591"
+	return loc, nil
 }
 
 func localeText(loc dateLocale, s string) string {
@@ -442,13 +511,14 @@ func strftime(t time.Time, f string, loc dateLocale) string {
 				b.WriteString(localeText(loc, loc.months[int(t.Month())-1]))
 			}
 		case 'c':
-			if loc.weekdaysShort[0] == "" {
+			if !loc.german {
 				b.WriteString(t.Format("Mon Jan _2 15:04:05 2006"))
 			} else {
-				fmt.Fprintf(&b, "%s %s %2d %02d:%02d:%02d %d",
+				// glibc de_DE d_t_fmt: "%a %d %b %Y %T %Z".
+				fmt.Fprintf(&b, "%s %02d %s %d %02d:%02d:%02d %s",
 					localeText(loc, loc.weekdaysShort[t.Weekday()]),
-					localeText(loc, loc.monthsShort[int(t.Month())-1]),
-					t.Day(), t.Hour(), t.Minute(), t.Second(), t.Year())
+					t.Day(), localeText(loc, loc.monthsShort[int(t.Month())-1]),
+					t.Year(), t.Hour(), t.Minute(), t.Second(), t.Format("MST"))
 			}
 		case 'C':
 			fmt.Fprintf(&b, "%02d", t.Year()/100)
@@ -459,9 +529,16 @@ func strftime(t time.Time, f string, loc dateLocale) string {
 			y, _ := t.ISOWeek()
 			fmt.Fprintf(&b, "%04d", y)
 		case 'r':
-			b.WriteString(t.Format("03:04:05 PM"))
+			if loc.german {
+				// de_DE has an empty am_pm value; glibc retains its separator.
+				b.WriteString(t.Format("03:04:05 "))
+			} else {
+				b.WriteString(t.Format("03:04:05 PM"))
+			}
 		case 'p':
-			if t.Hour() < 12 {
+			if loc.german {
+				break
+			} else if t.Hour() < 12 {
 				b.WriteString("AM")
 			} else {
 				b.WriteString("PM")
@@ -492,7 +569,11 @@ func strftime(t time.Time, f string, loc dateLocale) string {
 		case 'W':
 			fmt.Fprintf(&b, "%02d", weekNumber(t, time.Monday))
 		case 'x':
-			b.WriteString(t.Format("01/02/06"))
+			if loc.german {
+				b.WriteString(t.Format("02.01.2006"))
+			} else {
+				b.WriteString(t.Format("01/02/06"))
+			}
 		case 'X':
 			b.WriteString(t.Format("15:04:05"))
 		case 'z':

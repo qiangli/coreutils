@@ -102,17 +102,19 @@ Base synopsis `date [-u] [+format]` verified: directive set, field widths,
 `%n`/`%t`/`%%`; unknown directives print literally (spec: unspecified).
 Exit 0/>0. `TZ` implemented and tested (`cmds/date/date_test.go#TestDateTZ`).
 Environment: `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LC_TIME`, `TZ`,
-and XSI `NLSPATH`. Gap: XSI set-date operand `mmddhhmm[[cc]yy]` is rejected
-loudly while naming supported forms
-(RFC 3339, `@EPOCH`, `YYYY-MM-DD [HH:MM[:SS]]`) — implementation_gap
-(documented subset). `LC_TIME` precedence and non-C rendering are implemented
-and tested for de_DE UTF-8 and ISO-8859-1, including `LC_ALL`/`LC_TIME`/`LANG`
-precedence (`cmds/date/date_test.go#TestDateLCTimePrecedence`); `TZ` is likewise
-verified. Locale-sensitive diagnostics/catalog lookup and other unsupported
-locale effects remain implementation gaps. Evidence: `cmds/date/date.go`; also
-`#TestDateFormats`, `#TestDateErrors`, `#TestDateInvalidUsageDiagnostics`.
-Status: **partial**; display mode and the cited locale/TZ paths are verified,
-while set-date and message-catalog gaps remain.
+and XSI `NLSPATH`. Issue 722 closes the XSI set-date operand through an
+injectable clock setter, including all optional-year forms, field/calendar
+validation, current-year and 69/68 mapping, `TZ`/`-u`, setter errors, and
+successful default-format output. `TZ` unset or null selects the system default.
+`LC_TIME` precedence and complete bounded non-C rendering (`%c`, `%x`, `%X`,
+`%r`, `%p`, names, and alternative forms) are tested for de_DE UTF-8 and
+ISO-8859-1; unavailable locales fail before mutation. Evidence:
+`cmds/date/date_test.go#TestDateXSISetDateOperand`,
+`#TestDateXSISetDateRejectsBeforeMutationAndPropagatesFailure`,
+`#TestDateLCTimeCompleteFormatsAndUnsupported`, and `#TestDateTZ`.
+Status: **partial** only because translated diagnostics/`NLSPATH`, arbitrary
+locale catalogs, Go's inability to represent leap second 60, and unsupported
+platform clock setters remain residual.
 
 ## dd
 
