@@ -239,7 +239,8 @@ shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH
 fallback, a staged executable or shell whose digest is not the approved build
 recorded in the externally supplied build manifest (identity is mandatory and
-profile-exact: stock GNU Bash 5.3 for Profile C, Bashy 5.3 for Profile D), a
+profile-exact: GNU bash 5.3 with the stock -release flavor for Profile C,
+GNU bash 5.3 with the Bashy-specific -bashy-<revision> marker for Profile D), a
 provider cache the staged wrapper's own dispatch plan does not actually use, a
 shell not in POSIX mode, and POSIXLY_CORRECT failing to reach child processes.
 See [the POSIX owner gate](posix-owner-gate.md).

@@ -36,24 +36,40 @@ type buildManifest struct {
 	multicallSHA string // lower-case 64-hex
 }
 
-// profiles are the two approved certification profiles. Each pins WHICH shell
-// implementation is approved; both pin the same exact bash-5.3 version line
-// (approvedShellMajor.approvedShellMinor). The version/implementation checks
-// are a cross-check on top of the manifest digest — the digest is the build
-// identity, the version line merely has to agree with it.
+// profiles are the two approved certification profiles. BOTH approve a shell
+// that identifies as GNU bash exactly 5.3: Bashy is a bash-5.3 drop-in and its
+// staged shell reports the stock "GNU bash, version 5.3…" line — there is no
+// bashy-branded version-line prefix (a "bashy, GNU Bash … compatible" banner
+// belongs to the bashy front-door command, never to the staged shell). What
+// separates the profiles is the RELEASE FLAVOR the build stamps after the
+// version digits: an approved stock GNU release carries -release (Profile C),
+// a Bashy build carries the Bashy-specific -bashy-<revision> marker, e.g.
+// 5.3.0(1)-bashy-dev (Profile D). Each profile rejects the other's flavor.
+// The version/flavor checks are a cross-check on top of the manifest digest —
+// the digest is the build identity, the version line merely has to agree with
+// it.
 var profiles = map[string]struct {
-	impl  string // shellVersionRe group 1
+	bashy bool // false: stock -release flavor; true: -bashy-<revision> flavor
 	human string
 }{
-	"C": {impl: "GNU bash", human: "stock GNU Bash 5.3"},
-	"D": {impl: "bashy", human: "Bashy 5.3"},
+	"C": {bashy: false, human: "stock GNU Bash 5.3 (a -" + approvedStockFlavor + " build)"},
+	"D": {bashy: true, human: "Bashy 5.3 (GNU bash 5.3 with a -bashy-<revision> release marker)"},
+}
+
+// profileKnown reports whether p names an approved certification profile.
+func profileKnown(p string) bool {
+	_, ok := profiles[p]
+	return ok
 }
 
 // Both approved profiles run exactly a 5.3 shell: 5.2 is the previous release
-// and 5.4 a future one, and neither is the certified configuration.
+// and 5.4 a future one, and neither is the certified configuration. Profile
+// C's approved stock builds are -release; alpha, beta, rc, and maint flavors
+// are not certified stock releases.
 const (
-	approvedShellMajor = 5
-	approvedShellMinor = 3
+	approvedShellMajor  = 5
+	approvedShellMinor  = 3
+	approvedStockFlavor = "release"
 )
 
 // sha256Re is the ONLY accepted digest shape: exactly 64 hexadecimal
@@ -135,7 +151,7 @@ func loadBuildManifest(path, wantProfile string) (buildManifest, []Finding) {
 	case !seen["profile"]:
 		out = append(out, Finding{Check: "manifest",
 			Detail: fmt.Sprintf("%s does not record a profile", path)})
-	case profiles[m.profile].impl == "":
+	case !profileKnown(m.profile):
 		out = append(out, Finding{Check: "manifest",
 			Detail: fmt.Sprintf("%s records unknown profile %q (approved profiles: C, D)", path, m.profile)})
 	case m.profile != wantProfile:

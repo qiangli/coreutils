@@ -45,9 +45,12 @@ host PATH fallback, and a staged entry that is not the approved multicall are
 all rejections. Identity is rooted in --manifest, the approved build/run
 manifest (key<TAB>value rows: profile, shell_sha256, multicall_sha256) written
 when the approved builds were produced — never in the staged binaries
-themselves. Profile C certifies approved stock GNU Bash 5.3; Profile D
-certifies approved Bashy 5.3; 5.2, 5.4, a wrong implementation, or a manifest
-for the other profile all reject. --shell takes a command NAME (default sh)
+themselves. Both approved shells report the stock "GNU bash, version 5.3…"
+line and differ only in release flavor: Profile C certifies approved stock GNU
+Bash 5.3 (-release) and rejects any -bashy- build; Profile D certifies Bashy
+5.3, a GNU bash 5.3 build carrying the Bashy-specific -bashy-<revision>
+release marker (e.g. 5.3.0(1)-bashy-dev), and rejects stock flavors. 5.2,
+5.4, a wrong release flavor, or a manifest for the other profile all reject. --shell takes a command NAME (default sh)
 resolved through the staged PATH — a host shell path is a usage error, not an
 input. Run the runtime subcommand from INSIDE the staged environment, so the
 PATH, BASHY_BIN_CACHE, and POSIXLY_CORRECT it validates are the ones the
@@ -194,7 +197,7 @@ func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) 
 		switch name {
 		case "--profile":
 			v, ok := take()
-			if !ok || profiles[v].impl == "" {
+			if !ok || !profileKnown(v) {
 				return usage("--profile requires the profile being certified: C (stock GNU Bash 5.3) or D (Bashy 5.3)")
 			}
 			cfg.profile = v

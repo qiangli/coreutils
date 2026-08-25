@@ -37,8 +37,9 @@
 //   - a shell resolved from the host PATH, one whose bytes do not hash to
 //     the manifest's approved shell build (a --version line is forgeable and
 //     is never a build identity), or one whose reported identity is not the
-//     profile's — stock GNU Bash exactly 5.3 for Profile C, Bashy exactly
-//     5.3 for Profile D
+//     profile's — GNU bash exactly 5.3 in both, with the stock -release
+//     flavor for Profile C and the Bashy-specific -bashy-<revision> release
+//     marker for Profile D
 //   - a shell that is not in POSIX mode, or an environment in which
 //     POSIXLY_CORRECT=1 does not reach child processes
 //

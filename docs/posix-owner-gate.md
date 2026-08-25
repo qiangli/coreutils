@@ -46,7 +46,7 @@ compares row by row.
 | host PATH fallback | a staged runtime in which a multicall-owned name resolves outside the staged tool directory (or not at all) |
 | unapproved executable identity | a staged entry — even one inside the tool directory — whose resolved target does not hash to the manifest's approved multicall digest: a staged symlink to an arbitrary host `/bin` tool fails here |
 | host PATH shell / unapproved shell build | the interrogated shell resolving outside the staged directory, or its bytes not hashing to the manifest's approved `shell_sha256` — a forgeable `--version` line or target triplet is never accepted as a build identity |
-| wrong shell identity for the profile | a digest-proven shell whose reported identity still disagrees with the profile: Profile C requires stock GNU Bash exactly 5.3, Profile D requires Bashy exactly 5.3 — 5.2, 5.4, a wrong implementation, or a missing build identifier all reject |
+| wrong shell identity for the profile | a digest-proven shell whose reported identity still disagrees with the profile: both profiles require GNU bash exactly 5.3, and the release flavor decides between them — Profile C requires the stock `-release` flavor and rejects any `-bashy-` build, Profile D requires the Bashy-specific `-bashy-<revision>` marker (e.g. `5.3.0(1)-bashy-dev`) and rejects stock flavors; 5.2, 5.4, a non-shell banner (`bashy, GNU Bash … compatible` is the front-door command, not the shell), or a missing build identifier all reject |
 | broken classification transcript | the shell's classification transcript not accounting for exactly the 116 expected names: duplicates, extras, missing and malformed rows each reject |
 | wrong effective owner in the shell | `type -t` classifying a name differently from what its effective selector requires (see overlaps below) |
 | shell not in POSIX mode | `set -o` does not report `posix on` |
@@ -132,10 +132,18 @@ It verifies, in order:
    `--bindir` is a rejection. The resolved shell's bytes must hash to the
    manifest's `shell_sha256` — the build identity is the digest, because a
    `--version` line or target triplet is forgeable. Only a digest-proven
-   shell is then cross-checked against what it reports: the profile's
-   approved implementation (stock GNU Bash for Profile C, Bashy for
-   Profile D), **exactly** version 5.3 (5.2 and 5.4 both reject), and a
-   non-empty build identifier. No probe runs against an unvalidated shell.
+   shell is then cross-checked against what it reports. Both approved shells
+   report the stock `GNU bash, version 5.3…` line — Bashy is a bash-5.3
+   drop-in, so its staged shell prints e.g.
+   `GNU bash, version 5.3.0(1)-bashy-dev (a0a0315)`, and a
+   `bashy, GNU Bash … compatible` banner (the bashy front-door command's) is
+   never a shell version line. The cross-check requires GNU bash
+   **exactly** version 5.3 (5.2 and 5.4 both reject), the profile's approved
+   release flavor — stock `-release` for Profile C (any `-bashy-` build
+   rejects, even one whose digest was accidentally pinned), the
+   Bashy-specific `-bashy-<revision>` marker for Profile D (stock flavors
+   reject) — and a non-empty build identifier. No probe runs against an
+   unvalidated shell.
 6. **Shell-effective ownership** — one spawn of the staged shell classifies
    all 116 names with `type -t`. The transcript is parsed strictly: exactly
    one well-formed row per expected name (116 unique names); duplicate,

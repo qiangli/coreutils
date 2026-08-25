@@ -253,17 +253,27 @@ func runShellExec(rc *tool.RunContext, shell string, args ...string) (string, er
 // fails the probe loudly, which is the fail-closed direction.
 const classifyScript = `for n in "$@"; do t=$(type -t -- "$n" 2>/dev/null) || t=none; [ -n "$t" ] || t=none; printf '%s %s\n' "$n" "$t"; done`
 
-// shellVersionRe recognizes the version line of the two approved Profile C/D
-// shells. Group 1 is the implementation, groups 2/3 the major/minor version,
-// group 4 the build identifier. Observed forms:
+// shellVersionRe recognizes the GNU Bash version line BOTH approved Profile
+// C/D shells report. Bashy is a bash-5.3 drop-in, so its staged shell reports
+// the stock line shape and is distinguished only by its Bashy-specific
+// release flavor — a "bashy, GNU Bash … compatible" banner is the bashy
+// front-door command's, never the staged shell's, and does not parse here.
+// Observed forms:
 //
-//	GNU bash, version 5.3.8(1)-release (x86_64-pc-linux-gnu)   (Profile C)
-//	bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)   (Profile D)
+//	GNU bash, version 5.3.8(1)-release (x86_64-pc-linux-gnu)   (stock — Profile C)
+//	GNU bash, version 5.3.0(1)-bashy-dev (a0a0315)             (Bashy — Profile D)
 //
-// The line is a CROSS-CHECK only: it is trivially forgeable, so the build
-// identity is the manifest digest (verifyShellIdentity checks that first), and
-// this parse merely requires the proven binary to also SAY the right thing.
-var shellVersionRe = regexp.MustCompile(`^(GNU bash|bashy)\b.* version (\d+)\.(\d+)\S* \(([^()]+)\)\s*$`)
+// Groups: 1/2 major/minor, 3 patch, 4 build revision, 5 release flavor,
+// 6 build identifier. The line is a CROSS-CHECK only: it is trivially
+// forgeable, so the build identity is the manifest digest
+// (verifyShellIdentity checks that first), and this parse merely requires the
+// proven binary to also SAY the right thing.
+var shellVersionRe = regexp.MustCompile(`^GNU bash, version (\d+)\.(\d+)\.(\d+)\((\d+)\)-(\S+) \(([^()]+)\)\s*$`)
+
+// bashyFlavorRe is the Bashy-specific release marker Profile D requires:
+// a "bashy-<build revision>" flavor (-bashy-dev, -bashy-rc1, …). A bare
+// "bashy" with no revision does not identify a build.
+var bashyFlavorRe = regexp.MustCompile(`^bashy-.+$`)
 
 // verifyRuntime checks the staged environment: POSIXLY_CORRECT in this very
 // process and in shell children and grandchildren, the approved multicall's
@@ -584,10 +594,12 @@ func resolveShell(rc *tool.RunContext, cfg runtimeConfig) (string, []Finding) {
 // shell_sha256 the externally supplied build manifest records — a --version
 // line or target triplet is forgeable and is never accepted as identity on its
 // own. Only a digest-proven shell is then cross-checked against what it
-// reports: the profile's approved implementation (stock GNU Bash for Profile
-// C, Bashy for Profile D), exactly version 5.3 (5.2 and 5.4 both reject), and
-// a non-empty build identifier. An unidentified or mismatched shell must not
-// be allowed to answer the classification and POSIX-mode probes.
+// reports: GNU bash exactly version 5.3 (5.2 and 5.4 both reject), the
+// profile's approved release flavor (stock -release for Profile C, the
+// Bashy-specific -bashy-<revision> marker for Profile D — each profile
+// rejects the other's flavor), and a non-empty build identifier. An
+// unidentified or mismatched shell must not be allowed to answer the
+// classification and POSIX-mode probes.
 func verifyShellIdentity(rc *tool.RunContext, shellPath string, cfg runtimeConfig) []Finding {
 	prof, ok := profiles[cfg.profile]
 	if !ok || !sha256Re.MatchString(cfg.shellSHA) {
@@ -617,23 +629,33 @@ func verifyShellIdentity(rc *tool.RunContext, shellPath string, cfg runtimeConfi
 	m := shellVersionRe.FindStringSubmatch(first)
 	if m == nil {
 		return []Finding{{Check: "shell-identity",
-			Detail: fmt.Sprintf("%s reports %q, which does not identify an approved Profile C/D shell (GNU bash or bashy, with version and build)", shellPath, first)}}
+			Detail: fmt.Sprintf(`%s reports %q, which is not a GNU Bash version line ("GNU bash, version …") — both approved shells report the stock line (a "bashy, GNU Bash … compatible" banner is the bashy front-door command, never the staged shell)`, shellPath, first)}}
 	}
-	if m[1] != prof.impl {
-		return []Finding{{Check: "shell-identity",
-			Detail: fmt.Sprintf("%s identifies as %s %s.%s; profile %s requires %s",
-				shellPath, m[1], m[2], m[3], cfg.profile, prof.human)}}
-	}
-	major, errMaj := strconv.Atoi(m[2])
-	minor, errMin := strconv.Atoi(m[3])
+	flavor, build := m[5], m[6]
+	major, errMaj := strconv.Atoi(m[1])
+	minor, errMin := strconv.Atoi(m[2])
 	if errMaj != nil || errMin != nil || major != approvedShellMajor || minor != approvedShellMinor {
 		return []Finding{{Check: "shell-identity",
-			Detail: fmt.Sprintf("%s is %s %s.%s (build %s); profile %s requires %s — exactly version %d.%d",
-				shellPath, m[1], m[2], m[3], m[4], cfg.profile, prof.human, approvedShellMajor, approvedShellMinor)}}
+			Detail: fmt.Sprintf("%s is GNU bash %s.%s (flavor -%s, build %s); profile %s requires %s — exactly version %d.%d",
+				shellPath, m[1], m[2], flavor, build, cfg.profile, prof.human, approvedShellMajor, approvedShellMinor)}}
 	}
-	if strings.TrimSpace(m[4]) == "" {
+	switch {
+	case prof.bashy && !bashyFlavorRe.MatchString(flavor):
 		return []Finding{{Check: "shell-identity",
-			Detail: fmt.Sprintf("%s (%s %s.%s) reports no build identifier", shellPath, m[1], m[2], m[3])}}
+			Detail: fmt.Sprintf("%s is GNU bash %s.%s with release flavor -%s, not a Bashy build; profile %s requires %s",
+				shellPath, m[1], m[2], flavor, cfg.profile, prof.human)}}
+	case !prof.bashy && strings.Contains(flavor, "bashy"):
+		return []Finding{{Check: "shell-identity",
+			Detail: fmt.Sprintf("%s is a Bashy build (GNU bash %s.%s, release flavor -%s); profile %s requires %s",
+				shellPath, m[1], m[2], flavor, cfg.profile, prof.human)}}
+	case !prof.bashy && flavor != approvedStockFlavor:
+		return []Finding{{Check: "shell-identity",
+			Detail: fmt.Sprintf("%s is GNU bash %s.%s with release flavor -%s; profile %s requires %s — the approved stock flavor is -%s",
+				shellPath, m[1], m[2], flavor, cfg.profile, prof.human, approvedStockFlavor)}}
+	}
+	if strings.TrimSpace(build) == "" {
+		return []Finding{{Check: "shell-identity",
+			Detail: fmt.Sprintf("%s (GNU bash %s.%s-%s) reports no build identifier", shellPath, m[1], m[2], flavor)}}
 	}
 	return nil
 }

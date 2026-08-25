@@ -465,11 +465,17 @@ const (
 	hostToolBody  = "#!/bin/sh\n# arbitrary host /bin tool\nexit 0\n"
 )
 
-// The approved Profile C/D version lines: both exactly bash-5.3-family, as the
-// profiles require.
+// The approved Profile C/D version lines. BOTH are the stock GNU Bash line —
+// Bashy is a bash-5.3 drop-in, so its staged shell reports "GNU bash,
+// version 5.3.0(1)-bashy-dev (a0a0315)" (this is what a real `bash --version`
+// under Bashy prints), distinguished from stock only by the -bashy- release
+// flavor. inventedBashyBanner is the bashy FRONT-DOOR command's banner: it is
+// real output of `bashy --version`, but it is not a shell version line and a
+// gate that accepts it is classifying the wrong executable.
 const (
-	approvedBashLine  = "GNU bash, version 5.3.8(1)-release (x86_64-pc-linux-gnu)"
-	approvedBashyLine = "bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)"
+	approvedBashLine    = "GNU bash, version 5.3.8(1)-release (x86_64-pc-linux-gnu)"
+	approvedBashyLine   = "GNU bash, version 5.3.0(1)-bashy-dev (a0a0315)"
+	inventedBashyBanner = "bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)"
 )
 
 func sha256Hex(body string) string {
@@ -836,9 +842,13 @@ func TestRuntimeGateRejectsHostPathShell(t *testing.T) {
 
 // TestRuntimeGateRejectsUnapprovedShellIdentity: even a shell whose BUILD
 // digest matches the manifest must also SAY the right thing for the profile —
-// exactly the approved implementation, exactly version 5.3, with a build
-// identifier. 5.2 and 5.4 are neighboring releases, not the certified one, and
-// an implementation approved for one profile is not approved for the other.
+// GNU bash exactly version 5.3, the profile's approved release flavor, and a
+// build identifier. 5.2 and 5.4 are neighboring releases, not the certified
+// one; a flavor approved for one profile is not approved for the other; and a
+// "bashy," banner never identifies a shell at all. Every case here models the
+// digests PASSING (the manifest pins exactly the staged bytes) — including
+// "Bashy build under profile C", the accidentally-pinned-Bashy-bytes case:
+// the flavor cross-check must still reject even though the digest agrees.
 func TestRuntimeGateRejectsUnapprovedShellIdentity(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
@@ -847,16 +857,32 @@ func TestRuntimeGateRejectsUnapprovedShellIdentity(t *testing.T) {
 	cases := []struct {
 		name, profile, line, want string
 	}{
-		{"foreign shell", "C", "zsh 5.9 (x86_64-apple-darwin24.0)", "does not identify an approved"},
-		{"garbage", "C", "hello world", "does not identify an approved"},
-		{"empty", "C", "", "does not identify an approved"},
+		{"foreign shell", "C", "zsh 5.9 (x86_64-apple-darwin24.0)", "not a GNU Bash version line"},
+		{"garbage", "C", "hello world", "not a GNU Bash version line"},
+		{"empty", "C", "", "not a GNU Bash version line"},
+		// The invented "bashy, GNU Bash …" prefix is the bashy front-door
+		// command's banner, not any shell's --version line: rejected under
+		// BOTH profiles, even though every digit in it is version-correct.
+		{"invented bashy banner under D", "D", inventedBashyBanner, "not a GNU Bash version line"},
+		{"invented bashy banner under C", "C", inventedBashyBanner, "not a GNU Bash version line"},
 		{"bash 4", "C", "GNU bash, version 4.4.20(1)-release (x86_64-pc-linux-gnu)", "exactly version 5.3"},
 		{"bash 5.2", "C", "GNU bash, version 5.2.32(1)-release (x86_64-pc-linux-gnu)", "exactly version 5.3"},
 		{"bash 5.4", "C", "GNU bash, version 5.4.0(1)-release (x86_64-pc-linux-gnu)", "exactly version 5.3"},
-		{"bashy 5.2", "D", "bashy, GNU Bash 5.2 compatible, version 5.2.1(1)-bashy-dev (a0a0315)", "exactly version 5.3"},
-		{"bashy 5.4", "D", "bashy, GNU Bash 5.4 compatible, version 5.4.0(1)-bashy-dev (a0a0315)", "exactly version 5.3"},
-		{"bashy under profile C", "C", approvedBashyLine, "profile C requires stock GNU Bash 5.3"},
-		{"GNU bash under profile D", "D", approvedBashLine, "profile D requires Bashy 5.3"},
+		{"bashy 5.2", "D", "GNU bash, version 5.2.1(1)-bashy-dev (a0a0315)", "exactly version 5.3"},
+		{"bashy 5.4", "D", "GNU bash, version 5.4.0(1)-bashy-dev (a0a0315)", "exactly version 5.3"},
+		// Cross-profile flavor rejections: Profile C accidentally pinning a
+		// Bashy build (digest passes, flavor says -bashy-) and Profile D
+		// pinning a stock -release build.
+		{"Bashy build under profile C", "C", approvedBashyLine, "profile C requires stock GNU Bash 5.3"},
+		{"stock GNU bash under profile D", "D", approvedBashLine, "profile D requires Bashy 5.3"},
+		// Flavor mismatches inside each profile: a non-release stock flavor
+		// is not the approved stock build, a bare -bashy flavor with no
+		// build revision does not identify a Bashy build, and a Bashy
+		// marker buried elsewhere in the flavor is not a leading marker.
+		{"beta flavor under C", "C", "GNU bash, version 5.3.8(1)-beta (x86_64-pc-linux-gnu)", "approved stock flavor is -release"},
+		{"maint flavor under C", "C", "GNU bash, version 5.3.8(1)-maint (x86_64-pc-linux-gnu)", "approved stock flavor is -release"},
+		{"bare bashy flavor under D", "D", "GNU bash, version 5.3.0(1)-bashy (a0a0315)", "profile D requires Bashy 5.3"},
+		{"trailing bashy marker under D", "D", "GNU bash, version 5.3.0(1)-release-bashy (a0a0315)", "profile D requires Bashy 5.3"},
 		{"blank build", "C", "GNU bash, version 5.3.8(1)-release ( )", "no build identifier"},
 	}
 	for _, c := range cases {
