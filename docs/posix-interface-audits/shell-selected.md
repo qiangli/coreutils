@@ -108,15 +108,11 @@ exec-style callers such as `env`, `xargs`, or `find -exec`.  They do not own a
 direct shell invocation.  A direct-shell defect must be fixed and evidenced in
 Bash/Bashy shell code; duplicating the change in `cmds/<name>` cannot close it.
 
-**Flag — `sh` entrypoint vs. canonical `shell_builtin`.**  The canonical
-interface ledger (`docs/posix-required-command-interfaces.tsv`) records `sh`
-with `parser_model = shell_builtin`, matching the other 20 names.  That is a
-misclassification: `sh` is not an intrinsic selected inside a running shell — it
-is the **file entrypoint** that argv[0]=`sh` (`shell_only`, no Go package)
-resolves and executes, exactly as this audit's routing places it (`sh` = file).
-`time` is already correctly `shell_keyword` in the same ledger.  This audit does
-not edit that TSV; the discrepancy is flagged here for the ledger owner to
-reconcile `sh`'s `parser_model` to a file/entrypoint model.
+**`sh` entrypoint reconciliation.**  The canonical interface ledger now records
+`sh` with `parser_model = shell_entrypoint` (commit `fe6f45d`), rather than the
+earlier incorrect `shell_builtin` classification.  This matches the actual
+file entrypoint that argv0=`sh` (`shell_only`, no Go package) resolves and
+executes.  `time` remains correctly classified as `shell_keyword`.
 
 ## Priority summary
 
@@ -209,7 +205,7 @@ Normative interface: [`read [-r] var...`](https://pubs.opengroup.org/onlinepubs/
 
 ### `sh` — evidence_gap, critical (245)
 
-Normative interfaces: [`sh` command-file, `-c` command-string, and `-s` stdin forms](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html), with required `-a -b -C -e -f -h -i -m -n -u -v -x -o`, matching `+` forms, plus `-c` and `-s`; `-o/+o` take an option name.  The interface also owns shell grammar, expansion, redirection, execution, environment/startup, traps, jobs, and exit semantics.  Profile D routing is the argv0=`sh` strict route described above; Profile C is Bash 5.3 invoked as `sh`.  `sh_08:TP1` passes both arms of the accepted 9,337/9,337 remote pair and Sprint 68 retired eight selected `sh_01`/`sh_03` identities, but neither fact proves the 245-testable-TP command as a whole.  The canonical shell evidence lane is empty, so the only defensible classification is evidence gap.  Note also the ledger flag raised in the routing section: the canonical TSV records `sh` as `parser_model = shell_builtin`, but `sh` is the file entrypoint argv[0]=`sh` resolves and executes, not an intrinsic builtin — the ledger owner should reconcile that column.
+Normative interfaces: [`sh` command-file, `-c` command-string, and `-s` stdin forms](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html), with required `-a -b -C -e -f -h -i -m -n -u -v -x -o`, matching `+` forms, plus `-c` and `-s`; `-o/+o` take an option name.  The interface also owns shell grammar, expansion, redirection, execution, environment/startup, traps, jobs, and exit semantics.  Profile D routing is the argv0=`sh` strict route described above; Profile C is Bash 5.3 invoked as `sh`.  `sh_08:TP1` passes both arms of the accepted 9,337/9,337 remote pair and Sprint 68 retired eight selected `sh_01`/`sh_03` identities, but neither fact proves the 245-testable-TP command as a whole.  The canonical shell evidence lane is empty, so the only defensible classification is evidence gap.  The former ledger misclassification is closed by canonical commit `fe6f45d`, which records `sh` as `shell_entrypoint`.
 
 ### `test` — evidence_gap, critical (207)
 
@@ -245,9 +241,9 @@ integrated (`54c05236` is patch-equivalent to the shipped `031d47e2`), so **no
 reintegration or re-measurement is requested**; the residual `kill:TP9`/`TP8`
 are shared A/B results to attribute in the suite/environment, not code to
 change.  The targeted ARM `fc` control/candidate pair is already complete at
-53/53, so **no duplicate rerun is requested** either.  Separately, the ledger
-owner should reconcile `sh`'s `parser_model` from `shell_builtin` to a
-file/entrypoint model.  Only after those focused results cover stdout, stderr,
+53/53, so **no duplicate rerun is requested** either.  The ledger's `sh`
+parser-model reconciliation is already complete in `fe6f45d`.  Only after
+those focused results cover stdout, stderr,
 status, environment and shell effects should the canonical evidence ledger be
 updated by its owner.  This audit intentionally
 does not edit that TSV or generator.
