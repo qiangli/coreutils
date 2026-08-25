@@ -135,6 +135,13 @@ func run(rc *tool.RunContext, args []string) int {
 		hexStart, _ = strconv.Atoi(*hexSuffixes)
 	}
 	sfx := &suffixer{radix: radix, fixed: *suffixLen, useHex: useHex, hexStart: hexStart}
+	// Issue 7 fixes the omitted -a suffix length at two characters and
+	// requires failure after the resulting namespace is exhausted.  Preserve
+	// GNU's auto-widening extension outside the explicitly requested POSIX
+	// execution mode.
+	if !fs.Changed("suffix-length") && envPresent(rc.Env, "POSIXLY_CORRECT") {
+		sfx.fixed = 2
+	}
 	out := &outFiles{
 		rc:      rc,
 		prefix:  prefix,
@@ -190,6 +197,16 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func envPresent(env []string, name string) bool {
+	prefix := name + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // chunkInputHasKnownSize reports whether a named input is safe to materialize

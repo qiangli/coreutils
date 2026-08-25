@@ -3,6 +3,7 @@ package trcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -91,6 +92,36 @@ func TestTrDeleteSqueeze(t *testing.T) {
 		if out != c.want || code != 0 {
 			t.Errorf("%s: tr %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
 		}
+	}
+}
+
+type trFailReader struct {
+	done bool
+}
+
+func (r *trFailReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		copy(p, "abc")
+		return 3, nil
+	}
+	return 0, errors.New("injected read failure")
+}
+
+func TestTrInputReadErrorIsReported(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: &trFailReader{}, Out: &out, Err: &errb},
+	}
+	if code := run(rc, []string{"a-c", "A-C"}); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if out.String() != "ABC" {
+		t.Errorf("flushed stdout %q, want %q", out.String(), "ABC")
+	}
+	if !strings.Contains(errb.String(), "read error") || !strings.Contains(errb.String(), "injected read failure") {
+		t.Errorf("stderr %q lacks read failure", errb.String())
 	}
 }
 

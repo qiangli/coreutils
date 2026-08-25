@@ -149,6 +149,29 @@ func TestSplitAutoWiden(t *testing.T) {
 	}
 }
 
+func TestSplitPOSIXDefaultSuffixExhaustion(t *testing.T) {
+	dir := t.TempDir()
+	var input strings.Builder
+	for i := 0; i < 677; i++ {
+		input.WriteString("x\n")
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(input.String()), Out: &out, Err: &errb},
+	}
+	if code := run(rc, []string{"-l", "1"}); code != 1 {
+		t.Fatalf("exit %d, want 1 after the 676 two-letter suffixes", code)
+	}
+	if !strings.Contains(errb.String(), "suffixes exhausted") {
+		t.Fatalf("stderr %q does not report suffix exhaustion", errb.String())
+	}
+	files := listFiles(t, dir)
+	if len(files) != 676 || files[0] != "xaa" || files[len(files)-1] != "xzz" {
+		t.Fatalf("POSIX suffix namespace: count=%d first=%q last=%q", len(files), files[0], files[len(files)-1])
+	}
+}
+
 func TestSplitChunks(t *testing.T) {
 	dir := t.TempDir()
 	if _, _, code := runTool(t, dir, "abcdefghij", "-n", "3"); code != 0 {

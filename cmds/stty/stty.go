@@ -1,6 +1,7 @@
 package sttycmd
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -119,14 +120,24 @@ func printSettings(rc *tool.RunContext, fd int, all, save bool) int {
 		return 1
 	}
 	if save {
-		fmt.Fprintln(rc.Out, encodeState(state))
+		if _, err := fmt.Fprintln(rc.Out, encodeState(state)); err != nil {
+			fmt.Fprintf(rc.Err, "stty: write error: %v\n", err)
+			return 1
+		}
 		return 0
 	}
 	w, h, err := term.GetSize(fd)
 	if err != nil {
 		w, h = 0, 0
 	}
-	printReadableSettings(rc, state, h, w, all)
+	var report bytes.Buffer
+	reportRC := *rc
+	reportRC.Out = &report
+	printReadableSettings(&reportRC, state, h, w, all)
+	if _, err := rc.Out.Write(report.Bytes()); err != nil {
+		fmt.Fprintf(rc.Err, "stty: write error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -225,14 +236,18 @@ func applySettings(rc *tool.RunContext, fd int, ops []string) int {
 				fmt.Fprintf(rc.Err, "stty: %v\n", err)
 				return 1
 			}
-			fmt.Fprintf(rc.Out, "%d %d\n", h, w)
+			if _, err := fmt.Fprintf(rc.Out, "%d %d\n", h, w); err != nil {
+				return fail(fmt.Errorf("write error: %w", err))
+			}
 		case op == "baud":
 			state, err := getTerminalState(fd)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "stty: %v\n", err)
 				return 1
 			}
-			fmt.Fprintln(rc.Out, outputBaud(state))
+			if _, err := fmt.Fprintln(rc.Out, outputBaud(state)); err != nil {
+				return fail(fmt.Errorf("write error: %w", err))
+			}
 		case simpleModes[base] && (op == base || modeMayBeNegated(base)):
 			if err := applyMode(fd, op); err != nil {
 				return fail(err)

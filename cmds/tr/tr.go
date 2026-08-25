@@ -12,6 +12,7 @@ package trcmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -523,9 +524,13 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	in := bufio.NewReader(rc.In)
 	out := bufio.NewWriter(rc.Out)
 	lastOut := -1
+	var readErr error
 	for {
 		b, err := in.ReadByte()
 		if err != nil {
+			if err != io.EOF {
+				readErr = err
+			}
 			break
 		}
 		if deleting && member1[b] {
@@ -558,6 +563,9 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 			return 0
 		}
 		return fail(fmt.Sprintf("write error: %v", err))
+	}
+	if readErr != nil {
+		return fail(fmt.Sprintf("read error: %v", readErr))
 	}
 	return 0
 }

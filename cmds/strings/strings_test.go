@@ -3,6 +3,7 @@ package stringscmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,20 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type stringsFailReader struct{ delivered bool }
+
+func (r *stringsFailReader) Read(p []byte) (int, error) {
+	if !r.delivered {
+		r.delivered = true
+		return copy(p, "printable"), nil
+	}
+	return 0, errors.New("injected read failure")
+}
+
+type stringsFailWriter struct{}
+
+func (stringsFailWriter) Write([]byte) (int, error) { return 0, errors.New("injected write failure") }
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -66,6 +81,36 @@ func TestStrings(t *testing.T) {
 			t.Errorf("%s: strings %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
 		}
 	}
+}
+
+func TestStringsIOErrorsAreFailures(t *testing.T) {
+	t.Run("stdin read", func(t *testing.T) {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: t.TempDir(),
+			Stdio: tool.Stdio{In: &stringsFailReader{}, Out: &out, Err: &errb},
+		}
+		if code := run(rc, nil); code != 1 {
+			t.Fatalf("exit %d, want 1", code)
+		}
+		if !strings.Contains(errb.String(), "injected read failure") {
+			t.Errorf("stderr %q lacks read failure", errb.String())
+		}
+	})
+
+	t.Run("stdout write", func(t *testing.T) {
+		var errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: t.TempDir(),
+			Stdio: tool.Stdio{In: strings.NewReader("printable\n"), Out: stringsFailWriter{}, Err: &errb},
+		}
+		if code := run(rc, nil); code != 1 {
+			t.Fatalf("exit %d, want 1", code)
+		}
+		if !strings.Contains(errb.String(), "write error") {
+			t.Errorf("stderr %q lacks write failure", errb.String())
+		}
+	})
 }
 
 func TestStringsFiles(t *testing.T) {

@@ -5,6 +5,7 @@ package sttycmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"runtime"
@@ -16,6 +17,10 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type sttyFailWriter struct{}
+
+func (sttyFailWriter) Write([]byte) (int, error) { return 0, errors.New("injected write failure") }
 
 // openTTY returns the terminal side of a fresh pseudo-terminal pair,
 // skipping when the environment cannot allocate one.
@@ -122,6 +127,23 @@ func TestSttyRowsColsRejectsOverflow(t *testing.T) {
 	t.Run("platform vdisable", testSttyUsesPlatformVDisableAndPrintsUndef)
 	if runtime.GOOS == "linux" {
 		t.Run("Linux PTY speeds use Cflag", testLinuxPTYSpeedsUseCflag)
+	}
+}
+
+func TestSttyRequiredReportsPropagateWriteErrors(t *testing.T) {
+	tty := openTTY(t)
+	for _, args := range [][]string{nil, {"-a"}, {"-g"}} {
+		var errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: t.TempDir(),
+			Stdio: tool.Stdio{In: tty, Out: sttyFailWriter{}, Err: &errb},
+		}
+		if code := run(rc, args); code == 0 {
+			t.Errorf("stty %v ignored stdout failure", args)
+		}
+		if !strings.Contains(errb.String(), "write error") {
+			t.Errorf("stty %v stderr %q lacks write diagnostic", args, errb.String())
+		}
 	}
 }
 

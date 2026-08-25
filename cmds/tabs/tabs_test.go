@@ -2,12 +2,17 @@ package tabscmd
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/cmds/internal/terminfo"
 	"github.com/qiangli/coreutils/tool"
 )
+
+type tabsFailWriter struct{}
+
+func (tabsFailWriter) Write([]byte) (int, error) { return 0, errors.New("injected write failure") }
 
 // The fixture terminal's capabilities are the real xterm ones, so a rendered
 // sequence in a test below is byte-for-byte what a terminal would receive.
@@ -130,6 +135,21 @@ func TestPresetColumnsMatchPOSIX(t *testing.T) {
 				t.Errorf("%s is not ascending at index %d: %v", p.flag, i, p.stops)
 			}
 		}
+	}
+}
+
+func TestTabsOutputWriteErrorIsReported(t *testing.T) {
+	dir := fixtureDir(t)
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir: t.TempDir(), Env: []string{"TERMINFO=" + dir},
+		Stdio: tool.Stdio{Out: tabsFailWriter{}, Err: &errb},
+	}
+	if code := run(rc, []string{"-T", "demo", "8"}); code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+	if !strings.Contains(errb.String(), "write error") {
+		t.Errorf("stderr %q lacks write failure", errb.String())
 	}
 }
 
