@@ -35,14 +35,15 @@ func listMounts() ([]mountEntry, error) {
 			used = (st.Blocks - st.Bfree) * bs
 		}
 		out = append(out, mountEntry{
-			device: unescapeMount(f[0]),
-			point:  point,
-			fstype: f[2],
-			total:  st.Blocks * bs,
-			used:   used,
-			avail:  uint64(st.Bavail) * bs,
-			files:  st.Files,
-			ifree:  st.Ffree,
+			device:         unescapeMount(f[0]),
+			point:          point,
+			fstype:         f[2],
+			total:          st.Blocks * bs,
+			used:           used,
+			avail:          spaceFromBlocks(uint64(st.Bavail), st.Blocks, bs),
+			files:          st.Files,
+			ifree:          st.Ffree,
+			fileSlotsKnown: true,
 		})
 	}
 	return out, nil

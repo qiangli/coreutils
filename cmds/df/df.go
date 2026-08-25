@@ -1,5 +1,7 @@
-// Package dfcmd implements df per POSIX.1 Issue 7 (2016 Edition, XSI)
-// with GNU coreutils extensions where they do not conflict:
+// Package dfcmd implements the POSIX.1 Issue 7 (2016 Edition, XSI) df
+// interface with GNU coreutils extensions where they do not conflict.
+// Conformance evidence remains unverified until the full certification suite
+// covers platform probes and locale behavior.
 //
 //   - Space is reported in units of 512-byte blocks by default; -k
 //     selects 1024-byte units (POSIX XSI defaults, unconditional — not
@@ -12,6 +14,9 @@
 //     table already includes that field, so -t is idempotent; it never adds a
 //     synthetic record. GNU --total remains a separate grand-total extension.
 //     GNU type filtering is available only as --type=TYPE.
+//   - The default and -t tables include the XSI-required free-file-slot field.
+//     LC_MESSAGES catalogs are not yet provided; output uses the repository's
+//     documented deterministic C/POSIX message vocabulary.
 //
 // -h/-H print human-readable sizes (GNU extension). With FILE
 // arguments, only the file system containing each file is shown.
@@ -48,14 +53,15 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 // the per-platform listMounts (mounts_linux.go / mounts_darwin.go /
 // mounts_windows.go).
 type mountEntry struct {
-	device string
-	point  string
-	fstype string
-	total  uint64
-	used   uint64
-	avail  uint64
-	files  uint64
-	ifree  uint64
+	device         string
+	point          string
+	fstype         string
+	total          uint64
+	used           uint64
+	avail          spaceAmount
+	files          uint64
+	ifree          uint64
+	fileSlotsKnown bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -177,11 +183,24 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		printOutputTable(rc.Out, rows, fields, scale)
 	} else {
+		freeSlots := !*portable && !*human && !*si && *blockSize == "" &&
+			!*printType && !*all && !*inodes && !*local && !*noSync &&
+			!*doSync && len(includeTypes) == 0 && len(excludeTypes) == 0 &&
+			!*gnuTotal
+		if freeSlots {
+			for _, row := range rows {
+				if !row.fileSlotsKnown {
+					fmt.Fprintf(rc.Err, "df: free file-slot counts are unavailable for %s\n", row.point)
+					return 1
+				}
+			}
+		}
 		printTable(rc.Out, rows, tableOptions{
 			scale:     scale,
 			inodes:    *inodes,
 			printType: *printType,
 			portable:  *portable,
+			freeSlots: freeSlots,
 		})
 	}
 	return exit
@@ -199,6 +218,7 @@ type tableOptions struct {
 	inodes    bool
 	printType bool
 	portable  bool
+	freeSlots bool
 }
 
 func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
@@ -216,7 +236,7 @@ func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
 				m.device,
 				fmtValue(m.total, opt.scale),
 				fmtValue(m.used, opt.scale),
-				fmtValue(m.avail, opt.scale),
+				fmtSpaceValue(m.avail, opt.scale),
 				usePct(m.used, m.avail),
 				m.point)
 		}
@@ -246,18 +266,19 @@ func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
 	} else if opt.portable {
 		pctHdr = "Capacity" // POSIX -P header field
 	}
-	type line struct{ fsys, typ, size, used, avail, pct, mnt string }
+	type line struct{ fsys, typ, size, used, avail, pct, ifree, mnt string }
 	lines := make([]line, len(rows))
 	wf, ws, wu, wa, wp := len("Filesystem"), len(sizeHdr), len("Used"), len(availHdr), len(pctHdr)
-	wt := len("Type")
+	wt, wi := len("Type"), len("IFree")
 	for i, m := range rows {
 		l := line{
 			fsys:  m.device,
 			typ:   m.fstype,
 			size:  fmtValue(m.total, opt.scale),
 			used:  fmtValue(m.used, opt.scale),
-			avail: fmtValue(m.avail, opt.scale),
+			avail: fmtSpaceValue(m.avail, opt.scale),
 			pct:   usePct(m.used, m.avail),
+			ifree: strconv.FormatUint(m.ifree, 10),
 			mnt:   m.point,
 		}
 		if opt.inodes {
@@ -265,26 +286,35 @@ func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
 			l.size = strconv.FormatUint(m.files, 10)
 			l.used = strconv.FormatUint(iused, 10)
 			l.avail = strconv.FormatUint(m.ifree, 10)
-			l.pct = usePct(iused, m.ifree)
+			l.pct = usePct(iused, positiveSpace(m.ifree))
 		}
 		wf, ws, wu = max(wf, len(l.fsys)), max(ws, len(l.size)), max(wu, len(l.used))
 		wa, wp = max(wa, len(l.avail)), max(wp, len(l.pct))
 		wt = max(wt, len(l.typ))
+		wi = max(wi, len(l.ifree))
 		lines[i] = l
 	}
 	fmt.Fprintf(w, "%-*s", wf, "Filesystem")
 	if opt.printType {
 		fmt.Fprintf(w, " %-*s", wt, "Type")
 	}
-	fmt.Fprintf(w, " %*s %*s %*s %*s %s\n",
-		ws, sizeHdr, wu, usedHeader(opt.inodes), wa, availHdr, wp, pctHdr, "Mounted on")
+	fmt.Fprintf(w, " %*s %*s %*s %*s",
+		ws, sizeHdr, wu, usedHeader(opt.inodes), wa, availHdr, wp, pctHdr)
+	if opt.freeSlots {
+		fmt.Fprintf(w, " %*s", wi, "IFree")
+	}
+	fmt.Fprintln(w, " Mounted on")
 	for _, l := range lines {
 		fmt.Fprintf(w, "%-*s", wf, l.fsys)
 		if opt.printType {
 			fmt.Fprintf(w, " %-*s", wt, l.typ)
 		}
-		fmt.Fprintf(w, " %*s %*s %*s %*s %s\n",
-			ws, l.size, wu, l.used, wa, l.avail, wp, l.pct, l.mnt)
+		fmt.Fprintf(w, " %*s %*s %*s %*s",
+			ws, l.size, wu, l.used, wa, l.avail, wp, l.pct)
+		if opt.freeSlots {
+			fmt.Fprintf(w, " %*s", wi, l.ifree)
+		}
+		fmt.Fprintf(w, " %s\n", l.mnt)
 	}
 }
 
@@ -302,10 +332,47 @@ func fmtValue(b uint64, scale scaleMode) string {
 	return strconv.FormatUint(divCeil(b, scale.blockSize), 10)
 }
 
-// usePct is GNU's Use%: used/(used+avail) rounded up; "-" when both
-// are zero.
-func usePct(used, avail uint64) string {
-	if used == 0 && avail == 0 {
+type spaceAmount struct {
+	negative  bool
+	magnitude uint64
+}
+
+func positiveSpace(n uint64) spaceAmount { return spaceAmount{magnitude: n} }
+
+// spaceFromBlocks preserves the kernel's two's-complement representation of
+// a negative f_bavail. A positive available count cannot exceed total blocks;
+// a larger sign-bit value is therefore the negative value POSIX permits.
+func spaceFromBlocks(blocks, total, blockSize uint64) spaceAmount {
+	if blocks > total && blocks&(uint64(1)<<63) != 0 {
+		return spaceAmount{negative: true, magnitude: satMul(^blocks+1, blockSize)}
+	}
+	return positiveSpace(satMul(blocks, blockSize))
+}
+
+func fmtSpaceValue(value spaceAmount, scale scaleMode) string {
+	if !value.negative {
+		return fmtValue(value.magnitude, scale)
+	}
+	if scale.human {
+		return "-" + humanSize(value.magnitude, scale.base)
+	}
+	// "Next higher unit" is mathematical ceiling: -513 bytes in 512-byte
+	// units is -1, not -2.
+	units := uint64(0)
+	if scale.blockSize != 0 {
+		units = value.magnitude / scale.blockSize
+	}
+	if units == 0 {
+		return "0"
+	}
+	return "-" + strconv.FormatUint(units, 10)
+}
+
+// usePct is used/(used+avail), rounded up. POSIX permits negative available
+// space, which yields a positive percentage greater than 100 while the
+// normally available denominator remains positive.
+func usePct(used uint64, avail spaceAmount) string {
+	if used == 0 && avail.magnitude == 0 {
 		return "-"
 	}
 	// Keep the calculation exact even when the byte counters sum past
@@ -314,7 +381,15 @@ func usePct(used, avail uint64) string {
 	numerator := new(big.Int).SetUint64(used)
 	numerator.Mul(numerator, big.NewInt(100))
 	denominator := new(big.Int).SetUint64(used)
-	denominator.Add(denominator, new(big.Int).SetUint64(avail))
+	available := new(big.Int).SetUint64(avail.magnitude)
+	if avail.negative {
+		denominator.Sub(denominator, available)
+	} else {
+		denominator.Add(denominator, available)
+	}
+	if denominator.Sign() <= 0 {
+		return "-"
+	}
 	quotient := new(big.Int).Quo(numerator, denominator)
 	if new(big.Int).Mod(numerator, denominator).Sign() != 0 {
 		quotient.Add(quotient, big.NewInt(1))
@@ -548,13 +623,14 @@ func isRemoteType(t string) bool {
 }
 
 func totalRow(rows []mountEntry) mountEntry {
-	t := mountEntry{device: "total", point: "-", fstype: "-"}
+	t := mountEntry{device: "total", point: "-", fstype: "-", fileSlotsKnown: true}
 	for _, m := range rows {
 		t.total = satAdd(t.total, m.total)
 		t.used = satAdd(t.used, m.used)
-		t.avail = satAdd(t.avail, m.avail)
+		t.avail = addSpace(t.avail, m.avail)
 		t.files = satAdd(t.files, m.files)
 		t.ifree = satAdd(t.ifree, m.ifree)
+		t.fileSlotsKnown = t.fileSlotsKnown && m.fileSlotsKnown
 	}
 	return t
 }
@@ -564,6 +640,23 @@ func satAdd(a, b uint64) uint64 {
 		return ^uint64(0)
 	}
 	return a + b
+}
+
+func satMul(a, b uint64) uint64 {
+	if a != 0 && b > ^uint64(0)/a {
+		return ^uint64(0)
+	}
+	return a * b
+}
+
+func addSpace(a, b spaceAmount) spaceAmount {
+	if a.negative == b.negative {
+		return spaceAmount{negative: a.negative, magnitude: satAdd(a.magnitude, b.magnitude)}
+	}
+	if a.magnitude >= b.magnitude {
+		return spaceAmount{negative: a.negative, magnitude: a.magnitude - b.magnitude}
+	}
+	return spaceAmount{negative: b.negative, magnitude: b.magnitude - a.magnitude}
 }
 
 const defaultOutputFields = "source,fstype,itotal,iused,iavail,ipcent,size,used,avail,pcent,file,target"
@@ -666,13 +759,13 @@ func outputValue(m mountEntry, field string, scale scaleMode) string {
 	case "iavail":
 		return strconv.FormatUint(m.ifree, 10)
 	case "ipcent":
-		return usePct(iused, m.ifree)
+		return usePct(iused, positiveSpace(m.ifree))
 	case "size":
 		return fmtValue(m.total, scale)
 	case "used":
 		return fmtValue(m.used, scale)
 	case "avail":
-		return fmtValue(m.avail, scale)
+		return fmtSpaceValue(m.avail, scale)
 	case "pcent":
 		return usePct(m.used, m.avail)
 	case "file", "target":

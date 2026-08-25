@@ -173,7 +173,7 @@ func TestPortablePrintTypeAndInodesHeaders(t *testing.T) {
 // exact "Filesystem 512-blocks Used Available Capacity Mounted on"
 // header (1024-blocks with -k), with the percentage rounded up.
 func TestPortableExactOutput(t *testing.T) {
-	rows := []mountEntry{{device: "/dev/x", point: "/", total: 1 << 20, used: 1 << 19, avail: 1 << 19}}
+	rows := []mountEntry{{device: "/dev/x", point: "/", total: 1 << 20, used: 1 << 19, avail: positiveSpace(1 << 19)}}
 
 	var buf bytes.Buffer
 	printTable(&buf, rows, tableOptions{
@@ -201,7 +201,7 @@ func TestPortableExactOutput(t *testing.T) {
 // TestPortableRoundsPercentUp pins the POSIX -P rule that a fractional
 // <percentage used> is rounded to the next highest integer.
 func TestPortableRoundsPercentUp(t *testing.T) {
-	rows := []mountEntry{{device: "/dev/x", point: "/", total: 200 * 512, used: 1 * 512, avail: 199 * 512}}
+	rows := []mountEntry{{device: "/dev/x", point: "/", total: 200 * 512, used: 1 * 512, avail: positiveSpace(199 * 512)}}
 	var buf bytes.Buffer
 	printTable(&buf, rows, tableOptions{
 		scale:    scaleMode{blockSize: 512, header: "512-blocks"},
@@ -284,6 +284,9 @@ func TestXSITotalAllocatedSpaceOption(t *testing.T) {
 		if len(lines) < 2 || !strings.Contains(lines[0], "blocks") {
 			t.Errorf("df %v = %q, want header and per-filesystem total-space field", argv, out)
 		}
+		if !strings.Contains(lines[0], "IFree") {
+			t.Errorf("df %v header = %q, want required XSI free-file-slot field", argv, lines[0])
+		}
 		for _, line := range lines[1:] {
 			if strings.HasPrefix(line, "total") {
 				t.Errorf("df %v appended a GNU grand-total record: %q", argv, line)
@@ -302,6 +305,57 @@ func TestXSITotalAllocatedSpaceOption(t *testing.T) {
 	}
 	if out != "" {
 		t.Errorf("df -t missing-operand stdout = %q, want empty", out)
+	}
+}
+
+func TestXSIDefaultIncludesFreeFileSlots(t *testing.T) {
+	for _, argv := range [][]string{nil, {"-k"}} {
+		out, errb, code := runTool(t, argv...)
+		if code != 0 {
+			t.Fatalf("df %v code=%d stderr=%q", argv, code, errb)
+		}
+		if header := firstLine(out); !strings.Contains(header, "IFree") {
+			t.Fatalf("df %v header=%q, want required XSI free-file-slot field", argv, header)
+		}
+	}
+	if out, _, _ := runTool(t, "-P"); strings.Contains(firstLine(out), "IFree") {
+		t.Fatalf("df -P must retain exact six-field portable format: %q", firstLine(out))
+	}
+}
+
+func TestPortableNegativeAvailableAndOverCapacity(t *testing.T) {
+	rows := []mountEntry{{
+		device: "/dev/full", point: "/full",
+		total: 200 * 512, used: 200 * 512,
+		avail: spaceAmount{negative: true, magnitude: 50 * 512},
+	}}
+	var buf bytes.Buffer
+	printTable(&buf, rows, tableOptions{
+		scale: scaleMode{blockSize: 512, header: "512-blocks"}, portable: true,
+	})
+	want := "Filesystem 512-blocks Used Available Capacity Mounted on\n" +
+		"/dev/full 200 200 -50 134% /full\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("negative portable row=%q, want %q", got, want)
+	}
+}
+
+func TestSignedAvailableCounterAndRounding(t *testing.T) {
+	// Two's-complement -50 blocks as returned through an unsigned kernel ABI.
+	got := spaceFromBlocks(^uint64(49), 1000, 512)
+	if !got.negative || got.magnitude != 50*512 {
+		t.Fatalf("decoded available=%#v", got)
+	}
+	if text := fmtSpaceValue(got, scaleMode{blockSize: 512}); text != "-50" {
+		t.Fatalf("formatted available=%q, want -50", text)
+	}
+	if text := fmtSpaceValue(spaceAmount{negative: true, magnitude: 513}, scaleMode{blockSize: 512}); text != "-1" {
+		t.Fatalf("negative ceiling=%q, want -1", text)
+	}
+	// A sign-bit positive counter remains positive when it is within total.
+	huge := spaceFromBlocks(uint64(1)<<63, uint64(1)<<63, 1)
+	if huge.negative || huge.magnitude != uint64(1)<<63 {
+		t.Fatalf("huge positive available=%#v", huge)
 	}
 }
 
@@ -412,7 +466,7 @@ func TestUsePct(t *testing.T) {
 		{^uint64(0), ^uint64(0), "50%"},
 	}
 	for _, c := range cases {
-		if got := usePct(c.used, c.avail); got != c.want {
+		if got := usePct(c.used, positiveSpace(c.avail)); got != c.want {
 			t.Errorf("usePct(%d, %d) = %q, want %q", c.used, c.avail, got, c.want)
 		}
 	}

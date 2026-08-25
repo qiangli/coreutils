@@ -48,7 +48,7 @@ func listMounts() ([]mountEntry, error) {
 			fstype: "fixed",
 			total:  total,
 			used:   used,
-			avail:  availCaller,
+			avail:  positiveSpace(availCaller),
 		})
 	}
 	return out, nil
