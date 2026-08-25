@@ -93,6 +93,27 @@ func TestStandardInputFileModeComesFromFstat(t *testing.T) {
 	}
 }
 
+func TestExplicitInputFileDoesNotInspectStandardInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "input")
+	if err := os.WriteFile(path, []byte("Cat"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: closed, Out: &out, Err: &errb}}
+	code := cmd.Run(rc, []string{"input", "remote"})
+	if code != 0 || errb.String() != "" || !strings.HasPrefix(out.String(), "begin 640 remote\n") {
+		t.Fatalf("got (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+}
+
 func TestErrors(t *testing.T) {
 	for _, tc := range [][]string{{}, {"a", "b", "c"}, {"missing", "name"}} {
 		_, err, code := runTool(t, t.TempDir(), "", tc...)

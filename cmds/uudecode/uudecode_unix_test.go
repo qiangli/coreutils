@@ -52,6 +52,35 @@ func TestOverwriteFIFODoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestOverwriteWritableFileDoesNotRequireParentWrite(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "parent")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "target")
+	if err := os.WriteFile(target, []byte("old"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	if err := unix.Faccessat(unix.AT_FDCWD, target, unix.W_OK, unix.AT_EACCESS); err != nil {
+		t.Skipf("effective credentials cannot write fixture: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "begin-base64 640 parent/target\nRG9uZQ==\n====\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "Done" {
+		t.Fatalf("content=%q err=%v", got, err)
+	}
+}
+
 func TestDecodeFollowsFinalSymlinkWithoutReplacingIt(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")

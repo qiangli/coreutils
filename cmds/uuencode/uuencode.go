@@ -36,16 +36,8 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	input := rc.In
-	// POSIX requires the header to carry the input file's access bits. Standard
-	// input is still a file descriptor in a process invocation, so inspect it
-	// when the embedding exposes *os.File. A library embedding may instead
-	// supply an abstract Reader with no file metadata; 0666 is the explicit
-	// maximum-access fallback for that extension case.
-	mode, err := inputMode(input)
-	if err != nil {
-		fmt.Fprintf(rc.Err, "uuencode: standard input: %v\n", err)
-		return 1
-	}
+	var mode os.FileMode
+	var err error
 	remote := operands[0]
 	var file *os.File
 	if len(operands) == 2 {
@@ -62,6 +54,16 @@ func run(rc *tool.RunContext, args []string) int {
 		mode, err = inputMode(file)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "uuencode: %s: %v\n", operands[0], err)
+			return 1
+		}
+	} else {
+		// POSIX requires the header to carry standard input's access bits.
+		// Inspect its descriptor when the embedding exposes *os.File. A library
+		// embedding may instead supply an abstract Reader with no file metadata;
+		// 0666 is the explicit maximum-access fallback for that extension case.
+		mode, err = inputMode(input)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "uuencode: standard input: %v\n", err)
 			return 1
 		}
 	}

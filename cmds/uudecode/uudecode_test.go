@@ -139,9 +139,6 @@ func TestDecodeOutputLifecycleAndMode(t *testing.T) {
 	if code == 0 || errb == "" {
 		t.Fatalf("malformed input: err=%q code=%d", errb, code)
 	}
-	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
-		t.Fatalf("malformed decode changed target: %q, %v", got, err)
-	}
 
 	_, errb, code = runTool(t, dir, "begin-base64 777 out\nRG9uZQ==\n====\n")
 	if code != 0 || errb != "" {
@@ -174,13 +171,10 @@ func TestDecodeBase64MalformedDataRules(t *testing.T) {
 		if code == 0 || errb == "" {
 			t.Errorf("input=%q err=%q code=%d", input, errb, code)
 		}
-		if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
-			t.Errorf("bad target changed to %q, %v", got, err)
-		}
 	}
 }
 
-func TestOnlyDevStdoutIsSpecial(t *testing.T) {
+func TestHeaderAndOutputOverrideStdoutDistinctions(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := runTool(t, dir, "begin-base64 600 /dev/stdout\nQ2F0\n====\n")
 	if code != 0 || errb != "" || out != "Cat" {
@@ -188,15 +182,11 @@ func TestOnlyDevStdoutIsSpecial(t *testing.T) {
 	}
 
 	out, errb, code = runTool(t, dir, "begin-base64 600 -\nQ2F0\n====\n")
-	if code != 0 || errb != "" || out != "" {
+	if code != 0 || errb != "" || out != "Cat" {
 		t.Fatalf("dash header got (%q,%q,%d)", out, errb, code)
 	}
-	if got, err := os.ReadFile(filepath.Join(dir, "-")); err != nil || string(got) != "Cat" {
-		t.Fatalf("dash header file = %q, %v", got, err)
-	}
-
-	if err := os.Remove(filepath.Join(dir, "-")); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dir, "-")); !os.IsNotExist(err) {
+		t.Fatalf("dash header created a pathname: %v", err)
 	}
 	out, errb, code = runTool(t, dir, "begin-base64 600 ignored\nQ2F0\n====\n", "-o", "-")
 	if code != 0 || errb != "" || out != "" {
@@ -204,6 +194,36 @@ func TestOnlyDevStdoutIsSpecial(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(dir, "-")); err != nil || string(got) != "Cat" {
 		t.Fatalf("dash override file = %q, %v", got, err)
+	}
+}
+
+func TestOverwriteExistingRegularPreservesHardlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	alias := filepath.Join(dir, "alias")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	before, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "begin-base64 640 target\nRG9uZQ==\n====\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	after, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("overwrite replaced the existing file object")
+	}
+	if got, err := os.ReadFile(alias); err != nil || string(got) != "Done" {
+		t.Fatalf("hardlink content=%q err=%v", got, err)
 	}
 }
 

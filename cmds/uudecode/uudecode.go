@@ -128,8 +128,13 @@ func parseHeader(line string) (header, bool, error) {
 
 func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string) bool {
 	name := h.name
+	toStdout := h.name == "-" || h.name == "/dev/stdout"
 	if override != "" {
 		name = override
+		// POSIX makes /dev/stdout the sole special -o value. In particular,
+		// `-o -` is an ordinary pathname, even though a header pathname of `-`
+		// selects standard output.
+		toStdout = override == "/dev/stdout"
 	}
 
 	decode := func(w io.Writer) error {
@@ -138,14 +143,14 @@ func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string)
 		}
 		return decodeClassic(r, w)
 	}
-	if stdoutName(name) {
+	if toStdout {
 		if err := decode(rc.Out); err != nil {
 			fmt.Fprintf(rc.Err, "uudecode: %v\n", err)
 			return false
 		}
 		return true
 	}
-	chmodErr, err := decodeAtomically(rc.Path(name), h.mode, decode)
+	chmodErr, err := decodeOutput(rc.Path(name), h.mode, decode)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", name, err)
 		return false
@@ -160,14 +165,62 @@ func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string)
 
 var chmodDecodedFile = func(file *os.File, mode os.FileMode) error { return file.Chmod(mode) }
 
-func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) error) (chmodErr, err error) {
+func decodeOutput(path string, mode os.FileMode, decode func(io.Writer) error) (chmodErr, err error) {
 	path, err = resolveOutputPath(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkOverwrite(path); err != nil {
+	info, statErr := os.Stat(path)
+	if statErr == nil && info.Mode().IsRegular() {
+		return decodeExistingRegular(path, mode, decode)
+	}
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return nil, statErr
+	}
+	if statErr == nil {
+		// Never open an existing FIFO or device merely to check access: that
+		// can block or trigger device side effects. The platform check is
+		// metadata-only; a writable special file is replaced atomically.
+		if err := checkOverwrite(path); err != nil {
+			return nil, err
+		}
+	}
+	return decodeNewAtomically(path, mode, decode)
+}
+
+// decodeExistingRegular overwrites the existing file object rather than its
+// directory entry. This preserves hard links and requires write permission on
+// the file, but not write permission on its parent directory. The platform
+// opener verifies that the held descriptor is still a regular file before it
+// is truncated, avoiding FIFO/device blocking in the checked path.
+func decodeExistingRegular(path string, mode os.FileMode, decode func(io.Writer) error) (chmodErr, err error) {
+	file, err := openWritableRegular(path)
+	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
+	if err := file.Truncate(0); err != nil {
+		return nil, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	if err := decode(file); err != nil {
+		return nil, err
+	}
+	chmodErr = chmodDecodedFile(file, mode.Perm())
+	if err := file.Close(); err != nil {
+		return chmodErr, err
+	}
+	file = nil
+	return chmodErr, nil
+}
+
+func decodeNewAtomically(path string, mode os.FileMode, decode func(io.Writer) error) (chmodErr, err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".uudecode-*")
 	if err != nil {
 		return nil, err
@@ -189,8 +242,6 @@ func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) erro
 	tmp = nil
 	return chmodErr, os.Rename(tmpName, path)
 }
-
-func stdoutName(name string) bool { return name == "/dev/stdout" }
 
 // resolveOutputPath follows a final symlink because POSIX describes overwrite
 // behavior in terms of the file to which the pathname resolves. It also
