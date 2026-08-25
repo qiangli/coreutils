@@ -230,6 +230,12 @@ def recognized_go_options(row: dict[str, str], root: Path = ROOT) -> set[str]:
     chars.update(re.findall(
         r'\.\w+VarP\([^,]+,\s*"[^"]*"\s*,\s*"([A-Za-z0-9])"', source
     ))
+    # pflag's VarPF(value, name, shorthand, usage): the value expression may
+    # itself contain commas (a struct literal), so anchor on the trailing
+    # name/shorthand string pair instead of the first argument.
+    chars.update(re.findall(
+        r'\.VarPF\(.+,\s*"[^"]*"\s*,\s*"([A-Za-z0-9])"\s*,', source
+    ))
     for case in re.findall(r"case\s+([^:]+):", source):
         chars.update(re.findall(r"'([A-Za-z0-9])'", case))
     for group in re.findall(r'extractShort\([^,]+,\s*"([A-Za-z0-9]+)"', source):

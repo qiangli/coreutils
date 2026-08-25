@@ -19,10 +19,10 @@ import (
 var cmd = &tool.Tool{
 	Name:     "pax",
 	Synopsis: "Portable archive interchange.",
-	Usage: `pax [-cdnv] [-f archive] [-s replstr] [pattern...]
-  pax -r [-cdiknuv] [-f archive] [-p string] [-s replstr] [pattern...]
-  pax -w [-dituvX] [-b blocksize] [-a] [-f archive] [-s replstr] [-x format] [file...]
-  pax -r -w [-diklntuvX] [-p string] [-s replstr] file... directory`,
+	Usage: `pax [-cdnv] [-H|-L] [-f archive] [-s replstr] [pattern...]
+  pax -r [-cdiknuv] [-H|-L] [-f archive] [-p string] [-s replstr] [pattern...]
+  pax -w [-dituvX] [-H|-L] [-b blocksize] [-a] [-f archive] [-s replstr] [-x format] [file...]
+  pax -r -w [-diklntuvX] [-H|-L] [-p string] [-s replstr] file... directory`,
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -35,7 +35,7 @@ type options struct {
 	preserve        string
 	subst           []substitution
 	interactive     bool
-	link            bool
+	link            bool // -l (copy mode only; recognized, loudly unsupported)
 	noOverwrite     bool // -k
 	newerOnly       bool // -u
 	dirsNoDescend   bool // -d
@@ -50,7 +50,30 @@ type options struct {
 	// so later names for the same inode become hardlink members.
 	links      map[devIno]string
 	optionsStr string // -o
-	t, X, H, L bool
+	t, X       bool
+	follow     followMode // -H/-L; the last one given wins
+}
+
+// followFlag is the pflag value behind -H and -L. Each occurrence overwrites
+// options.follow, so with repeated or mixed -H/-L the LAST one on the command
+// line wins — pflag calls Set in argument order, including inside clustered
+// short options, which a pair of plain bools cannot observe.
+type followFlag struct {
+	o    *options
+	mode followMode
+}
+
+func (f *followFlag) String() string { return "false" }
+func (f *followFlag) Type() string   { return "bool" }
+func (f *followFlag) Set(s string) error {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
+	}
+	if v {
+		f.o.follow = f.mode
+	}
+	return nil
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -76,9 +99,9 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "physical block size: decimal factors joined by 'x', each optionally suffixed b (512), k (1024), or m (1048576); must be a positive multiple of 512 up to 32256 (default 10240, or 5120 for -x cpio)")
 	fs.StringVarP(&o.optionsStr, "options", "o", "", "format-specific options")
 	fs.BoolVarP(&o.t, "t", "t", false, "reset access times")
-	fs.BoolVarP(&o.X, "X", "X", false, "device boundary")
-	fs.BoolVarP(&o.H, "H", "H", false, "follow command-line symlinks")
-	fs.BoolVarP(&o.L, "L", "L", false, "follow all symlinks")
+	fs.BoolVarP(&o.X, "X", "X", false, "do not descend into directories on a different device")
+	fs.VarPF(&followFlag{o: &o, mode: followCmdline}, "H", "H", "follow symlinks named as command-line operands").NoOptDefVal = "true"
+	fs.VarPF(&followFlag{o: &o, mode: followAll}, "L", "L", "follow all symlinks").NoOptDefVal = "true"
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -111,17 +134,21 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return tool.NotSupported(rc, cmd, "-t")
 	}
-	if fs.Changed("X") {
-		if isList || isRead {
-			return tool.UsageError(rc, cmd, "-X is valid only in write or copy mode")
+	// -X is legal only where a hierarchy is traversed; -H/-L are legal in
+	// every mode (POSIX lists them in all four synopsis forms) and simply
+	// have nothing to do in list and read modes, which traverse no hierarchy.
+	if fs.Changed("X") && (isList || isRead) {
+		return tool.UsageError(rc, cmd, "-X is valid only in write or copy mode")
+	}
+	// -l is a copy-mode option. In copy mode it is recognized but not
+	// implemented: refuse loudly rather than silently copying where POSIX
+	// says to hard-link (the historical behavior here was exactly that
+	// silent wrong answer).
+	if o.link {
+		if !(o.read && o.write) {
+			return tool.UsageError(rc, cmd, "-l is valid only in copy mode")
 		}
-		return tool.NotSupported(rc, cmd, "-X")
-	}
-	if fs.Changed("H") {
-		return tool.NotSupported(rc, cmd, "-H")
-	}
-	if fs.Changed("L") {
-		return tool.NotSupported(rc, cmd, "-L")
+		return tool.NotSupported(rc, cmd, "-l")
 	}
 	for _, s := range *subst {
 		sub, err := parseSubstitution(s)

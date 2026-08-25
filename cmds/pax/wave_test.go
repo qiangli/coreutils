@@ -371,8 +371,9 @@ func TestSubstitutionWithExtraDelimiterIsRejected(t *testing.T) {
 	}
 }
 
-// -b/-o/-t/-X/-H/-L are recognized so their mode legality is enforced, and
+// -b/-o/-t/-X/-l are recognized so their mode legality is enforced, and
 // unsupported options are refused loudly rather than silently accepted.
+// (-H and -L are implemented; their behavior is covered in follow_test.go.)
 func TestModeOptionLegality(t *testing.T) {
 	d := makeTree(t)
 	arc := writeArchive(t, d, "src")
@@ -391,10 +392,9 @@ func TestModeOptionLegality(t *testing.T) {
 		{"t-in-write-unimpl", []string{"-w", "-t", "-f", arc, "src"}, "-t is not supported"},
 		{"X-in-list-illegal", []string{"-f", arc, "-X"}, "-X is valid only in write or copy mode"},
 		{"X-in-read-illegal", []string{"-r", "-X", "-f", arc}, "-X is valid only in write or copy mode"},
-		{"X-in-write-unimpl", []string{"-w", "-X", "-f", arc, "src"}, "-X is not supported"},
-		{"H-in-read-unimpl", []string{"-r", "-H", "-f", arc}, "-H is not supported"},
-		{"L-in-list-unimpl", []string{"-L", "-f", arc}, "-L is not supported"},
-		{"L-in-write-unimpl", []string{"-w", "-L", "-f", arc, "src"}, "-L is not supported"},
+		{"l-in-list-illegal", []string{"-l", "-f", arc}, "-l is valid only in copy mode"},
+		{"l-in-write-illegal", []string{"-w", "-l", "-f", arc, "src"}, "-l is valid only in copy mode"},
+		{"l-in-copy-unimpl", []string{"-r", "-w", "-l", "src", d}, "-l is not supported"},
 		{"c-and-n-together", []string{"-f", arc, "-c", "-n", "x"}, "-c and -n"},
 	}
 	for _, tc := range cases {

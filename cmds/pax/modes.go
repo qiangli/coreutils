@@ -371,8 +371,11 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	} else {
 		tw := tar.NewWriter(out)
 		for _, name := range files {
-			if err := addPath(rc, o, tw, name); err != nil {
+			diagnosed, err := addPath(rc, o, tw, name)
+			if err != nil {
 				fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
+			}
+			if err != nil || diagnosed {
 				status = 1
 			}
 		}
@@ -602,8 +605,11 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 	status := 0
 	var members []cpioMember
 	for _, name := range files {
-		if err := collectCPIOPath(rc, o, &members, name); err != nil {
+		diagnosed, err := collectCPIOPath(rc, o, &members, name)
+		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
+		}
+		if err != nil || diagnosed {
 			status = 1
 		}
 	}
@@ -636,65 +642,44 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 	return status
 }
 
-func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, name string) error {
-	full := resolve(rc, name)
-	fi, err := os.Lstat(full)
-	if err != nil {
-		return err
-	}
-	collect := func(rel, abs string, fi os.FileInfo) error {
-		out := applySubstitutions(o.subst, filepath.ToSlash(rel), rc.Err)
+func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, name string) (bool, error) {
+	return walkOperand(rc, o, name, func(e walkEntry) error {
+		out := applySubstitutions(o.subst, e.member, rc.Err)
 		if out == "" {
 			return nil
 		}
-		if !newerThanArchive(o, out, fi.ModTime()) {
+		if !newerThanArchive(o, out, e.fi.ModTime()) {
 			return nil
 		}
 		var data []byte
 		var err error
 		switch {
-		case fi.Mode().IsRegular():
-			data, err = os.ReadFile(abs)
-		case fi.Mode()&os.ModeSymlink != 0:
+		case e.fi.Mode().IsRegular():
+			data, err = os.ReadFile(e.abs)
+		case e.fi.Mode()&os.ModeSymlink != 0:
 			var target string
-			target, err = os.Readlink(abs)
+			target, err = os.Readlink(e.abs)
 			data = []byte(target)
 		}
 		if err != nil {
 			return err
 		}
-		*members = append(*members, cpioMember{name: out, fi: fi, id: identityOf(fi), data: data})
+		*members = append(*members, cpioMember{name: out, fi: e.fi, id: identityOf(e.fi), data: data})
 		return nil
-	}
-	if !fi.IsDir() || o.dirsNoDescend {
-		return collect(name, full, fi)
-	}
-	return filepath.Walk(full, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, relErr := filepath.Rel(filepath.Dir(full), path)
-		if relErr != nil {
-			return relErr
-		}
-		return collect(rel, path, info)
 	})
 }
 
-func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error {
-	full := resolve(rc, name)
-	fi, err := os.Lstat(full)
-	if err != nil {
-		return err
-	}
-	write := func(rel, abs string, fi os.FileInfo) error {
+func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool, error) {
+	return walkOperand(rc, o, name, func(e walkEntry) error {
+		fi := e.fi
 		link := ""
 		if fi.Mode()&os.ModeSymlink != 0 {
-			if link, err = os.Readlink(abs); err != nil {
+			var err error
+			if link, err = os.Readlink(e.abs); err != nil {
 				return err
 			}
 		}
-		out := applySubstitutions(o.subst, filepath.ToSlash(rel), rc.Err)
+		out := applySubstitutions(o.subst, e.member, rc.Err)
 		if out == "" {
 			return nil
 		}
@@ -758,7 +743,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 			return err
 		}
 		if fi.Mode().IsRegular() && !hardlink {
-			f, err := os.Open(abs)
+			f, err := os.Open(e.abs)
 			if err != nil {
 				return err
 			}
@@ -771,19 +756,6 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 			fmt.Fprintln(rc.Err, out)
 		}
 		return nil
-	}
-	if !fi.IsDir() || o.dirsNoDescend {
-		return write(name, full, fi)
-	}
-	return filepath.Walk(full, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, rerr := filepath.Rel(filepath.Dir(full), p)
-		if rerr != nil {
-			return rerr
-		}
-		return write(rel, p, info)
 	})
 }
 
@@ -813,17 +785,25 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	}
 
 	pr, pw := io.Pipe()
+	// diagCh carries the write side's already-printed cycle diagnostics to
+	// the exit status; the channel receive after readMode is the
+	// synchronization point.
+	diagCh := make(chan bool, 1)
 	go func() {
 		tw := tar.NewWriter(pw)
 		var werr error
+		diagnosed := false
 		for _, name := range files {
-			if e := addPath(rc, o, tw, name); e != nil && werr == nil {
+			d, e := addPath(rc, o, tw, name)
+			diagnosed = diagnosed || d
+			if e != nil && werr == nil {
 				werr = e
 			}
 		}
 		if e := tw.Close(); e != nil && werr == nil {
 			werr = e
 		}
+		diagCh <- diagnosed
 		pw.CloseWithError(werr)
 	}()
 
@@ -835,5 +815,9 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	inner.Dir = full
 	inner.Stdio = rc.Stdio
 	inner.In = pr
-	return readMode(&inner, &sub, nil)
+	status := readMode(&inner, &sub, nil)
+	if <-diagCh && status == 0 {
+		status = 1
+	}
+	return status
 }
