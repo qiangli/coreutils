@@ -56,10 +56,16 @@ const (
 // remains consumable by the fail-closed reader. abs is the filesystem path to
 // read from. fi is the lstat result, or the stat result when following a link.
 type walkEntry struct {
-	member string
-	abs    string
-	fi     os.FileInfo
+	member   string
+	abs      string
+	fi       os.FileInfo
+	followed bool // abs names a symlink whose referent supplied fi
 }
+
+var (
+	sourceAccessTimeFn   = sourceAccessTime
+	restoreSourceTimesFn = restoreSourceTimes
+)
 
 // deviceOf is the -X device-identity seam. It reports the st_dev of an
 // already-statted file, and false where the platform exposes no device
@@ -103,10 +109,12 @@ func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry
 		return false, sourceTraversalErr(err)
 	}
 	// -H and -L both resolve a symlink named on the command line.
+	followed := false
 	if fi.Mode()&os.ModeSymlink != 0 && o.follow != followNone {
 		if fi, err = os.Stat(full); err != nil {
 			return false, sourceTraversalErr(err)
 		}
+		followed = true
 	}
 	w := &walker{rc: rc, o: o, fn: fn}
 	if o.X {
@@ -116,7 +124,7 @@ func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry
 		}
 		w.rootDev = dev
 	}
-	err = w.walk(archiveMemberRoot(name, full), full, fi)
+	err = w.walk(archiveMemberRoot(name, full), full, fi, followed)
 	return w.diagnosed, err
 }
 
@@ -140,8 +148,23 @@ func archiveMemberRoot(name, full string) string {
 	return filepath.ToSlash(base)
 }
 
-func (w *walker) walk(member, abs string, fi os.FileInfo) error {
-	if err := w.fn(walkEntry{member: member, abs: abs, fi: fi}); err != nil {
+func (w *walker) walk(member, abs string, fi os.FileInfo, followed bool) error {
+	if w.o.t {
+		atime, ok := sourceAccessTimeFn(fi)
+		if !ok {
+			fmt.Fprintf(w.rc.Err, "pax: %s: cannot determine source access time on this platform\n", member)
+			w.diagnosed = true
+		} else {
+			mtime := fi.ModTime()
+			defer func() {
+				if err := restoreSourceTimesFn(abs, atime, mtime, fi.Mode()&os.ModeSymlink != 0 && !followed); err != nil {
+					fmt.Fprintf(w.rc.Err, "pax: %s: restore source access time: %v\n", member, err)
+					w.diagnosed = true
+				}
+			}()
+		}
+	}
+	if err := w.fn(walkEntry{member: member, abs: abs, fi: fi, followed: followed}); err != nil {
 		if sourceTraversalFailure(err) {
 			fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", member, err)
 			w.diagnosed = true
@@ -202,14 +225,16 @@ func (w *walker) walk(member, abs string, fi os.FileInfo) error {
 		}
 		// Only -L resolves symlinks encountered below an operand; under -H
 		// they are archived as the symlinks they are.
+		childFollowed := false
 		if cfi.Mode()&os.ModeSymlink != 0 && w.o.follow == followAll {
 			if cfi, err = os.Stat(childAbs); err != nil {
 				fmt.Fprintf(w.rc.Err, "pax: %s/%s: %v\n", base, e.Name(), err)
 				w.diagnosed = true
 				continue
 			}
+			childFollowed = true
 		}
-		if err := w.walk(base+"/"+e.Name(), childAbs, cfi); err != nil {
+		if err := w.walk(base+"/"+e.Name(), childAbs, cfi, childFollowed); err != nil {
 			return err
 		}
 	}

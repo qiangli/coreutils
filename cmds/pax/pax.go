@@ -35,7 +35,7 @@ type options struct {
 	preserve        string
 	subst           []substitution
 	interactive     bool
-	link            bool // -l (copy mode only; recognized, loudly unsupported)
+	link            bool // -l (copy mode only)
 	noOverwrite     bool // -k
 	newerOnly       bool // -u
 	dirsNoDescend   bool // -d
@@ -52,6 +52,7 @@ type options struct {
 	optionsStr string // -o
 	t, X       bool
 	follow     followMode // -H/-L; the last one given wins
+	renamer    *interactiveRenamer
 }
 
 // followFlag is the pflag value behind -H and -L. Each occurrence overwrites
@@ -132,7 +133,6 @@ func run(rc *tool.RunContext, args []string) int {
 		if isList || isRead {
 			return tool.UsageError(rc, cmd, "-t is valid only in write or copy mode")
 		}
-		return tool.NotSupported(rc, cmd, "-t")
 	}
 	// -X is legal only where a hierarchy is traversed; -H/-L are legal in
 	// every mode (POSIX lists them in all four synopsis forms) and simply
@@ -140,15 +140,10 @@ func run(rc *tool.RunContext, args []string) int {
 	if fs.Changed("X") && (isList || isRead) {
 		return tool.UsageError(rc, cmd, "-X is valid only in write or copy mode")
 	}
-	// -l is a copy-mode option. In copy mode it is recognized but not
-	// implemented: refuse loudly rather than silently copying where POSIX
-	// says to hard-link (the historical behavior here was exactly that
-	// silent wrong answer).
 	if o.link {
 		if !(o.read && o.write) {
 			return tool.UsageError(rc, cmd, "-l is valid only in copy mode")
 		}
-		return tool.NotSupported(rc, cmd, "-l")
 	}
 	for _, s := range *subst {
 		sub, err := parseSubstitution(s)
@@ -168,16 +163,33 @@ func run(rc *tool.RunContext, args []string) int {
 		o.blockBytes = defaultBlockSize(o.format)
 	}
 
+	if o.interactive {
+		r, err := openInteractiveRenamer()
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
+			return 1
+		}
+		o.renamer = r
+	}
+
+	status := 0
 	switch {
 	case o.read && o.write:
-		return copyMode(rc, &o, operands)
+		status = copyMode(rc, &o, operands)
 	case o.read:
-		return readMode(rc, &o, operands)
+		status = readMode(rc, &o, operands)
 	case o.write:
-		return writeMode(rc, &o, operands)
+		status = writeMode(rc, &o, operands)
 	default:
-		return listMode(rc, &o, operands)
+		status = listMode(rc, &o, operands)
 	}
+	if o.renamer != nil {
+		if err := o.renamer.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "pax: interactive rename: close /dev/tty: %v\n", err)
+			status = 1
+		}
+	}
+	return status
 }
 
 // parseBlockSize implements the POSIX pax blocksize grammar. A size is one or
@@ -341,6 +353,14 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		}
 		name := applySubstitutions(o.subst, m.Path, rc.Err)
 		if name == "" {
+			continue
+		}
+		name, keep, err := renameInteractively(o, name)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
+			return 1
+		}
+		if !keep {
 			continue
 		}
 		if o.verbose {

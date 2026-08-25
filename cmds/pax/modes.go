@@ -64,11 +64,38 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	}
 	sel.prime(catalog)
 
+	// POSIX ordering is selection, then -s substitution, then -i. Resolve every
+	// interactive name before extraction begins so an EOF or terminal failure is
+	// immediate and cannot leave a partially extracted filesystem. The complete
+	// map also lets hard-link targets follow a renamed member even when their
+	// archive occurrence precedes that member.
+	selected := make(map[int]string)
+	renames := make(map[string]string)
+	for index, m := range catalog {
+		if !sel.keep(m.name, m.isDir) {
+			continue
+		}
+		subName := applySubstitutions(o.subst, m.name, rc.Err)
+		if subName == "" {
+			continue
+		}
+		newName, keep, err := renameInteractively(o, subName)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
+			return 1
+		}
+		if !keep {
+			continue
+		}
+		selected[index] = newName
+		renames[subName] = newName
+	}
+
 	var rewritten bytes.Buffer
 	tr := tar.NewReader(bytes.NewReader(raw))
 	tw := tar.NewWriter(&rewritten)
 
-	for {
+	for index := 0; ; index++ {
 		h, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -78,13 +105,8 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 			return 1
 		}
 
-		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
-		if !sel.keep(h.Name, isDir) {
-			continue
-		}
-
-		newName := applySubstitutions(o.subst, h.Name, rc.Err)
-		if newName == "" {
+		newName, keep := selected[index]
+		if !keep {
 			continue
 		}
 
@@ -93,6 +115,9 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 			h.Linkname = applySubstitutions(o.subst, h.Linkname, nil)
 			if h.Linkname == "" {
 				continue
+			}
+			if renamed, ok := renames[h.Linkname]; ok {
+				h.Linkname = renamed
 			}
 		}
 		if err := tw.WriteHeader(h); err != nil {
@@ -379,6 +404,9 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			if err != nil || diagnosed {
 				status = 1
 			}
+			if errors.Is(err, errInteractiveRename) {
+				break
+			}
 			if errors.Is(err, errTraversalCycle) {
 				break
 			}
@@ -616,6 +644,9 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 		if err != nil || diagnosed {
 			status = 1
 		}
+		if errors.Is(err, errInteractiveRename) {
+			break
+		}
 		if errors.Is(err, errTraversalCycle) {
 			break
 		}
@@ -655,21 +686,28 @@ func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, nam
 		if out == "" {
 			return nil
 		}
+		out, keep, err := renameInteractively(o, out)
+		if err != nil {
+			return err
+		}
+		if !keep {
+			return nil
+		}
 		if !newerThanArchive(o, out, e.fi.ModTime()) {
 			return nil
 		}
 		var data []byte
-		var err error
+		var dataErr error
 		switch {
 		case e.fi.Mode().IsRegular():
-			data, err = os.ReadFile(e.abs)
+			data, dataErr = os.ReadFile(e.abs)
 		case e.fi.Mode()&os.ModeSymlink != 0:
 			var target string
-			target, err = os.Readlink(e.abs)
+			target, dataErr = os.Readlink(e.abs)
 			data = []byte(target)
 		}
-		if err != nil {
-			return sourceTraversalErr(err)
+		if dataErr != nil {
+			return sourceTraversalErr(dataErr)
 		}
 		*members = append(*members, cpioMember{name: out, fi: e.fi, id: identityOf(e.fi), data: data})
 		return nil
@@ -688,6 +726,13 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		}
 		out := applySubstitutions(o.subst, e.member, rc.Err)
 		if out == "" {
+			return nil
+		}
+		out, keep, err := renameInteractively(o, out)
+		if err != nil {
+			return err
+		}
+		if !keep {
 			return nil
 		}
 		if !newerThanArchive(o, out, fi.ModTime()) {
@@ -817,6 +862,9 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		fmt.Fprintf(rc.Err, "pax: %s: not a directory\n", dest)
 		return 1
 	}
+	if o.link {
+		return linkCopyMode(rc, o, files, full)
+	}
 
 	pr, pw := io.Pipe()
 	// diagCh carries the write side's already-printed traversal diagnostics to
@@ -854,6 +902,8 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	sub.read, sub.write = true, false
 	sub.archive = ""
 	sub.subst = nil // already applied on the write side; applying twice would rewrite a rewrite
+	sub.interactive = false
+	sub.renamer = nil // already prompted on the write side; never prompt twice in copy mode
 	inner := *rc
 	inner.Dir = full
 	inner.Stdio = rc.Stdio
@@ -863,4 +913,158 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		status = 1
 	}
 	return status
+}
+
+var linkSourceFn = defaultLinkSource
+
+// linkCopyMode implements copy-mode -l directly against the filesystem. The
+// ordinary copy lane deliberately travels through an archive to share its
+// extraction safety rules; hard links cannot be represented that way because
+// an archive hard-link member links two destination members, not a destination
+// member to its live source. safeCopyTarget applies the same extraction planner
+// to every transformed name before this lane touches the destination.
+func linkCopyMode(rc *tool.RunContext, o *options, files []string, root string) int {
+	status := 0
+	stop := false
+	for _, name := range files {
+		diagnosed, err := walkOperand(rc, o, name, func(e walkEntry) error {
+			out := applySubstitutions(o.subst, e.member, rc.Err)
+			if out == "" {
+				return nil
+			}
+			out, keep, err := renameInteractively(o, out)
+			if err != nil {
+				return err
+			}
+			if !keep {
+				return nil
+			}
+			target, err := safeCopyTarget(root, out)
+			if err != nil {
+				return err
+			}
+			if o.noOverwrite {
+				if _, err := os.Lstat(target); err == nil {
+					return nil
+				}
+			}
+			if o.newerOnly {
+				if dst, err := os.Lstat(target); err == nil && !e.fi.ModTime().After(dst.ModTime()) {
+					return nil
+				}
+			}
+			if err := copyOneByLink(e, target); err != nil {
+				return err
+			}
+			if o.verbose {
+				fmt.Fprintln(rc.Err, out)
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, errTraversalCycle) {
+			fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
+		}
+		if err != nil || diagnosed {
+			status = 1
+		}
+		if errors.Is(err, errTraversalCycle) || errors.Is(err, errInteractiveRename) {
+			stop = true
+		}
+		if stop {
+			break
+		}
+	}
+	return status
+}
+
+func safeCopyTarget(root, name string) (string, error) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Typeflag: tar.TypeReg, Mode: 0o600}); err != nil {
+		return "", err
+	}
+	if err := tw.Close(); err != nil {
+		return "", err
+	}
+	plan, err := pax.PlanExtraction(bytes.NewReader(archive.Bytes()), root, pax.OSFS{})
+	if err != nil {
+		return "", err
+	}
+	if len(plan.Members) == 1 {
+		return plan.Members[0].Target, nil
+	}
+	if len(plan.Rejected) == 1 && pax.IsDestinationExists(plan.Rejected[0].Reason) {
+		return filepath.Join(root, filepath.FromSlash(plan.Rejected[0].Path)), nil
+	}
+	if len(plan.Rejected) != 0 {
+		return "", fmt.Errorf("refusing %s: %s", plan.Rejected[0].Path, plan.Rejected[0].Reason)
+	}
+	return "", fmt.Errorf("refusing invalid destination name %q", name)
+}
+
+func copyOneByLink(e walkEntry, target string) error {
+	if e.fi.IsDir() {
+		return os.MkdirAll(target, e.fi.Mode().Perm())
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	source := e.abs
+	if e.followed {
+		resolved, err := filepath.EvalSymlinks(source)
+		if err != nil {
+			return sourceTraversalErr(err)
+		}
+		source = resolved
+	}
+	if _, err := os.Lstat(target); err == nil {
+		sourceInfo, sourceErr := os.Stat(source)
+		targetInfo, targetErr := os.Stat(target)
+		if sourceErr == nil && targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
+			return fmt.Errorf("source and destination are the same file")
+		}
+		if err := os.Remove(target); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := linkSourceFn(source, target); err == nil {
+		return nil
+	}
+	// POSIX says "whenever possible": a cross-device filesystem or a platform
+	// that cannot hard-link symlinks falls back to the normal copy semantics.
+	switch {
+	case e.fi.Mode().IsRegular():
+		in, err := os.Open(source)
+		if err != nil {
+			return sourceTraversalErr(err)
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, e.fi.Mode().Perm())
+		if err != nil {
+			in.Close()
+			return err
+		}
+		copyErr := copySourceFile(out, in)
+		closeOutErr := out.Close()
+		closeInErr := in.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeOutErr != nil {
+			return closeOutErr
+		}
+		if closeInErr != nil {
+			return sourceTraversalErr(closeInErr)
+		}
+		return nil
+	case e.fi.Mode()&os.ModeSymlink != 0 && !e.followed:
+		link, err := os.Readlink(source)
+		if err != nil {
+			return sourceTraversalErr(err)
+		}
+		return os.Symlink(link, target)
+	default:
+		return fmt.Errorf("unsupported source type %s", e.fi.Mode())
+	}
 }
