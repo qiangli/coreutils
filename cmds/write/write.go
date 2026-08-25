@@ -31,12 +31,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
@@ -55,17 +58,20 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 // terminal in a hermetic test run. Overriding them is how the behaviour under
 // test stays the same code path that runs in production.
 var (
-	dbPath     = defaultUtmpPath  // login-accounting database
-	dbLayout   = activeUtmpLayout // struct layout of that database
-	devDir     = "/dev"           // where a ut_line name resolves
-	supported  = platformSupported
-	lookupUser = func(name string) error { _, err := user.Lookup(name); return err }
-	senderInfo = defaultSenderInfo
-	senderTTY  = defaultSenderTTY
-	hostnameFn = os.Hostname
-	nowFn      = time.Now
-	statFn     = os.Stat
-	openTTYFn  = defaultOpenTTY
+	dbPath                 = defaultUtmpPath  // login-accounting database
+	dbLayout               = activeUtmpLayout // struct layout of that database
+	devDir                 = "/dev"           // where a ut_line name resolves
+	supported              = platformSupported
+	lookupUser             = func(name string) error { _, err := user.Lookup(name); return err }
+	senderInfo             = defaultSenderInfo
+	senderTTY              = defaultSenderTTY
+	openSenderControlTTYFn = defaultOpenSenderControlTTY
+	getVEOL                = defaultGetVEOL
+	unblockIn              = defaultUnblockIn
+	hostnameFn             = os.Hostname
+	nowFn                  = time.Now
+	statFn                 = os.Stat
+	openTTYFn              = defaultOpenTTY
 )
 
 // defaultOpenTTY opens the recipient's terminal for writing. O_WRONLY only:
@@ -122,49 +128,54 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
+	controlW := openSenderControlTTYFn(rc)
+
 	if !supported {
-		fmt.Fprintf(rc.Err, "write: %v\n", errPlatform)
+		fmt.Fprintf(controlW, "write: %v\n", errPlatform)
 		return 1
 	}
 
 	if err := lookupUser(target); err != nil {
-		fmt.Fprintf(rc.Err, "write: %s: no such user\n", target)
+		fmt.Fprintf(controlW, "write: %s: no such user\n", target)
 		return 1
 	}
 
 	sender, uid, err := senderInfo()
 	if err != nil {
-		fmt.Fprintf(rc.Err, "write: cannot determine the sending user: %v\n", err)
+		fmt.Fprintf(controlW, "write: cannot determine the sending user: %v\n", err)
 		return 1
 	}
 
 	records, err := readUtmpFile(dbPath, dbLayout)
 	if err != nil {
 		if errors.Is(err, errNoLayout) {
-			fmt.Fprintf(rc.Err, "write: %v\n", err)
+			fmt.Fprintf(controlW, "write: %v\n", err)
 		} else {
-			fmt.Fprintf(rc.Err, "write: %s: %v\n", dbPath, err)
+			fmt.Fprintf(controlW, "write: %s: %v\n", dbPath, err)
 		}
 		return 1
 	}
 
 	myTTY := senderTTY(rc)
-	line, failure := selectTerminal(records, target, wantTTY, myTTY, uid == 0)
+	line, failure, isMulti := selectTerminal(records, target, wantTTY, myTTY, uid == 0)
 	if failure != "" {
-		fmt.Fprintf(rc.Err, "write: %s\n", failure)
+		fmt.Fprintf(controlW, "write: %s\n", failure)
 		return 1
+	}
+	if isMulti {
+		fmt.Fprintf(controlW, "write: %s is logged in on more than one line; using %s\n", target, line)
 	}
 
 	path := ttyDevice(line)
 	term, err := openTTYFn(path)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
+		fmt.Fprintf(controlW, "write: %s: %v\n", path, err)
 		return 1
 	}
 	defer term.Close()
 
-	if err := deliver(term, rc.In, sender, myTTY); err != nil {
-		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
+	if err := deliver(term, rc.In, sender, target, myTTY); err != nil {
+		fmt.Fprintf(controlW, "write: %s: %v\n", path, err)
 		return 1
 	}
 	return 0
@@ -193,12 +204,7 @@ func run(rc *tool.RunContext, args []string) int {
 //     "where is this person actually sitting" signal available from the
 //     database alone; the name tie-break makes the result independent of the
 //     order records happen to appear in.
-//
-// Deliberately NOT used: terminal idle time (atime of the device), the
-// historical heuristic. It needs a stat field Go does not expose portably, and
-// it makes the choice depend on filesystem mount options (noatime, relatime) —
-// so the same fleet would select differently host to host.
-func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot bool) (line, failure string) {
+func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot bool) (line, failure string, isMulti bool) {
 	var candidates []utmpRecord
 	for _, r := range records {
 		if r.User != target {
@@ -211,10 +217,12 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 	}
 	if len(candidates) == 0 {
 		if wantTTY != "" {
-			return "", fmt.Sprintf("%s is not logged in on %s", target, wantTTY)
+			return "", fmt.Sprintf("%s is not logged in on %s", target, wantTTY), false
 		}
-		return "", fmt.Sprintf("%s is not logged in", target)
+		return "", fmt.Sprintf("%s is not logged in", target), false
 	}
+
+	isMulti = (wantTTY == "" && len(candidates) > 1)
 
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if !candidates[i].Time.Equal(candidates[j].Time) {
@@ -242,23 +250,38 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 			denied = append(denied, r.Line)
 			continue
 		}
-		return r.Line, ""
+		return r.Line, "", isMulti
 	}
 
 	switch {
 	case len(denied) > 0:
-		return "", fmt.Sprintf("%s has messages disabled on %s", target, denied[0])
+		return "", fmt.Sprintf("%s has messages disabled on %s", target, denied[0]), false
 	case skippedSelf:
-		return "", "you cannot write to your own terminal"
+		return "", "you cannot write to your own terminal", false
 	case missing > 0:
-		return "", fmt.Sprintf("%s: no accessible terminal", target)
+		return "", fmt.Sprintf("%s: no accessible terminal", target), false
 	default:
-		return "", fmt.Sprintf("%s is not logged in", target)
+		return "", fmt.Sprintf("%s is not logged in", target), false
 	}
 }
 
-// deliver writes the banner, the message body and the closing EOF marker.
-func deliver(w io.Writer, in io.Reader, sender, senderTTY string) error {
+// readLine reads bytes until newline (\n), canonical EOL (veol if non-zero), or EOF.
+func readLine(br *bufio.Reader, veol byte) (string, error) {
+	var buf []byte
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return string(buf), err
+		}
+		if b == '\n' || (veol != 0 && b == veol) {
+			return string(buf), nil
+		}
+		buf = append(buf, b)
+	}
+}
+
+// deliver writes the banner, the message body and the closing EOF/EOT marker.
+func deliver(w io.Writer, in io.Reader, sender, target, senderTTY string) error {
 	host, err := hostnameFn()
 	if err != nil || host == "" {
 		host = "localhost"
@@ -273,26 +296,86 @@ func deliver(w io.Writer, in io.Reader, sender, senderTTY string) error {
 	// The bell and the CR-LF pairs are the historical banner shape: the
 	// recipient's terminal may be in raw mode, where a bare LF would leave the
 	// cursor mid-line and shred the display of whatever they were running.
-	banner := fmt.Sprintf("\a\r\nMessage from %s@%s on %s at %s ...\r\n",
-		sender, host, from, nowFn().Format("15:04"))
+	banner := fmt.Sprintf("\a\r\nMessage from %s@%s on %s to %s at %s ...\r\n",
+		sender, host, from, target, nowFn().Format("15:04"))
 	if _, err := io.WriteString(w, banner); err != nil {
 		return err
 	}
 	if in != nil {
-		br := bufio.NewReader(in)
-		for {
-			chunk, rerr := br.ReadString('\n')
-			if chunk != "" {
-				if _, werr := io.WriteString(w, sanitize(chunk)); werr != nil {
-					return werr
+		veol := getVEOL(in)
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
+		defer signal.Stop(sigCh)
+
+		type lineResult struct {
+			line string
+			err  error
+		}
+		lineChan := make(chan lineResult)
+		stopReader := make(chan struct{})
+		readerDone := make(chan struct{})
+
+		go func() {
+			defer close(readerDone)
+			defer close(lineChan)
+			br := bufio.NewReader(in)
+			for {
+				line, rerr := readLine(br, veol)
+				if line != "" || rerr == nil {
+					select {
+					case lineChan <- lineResult{line: line, err: rerr}:
+					case <-stopReader:
+						return
+					}
+				}
+				if rerr != nil {
+					return
 				}
 			}
-			if rerr != nil {
-				if errors.Is(rerr, io.EOF) {
+		}()
+
+		var sigintReceived bool
+		for {
+			select {
+			case <-sigCh:
+				sigintReceived = true
+				close(stopReader)
+				unblockIn(in)
+				<-readerDone
+			case res, ok := <-lineChan:
+				if !ok {
 					break
 				}
-				return rerr
+				if res.err == nil {
+					if _, werr := io.WriteString(w, sanitize(res.line)+"\r\n"); werr != nil {
+						close(stopReader)
+						unblockIn(in)
+						<-readerDone
+						return werr
+					}
+				} else if errors.Is(res.err, io.EOF) {
+					if res.line != "" {
+						if _, werr := io.WriteString(w, sanitize(res.line)); werr != nil {
+							close(stopReader)
+							unblockIn(in)
+							<-readerDone
+							return werr
+						}
+					}
+				} else {
+					close(stopReader)
+					unblockIn(in)
+					<-readerDone
+					return res.err
+				}
+				continue
 			}
+			break
+		}
+
+		if sigintReceived {
+			_, err = io.WriteString(w, "EOT\r\n")
+			return err
 		}
 	}
 	_, err = io.WriteString(w, "EOF\r\n")
@@ -300,13 +383,6 @@ func deliver(w io.Writer, in io.Reader, sender, senderTTY string) error {
 }
 
 // sanitize renders one line safely on someone else's terminal.
-//
-// This is not cosmetic. The recipient's terminal interprets what arrives, so
-// forwarding raw control bytes hands the sender the ability to reprogram
-// another user's session — clear the screen, redefine keys, or on some
-// terminals inject a command line. POSIX leaves the rendering of non-printable
-// characters implementation-defined, so caret notation (^[ for ESC) is both
-// permitted and the historically expected shape.
 //
 // Printable multi-byte UTF-8 passes through unchanged: mangling it would be a
 // gratuitous regression, and it cannot carry a control sequence.
@@ -316,11 +392,11 @@ func sanitize(s string) string {
 	for i := 0; i < len(s); {
 		c := s[i]
 		switch {
+		case c == '\a' || c == '\t' || c == '\r':
+			b.WriteByte(c)
+			i++
 		case c == '\n':
 			b.WriteString("\r\n")
-			i++
-		case c == '\t' || c == '\r':
-			b.WriteByte(c)
 			i++
 		case c < 0x20 || c == 0x7f:
 			b.WriteByte('^')
@@ -344,7 +420,21 @@ func sanitize(s string) string {
 				i++
 				continue
 			}
-			b.WriteString(s[i : i+size])
+			if unicode.IsPrint(r) {
+				b.WriteString(s[i : i+size])
+			} else {
+				if r <= 0xff {
+					b.WriteString("M-")
+					lo := byte(r) & 0x7f
+					if lo < 0x20 || lo == 0x7f {
+						b.WriteByte('^')
+						lo ^= 0x40
+					}
+					b.WriteByte(lo)
+				} else {
+					fmt.Fprintf(&b, "<U+%04X>", r)
+				}
+			}
 			i += size
 		}
 	}

@@ -23,15 +23,17 @@ import (
 
 // fixture describes the synthetic world one test case runs in.
 type fixture struct {
-	layout  utmpLayout
-	logins  []login  // USER_PROCESS records
-	dead    []login  // DEAD_PROCESS records, written into the same database
-	stale   []string // ut_line values with no device file behind them
-	sender  string
-	uid     int
-	myTTY   string // the sender's own terminal, bare name
-	unknown bool   // user.Lookup should fail
-	noPlat  bool   // pretend the platform has no messaging
+	layout   utmpLayout
+	logins   []login  // USER_PROCESS records
+	dead     []login  // DEAD_PROCESS records, written into the same database
+	stale    []string // ut_line values with no device file behind them
+	sender   string
+	uid      int
+	myTTY    string // the sender's own terminal, bare name
+	unknown  bool   // user.Lookup should fail
+	noPlat   bool   // pretend the platform has no messaging
+	controlW io.Writer
+	veol     byte
 }
 
 type login struct {
@@ -100,6 +102,7 @@ func install(t *testing.T, f fixture) *world {
 	oldSup, oldLookup, oldSender := supported, lookupUser, senderInfo
 	oldTTY, oldHost, oldNow := senderTTY, hostnameFn, nowFn
 	oldStat, oldOpen := statFn, openTTYFn
+	oldControlTTY, oldGetVEOL, oldUnblock := openSenderControlTTYFn, getVEOL, unblockIn
 
 	dbPath, dbLayout, devDir = db, f.layout, dev
 	supported = !f.noPlat
@@ -117,11 +120,26 @@ func install(t *testing.T, f fixture) *world {
 	nowFn = func() time.Time { return epoch.Add(90 * time.Minute) }
 	statFn, openTTYFn = os.Stat, defaultOpenTTY
 
+	openSenderControlTTYFn = func(rc *tool.RunContext) io.Writer {
+		if f.controlW != nil {
+			return f.controlW
+		}
+		if rc != nil && rc.Err != nil {
+			return rc.Err
+		}
+		return os.Stderr
+	}
+
+	if f.veol != 0 {
+		getVEOL = func(io.Reader) byte { return f.veol }
+	}
+
 	t.Cleanup(func() {
 		dbPath, dbLayout, devDir = oldPath, oldLayout, oldDev
 		supported, lookupUser, senderInfo = oldSup, oldLookup, oldSender
 		senderTTY, hostnameFn, nowFn = oldTTY, oldHost, oldNow
 		statFn, openTTYFn = oldStat, oldOpen
+		openSenderControlTTYFn, getVEOL, unblockIn = oldControlTTY, oldGetVEOL, oldUnblock
 	})
 	return w
 }
@@ -172,7 +190,7 @@ func TestDeliversBannerBodyAndEOF(t *testing.T) {
 		t.Errorf("write must say nothing on its own streams; got out=%q err=%q", out, errOut)
 	}
 	got := w.read(t, "pts/9")
-	want := "\a\r\nMessage from alice@testhost on pts/1 at 10:30 ...\r\nhello\r\nthere\r\nEOF\r\n"
+	want := "\a\r\nMessage from alice@testhost on pts/1 to bob at 10:30 ...\r\nhello\r\nthere\r\nEOF\r\n"
 	if got != want {
 		t.Errorf("terminal received\n %q\nwant\n %q", got, want)
 	}
@@ -215,7 +233,7 @@ func TestBannerWithNoControllingTerminal(t *testing.T) {
 	if _, e, code := exec(t, "hi\n", "bob"); code != 0 {
 		t.Fatalf("exit %d: %s", code, e)
 	}
-	if got := w.read(t, "pts/9"); !strings.Contains(got, "on ? at ") {
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "on ? to bob at ") {
 		t.Errorf("a sender with no tty must not be attributed to one: %q", got)
 	}
 }
@@ -575,7 +593,7 @@ func TestSanitizeRendersControlCharactersSafely(t *testing.T) {
 		{"plain\n", "plain\r\n"},
 		{"tab\there\n", "tab\there\r\n"},
 		{"\x1b[2J", "^[[2J"},               // ESC — a screen-clearing sequence
-		{"bel\x07", "bel^G"},               // the sender may not ring the bell
+		{"bel\x07", "bel\x07"},             // BEL is preserved per POSIX
 		{"\x00nul", "^@nul"},               //
 		{"del\x7f", "del^?"},               //
 		{"héllo — ok\n", "héllo — ok\r\n"}, // valid UTF-8 passes through
@@ -602,8 +620,8 @@ func TestEscapeSequencesDoNotReachTheRecipientRaw(t *testing.T) {
 	if strings.Contains(got, "\x1b") {
 		t.Errorf("raw ESC reached the recipient's terminal: %q", got)
 	}
-	if !strings.Contains(got, "^[]0;pwned^G") {
-		t.Errorf("escape not rendered in caret notation: %q", got)
+	if !strings.Contains(got, "^[]0;pwned\a") {
+		t.Errorf("escape not rendered correctly: %q", got)
 	}
 }
 
@@ -665,4 +683,100 @@ func TestMissingDatabaseIsDistinctFromNotLoggedIn(t *testing.T) {
 	if !strings.Contains(errOut, "absent") {
 		t.Errorf("the diagnostic should name the database: %q", errOut)
 	}
+}
+
+func TestMultiLoginAlertSentToControllingTerminal(t *testing.T) {
+	var controlBuf bytes.Buffer
+	w := install(t, fixture{
+		sender: "alice", uid: 1000, myTTY: "pts/1",
+		controlW: &controlBuf,
+		logins: []login{
+			{user: "bob", line: "pts/2", mode: writable, when: epoch},
+			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
+		},
+	})
+	out, errOut, code := exec(t, "hi\n", "bob")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout must remain empty, got %q", out)
+	}
+	if !strings.Contains(controlBuf.String(), "write: bob is logged in on more than one line; using pts/4\n") {
+		t.Errorf("controlling terminal = %q, want multi-login alert", controlBuf.String())
+	}
+	if got := w.read(t, "pts/4"); !strings.Contains(got, "hi") {
+		t.Errorf("recipient terminal pts/4 did not receive message: %q", got)
+	}
+}
+
+func TestCanonicalVEOL(t *testing.T) {
+	w := install(t, fixture{
+		sender: "alice", uid: 1000, myTTY: "pts/1", veol: '\x03',
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	if _, e, code := exec(t, "first line\x03second line\x03", "bob"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	got := w.read(t, "pts/9")
+	if !strings.Contains(got, "first line\r\nsecond line\r\nEOF\r\n") {
+		t.Errorf("VEOL lines were not properly framed: %q", got)
+	}
+}
+
+func TestSIGINTWritesEOTAndReturnsSuccess(t *testing.T) {
+	w := install(t, fixture{
+		sender: "alice", uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+
+	pr, pw := io.Pipe()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb},
+	}
+
+	done := make(chan int)
+	go func() {
+		done <- run(rc, []string{"bob"})
+	}()
+
+	pw.Write([]byte("hello\n"))
+	time.Sleep(50 * time.Millisecond)
+
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Signal(os.Interrupt); err != nil {
+		t.Skipf("cannot send signal: %v", err)
+	}
+
+	code := <-done
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 on SIGINT", code)
+	}
+	got := w.read(t, "pts/9")
+	if !strings.Contains(got, "hello\r\nEOT\r\n") {
+		t.Errorf("recipient terminal should receive EOT: %q", got)
+	}
+}
+
+func TestRace(t *testing.T) {
+	w := install(t, fixture{
+		sender: "alice", uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	done := make(chan bool)
+	for i := 0; i < 5; i++ {
+		go func() {
+			_, _, _ = exec(t, "line\n", "bob")
+			done <- true
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		<-done
+	}
+	_ = w
 }

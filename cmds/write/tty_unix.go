@@ -3,10 +3,14 @@
 package writecmd
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -81,4 +85,34 @@ func rdevOf(fi fs.FileInfo) (uint64, bool) {
 		return 0, false
 	}
 	return uint64(st.Rdev), true
+}
+
+func defaultOpenSenderControlTTY(rc *tool.RunContext) io.Writer {
+	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+		return tty
+	}
+	if rc != nil && rc.Err != nil {
+		return rc.Err
+	}
+	return os.Stderr
+}
+
+func defaultGetVEOL(in io.Reader) byte {
+	if f, ok := in.(*os.File); ok {
+		if term, err := getTermios(int(f.Fd())); err == nil {
+			veol := term.Cc[unix.VEOL]
+			if veol != 0 && veol != 0xff {
+				return veol
+			}
+		}
+	}
+	return 0
+}
+
+func defaultUnblockIn(in io.Reader) {
+	if f, ok := in.(*os.File); ok {
+		_ = f.SetReadDeadline(time.Now())
+	} else if c, ok := in.(io.Closer); ok {
+		_ = c.Close()
+	}
 }
