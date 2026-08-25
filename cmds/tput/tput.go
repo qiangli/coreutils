@@ -39,7 +39,8 @@ var cmd = &tool.Tool{
 	Name:     "tput",
 	Synopsis: "Query the terminfo database; emit terminal capability strings.",
 	Usage: `tput [-T type] capname [parm...]
-  tput [-T type] clear|init|reset|longname`,
+  tput [-T type] clear|init|reset [clear|init|reset...]
+  tput [-T type] longname`,
 }
 
 func init() {
@@ -84,13 +85,24 @@ func run(rc *tool.RunContext, args []string) int {
 		return exitUnknownTT
 	}
 
-	capName, parms := operands[0], operands[1:]
+	// POSIX permits a sequence of clear, init, and reset operands.  Restrict
+	// that interpretation to an operation in the first position so the
+	// long-standing capname [parm...] extension remains unambiguous.
+	if isPOSIXOperation(operands[0]) {
+		for _, operation := range operands {
+			if !isPOSIXOperation(operation) {
+				fmt.Fprintf(rc.Err, "tput: %q is not a POSIX operation\n", operation)
+				return exitUsage
+			}
+			if code := emitPOSIXOperation(rc, e, operation); code != exitOK {
+				return code
+			}
+		}
+		return exitOK
+	}
 
+	capName, parms := operands[0], operands[1:]
 	switch capName {
-	case "init":
-		return emitStartup(rc, e, false)
-	case "reset":
-		return emitStartup(rc, e, true)
 	case "longname":
 		// An SVr4 tput operand rather than a capability: it reports the
 		// entry's description field.
@@ -99,6 +111,23 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	return emitCapability(rc, e, capName, parms)
+}
+
+func isPOSIXOperation(operand string) bool {
+	return operand == "clear" || operand == "init" || operand == "reset"
+}
+
+func emitPOSIXOperation(rc *tool.RunContext, e *terminfo.Entry, operation string) int {
+	switch operation {
+	case "clear":
+		return emitCapability(rc, e, operation, nil)
+	case "init":
+		return emitStartup(rc, e, false)
+	case "reset":
+		return emitStartup(rc, e, true)
+	default:
+		panic("unreachable POSIX operation")
+	}
 }
 
 // emitCapability handles the capname form, including the POSIX `clear`

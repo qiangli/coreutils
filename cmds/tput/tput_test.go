@@ -266,6 +266,53 @@ func TestInitAndReset(t *testing.T) {
 	}
 }
 
+func TestPOSIXOperationSequence(t *testing.T) {
+	dir := fixtureDir(t)
+
+	out, errb, code := runIn(t, dir, nil, "-T", "demo", "clear", "init", "reset")
+	if code != exitOK || out != "\x1b[H\x1b[2J<is1><is2><is3><is1><rs2><is3>" || errb != "" {
+		t.Errorf("got (out=%q, err=%q, code=%d)", out, errb, code)
+	}
+
+	// Once the first operand selects POSIX operation mode, every following
+	// operand must also be an operation; it is not a parameter to clear.
+	out, errb, code = runIn(t, dir, nil, "-T", "demo", "clear", "5")
+	if code != exitUsage || out != "\x1b[H\x1b[2J" || !strings.Contains(errb, "5") {
+		t.Errorf("non-operation: got (out=%q, err=%q, code=%d)", out, errb, code)
+	}
+}
+
+func TestPOSIXOperationSequenceStopsOnFailure(t *testing.T) {
+	t.Run("missing capability", func(t *testing.T) {
+		dir := t.TempDir()
+		f := terminfo.DemoFixture()
+		delete(f.Strs, "clear")
+		writeEntry(t, dir, "demo", f, false)
+
+		out, errb, code := runIn(t, dir, nil, "-T", "demo", "clear", "init")
+		if code != exitAbsent || out != "" || errb != "" {
+			t.Errorf("got (out=%q, err=%q, code=%d)", out, errb, code)
+		}
+	})
+
+	t.Run("write error", func(t *testing.T) {
+		dir := fixtureDir(t)
+		var errb bytes.Buffer
+		out := &countingFailingWriter{}
+		rc := &tool.RunContext{
+			Dir:   t.TempDir(),
+			Env:   []string{"TERMINFO=" + dir},
+			Stdio: tool.Stdio{Out: out, Err: &errb},
+		}
+		if code := run(rc, []string{"-T", "demo", "clear", "init"}); code != exitUsage {
+			t.Errorf("exit %d, want %d", code, exitUsage)
+		}
+		if out.writes != 1 || !strings.Contains(errb.String(), "write") {
+			t.Errorf("writes=%d, stderr=%q", out.writes, errb.String())
+		}
+	})
+}
+
 // The init/reset FILE capability names a file whose bytes are written out.
 func TestInitFile(t *testing.T) {
 	dir := t.TempDir()
@@ -397,6 +444,13 @@ func TestWriteErrorIsReported(t *testing.T) {
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("output unavailable") }
+
+type countingFailingWriter struct{ writes int }
+
+func (w *countingFailingWriter) Write([]byte) (int, error) {
+	w.writes++
+	return 0, errors.New("output unavailable")
+}
 
 func TestRegisteredUnderItsOwnName(t *testing.T) {
 	got := tool.Lookup("tput")
