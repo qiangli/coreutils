@@ -14,9 +14,11 @@
 package xargscmd
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -34,17 +36,18 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type options struct {
-	null       bool
-	noRunEmpty bool
-	trace      bool
-	maxArgs    int // <=0 means unlimited (one batch)
-	maxLines   int // <=0 means unlimited
-	maxChars   int // <=0 means unlimited
-	exactSize  bool
-	replace    string
-	maxProcs   int
-	eof        string
-	delim      string // raw -d value (pre-unescape); "" = unset
+	null        bool
+	noRunEmpty  bool
+	trace       bool
+	interactive bool
+	maxArgs     int // <=0 means unlimited (one batch)
+	maxLines    int // <=0 means unlimited
+	maxChars    int // <=0 means unlimited
+	exactSize   bool
+	replace     string
+	maxProcs    int
+	eof         string
+	delim       string // raw -d value (pre-unescape); "" = unset
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -78,7 +81,8 @@ func run(rc *tool.RunContext, args []string) int {
 		case a == "-t" || a == "--verbose":
 			o.trace = true
 		case a == "-p" || a == "--interactive":
-			return tool.UsageError(rc, cmd, "-p/--interactive is not supported (no controlling terminal)")
+			o.interactive = true
+			o.trace = true
 		case a == "-n" || a == "--max-args":
 			v, ok := val()
 			if !ok {
@@ -113,10 +117,13 @@ func run(rc *tool.RunContext, args []string) int {
 			} else {
 				o.replace, o.maxArgs, o.maxLines = "{}", -1, 1
 			}
+			o.exactSize = true
 		case strings.HasPrefix(a, "-I") && len(a) > 2:
 			o.replace, o.maxArgs, o.maxLines = a[2:], -1, 1
+			o.exactSize = true
 		case strings.HasPrefix(a, "--replace="):
 			o.replace, o.maxArgs, o.maxLines = a[len("--replace="):], -1, 1
+			o.exactSize = true
 		case a == "-P" || a == "--max-procs":
 			v, ok := val()
 			if !ok {
@@ -160,6 +167,23 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if o.maxProcs == -2 {
 		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
+	}
+
+	maxSupported := commandSizeLimit(rc.Env)
+	if maxSupported <= 0 {
+		fmt.Fprintln(rc.Err, "xargs: environment is too large for exec")
+		return 1
+	}
+	if o.maxChars == 0 {
+		// POSIX specifies LINE_MAX as the implicit -s limit when -n is used.
+		// With no -n or explicit -s, use the largest safe system-derived
+		// budget so the mandatory default batching still occurs before exec.
+		o.maxChars = maxSupported
+		if o.maxArgs > 0 && o.maxChars > lineMax {
+			o.maxChars = lineMax
+		}
+	} else if o.maxChars > maxSupported {
+		o.maxChars = maxSupported
 	}
 
 	command := args[i:]
@@ -265,7 +289,7 @@ func readItems(r io.Reader, o options) ([]inputItem, error) {
 		d := unescapeDelim(o.delim)
 		items = plainItems(splitOn(string(data), d))
 	default:
-		items, err = splitQuoted(string(data))
+		items, err = splitQuoted(string(data), o.maxLines > 0)
 		if err != nil {
 			return nil, err
 		}
@@ -287,6 +311,18 @@ func readItems(r io.Reader, o options) ([]inputItem, error) {
 // is required by -I: the entire logical line is one replacement item, while
 // quotes and backslashes remain syntax rather than literal data.
 func unquoteReplacementLine(text string) (string, error) {
+	// Skip leading unquoted, unescaped blanks
+	start := 0
+	for start < len(text) {
+		c := text[start]
+		if c == ' ' || c == '\t' {
+			start++
+		} else {
+			break
+		}
+	}
+	text = text[start:]
+
 	var out strings.Builder
 	var quote byte
 	for i := 0; i < len(text); i++ {
@@ -342,14 +378,24 @@ func splitOn(s string, delim rune) []string {
 // splitQuoted implements GNU xargs default word splitting: blanks/newlines
 // separate items; single and double quotes group; backslash escapes the next
 // character (outside quotes).
-func splitQuoted(s string) ([]inputItem, error) {
+func splitQuoted(s string, useContinuation bool) ([]inputItem, error) {
+	var lineMap map[int]int
+	if useContinuation {
+		lineMap = computeLogicalLines(s)
+	}
 	var items []inputItem
 	var cur strings.Builder
 	inItem := false
 	line, itemLine := 1, 1
 	flush := func() {
 		if inItem {
-			items = append(items, inputItem{value: cur.String(), line: itemLine})
+			l := itemLine
+			if useContinuation && lineMap != nil {
+				if mapped, ok := lineMap[itemLine]; ok {
+					l = mapped
+				}
+			}
+			items = append(items, inputItem{value: cur.String(), line: l})
 			cur.Reset()
 			inItem = false
 		}
@@ -395,6 +441,100 @@ func splitQuoted(s string) ([]inputItem, error) {
 	return items, nil
 }
 
+func computeLogicalLines(s string) map[int]int {
+	parts := strings.Split(s, "\n")
+	if len(parts) > 1 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	m := make(map[int]int)
+	logicalLine := 0
+	inContinuation := false
+	for i, part := range parts {
+		phys := i + 1
+		isEmpty, endsWithUnescapedBlank := analyzePhysicalLine(part)
+		if isEmpty {
+			if logicalLine == 0 {
+				logicalLine = 1
+			}
+			m[phys] = logicalLine
+			continue
+		}
+		if !inContinuation {
+			logicalLine++
+		}
+		m[phys] = logicalLine
+		inContinuation = endsWithUnescapedBlank
+	}
+	return m
+}
+
+func analyzePhysicalLine(line string) (isEmpty bool, endsWithUnescapedBlank bool) {
+	inSingle := false
+	inDouble := false
+	escaped := false
+	nonBlankSeen := false
+	line = strings.TrimSuffix(line, "\r")
+	var lastIsBlank bool
+	var lastIsEscaped bool
+	var lastIsQuoted bool
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if escaped {
+			escaped = false
+			nonBlankSeen = true
+			lastIsBlank = (c == ' ' || c == '\t')
+			lastIsEscaped = true
+			lastIsQuoted = inSingle || inDouble
+			continue
+		}
+		if inSingle {
+			if c == '\'' {
+				inSingle = false
+			} else {
+				nonBlankSeen = true
+				lastIsBlank = (c == ' ' || c == '\t')
+				lastIsEscaped = false
+				lastIsQuoted = true
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				inDouble = false
+			} else {
+				nonBlankSeen = true
+				lastIsBlank = (c == ' ' || c == '\t')
+				lastIsEscaped = false
+				lastIsQuoted = true
+			}
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '\'' {
+			nonBlankSeen = true // even '' supplies an empty argument
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			nonBlankSeen = true // even "" supplies an empty argument
+			inDouble = true
+			continue
+		}
+		if c != ' ' && c != '\t' {
+			nonBlankSeen = true
+		}
+		lastIsBlank = (c == ' ' || c == '\t')
+		lastIsEscaped = false
+		lastIsQuoted = false
+	}
+	isEmpty = !nonBlankSeen
+	endsWithUnescapedBlank = lastIsBlank && !lastIsEscaped && !lastIsQuoted
+	return isEmpty, endsWithUnescapedBlank
+}
+
 func unescapeDelim(s string) rune {
 	if len(s) >= 2 && s[0] == '\\' {
 		switch s[1] {
@@ -427,6 +567,9 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 			for k, a := range command {
 				argv[k] = strings.ReplaceAll(a, o.replace, it.value)
 			}
+			if argvSize(argv) > o.maxChars {
+				return nil, fmt.Errorf("constructed command exceeds size limit")
+			}
 			batches = append(batches, argv)
 		}
 		return batches, nil // empty items ⇒ no invocations
@@ -458,11 +601,11 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 				break
 			}
 			itemSize := len(it.value) + 1
-			if o.maxChars > 0 && size+itemSize > o.maxChars && end > start {
+			if size+itemSize > o.maxChars {
+				if o.exactSize || end == start {
+					return nil, fmt.Errorf("constructed command exceeds size limit")
+				}
 				break
-			}
-			if o.maxChars > 0 && size+itemSize > o.maxChars && o.exactSize {
-				return nil, fmt.Errorf("input item exceeds -s size limit")
 			}
 			argv = append(argv, it.value)
 			size += itemSize
@@ -470,10 +613,6 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 				lines++
 				lastLine = it.line
 			}
-			end++
-		}
-		if end == start { // A single large input item is permitted unless -x was set.
-			argv = append(argv, items[end].value)
 			end++
 		}
 		batches = append(batches, argv)
@@ -493,6 +632,27 @@ func argvSize(argv []string) int {
 	return n
 }
 
+const (
+	argMaxHeadroom = 2048
+	lineMax        = 2048
+)
+
+var systemArgMax = sysArgMax
+
+// commandSizeLimit returns the generated argv-string budget after reserving
+// POSIX's required headroom and every environment string passed to exec.
+func commandSizeLimit(env []string) int {
+	limit := systemArgMax() - argMaxHeadroom
+	for _, entry := range env {
+		limit -= len(entry) + 1
+	}
+	return limit
+}
+
+var ttyOpener = func() (io.ReadCloser, error) {
+	return os.Open("/dev/tty")
+}
+
 // execBatches runs the planned invocations (parallel when -P>1) and returns the
 // xargs exit status.
 func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
@@ -506,45 +666,80 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 		mu.Unlock()
 	}
 
+	var tty io.ReadCloser
+	var ttyReader *bufio.Reader
+	if o.interactive {
+		var err error
+		tty, err = ttyOpener()
+		if err != nil {
+			fmt.Fprintf(rc.Err, "xargs: open controlling terminal: %v\n", err)
+			return 1
+		}
+		defer tty.Close()
+		ttyReader = bufio.NewReader(tty)
+	}
+
 	// runOne executes one invocation, writing its output to stdout/stderr.
 	runOne := func(argv []string, stdout, stderr io.Writer) (stop bool) {
-		if o.trace {
+		if o.interactive {
+			fmt.Fprintf(stderr, "%s?...", strings.Join(argv, " "))
+			line, err := ttyReader.ReadString('\n')
+			if err != nil && err != io.EOF {
+				fmt.Fprintf(stderr, "\nxargs: read controlling terminal: %v\n", err)
+				note(1)
+				return true
+			}
+			response := strings.TrimSpace(line)
+			if !strings.HasPrefix(strings.ToLower(response), "y") {
+				return false
+			}
+		} else if o.trace {
 			fmt.Fprintln(stderr, strings.Join(argv, " "))
 		}
+
 		path := rc.ResolveCommand(argv[0])
 		if path == "" {
 			fmt.Fprintf(stderr, "xargs: %s: command not found\n", argv[0])
 			note(127)
-			return false
+			return true
 		}
 		// The child reads from the null device, not xargs's consumed input.
 		c, startErr := rc.StartCommand(path, argv[1:], nil, stdout, stderr)
 		if startErr != nil {
+			fmt.Fprintf(stderr, "xargs: %s: %v\n", argv[0], startErr)
 			note(126)
-			return false
+			return true
 		}
 		switch err := c.Wait().(type) {
 		case nil:
 		case *exec.ExitError:
 			switch ec := err.ExitCode(); {
 			case ec == 255:
+				fmt.Fprintln(stderr, "xargs: child returned exit status 255")
 				note(124)
 				return true
 			case ec < 0:
+				fmt.Fprintln(stderr, "xargs: child terminated by signal")
 				note(125) // killed by signal
+				return true
 			default:
 				note(123) // any 1..125
 			}
 		default:
+			fmt.Fprintf(stderr, "xargs: wait error: %v\n", err)
 			note(126) // could not run
+			return true
 		}
 		return false
 	}
 
 	procs := o.maxProcs
-	if procs <= 0 { // -P0 = run as many as possible
+	if o.interactive {
+		procs = 1
+	} else if procs <= 0 { // -P0 = run as many as possible
 		procs = len(batches)
 	}
+
 	if procs <= 1 {
 		for _, argv := range batches {
 			if runOne(argv, rc.Out, rc.Err) { // exit 255 stops further input
@@ -557,19 +752,39 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	// Parallel: capture each invocation's output and flush it atomically under
 	// the lock, so concurrent children don't interleave-corrupt the shared
 	// writers (and a non-concurrent-safe writer like a buffer is never raced).
+	var stopped bool
 	sem := make(chan struct{}, procs)
 	var wg sync.WaitGroup
 	for _, argv := range batches {
+		mu.Lock()
+		if stopped {
+			mu.Unlock()
+			break
+		}
+		mu.Unlock()
+
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(a []string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+
+			mu.Lock()
+			if stopped {
+				mu.Unlock()
+				return
+			}
+			mu.Unlock()
+
 			var ob, eb bytes.Buffer
-			runOne(a, &ob, &eb)
+			stop := runOne(a, &ob, &eb)
+
 			mu.Lock()
 			rc.Out.Write(ob.Bytes())
 			rc.Err.Write(eb.Bytes())
+			if stop {
+				stopped = true
+			}
 			mu.Unlock()
 		}(argv)
 	}

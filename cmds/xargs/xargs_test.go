@@ -3,6 +3,7 @@ package xargscmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -135,9 +136,24 @@ func TestXargsTrace(t *testing.T) {
 	}
 }
 
-func TestXargsInteractiveUnsupported(t *testing.T) {
-	if _, _, code := runXargs(t, "a\n", "-p", "echo"); code == 0 {
-		t.Error("-p should fail loudly (unsupported)")
+func TestXargsInteractiveReadsControllingTerminal(t *testing.T) {
+	original := ttyOpener
+	t.Cleanup(func() { ttyOpener = original })
+	opened := 0
+	ttyOpener = func() (io.ReadCloser, error) {
+		opened++
+		return io.NopCloser(strings.NewReader("yes\nno\nY\n")), nil
+	}
+
+	out, errOut, code := runXargs(t, "a b c\n", "-p", "-n1", "echo")
+	if code != 0 || out != "a\nc\n" {
+		t.Fatalf("-p: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if opened != 1 {
+		t.Fatalf("controlling terminal opened %d times, want once", opened)
+	}
+	if strings.Count(errOut, "?...") != 3 || !strings.Contains(errOut, "echo a?...") {
+		t.Fatalf("-p prompts=%q, want traced command and one prompt per batch", errOut)
 	}
 }
 
@@ -145,6 +161,21 @@ func TestXargsLogicalLines(t *testing.T) {
 	out, _, code := runXargs(t, "a b\nc\nd e\n", "-L", "2", "echo")
 	if code != 0 || out != "a b c\nd e\n" {
 		t.Fatalf("-L 2: out=%q code=%d", out, code)
+	}
+}
+
+func TestXargsLogicalLinesContinueAfterTrailingBlank(t *testing.T) {
+	input := "one \n\n two\nthree\nfour \t\n\nfive\nsix\n"
+	out, errOut, code := runXargs(t, input, "-L2", "echo")
+	if code != 0 || errOut != "" || out != "one two three\nfour five six\n" {
+		t.Fatalf("-L trailing-blank continuation: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsLogicalLinesDoNotContinueEscapedTrailingBlank(t *testing.T) {
+	out, errOut, code := runXargs(t, "one\\ \ntwo\nthree\n", "-L2", "echo")
+	if code != 0 || errOut != "" || out != "one  two\nthree\n" {
+		t.Fatalf("-L escaped trailing blank: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
 
@@ -159,6 +190,14 @@ func TestXargsReplaceUsesWholeLine(t *testing.T) {
 	out, _, code := runXargs(t, "a b\nc d\n", "-I", "{}", "echo", "[{}]")
 	if code != 0 || out != "[a b]\n[c d]\n" {
 		t.Fatalf("-I line replacement: out=%q code=%d", out, code)
+	}
+}
+
+func TestXargsReplaceIgnoresOnlyLeadingUnquotedUnescapedBlanks(t *testing.T) {
+	input := " \tplain\n'  'quoted\n\\ escaped\n"
+	out, errOut, code := runXargs(t, input, "-I{}", "echo", "[{}]")
+	if code != 0 || errOut != "" || out != "[plain]\n[  quoted]\n[ escaped]\n" {
+		t.Fatalf("-I leading blanks: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
 
@@ -188,5 +227,40 @@ func TestXargsSizeLimitAndExactMode(t *testing.T) {
 	_, errOut, code := runXargs(t, "oversized\n", "-s", "5", "-x", "echo")
 	if code == 0 || !strings.Contains(errOut, "size") {
 		t.Fatalf("-s -x oversize: code=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestXargsDefaultSizeBatchesBeforeExecLimit(t *testing.T) {
+	original := systemArgMax
+	t.Cleanup(func() { systemArgMax = original })
+	systemArgMax = func() int { return argMaxHeadroom + 12 }
+
+	out, errOut, code := runXargsEnv(t, t.TempDir(), nil, "aaa bbb ccc\n", "echo")
+	if code != 0 || errOut != "" || out != "aaa\nbbb\nccc\n" {
+		t.Fatalf("default size batching: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsSizeClampAccountsForEnvironment(t *testing.T) {
+	original := systemArgMax
+	t.Cleanup(func() { systemArgMax = original })
+	systemArgMax = func() int { return argMaxHeadroom + 17 }
+
+	// PAD=1234 occupies nine bytes including its terminating NUL, leaving an
+	// eight-byte argv budget even though the explicit -s value is larger.
+	out, errOut, code := runXargsEnv(t, t.TempDir(), []string{"PAD=1234"}, "a b\n", "-s100", "echo")
+	if code != 0 || errOut != "" || out != "a\nb\n" {
+		t.Fatalf("environment-aware -s clamp: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsReplaceHonorsForcedExactSize(t *testing.T) {
+	original := systemArgMax
+	t.Cleanup(func() { systemArgMax = original })
+	systemArgMax = func() int { return 1 << 20 }
+
+	_, errOut, code := runXargsEnv(t, t.TempDir(), nil, "abcd\n", "-s8", "-I{}", "echo", "{}")
+	if code == 0 || !strings.Contains(errOut, "size") {
+		t.Fatalf("oversized -I command: code=%d stderr=%q", code, errOut)
 	}
 }

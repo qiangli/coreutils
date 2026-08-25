@@ -97,6 +97,30 @@ func TestXargsNotFoundIs127(t *testing.T) {
 	}
 }
 
+func TestXargsNotFoundStopsBeforeLaterBatches(t *testing.T) {
+	_, errOut, code := runXargsEnv(t, t.TempDir(), []string{"PATH=/nonexistent"}, "a b c\n", "-n1", "no-such-cmd-xyz")
+	if code != 127 {
+		t.Fatalf("not-found xargs: code=%d, want 127", code)
+	}
+	if count := strings.Count(errOut, "command not found"); count != 1 {
+		t.Fatalf("not-found diagnostics=%d stderr=%q, want one attempted batch", count, errOut)
+	}
+}
+
+func TestXargsStartFailureStopsBeforeLaterBatches(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "cannot-run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runXargsEnv(t, dir, []string{"PATH=."}, "a b c\n", "-n1", "cannot-run")
+	if code != 126 {
+		t.Fatalf("start-failure xargs: code=%d stderr=%q, want 126", code, errOut)
+	}
+	if count := strings.Count(errOut, "xargs: cannot-run:"); count != 1 {
+		t.Fatalf("start-failure diagnostics=%d stderr=%q, want one attempted batch", count, errOut)
+	}
+}
+
 // A child exit of 1..125 propagates as xargs status 123 (GNU semantics).
 func TestXargsChildExitMapsTo123(t *testing.T) {
 	_, _, code := runXargsEnv(t, t.TempDir(), []string{"PATH=/bin:/usr/bin"}, "x\n", "sh", "-c", "exit 7")
