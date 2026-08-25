@@ -2,8 +2,8 @@
 
 This unique Wave 5A audit covers exactly `at`, `batch`, `crontab`, `dd`,
 `df`, and `diff` against POSIX.1-2016 (Issue 7).  The six rows are Go-owned;
-POSIX is normative and existing GNU behavior remains an extension only outside
-`POSIXLY_CORRECT`.
+POSIX is normative and existing upstream/non-POSIX behavior remains an
+extension only outside `POSIXLY_CORRECT`.
 
 Every row is promoted to `partial`, not `verified`.  Each has hermetic,
 package-local evidence for its accepted synopsis/options, operands, stream
@@ -30,7 +30,7 @@ both modes and both present-value forms.
 | `crontab` | partial | Standard-input and file replacement, `-l`, `-e`, and `-r`; one-file arity; silent successful installation; exact source round-trip; atomic rejection; `EDITOR`; persisted shell/home/default environment effects; and exit paths are covered. The optional-user interface is deliberately fail-closed, with catalog diagnostics and platform daemon policy residual. |
 | `dd` | partial | All Issue 7 operands and conversions listed in the ledger, stdin/stdout defaults, file effects, status/error paths, SIGINT, FIFO handling, `conv=sync`, and XSI codeset conversions have focused coverage. Wave 5A adds POSIX-mode status discrimination. Locale message catalogs remain absent. |
 | `df` | partial | XSI `-k`, `-P`, and no-argument `-t`, their conflict, operand diagnostics/continuation, 512/1024 units, free file slots, allocated space, portable rows, and statuses are covered. Platform mount discovery and translated diagnostics remain implementation-dependent. |
-| `diff` | partial | `-b`, `-c`/`-C`, `-e`, `-f`, `-r`, `-u`/`-U`, two operands including one standard-input operand, normal/ed/context/unified output, `LC_TIME`/`TZ` headers, directory effects, output failures, and 0/1/2 status paths are covered. Locale collation/message catalogs and all implementation-defined directory/FIFO cases remain residual. |
+| `diff` | partial | `-b`, `-c`/`-C`, `-e`, `-f`, `-r`, `-u`/`-U`, two operands including one standard-input operand, normal/ed/context/unified output, fixed C/POSIX timestamp formatting with `TZ`, directory effects, output failures, and 0/1/2 status paths are covered. Non-C `LC_TIME`, locale collation/message catalogs, and all implementation-defined directory/FIFO cases remain residual. |
 
 ## Focused evidence
 
