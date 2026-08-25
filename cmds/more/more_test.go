@@ -3,6 +3,8 @@ package morecmd
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +13,35 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
+var testIsTerminal = true
+
+func init() {
+	// Override the variable from more.go
+	isTerminal = func(w io.Writer) bool {
+		return testIsTerminal
+	}
+}
+
 func runMore(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	t.Helper()
+	return runMoreEnv(t, dir, stdin, nil, args...)
+}
+
+func runMoreEnv(t *testing.T, dir, stdin string, env []string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
+	}
+	testIsTerminal = true
+	code := cmd.Run(rc, args)
+	return out.String(), errb.String(), code
+}
+
+func runMoreNonTerminal(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
@@ -19,6 +49,7 @@ func runMore(t *testing.T, dir, stdin string, args ...string) (string, string, i
 		Dir:   dir,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
+	testIsTerminal = false
 	code := cmd.Run(rc, args)
 	return out.String(), errb.String(), code
 }
@@ -52,7 +83,7 @@ func TestMoreSqueezeAndFromLine(t *testing.T) {
 }
 
 func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
-	out, errb, code := runMore(t, t.TempDir(), "a\nb\n", "-d", "-f", "-p", "-c", "-n", "5")
+	out, errb, code := runMore(t, t.TempDir(), "a\nb\n", "-d", "-f", "-c", "-n", "5")
 	if out != "a\nb\n" || errb != "" || code != 0 {
 		t.Fatalf("more display flags = (%q, %q, %d)", out, errb, code)
 	}
@@ -62,15 +93,34 @@ func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
 		t.Fatalf("more alias flags = (%q, %q, %d)", out, errb, code)
 	}
 
-	// -p pairs with --print-over and -u with --plain (util-linux naming).
-	out, errb, code = runMore(t, t.TempDir(), "a\n", "--print-over", "--plain")
-	if out != "a\n" || errb != "" || code != 0 {
-		t.Fatalf("more long display flags = (%q, %q, %d)", out, errb, code)
-	}
-
 	out, errb, code = runMore(t, t.TempDir(), "a\n", "-10")
 	if out != "a\n" || errb != "" || code != 0 {
 		t.Fatalf("more numeric screen size = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestMoreRejectsInteractiveFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"-i"}, {"-p", "next"}, {"--command="}, {"-t", "tag"}, {"--tag="},
+	} {
+		_, errb, code := runMore(t, t.TempDir(), "a\n", args...)
+		if code == 0 || !strings.Contains(errb, "not supported") {
+			t.Fatalf("expected %v to fail with not supported, got code %d err %q", args, code, errb)
+		}
+	}
+	for _, args := range [][]string{{"-p"}, {"-t"}} {
+		_, errb, code := runMore(t, t.TempDir(), "a\n", args...)
+		if code != 2 || !strings.Contains(errb, "needs an argument") {
+			t.Fatalf("expected missing argument for %v, got code %d err %q", args, code, errb)
+		}
+	}
+}
+
+func TestMoreNonTerminalParsesAndIgnoresInteractiveFlags(t *testing.T) {
+	input := "one\r\n\x00two\n"
+	out, errb, code := runMoreNonTerminal(t, t.TempDir(), input, "-i", "-p", "next", "-t", "tag")
+	if out != input || errb != "" || code != 0 {
+		t.Fatalf("more non-terminal interactive flags = (%q, %q, %d), want exact input", out, errb, code)
 	}
 }
 
@@ -82,13 +132,11 @@ func TestMorePatternStartsAtMatch(t *testing.T) {
 }
 
 func TestMorePatternIsLiteral(t *testing.T) {
-	// "^bet" is a literal substring, not a regex anchor.
 	out, errb, code := runMore(t, t.TempDir(), "alpha\nx^bety\ngamma\n", "-P", "^bet")
 	if want := "x^bety\ngamma\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("more literal pattern = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
 	}
 
-	// Regex metacharacters are valid literal patterns.
 	out, errb, code = runMore(t, t.TempDir(), "a\n[b\nc\n", "-P", "[")
 	if want := "[b\nc\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("more bracket pattern = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
@@ -109,5 +157,82 @@ func TestMoreRejectsBadLineCounts(t *testing.T) {
 	_, errb, code := runMore(t, t.TempDir(), "", "-F", "0")
 	if code != 2 || !strings.Contains(errb, "invalid starting line") {
 		t.Fatalf("more bad from-line code=%d err=%q", code, errb)
+	}
+}
+
+func TestMoreNonTerminalIgnoresFAndP(t *testing.T) {
+	// -F and -P should be ignored when output is non-terminal.
+	out, errb, code := runMoreNonTerminal(t, t.TempDir(), "alpha\nbeta\ngamma\n", "-F", "2", "-P", "bet")
+	if want := "alpha\nbeta\ngamma\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more non-terminal -F -P = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestMoreSqueezeCRLF(t *testing.T) {
+	// -s squeezes only repeated empty text lines (\n)
+	// CR-containing lines (\r\n) are non-empty.
+	out, errb, code := runMore(t, t.TempDir(), "one\n\n\ntwo\n\r\n\r\nthree\n\n\n", "-s")
+	if want := "one\n\ntwo\n\r\n\r\nthree\n\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more squeeze CRLF = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestMoreEnvironmentMORE(t *testing.T) {
+	env := []string{"MORE=-s\t-F 2"}
+	out, errb, code := runMoreEnv(t, t.TempDir(), "one\n\n\ntwo\n", env)
+	if want := "\ntwo\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more MORE env = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+
+	// Precedence: command line should override.
+	// -F 3 should override -F 2 from env.
+	out, errb, code = runMoreEnv(t, t.TempDir(), "one\n\n\ntwo\nthree\n", env, "-F", "3")
+	// line 3 is the second \n
+	if want := "\ntwo\nthree\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more MORE env precedence = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+type errorReader struct{}
+
+func (errorReader) Read(p []byte) (n int, err error) {
+	return 0, fmt.Errorf("simulated read error")
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (n int, err error) {
+	// Always short write and error
+	return len(p) / 2, fmt.Errorf("simulated short write")
+}
+
+func TestMoreReadWriteErrors(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: errorReader{}, Out: shortWriter{}, Err: &errb},
+	}
+	testIsTerminal = true
+	code := cmd.Run(rc, []string{})
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code on read error, got %d", code)
+	}
+	if !strings.Contains(strings.ToLower(errb.String()), "simulated read error") {
+		t.Fatalf("expected read error message, got %q", errb.String())
+	}
+
+	errb.Reset()
+	rc = &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("hello\nworld\n"), Out: shortWriter{}, Err: &errb},
+	}
+	code = cmd.Run(rc, []string{})
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code on write error, got %d", code)
+	}
+	if !strings.Contains(errb.String(), "simulated short write") {
+		t.Fatalf("expected write error message, got %q", errb.String())
 	}
 }

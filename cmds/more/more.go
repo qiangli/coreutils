@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -31,6 +33,42 @@ type options struct {
 	pattern  string
 }
 
+var isTerminal = func(w io.Writer) bool {
+	if f, ok := w.(interface{ Fd() uintptr }); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return false
+}
+
+func parseMORE(env []string) []string {
+	var moreEnv string
+	for _, e := range env {
+		if strings.HasPrefix(e, "MORE=") {
+			moreEnv = e[5:]
+		}
+	}
+	if moreEnv == "" {
+		return nil
+	}
+	var args []string
+	var buf []byte
+	for i := 0; i < len(moreEnv); i++ {
+		c := moreEnv[i]
+		if c == ' ' || c == '\t' {
+			if len(buf) > 0 {
+				args = append(args, string(buf))
+				buf = buf[:0]
+			}
+		} else {
+			buf = append(buf, c)
+		}
+	}
+	if len(buf) > 0 {
+		args = append(args, string(buf))
+	}
+	return args
+}
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	squeeze := fs.BoolP("squeeze", "s", false, "squeeze multiple blank lines into one")
@@ -40,11 +78,15 @@ func run(rc *tool.RunContext, args []string) int {
 	pattern := fs.StringP("pattern", "P", "", "start displaying at the first line containing PATTERN")
 	_ = fs.BoolP("silent", "d", false, "accepted for non-interactive compatibility")
 	_ = fs.BoolP("logical", "l", false, "accepted for non-interactive compatibility")
+	_ = fs.BoolP("ignore-case", "i", false, "ignore case in interactive searches (interactive mode deferred)")
 	_ = fs.BoolP("exit-on-eof", "e", false, "accepted for non-interactive compatibility")
 	_ = fs.BoolP("no-pause", "f", false, "accepted for non-interactive compatibility")
-	_ = fs.BoolP("print-over", "p", false, "accepted for non-interactive compatibility")
+	_ = fs.StringP("command", "p", "", "execute COMMAND before displaying (interactive mode deferred)")
+	_ = fs.StringP("tag", "t", "", "start at TAG (interactive mode deferred)")
 	_ = fs.BoolP("plain", "u", false, "accepted for non-interactive compatibility")
 	_ = fs.BoolP("clean-print", "c", false, "accepted for non-interactive compatibility")
+
+	args = append(parseMORE(rc.Env), args...)
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "-") && len(arg) > 1 && allDigits(arg[1:]) {
 			args[i] = "-n=" + arg[1:]
@@ -53,6 +95,16 @@ func run(rc *tool.RunContext, args []string) int {
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	terminal := isTerminal(rc.Out)
+	if terminal {
+		for _, name := range []string{"ignore-case", "command", "tag"} {
+			if fs.Changed(name) {
+				return tool.NotSupported(rc, cmd, "-"+map[string]string{
+					"ignore-case": "i", "command": "p", "tag": "t",
+				}[name])
+			}
+		}
 	}
 	if *lines < 0 {
 		return tool.UsageError(rc, cmd, "invalid line count: %d", *lines)
@@ -65,6 +117,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *number > 0 {
 		*lines = *number
+	}
+	if !terminal {
+		*fromLine = 1
+		*pattern = ""
 	}
 	o := options{squeeze: *squeeze, lines: *lines, fromLine: *fromLine, pattern: *pattern}
 	files := operands
@@ -131,7 +187,7 @@ func copyMore(w *bufio.Writer, errW io.Writer, r io.Reader, o options) error {
 	}
 	wroteBlank := false
 	for _, line := range lines[start:] {
-		blank := strings.TrimRight(line, "\n\r") == ""
+		blank := line == "\n"
 		if o.squeeze && blank && wroteBlank {
 			continue
 		}

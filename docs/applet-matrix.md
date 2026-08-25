@@ -125,7 +125,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
-| `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 1 | 8 |
+| `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 1 | 14 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
 | `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 4 | 35 |
