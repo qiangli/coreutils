@@ -18,9 +18,43 @@ type Record struct {
 	User string
 	TTY  string
 	Host string
+	ID   string
 	Time time.Time
 	Type string
 	PID  int
+	// Term and Exit carry the exit_status of a DEAD_PROCESS record
+	// (ut_exit.e_termination / ut_exit.e_exit on Linux utmp). They are
+	// only meaningful when Type is DEAD_PROCESS; who -d reports them.
+	Term int
+	Exit int
+}
+
+// utmpType maps a binary ut_type value to the canonical POSIX record-type
+// name used throughout who's filtering. Keeping the names (rather than a
+// single "user" bucket) is what lets who honor -b/-d/-l/-p/-r/-t.
+func utmpType(t int16) string {
+	switch t {
+	case 1:
+		return "RUN_LVL"
+	case 2:
+		return "BOOT_TIME"
+	case 3:
+		return "NEW_TIME"
+	case 4:
+		return "OLD_TIME"
+	case 5:
+		return "INIT_PROCESS"
+	case 6:
+		return "LOGIN_PROCESS"
+	case 7:
+		return "USER_PROCESS"
+	case 8:
+		return "DEAD_PROCESS"
+	case 9:
+		return "ACCOUNTING"
+	default:
+		return "EMPTY"
+	}
 }
 
 func DefaultFile() string {
@@ -134,26 +168,41 @@ func parseBinary(data []byte) []Record {
 	}
 }
 
+// parseLinuxUtmp decodes the Linux utmp/utmpx on-disk format (struct utmp,
+// 384 bytes/record). Every non-EMPTY record type is retained and tagged
+// with its canonical name so who's -b/-d/-l/-p/-r/-t selectors have data
+// to work with; PID and the dead-process exit_status are carried through.
 func parseLinuxUtmp(data []byte) []Record {
 	const size = 384
 	var out []Record
 	for off := 0; off+size <= len(data); off += size {
 		rec := data[off : off+size]
 		typ := int16(binary.LittleEndian.Uint16(rec[0:2]))
-		if typ != 7 {
+		if typ == 0 { // EMPTY: unused slot
 			continue
 		}
-		user := cString(rec[44 : 44+32])
+		pid := int32(binary.LittleEndian.Uint32(rec[4:8]))
 		line := cString(rec[8 : 8+32])
+		id := cString(rec[40 : 40+4])
+		user := cString(rec[44 : 44+32])
 		host := cString(rec[76 : 76+256])
+		term := int16(binary.LittleEndian.Uint16(rec[332:334]))
+		exit := int16(binary.LittleEndian.Uint16(rec[334:336]))
 		sec := int64(binary.LittleEndian.Uint32(rec[340:344]))
-		if user != "" {
-			out = append(out, Record{User: user, TTY: line, Host: host, Time: time.Unix(sec, 0), Type: "user"})
-		}
+		out = append(out, Record{
+			User: user, TTY: line, Host: host, ID: id,
+			Time: time.Unix(sec, 0), Type: utmpType(typ),
+			PID: int(pid), Term: int(term), Exit: int(exit),
+		})
 	}
 	return out
 }
 
+// parseDarwinUtmpx decodes the macOS utmpx on-disk format (628 bytes/record).
+// Like the Linux path it now retains every non-EMPTY record type (previously
+// only USER_PROCESS survived, which silently starved -b/-d/-l/-p/-r/-t). The
+// byte offsets are unchanged from the validated layout; macOS utmpx carries no
+// ut_exit field, so Term/Exit stay zero.
 func parseDarwinUtmpx(data []byte) []Record {
 	const size = 628
 	var out []Record
@@ -164,9 +213,13 @@ func parseDarwinUtmpx(data []byte) []Record {
 		host := cString(rec[296 : 296+256])
 		typ := int16(binary.LittleEndian.Uint16(rec[552:554]))
 		sec := int64(binary.LittleEndian.Uint32(rec[560:564]))
-		if user != "" && (typ == 7 || typ == 0) {
-			out = append(out, Record{User: user, TTY: line, Host: host, Time: time.Unix(sec, 0), Type: "user"})
+		if typ == 0 { // EMPTY: unused slot
+			continue
 		}
+		out = append(out, Record{
+			User: user, TTY: line, Host: host,
+			Time: time.Unix(sec, 0), Type: utmpType(typ),
+		})
 	}
 	return out
 }

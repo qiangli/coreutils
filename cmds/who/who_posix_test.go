@@ -38,7 +38,10 @@ func TestWhoSameHost(t *testing.T) {
 	}
 }
 
-func TestWhoAmI(t *testing.T) {
+// TestWhoSameHostNonMatching confirms the -m / same-host filter drops
+// records whose terminal is not the invoking stdin's, returning cleanly
+// (exit 0, no rows) rather than showing an unrelated login.
+func TestWhoSameHostNonMatching(t *testing.T) {
 	_, tty, err := pty.Open()
 	if err != nil {
 		t.Skipf("cannot open pty: %v", err)
@@ -46,18 +49,17 @@ func TestWhoAmI(t *testing.T) {
 	defer tty.Close()
 
 	dir := t.TempDir()
-	ttyName := tty.Name()
-	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("alice "+ttyName+" 1 host\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("alice pts/999 1 host\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: tty, Out: &out, Err: &errb}}
-	code := run(rc, []string{"utmp", "am", "i"})
+	code := run(rc, []string{"-m", "utmp"})
 	if code != 0 {
-		t.Fatalf("am i: code=%d out=%q err=%q", code, out.String(), errb.String())
+		t.Fatalf("-m: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "alice") || !strings.Contains(out.String(), filepath.Base(ttyName)) {
-		t.Fatalf("expected user and tty in output, got %q", out.String())
+	if strings.Contains(out.String(), "alice") {
+		t.Fatalf("expected no rows for non-matching terminal, got %q", out.String())
 	}
 }
