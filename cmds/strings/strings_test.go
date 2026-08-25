@@ -128,6 +128,29 @@ func TestStringsUTF8(t *testing.T) {
 	}
 }
 
+func TestStringsUTF8ReplacementCharacterPreservesBytesAndOffset(t *testing.T) {
+	const utf8Locale = "en_US.UTF-8"
+
+	// A canonical encoding of U+FFFD is a printable character, not the
+	// one-byte RuneError sentinel returned for invalid UTF-8.
+	stdin := "\x00\uFFFDAB\x00"
+	out, errb, code := runToolEnv(t, "", []string{"LC_ALL=" + utf8Locale}, stdin, "-n", "3")
+	if errb != "" || code != 0 || out != "\uFFFDAB\n" {
+		t.Fatalf("canonical U+FFFD = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "\uFFFDAB\n", "")
+	}
+	if !bytes.Equal([]byte(out), []byte{0xef, 0xbf, 0xbd, 'A', 'B', '\n'}) {
+		t.Fatalf("canonical U+FFFD bytes = % x, want original UTF-8 bytes", []byte(out))
+	}
+
+	// Offsets remain byte offsets: the three-byte Euro sign and one invalid
+	// byte occupy four bytes before the printable U+FFFD run.
+	stdin = "\u20AC\xff\uFFFDAB\x00"
+	out, errb, code = runToolEnv(t, "", []string{"LC_ALL=" + utf8Locale}, stdin, "-n", "3", "-t", "d")
+	if errb != "" || code != 0 || out != "      4 \uFFFDAB\n" {
+		t.Fatalf("canonical U+FFFD offset = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "      4 \uFFFDAB\n", "")
+	}
+}
+
 func TestStringsErrors(t *testing.T) {
 	_, errb, code := runTool(t, "", "", "-n", "0")
 	if code != 2 || !strings.Contains(errb, "invalid minimum string length") {

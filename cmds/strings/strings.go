@@ -161,17 +161,30 @@ func scan(r io.Reader, w *bufio.Writer, minLen int, radix string, isPrint func(r
 			if err != nil {
 				return err
 			}
-			if rn != utf8.RuneError && isPrint(rn) {
+			// ReadRune reports both an invalid encoding byte and a valid,
+			// canonical encoding of U+FFFD as RuneError. The width separates
+			// them: invalid input consumes one byte, while U+FFFD consumes its
+			// original three-byte encoding.
+			valid := rn != utf8.RuneError || size > 1
+			if valid && isPrint(rn) {
 				if runCharLen == 0 {
 					start = offset
 				}
-				runBytes = utf8.AppendRune(runBytes, rn)
+				// Preserve the input bytes exactly. Re-encoding the rune would
+				// make strings a text transcoder rather than a scanner.
+				if err := br.UnreadRune(); err != nil {
+					return err
+				}
+				raw, err := br.Peek(size)
+				if err != nil {
+					return err
+				}
+				runBytes = append(runBytes, raw...)
+				if _, err := br.Discard(size); err != nil {
+					return err
+				}
 				runCharLen++
 			} else {
-				if rn == utf8.RuneError {
-					// Invalid sequence counts as non-printable.
-					// Actually, ReadRune consumed 1 byte.
-				}
 				if ferr := flush(); ferr != nil {
 					return ferr
 				}
