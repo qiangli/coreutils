@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -52,11 +53,14 @@ type copier struct {
 	removeDest   bool
 	interactive  bool
 	verbose      bool
-	failed       bool
-	in           *bufio.Reader
-	rootDev      devID
-	haveRootDev  bool
-	dirStack     []os.FileInfo
+	// messagesGerman selects the provisioned de_DE LC_MESSAGES yesexpr
+	// for -i replies; every other supported locale uses C/POSIX "^[yY]".
+	messagesGerman bool
+	failed         bool
+	in             *bufio.Reader
+	rootDev        devID
+	haveRootDev    bool
+	dirStack       []os.FileInfo
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -157,7 +161,9 @@ func run(rc *tool.RunContext, args []string) int {
 		removeDest:   *removeDest,
 		interactive:  *interactive,
 		verbose:      *verbose,
-		in:           inputReader(rc.In),
+		messagesGerman: strings.HasPrefix(
+			strings.ToLower(locale.Resolve(rc.Env, locale.Messages)), "de_de"),
+		in: inputReader(rc.In),
 	}
 	defer c.paths.close()
 	// GNU rule: of -f and -n, the one given last takes effect.
@@ -277,28 +283,44 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 	c.dirStack = append(c.dirStack, fi)
 	defer func() { c.dirStack = c.dirStack[:len(c.dirStack)-1] }()
 	created := false
+	// finalPerm is the mode a newly created directory receives after the
+	// tree is populated when -p does not preserve the mode: the source
+	// mode as modified by the invoking umask (POSIX cp step 2.d).
+	finalPerm := fi.Mode().Perm()
 	if di, err := os.Lstat(c.path(dst)); err == nil {
 		if !di.IsDir() {
 			c.errf("cannot overwrite non-directory '%s' with directory '%s'", dst, src)
 			return
 		}
 	} else {
-		// Created writable regardless of the source mode so children
-		// can land; the final mode is applied after the tree is
-		// populated (the GNU manual's read-only-source-dir behavior).
-		mode := fi.Mode().Perm() | 0o700
+		// POSIX: the directory is created with the source mode modified
+		// by the umask (Mkdir applies the process umask), then OR'd with
+		// S_IRWXU so children can land regardless of the source mode (the
+		// GNU manual's read-only-source-dir behavior). The umask-filtered
+		// mode is read back before widening so the final mode retains the
+		// filtering.
+		if err := os.Mkdir(c.path(dst), fi.Mode().Perm()); err != nil {
+			c.errf("cannot create directory '%s': %s", dst, reason(err))
+			return
+		}
+		if di, err := os.Lstat(c.path(dst)); err == nil {
+			finalPerm = di.Mode().Perm()
+		}
+		population := finalPerm | 0o700
 		if c.preserve.ownership {
 			// Ownership may change after population. Until then, do not
 			// expose the incomplete tree to the source group or others.
-			mode &= 0o700
+			population = 0o700
 		} else if c.preserve.mode {
 			// Mode is restored after population; suppress group/other
 			// write access while children are still being copied.
-			mode &^= 0o022
+			population &^= 0o022
 		}
-		if err := os.Mkdir(c.path(dst), mode); err != nil {
-			c.errf("cannot create directory '%s': %s", dst, reason(err))
-			return
+		if population != finalPerm {
+			if err := os.Chmod(c.path(dst), population); err != nil {
+				c.errf("setting permissions for '%s': %s", dst, reason(err))
+				return
+			}
 		}
 		created = true
 	}
@@ -338,7 +360,7 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 		c.preserveAttrs(src, dst, fi)
 	}
 	if created && !c.preserve.mode {
-		if err := os.Chmod(c.path(dst), fi.Mode().Perm()); err != nil {
+		if err := os.Chmod(c.path(dst), finalPerm); err != nil {
 			c.errf("setting permissions for '%s': %s", dst, reason(err))
 		}
 	}
@@ -408,7 +430,9 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 			return
 		}
 		if c.interactive && !c.confirm(dst) {
-			c.failed = true
+			// POSIX: a declined -i reply means "do nothing more with
+			// source_file, go on to any remaining files" — a successful
+			// skip, not an error, so the exit status is unaffected.
 			return
 		}
 		if ds, err := os.Stat(dp); err == nil {
@@ -515,8 +539,7 @@ func (c *copier) copySymlink(src, dst string) {
 			return
 		}
 		if c.interactive && !c.confirm(dst) {
-			c.failed = true
-			return
+			return // declined -i: successful skip, status unaffected
 		}
 		if c.backup && !c.backupDest(dst) {
 			return
@@ -534,14 +557,25 @@ func (c *copier) copySymlink(src, dst string) {
 	c.verbosef("'%s' -> '%s'", src, dst)
 }
 
+// confirm writes the -i prompt to stderr and reads one reply line from
+// the invocation's standard input. The affirmative match is the
+// LC_MESSAGES yesexpr anchored at byte zero — "^[yY]" in the C/POSIX
+// locale, plus j/J for the provisioned de_DE locale — so only the line
+// terminator is stripped, never leading white space: " y" declines.
 func (c *copier) confirm(dst string) bool {
 	fmt.Fprintf(c.rc.Err, "cp: overwrite '%s'? ", dst)
 	line, err := c.in.ReadString('\n')
 	if err != nil && line == "" {
+		return false // EOF: not affirmative
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" {
 		return false
 	}
-	line = strings.TrimSpace(line)
-	return line == "y" || line == "Y" || strings.EqualFold(line, "yes")
+	if c.messagesGerman {
+		return line[0] == 'j' || line[0] == 'J' || line[0] == 'y' || line[0] == 'Y'
+	}
+	return line[0] == 'y' || line[0] == 'Y'
 }
 
 func inputReader(r io.Reader) *bufio.Reader {

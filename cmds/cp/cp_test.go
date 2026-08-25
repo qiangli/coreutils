@@ -22,10 +22,16 @@ func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, c
 
 func runToolWithInput(t *testing.T, dir string, input string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolWithInputEnv(t, dir, input, nil, args...)
+}
+
+func runToolWithInputEnv(t *testing.T, dir, input string, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -247,8 +253,8 @@ func TestCpBackupSuffixUpdateAndInteractive(t *testing.T) {
 	write(t, src, "prompted")
 	write(t, dst, "keep")
 	_, errb, code = runTool(t, dir, "-i", "a", "b")
-	if code != 1 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
-		t.Fatalf("cp -i without yes should skip with exit 1: code=%d err=%q", code, errb)
+	if code != 0 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
+		t.Fatalf("cp -i without yes should skip successfully: code=%d err=%q", code, errb)
 	}
 }
 
@@ -713,17 +719,144 @@ func TestCpHelpAndVersion(t *testing.T) {
 	}
 }
 
+// TestCpInteractiveDecline pins the POSIX exit status: a declined -i
+// reply is the specified no-copy branch, not an error, so cp exits 0.
 func TestCpInteractiveDecline(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "a content")
 	write(t, filepath.Join(dir, "b"), "b content")
 
-	_, _, code := runToolWithInput(t, dir, "n\n", "-i", "a", "b")
-	if code != 1 {
-		t.Errorf("cp -i with declined prompt: code=%d, want 1", code)
+	out, errb, code := runToolWithInput(t, dir, "n\n", "-i", "a", "b")
+	if code != 0 {
+		t.Errorf("cp -i with declined prompt: code=%d, want 0", code)
 	}
 	if got := read(t, filepath.Join(dir, "b")); got != "b content" {
 		t.Errorf("destination modified after declined prompt: got %q, want %q", got, "b content")
+	}
+	// Prompt routing: the question goes to stderr; stdout stays unused.
+	if out != "" {
+		t.Errorf("stdout not empty after -i prompt: %q", out)
+	}
+	if !strings.Contains(errb, "cp: overwrite 'b'? ") {
+		t.Errorf("prompt missing from stderr: %q", errb)
+	}
+}
+
+// TestCpInteractiveEOFDeclines: end-of-file on the response stream is
+// not an affirmative; the file is skipped and the status is still 0.
+func TestCpInteractiveEOFDeclines(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a content")
+	write(t, filepath.Join(dir, "b"), "b content")
+
+	_, _, code := runToolWithInput(t, dir, "", "-i", "a", "b")
+	if code != 0 {
+		t.Errorf("cp -i at EOF: code=%d, want 0", code)
+	}
+	if got := read(t, filepath.Join(dir, "b")); got != "b content" {
+		t.Errorf("destination modified after EOF: got %q", got)
+	}
+}
+
+// TestCpInteractiveDeclineContinues: declining one source must not stop
+// processing of the remaining sources (POSIX "go on to any remaining
+// files"), and a run whose only skips are declines exits 0.
+func TestCpInteractiveDeclineContinues(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a new")
+	write(t, filepath.Join(dir, "b"), "b new")
+	write(t, filepath.Join(dir, "c"), "c new")
+	destDir := filepath.Join(dir, "d")
+	write(t, filepath.Join(destDir, "a"), "a old")
+	write(t, filepath.Join(destDir, "b"), "b old")
+
+	// First prompt (a) declined, second (b) affirmed, c has no existing
+	// destination and copies without a prompt.
+	out, errb, code := runToolWithInput(t, dir, "n\ny\n", "-i", "a", "b", "c", "d")
+	if code != 0 {
+		t.Fatalf("cp -i multi-source: code=%d err=%q, want 0", code, errb)
+	}
+	if out != "" {
+		t.Errorf("stdout not empty: %q", out)
+	}
+	if got := read(t, filepath.Join(destDir, "a")); got != "a old" {
+		t.Errorf("declined destination modified: got %q", got)
+	}
+	if got := read(t, filepath.Join(destDir, "b")); got != "b new" {
+		t.Errorf("affirmed destination not copied: got %q", got)
+	}
+	if got := read(t, filepath.Join(destDir, "c")); got != "c new" {
+		t.Errorf("fresh destination not copied: got %q", got)
+	}
+	if want := "cp: overwrite 'd/a'? cp: overwrite 'd/b'? "; errb != strings.ReplaceAll(want, "/", string(filepath.Separator)) {
+		t.Errorf("prompts on stderr = %q, want %q", errb, want)
+	}
+}
+
+// TestCpInteractiveDeclineThenError: a decline stays a successful skip,
+// but a genuine error elsewhere in the same run still yields status 1.
+func TestCpInteractiveDeclineThenError(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a new")
+	destDir := filepath.Join(dir, "d")
+	write(t, filepath.Join(destDir, "a"), "a old")
+
+	_, errb, code := runToolWithInput(t, dir, "n\n", "-i", "a", "missing", "d")
+	if code != 1 {
+		t.Errorf("cp -i with missing source: code=%d err=%q, want 1", code, errb)
+	}
+	if !strings.Contains(errb, "cannot stat 'missing'") {
+		t.Errorf("missing-source diagnostic absent: %q", errb)
+	}
+	if got := read(t, filepath.Join(destDir, "a")); got != "a old" {
+		t.Errorf("declined destination modified: got %q", got)
+	}
+}
+
+// TestCpInteractiveAffirmativeMatching pins yesexpr semantics: the match
+// is anchored at byte zero ("^[yY]" in the C/POSIX locale), only the
+// line terminator is stripped, and the provisioned de_DE LC_MESSAGES
+// locale adds j/J. Locale resolution follows LC_ALL > LC_MESSAGES > LANG.
+func TestCpInteractiveAffirmativeMatching(t *testing.T) {
+	cases := []struct {
+		name  string
+		env   []string
+		reply string
+		copy  bool
+	}{
+		{"posix y", nil, "y\n", true},
+		{"posix Y", nil, "Y\n", true},
+		{"posix yes", nil, "yes\n", true},
+		{"posix crlf", nil, "y\r\n", true},
+		{"posix leading space declines", nil, " y\n", false},
+		{"posix n", nil, "n\n", false},
+		{"posix empty", nil, "\n", false},
+		{"posix j declines", nil, "j\n", false},
+		{"german j", []string{"LC_MESSAGES=de_DE.iso88591"}, "j\n", true},
+		{"german ja", []string{"LC_MESSAGES=de_DE.iso88591"}, "ja\n", true},
+		{"german J", []string{"LANG=de_DE.UTF-8"}, "J\n", true},
+		{"german y still affirms", []string{"LC_ALL=de_DE.iso88591"}, "y\n", true},
+		{"german leading space declines", []string{"LC_MESSAGES=de_DE.iso88591"}, " j\n", false},
+		{"german nein", []string{"LC_MESSAGES=de_DE.iso88591"}, "nein\n", false},
+		{"lc_all overrides messages", []string{"LC_MESSAGES=de_DE.iso88591", "LC_ALL=POSIX"}, "j\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "a"), "new")
+			write(t, filepath.Join(dir, "b"), "old")
+			_, errb, code := runToolWithInputEnv(t, dir, tc.reply, tc.env, "-i", "a", "b")
+			if code != 0 {
+				t.Fatalf("code=%d err=%q, want 0", code, errb)
+			}
+			want := "old"
+			if tc.copy {
+				want = "new"
+			}
+			if got := read(t, filepath.Join(dir, "b")); got != want {
+				t.Errorf("reply %q in env %v: destination = %q, want %q", tc.reply, tc.env, got, want)
+			}
+		})
 	}
 }
 

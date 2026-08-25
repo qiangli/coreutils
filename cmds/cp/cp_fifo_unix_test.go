@@ -135,9 +135,13 @@ func TestCpCopyContentsCreatesRestrictedDirectoryBeforeFIFORead(t *testing.T) {
 	for _, tc := range []struct {
 		attr       string
 		unsafeMask os.FileMode
+		finalMode  os.FileMode
 	}{
-		{attr: "mode", unsafeMask: 0o022},
-		{attr: "ownership", unsafeMask: 0o077},
+		// --preserve=mode duplicates the source mode exactly; without it
+		// the final mode is the source mode modified by the umask (0o022
+		// here, pinned around the child spawn below).
+		{attr: "mode", unsafeMask: 0o022, finalMode: 0o775},
+		{attr: "ownership", unsafeMask: 0o077, finalMode: 0o755},
 	} {
 		t.Run(tc.attr, func(t *testing.T) {
 			dir := t.TempDir()
@@ -159,8 +163,12 @@ func TestCpCopyContentsCreatesRestrictedDirectoryBeforeFIFORead(t *testing.T) {
 			defer cancel()
 			child, stderr := cpHelperCommand(t, ctx, dir,
 				"--preserve="+tc.attr, "-R", "--copy-contents", "--parents", "src", "dest")
-			if err := child.Start(); err != nil {
-				t.Fatal(err)
+			// The child inherits the file creation mask at spawn; pin it
+			// so the umask-filtered final mode is deterministic.
+			var startErr error
+			withUmask(t, 0o022, func() { startErr = child.Start() })
+			if startErr != nil {
+				t.Fatal(startErr)
 			}
 			waited := false
 			defer func() {
@@ -232,8 +240,8 @@ func TestCpCopyContentsCreatesRestrictedDirectoryBeforeFIFORead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if final.Mode().Perm() != 0o775 {
-				t.Fatalf("final destination mode = %03o, want 775", final.Mode().Perm())
+			if final.Mode().Perm() != tc.finalMode {
+				t.Fatalf("final destination mode = %03o, want %03o", final.Mode().Perm(), tc.finalMode)
 			}
 		})
 	}
