@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `1a27ec0`
+This report reconciles the Sprint 79 interface ledger through coreutils `1ae7adc`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -101,7 +101,7 @@ lower-ranked edges.
 | 2 | `awk`, `comm`, `csplit`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `tr`, `unexpand`, `uniq`, `wc` | `ENVIRONMENT_VARIABLES`, algorithmic `STDOUT` | Add non-C multibyte `LC_CTYPE`/`LC_COLLATE`/`LC_NUMERIC` fixtures that discriminate character boundaries, classes, equivalence, ranges, ordering, blanks, widths, and numeric rendering for each named command. |
 | 2 | `cut` | locale-provider integration | Accepted source now applies invocation `LC_CTYPE` to `-c`, `-b -n`, and multibyte `-d` boundaries while preserving exact input bytes; focused tests cover C/POSIX, UTF-8, ISO-8859-1, malformed input, precedence, long lines, and fail-before-I/O behavior. Remaining: the carried locale corpus is bounded and installed locales outside it fail closed. |
 | 2 | `expand` | locale-provider integration | Accepted source now retains exact byte spans and uses invocation `LC_CTYPE` for display-column accounting; focused tests cover C/POSIX, UTF-8 widths, ISO-8859-1, malformed input, precedence, `-i`, read errors, and short writes. Remaining: the carried locale corpus and Unicode width policy are bounded. |
-| 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add privileged clock-set integration coverage, leap-second rendering, additional platform setters, and a complete installed-locale `LC_TIME` matrix with mutation-after-validation checks. |
+| 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Issue 748 and manager review now prove every Issue 7 conversion and E/O fallback in the carried locales, `LC_TIME` precedence/fail-closed behavior, invocation `TZ`/`-u`, validation before the injected clock setter, XSI year rules, setter failure, and output error plus short-write status. Remaining: privileged real clock-set integration, leap-second rendering from a system clock source, additional platform setters, and installed locales outside the bounded C/POSIX and `de_DE` corpus. |
 | 2 | `getconf` | platform integration | Accepted source now inventories every mandatory sysconf/pathconf/confstr/minimum name, routes pathname and system queries, distinguishes undefined results, validates programming environments, and propagates path/output errors. Remaining: privileged/kernel-limit products, a non-Linux/Darwin runtime provider, and broader native platform certification fixtures. |
 | 2 | `file` | locale/platform integration | Accepted Issue 746 evidence maps every required option (`-d`, `-h`, `-i`, `-M`, `-m`), option ordering, operands/stdin choice, symlink policy, default and custom magic grammar, required type strings, inaccessible operands, status, and output failures. Manager review rejected an attempted `-b` behavior change because `-b` is not an Issue 7 option. Remaining: broader locale providers, platform-specific device wording, and implementation-defined type-string breadth. |
 | 2 | `find` | platform/locale integration | Accepted source now requires a path operand whenever `POSIXLY_CORRECT` is present while preserving the default-`.` extension outside POSIX mode. Focused products cover every required primary/action/operator, real and seam-backed ownership cases, locale precedence for patterns and `-ok`, `-exec` side effects/batching, traversal failures, and aggregate status. Remaining: cross-mount positive `-xdev`, non-Unix identity providers, and locale/filesystem breadth outside the carried corpus. |
@@ -110,8 +110,8 @@ lower-ranked edges.
 | 2 | `od` | locale-provider integration | Accepted source now applies invocation-owned `LC_CTYPE` to `-t c`, including printable UTF-8 first-byte/`**` continuation fields across output groups, exact Latin-1 bytes, malformed/nonprintable octals, and bounded streaming lookahead. `LC_NUMERIC` controls the radix across all required floating type strings and carried ABIs. Remaining: the locale corpus and Unicode printability tables are bounded and translated catalogs are absent. |
 | 2 | `paste` | locale-provider integration | Accepted source now splits `-d LIST` into delimiter characters per invocation `LC_CTYPE` (carried C/POSIX, their UTF-8 aliases, and `de_DE.ISO-8859-1`, original bytes preserved, unsupported locales failing before any operand opens), and has focused tests for repeated `-` under `-s`, the twelve-operand minimum, the `\\` escape, serial `\0`, mid-file read errors, and stdout write/short-write failures. Remaining: locale codeset discovery is a bounded carried corpus rather than `nl_langinfo(CODESET)`; unqualified installed locales outside that corpus fail closed. |
 | 2 | `pathchk` | filesystem/platform integration | Accepted source now handles failed and indeterminate containing-filesystem limit queries, differing limits at depth, diagnostics, and aggregate status. Linux runtime evidence proves filesystem-valid non-UTF-8 component bytes are not incorrectly rejected by a UTF-8 locale. Remaining: a side-effect-free provider for missing-name syntax on filesystems with additional encoding restrictions and non-Linux/Darwin runtime coverage. |
-| 2 | `pr` | `OPTIONS`, `ENVIRONMENT_VARIABLES`, `STDOUT` | Add exact Issue 7 optional-argument grammar, every column/merge/page interaction, locale date/header width, terminal pause/interruption, input/output failure, and status matrix. |
-| 2 | `tty` | `STDOUT`, `EXIT_STATUS` | Linux and Darwin now have real terminal-name tests; Windows console behavior, silent mode, invalid descriptors, output errors, and short writes are covered. Add truthful terminal pathname lookup on the remaining POSIX targets and the specified POSIX-locale nonterminal output before verification. |
+| 2 | `pr` | `ENVIRONMENT_VARIABLES`, platform/locale integration | Issue 747 closes the complete required option/optional-argument matrix, corrects the ledger's XSI classification (`-f`, not `-l`), proves exact headers and page structures, makes `-m` assume `-e`/`-i`, applies invocation `TZ` and bounded `LC_TIME`, defers terminal diagnostics, returns nonzero on SIGINT, and covers read/write/short-write failures. Remaining: multibyte `LC_CTYPE` display widths/printability, installed locales outside the carried corpus, and a real controlling-terminal certification-host run. |
+| 2 | `tty` | platform/locale integration | Linux and Darwin have real PTY terminal-name tests, with Darwin `/dev/console` coverage; the exact POSIX-locale nonterminal output, status partition, invalid descriptors, output errors, and short writes are covered. Remaining: truthful terminal pathname lookup on the other POSIX targets, a certification-host controlling-terminal run, and locale message providers outside the POSIX locale. |
 | 2 | `more` | `ENVIRONMENT_VARIABLES`, terminal integration | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are unavailable UTF-8 collation providers and terminal-capability/platform integration—not absent translated catalogs or unsupported `-i`, `-p`, or `-t`. |
 | 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, and Windows runtime paths. |
 | 2 | `touch` | `OUTPUT_FILES`, platform/error integration | Accepted source now obtains reference atime on supported stat layouts and fails loudly when unavailable; literal `-`, TZ, leap second, near-PATH_MAX, and reference-time paths are tested. Remaining: real atime propagation on every target, 0666 creation through umask, `-c` existing-file and multi-operand failure products, and full range rejection. |
@@ -157,7 +157,7 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `0c3c8a0`. It credits the accepted command
+This report is reconciled through canonical `1ae7adc`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -177,6 +177,12 @@ through `e5cda57`; `file` mandatory magic/option evidence through `92fbfb3`
 with the rejected non-POSIX `-b` change recorded by `e3b37e2`; and `id`/`logname`
 output, portable-account, and BSD session-provider evidence through `49e8fab`,
 `232c333`, and manager amendment `9561a21`.
+It additionally credits `date` Issue 748 through `8d83339` and manager
+correction `a2e79d4` (removing limitation-locking tests and adding short-write
+handling), and `pr` Issue 747 through manager-completed `987058e`, merged by
+`4f8684c` and `1ae7adc`. The `tty` Issue 749 worker made no source change;
+manager reruns independently passed count-20, race-5, vet, and Linux, Darwin,
+Windows, AIX, and FreeBSD cross-build coverage against the existing tests.
 
 The machine-readable evidence lanes name the exact current test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,

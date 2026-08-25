@@ -3707,12 +3707,13 @@ pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [f
 **Issue 7 synopsis candidate:**
 
 ```text
-pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l lines] [-n[char][width]] [-o offset] [-s[char]] [-w width] [-fp] [file...]
+pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l lines] [-n[char][width]] [-o offset] [-s[char]] [-w width] [-p] [file...]
+[xsi] pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l lines] [-n[char][width]] [-o offset] [-s[char]] [-w width] [-fp] [file...]
 ```
 
-**Issue 7 required-option candidate:** `+<page>; -<column>; -a; -d; -e; -f; -F; -h; -i; -m; -n; -o; -p; -r; -s; -t; -w`.
+**Issue 7 required-option candidate:** `+<page>; -<column>; -a; -d; -e; -F; -h; -i; -l; -m; -n; -o; -p; -r; -s; -t; -w`.
 
-**Issue 7 conditional-option candidate:** `xsi:-l`.
+**Issue 7 conditional-option candidate:** `xsi:-f`.
 
 **Issue 7 option-argument candidate:** `-e[char][gap]; -h=<header>; -i[char][gap]; -l=<lines>; -n[char][width]; -o=<offset>; -s[char]; -w=<width>`.
 
@@ -3742,7 +3743,7 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pr`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/pr/pr_test.go#TestPRDefaultPageStructure;cmds/pr/pr_test.go#TestPRNumberIndentAndDoubleSpace;cmds/pr/pr_test.go#TestPRPagesRangeAndDateFormat;cmds/pr/pr_test.go#TestPRPausePerPageWritesAlertAndReadsDevTTY;cmds/pr/pr_test.go#TestPRVerticalColumns;cmds/pr/pr_test.go#TestPRMerge;cmds/pr/pr_test.go#TestPROptionalExpandArgument;cmds/pr/pr_test.go#TestPRPOSIXLYCorrectDifferentials`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/pr/pr_test.go#TestPRDefaultPageStructure;cmds/pr/pr_test.go#TestPRHeaderHonorsInvocationTZAndLCTime;cmds/pr/pr_test.go#TestPRNumberIndentAndDoubleSpace;cmds/pr/pr_test.go#TestPRPagesRangeAndDateFormat;cmds/pr/pr_test.go#TestPRPausePerPageWritesAlertAndReadsDevTTY;cmds/pr/pr_test.go#TestPRPauseInterrupted;cmds/pr/pr_test.go#TestPRVerticalColumns;cmds/pr/pr_test.go#TestPRMerge;cmds/pr/pr_test.go#TestPRMergeAssumesPOSIXTabExpansionAndReplacement;cmds/pr/pr_test.go#TestPROptionalExpandArgument;cmds/pr/pr_test.go#TestPRTerminalDefersFileDiagnosticsUntilOutputCompletes;cmds/pr/pr_test.go#TestPRStreamReadAndShortWriteFailuresAreNonzero;cmds/pr/pr_test.go#TestPRPOSIXLYCorrectDifferentials`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [pr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pr.html).
 
@@ -5051,7 +5052,7 @@ tty
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tty`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/tty/tty_posix_test.go#TestTTYTerminalName;cmds/tty/tty_test.go#TestTTYNotAFile;cmds/tty/tty_test.go#TestTTYWriteError;cmds/tty/tty_test.go#TestTTYErrors;cmds/tty/tty_posix_test.go#TestTTYTerminalSilent;cmds/tty/tty_posix_test.go#TestTTYTerminalWriteError;cmds/tty/tty_test.go#TestTTYShortWriteAndInvalidDescriptorAreErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tty/tty_posix_test.go#TestTTYTerminalName;cmds/tty/tty_console_darwin_test.go#TestTTYDevConsole;cmds/tty/tty_test.go#TestTTYNotAFile;cmds/tty/tty_test.go#TestTTYWriteError;cmds/tty/tty_test.go#TestTTYErrors;cmds/tty/tty_posix_test.go#TestTTYTerminalSilent;cmds/tty/tty_posix_test.go#TestTTYTerminalWriteError;cmds/tty/tty_test.go#TestTTYShortWriteAndInvalidDescriptorAreErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tty.html).
 
