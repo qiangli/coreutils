@@ -440,6 +440,19 @@ func TestPAXMalformedListFormatFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPAXEmptyListFormatStillOverridesDefaultListing(t *testing.T) {
+	raw := makeAttributeArchive(t, archiveFixture{name: "file", body: "x", mode: 0o600})
+	d := t.TempDir()
+	arc := filepath.Join(d, "archive.pax")
+	if err := os.WriteFile(arc, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := exec(t, d, "", "-f", arc, "-o", "listopt=")
+	if code != 0 || errOut != "" || out != "\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
 func makePAXPrecedenceArchive(t *testing.T) []byte {
 	t.Helper()
 	var raw bytes.Buffer

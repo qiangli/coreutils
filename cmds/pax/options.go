@@ -30,6 +30,7 @@ type paxOptions struct {
 	exthdrName, globalName string
 	invalid                string
 	linkdata, times        bool
+	listSet                bool
 	listFormat             string
 	global, local          map[string]string
 	needsPAX               bool
@@ -207,6 +208,7 @@ func parsePAXOptions(args []string, mode paxOptionMode, format string) (paxOptio
 					return paxOptions{}, fmt.Errorf("-o listopt is valid only in list mode")
 				}
 				o.listFormat += value
+				o.listSet = true
 			case "times":
 				if hasValue || (mode != paxWrite && mode != paxCopy) {
 					return paxOptions{}, fmt.Errorf("-o times is valid only as a keyword in write or copy mode")

@@ -412,7 +412,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		if !keep {
 			continue
 		}
-		if o.paxOptions.listFormat != "" {
+		if o.paxOptions.listSet {
 			h.Name = name
 			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env))
 			if err != nil {
