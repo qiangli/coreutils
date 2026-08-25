@@ -1,9 +1,10 @@
-// Package writecmd implements write(1) per POSIX.1-2017: read lines from
-// standard input and write them to the terminal of a logged-in user.
+// Package writecmd implements write(1) per POSIX.1-2008 (Issue 7, 2016
+// Edition): read lines from standard input and write them to the terminal of
+// a logged-in user.
 //
 //	write user_name [terminal]
 //
-// Three things about this utility are easy to get wrong, and all three are
+// Four things about this utility are easy to get wrong, and all four are
 // load-bearing.
 //
 // FIRST, the recipient is found by reading the login-accounting database
@@ -23,11 +24,30 @@
 // DEVICE, not a stored preference, so the check is a stat and nothing else.
 // Denial is a diagnosed failure with a non-zero exit, never a silent drop:
 // a message the sender believes was delivered is worse than an error.
+//
+// FOURTH, there are THREE distinct sinks and they must not be confused:
+//
+//   - The RECIPIENT'S TERMINAL carries the banner, the message body and the
+//     closing "EOT\n". POSIX OUTPUT FILES.
+//   - The SENDER'S CONTROLLING TERMINAL carries the two alerts POSIX requires
+//     once the connection is made, and the informational message naming the
+//     terminal chosen when the recipient is logged in more than once. The
+//     alert and the "which terminal did it go to" answer are useless to the
+//     sender if a shell redirection swallowed them, so they are addressed to
+//     the terminal, not to the standard output stream. POSIX's STDOUT clause
+//     ("An informational message shall be written to standard output if a
+//     recipient is logged in more than once") is honoured verbatim in the one
+//     case where there is no controlling terminal to prefer — see
+//     senderNotice. This is a deliberate, documented deviation: in the
+//     ordinary interactive case standard output IS the controlling terminal
+//     and the two readings coincide.
+//   - STANDARD ERROR carries diagnostics and nothing else, per POSIX STDERR.
+//
+// Standard output is never used for anything else, in any code path.
 package writecmd
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -38,8 +58,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/pkg/locale"
@@ -85,41 +106,95 @@ type ctypeProvider interface {
 
 var openCTypeFn = func(name string) (ctypeProvider, error) { return ctype.Open(name) }
 
-type charClasses struct{ pass [256]bool }
+// charClasses answers "may this character reach the recipient unchanged?" for
+// the sender's LC_CTYPE. POSIX: characters from the print or space
+// classifications are sent through; every other non-printable character is
+// rendered as an implementation-defined printable sequence (here: caret and
+// meta notation, the historical shape).
+//
+// Two representations, because a locale is one of two shapes:
+//
+//   - pass[] is a BYTE table, used for the C/POSIX locale and for single-byte
+//     locales resolved through the real glibc provider (pkg/ctype).
+//   - multibyte selects UTF-8 mode, where classification runs on the decoded
+//     RUNE and a printable rune's bytes are copied through untouched. Byte
+//     classification would shred every non-ASCII character into M- notation,
+//     which is exactly the mangling this mode exists to prevent.
+type charClasses struct {
+	pass      [256]bool
+	multibyte bool
+}
 
-func loadCharClasses(env []string) (*charClasses, error) {
+// cPass fills the byte table with the C/POSIX locale's print+space classes.
+func (c *charClasses) cPass() {
+	for b := byte(0x20); b <= 0x7e; b++ {
+		c.pass[b] = true
+	}
+	for _, b := range []byte{'\t', '\n', '\v', '\f', '\r'} {
+		c.pass[b] = true
+	}
+}
+
+// loadCharClasses resolves LC_CTYPE and builds the classifier for it.
+//
+// It cannot fail. An unusable LC_CTYPE — a name pkg/ctype does not accept, a
+// host with no glibc, a platform with no provider at all — falls back to the
+// C locale's classes, which is what a C program gets when setlocale() fails.
+// Refusing to deliver the message because the locale is exotic would trade a
+// cosmetic rendering question for total loss of the utility's function, and
+// POSIX reserves a non-zero exit for "not logged on or permission denied".
+func loadCharClasses(env []string) *charClasses {
 	name := locale.Resolve(env, locale.CType)
 	c := new(charClasses)
-	if name == "C" || name == "POSIX" {
-		for b := byte(0x20); b <= 0x7e; b++ {
-			c.pass[b] = true
-		}
-		for _, b := range []byte{'\t', '\n', '\v', '\f', '\r'} {
-			c.pass[b] = true
-		}
-		return c, nil
+	switch {
+	case name == "C" || name == "POSIX":
+		c.cPass()
+		return c
+	case isUTF8Locale(name):
+		// The codeset is UTF-8: classify decoded runes, not bytes.
+		c.cPass()
+		c.multibyte = true
+		return c
 	}
 	p, err := openCTypeFn(name)
 	if err != nil {
-		return nil, err
+		c.cPass()
+		return c
 	}
+	defer func() { _ = p.Close() }()
 	for i := 0; i < 256; i++ {
-		printable, err := p.IsPrint(byte(i))
-		if err != nil {
-			_ = p.Close()
-			return nil, err
+		printable, perr := p.IsPrint(byte(i))
+		if perr != nil {
+			var fallback charClasses
+			fallback.cPass()
+			return &fallback
 		}
-		space, err := p.IsSpace(byte(i))
-		if err != nil {
-			_ = p.Close()
-			return nil, err
+		space, serr := p.IsSpace(byte(i))
+		if serr != nil {
+			var fallback charClasses
+			fallback.cPass()
+			return &fallback
 		}
 		c.pass[i] = printable || space
 	}
-	if err := p.Close(); err != nil {
-		return nil, err
+	return c
+}
+
+// isUTF8Locale reports whether a POSIX locale name names the UTF-8 codeset.
+// The codeset is the part after '.', with any '@modifier' stripped; spelling
+// varies ("en_US.UTF-8", "en_US.utf8", "C.UTF-8"), so the comparison folds
+// case and ignores the hyphen.
+func isUTF8Locale(name string) bool {
+	dot := strings.IndexByte(name, '.')
+	if dot < 0 {
+		return false
 	}
-	return c, nil
+	codeset := name[dot+1:]
+	if at := strings.IndexByte(codeset, '@'); at >= 0 {
+		codeset = codeset[:at]
+	}
+	codeset = strings.ToLower(strings.ReplaceAll(codeset, "-", ""))
+	return codeset == "utf8"
 }
 
 // defaultOpenTTY opens the recipient's terminal for writing. O_WRONLY only:
@@ -180,11 +255,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "write: %v\n", errPlatform)
 		return 1
 	}
-	classes, err := loadCharClasses(rc.Env)
-	if err != nil {
-		fmt.Fprintf(rc.Err, "write: LC_CTYPE=%s: %v\n", locale.Resolve(rc.Env, locale.CType), err)
-		return 1
-	}
+	classes := loadCharClasses(rc.Env)
 
 	if err := lookupUser(target); err != nil {
 		fmt.Fprintf(rc.Err, "write: %s: no such user\n", target)
@@ -220,30 +291,54 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	defer term.Close()
-	if isMulti {
-		fmt.Fprintf(rc.Out, "write: %s is logged in on more than one line; using %s\n", target, line)
-	}
-	control, err := openSenderControlTTYFn(rc)
-	if err != nil {
-		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", err)
-		return 1
-	}
-	_, alertErr := io.WriteString(control, "\a\a")
-	closeErr := control.Close()
-	if alertErr != nil {
-		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", alertErr)
-		return 1
-	}
-	if closeErr != nil {
-		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", closeErr)
-		return 1
-	}
 
-	if err := deliver(term, rc.In, sender, myTTY, classes); err != nil {
+	notice := ""
+	if isMulti {
+		notice = fmt.Sprintf("write: %s is logged in on more than one line; using %s\n", target, line)
+	}
+	senderNotice(rc, notice)
+
+	if err := deliver(term, rc.In, sender, myTTY, target, classes); err != nil {
 		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
 	return 0
+}
+
+// senderNotice delivers everything the SENDER is owed once the connection is
+// made: the optional informational message naming the chosen terminal, then
+// the two alerts POSIX requires ("the sender's terminal shall be alerted
+// twice to indicate that what the sender is typing is being written to the
+// recipient's terminal").
+//
+// Both go to the sender's CONTROLLING TERMINAL. An alert that a redirection
+// captured into a file has alerted nobody, and an informational message the
+// sender never sees leaves them unable to answer "which terminal did that go
+// to?" — the one question the message exists to answer. Only when there is no
+// controlling terminal at all (a cron job, a pipeline, an agent harness) does
+// the informational message fall back to standard output, which is POSIX's
+// STDOUT clause and the only sink left; there is no terminal to alert in that
+// case, and inventing one is not an option.
+//
+// Failure here is DIAGNOSED BUT NOT FATAL. The recipient's message is the
+// point of the utility, and POSIX reserves a non-zero exit for "the addressed
+// user is not logged on or the addressed user denies permission".
+func senderNotice(rc *tool.RunContext, notice string) {
+	control, err := openSenderControlTTYFn(rc)
+	if err != nil {
+		if notice != "" {
+			fmt.Fprint(rc.Out, notice)
+		}
+		return
+	}
+	_, werr := io.WriteString(control, notice+"\a\a")
+	cerr := control.Close()
+	if werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", werr)
+	}
 }
 
 // selectTerminal resolves the recipient's terminal, or returns the diagnostic
@@ -256,9 +351,11 @@ func run(rc *tool.RunContext, args []string) int {
 //     narrowed to the terminal operand when one was given.
 //  2. A candidate whose device does not exist is dropped — the database
 //     routinely retains entries for sessions whose device is gone.
-//  3. The sender's OWN terminal is dropped. Writing to it echoes the message
-//     back into the session that is typing it, which is never the intent, and
-//     it is the one case a user can hit by accident (`write $USER`).
+//  3. The sender's OWN terminal is dropped, BUT ONLY when no terminal operand
+//     was given. Writing to it echoes the message back into the session that
+//     is typing it, which is never the intent, and it is the one case a user
+//     can hit by accident (`write $USER`). Naming it explicitly is not an
+//     accident, so `write $USER $(tty)` is honoured.
 //  4. A candidate whose device denies messages (group-write clear, the bit
 //     mesg(1) owns) is dropped, unless the sender is the superuser. Skipping
 //     rather than failing outright matters: a user with mesg n on one terminal
@@ -269,6 +366,16 @@ func run(rc *tool.RunContext, args []string) int {
 //     "where is this person actually sitting" signal available from the
 //     database alone; the name tie-break makes the result independent of the
 //     order records happen to appear in.
+//
+// Deliberately NOT used: terminal idle time (atime of the device), the
+// historical heuristic. It needs a stat field Go does not expose portably, and
+// it makes the choice depend on filesystem mount options (noatime, relatime) —
+// so the same fleet would select differently host to host.
+//
+// isMulti reports that the recipient had more than one candidate login and no
+// terminal operand narrowed it: the condition POSIX attaches the informational
+// message to. It is reported even when selection then fails, because the
+// caller only emits the notice on the success path.
 func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot bool) (line, failure string, isMulti bool) {
 	var candidates []utmpRecord
 	for _, r := range records {
@@ -287,7 +394,7 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 		return "", fmt.Sprintf("%s is not logged in", target), false
 	}
 
-	isMulti = (wantTTY == "" && len(candidates) > 1)
+	isMulti = wantTTY == "" && len(candidates) > 1
 
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if !candidates[i].Time.Equal(candidates[j].Time) {
@@ -330,8 +437,16 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 	}
 }
 
-// readLine reads bytes until newline, canonical EOL, or EOF and normalises a
-// completed input record to one newline byte.
+// readLine reads bytes until NL, the terminal's canonical EOL character, or
+// EOF, and normalises a completed input record to a single NL byte.
+//
+// POSIX: "Whenever a line of input as delimited by an NL, EOF, or EOL special
+// character is accumulated while in canonical input mode, the accumulated data
+// shall be written on the other user's terminal." EOF (VEOF, normally ^D) is
+// not a byte the reader ever sees — in canonical mode the driver turns it into
+// a zero-length read, which surfaces here as io.EOF — so only NL and EOL are
+// byte comparisons. veol == 0 means the terminal has EOL disabled
+// (_POSIX_VDISABLE), which is the default, and no second delimiter applies.
 func readLine(br *bufio.Reader, veol byte) (string, error) {
 	var buf []byte
 	for {
@@ -347,69 +462,92 @@ func readLine(br *bufio.Reader, veol byte) (string, error) {
 }
 
 // deliver writes the prescribed banner, message body, and EOT marker.
-func deliver(w io.Writer, in io.Reader, sender, senderTTY string, classes *charClasses) error {
+func deliver(w io.Writer, in io.Reader, sender, senderTTY, target string, classes *charClasses) error {
 	from := senderTTY
 	if from == "" {
+		// No controlling terminal (a script, a pipe, an agent harness). The
+		// banner still has to say something, and "?" is the honest answer -
+		// inventing a plausible tty name would misattribute the message.
 		from = "?"
 	}
 
-	var owned *os.File
-	finite := false
-	switch r := in.(type) {
-	case nil:
-		finite = true
-	case *bytes.Buffer, *bytes.Reader, *strings.Reader:
-		finite = true
-	case *os.File:
-		var err error
-		owned, err = duplicateInputFile(r)
-		if err != nil {
-			return fmt.Errorf("cannot duplicate input: %w", err)
-		}
-		defer owned.Close()
-	default:
-		return errors.New("input reader is not safely interruptible")
-	}
-
-	banner := fmt.Sprintf("Message from %s (%s) [%s]...\n", sender, from, nowFn().Format(time.ANSIC))
+	// POSIX DESCRIPTION: "it shall write the message: Message from
+	// sender-login-id (sending-terminal) [date]... to user_name." The
+	// recipient is named in the banner so a terminal that is receiving from
+	// several senders, or a session logged in under more than one account,
+	// shows who the message was addressed to.
+	banner := fmt.Sprintf("Message from %s (%s) [%s]... to %s .\n",
+		sender, from, nowFn().Format(time.ANSIC), target)
 	if _, err := io.WriteString(w, banner); err != nil {
 		return err
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-	if finite {
-		return deliverFinite(w, in, getVEOL(in), classes, sigCh)
+	// An *os.File input can be waited on with poll(2), so an interrupt is
+	// honoured even while the sender is mid-line. Any other reader is drained
+	// synchronously: it cannot be unblocked, and handing it to a goroutine
+	// would only move the block somewhere it can never be reclaimed. See
+	// deliverStream.
+	var owned *os.File
+	if f, ok := in.(*os.File); ok {
+		if dup, err := duplicateInputFile(f); err == nil {
+			owned = dup
+			defer owned.Close()
+		}
 	}
-	return deliverFile(w, owned, getVEOL(in), classes, sigCh)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	if owned != nil {
+		return deliverPolled(w, owned, getVEOL(in), classes, sigCh)
+	}
+	return deliverStream(w, in, getVEOL(in), classes, sigCh)
 }
 
-func deliverFinite(w io.Writer, in io.Reader, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
+// finish closes the message. POSIX: the interrupt and end-of-file characters
+// "cause write to write an appropriate message ("EOT\n" in the POSIX locale)
+// to the recipient's terminal and exit".
+//
+// pending is the sender's accumulated but undelimited bytes. They are
+// delivered — they were typed, and dropping them silently truncates the
+// message — followed by the NL that frames them, so "EOT" always begins a
+// line of its own on the recipient's terminal.
+func finish(w io.Writer, pending []byte, classes *charClasses) error {
+	if len(pending) > 0 {
+		if _, err := io.WriteString(w, sanitize(string(append(pending, '\n')), classes)); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(w, "EOT\n")
+	return err
+}
+
+// deliverStream copies a reader that cannot be polled. The interrupt is
+// checked between lines: a reader that is not a file offers no way to abandon
+// a blocked Read, and the alternative — a goroutine parked in that Read
+// forever — is a leak in every host that embeds this package in-process.
+// Checking at line boundaries costs interrupt latency, never correctness, and
+// never a stuck sender.
+func deliverStream(w io.Writer, in io.Reader, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
 	if in == nil {
-		_, err := io.WriteString(w, "EOT\n")
-		return err
+		return finish(w, nil, classes)
 	}
 	br := bufio.NewReader(in)
 	for {
 		select {
 		case <-sigCh:
-			_, err := io.WriteString(w, "EOT\n")
-			return err
+			return finish(w, nil, classes)
 		default:
 		}
 		line, err := readLine(br, veol)
+		if errors.Is(err, io.EOF) {
+			return finish(w, []byte(line), classes)
+		}
 		if line != "" {
-			if errors.Is(err, io.EOF) && !strings.HasSuffix(line, "\n") {
-				line += "\n"
-			}
 			if _, werr := io.WriteString(w, sanitize(line, classes)); werr != nil {
 				return werr
 			}
-		}
-		if errors.Is(err, io.EOF) {
-			_, err = io.WriteString(w, "EOT\n")
-			return err
 		}
 		if err != nil {
 			return err
@@ -417,16 +555,19 @@ func deliverFinite(w io.Writer, in io.Reader, veol byte, classes *charClasses, s
 	}
 }
 
-func deliverFile(w io.Writer, in *os.File, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
+// deliverPolled copies a file-backed input, waiting on poll(2) so an interrupt
+// is honoured immediately — including while the sender is part-way through a
+// line. The descriptor is a DUPLICATE (see deliver): returning early closes
+// only this copy, never the caller's stdin, and leaves no reader behind.
+func deliverPolled(w io.Writer, in *os.File, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
 	var line []byte
 	for {
 		select {
 		case <-sigCh:
-			_, err := io.WriteString(w, "EOT\n")
-			return err
+			return finish(w, line, classes)
 		default:
 		}
-		ready, err := waitInputReadable(in, 100*time.Millisecond)
+		ready, err := waitInputReadable(in, pollInterval)
 		if err != nil {
 			return err
 		}
@@ -447,14 +588,7 @@ func deliverFile(w io.Writer, in *os.File, veol byte, classes *charClasses, sigC
 			}
 		}
 		if errors.Is(rerr, io.EOF) {
-			if len(line) > 0 {
-				line = append(line, '\n')
-				if _, err := io.WriteString(w, sanitize(string(line), classes)); err != nil {
-					return err
-				}
-			}
-			_, err = io.WriteString(w, "EOT\n")
-			return err
+			return finish(w, line, classes)
 		}
 		if rerr != nil {
 			return rerr
@@ -462,33 +596,100 @@ func deliverFile(w io.Writer, in *os.File, veol byte, classes *charClasses, sigC
 	}
 }
 
+// pollInterval bounds how long an interrupt can wait behind a blocked read.
+// It is a wakeup budget, not a busy loop: poll(2) sleeps for the whole
+// interval when nothing arrives.
+const pollInterval = 100 * time.Millisecond
+
 // sanitize renders one line safely on someone else's terminal.
 //
-// Classification is byte-oriented, as required by the locale provider used by
-// the rest of this package. BEL is the one unconditional pass-through byte;
-// all other bytes pass only when LC_CTYPE calls them printable or spacing.
+// This is not cosmetic. The recipient's terminal interprets what arrives, so
+// forwarding raw control bytes hands the sender the ability to reprogram
+// another user's session — clear the screen, redefine keys, or on some
+// terminals inject a command line. POSIX leaves the rendering of non-printable
+// characters implementation-defined, so caret notation (^[ for ESC) is both
+// permitted and the historically expected shape.
+//
+// Two POSIX rules constrain what may NOT be rewritten:
+//
+//   - "Typing <alert> shall write the <alert> character to the recipient's
+//     terminal." BEL is therefore passed through as the byte 0x07, never
+//     rendered as ^G, even though it is a control character. It is the one
+//     control character the standard names as deliverable, and it cannot
+//     carry a control sequence on its own.
+//   - "Typing characters from LC_CTYPE classifications print or space shall
+//     cause those characters to be sent to the recipient's terminal." So the
+//     pass set is the SENDER'S RESOLVED LC_CTYPE, not a hard-coded ASCII
+//     table — see loadCharClasses.
+//
+// In a UTF-8 locale classification runs on the decoded rune and a printable
+// rune's bytes are copied through byte-for-byte; only an invalid byte falls
+// back to meta notation.
 func sanitize(s string, classes *charClasses) string {
 	var b strings.Builder
 	b.Grow(len(s) + 8)
-	for i := 0; i < len(s); i++ {
+	for i := 0; i < len(s); {
 		c := s[i]
 		switch {
-		case c == '\a' || classes.pass[c]:
+		case c == '\a':
+			// POSIX: the alert character reaches the recipient as itself.
 			b.WriteByte(c)
-		case c < 0x20 || c == 0x7f:
-			b.WriteByte('^')
-			b.WriteByte(c ^ 0x40)
-		default:
-			b.WriteString("M-")
-			lo := c & 0x7f
-			if lo < 0x20 || lo == 0x7f {
-				b.WriteByte('^')
-				lo ^= 0x40
+			i++
+		case classes.multibyte && c >= utf8.RuneSelf:
+			r, size := utf8.DecodeRuneInString(s[i:])
+			switch {
+			case r == utf8.RuneError && size == 1:
+				// Not valid UTF-8 in a UTF-8 locale: show the raw byte in
+				// meta notation rather than passing an unknown 8-bit byte to
+				// the terminal.
+				writeMeta(&b, c)
+			case unicode.IsPrint(r) || unicode.IsSpace(r):
+				b.WriteString(s[i : i+size])
+			default:
+				for j := 0; j < size; j++ {
+					writeMeta(&b, s[i+j])
+				}
 			}
-			b.WriteByte(lo)
+			i += size
+		case classes.pass[c]:
+			// LC_CTYPE calls it print or space: POSIX sends it through.
+			b.WriteByte(c)
+			i++
+		case c < 0x20 || c == 0x7f:
+			writeCaret(&b, c)
+			i++
+		case c >= utf8.RuneSelf:
+			writeMeta(&b, c)
+			i++
+		default:
+			// A graphic ASCII byte the locale declined to classify. cat -v,
+			// the notation this follows, renders 0x20-0x7e as itself, and it
+			// cannot carry a control sequence on its own. Unreachable with any
+			// real LC_CTYPE, where those bytes are always print.
+			b.WriteByte(c)
+			i++
 		}
 	}
 	return b.String()
+}
+
+// writeCaret renders a C0 control character or DEL in caret notation.
+func writeCaret(b *strings.Builder, c byte) {
+	b.WriteByte('^')
+	b.WriteByte(c ^ 0x40)
+}
+
+// writeMeta renders a byte with the high bit set in meta notation, with the
+// remaining seven bits themselves rendered in caret notation when they name a
+// control character.
+func writeMeta(b *strings.Builder, c byte) {
+	b.WriteString("M-")
+	lo := c & 0x7f
+	if lo < 0x20 || lo == 0x7f {
+		writeCaret(b, lo)
+		return
+	}
+	b.WriteByte(lo)
 }
 
 // normalizeTTY reduces a terminal operand or a ut_line value to the bare device

@@ -3,10 +3,13 @@ package writecmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -186,7 +189,7 @@ func TestDeliversBannerBodyAndEOF(t *testing.T) {
 		t.Errorf("write must say nothing on its own streams; got out=%q err=%q", out, errOut)
 	}
 	got := w.read(t, "pts/9")
-	want := "Message from alice (pts/1) [Sat Aug 22 10:30:00 2026]...\nhello\nthere\nEOT\n"
+	want := "Message from alice (pts/1) [Sat Aug 22 10:30:00 2026]... to bob .\nhello\nthere\nEOT\n"
 	if got != want {
 		t.Errorf("terminal received\n %q\nwant\n %q", got, want)
 	}
@@ -596,10 +599,7 @@ func TestRegisteredUnderItsPosixName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSanitizeRendersControlCharactersSafely(t *testing.T) {
-	classes, err := loadCharClasses([]string{"LC_ALL=C"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	classes := loadCharClasses([]string{"LC_ALL=C"})
 	cases := []struct{ in, want string }{
 		{"plain\n", "plain\n"},
 		{"tab\there\n", "tab\there\n"},
@@ -633,10 +633,7 @@ func TestSanitizeUsesResolvedLCCTYPEByteClasses(t *testing.T) {
 		}
 		return &fakeCType{print: map[byte]bool{0xe9: true}, space: map[byte]bool{0xa0: true}}, nil
 	}
-	classes, err := loadCharClasses([]string{"LC_ALL=test_8bit"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	classes := loadCharClasses([]string{"LC_ALL=test_8bit"})
 	if got := sanitize("\xe9\xa0\x1b", classes); got != "\xe9\xa0^[" {
 		t.Fatalf("sanitize = %q", got)
 	}
@@ -720,7 +717,12 @@ func TestMissingDatabaseIsDistinctFromNotLoggedIn(t *testing.T) {
 	}
 }
 
-func TestMultiLoginAlertSentToControllingTerminal(t *testing.T) {
+// POSIX requires an informational message naming the terminal chosen when the
+// recipient is logged in more than once. It is addressed to the SENDER'S
+// CONTROLLING TERMINAL, together with the two required alerts: a redirection
+// of standard output must not be able to swallow the one answer to "which of
+// bob's terminals did that go to?".
+func TestMultiLoginNoticeAndAlertsGoToTheControllingTerminal(t *testing.T) {
 	var controlBuf bytes.Buffer
 	w := install(t, fixture{
 		sender: "alice", uid: 1000, myTTY: "pts/1",
@@ -734,14 +736,163 @@ func TestMultiLoginAlertSentToControllingTerminal(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	if !strings.Contains(out, "write: bob is logged in on more than one line; using pts/4\n") {
-		t.Errorf("stdout = %q, want multi-login information", out)
+	if out != "" {
+		t.Errorf("standard output must stay empty, got %q", out)
 	}
-	if controlBuf.String() != "\a\a" {
-		t.Errorf("controlling terminal = %q, want two alerts", controlBuf.String())
+	if got := controlBuf.String(); got != "write: bob is logged in on more than one line; using pts/4\n\a\a" {
+		t.Errorf("controlling terminal = %q, want the notice followed by two alerts", got)
 	}
 	if got := w.read(t, "pts/4"); !strings.Contains(got, "hi") {
 		t.Errorf("recipient terminal pts/4 did not receive message: %q", got)
+	}
+	if got := w.read(t, "pts/2"); got != "" {
+		t.Errorf("unchosen terminal pts/2 received %q", got)
+	}
+}
+
+// A single login is not "more than once": no informational message is owed,
+// only the alerts.
+func TestSingleLoginEmitsNoInformationalMessage(t *testing.T) {
+	var controlBuf bytes.Buffer
+	install(t, fixture{
+		uid: 1000, myTTY: "pts/1", controlW: &controlBuf,
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	out, errOut, code := exec(t, "hi\n", "bob")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if out != "" {
+		t.Errorf("standard output must stay empty, got %q", out)
+	}
+	if controlBuf.String() != "\a\a" {
+		t.Errorf("controlling terminal = %q, want two alerts only", controlBuf.String())
+	}
+}
+
+// An explicit terminal operand answers the question the informational message
+// exists to answer, so POSIX attaches no message to it.
+func TestExplicitTerminalOperandSuppressesTheInformationalMessage(t *testing.T) {
+	var controlBuf bytes.Buffer
+	install(t, fixture{
+		uid: 1000, myTTY: "pts/1", controlW: &controlBuf,
+		logins: []login{
+			{user: "bob", line: "pts/2", mode: writable, when: epoch},
+			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
+		},
+	})
+	out, errOut, code := exec(t, "hi\n", "bob", "pts/2")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if out != "" || strings.Contains(controlBuf.String(), "more than one") {
+		t.Errorf("stdout=%q control=%q, want no informational message", out, controlBuf.String())
+	}
+}
+
+// With no controlling terminal there is nothing to alert and nothing to be
+// swallowed: POSIX's STDOUT clause is then the only sink left, and write must
+// still deliver rather than fail.
+func TestNoControllingTerminalFallsBackToStandardOutput(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "",
+		logins: []login{
+			{user: "bob", line: "pts/2", mode: writable, when: epoch},
+			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
+		},
+	})
+	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) {
+		return nil, errors.New("no controlling terminal")
+	}
+	out, errOut, code := exec(t, "hi\n", "bob")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if out != "write: bob is logged in on more than one line; using pts/4\n" {
+		t.Errorf("stdout = %q, want the POSIX informational message", out)
+	}
+	if got := w.read(t, "pts/4"); !strings.Contains(got, "hi\nEOT\n") {
+		t.Errorf("delivery must still happen without a controlling terminal: %q", got)
+	}
+}
+
+// The sender's terminal is a courtesy channel. Losing it (it was hung up, the
+// session is gone) is diagnosed, but it must not cost the recipient the
+// message, which is the whole point of the utility, nor turn a delivered
+// message into a non-zero exit.
+func TestControllingTerminalWriteFailureIsNotFatal(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) {
+		return &failingWriter{}, nil
+	}
+	out, errOut, code := exec(t, "hi\n", "bob")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0: %s", code, errOut)
+	}
+	if out != "" {
+		t.Errorf("standard output must stay empty, got %q", out)
+	}
+	if !strings.Contains(errOut, "sender terminal") {
+		t.Errorf("stderr = %q, want a diagnostic naming the sender terminal", errOut)
+	}
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "hi\nEOT\n") {
+		t.Errorf("recipient did not receive the message: %q", got)
+	}
+}
+
+// POSIX STDERR: "The standard error shall be used only for diagnostic
+// messages" - and standard output carries the informational message and
+// nothing else. Every diagnosed failure is checked in one place so a new one
+// cannot quietly start printing to stdout.
+func TestNoDiagnosticEverReachesStandardOutput(t *testing.T) {
+	cases := []struct {
+		name  string
+		fix   fixture
+		args  []string
+		setup func()
+	}{
+		{name: "not logged in", args: []string{"carol"},
+			fix: fixture{uid: 1000, myTTY: "pts/1",
+				logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}}},
+		{name: "messages disabled", args: []string{"bob"},
+			fix: fixture{uid: 1000, myTTY: "pts/1",
+				logins: []login{{user: "bob", line: "pts/9", mode: denied, when: epoch}}}},
+		{name: "own terminal", args: []string{"bob"},
+			fix: fixture{uid: 1000, myTTY: "pts/9",
+				logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}}},
+		{name: "no such user", args: []string{"bob"},
+			fix: fixture{uid: 1000, myTTY: "pts/1", unknown: true,
+				logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}}},
+		{name: "unsupported platform", args: []string{"bob"},
+			fix: fixture{uid: 1000, myTTY: "pts/1", noPlat: true,
+				logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}}},
+		{name: "open failure", args: []string{"bob"},
+			fix: fixture{uid: 1000, myTTY: "pts/1",
+				logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}},
+			setup: func() {
+				openTTYFn = func(string) (io.WriteCloser, error) { return nil, os.ErrPermission }
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			install(t, tc.fix)
+			if tc.setup != nil {
+				tc.setup()
+			}
+			out, errOut, code := exec(t, "hi\n", tc.args...)
+			if code == 0 {
+				t.Fatalf("exit = 0, want a failure")
+			}
+			if out != "" {
+				t.Errorf("stdout = %q, want empty; diagnostics belong on stderr", out)
+			}
+			if errOut == "" {
+				t.Error("a failure must be diagnosed")
+			}
+		})
 	}
 }
 
@@ -765,24 +916,37 @@ func TestSenderControlTerminalIsClosed(t *testing.T) {
 	}
 }
 
-type forbiddenReader struct{ called bool }
+// slowReader is neither an *os.File nor a bytes/strings reader: the shape an
+// embedding host (bashy's ExecHandler, mvdan.cc/sh) routinely hands a tool.
+// It must be delivered, not refused - an earlier revision failed closed here,
+// which turned `printf ... | write bob` inside the shell into a hard error.
+type slowReader struct {
+	chunks []string
+	n      int
+}
 
-func (r *forbiddenReader) Read([]byte) (int, error) { r.called = true; select {} }
+func (r *slowReader) Read(p []byte) (int, error) {
+	if r.n >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	c := r.chunks[r.n]
+	r.n++
+	return copy(p, c), nil
+}
 
-func TestUnknownReaderFailsClosedWithoutReadingOrClosingIt(t *testing.T) {
-	install(t, fixture{uid: 1000, myTTY: "pts/1",
+func TestGenericReaderIsDeliveredNotRefused(t *testing.T) {
+	w := install(t, fixture{uid: 1000, myTTY: "pts/1",
 		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
-	r := new(forbiddenReader)
 	var out, errb bytes.Buffer
-	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{In: r, Out: &out, Err: &errb}}
-	if code := run(rc, []string{"bob"}); code != 1 {
-		t.Fatalf("exit = %d", code)
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: &slowReader{chunks: []string{"one\n", "two\n", "tail"}}, Out: &out, Err: &errb},
 	}
-	if r.called {
-		t.Fatal("unsafe reader was invoked")
+	if code := run(rc, []string{"bob"}); code != 0 {
+		t.Fatalf("exit = %d: %s", code, errb.String())
 	}
-	if !strings.Contains(errb.String(), "not safely interruptible") {
-		t.Fatalf("stderr = %q", errb.String())
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "one\ntwo\ntail\nEOT\n") {
+		t.Errorf("recipient terminal = %q", got)
 	}
 }
 
@@ -800,9 +964,215 @@ func TestCanonicalVEOL(t *testing.T) {
 	}
 }
 
-func TestSIGINTWritesEOTAndReturnsSuccess(t *testing.T) {
+// ---------------------------------------------------------------------------
+// LC_CTYPE, BEL, and UTF-8
+// ---------------------------------------------------------------------------
+
+// execEnv is exec with an invocation environment, so LC_CTYPE resolution runs
+// the same way it does for a real caller.
+func execEnv(t *testing.T, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
+	}
+	code = run(rc, args)
+	return out.String(), errb.String(), code
+}
+
+// POSIX: "Typing <alert> shall write the <alert> character to the recipient's
+// terminal." BEL is the one control character the standard names as
+// deliverable, so it must arrive as the byte 0x07 — rendering it as ^G would
+// silence the alert the sender asked for.
+func TestTypedBELReachesTheRecipientAsAByte(t *testing.T) {
 	w := install(t, fixture{
-		sender: "alice", uid: 1000, myTTY: "pts/1",
+		uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	if _, e, code := exec(t, "wake\aup\n", "bob"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	got := w.read(t, "pts/9")
+	if !strings.Contains(got, "wake\aup\n") {
+		t.Errorf("recipient terminal = %q, want a raw BEL byte", got)
+	}
+	if strings.Contains(got, "^G") {
+		t.Errorf("BEL was rewritten to caret notation: %q", got)
+	}
+}
+
+// BEL survives even where the locale's classifier rejects it: the pass-through
+// is a POSIX rule about the alert character, not a consequence of LC_CTYPE.
+func TestBELSurvivesALocaleThatDoesNotClassifyItAsPrintable(t *testing.T) {
+	old := openCTypeFn
+	defer func() { openCTypeFn = old }()
+	openCTypeFn = func(string) (ctypeProvider, error) {
+		return &fakeCType{
+			print: map[byte]bool{'a': true, 'b': true},
+			space: map[byte]bool{'\n': true},
+		}, nil
+	}
+	classes := loadCharClasses([]string{"LC_ALL=test_8bit"})
+	if classes.pass['\a'] {
+		t.Fatal("fixture is wrong: BEL must not be in the pass table for this test to mean anything")
+	}
+	if got := sanitize("a\ab\n", classes); got != "a\ab\n" {
+		t.Errorf("sanitize = %q, want the BEL byte preserved", got)
+	}
+}
+
+// A UTF-8 LC_CTYPE must not shred multi-byte characters into meta notation:
+// POSIX sends characters from the print and space classifications through, and
+// in a UTF-8 locale those classifications are properties of the CHARACTER, not
+// of each byte that encodes it.
+func TestUTF8LocalePreservesMultiByteCharacters(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	const body = "héllo — 日本語 🌍\n"
+	if _, e, code := execEnv(t, []string{"LC_ALL=en_US.UTF-8"}, body, "bob"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	if got := w.read(t, "pts/9"); !strings.Contains(got, body) {
+		t.Errorf("recipient terminal = %q, want the UTF-8 bytes unchanged", got)
+	}
+}
+
+func TestUTF8LocaleStillRendersControlAndInvalidBytes(t *testing.T) {
+	classes := loadCharClasses([]string{"LC_ALL=en_US.UTF-8"})
+	if !classes.multibyte {
+		t.Fatal("en_US.UTF-8 must select multi-byte classification")
+	}
+	cases := []struct{ in, want string }{
+		{"h\u00e9llo\n", "h\u00e9llo\n"}, // printable multi-byte passes through
+		{"\U0001f30d", "\U0001f30d"},     // outside the BMP, still printable
+		{"\x1b[2J", "^[[2J"},             // ESC is still rendered
+		{"bel\a", "bel\a"},               // BEL is still preserved
+		{"\xffbad", "M-^?bad"},           // invalid UTF-8 byte in meta notation
+		{"a\u00a0b", "a\u00a0b"},         // NBSP is a space character
+		{"a\u200bb", "aM-bM-^@M-^Kb"},    // ZWSP is format, not print or space
+		{"\u0007\u0301", "\a\u0301"},     // BEL then a printable combining mark
+	}
+	for _, tc := range cases {
+		if got := sanitize(tc.in, classes); got != tc.want {
+			t.Errorf("sanitize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A locale pkg/ctype cannot serve — the common case on every non-glibc host —
+// must degrade to the C locale's classes, not cost the recipient the message.
+func TestUnsupportedLocaleFallsBackToTheCLocaleAndStillDelivers(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	openCTypeFn = func(string) (ctypeProvider, error) {
+		return nil, errors.New("ctype: unsupported locale")
+	}
+	out, errOut, code := execEnv(t, []string{"LC_ALL=fr_FR.ISO-8859-15"}, "plain\n", "bob")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want empty", out)
+	}
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "plain\nEOT\n") {
+		t.Errorf("recipient terminal = %q", got)
+	}
+	classes := loadCharClasses([]string{"LC_ALL=fr_FR.ISO-8859-15"})
+	if classes.multibyte || !classes.pass['a'] || classes.pass[0xe9] {
+		t.Error("fallback classes are not the C locale's")
+	}
+}
+
+func TestUTF8LocaleNameSpellings(t *testing.T) {
+	yes := []string{"en_US.UTF-8", "en_US.utf8", "C.UTF-8", "de_DE.UTF-8@euro", "zh_CN.Utf-8"}
+	no := []string{"C", "POSIX", "de_DE", "de_DE.ISO-8859-1", "en_US.iso885915", "utf8"}
+	for _, n := range yes {
+		if !isUTF8Locale(n) {
+			t.Errorf("isUTF8Locale(%q) = false, want true", n)
+		}
+	}
+	for _, n := range no {
+		if isUTF8Locale(n) {
+			t.Errorf("isUTF8Locale(%q) = true, want false", n)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Canonical line delimiters
+// ---------------------------------------------------------------------------
+
+// POSIX delimits an input record by "an NL, EOF, or EOL special character".
+// EOL is a per-terminal setting, so recognising NL alone would buffer a whole
+// session's typing on a terminal configured with a different EOL.
+func TestCanonicalEOLAndNewlineBothDelimit(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1", veol: '\x1d',
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	if _, e, code := exec(t, "eol\x1dnl\nmixed\x1d", "bob"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "eol\nnl\nmixed\nEOT\n") {
+		t.Errorf("recipient terminal = %q", got)
+	}
+}
+
+// _POSIX_VDISABLE (a zero EOL) means the terminal has no second delimiter.
+// Treating a NUL byte as one would split a line at every NUL in the input.
+func TestDisabledEOLDoesNotDelimitOnNUL(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+	if _, e, code := exec(t, "a\x00b\n", "bob"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "a^@b\nEOT\n") {
+		t.Errorf("recipient terminal = %q, want one line with the NUL in caret notation", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interrupt
+// ---------------------------------------------------------------------------
+
+// waitForBanner blocks until the banner has reached the fake terminal, so a
+// test can signal the process only once write has installed its handler.
+// Sleeping a fixed interval instead would kill the test binary on a slow host,
+// because an unhandled SIGINT terminates it.
+func waitForBanner(t *testing.T, w *world, line string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(w.devs[line]); err == nil && strings.Contains(string(b), "Message from") {
+			// The banner is written before signal.Notify; give the handler
+			// registration room to complete.
+			time.Sleep(20 * time.Millisecond)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("banner never reached %s", line)
+}
+
+// POSIX ASYNCHRONOUS EVENTS: "If an interrupt signal is received, write shall
+// write an appropriate message on the recipient's terminal and exit with a
+// status of zero."
+//
+// The three things this pins beyond the EOT itself: exit 0, the caller's own
+// stdin still open afterwards (write duplicates the descriptor, it does not
+// adopt it), and no goroutine left parked in a Read that nothing will ever
+// satisfy.
+func TestSIGINTWritesEOTReturnsSuccessAndLeaksNothing(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1",
 		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
 	})
 
@@ -812,19 +1182,18 @@ func TestSIGINTWritesEOTAndReturnsSuccess(t *testing.T) {
 	}
 	defer pr.Close()
 	defer pw.Close()
+
+	before := goroutineCount()
+
 	var out, errb bytes.Buffer
-	rc := &tool.RunContext{
-		Dir:   t.TempDir(),
-		Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb},
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb}}
+	done := make(chan int, 1)
+	go func() { done <- run(rc, []string{"bob"}) }()
+
+	if _, err := pw.Write([]byte("hello\n")); err != nil {
+		t.Fatal(err)
 	}
-
-	done := make(chan int)
-	go func() {
-		done <- run(rc, []string{"bob"})
-	}()
-
-	pw.Write([]byte("hello\n"))
-	time.Sleep(50 * time.Millisecond)
+	waitForBanner(t, w, "pts/9")
 
 	p, err := os.FindProcess(os.Getpid())
 	if err != nil {
@@ -834,15 +1203,116 @@ func TestSIGINTWritesEOTAndReturnsSuccess(t *testing.T) {
 		t.Skipf("cannot send signal: %v", err)
 	}
 
-	code := <-done
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0 on SIGINT", code)
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 on SIGINT", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("write did not return after SIGINT: the sender is blocked")
 	}
+
 	if _, err := pr.Stat(); err != nil {
 		t.Fatalf("caller-owned input was closed: %v", err)
 	}
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "hello\nEOT\n") {
+		t.Errorf("recipient terminal = %q, want the body then EOT", got)
+	}
+	if after := settledGoroutineCount(before); after > before {
+		t.Errorf("goroutines: %d before, %d after; a reader was left blocked", before, after)
+	}
+}
+
+// An interrupt part-way through a line must not glue "EOT" onto the sender's
+// unfinished text: the recipient would read "partialEOT" as one word.
+func TestSIGINTFramesAnUnfinishedLineBeforeEOT(t *testing.T) {
+	w := install(t, fixture{
+		uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
+	})
+
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb}}
+	done := make(chan int, 1)
+	go func() { done <- run(rc, []string{"bob"}) }()
+
+	if _, err := pw.Write([]byte("partial")); err != nil {
+		t.Fatal(err)
+	}
+	waitForBanner(t, w, "pts/9")
+
+	p, _ := os.FindProcess(os.Getpid())
+	if err := p.Signal(os.Interrupt); err != nil {
+		t.Skipf("cannot send signal: %v", err)
+	}
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("write did not return after SIGINT")
+	}
+
 	got := w.read(t, "pts/9")
-	if !strings.Contains(got, "hello\nEOT\n") {
-		t.Errorf("recipient terminal should receive EOT: %q", got)
+	if !strings.Contains(got, "partial\nEOT\n") {
+		t.Errorf("recipient terminal = %q, want the partial line framed before EOT", got)
+	}
+}
+
+func goroutineCount() int { return runtime.NumGoroutine() }
+
+// settledGoroutineCount gives the runtime a bounded chance to retire the
+// goroutines a finished run is still unwinding, so the leak assertion measures
+// a leak rather than scheduling latency.
+func settledGoroutineCount(target int) int {
+	n := runtime.NumGoroutine()
+	for i := 0; i < 100 && n > target; i++ {
+		time.Sleep(10 * time.Millisecond)
+		runtime.Gosched()
+		n = runtime.NumGoroutine()
+	}
+	return n
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency
+// ---------------------------------------------------------------------------
+
+// A resolved classifier is read-only and a delivery owns nothing shared, so
+// several deliveries can run at once. Worth pinning under -race: the classifier
+// used to be built per call, and a future cache would be the obvious place to
+// introduce a data race.
+func TestConcurrentDeliveriesShareTheClassifierSafely(t *testing.T) {
+	classes := loadCharClasses([]string{"LC_ALL=en_US.UTF-8"})
+	const n = 8
+	var wg sync.WaitGroup
+	bufs := make([]bytes.Buffer, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			body := fmt.Sprintf("line %d héllo\a\n", i)
+			errs[i] = deliver(&bufs[i], strings.NewReader(body), "alice", "pts/1", "bob", classes)
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("delivery %d: %v", i, errs[i])
+		}
+		want := fmt.Sprintf("line %d héllo\a\nEOT\n", i)
+		if !strings.HasSuffix(bufs[i].String(), want) {
+			t.Errorf("delivery %d = %q, want suffix %q", i, bufs[i].String(), want)
+		}
 	}
 }
