@@ -1310,7 +1310,7 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 
 **Implementation:** `cmds/diff`.
 
-**Conservative source-token audit:** token gaps: options=none; argument-form gaps=-C=<n>, -U=<n>; source `cmds/diff`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/diff`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/diff/diff_test.go#TestNormalFormat;cmds/diff/diff_test.go#TestUnifiedGolden;cmds/diff/diff_test.go#TestContextGolden;cmds/diff/diff_test.go#TestRunReportsBufferedFlushError;cmds/diff/diff_fifo_unix_test.go#TestDirectoryFIFOComparedByType`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1889,7 +1889,7 @@ file -i [-h] file...
 
 **Implementation:** `cmds/file`.
 
-**Conservative source-token audit:** token gaps: options=-M, -d, -m; argument-form gaps=-M=<file>, -m=<file>; source `cmds/file`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/file`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2427,7 +2427,7 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 
 **Implementation:** `cmds/join`.
 
-**Conservative source-token audit:** token gaps: options=none; argument-form gaps=-1=<field>, -2=<field>, -a=<file_number>, -e=<string>, -o=<list>, -t=<char>, -v=<file_number>; source `cmds/join`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/join`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/join/join_test.go#TestJoin;cmds/join/join_test.go#TestJoinStdin;cmds/join/join_test.go#TestJoinOrderCheck;cmds/join/join_test.go#TestJoinPOSIXOutputListAndUnpairableAggregation;cmds/join/join_test.go#TestJoinPOSIXFieldSeparators;cmds/join/join_test.go#TestJoinPOSIXOperandArityAndStderr`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3737,7 +3737,7 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 **Implementation:** `cmds/pr`.
 
-**Conservative source-token audit:** token gaps: options=+<page>; argument-form gaps=none; source `cmds/pr`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pr`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/pr/pr_test.go`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4514,7 +4514,7 @@ tabs [-T type] n[[sep[+]n]...]
 
 **Implementation:** `cmds/tabs`.
 
-**Conservative source-token audit:** token gaps: options=-<n>, -a2, -c2, -c3; argument-form gaps=none; source `cmds/tabs`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tabs`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tabs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 

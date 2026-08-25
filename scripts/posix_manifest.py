@@ -236,6 +236,13 @@ def recognized_go_options(row: dict[str, str], root: Path = ROOT) -> set[str]:
     chars.update(re.findall(
         r'\.VarPF\(.+,\s*"[^"]*"\s*,\s*"([A-Za-z0-9])"\s*,', source
     ))
+    # Some packages preserve option order through a small typed helper around
+    # pflag.VarP (for example file's -d/-M/-m magic-source sequence).  Scan
+    # the helper call sites rather than pretending the helper's variable
+    # shorthand parameter is a literal declaration.
+    chars.update(re.findall(
+        r'addSourceFlag\([^\n]*,\s*"[^"]*"\s*,\s*"([A-Za-z0-9])"\s*,', source
+    ))
     for case in re.findall(r"case\s+([^:]+):", source):
         chars.update(re.findall(r"'([A-Za-z0-9])'", case))
     for group in re.findall(r'extractShort\([^,]+,\s*"([A-Za-z0-9]+)"', source):
@@ -248,10 +255,16 @@ def recognized_go_options(row: dict[str, str], root: Path = ROOT) -> set[str]:
         result.add("-R")
     if 'strings.Trim(arg[1:], "0123456789")' in source:
         result.add("-<column>")
-    if "scanPlusPage(" in source:
+    if "scanPlusPage(" in source or (
+        "protectPlusOperands(" in source and 'strings.HasPrefix(op, "+")' in source
+    ):
         result.add("+<page>")
-    if "parseTabStops(" in source:
+    if "parseTabStops(" in source or "isFormatFlag(" in source:
         result.add("-<n>")
+    # tabs keeps its multi-character presets in a normative data table and
+    # recognizes them through preset(); they cannot be represented by pflag.
+    if "presetsTable" in source and "func preset(" in source:
+        result.update(re.findall(r'\{"(-[A-Za-z0-9]+)"\s*,', source))
     return result
 
 
@@ -298,11 +311,19 @@ def recognized_go_option_arguments(
                 or "parseOption" in source
             )
         )
+        manual_char_value = (
+            re.search(rf"case\s+[^:\n]*'{short}'[^:\n]*:", source)
+            and "requires an argument" in source
+        )
+        ordered_var_value = re.search(
+            rf'addSourceFlag\([^\n]*,\s*"[^"]*"\s*,\s*"{short}"\s*,[^\n]*false\s*\)',
+            source,
+        )
         optional_pr = (
             row["command"] == "pr" and option in {"-e", "-i", "-n", "-s"}
             and f"'{option[1]}':" in source and "NoOptDefVal" in source
         )
-        if value_flag or manual_value or optional_pr:
+        if value_flag or manual_value or manual_char_value or ordered_var_value or optional_pr:
             result.add(item)
     return result
 

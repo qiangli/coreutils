@@ -511,6 +511,13 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertIn("-s[char]", row["option_arguments"])
         self.assertEqual(manifest.declared_options(row) & {"-e", "-i", "-n", "-s"}, {"-e", "-i", "-n", "-s"})
 
+    def test_manual_and_helper_parsers_have_no_scanner_false_gaps(self) -> None:
+        for command in ("diff", "file", "join", "pr", "tabs"):
+            with self.subTest(command=command):
+                row = self.row(command)
+                self.assertEqual(manifest.parser_gaps(row), set())
+                self.assertEqual(manifest.option_argument_gaps(row), set())
+
     def test_known_guideline_10_exceptions_are_exact(self) -> None:
         self.assertIn("does not recognize", self.row("echo")["special_tokens"])
         self.assertIn("does not recognize", self.row("test")["special_tokens"])
