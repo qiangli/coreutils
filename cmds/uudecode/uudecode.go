@@ -17,8 +17,8 @@ import (
 var cmd = &tool.Tool{
 	Name:     "uudecode",
 	Synopsis: "Decode a uuencoded file.",
-	Usage: "uudecode [OPTION]... [FILE]...\n\n" +
-		"Decode traditional or begin-base64 data from FILEs, or standard input.\n\n" +
+	Usage: "uudecode [-o OUTFILE] [FILE]\n\n" +
+		"Decode traditional or begin-base64 data from FILE, or standard input.\n\n" +
 		"  -o, --output-file=FILE  write to FILE instead of the header name\n\n" +
 		"Header output names use ordinary pathname semantics.",
 }
@@ -38,8 +38,8 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if *output != "" && len(operands) > 1 {
-		return tool.UsageError(rc, cmd, "--output-file cannot be used with multiple input files")
+	if len(operands) > 1 {
+		return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
 	}
 	if len(operands) == 0 {
 		if decodeInput(rc, "standard input", rc.In, *output) {
@@ -48,24 +48,18 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
-	failed := false
-	for _, operand := range operands {
-		f, err := os.Open(rc.Path(operand))
-		if err != nil {
-			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
-			failed = true
-			continue
-		}
-		ok := decodeInput(rc, operand, f, *output)
-		if err := f.Close(); err != nil {
-			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
-			ok = false
-		}
-		if !ok {
-			failed = true
-		}
+	operand := operands[0]
+	f, err := os.Open(rc.Path(operand))
+	if err != nil {
+		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
+		return 1
 	}
-	if failed {
+	ok := decodeInput(rc, operand, f, *output)
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
+		ok = false
+	}
+	if !ok {
 		return 1
 	}
 	return 0

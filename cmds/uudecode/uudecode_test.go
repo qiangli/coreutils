@@ -110,7 +110,7 @@ func TestDecodeBase64AndHeaderScanning(t *testing.T) {
 	}
 }
 
-func TestDecodeMultipleInputFilesAndOutputConflict(t *testing.T) {
+func TestPOSIXRejectsMultipleInputFiles(t *testing.T) {
 	dir := t.TempDir()
 	for name, data := range map[string]string{
 		"one.uue": "begin 600 one\n#0V%T\n \nend\n",
@@ -121,12 +121,17 @@ func TestDecodeMultipleInputFilesAndOutputConflict(t *testing.T) {
 		}
 	}
 	_, errb, code := runTool(t, dir, "", "one.uue", "two.uue")
-	if code != 0 || errb != "" {
-		t.Fatalf("err=%q code=%d", errb, code)
+	if code != 2 || !strings.Contains(errb, "extra operand") {
+		t.Fatalf("multiple inputs: err=%q code=%d", errb, code)
 	}
 	_, errb, code = runTool(t, dir, "", "-o", "result", "one.uue", "two.uue")
-	if code != 2 || !strings.Contains(errb, "output-file") {
+	if code != 2 || !strings.Contains(errb, "extra operand") {
 		t.Fatalf("-o with multiple inputs: err=%q code=%d", errb, code)
+	}
+	for _, name := range []string{"one", "two", "result"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("usage error created %q: %v", name, err)
+		}
 	}
 }
 
