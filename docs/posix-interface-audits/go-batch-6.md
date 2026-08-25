@@ -1,285 +1,239 @@
 # POSIX Interface Audit: Go Batch 6
 
-This document audits the POSIX.1-2016 (Issue 7) compliance of 13 Go-owned commands: `tput`, `tr`, `tsort`, `tty`, `uname`, `unexpand`, `uniq`, `uudecode`, `uuencode`, `wc`, `who`, `write`, `xargs`.
-
----
+This audit covers exactly 13 Go-owned commands against POSIX.1-2016 (Issue 7): `tput`, `tr`, `tsort`, `tty`, `uname`, `unexpand`, `uniq`, `uudecode`, `uuencode`, `wc`, `who`, `write`, and `xargs`. A passing package test means the implementation's current behavior is internally consistent; it is not, by itself, evidence of POSIX conformance.
 
 ## 1. `tput`
-**POSIX Specification:** [Issue 7: tput](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/tput.html)
-**Applicability:** User Portability Utilities (`[UP]`)
+
+**POSIX specification:** [Issue 7/2016: tput](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tput.html)
+**Applicability:** User Portability Utilities (`UP`)
 **Status:** `implementation_gap`
-**Missing/Defect Feature:** Multi-operand execution defect.
 
-### Interface Definition
+### Interface definition
+
 - **Synopsis:** `tput [-T type] operand...`
-- **Flags and Option Arguments:** `-T type` (Base option to specify terminal type).
-- **Operands, Arity, Special Tokens, Stdin:** `operand...` list. Supports `clear`, `init`, and `reset` (required Base operands), or a `capname` capability name. If `capname` requires parameters, they must immediately follow as operands. Stdin is not used.
-- **Environment:** `TERM` (default type), `LINES`, `COLUMNS` (override terminfo).
-- **Stdout, Stderr, Effects:** Writes capability strings to stdout. Stderr receives diagnostics.
-- **Diagnostics and Exit Statuses:** 0 (success/true), 1 (false/absent), 2 (usage error), 3 (no terminal info), 4 (unknown operand), >4 (other error).
+- **Options:** `-T type` overrides `TERM`.
+- **Operands:** POSIX requires `clear`, `init`, and `reset` in the POSIX locale. It does not specify the terminfo `capname [parameter...]` interface provided as an extension by this implementation.
+- **Environment:** `TERM` and the standard locale variables.
+- **Exit:** 0 means the requested string was written; 1 is unspecified; 2 is usage error; 3 means no terminal information; 4 means an invalid operand; greater than 4 means another error. An unavailable operation is not an error, and processing must continue with later operands.
 
-### Gap Analysis
-- **Parser/Source:** [cmds/tput/tput.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tput/tput.go#L61-L102)
-- **Behavioral Tests:** [cmds/tput/tput_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tput/tput_test.go#L51-L100) (specifically `TestExitStatuses`).
-- **Defect/Gap Classification:** Multi-operand defect. POSIX specifies that `tput` accepts multiple capability/operation operands sequentially in a single invocation (e.g. `tput clear cols`). However, the Go parser only processes `operands[0]` as the capability and parses all subsequent arguments `operands[1:]` as arguments/parameters for that single capability. Sequential execution of multiple distinct capabilities is unsupported.
+### Disposition
 
----
+- **Source:** [`cmds/tput/tput.go`](../../cmds/tput/tput.go) processes only `operands[0]` and treats all later operands as parameters for that one terminfo capability. Thus a conforming sequence such as `tput clear reset` is not executed as two operations.
+- **Tests:** [`cmds/tput/tput_test.go`](../../cmds/tput/tput_test.go) covers the published terminfo extension and exit statuses, but has no POSIX multi-operation/continue-after-unavailable test.
+- **Required work:** Preserve the published terminfo capability behavior while adding an unambiguous path for sequential POSIX `clear`, `init`, and `reset` operands.
 
 ## 2. `tr`
-**POSIX Specification:** [Issue 7: tr](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/tr.html)
+
+**POSIX specification:** [Issue 7/2016: tr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tr.html)
 **Applicability:** Base
-**Status:** `verified`
+**Status:** `implementation_gap`
 
-### Interface Definition
-- **Synopsis:** `tr [-c|-C] [-s] [-d] [string1 [string2]]`
-- **Flags and Option Arguments:** `-c`, `-C` (complement), `-s` (squeeze repeats), `-d` (delete).
-- **Operands, Arity, Special Tokens, Stdin:** `string1` and `string2` specifying sets of characters. Stdin is the input.
-- **Environment:** `LC_CTYPE`, `LC_COLLATE`.
-- **Stdout, Stderr, Effects:** Stdout emits the translated/deleted stream. Stderr for diagnostics.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/tr/tr.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tr/tr.go)
-- **Behavioral Tests:** [cmds/tr/tr_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tr/tr_test.go) (covering `TestTr` and `TestTrEquivClass`).
-- **Compliance Notes:**
-  - **No Collating Symbol Gap:** The previous audit claimed a gap for missing collating symbol `[.c.]` support. Under POSIX.1-2016, `tr` is explicitly not required to support collating symbols ("Collating symbols are not supported by tr..."). Hence, this gap was fabricated and has been removed.
-  - **Non-POSIX Option:** The `-t` (truncate `string1`) flag implemented in [cmds/tr/tr.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tr/tr.go) is a non-POSIX extension (GNU/BSD compatibility) and is documented as such.
+- **Synopses:** `tr [-c|-C] [-s] string1 string2`; `tr -s [-c|-C] string1`; `tr -d [-c|-C] string1`; `tr -ds [-c|-C] string1 string2`.
+- **Options:** `-c`, `-C`, `-d`, and `-s`. GNU/BSD `-t` is an extension, not a POSIX option.
+- **Operands/input:** The strings define character arrays; standard input supplies the characters to translate, delete, or squeeze.
+- **Environment:** `LC_CTYPE` and `LC_COLLATE` affect character interpretation, classes, ranges, complements, and equivalence classes.
 
----
+### Disposition
+
+- **Source:** [`cmds/tr/tr.go`](../../cmds/tr/tr.go) expands byte arrays, byte ranges, and one-byte equivalence members. [`cmds/tr/ctype.go`](../../cmds/tr/ctype.go) adds provider-backed class tables but does not make the whole engine multibyte- or collation-aware.
+- **Tests:** [`cmds/tr/tr_test.go`](../../cmds/tr/tr_test.go) and [`cmds/tr/ctype_test.go`](../../cmds/tr/ctype_test.go) provide strong C/POSIX and provider-table coverage, but do not establish full multibyte `LC_CTYPE`/`LC_COLLATE` semantics.
+- **Required work:** Close only the locale/multibyte/collation gap. POSIX explicitly does not require `[.c.]` collating-symbol syntax for `tr`, so its absence is not a gap.
 
 ## 3. `tsort`
-**POSIX Specification:** [Issue 7: tsort](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/tsort.html)
+
+**POSIX specification:** [Issue 7/2016: tsort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tsort.html)
 **Applicability:** Base
 **Status:** `verified`
 
-### Interface Definition
-- **Synopsis:** `tsort [file]`
-- **Flags and Option Arguments:** None.
-- **Operands, Arity, Special Tokens, Stdin:** Optional `file` to read pairs from; defaults to stdin if omitted or `-`.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Stdout receives topologically sorted items. Stderr receives cycle warnings.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/tsort/tsort.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tsort/tsort.go)
-- **Behavioral Tests:** [cmds/tsort/tsort_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tsort/tsort_test.go) (covering `TestTsort` and cycles).
+- **Synopsis:** `tsort [file]`; there are no POSIX options.
+- **Input:** A text file, or standard input when omitted (and for `-` as the implementation-defined standard-input spelling), containing blank-separated pairs of non-empty items.
+- **Effects/exit:** Write an order consistent with the input. Diagnose cycles, continue sufficiently to produce an order where possible, and return greater than zero for an error.
 
----
+### Disposition
+
+- **Source:** [`cmds/tsort/tsort.go`](../../cmds/tsort/tsort.go) enforces one operand, handles identical-item presence, diagnoses and breaks cycles, continues sorting, and reports a nonzero status.
+- **Tests:** [`cmds/tsort/tsort_test.go`](../../cmds/tsort/tsort_test.go) covers stdin/file input, identical items, odd tokens, cycles, continuation, and the POSIX example. The accepted `-w` behavior is a non-Issue-7 extension and is not relied on for this disposition.
 
 ## 4. `tty`
-**POSIX Specification:** [Issue 7: tty](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/tty.html)
+
+**POSIX specification:** [Issue 7/2016: tty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tty.html)
 **Applicability:** Base
 **Status:** `verified`
 
-### Interface Definition
-- **Synopsis:** `tty`
-- **Flags and Option Arguments:** `-s` (silent/suppress terminal name output). Note: `-s` is classified as an obsolescent option in POSIX.
-- **Operands, Arity, Special Tokens, Stdin:** No operands. Stdin is checked if it is a terminal.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Stdout receives the path to the terminal device, or "not a tty" message.
-- **Diagnostics and Exit Statuses:** 
-  - `0`: Standard input is a terminal.
-  - `1`: Standard input is not a terminal.
-  - `>1`: An error occurred.
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/tty/tty.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tty/tty.go)
-- **Behavioral Tests:** [cmds/tty/tty_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/tty/tty_test.go) (verifying exits 0 and 1, and option rejection).
+- **Synopsis:** `tty`; POSIX Issue 7 specifies no options and no operands.
+- **Input/effects:** Examine standard input without reading it. Write the equivalent of `ttyname()` when it is a terminal, otherwise write an informative message.
+- **Exit:** 0 when standard input is a terminal, 1 when it is not, and greater than 1 for an error.
 
----
+### Disposition
+
+- **Source:** [`cmds/tty/tty.go`](../../cmds/tty/tty.go) implements the terminal check, message, operand rejection, and required exit partition.
+- **Tests:** [`cmds/tty/tty_test.go`](../../cmds/tty/tty_test.go) includes a real PTY test, non-terminal cases, operand rejection, and write-error behavior.
+- **Extension note:** `-s`, `--silent`, and `--quiet` are implementation extensions. The obsolete POSIX `-s` form was removed before Issue 7 and is not part of the audited interface.
 
 ## 5. `uname`
-**POSIX Specification:** [Issue 7: uname](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/uname.html)
+
+**POSIX specification:** [Issue 7/2016: uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html)
 **Applicability:** Base
-**Status:** `verified`
+**Status:** `implementation_gap`
 
-### Interface Definition
-- **Synopsis:** `uname [-amnrsv]`
-- **Flags and Option Arguments:** `-a` (all), `-m` (machine), `-n` (nodename), `-r` (release), `-s` (sysname), `-v` (version).
-- **Operands, Arity, Special Tokens, Stdin:** None.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Writes requested system name info to stdout.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/uname/uname.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uname/uname.go)
-- **Behavioral Tests:** [cmds/uname/uname_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uname/uname_test.go) (covering `TestUname` combinations).
+- **Synopsis:** `uname [-amnrsv]`; no operands.
+- **Options:** `-a` is exactly the behavior of `-mnrsv`; the remaining options select machine, node name, release, system name, and version. With no option, behavior is `-s`.
+- **Output/exit:** Write selected implementation-defined system symbols in `s n r v m` order; return 0 on success and greater than zero on error.
 
----
+### Disposition
+
+- **Source:** [`cmds/uname/uname.go`](../../cmds/uname/uname.go) implements every required selector and the default, but `-a` also appends the GNU `-o` operating-system field. That is not the POSIX `-mnrsv` equivalence.
+- **Tests:** [`cmds/uname/uname_test.go`](../../cmds/uname/uname_test.go) validates the current GNU-oriented output order and therefore does not close this POSIX defect.
+- **Required work:** In POSIX mode, make `-a` emit only `-mnrsv`; retain `-o` as an explicitly requested extension.
 
 ## 6. `unexpand`
-**POSIX Specification:** [Issue 7: unexpand](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/unexpand.html)
+
+**POSIX specification:** [Issue 7/2016: unexpand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unexpand.html)
 **Applicability:** Base
-**Status:** `verified`
+**Status:** `implementation_gap`
 
-### Interface Definition
-- **Synopsis:** `unexpand [-a|-t tablist] [file...]`
-- **Flags and Option Arguments:** `-a` (all blanks), `-t tablist` (comma/space-separated list of ascending tab stops).
-- **Operands, Arity, Special Tokens, Stdin:** `file...` paths to process; `-` or empty implies stdin.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Writes text with spaces converted to tabs to stdout.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/unexpand/unexpand.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/unexpand/unexpand.go)
-- **Behavioral Tests:** [cmds/unexpand/unexpand_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/unexpand/unexpand_test.go) (covering `TestUnexpand` tab calculations).
+- **Synopsis:** `unexpand [-a|-t tablist] [file...]`.
+- **Options:** `-a` converts eligible non-leading blank runs; `-t tablist` selects repeating or explicit tab stops and implies all-run processing.
+- **Environment:** `LC_CTYPE` controls byte-to-character interpretation, blank characters, and each character's display-column width.
+- **Effects:** Preserve text while replacing eligible blanks with the maximum tabs and minimum spaces occupying the same columns.
 
----
+### Disposition
+
+- **Source:** [`cmds/unexpand/unexpand.go`](../../cmds/unexpand/unexpand.go) has the required parser and tab-stop algorithm, but treats only space/tab as blanks and increments every decoded rune by one column. It therefore cannot honor locale-defined blanks or wide/zero-width characters.
+- **Tests:** [`cmds/unexpand/unexpand_test.go`](../../cmds/unexpand/unexpand_test.go) covers tab arithmetic, UTF-8 code-point counting, malformed UTF-8, and backspace, but not `LC_CTYPE` display widths.
+- **Required work:** Make blank classification and display-column width follow the effective `LC_CTYPE` locale.
 
 ## 7. `uniq`
-**POSIX Specification:** [Issue 7: uniq](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/uniq.html)
+
+**POSIX specification:** [Issue 7/2016: uniq](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uniq.html)
 **Applicability:** Base
-**Status:** `verified`
+**Status:** `implementation_gap`
 
-### Interface Definition
-- **Synopsis:** `uniq [-c|-d|-u] [-f fields] [-s chars] [input_file [output_file]]`
-- **Flags and Option Arguments:** `-c` (prepend count), `-d` (duplicate lines only), `-u` (unique lines only), `-f fields` (ignore first N fields), `-s chars` (ignore first N characters).
-- **Operands, Arity, Special Tokens, Stdin:** Optional `input_file` and `output_file` (up to 2 operands). `-` for stdin/stdout.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Writes unique lines to stdout or `output_file`.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/uniq/uniq.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uniq/uniq.go)
-- **Behavioral Tests:** [cmds/uniq/uniq_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uniq/uniq_test.go) (covering `TestUniq` and `TestUniqOperands`).
+- **Synopsis:** `uniq [-c|-d|-u] [-f fields] [-s chars] [input_file [output_file]]`.
+- **Options:** Select counts/duplicate/unique groups and ignore an initial number of locale-defined fields or characters.
+- **Environment:** `LC_CTYPE` determines characters and blanks; `LC_COLLATE` affects comparisons.
 
----
+### Disposition
+
+- **Source:** [`cmds/uniq/uniq.go`](../../cmds/uniq/uniq.go) implements the flags and operands, but `skipKey` skips bytes and recognizes only ASCII space/tab. Comparisons are explicitly byte-wise C-locale comparisons.
+- **Tests:** [`cmds/uniq/uniq_test.go`](../../cmds/uniq/uniq_test.go) covers the C-locale behavior and operands, not multibyte `-s`, locale blanks, or collation.
+- **Required work:** Count characters rather than bytes and honor `LC_CTYPE`/`LC_COLLATE` for field parsing and comparison.
 
 ## 8. `uudecode`
-**POSIX Specification:** [Issue 7: uudecode](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/uudecode.html)
+
+**POSIX specification:** [Issue 7/2016: uudecode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uudecode.html)
 **Applicability:** Base
-**Status:** `implementation_gap`
-**Missing Feature:** Output path restrictions and umask/mode gaps.
+**Status:** `implementation_gap` (fix pending review/integration)
 
-### Interface Definition
-- **Synopsis:** `uudecode [-o outfile] [file]`
-- **Flags and Option Arguments:** `-o outfile` (explicit destination path; override header value).
-- **Operands, Arity, Special Tokens, Stdin:** Optional `file` to decode; stdin if omitted or `-`.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Extracts decoded file to header-defined path or overridden `-o` destination.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/uudecode/uudecode.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uudecode/uudecode.go)
-- **Behavioral Tests:** [cmds/uudecode/uudecode_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uudecode/uudecode_test.go) (covering standard and base64 decode).
-- **Gaps identified:**
-  - **Path restriction gap:** POSIX allows relative or absolute paths inside the `begin` line header. However, the Go implementation strictly limits header names to safe relative basenames (`!strings.ContainsAny(name, "/\\")`), failing on any paths with subdirectories or absolute structures.
-  - **Mode/Write-Permission gap:** POSIX dictates that the decoded file mode matches the header mode, except that execution bits must be cleared and the file must not be made writable by others unless permitted by umask. The Go implementation uses `mode & 0o666` and updates the permissions via `Chmod` after temporary file creation, which bypasses the host process umask entirely.
+- **Synopsis:** `uudecode [-o outfile] [file]`.
+- **Effects:** Decode historical or Base64 input, use the header pathname unless overridden, and set the produced file's header permissions independently of the process umask. A conforming header can express permissions in `chmod` octal or symbolic notation.
+- **Existing files:** Refuse an existing file the user cannot write; when a writable existing file cannot have its mode changed, that mode failure is not itself fatal.
 
----
+### Disposition
+
+- **Source:** [`cmds/uudecode/uudecode.go`](../../cmds/uudecode/uudecode.go) supports both payload formats and atomic output, but restricts header paths to basenames, accepts only octal modes, masks modes to `0666` (dropping execute bits), can replace an existing non-writable file via directory rename permission, and treats every `Chmod` failure as fatal.
+- **Tests:** [`cmds/uudecode/uudecode_test.go`](../../cmds/uudecode/uudecode_test.go) intentionally verifies the current path restriction and does not cover all normative mode/existing-file cases.
+- **Required work:** Pending issue 55 must be reviewed and integrated before this disposition can change; bypassing umask is required and is not itself a defect.
 
 ## 9. `uuencode`
-**POSIX Specification:** [Issue 7: uuencode](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/uuencode.html)
+
+**POSIX specification:** [Issue 7/2016: uuencode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uuencode.html)
 **Applicability:** Base
-**Status:** `implementation_gap`
-**Missing Feature:** `-m` Base64 encoding.
+**Status:** `implementation_gap` (fix pending review/integration)
 
-### Interface Definition
-- **Synopsis:** `uuencode [-m] [file] decode_pathname`
-- **Flags and Option Arguments:** `-m` (encode using Base64 instead of historical format).
-- **Operands, Arity, Special Tokens, Stdin:** `file` (optional, defaults to stdin) and `decode_pathname` (required).
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Writes encoded text with header to stdout.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/uuencode/uuencode.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uuencode/uuencode.go)
-- **Behavioral Tests:** [cmds/uuencode/uuencode_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/uuencode/uuencode_test.go) (covering historical format encoding).
-- **Gap Classification:** Under POSIX.1-2016, the `-m` (Base64 encoding) option is a required Base feature. The Go implementation deliberately omits `-m` and fails on its usage.
+- **Synopsis:** `uuencode [-m] [file] decode_pathname`.
+- **Options/effects:** `-m` selects the required MIME Base64 encoding; without it, use the historical encoding. The header records the input file permissions and decode pathname.
 
----
+### Disposition
+
+- **Source:** [`cmds/uuencode/uuencode.go`](../../cmds/uuencode/uuencode.go) implements only historical encoding and deliberately rejects `-m`.
+- **Tests:** [`cmds/uuencode/uuencode_test.go`](../../cmds/uuencode/uuencode_test.go) covers historical output but not required Base64 output.
+- **Required work:** Pending issue 56 must be reviewed and integrated before this command can be marked verified.
 
 ## 10. `wc`
-**POSIX Specification:** [Issue 7: wc](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/wc.html)
+
+**POSIX specification:** [Issue 7/2016: wc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wc.html)
 **Applicability:** Base
-**Status:** `verified`
+**Status:** `implementation_gap`
 
-### Interface Definition
-- **Synopsis:** `wc [-c|-m] [-lw] [file...]`
-- **Flags and Option Arguments:** `-c` (bytes), `-m` (characters), `-l` (newlines), `-w` (words).
-- **Operands, Arity, Special Tokens, Stdin:** `file...` paths; stdin if empty or `-`.
-- **Environment:** `LC_CTYPE`.
-- **Stdout, Stderr, Effects:** Emits counts and paths to stdout.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/wc/wc.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/wc/wc.go)
-- **Behavioral Tests:** [cmds/wc/wc_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/wc/wc_test.go) (covering `TestWc` standard flags).
+- **Synopsis:** `wc [-c|-m] [-lw] [file...]`.
+- **Options:** Count bytes, characters, newlines, and words. `-c` and `-m` are mutually exclusive.
+- **Environment:** `LC_CTYPE` determines characters and white-space characters.
 
----
+### Disposition
+
+- **Source:** [`cmds/wc/wc.go`](../../cmds/wc/wc.go) implements selection, formatting, files, and totals, but explicitly sets the character count equal to the byte count and uses a fixed ASCII white-space table.
+- **Tests:** [`cmds/wc/wc_test.go`](../../cmds/wc/wc_test.go) covers C-locale counts and formatting, not multibyte `-m` or locale white space.
+- **Required work:** Decode characters according to `LC_CTYPE` for `-m` and use its white-space classification for `-w`.
 
 ## 11. `who`
-**POSIX Specification:** [Issue 7: who](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/who.html)
-**Applicability:** Base, with User Portability Utilities (`[UP]`) options.
-**Status:** `implementation_gap`
-**Missing Feature:** Operand verification, `-q` flag interaction/standard counting gaps.
 
-### Interface Definition
-- **Synopsis:** 
-  - `who [-mTu] [-abdHlprt] [file]` (Base, with `[UP]` options `-a`, `-b`, `-d`, `-l`, `-p`, `-r`, `-t`, `-T`, `-u`)
-  - `who [-mu] -s [-bHlprt] [file]`
-  - `who -q [file]`
-  - `who am i` or `who am I`
-- **Flags and Option Arguments:** `-q` (quick mode), `-H` (headings), `-m` (stdin-associated session only), other `[UP]` options.
-- **Operands, Arity, Special Tokens, Stdin:** Optional `file` for session DB. Special sequence `am i`/`am I` for current session user.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Output list of users/events.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+**POSIX specification:** [Issue 7/2016: who](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/who.html)
+**Applicability:** Base, with XSI-shaded forms and options
+**Status:** `implementation_gap` (fix pending review/integration)
 
-### Gap Analysis
-- **Parser/Source:** [cmds/who/who.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/who/who.go)
-- **Behavioral Tests:** [cmds/who/who_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/who/who_test.go) (specifically `TestWhoFileAndCount`).
-- **Gaps identified:**
-  - **Operand verification gap:** POSIX strictly defines that when two operands are given, they must be `am i` or `am I`. The Go implementation accepts any two-operand list (e.g. `who foo bar`) as a match for the `am i` behavior (setting `sameHost` to true) without verifying the string content.
-  - **`-q` Quick option gap:** POSIX specifies that if `-q` is provided, all other options shall be ignored. The Go implementation still applies filtering and counting logic based on other options (e.g., `-b` or `-d`) if combined, rather than ignoring them and listing standard user processes.
-  - **Counting gap:** The number of users reported under quick mode `-q` is based on whatever records are filtered, not restricted to the standard logged-in users.
+### Interface definition
 
----
+- **Base:** `who [-mTu]` plus the implementation-defined database/file behavior.
+- **XSI:** Additional `-abdHlprstq` forms and the exact special operands `who am i` and `who am I`.
+- **Quick mode:** `-q` lists only logged-in user names and their count; all other options are ignored.
+
+### Disposition
+
+- **Source:** [`cmds/who/who.go`](../../cmds/who/who.go) accepts any two operands as the special form and also accepts an invalid three-operand form. Its `-q` path uses records already selected by other options, so other options are not ignored and non-user records can affect output/counting.
+- **Tests:** [`cmds/who/who_test.go`](../../cmds/who/who_test.go) covers session fixtures but does not establish the exact special-operand and `-q` interactions.
+- **Required work:** Pending issue 57 must be reviewed and integrated before these gaps can be closed.
 
 ## 12. `write`
-**POSIX Specification:** [Issue 7: write](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/write.html)
+
+**POSIX specification:** [Issue 7/2016: write](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/write.html)
 **Applicability:** Base
-**Status:** `implementation_gap`
-**Missing Feature:** Signal handling, alerts, banner/EOT conformity, and multi-session notification gaps.
+**Status:** `implementation_gap` (fix pending review/integration)
 
-### Interface Definition
-- **Synopsis:** `write user_name [terminal]`
-- **Flags and Option Arguments:** None.
-- **Operands, Arity, Special Tokens, Stdin:** `user_name` (required target user), `terminal` (optional terminal device). Stdin is the message stream.
-- **Environment:** Standard locale variables.
-- **Stdout, Stderr, Effects:** Writes messages directly to recipient's terminal device.
-- **Diagnostics and Exit Statuses:** 0 (success), >0 (error).
+### Interface definition
 
-### Gap Analysis
-- **Parser/Source:** [cmds/write/write.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/write/write.go)
-- **Behavioral Tests:** [cmds/write/write_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/write/write_test.go) (specifically `TestWrite` and permission checks).
-- **Gaps identified:**
-  - **SIGINT / Interrupt Signal Gap:** POSIX specifies that if `write` is interrupted by a signal (e.g. SIGINT), it must write a graceful termination message to the recipient's terminal before exiting. The Go implementation does not capture signals and terminates abruptly.
-  - **Alerts Gap:** POSIX requires that upon a successful connection, the sender's terminal must be alerted twice (using bell characters `\a\a`) to indicate transmission has started. This is not implemented.
-  - **Multi-session Gap:** If a user is logged in more than once and no terminal operand is provided, POSIX allows selecting one in an implementation-defined manner. The Go implementation chooses the most recent login, but does not notify the sender that multiple sessions exist.
-  - **Banner / EOT Gap:** Our implementation outputs `EOF\r\n` on stream termination instead of the POSIX-required `EOT` (End of Transmission) marker.
+- **Synopsis:** `write user_name [terminal]`; no options.
+- **Connection:** Write the prescribed initial message to the recipient, then alert the sender's terminal twice. When choosing among multiple recipient sessions, tell the sender which terminal was selected.
+- **Termination:** Interrupt or end-of-file must send the POSIX-locale `EOT\n` termination message to the recipient before exit.
 
----
+### Disposition
+
+- **Source:** [`cmds/write/write.go`](../../cmds/write/write.go) selects and writes a recipient terminal, but does not notify the sender about multiple sessions or alert the sender twice, installs no interrupt handling, emits a GNU-shaped banner, and terminates with `EOF\r\n` rather than `EOT\n`.
+- **Tests:** [`cmds/write/write_test.go`](../../cmds/write/write_test.go) validates the current banner/`EOF` contract and terminal permissions rather than the missing POSIX interactions.
+- **Required work:** Pending issue 57 must be reviewed and integrated before these gaps can be closed.
 
 ## 13. `xargs`
-**POSIX Specification:** [Issue 7: xargs](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/xargs.html)
-**Applicability:** Base, with obsolescent XSI options.
-**Status:** `implementation_gap`
-**Missing Feature:** `-p` interactive confirmation (Base gap) and obsolescent XSI options gaps.
 
-### Interface Definition
-- **Synopsis:** `xargs [-ptx] [-E eofstr] [-I replstr] [-L number] [-n number [-s size]] [utility [argument...]]`
-- **Flags and Option Arguments:**
-  - Base: `-p` (prompt/interactive), `-t` (trace), `-x` (exact), `-E eofstr`, `-I replstr`, `-L number`, `-n number`, `-s size`.
-  - Obsolescent XSI Extensions: `-e [eofstr]`, `-i [replstr]`, `-l [number]`.
-- **Operands, Arity, Special Tokens, Stdin:** `utility` (default `/bin/echo`) and optional arguments. Stdin provides items to batch.
-- **Environment:** `PATH`, standard locale variables.
-- **Stdout, Stderr, Effects:** Executes utility.
-- **Diagnostics and Exit Statuses:** 0 (all success), 126 (found but not executable), 127 (not found), 1-125 (child exit status/error).
+**POSIX specification:** [Issue 7/2016: xargs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/xargs.html)
+**Applicability:** Base, with XSI `-I` and `-L`
+**Status:** `implementation_gap` (fix pending review/integration)
 
-### Gap Analysis
-- **Parser/Source:** [cmds/xargs/xargs.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/xargs/xargs.go)
-- **Behavioral Tests:** [cmds/xargs/xargs_test.go](file:///Users/qiangli/.bashy/weave/coreutils-36223d01/workspaces/issue-42/cmds/xargs/xargs_test.go).
-- **Gaps identified:**
-  - **Interactive prompt (`-p`) gap:** The Base option `-p` is missing due to a lack of controlling terminal support in the runner.
-  - **Obsolescent XSI option gaps:** POSIX requires supporting `-e` (eofstr), `-i` (replstr), and `-l` (number) as obsolescent XSI extensions. The Go implementation does not parse or support these lowercase flags.
+### Interface definition
+
+- **Synopsis:** `xargs [-ptx] [-E eofstr] [-I replstr|-L number|-n number] [-s size] [utility [argument...]]` with the `-I`/`-L` portions XSI-shaded.
+- **Required behavior:** Prompt through the controlling terminal for `-p`; implement exact quoting, logical-line, replacement, size, `{ARG_MAX}-2048`, default-at-least-`{LINE_MAX}`, execution, stop, and 123-127 status rules.
+- **Removed options:** Lowercase `-e`, `-i`, and `-l` were removed in Issue 6 and are not Issue 7 certification requirements.
+
+### Disposition
+
+- **Source:** [`cmds/xargs/xargs.go`](../../cmds/xargs/xargs.go) rejects `-p`; does not discard leading unquoted blanks for `-I`; does not join `-L` lines ending in an unquoted blank; performs no mandatory default system-size batching or environment/`ARG_MAX` accounting; and continues after command lookup/start failures. It already accepts extension aliases `-e` and `-i`, so claiming all lowercase aliases are absent would also be false.
+- **Tests:** [`cmds/xargs/xargs_test.go`](../../cmds/xargs/xargs_test.go) covers the current parser, batching, and status aggregation but not all missing Issue 7/XSI cases.
+- **Required work:** Pending issue 41 must be reviewed and integrated before this command can be marked verified.
