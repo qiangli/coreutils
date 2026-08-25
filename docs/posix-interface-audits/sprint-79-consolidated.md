@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger at coreutils `056e48a`
+This report reconciles the Sprint 79 interface ledger through coreutils `07e9f17`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -100,7 +100,7 @@ lower-ranked edges.
 | 2 | `at`, `batch`, `crontab` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add scheduler integration tests for access policy, delivery/mail behavior, load gating, all locale time grammars, daemon handoff, and persisted execution environment. |
 | 2 | `awk`, `comm`, `csplit`, `cut`, `expand`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `tr`, `unexpand`, `uniq`, `wc` | `ENVIRONMENT_VARIABLES`, algorithmic `STDOUT` | Add non-C multibyte `LC_CTYPE`/`LC_COLLATE`/`LC_NUMERIC` fixtures that discriminate character boundaries, classes, equivalence, ranges, ordering, blanks, widths, and numeric rendering for each named command. |
 | 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add privileged clock-set integration coverage, leap-second rendering, additional platform setters, and a complete installed-locale `LC_TIME` matrix with mutation-after-validation checks. |
-| 2 | `getconf` | `OPERANDS`, `STDOUT` | Add a generated exhaustive test for every required sysconf/pathconf/confstr/minimum name, pathname-vs-system routing, undefined/indeterminate output, specification operands, and status. Issue 734 is active and intentionally not credited at this pin. |
+| 2 | `getconf` | platform integration | Accepted source now inventories every mandatory sysconf/pathconf/confstr/minimum name, routes pathname and system queries, distinguishes undefined results, validates programming environments, and propagates path/output errors. Remaining: privileged/kernel-limit products, a non-Linux/Darwin runtime provider, and broader native platform certification fixtures. |
 | 2 | `file` | `OPTIONS`, `STDOUT` | Add complete magic-file grammar and required type-string tests, including `-d`, `-i`, `-M`, symlink policy, stdin, inaccessible operands, and locale effects. |
 | 2 | `find` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Reject the omitted-path extension in POSIX mode or document a gated route; add all primary/action products, real ownership databases, locale `-ok`/pattern behavior, filesystem failures, and `-exec` side effects. |
 | 2 | `id` | `STDOUT` | Add named-user default/group output, lookup-failure fallbacks, a real set-ID process fixture, and executable non-Unix behavior or an explicit platform conformance disposition. |
@@ -154,21 +154,23 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is pinned to canonical `056e48a`. It credits the accepted command
+This report is reconciled through canonical `07e9f17`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
 `newgrp` through `2c459cc` and `0d24315`; `pax` issues 715-717 through
 `b614e20`, `27c4c30`, `8b7c051`, `6cd55bc`, `af1fd00`, `ddbe753`,
 `7fff4b6`, `4741bf9`, `dd63476`, `3aefbac`, `9ef3a43`, and matrix refresh
-`dc79ecd`; and `iconv` through `70bc09b` and matrix refresh `056e48a`.
+`dc79ecd`; `iconv` through `70bc09b` and matrix refresh `056e48a`; `fold`
+through `e461654` and matrix refresh `c354351`; and `getconf` through
+`ceae89d`, `2fbc91c`, and matrix refresh `07e9f17`.
 
 The machine-readable evidence lanes name the exact current test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
-pax interactive/preservation/extended-header families, and iconv
-charmap/stream/status matrix. Active getconf issue 734 and fold issue 735 are
-not present at this pin and are intentionally not claimed or folded into these
-counts.
+pax interactive/preservation/extended-header families, iconv
+charmap/stream/status matrix, fold locale/byte/error matrix, and getconf
+inventory/platform/error matrix. Both accepted waves remain partial because
+their platform and locale-provider residuals are stated explicitly above.
 
 ## Reproduction
 
