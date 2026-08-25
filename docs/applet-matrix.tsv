@@ -155,7 +155,7 @@ tsort	cmds/tsort		GNU Coreutils	yes	yes	1	7
 tty	cmds/tty		GNU Coreutils	yes	yes	3	13
 tz	cmds/tz		Bashy/other extension	no	no	1	2
 uname	cmds/uname		GNU Coreutils	yes	yes	3	10
-unexpand	cmds/unexpand		GNU Coreutils	yes	yes	1	15
+unexpand	cmds/unexpand		GNU Coreutils	yes	yes	2	21
 uniq	cmds/uniq		GNU Coreutils	yes	yes	1	6
 unlink	cmds/unlink		GNU Coreutils	yes	no	1	3
 uptime	cmds/uptime		GNU Coreutils	yes	no	1	5
@@ -165,12 +165,12 @@ uuencode	cmds/uuencode		POSIX/Unix utility	no	yes	1	7
 vdir	cmds/vdir		GNU Coreutils	yes	no	1	4
 vi	cmds/posixproviders		POSIX external provider	no	yes	3	20
 watch	cmds/watch		Bashy/other extension	no	no	1	4
-wc	cmds/wc		GNU Coreutils	yes	yes	2	20
+wc	cmds/wc		GNU Coreutils	yes	yes	3	26
 which	cmds/which		Bashy/other extension	no	no	1	9
 who	cmds/who		GNU Coreutils	yes	yes	4	30
 whoami	cmds/whoami		GNU Coreutils	yes	no	1	3
 why	cmds/why		Bashy/other extension	no	no	1	17
-write	cmds/write		POSIX/Unix utility	no	yes	4	79
+write	cmds/write		POSIX/Unix utility	no	yes	5	83
 xargs	cmds/xargs		POSIX/Unix utility	no	yes	3	42
 yes	cmds/yes		GNU Coreutils	yes	no	1	4
 zcat	cmds/gzip	gzip	Bashy/other extension	no	no	1	10
