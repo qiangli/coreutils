@@ -3,6 +3,7 @@ package mkdircmd
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,16 +13,31 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
+type mkdirModeFileInfo struct {
+	os.FileInfo
+	mode os.FileMode
+}
+
+func (fi mkdirModeFileInfo) Mode() os.FileMode { return fi.mode }
+
 // runTool is the canonical test harness shape for cmds packages:
 // output is captured after Run returns.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	var out, errb bytes.Buffer
-	rc := &tool.RunContext{
+	return runToolWithContext(t, &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}},
+	}, args...)
+}
+
+func runToolWithContext(t *testing.T, rc *tool.RunContext, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	if rc.Ctx == nil {
+		rc.Ctx = context.Background()
 	}
+	rc.Stdio = tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
 }
@@ -183,6 +199,28 @@ func TestMkdirModeErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "invalid mode 'u+q'") {
 		t.Errorf("-m u+q: code=%d err=%q", code, errb)
 	}
+	_, errb, code = runTool(t, dir, "-m", "10000", "d")
+	if code != 2 || !strings.Contains(errb, "invalid mode '10000'") {
+		t.Errorf("-m 10000: code=%d err=%q", code, errb)
+	}
+}
+
+func TestMkdirLeadingPlusNumericModeExtension(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("-m is loudly unsupported on Windows")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-m", "+777", "d")
+	if code != 0 {
+		t.Fatalf("mkdir -m +777: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o777 {
+		t.Fatalf("mkdir -m +777 mode=%o, want 777", got)
+	}
 }
 
 func TestMkdirSymbolicMode(t *testing.T) {
@@ -293,6 +331,212 @@ func TestMkdirUsageErrors(t *testing.T) {
 	_, errb, code = runTool(t, dir, "--frobnicate", "d")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+func TestMkdirDashOperandIsPathname(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "--", "-")
+	if code != 0 || errb != "" {
+		t.Fatalf("mkdir -- -: code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "-")); err != nil || !fi.IsDir() {
+		t.Fatalf("dash pathname not created: %v", err)
+	}
+}
+
+func TestMkdirEmptyOperandFailsAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "", "ok")
+	if code != 1 || !strings.Contains(errb, "cannot create directory ''") {
+		t.Fatalf("empty operand: code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "ok")); err != nil || !fi.IsDir() {
+		t.Fatalf("later operand not created after empty pathname: %v", err)
+	}
+}
+
+func TestMkdirVirtualUmaskDefaultAndParents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Umask: 0o027, UmaskSet: true}
+	_, errb, code := runToolWithContext(t, rc, "plain")
+	if code != 0 {
+		t.Fatalf("mkdir with virtual umask: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o750 {
+		t.Fatalf("plain mode=%o, want 750", got)
+	}
+
+	_, errb, code = runToolWithContext(t, rc, "-p", filepath.Join("a", "b"))
+	if code != 0 {
+		t.Fatalf("mkdir -p with virtual umask: code=%d err=%q", code, errb)
+	}
+	afi, err := os.Stat(filepath.Join(dir, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := afi.Mode().Perm(); got != 0o750 {
+		t.Fatalf("intermediate mode=%o, want 750", got)
+	}
+	bfi, err := os.Stat(filepath.Join(dir, "a", "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bfi.Mode().Perm(); got != 0o750 {
+		t.Fatalf("final mode=%o, want 750", got)
+	}
+}
+
+func TestMkdirVirtualUmaskSymbolicImplicitWho(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Umask: 0o077, UmaskSet: true}
+	_, errb, code := runToolWithContext(t, rc, "-m", "=rwx", "d")
+	if code != 0 {
+		t.Fatalf("mkdir -m =rwx: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o700 {
+		t.Fatalf("mode=%o, want 700", got)
+	}
+}
+
+func TestMkdirVirtualUmaskRestrictsInitialMkdirModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	var got = make(map[string]os.FileMode)
+	m := &maker{
+		rc: &tool.RunContext{
+			Ctx: context.Background(), Dir: dir, Umask: 0o077, UmaskSet: true,
+			Stdio: tool.Stdio{Err: &bytes.Buffer{}},
+		},
+		parents: true,
+		deps:    defaultMkdirDeps,
+	}
+	m.deps.mkdir = func(path string, mode os.FileMode) error {
+		got[filepath.Base(path)] = mode
+		return os.Mkdir(path, mode)
+	}
+	m.make(filepath.Join("a", "b"))
+	if m.failed {
+		t.Fatal("mkdir -p failed")
+	}
+	for _, name := range []string{"a", "b"} {
+		if mode, ok := got[name]; !ok || mode.Perm() != 0o700 {
+			t.Errorf("initial mkdir mode for %s = %o (present=%v), want 700", name, mode.Perm(), ok)
+		}
+	}
+}
+
+func TestMkdirVirtualUmaskCorrectionPreservesInheritedSpecialBits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	var corrected os.FileMode
+	m := &maker{
+		rc: &tool.RunContext{
+			Ctx: context.Background(), Dir: dir, Umask: 0o022, UmaskSet: true,
+			Stdio: tool.Stdio{Err: &bytes.Buffer{}},
+		},
+		deps: defaultMkdirDeps,
+	}
+	m.deps.mkdir = func(path string, mode os.FileMode) error {
+		// Model a host umask stricter than the virtual one.
+		return os.Mkdir(path, 0o700)
+	}
+	m.deps.stat = func(path string) (os.FileInfo, error) {
+		fi, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		return mkdirModeFileInfo{FileInfo: fi, mode: os.ModeDir | os.ModeSetgid | os.ModeSticky | 0o700}, nil
+	}
+	m.deps.chmod = func(_ string, mode os.FileMode) error {
+		corrected = mode
+		return nil
+	}
+	m.make("d")
+	if m.failed {
+		t.Fatal("mkdir failed")
+	}
+	want := os.FileMode(0o755) | os.ModeSetgid | os.ModeSticky
+	const controlled = os.ModePerm | os.ModeSetgid | os.ModeSticky
+	if corrected&controlled != want {
+		t.Fatalf("corrective mode=%v, want permissions 0755 with inherited setgid and sticky", corrected)
+	}
+}
+
+func TestMkdirInjectedFilesystemErrors(t *testing.T) {
+	dir := t.TempDir()
+	var errb bytes.Buffer
+	m := &maker{
+		rc: &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{Err: &errb},
+		},
+		deps: defaultMkdirDeps,
+	}
+	m.deps.mkdir = func(path string, mode os.FileMode) error {
+		if filepath.Base(path) == "bad" {
+			return &os.PathError{Op: "mkdir", Path: path, Err: fs.ErrPermission}
+		}
+		return os.Mkdir(path, mode)
+	}
+	m.make("bad")
+	m.make("ok")
+	if !m.failed || !strings.Contains(errb.String(), "cannot create directory 'bad'") {
+		t.Fatalf("missing injected mkdir failure: failed=%v err=%q", m.failed, errb.String())
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "ok")); err != nil || !fi.IsDir() {
+		t.Fatalf("later operand not created after injected failure: %v", err)
+	}
+}
+
+func TestMkdirInjectedChmodErrorLeavesCreatedDirectoryAndFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	var errb bytes.Buffer
+	m := &maker{
+		rc: &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{Err: &errb},
+		},
+		useMode: true,
+		mode:    0o700,
+		deps:    defaultMkdirDeps,
+	}
+	m.deps.chmod = func(path string, mode os.FileMode) error {
+		return &os.PathError{Op: "chmod", Path: path, Err: fs.ErrPermission}
+	}
+	// Force the post-create correction path regardless of the host umask.
+	m.deps.mkdir = func(path string, mode os.FileMode) error {
+		return os.Mkdir(path, 0)
+	}
+	m.make("d")
+	if !m.failed || !strings.Contains(errb.String(), "cannot set permissions of 'd'") {
+		t.Fatalf("missing injected chmod failure: failed=%v err=%q", m.failed, errb.String())
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "d")); err != nil || !fi.IsDir() {
+		t.Fatalf("directory should remain after chmod failure: %v", err)
 	}
 }
 

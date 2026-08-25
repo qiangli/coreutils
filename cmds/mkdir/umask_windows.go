@@ -2,4 +2,4 @@
 
 package mkdircmd
 
-func umask() uint32 { return 0 }
+func processUmask() uint32 { return 0 }

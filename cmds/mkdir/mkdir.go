@@ -42,6 +42,21 @@ type maker struct {
 	mode     os.FileMode
 	symbolic *mkdirMode
 	failed   bool
+	deps     mkdirDeps
+	mask     uint32
+	maskSet  bool
+}
+
+type mkdirDeps struct {
+	stat  func(string) (os.FileInfo, error)
+	mkdir func(string, os.FileMode) error
+	chmod func(string, os.FileMode) error
+}
+
+var defaultMkdirDeps = mkdirDeps{
+	stat:  os.Stat,
+	mkdir: os.Mkdir,
+	chmod: os.Chmod,
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -63,7 +78,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
 
-	m := &maker{rc: rc, parents: *parents, verbose: *verbose}
+	m := &maker{rc: rc, parents: *parents, verbose: *verbose, deps: defaultMkdirDeps}
 	if fs.Changed("mode") {
 		if runtime.GOOS == "windows" {
 			return tool.NotSupported(rc, cmd, "-m/--mode on windows (no POSIX mode bits; mapping to read-only would change the documented meaning)")
@@ -91,7 +106,21 @@ func run(rc *tool.RunContext, args []string) int {
 // documented behavior. Returns (mode, symbolic, -1) on success, or a
 // zero mode and an exit code on failure.
 func parseMode(rc *tool.RunContext, s string) (os.FileMode, *mkdirMode, int) {
-	if n, err := strconv.ParseUint(s, 8, 32); err == nil && n <= 0o7777 {
+	if isOctalMode(s) {
+		numeric := s
+		operatorPlus := s[0] == '+'
+		if operatorPlus {
+			numeric = s[1:]
+		}
+		n, err := strconv.ParseUint(numeric, 8, 32)
+		if err != nil || n > 0o7777 {
+			return 0, nil, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
+		}
+		if operatorPlus {
+			// GNU operator-numeric +MODE adds MODE to mkdir's a=rwx
+			// point of departure rather than replacing it.
+			n |= 0o777
+		}
 		mode := os.FileMode(n & 0o777)
 		if n&0o1000 != 0 {
 			mode |= os.ModeSticky
@@ -112,6 +141,27 @@ func parseMode(rc *tool.RunContext, s string) (os.FileMode, *mkdirMode, int) {
 		return 0, nil, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
 	}
 	return 0, m, -1
+}
+
+func isOctalMode(s string) bool {
+	if s == "" {
+		return false
+	}
+	start := 0
+	// GNU accepts a leading plus on a numeric mkdir mode. Retain that
+	// documented extension outside the Issue 7 evidence surface.
+	if s[0] == '+' {
+		start = 1
+		if len(s) == 1 {
+			return false
+		}
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '7' {
+			return false
+		}
+	}
+	return true
 }
 
 func allDigits(s string) bool {
@@ -137,16 +187,17 @@ func (m *maker) make(op string) {
 		op = trimTrailingSep(op)
 		ok, createdFinal := m.makeAll(op, true)
 		if ok && createdFinal {
-			m.applyMode(op)
+			m.applyFinalMode(op, createdFinal)
 		}
 		return
 	}
-	if err := os.Mkdir(m.rc.Path(op), 0o777); err != nil {
+	createMode, _ := m.finalMode()
+	if err := m.deps.mkdir(m.rc.Path(op), createMode); err != nil {
 		m.errf("cannot create directory '%s': %s", op, reason(err))
 		return
 	}
 	m.verbosef("mkdir: created directory '%s'", op)
-	m.applyMode(op)
+	m.applyFinalMode(op, true)
 }
 
 // trimTrailingSep drops trailing path separators (and a trailing "/."
@@ -173,7 +224,7 @@ func trimTrailingSep(op string) string {
 // actually created (GNU: -m affects the final directory only).
 func (m *maker) makeAll(op string, final bool) (ok, createdSelf bool) {
 	full := m.rc.Path(op)
-	if fi, err := os.Stat(full); err == nil {
+	if fi, err := m.deps.stat(full); err == nil {
 		if fi.IsDir() {
 			return true, false
 		}
@@ -186,12 +237,18 @@ func (m *maker) makeAll(op string, final bool) (ok, createdSelf bool) {
 			return false, false
 		}
 	}
-	if err := os.Mkdir(full, 0o777); err != nil {
+	createMode := os.FileMode(0o777)
+	if final {
+		createMode, _ = m.finalMode()
+	} else if runtime.GOOS != "windows" {
+		createMode = m.parentMode()
+	}
+	if err := m.deps.mkdir(full, createMode); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			// A path may appear between the Stat and Mkdir calls. Treat the
 			// race as success only when it is now a directory; a regular file
 			// or dangling symlink still makes mkdir -p fail.
-			if fi, statErr := os.Stat(full); statErr == nil && fi.IsDir() {
+			if fi, statErr := m.deps.stat(full); statErr == nil && fi.IsDir() {
 				return true, false
 			}
 		}
@@ -199,11 +256,20 @@ func (m *maker) makeAll(op string, final bool) (ok, createdSelf bool) {
 		return false, false
 	}
 	if !final {
+		if runtime.GOOS == "windows" {
+			// Windows directory access is ACL-owned. os.Chmod only toggles a
+			// read-only attribute, so applying a POSIX virtual mode here would
+			// silently give the mask a different meaning.
+			m.verbosef("mkdir: created directory '%s'", op)
+			return true, true
+		}
 		// POSIX requires -p ancestors to retain owner write and search so
 		// creation can descend even when the process umask masks those bits.
-		mode := os.FileMode((0o777 &^ umask()) | 0o300)
-		if err := os.Chmod(full, mode); err != nil {
-			m.errf("cannot set permissions of '%s': %s", op, reason(err))
+		// The same mode was supplied to mkdir above, so it is never exposed
+		// more broadly than requested. A corrective chmod restores only bits
+		// removed by a stricter host-process umask and preserves any special
+		// bits the filesystem inherited from the parent directory.
+		if !m.correctCreatedMode(op, m.parentMode(), true) {
 			return false, false
 		}
 	}
@@ -211,22 +277,81 @@ func (m *maker) makeAll(op string, final bool) (ok, createdSelf bool) {
 	return true, true
 }
 
-// applyMode sets -m MODE on the (just created) final directory, as
-// with chmod: umask does not apply.
-func (m *maker) applyMode(op string) {
-	if !m.useMode {
+// applyFinalMode sets the requested final directory mode. With -m MODE this is
+// chmod-like and umask-independent. Without -m, embedded invocations with a
+// virtual RunContext umask still need an explicit chmod because the process
+// umask is not the shell's umask.
+func (m *maker) applyFinalMode(op string, created bool) {
+	if !created {
 		return
+	}
+	mode, correct := m.finalMode()
+	if !correct {
+		return
+	}
+	m.correctCreatedMode(op, mode, !m.useMode)
+}
+
+// finalMode returns the mode to supply to mkdir and whether a post-create
+// check/correction is required. A virtual umask is a Unix permission concept;
+// on Windows the default creation path remains ACL-owned and -m is refused
+// before a maker is constructed.
+func (m *maker) finalMode() (os.FileMode, bool) {
+	if !m.useMode {
+		if !m.rc.UmaskSet || runtime.GOOS == "windows" {
+			return 0o777, false
+		}
+		return os.FileMode(0o777 &^ m.umask()), true
 	}
 	mode := m.mode
 	if m.symbolic != nil {
 		// Symbolic mkdir modes are applied to the default creation mode,
 		// not to the mode left after the kernel has applied the umask. This
 		// matters for implicit-who clauses such as +x.
-		mode = bitsToFileMode(m.symbolic.apply(0o777, umask()))
+		mode = bitsToFileMode(m.symbolic.apply(0o777, m.umask()))
 	}
-	if err := os.Chmod(m.rc.Path(op), mode); err != nil {
+	return mode, true
+}
+
+func (m *maker) parentMode() os.FileMode {
+	return os.FileMode((0o777 &^ m.umask()) | 0o300)
+}
+
+// correctCreatedMode restores permission bits a host process umask removed
+// from the already-restrictive mkdir mode. When no explicit -m controls this
+// directory, retain special bits inherited from its parent instead of clearing
+// them as a permission-only chmod would.
+func (m *maker) correctCreatedMode(op string, requested os.FileMode, preserveInherited bool) bool {
+	full := m.rc.Path(op)
+	fi, err := m.deps.stat(full)
+	if err != nil {
 		m.errf("cannot set permissions of '%s': %s", op, reason(err))
+		return false
 	}
+	target := requested
+	if preserveInherited {
+		target |= fi.Mode() & (os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	}
+	const controlled = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if fi.Mode()&controlled == target&controlled {
+		return true
+	}
+	if err := m.deps.chmod(full, target); err != nil {
+		m.errf("cannot set permissions of '%s': %s", op, reason(err))
+		return false
+	}
+	return true
+}
+
+func (m *maker) umask() uint32 {
+	if m.rc.UmaskSet {
+		return uint32(m.rc.Umask.Perm()) & 0o777
+	}
+	if !m.maskSet {
+		m.mask = processUmask()
+		m.maskSet = true
+	}
+	return m.mask
 }
 
 type mkdirOp struct {
