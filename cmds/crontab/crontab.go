@@ -315,9 +315,13 @@ func splitCronCommand(raw string) (command, stdin string) {
 	var translated strings.Builder
 	translated.Grow(len(raw))
 	for i := 0; i < len(raw); i++ {
-		if raw[i] == '\\' && i+1 < len(raw) {
+		// A backslash escapes only a following percent-sign. Before any other
+		// byte it is command data the shell must still receive, so it passes
+		// through unchanged (a stripped backslash would rewrite constructs
+		// such as printf 'a\tb').
+		if raw[i] == '\\' && i+1 < len(raw) && raw[i+1] == '%' {
 			i++
-			translated.WriteByte(raw[i])
+			translated.WriteByte('%')
 			continue
 		}
 		if raw[i] == '%' {
