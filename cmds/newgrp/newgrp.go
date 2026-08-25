@@ -154,6 +154,10 @@ func (e *errGroupChange) Error() string { return e.err.Error() }
 func (e *errGroupChange) Unwrap() error { return e.err }
 
 func run(rc *tool.RunContext, args []string) int {
+	// Embedders may reuse a RunContext. A normally exiting shell must not
+	// retain the signal reported by an earlier command.
+	rc.ExitSignal = 0
+
 	// NOT tool.AliasHelpVersion: it rewrites any short cluster containing an
 	// 'h' into --help, and while newgrp's only option is -l today, an operand
 	// is not worth risking. tool.Parse registers -h/-V itself.
@@ -243,8 +247,8 @@ func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (*cr
 	if errors.Is(err, errNoSuchGroup) {
 		// A numeric operand may name a gid directly. Names are tried FIRST: a
 		// group literally called "100" must resolve to itself, not to gid 100.
-		if _, convErr := strconv.Atoi(name); convErr == nil {
-			g, err = db.GroupByID(name)
+		if gid, ok := canonicalNumericGID(name); ok {
+			g, err = db.GroupByID(gid)
 		}
 	}
 	if errors.Is(err, errNoSuchGroup) {
@@ -285,6 +289,26 @@ func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (*cr
 		return nil, fmt.Errorf("cannot read current group credentials: %w", err)
 	}
 	return planGroupChange(current, g.GID), nil
+}
+
+// canonicalNumericGID recognizes the POSIX non-negative numeric group-ID
+// operand and returns its value in database form. In particular, a leading
+// zero does not change the ID, while signs are not part of a numeric string.
+// The uint32 bound matches the credential adapter's gid representation.
+func canonicalNumericGID(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	n, err := strconv.ParseUint(value, 10, 32)
+	if err != nil {
+		return "", false
+	}
+	return strconv.FormatUint(n, 10), true
 }
 
 func planGroupChange(current credentialState, target string) *credentialPlan {

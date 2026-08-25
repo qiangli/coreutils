@@ -374,6 +374,35 @@ func TestNumericOperandPrefersTheGroupName(t *testing.T) {
 	}
 }
 
+func TestNumericOperandUsesTheNonNegativeGIDValue(t *testing.T) {
+	// After the required name lookup misses, leading zeroes do not change a
+	// numeric GID's value. The old string-exact lookup incorrectly searched for
+	// a database ID literally spelled "00050".
+	h := install(t)
+	if _, errOut, code := runCmd(t, testEnv, "00050"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if plannedGID(h.spawn.calls[0]) != "50" {
+		t.Errorf("gid = %q, want canonical numeric gid 50", plannedGID(h.spawn.calls[0]))
+	}
+
+	// A sign is not part of POSIX's non-negative numeric string. It may still
+	// be a group name (the name lookup always comes first), but it is not a GID
+	// spelling when no such name exists.
+	h2 := install(t)
+	h2.spawn.status = 11
+	_, errOut, code := runCmd(t, testEnv, "+50")
+	if !strings.Contains(errOut, "no such group") {
+		t.Errorf("stderr = %q, want name lookup failure", errOut)
+	}
+	if len(h2.spawn.calls) != 1 || h2.spawn.calls[0].Credential != nil {
+		t.Errorf("spawns = %+v, want unchanged shell after invalid group", h2.spawn.calls)
+	}
+	if code != 11 {
+		t.Errorf("exit = %d, want unchanged shell status 11", code)
+	}
+}
+
 // --- the POSIX exec-anyway rule -----------------------------------------------
 
 // "If newgrp succeeds in creating a new shell execution environment, WHETHER OR
@@ -479,6 +508,22 @@ func TestSuccessfulGroupChangePropagatesShellStatusThroughSpawnSeam(t *testing.T
 	}
 	if code != 42 {
 		t.Fatalf("exit=%d want shell status 42", code)
+	}
+}
+
+func TestNormalRunClearsAReusedContextSignal(t *testing.T) {
+	install(t)
+	rc := &tool.RunContext{
+		Dir:        "/work",
+		Env:        testEnv,
+		Stdio:      tool.Stdio{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}},
+		ExitSignal: 15,
+	}
+	if code := run(rc, nil); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if rc.ExitSignal != 0 {
+		t.Fatalf("reused context retained ExitSignal = %d", rc.ExitSignal)
 	}
 }
 

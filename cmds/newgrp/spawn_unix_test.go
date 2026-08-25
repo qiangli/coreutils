@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +17,28 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+const umaskProbeEnv = "COREUTILS_NEWGRP_UMASK_PROBE"
+const shellIOProbeEnv = "COREUTILS_NEWGRP_SHELL_IO_PROBE"
+
+func init() {
+	// The internal helper is handled by production init before this test init.
+	// After it overlays itself with the requested test-binary shell, this probe
+	// reports the shell's initial mask without involving a host utility.
+	if os.Getenv(umaskProbeEnv) == "1" {
+		mask := syscall.Umask(0)
+		syscall.Umask(mask)
+		fmt.Fprintf(os.Stdout, "%03o\n", mask)
+		os.Exit(0)
+	}
+	if os.Getenv(shellIOProbeEnv) == "1" {
+		input, _ := io.ReadAll(os.Stdin)
+		cwd, _ := os.Getwd()
+		fmt.Fprintf(os.Stdout, "argv0=%s\ncwd=%s\ninput=%s\nenv=%s\n", os.Args[0], cwd, input, os.Getenv("KEEP"))
+		fmt.Fprintln(os.Stderr, "shell-stderr")
+		os.Exit(0)
+	}
+}
 
 type stubShellProcess struct{ waitErr error }
 
@@ -215,6 +239,140 @@ func TestDefaultSpawnShellPropagatesExitStatus(t *testing.T) {
 	}
 	if status != 23 {
 		t.Errorf("status = %d, want 23", status)
+	}
+}
+
+func TestDefaultSpawnShellPreservesArgumentsDirectoryEnvironmentAndIO(t *testing.T) {
+	path, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Env: []string{shellIOProbeEnv + "=1", "KEEP=exported"},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("payload"),
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	status, err := defaultSpawnShell(rc, shellSpec{Path: path, Argv0: "chosen-argv0", Dir: dir})
+	if err != nil || status != 0 {
+		t.Fatalf("status = %d, error = %v, stderr = %q", status, err, errb.String())
+	}
+	physicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("argv0=chosen-argv0\ncwd=%s\ninput=payload\nenv=exported\n", physicalDir)
+	if out.String() != want {
+		t.Fatalf("shell stdout = %q, want %q", out.String(), want)
+	}
+	if errb.String() != "shell-stderr\n" {
+		t.Fatalf("shell stderr = %q", errb.String())
+	}
+}
+
+func TestDefaultSpawnShellAppliesRunContextVirtualUmask(t *testing.T) {
+	parentMask := syscall.Umask(0)
+	syscall.Umask(parentMask)
+	want := 0o077
+	if parentMask == want {
+		want = 0o022
+	}
+
+	path, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Env:      []string{umaskProbeEnv + "=1"},
+		UmaskSet: true,
+		Umask:    os.FileMode(want),
+		Stdio:    tool.Stdio{Out: &out, Err: &errb},
+	}
+	status, err := defaultSpawnShell(rc, shellSpec{Path: path, Argv0: "umask-probe"})
+	if err != nil || status != 0 {
+		t.Fatalf("status = %d, error = %v, stderr = %q", status, err, errb.String())
+	}
+	if got, expected := strings.TrimSpace(out.String()), fmt.Sprintf("%03o", want); got != expected {
+		t.Fatalf("child umask = %q, want virtual mask %q (parent mask %03o)", got, expected, parentMask)
+	}
+	after := syscall.Umask(parentMask)
+	syscall.Umask(after)
+	if after != parentMask {
+		t.Fatalf("embedding process umask changed: before %03o after %03o", parentMask, after)
+	}
+}
+
+func TestRunUmaskHelperRequiresCompleteControlAndPreservesExecInputs(t *testing.T) {
+	oldExec := umaskHelperExec
+	oldMask := syscall.Umask(0)
+	syscall.Umask(oldMask)
+	t.Cleanup(func() {
+		umaskHelperExec = oldExec
+		syscall.Umask(oldMask)
+	})
+
+	var gotPath string
+	var gotArgv, gotEnv []string
+	umaskHelperExec = func(path string, argv, envv []string) error {
+		gotPath = path
+		gotArgv = slices.Clone(argv)
+		gotEnv = slices.Clone(envv)
+		return nil // a successful real exec does not return
+	}
+
+	env := []string{"KEEP=exact", "DUP=first", "DUP=last"}
+	args := []string{"077", "/bin/chosen-shell", "-chosen-shell"}
+	if code := runUmaskHelper(args, env, &bytes.Buffer{}, strings.NewReader(umaskHelperToken[:len(umaskHelperToken)-1])); code == 0 {
+		t.Fatal("an incomplete control token was accepted")
+	}
+	if gotPath != "" {
+		t.Fatalf("exec occurred before a complete valid token: %q", gotPath)
+	}
+
+	code := runUmaskHelper(args, env, &bytes.Buffer{}, strings.NewReader(umaskHelperToken))
+	syscall.Umask(oldMask)
+	if code != 0 {
+		t.Fatalf("valid helper invocation returned %d", code)
+	}
+	if gotPath != "/bin/chosen-shell" || !slices.Equal(gotArgv, []string{"-chosen-shell"}) {
+		t.Fatalf("exec path = %q argv = %q", gotPath, gotArgv)
+	}
+	if !slices.Equal(gotEnv, env) {
+		t.Fatalf("exec environment = %q, want exact %q", gotEnv, env)
+	}
+}
+
+func TestRunUmaskHelperRejectsInvalidControlOrMaskWithoutExec(t *testing.T) {
+	oldExec := umaskHelperExec
+	t.Cleanup(func() { umaskHelperExec = oldExec })
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		control string
+	}{
+		{name: "wrong control", args: []string{"077", "/bin/sh", "sh"}, control: strings.Repeat("x", len(umaskHelperToken))},
+		{name: "non-octal mask", args: []string{"xyz", "/bin/sh", "sh"}, control: umaskHelperToken},
+		{name: "out-of-range mask", args: []string{"1000", "/bin/sh", "sh"}, control: umaskHelperToken},
+		{name: "missing argument", args: []string{"077", "/bin/sh"}, control: umaskHelperToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			execCalled := false
+			umaskHelperExec = func(string, []string, []string) error {
+				execCalled = true
+				return nil
+			}
+			if code := runUmaskHelper(tc.args, nil, &bytes.Buffer{}, strings.NewReader(tc.control)); code == 0 {
+				t.Fatal("invalid helper invocation returned success")
+			}
+			if execCalled {
+				t.Fatal("invalid helper invocation reached exec")
+			}
+		})
 	}
 }
 

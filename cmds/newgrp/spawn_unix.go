@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,6 +17,24 @@ import (
 )
 
 const defaultShell = "/bin/sh"
+
+const (
+	umaskHelperArg   = "--coreutils-internal-newgrp-umask-helper"
+	umaskHelperToken = "coreutils-newgrp-umask-v1"
+)
+
+var (
+	umaskHelperExecutable = os.Executable
+	umaskHelperExec       = syscall.Exec
+)
+
+func init() {
+	if len(os.Args) < 5 || os.Args[1] != umaskHelperArg {
+		return
+	}
+	control := os.NewFile(3, "newgrp-umask-control")
+	os.Exit(runUmaskHelper(os.Args[2:5], os.Environ(), os.Stderr, control))
+}
 
 // defaultSpawnShell starts the replacement shell, optionally under a new group
 // id, and returns its exit status.
@@ -36,8 +55,32 @@ type shellProcess interface {
 type shellStarter func(context.Context, *tool.RunContext, shellSpec, *syscall.Credential) (shellProcess, error)
 
 func startExecShell(ctx context.Context, rc *tool.RunContext, spec shellSpec, credential *syscall.Credential) (shellProcess, error) {
-	c := exec.CommandContext(ctx, spec.Path)
-	c.Args = []string{spec.Argv0}
+	path := spec.Path
+	args := []string{spec.Argv0}
+	var controlRead, controlWrite *os.File
+	if rc.UmaskSet {
+		executable, err := umaskHelperExecutable()
+		if err != nil {
+			return nil, fmt.Errorf("cannot locate umask helper: %w", err)
+		}
+		controlRead, controlWrite, err = os.Pipe()
+		if err != nil {
+			return nil, fmt.Errorf("cannot create umask helper control: %w", err)
+		}
+		defer controlRead.Close()
+		defer controlWrite.Close()
+		path = executable
+		args = []string{
+			executable,
+			umaskHelperArg,
+			strconv.FormatUint(uint64(rc.Umask.Perm()), 8),
+			spec.Path,
+			spec.Argv0,
+		}
+	}
+
+	c := exec.CommandContext(ctx, path)
+	c.Args = args
 	c.Dir = spec.Dir
 	if spec.Env != nil {
 		c.Env = spec.Env
@@ -50,10 +93,53 @@ func startExecShell(ctx context.Context, rc *tool.RunContext, spec shellSpec, cr
 	if credential != nil {
 		c.SysProcAttr = &syscall.SysProcAttr{Credential: credential}
 	}
+	if controlRead != nil {
+		c.ExtraFiles = []*os.File{controlRead}
+	}
 	if err := c.Start(); err != nil {
 		return nil, err
 	}
+	if controlWrite != nil {
+		if n, err := controlWrite.Write([]byte(umaskHelperToken)); err != nil || n != len(umaskHelperToken) {
+			if err == nil {
+				err = io.ErrShortWrite
+			}
+			_ = c.Process.Kill()
+			_ = c.Wait()
+			return nil, fmt.Errorf("cannot release umask helper: %w", err)
+		}
+	}
 	return c, nil
+}
+
+// runUmaskHelper applies an embedding shell's virtual umask in the child and
+// immediately overlays that same PID with the required shell. The inherited
+// one-shot descriptor validates internal use without reserving or changing
+// any user environment variable.
+func runUmaskHelper(args, environ []string, stderr io.Writer, control io.Reader) int {
+	if len(args) != 3 {
+		fmt.Fprintln(stderr, "newgrp: invalid internal umask helper invocation")
+		return 1
+	}
+	token := make([]byte, len(umaskHelperToken))
+	if _, err := io.ReadFull(control, token); err != nil || string(token) != umaskHelperToken {
+		fmt.Fprintln(stderr, "newgrp: invalid internal umask helper control")
+		return 1
+	}
+	if closer, ok := control.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	mask, err := strconv.ParseUint(args[0], 8, 32)
+	if err != nil || mask > 0o777 {
+		fmt.Fprintln(stderr, "newgrp: invalid internal umask helper mask")
+		return 1
+	}
+	syscall.Umask(int(mask))
+	if err := umaskHelperExec(args[1], []string{args[2]}, environ); err != nil {
+		fmt.Fprintf(stderr, "newgrp: cannot run %s: %v\n", args[1], err)
+		return 1
+	}
+	return 0
 }
 
 func spawnShellWithStarter(rc *tool.RunContext, spec shellSpec, start shellStarter) (int, error) {
