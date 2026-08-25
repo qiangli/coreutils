@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -713,8 +714,8 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 				note(1)
 				return true
 			}
-			response := strings.TrimSpace(line)
-			if !strings.HasPrefix(strings.ToLower(response), "y") {
+			response := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if !affirmativeReply(response, rc.Env) {
 				return false
 			}
 		} else if o.trace {
@@ -814,4 +815,19 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	}
 	wg.Wait()
 	return worst
+}
+
+// affirmativeReply matches the yesexpr carried by the repository's bounded
+// LC_MESSAGES provider.  The match is anchored at byte zero, as required by
+// the POSIX C/POSIX expression and the provisioned German expression; leading
+// white space therefore cannot turn a negative response into an affirmative.
+func affirmativeReply(reply string, env []string) bool {
+	if reply == "" {
+		return false
+	}
+	messages := strings.ToLower(locale.Resolve(env, locale.Messages))
+	if strings.HasPrefix(messages, "de_de") {
+		return reply[0] == 'j' || reply[0] == 'J' || reply[0] == 'y' || reply[0] == 'Y'
+	}
+	return reply[0] == 'y' || reply[0] == 'Y'
 }

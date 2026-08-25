@@ -157,6 +157,47 @@ func TestXargsInteractiveReadsControllingTerminal(t *testing.T) {
 	}
 }
 
+func TestXargsInteractiveUsesLCMessagesYesexpr(t *testing.T) {
+	original := ttyOpener
+	t.Cleanup(func() { ttyOpener = original })
+	ttyOpener = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("ja\nnein\nY\n")), nil
+	}
+
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   append(os.Environ(), "LC_ALL=", "LANG=C", "LC_MESSAGES=de_DE.UTF-8"),
+		Stdio: tool.Stdio{In: strings.NewReader("a b c\n"), Out: &out, Err: &errOut},
+	}
+	code := cmd.Run(rc, []string{"-p", "-n1", "echo"})
+	if code != 0 || out.String() != "a\nc\n" {
+		t.Fatalf("-p German replies: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestXargsInteractiveYesexprPrecedenceAndAnchoring(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply string
+		env   []string
+		want  bool
+	}{
+		{name: "POSIX yes", reply: "yes", env: []string{"LC_ALL=C"}, want: true},
+		{name: "POSIX leading blank", reply: " y", env: []string{"LC_ALL=C"}, want: false},
+		{name: "German category", reply: "ja", env: []string{"LANG=C", "LC_MESSAGES=de_DE.UTF-8"}, want: true},
+		{name: "LC_ALL overrides category", reply: "ja", env: []string{"LC_MESSAGES=de_DE.UTF-8", "LC_ALL=C"}, want: false},
+		{name: "empty LC_ALL falls through", reply: "J", env: []string{"LC_MESSAGES=de_DE.UTF-8", "LC_ALL="}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := affirmativeReply(tt.reply, tt.env); got != tt.want {
+				t.Errorf("affirmativeReply(%q, %v) = %v, want %v", tt.reply, tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestXargsLogicalLines(t *testing.T) {
 	out, _, code := runXargs(t, "a b\nc\nd e\n", "-L", "2", "echo")
 	if code != 0 || out != "a b c\nd e\n" {
