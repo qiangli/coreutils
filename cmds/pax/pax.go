@@ -54,6 +54,16 @@ type options struct {
 	t, X       bool
 	follow     followMode // -H/-L; the last one given wins
 	renamer    *interactiveRenamer
+	// invalid=rename copy-mode answers are collected before the archive pipe
+	// starts, so a terminal failure cannot leave a partially copied tree.
+	invalidRenamePlans map[string][]invalidCopyRename
+	invalidRenameUsed  map[string]int
+}
+
+type invalidCopyRename struct {
+	name, link       string
+	nameSet, linkSet bool
+	skip             bool
 }
 
 // followFlag is the pflag value behind -H and -L. Each occurrence overwrites
@@ -403,6 +413,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	}
 	tr := newOptionTarReader(tarData, o.paxOptions, true)
 	var members []*tar.Header
+	var invalidMembers []bool
 	for {
 		h, nextErr := tr.Next()
 		if nextErr == io.EOF {
@@ -412,8 +423,10 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 			fmt.Fprintf(rc.Err, "pax: %v\n", nextErr)
 			return 1
 		}
+		invalid := translatePAXHeaderToLocal(rc, h, o.paxOptions.invalid, true)
 		copyHeader := *h
 		members = append(members, &copyHeader)
+		invalidMembers = append(invalidMembers, invalid.name || invalid.link || invalid.other)
 	}
 
 	sel := newSelector(o, patterns)
@@ -427,14 +440,13 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	sel.prime(catalog)
 
 	status := 0
-	for _, h := range members {
+	for index, h := range members {
 		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
 		if !sel.keep(h.Name, isDir) {
 			continue
 		}
-		if (invalidPAXDestination(rc, h.Name) || invalidPAXDestination(rc, h.Linkname) && h.Linkname != "" || invalidPAXListHeader(rc, h)) &&
-			o.paxOptions.invalid != "UTF-8" {
-			fmt.Fprintf(rc.Err, "pax: %s: invalid value bypassed\n", h.Name)
+		if invalidMembers[index] {
+			fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated\n", h.Name)
 			status = 1
 		}
 		name := applySubstitutions(o.subst, h.Name, rc.Err)

@@ -36,29 +36,69 @@ type paxOptions struct {
 	needsPAX               bool
 }
 
-func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions) error {
+func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions) (bool, error) {
 	if value, ok := options.global["size"]; ok && value != strconv.FormatInt(h.Size, 10) {
-		return fmt.Errorf("-o size=%s conflicts with member %q size %d", value, h.Name, h.Size)
+		return false, fmt.Errorf("-o size=%s conflicts with member %q size %d", value, h.Name, h.Size)
 	}
 	if value, ok := options.local["size"]; ok && value != "" && value != strconv.FormatInt(h.Size, 10) {
-		return fmt.Errorf("-o size:=%s conflicts with member %q size %d", value, h.Name, h.Size)
+		return false, fmt.Errorf("-o size:=%s conflicts with member %q size %d", value, h.Name, h.Size)
 	}
 	if h.PAXRecords == nil {
 		h.PAXRecords = map[string]string{}
 	}
-	for key, value := range options.local {
+	localValues, binaryValue, err := localPAXValuesToArchive(rc, options.local, options.invalid)
+	if err != nil {
+		return false, err
+	}
+	for key, value := range localValues {
 		h.PAXRecords[key] = value
 	}
-	if err := applyPAXValues(h, options.local); err != nil {
-		return err
+	if err := applyPAXValues(h, localValues); err != nil {
+		return false, err
 	}
-	if options.invalid == "binary" && paxHeaderNeedsBinary(rc, h) {
+	headerBinary := paxHeaderNeedsBinary(rc, h)
+	if options.invalid == "binary" && (binaryValue || headerBinary) {
 		h.PAXRecords["hdrcharset"] = "BINARY"
 	}
 	for key := range h.PAXRecords {
 		if deletedPAXKeyword(options, key) {
 			delete(h.PAXRecords, key)
 		}
+	}
+	return binaryValue || headerBinary, nil
+}
+
+func localPAXValuesToArchive(rc *tool.RunContext, values map[string]string, action string) (map[string]string, bool, error) {
+	out := make(map[string]string, len(values))
+	binary := false
+	for key, value := range values {
+		translated, err := localTextToArchive(rc, value)
+		if err != nil {
+			if action != "binary" {
+				return nil, false, fmt.Errorf("-o %s value cannot be translated to UTF-8", key)
+			}
+			translated = value
+			binary = true
+		}
+		out[key] = translated
+	}
+	return out, binary, nil
+}
+
+// translatePAXIdentityToArchive converts the locally sourced textual identity
+// fields populated by tar.FileInfoHeader. Name and Linkname are converted by
+// addPath after substitution and interactive rename, so converting them here
+// would corrupt single-byte locale data a second time.
+func translatePAXIdentityToArchive(rc *tool.RunContext, h *tar.Header, action string) error {
+	for label, value := range map[string]*string{"uname": &h.Uname, "gname": &h.Gname} {
+		translated, err := localTextToArchive(rc, *value)
+		if err != nil {
+			if action == "binary" {
+				continue
+			}
+			return fmt.Errorf("%s cannot be translated to UTF-8", label)
+		}
+		*value = translated
 	}
 	return nil
 }
@@ -89,43 +129,119 @@ func invalidPAXDestinationName(name string) bool {
 	return false
 }
 
-func invalidPAXText(rc *tool.RunContext, value string) bool {
-	if !utf8.ValidString(value) {
+func invalidPAXLocalDestinationName(name string) bool {
+	if name == "" || strings.IndexByte(name, 0) >= 0 || len(name) > 4096 {
 		return true
 	}
-	ctype := locale.Resolve(rc.Env, locale.CType)
-	base, codeset := ctype, ""
-	if at := strings.IndexByte(base, '@'); at >= 0 {
-		base = base[:at]
-	}
-	if at := strings.IndexByte(base, '.'); at >= 0 {
-		base, codeset = base[:at], base[at+1:]
-	}
-	codeset = strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset))
-	if codeset == "UTF8" {
-		return false
-	}
-	for _, r := range value {
-		if r < utf8.RuneSelf {
-			continue
+	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
+		if len(component) > 255 {
+			return true
 		}
-		switch codeset {
-		case "ISO88591":
-			if r <= 0xff {
-				continue
-			}
-		case "ISO885915":
-			if iso885915Rune(r) {
-				continue
-			}
-		case "":
-			// The only carried locales without a codeset are C and POSIX.
-			// Unknown names deliberately take the same fail-closed ASCII path.
-			_ = base
-		}
-		return true
 	}
 	return false
+}
+
+func invalidPAXText(rc *tool.RunContext, value string) bool {
+	_, err := archiveTextToLocal(rc, value, false)
+	return err != nil
+}
+
+type paxTextEncoding int
+
+const (
+	paxASCII paxTextEncoding = iota
+	paxUTF8
+	paxLatin1
+	paxLatin15
+	paxUnknown
+)
+
+func paxInvocationEncoding(rc *tool.RunContext) paxTextEncoding {
+	name := locale.Resolve(rc.Env, locale.CType)
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ := strings.Cut(name, ".")
+	codeset = strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset))
+	switch codeset {
+	case "UTF8":
+		return paxUTF8
+	case "ISO88591":
+		return paxLatin1
+	case "ISO885915":
+		return paxLatin15
+	case "":
+		if base == "C" || base == "POSIX" {
+			return paxASCII
+		}
+	}
+	return paxUnknown
+}
+
+// archiveTextToLocal translates the pax UTF-8 interchange encoding into the
+// invocation's carried LC_CTYPE codeset. lossy is used only by invalid=write.
+func archiveTextToLocal(rc *tool.RunContext, value string, lossy bool) (string, error) {
+	if !utf8.ValidString(value) {
+		if !lossy {
+			return "", fmt.Errorf("archive value is not UTF-8")
+		}
+		value = strings.ToValidUTF8(value, "?")
+	}
+	encoding := paxInvocationEncoding(rc)
+	if encoding == paxUTF8 {
+		return value, nil
+	}
+	var out strings.Builder
+	for _, r := range value {
+		var b byte
+		ok := true
+		switch encoding {
+		case paxASCII, paxUnknown:
+			ok = r < utf8.RuneSelf
+			b = byte(r)
+		case paxLatin1:
+			ok = r <= 0xff
+			b = byte(r)
+		case paxLatin15:
+			b, ok = encodeISO885915(r)
+		}
+		if !ok {
+			if !lossy {
+				return "", fmt.Errorf("value cannot be represented in selected LC_CTYPE")
+			}
+			b = '?'
+		}
+		out.WriteByte(b)
+	}
+	return out.String(), nil
+}
+
+// localTextToArchive translates invocation-local bytes into pax UTF-8.
+func localTextToArchive(rc *tool.RunContext, value string) (string, error) {
+	encoding := paxInvocationEncoding(rc)
+	switch encoding {
+	case paxUTF8:
+		if !utf8.ValidString(value) {
+			return "", fmt.Errorf("local value is not UTF-8")
+		}
+		return value, nil
+	case paxASCII, paxUnknown:
+		for i := 0; i < len(value); i++ {
+			if value[i] >= utf8.RuneSelf {
+				return "", fmt.Errorf("local value is not representable in selected LC_CTYPE")
+			}
+		}
+		return value, nil
+	case paxLatin1, paxLatin15:
+		var out strings.Builder
+		for i := 0; i < len(value); i++ {
+			r := rune(value[i])
+			if encoding == paxLatin15 {
+				r = decodeISO885915(value[i])
+			}
+			out.WriteRune(r)
+		}
+		return out.String(), nil
+	}
+	return "", fmt.Errorf("unsupported LC_CTYPE")
 }
 
 func iso885915Rune(r rune) bool {
@@ -141,6 +257,117 @@ func iso885915Rune(r rune) bool {
 		return true
 	}
 	return false
+}
+
+func encodeISO885915(r rune) (byte, bool) {
+	switch r {
+	case 0x20ac:
+		return 0xa4, true
+	case 0x0160:
+		return 0xa6, true
+	case 0x0161:
+		return 0xa8, true
+	case 0x017d:
+		return 0xb4, true
+	case 0x017e:
+		return 0xb8, true
+	case 0x0152:
+		return 0xbc, true
+	case 0x0153:
+		return 0xbd, true
+	case 0x0178:
+		return 0xbe, true
+	}
+	if iso885915Rune(r) && r <= 0xff {
+		return byte(r), true
+	}
+	return 0, false
+}
+
+func decodeISO885915(b byte) rune {
+	switch b {
+	case 0xa4:
+		return 0x20ac
+	case 0xa6:
+		return 0x0160
+	case 0xa8:
+		return 0x0161
+	case 0xb4:
+		return 0x017d
+	case 0xb8:
+		return 0x017e
+	case 0xbc:
+		return 0x0152
+	case 0xbd:
+		return 0x0153
+	case 0xbe:
+		return 0x0178
+	}
+	return rune(b)
+}
+
+type paxInvalidHeaderFields struct {
+	name, link, other bool
+}
+
+func translatePAXHeaderToLocal(rc *tool.RunContext, h *tar.Header, action string, listMode bool) paxInvalidHeaderFields {
+	var invalid paxInvalidHeaderFields
+	hdrcharset := h.PAXRecords["hdrcharset"]
+	if hdrcharset == "BINARY" {
+		return invalid
+	}
+	unsupportedCharset := hdrcharset != "" && hdrcharset != "UTF-8" && hdrcharset != "ISO-IR 10646 2000 UTF-8"
+	// In read/copy mode binary explicitly suppresses translation, but a failed
+	// attempted translation is still diagnosed. In list mode it follows bypass
+	// and therefore uses translated values when translation succeeds.
+	suppressTranslation := action == "binary" && !listMode
+	lossy := action == "write" && !listMode
+	translate := func(value *string, field *bool) {
+		if unsupportedCharset {
+			*field = true
+			return
+		}
+		translated, err := archiveTextToLocal(rc, *value, false)
+		if err != nil {
+			*field = true
+			if lossy {
+				if replacement, replacementErr := archiveTextToLocal(rc, *value, true); replacementErr == nil {
+					*value = replacement
+				}
+			}
+			return
+		}
+		if !suppressTranslation {
+			*value = translated
+		}
+	}
+	translate(&h.Name, &invalid.name)
+	if h.Linkname != "" {
+		translate(&h.Linkname, &invalid.link)
+	}
+	translate(&h.Uname, &invalid.other)
+	translate(&h.Gname, &invalid.other)
+	// Extraction rewrites the member headers into a private tar stream. Keep
+	// its extended records in archive encoding: Header's concrete fields take
+	// precedence when tar.Writer emits path/linkpath/uname/gname, while custom
+	// records must not be transcoded twice. Listing consumes the values and
+	// therefore translates every string operand.
+	if listMode && h.PAXRecords != nil {
+		for key, value := range h.PAXRecords {
+			if key == "hdrcharset" || strings.HasPrefix(key, "COREUTILS.internal.cpio.filedata") {
+				continue
+			}
+			bad := false
+			translate(&value, &bad)
+			invalid.other = invalid.other || bad
+			h.PAXRecords[key] = value
+		}
+	}
+	invalid.name = invalid.name || invalidPAXLocalDestinationName(h.Name)
+	if h.Linkname != "" {
+		invalid.link = invalid.link || invalidPAXLocalDestinationName(h.Linkname)
+	}
+	return invalid
 }
 
 func invalidPAXDestination(rc *tool.RunContext, name string) bool {

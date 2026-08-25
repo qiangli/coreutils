@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -360,7 +361,7 @@ func TestPAXInvalidActionsBypassAndUTF8(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, errOut, code := exec(t, d, "", "-f", arc)
-	if code != 1 || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) || !strings.Contains(errOut, "invalid value bypassed") {
+	if code != 1 || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) || !strings.Contains(errOut, "value cannot be translated") {
 		t.Fatalf("default code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	for _, action := range []string{"binary", "rename", "write"} {
@@ -370,7 +371,7 @@ func TestPAXInvalidActionsBypassAndUTF8(t *testing.T) {
 		}
 	}
 	out, errOut, code = exec(t, d, "", "-f", arc, "-o", "invalid=UTF-8")
-	if code != 0 || errOut != "" || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) {
+	if code != 1 || !strings.Contains(errOut, "value cannot be translated") || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) {
 		t.Fatalf("UTF-8 code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
@@ -440,7 +441,7 @@ func TestPAXInvalidBinaryCoversNamesOwnersAndExtendedStrings(t *testing.T) {
 	}
 	local := "comment:=" + string([]byte{0xff}) + ",uname:=" + string([]byte{0xfe}) + ",gname:=" + string([]byte{0xfd})
 	out, errOut, code := exec(t, d, "", "-w", "-x", "pax", "-o", "invalid=binary", "-o", local, "file")
-	if code != 0 || errOut != "" {
+	if code != 1 || !strings.Contains(errOut, "value cannot be translated") {
 		t.Fatalf("local code=%d stderr=%q", code, errOut)
 	}
 	h, err := tar.NewReader(strings.NewReader(out)).Next()
@@ -448,7 +449,7 @@ func TestPAXInvalidBinaryCoversNamesOwnersAndExtendedStrings(t *testing.T) {
 		t.Fatalf("local header=%+v records=%v err=%v", h, h.PAXRecords, err)
 	}
 	out, errOut, code = exec(t, d, "", "-w", "-x", "pax", "-o", "invalid=binary", "-o", "comment="+string([]byte{0xfc}), "file")
-	if code != 0 || errOut != "" {
+	if code != 1 || !strings.Contains(errOut, "value cannot be translated") {
 		t.Fatalf("global code=%d stderr=%q", code, errOut)
 	}
 	g, err := tar.NewReader(strings.NewReader(out)).Next()
@@ -456,7 +457,7 @@ func TestPAXInvalidBinaryCoversNamesOwnersAndExtendedStrings(t *testing.T) {
 		t.Fatalf("global header=%+v records=%v err=%v", g, g.PAXRecords, err)
 	}
 	out, errOut, code = execPaxEnv(t, d, []string{"LC_CTYPE=C"}, "-w", "-x", "pax", "-o", "invalid=binary", "-o", "comment=ä", "file")
-	if code != 0 || errOut != "" {
+	if code != 1 || !strings.Contains(errOut, "value cannot be translated") {
 		t.Fatalf("C locale code=%d stderr=%q", code, errOut)
 	}
 	g, err = tar.NewReader(strings.NewReader(out)).Next()
@@ -537,6 +538,334 @@ func TestPAXInvalidTextUsesRunContextLocaleEncodability(t *testing.T) {
 		if got := invalidPAXText(rc, tc.value); got != tc.invalid {
 			t.Errorf("env=%v value=%q invalid=%v, want %v", tc.env, tc.value, got, tc.invalid)
 		}
+	}
+}
+
+func TestPAXCarriedCodesetByteTranscoding(t *testing.T) {
+	latin1 := &tool.RunContext{Env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}}
+	if got, err := archiveTextToLocal(latin1, "ä", false); err != nil || got != "\xe4" {
+		t.Fatalf("UTF-8 to Latin-1=%q err=%v", got, err)
+	}
+	if got, err := localTextToArchive(latin1, "\xe4"); err != nil || got != "ä" {
+		t.Fatalf("Latin-1 to UTF-8=%q err=%v", got, err)
+	}
+	latin15 := &tool.RunContext{Env: []string{"LC_CTYPE=de_DE.ISO-8859-15"}}
+	if got, err := archiveTextToLocal(latin15, "€", false); err != nil || got != "\xa4" {
+		t.Fatalf("UTF-8 to Latin-15=%q err=%v", got, err)
+	}
+	if got, err := localTextToArchive(latin15, "\xa4"); err != nil || got != "€" {
+		t.Fatalf("Latin-15 to UTF-8=%q err=%v", got, err)
+	}
+	ascii := &tool.RunContext{Env: []string{"LC_CTYPE=C"}}
+	if _, err := archiveTextToLocal(ascii, "中文", false); err == nil {
+		t.Fatal("unrepresentable C-locale value accepted")
+	}
+	if got, err := archiveTextToLocal(ascii, "中文", true); err != nil || got != "??" {
+		t.Fatalf("lossy invalid=write=%q err=%v", got, err)
+	}
+}
+
+func TestPAXListAndReadTranslateUTF8ArchiveToLatin1Bytes(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	h := &tar.Header{Name: "ä", Typeflag: tar.TypeReg, Mode: 0o600, Size: 1, Uname: "ä", Gname: "ä", Format: tar.FormatPAX,
+		PAXRecords: map[string]string{"comment": "ä"}}
+	if err := tw.WriteHeader(h); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d := t.TempDir()
+	arc := filepath.Join(d, "archive.pax")
+	if err := os.WriteFile(arc, raw.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"LC_CTYPE=de_DE.ISO-8859-1", "LC_TIME=C"}
+	out, errOut, code := execPaxEnv(t, d, env, "-v", "-f", arc, "-o", `listopt=%(path)s|%(uname)s|%(gname)s|%(comment)s`)
+	if code != 0 || errOut != "" || out != "\xe4|\xe4|\xe4|\xe4\n" {
+		t.Fatalf("list code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if runtime.GOOS == "darwin" {
+		// Darwin rejects non-UTF-8 pathname bytes at the VFS boundary. The
+		// byte-exact list assertion above remains portable; extraction runs on
+		// the Linux certification target.
+		return
+	}
+	extract := t.TempDir()
+	_, errOut, code = execPaxEnv(t, extract, env, "-r", "-f", arc)
+	if code != 0 || errOut != "" || string(mustRead(t, filepath.Join(extract, "\xe4"))) != "x" {
+		t.Fatalf("read code=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestPAXWriteTranslatesLatin1OptionBytesToUTF8(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := execPaxEnv(t, d, []string{"LC_CTYPE=de_DE.ISO-8859-1"}, "-w", "-x", "pax", "-o", "comment:=\xe4,uname:=\xe4,gname:=\xe4", "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	h, err := tar.NewReader(strings.NewReader(out)).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"comment", "uname", "gname"} {
+		if h.PAXRecords[key] != "ä" {
+			t.Errorf("%s=%q records=%v", key, h.PAXRecords[key], h.PAXRecords)
+		}
+	}
+}
+
+func TestPAXWriteTranslatesHeaderIdentityFieldsOnce(t *testing.T) {
+	rc := &tool.RunContext{Env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}}
+	h := &tar.Header{Name: "already-UTF-8-ä", Linkname: "already-UTF-8-ä", Uname: "\xe4", Gname: "\xe4"}
+	if err := translatePAXIdentityToArchive(rc, h, "binary"); err != nil {
+		t.Fatal(err)
+	}
+	if h.Name != "already-UTF-8-ä" || h.Linkname != "already-UTF-8-ä" {
+		t.Fatalf("path/link were double-transcoded: name=%q link=%q", h.Name, h.Linkname)
+	}
+	if h.Uname != "ä" || h.Gname != "ä" {
+		t.Fatalf("identity fields uname=%q gname=%q", h.Uname, h.Gname)
+	}
+}
+
+func TestPAXWriteTranslatesActualLatin1PathAndLinkBytes(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("raw non-UTF-8 filesystem names require the Linux certification target")
+	}
+	d := t.TempDir()
+	rawName := "\xe4"
+	if err := os.WriteFile(filepath.Join(d, rawName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rawName, filepath.Join(d, "link")); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := execPaxEnv(t, d, []string{"LC_CTYPE=de_DE.ISO-8859-1"}, "-w", "-x", "pax", rawName, "link")
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	tr := tar.NewReader(strings.NewReader(out))
+	first, err := tr.Next()
+	if err != nil || first.Name != "ä" {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	if _, err := io.Copy(io.Discard, tr); err != nil {
+		t.Fatal(err)
+	}
+	second, err := tr.Next()
+	if err != nil || second.Name != "link" || second.Linkname != "ä" {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+}
+
+func TestPAXWriteInvalidBinaryPreservesActualNonUTF8PathLinkAndOption(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("raw non-UTF-8 filesystem names require the Linux certification target")
+	}
+	d := t.TempDir()
+	rawName := "\xff"
+	if err := os.WriteFile(filepath.Join(d, rawName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rawName, filepath.Join(d, "link")); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := execPaxEnv(t, d, []string{"LC_CTYPE=C.UTF-8"}, "-w", "-x", "pax", "-o", "invalid=binary", "-o", "comment:=\xfe", rawName, "link")
+	if code != 1 || !strings.Contains(errOut, "value cannot be translated") {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	tr := tar.NewReader(strings.NewReader(out))
+	first, err := tr.Next()
+	if err != nil || first.Name != rawName || first.PAXRecords["comment"] != "\xfe" || first.PAXRecords["hdrcharset"] != "BINARY" {
+		t.Fatalf("first=%+v records=%v err=%v", first, first.PAXRecords, err)
+	}
+	if _, err := io.Copy(io.Discard, tr); err != nil {
+		t.Fatal(err)
+	}
+	second, err := tr.Next()
+	if err != nil || second.Linkname != rawName || second.PAXRecords["hdrcharset"] != "BINARY" {
+		t.Fatalf("second=%+v records=%v err=%v", second, second.PAXRecords, err)
+	}
+}
+
+func TestPAXReadInvalidActionTranslationMatrix(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "中文", Typeflag: tar.TypeReg, Mode: 0o600, Size: 1, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		action, extracted string
+	}{
+		{"bypass", ""},
+		{"binary", "中文"},
+		{"UTF-8", "中文"},
+		{"write", "??"},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			d := t.TempDir()
+			var out, errs bytes.Buffer
+			rc := &tool.RunContext{Dir: d, Env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}, Stdio: tool.Stdio{In: bytes.NewReader(raw.Bytes()), Out: &out, Err: &errs}}
+			code := run(rc, []string{"-r", "-o", "invalid=" + tc.action})
+			if code != 1 || !strings.Contains(errs.String(), "value cannot be translated") {
+				t.Fatalf("code=%d stderr=%q", code, errs.String())
+			}
+			if tc.extracted == "" {
+				if entries, err := os.ReadDir(d); err != nil || len(entries) != 0 {
+					t.Fatalf("bypass entries=%v err=%v", entries, err)
+				}
+				return
+			}
+			if got := string(mustRead(t, filepath.Join(d, tc.extracted))); got != "x" {
+				t.Fatalf("body=%q", got)
+			}
+		})
+	}
+}
+
+func TestPAXListInvalidActionMatrixForUnrepresentableUTF8(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "中文", Typeflag: tar.TypeReg, Mode: 0o600, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d := t.TempDir()
+	arc := filepath.Join(d, "archive.pax")
+	if err := os.WriteFile(arc, raw.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"binary", "bypass", "rename", "UTF-8", "write"} {
+		out, errOut, code := execPaxEnv(t, d, []string{"LC_CTYPE=de_DE.ISO-8859-1"}, "-f", arc, "-o", "invalid="+action)
+		if code != 1 || out != "中文\n" || !strings.Contains(errOut, "value cannot be translated") {
+			t.Errorf("action=%s code=%d stdout=%q stderr=%q", action, code, out, errOut)
+		}
+	}
+}
+
+func TestPAXUnknownHeaderCharsetFailsClosed(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o600, Format: tar.FormatPAX,
+		PAXRecords: map[string]string{"hdrcharset": "KOI8-R"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	rc := &tool.RunContext{Env: []string{"LC_CTYPE=C.UTF-8"}, Stdio: tool.Stdio{In: bytes.NewReader(raw.Bytes()), Out: &out, Err: &errs}}
+	if code := run(rc, nil); code != 1 || out.String() != "file\n" || !strings.Contains(errs.String(), "value cannot be translated") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errs.String())
+	}
+}
+
+func TestPAXStandardUTF8HeaderCharsetIsTranslated(t *testing.T) {
+	rc := &tool.RunContext{Env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}}
+	h := &tar.Header{Name: "ä", Uname: "ä", PAXRecords: map[string]string{"hdrcharset": "ISO-IR 10646 2000 UTF-8"}}
+	invalid := translatePAXHeaderToLocal(rc, h, "bypass", true)
+	if invalid.name || invalid.link || invalid.other || h.Name != "\xe4" || h.Uname != "\xe4" {
+		t.Fatalf("header=%+v invalid=%+v", h, invalid)
+	}
+}
+
+func TestPAXReadBypassesUntranslatableOwnerForBypassAndRename(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "file", Uname: "中文", Typeflag: tar.TypeReg, Mode: 0o600, Size: 1, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"bypass", "rename"} {
+		t.Run(action, func(t *testing.T) {
+			d := t.TempDir()
+			var out, errs bytes.Buffer
+			rc := &tool.RunContext{Dir: d, Env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}, Stdio: tool.Stdio{In: bytes.NewReader(raw.Bytes()), Out: &out, Err: &errs}}
+			if code := run(rc, []string{"-r", "-o", "invalid=" + action}); code != 1 || !strings.Contains(errs.String(), "value cannot be translated") {
+				t.Fatalf("code=%d stderr=%q", code, errs.String())
+			}
+			if entries, err := os.ReadDir(d); err != nil || len(entries) != 0 {
+				t.Fatalf("entries=%v err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestPAXCopyInvalidRenamePreflightsNameAndLinkFields(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "ä"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("中文", filepath.Join(d, "slink")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(d, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tty := newFakeInteractiveTTY("renamed\ntarget\n")
+	withInteractiveTTY(t, tty)
+	_, errOut, code := execPaxEnv(t, d, []string{"LC_CTYPE=C"}, "-r", "-w", "-o", "invalid=rename", "ä", "slink", "dest")
+	if code != 1 || !strings.Contains(errOut, "value cannot be translated") {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	if got := string(mustRead(t, filepath.Join(d, "dest", "renamed"))); got != "x" {
+		t.Fatalf("renamed body=%q", got)
+	}
+	target, err := os.Readlink(filepath.Join(d, "dest", "slink"))
+	if err != nil || target != "target" {
+		t.Fatalf("target=%q err=%v", target, err)
+	}
+	if got := tty.out.String(); got != "pax: rename ä? pax: rename 中文? " {
+		t.Fatalf("prompt=%q", got)
+	}
+}
+
+func TestPAXInvalidRenamePromptsForLinkFieldNotMemberName(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "中文", Mode: 0o777, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tty := newFakeInteractiveTTY("replacement\n")
+	withInteractiveTTY(t, tty)
+	d := t.TempDir()
+	// Run against the archive on stdin so no filesystem pathname encoding is involved.
+	var out, errs bytes.Buffer
+	rc := &tool.RunContext{Dir: d, Env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}, Stdio: tool.Stdio{In: bytes.NewReader(raw.Bytes()), Out: &out, Err: &errs}}
+	code := run(rc, []string{"-r", "-o", "invalid=rename"})
+	if code != 1 || !strings.Contains(errs.String(), "value cannot be translated") {
+		t.Fatalf("code=%d stderr=%q", code, errs.String())
+	}
+	target, err := os.Readlink(filepath.Join(d, "link"))
+	if err != nil || target != "replacement" {
+		t.Fatalf("link target=%q err=%v", target, err)
+	}
+	if got := tty.out.String(); got != "pax: rename 中文? " {
+		t.Fatalf("prompt=%q", got)
 	}
 }
 

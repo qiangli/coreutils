@@ -72,7 +72,8 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	status = 0
 	sel := newSelector(o, patterns)
 	var catalog []selectorMember
-	var invalidMembers []bool
+	var invalidMembers []paxInvalidHeaderFields
+	var linkNames []string
 	scan := newOptionTarReader(raw, o.paxOptions, false)
 	for {
 		h, err := scan.Next()
@@ -83,11 +84,13 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
 		}
+		invalid := translatePAXHeaderToLocal(rc, h, o.paxOptions.invalid, false)
 		catalog = append(catalog, selectorMember{
 			name:  h.Name,
 			isDir: h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/"),
 		})
-		invalidMembers = append(invalidMembers, invalidPAXDestination(rc, h.Name) || invalidPAXDestination(rc, h.Linkname) && h.Linkname != "")
+		invalidMembers = append(invalidMembers, invalid)
+		linkNames = append(linkNames, h.Linkname)
 	}
 	sel.prime(catalog)
 
@@ -98,6 +101,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	// archive occurrence precedes that member.
 	selected := make(map[int]string)
 	renames := make(map[string]string)
+	linkRenames := make(map[int]string)
 	for index, m := range catalog {
 		if !sel.keep(m.name, m.isDir) {
 			continue
@@ -106,13 +110,14 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		if subName == "" {
 			continue
 		}
-		if invalidMembers[index] && o.paxOptions.invalid != "binary" && o.paxOptions.invalid != "UTF-8" && o.paxOptions.invalid != "write" {
-			fmt.Fprintf(rc.Err, "pax: %s: invalid destination name\n", m.name)
+		invalid := invalidMembers[index]
+		if invalid.name || invalid.link || invalid.other {
+			fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated\n", m.name)
 			status = 1
-			if o.paxOptions.invalid != "rename" {
+			if o.paxOptions.invalid == "bypass" || invalid.other && o.paxOptions.invalid == "rename" {
 				continue
 			}
-			if o.renamer == nil {
+			if (invalid.name || invalid.link) && o.paxOptions.invalid == "rename" && o.renamer == nil {
 				r, openErr := openInteractiveRenamer()
 				if openErr != nil {
 					fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", openErr)
@@ -123,7 +128,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			}
 		}
 		newName, keep, err := renameInteractively(o, subName)
-		if err == nil && invalidMembers[index] && o.paxOptions.invalid == "rename" && !o.interactive {
+		if err == nil && invalid.name && o.paxOptions.invalid == "rename" && !o.interactive {
 			newName, keep, err = o.renamer.rename(subName)
 		}
 		if err != nil {
@@ -132,6 +137,19 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		}
 		if !keep {
 			continue
+		}
+		if invalid.link && o.paxOptions.invalid == "rename" {
+			linkName := linkNames[index]
+			var linkKeep bool
+			linkName, linkKeep, err = o.renamer.rename(linkName)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "pax: interactive link rename: %v\n", err)
+				return 1
+			}
+			if !linkKeep {
+				continue
+			}
+			linkRenames[index] = linkName
 		}
 		selected[index] = newName
 		renames[subName] = newName
@@ -150,6 +168,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
 		}
+		translatePAXHeaderToLocal(rc, h, o.paxOptions.invalid, false)
 
 		newName, keep := selected[index]
 		if !keep {
@@ -165,6 +184,9 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			if renamed, ok := renames[h.Linkname]; ok {
 				h.Linkname = renamed
 			}
+		}
+		if linkName, ok := linkRenames[index]; ok {
+			h.Linkname = linkName
 		}
 		if err := tw.WriteHeader(h); err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
@@ -516,7 +538,12 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	} else {
 		var logical bytes.Buffer
 		tw := tar.NewWriter(&logical)
-		if err := writeGlobalPAXHeader(rc, o, tw); err != nil {
+		globalInvalid, err := writeGlobalPAXHeader(rc, o, tw)
+		if globalInvalid {
+			fmt.Fprintln(rc.Err, "pax: global extended-header value cannot be translated; written as binary")
+			status = 1
+		}
+		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			status = 1
 		}
@@ -867,23 +894,23 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if out == "" {
 			return nil
 		}
-		invalidValue := invalidPAXDestinationName(out) || link != "" && invalidPAXDestinationName(link)
-		if invalidValue {
-			if o.paxOptions.invalid == "rename" && !o.interactive && o.renamer != nil {
-				var keep bool
-				var renameErr error
-				out, keep, renameErr = o.renamer.rename(out)
-				if renameErr != nil {
-					return renameErr
-				}
-				if !keep {
-					return nil
-				}
-			} else if o.paxOptions.invalid != "binary" && o.paxOptions.invalid != "rename" {
-				fmt.Fprintf(rc.Err, "pax: %s: value cannot be encoded as UTF-8; bypassed\n", out)
-				invalidDiagnosed = true
-				return nil
+		var invalidRename invalidCopyRename
+		planKey := invalidCopyRenameKey(e)
+		if plans := o.invalidRenamePlans[planKey]; len(plans) != 0 {
+			index := o.invalidRenameUsed[planKey]
+			if index < len(plans) {
+				invalidRename = plans[index]
+				o.invalidRenameUsed[planKey] = index + 1
 			}
+		}
+		if invalidRename.skip {
+			return nil
+		}
+		if invalidRename.nameSet {
+			out = invalidRename.name
+		}
+		if invalidRename.linkSet {
+			link = invalidRename.link
 		}
 		out, keep, err := renameInteractively(o, out)
 		if err != nil {
@@ -895,11 +922,34 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if !newerThanArchive(o, out, fi.ModTime()) {
 			return nil
 		}
-		h, err := headerFor(out, fi, link)
+		archiveOut, archiveLink := out, link
+		if o.format == "pax" {
+			var outEncodingErr, linkEncodingErr error
+			archiveOut, outEncodingErr = localTextToArchive(rc, out)
+			archiveLink, linkEncodingErr = localTextToArchive(rc, link)
+			invalidValue := outEncodingErr != nil || linkEncodingErr != nil || invalidPAXLocalDestinationName(out) || link != "" && invalidPAXLocalDestinationName(link)
+			if invalidValue && o.paxOptions.invalid != "binary" && o.paxOptions.invalid != "rename" {
+				fmt.Fprintf(rc.Err, "pax: %s: value cannot be encoded as UTF-8; bypassed\n", out)
+				invalidDiagnosed = true
+				return nil
+			}
+			if outEncodingErr != nil {
+				archiveOut = out
+			}
+			if linkEncodingErr != nil {
+				archiveLink = link
+			}
+		}
+		h, err := headerFor(archiveOut, fi, archiveLink)
 		if err != nil {
 			return sourceTraversalErr(err)
 		}
 		h.Format = tarFormat(o.format)
+		if h.Format == tar.FormatPAX {
+			if err := translatePAXIdentityToArchive(rc, h, o.paxOptions.invalid); err != nil {
+				return err
+			}
+		}
 		if o.paxOptions.times || o.read && o.write {
 			if atime, ok := sourceAccessTimeFn(fi); ok {
 				h.AccessTime = atime
@@ -920,7 +970,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				h.Size = 0
 				hardlink = true
 			} else {
-				o.links[id.key()] = out
+				o.links[id.key()] = archiveOut
 			}
 		}
 		if h.Format == tar.FormatPAX {
@@ -941,8 +991,21 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				h.PAXRecords["SCHILY.ino"] = strconv.FormatUint(id.ino, 10)
 				h.PAXRecords["SCHILY.nlink"] = strconv.FormatUint(id.nlink, 10)
 			}
-			if err := applyWritePAXOptions(rc, h, o.paxOptions); err != nil {
+			invalidHeader, err := applyWritePAXOptions(rc, h, o.paxOptions)
+			if err != nil {
 				return err
+			}
+			// The preflight examined the effective path/linkpath values, so its
+			// replacements take precedence over those same -o overrides.
+			if invalidRename.nameSet {
+				h.Name = archiveOut
+			}
+			if invalidRename.linkSet {
+				h.Linkname = archiveLink
+			}
+			if invalidHeader {
+				fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated; written as binary\n", out)
+				invalidDiagnosed = true
 			}
 			if hardlink && o.paxOptions.linkdata {
 				h.PAXRecords["COREUTILS.linkdata"] = h.Linkname
@@ -1045,6 +1108,11 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 			return linkCopyMode(rc, o, files, full)
 		}
 	}
+	invalidRenameDiagnosed, err := preflightCopyInvalidRenames(rc, o, files)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
+		return 1
+	}
 
 	pr, pw := io.Pipe()
 	writerOptions := *o
@@ -1057,7 +1125,12 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		tw := tar.NewWriter(pw)
 		var werr error
 		diagnosed := false
-		if err := writeGlobalPAXHeader(rc, &writerOptions, tw); err != nil {
+		globalInvalid, err := writeGlobalPAXHeader(rc, &writerOptions, tw)
+		if globalInvalid {
+			fmt.Fprintln(rc.Err, "pax: global extended-header value cannot be translated; written as binary")
+			diagnosed = true
+		}
+		if err != nil {
 			werr = err
 		}
 		for _, name := range files {
@@ -1097,11 +1170,101 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	inner.Stdio = rc.Stdio
 	inner.In = pr
 	status := readMode(&inner, &sub, nil)
-	if <-diagCh && status == 0 {
+	if (<-diagCh || invalidRenameDiagnosed) && status == 0 {
 		status = 1
 	}
 	return status
 }
+
+func preflightCopyInvalidRenames(rc *tool.RunContext, o *options, files []string) (diagnosed bool, retErr error) {
+	if o.paxOptions.invalid != "rename" {
+		return false, nil
+	}
+	var renamer *interactiveRenamer
+	defer func() {
+		if renamer != nil {
+			if err := renamer.Close(); retErr == nil && err != nil {
+				retErr = err
+			}
+		}
+	}()
+	o.invalidRenamePlans = make(map[string][]invalidCopyRename)
+	o.invalidRenameUsed = make(map[string]int)
+	for _, name := range files {
+		_, err := walkOperand(rc, o, name, func(e walkEntry) error {
+			plan := invalidCopyRename{}
+			out := applySubstitutions(o.subst, e.member, nil)
+			if value := o.paxOptions.global["path"]; value != "" {
+				out = value
+			}
+			if value := o.paxOptions.local["path"]; value != "" {
+				out = value
+			}
+			link := ""
+			if e.fi.Mode()&os.ModeSymlink != 0 && !e.followed {
+				var err error
+				link, err = os.Readlink(e.abs)
+				if err != nil {
+					return err
+				}
+			}
+			if value := o.paxOptions.global["linkpath"]; value != "" {
+				link = value
+			}
+			if value := o.paxOptions.local["linkpath"]; value != "" {
+				link = value
+			}
+			_, nameEncodingErr := localTextToArchive(rc, out)
+			_, linkEncodingErr := localTextToArchive(rc, link)
+			invalidName := nameEncodingErr != nil || invalidPAXLocalDestinationName(out)
+			invalidLink := link != "" && (linkEncodingErr != nil || invalidPAXLocalDestinationName(link))
+			if !invalidName && !invalidLink {
+				return nil
+			}
+			diagnosed = true
+			fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated\n", out)
+			if renamer == nil {
+				var err error
+				renamer, err = openInteractiveRenamer()
+				if err != nil {
+					return err
+				}
+			}
+			if invalidName {
+				replacement, keep, err := renamer.rename(out)
+				if err != nil {
+					return err
+				}
+				if !keep {
+					plan.skip = true
+					o.invalidRenamePlans[invalidCopyRenameKey(e)] = append(o.invalidRenamePlans[invalidCopyRenameKey(e)], plan)
+					return nil
+				}
+				plan.name, plan.nameSet = replacement, true
+			}
+			if invalidLink {
+				replacement, keep, err := renamer.rename(link)
+				if err != nil {
+					return err
+				}
+				if !keep {
+					plan.skip = true
+					o.invalidRenamePlans[invalidCopyRenameKey(e)] = append(o.invalidRenamePlans[invalidCopyRenameKey(e)], plan)
+					return nil
+				}
+				plan.link, plan.linkSet = replacement, true
+			}
+			o.invalidRenamePlans[invalidCopyRenameKey(e)] = append(o.invalidRenamePlans[invalidCopyRenameKey(e)], plan)
+			return nil
+		})
+		if err != nil {
+			return diagnosed, err
+		}
+	}
+	return diagnosed, nil
+}
+
+func invalidCopyRenameKey(e walkEntry) string { return e.abs + "\x00" + e.member }
 
 var errLinkCopyNeedsInvalidRename = errors.New("invalid copy name requires rename")
 

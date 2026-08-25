@@ -15,9 +15,9 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-func writeGlobalPAXHeader(rc *tool.RunContext, o *options, tw *tar.Writer) error {
+func writeGlobalPAXHeader(rc *tool.RunContext, o *options, tw *tar.Writer) (bool, error) {
 	if len(o.paxOptions.global) == 0 {
-		return nil
+		return false, nil
 	}
 	pattern := o.paxOptions.globalName
 	if pattern == "" {
@@ -29,27 +29,37 @@ func writeGlobalPAXHeader(rc *tool.RunContext, o *options, tw *tar.Writer) error
 	}
 	name, err := expandGlobalHeaderName(pattern, 1)
 	if err != nil {
-		return err
+		return false, err
 	}
-	records := maps.Clone(o.paxOptions.global)
+	archiveName, nameErr := localTextToArchive(rc, name)
+	if nameErr == nil {
+		name = archiveName
+	} else if o.paxOptions.invalid != "binary" {
+		return false, fmt.Errorf("global extended-header name cannot be translated to UTF-8")
+	}
+	records, binaryValue, err := localPAXValuesToArchive(rc, o.paxOptions.global, o.paxOptions.invalid)
+	if err != nil {
+		return false, err
+	}
 	for key := range records {
 		if deletedPAXKeyword(o.paxOptions, key) {
 			delete(records, key)
 		}
 	}
 	if len(records) == 0 {
-		return nil
+		return nameErr != nil || binaryValue, nil
 	}
 	if o.paxOptions.invalid == "binary" {
 		probe := &tar.Header{Name: name, PAXRecords: records}
-		if paxHeaderNeedsBinary(rc, probe) {
+		if binaryValue || paxHeaderNeedsBinary(rc, probe) {
 			records["hdrcharset"] = "BINARY"
 		}
 	}
-	return tw.WriteHeader(&tar.Header{
+	err = tw.WriteHeader(&tar.Header{
 		Name: name, Typeflag: tar.TypeXGlobalHeader,
 		Format: tar.FormatPAX, PAXRecords: records,
 	})
+	return nameErr != nil || binaryValue, err
 }
 
 func expandGlobalHeaderName(pattern string, sequence int) (string, error) {

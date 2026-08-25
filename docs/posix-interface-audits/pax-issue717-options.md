@@ -22,8 +22,14 @@ page:
   `RunContext.Env`; no process
   environment is mutated. In list mode binary/rename/write follow bypass;
   write-mode binary marks untranslatable names, owners, groups, and extended
-  strings with `hdrcharset=BINARY`. Interactive rename uses the existing
-  `/dev/tty` lane.
+  strings with `hdrcharset=BINARY`. Every failed translation is diagnosed and
+  makes status non-zero while the selected action still controls whether the
+  member is bypassed, retained as binary/UTF-8, lossily written, or renamed.
+  Archive UTF-8 and the carried ISO-8859-1/15 local encodings are transcoded
+  byte-exactly in both directions across path, link, owner/group, and listopt
+  strings. Interactive rename uses the existing `/dev/tty` lane, prompts
+  pathname and link-name fields independently, and copy mode resolves all
+  invalid-value answers before destination mutation.
 - Global `keyword=value`, per-file `keyword:=value`, archive global records,
   archive per-file records, empty per-file deletion, and `delete=` follow the
   required precedence. Ordered name/ID application is deterministic.
@@ -57,13 +63,10 @@ host charmaps. Raw cpio file data is losslessly base64-carried only through the
 private normalization lane and decoded for the normative `c_filedata` field;
 it is not advertised as a pax extended-header interface.
 
-The remaining invalid-value blocker is byte transcoding, not encodability
-detection: archive UTF-8 text is not yet converted to the selected carried
-ISO-8859-1/15 destination bytes, and local ISO bytes are not yet converted to
-UTF-8 on write. `invalid=rename` also still needs field-specific replacement
-for an invalid link-name value rather than only the member pathname. Until
-those are implemented and byte-exactly tested, this audit does not classify
-the full `invalid=` interface as closed.
+The carried encodings are closed with byte-exact tests, including the standard
+`ISO-IR 10646 2000 UTF-8` `hdrcharset` spelling and fail-closed handling for
+unknown header encodings. Other unadvertised legacy charmaps remain outside
+the bounded locale provider rather than being silently approximated.
 
 All production archive parsing, rewriting, formatting, and copying is pure Go
 and performs no shell-outs.
