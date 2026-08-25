@@ -117,8 +117,19 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 	if *list {
+		if fs.Changed("from-code") || fs.Changed("to-code") || fs.Changed("silent") || fs.Changed("discard-invalid") || len(files) != 0 {
+			return tool.UsageError(rc, cmd, "-l is a standalone form")
+		}
 		for _, name := range supportedEncodings {
-			fmt.Fprintln(rc.Out, name)
+			line := name + "\n"
+			n, err := io.WriteString(rc.Out, line)
+			if err == nil && n != len(line) {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				fmt.Fprintf(rc.Err, "iconv: write error: %v\n", err)
+				return 1
+			}
 		}
 		return 0
 	}

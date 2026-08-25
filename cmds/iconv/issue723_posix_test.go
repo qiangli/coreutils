@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -96,9 +97,9 @@ func TestIssue723CharmapSyntaxAndAliasJoin(t *testing.T) {
 <comment_char> %
 % ignored
 CHARMAP
-<A> /d65
-<A-alias> /101
-<cent-sign> /x80
+<A> /d65 inline comment is ignored
+<A-alias> /101 another inline comment
+<cent-sign> /x80 hexadecimal comment
 <gt/>> /x81
 END CHARMAP
 `
@@ -140,6 +141,28 @@ func TestIssue723CharmapOperandFailuresAreNotSilent(t *testing.T) {
 	}
 }
 
+func TestIssue723CharmapParserRejectsMalformedDefinitions(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, want string
+	}{
+		{"missing start", "<A> \\x41\nEND CHARMAP\n", "missing CHARMAP"},
+		{"missing end", "CHARMAP\n<A> \\x41\n", "missing CHARMAP or END CHARMAP"},
+		{"empty", "CHARMAP\nEND CHARMAP\n", "empty CHARMAP"},
+		{"truncated hex", "CHARMAP\n<A> \\x4\nEND CHARMAP\n", "truncated encoding"},
+		{"short decimal", "CHARMAP\n<A> \\d4\nEND CHARMAP\n", "invalid decimal"},
+		{"short octal", "CHARMAP\n<A> \\4\nEND CHARMAP\n", "invalid encoding"},
+		{"bad range", "CHARMAP\n<A1>...<A02> \\x41\nEND CHARMAP\n", "invalid symbolic range"},
+		{"conflicting symbol", "CHARMAP\n<A> \\x41\n<A> \\x42\nEND CHARMAP\n", "conflicting definition"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseCharmap(strings.NewReader(tc.content))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
 type terminalErrorReader struct{ done bool }
 
 func (r *terminalErrorReader) Read(p []byte) (int, error) {
@@ -172,6 +195,62 @@ func TestIssue723SilentDoesNotSuppressOutputIOErrors(t *testing.T) {
 	if code := run(rc, []string{"-s", "-f", "UTF-8", "-t", "UTF-8"}); code != 1 ||
 		!strings.Contains(errout.String(), "injected write failure") {
 		t.Fatalf("code=%d err=%q", code, errout.String())
+	}
+}
+
+type shortNilWriter struct{}
+
+func (shortNilWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return len(p) - 1, nil
+}
+
+func TestIssue723ShortWritesFailForCharmapAndList(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"f.map", "t.map"} {
+		if err := os.WriteFile(dir+"/"+name, []byte("CHARMAP\n<A> \\x41\nEND CHARMAP\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-s", "-f", "./f.map", "-t", "./t.map"},
+		{"-l"},
+	} {
+		var errout bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: dir,
+			Stdio: tool.Stdio{In: strings.NewReader("A"), Out: shortNilWriter{}, Err: &errout}}
+		if code := run(rc, args); code != 1 || !strings.Contains(errout.String(), io.ErrShortWrite.Error()) {
+			t.Fatalf("args=%v code=%d err=%q", args, code, errout.String())
+		}
+	}
+}
+
+func TestIssue723ListIsStandaloneAndEveryEntryRoundTrips(t *testing.T) {
+	for _, args := range [][]string{
+		{"-l", "file"}, {"-l", "-c"}, {"-l", "-s"},
+		{"-l", "-f", "UTF-8"}, {"-l", "-t", "UTF-8"},
+	} {
+		code, out, errout := invoke(t, "", args...)
+		if code != 2 || len(out) != 0 || !strings.Contains(errout, "standalone") {
+			t.Fatalf("args=%v code=%d out=%q err=%q", args, code, out, errout)
+		}
+	}
+
+	code, listed, errout := invoke(t, "", "-l")
+	if code != 0 || errout != "" {
+		t.Fatalf("list code=%d err=%q", code, errout)
+	}
+	for _, name := range strings.Fields(string(listed)) {
+		code, encoded, encodeErr := invoke(t, "A", "-f", "UTF-8", "-t", name)
+		if code != 0 || encodeErr != "" {
+			t.Fatalf("to role %q: code=%d err=%q", name, code, encodeErr)
+		}
+		code, decoded, decodeErr := invoke(t, string(encoded), "-f", name, "-t", "UTF-8")
+		if code != 0 || string(decoded) != "A" || decodeErr != "" {
+			t.Fatalf("from role %q: code=%d out=%q err=%q encoded=%x", name, code, decoded, decodeErr, encoded)
+		}
 	}
 }
 

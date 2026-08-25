@@ -60,7 +60,11 @@ func runCharmapConversion(rc *tool.RunContext, fromPath, toPath string, files []
 				pos++
 				continue
 			}
-			if _, err := rc.Out.Write(replacement); err != nil {
+			n, err := rc.Out.Write(replacement)
+			if err == nil && n != len(replacement) {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
 				fmt.Fprintf(rc.Err, "iconv: write error: %v\n", err)
 				return 1
 			}
@@ -107,6 +111,12 @@ func readCharmap(rc *tool.RunContext, path string) (*charmapTable, error) {
 	return parseCharmap(f)
 }
 
+// parseCharmap reads the XBD 6.4 mapping grammar needed for iconv's symbolic
+// join. WIDTH data after END CHARMAP is intentionally irrelevant. POSIX makes
+// an invalid charmap's conversion result undefined, so this is not a second
+// localedef validator: it rejects malformed structure and byte tokens but does
+// not prove Portable Character Set completeness, declaration consistency, or
+// the same-constant-kind rule for concatenated bytes.
 func parseCharmap(r io.Reader) (*charmapTable, error) {
 	table := &charmapTable{bySymbol: make(map[string][]byte), byBytes: make(map[string][]string)}
 	escape, comment := byte('\\'), byte('#')
