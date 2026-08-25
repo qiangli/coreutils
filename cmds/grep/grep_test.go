@@ -352,6 +352,26 @@ func TestGrepMultiplePatterns(t *testing.T) {
 	}
 }
 
+func TestGrepPOSIXPatternListAndOptionPrecedence(t *testing.T) {
+	out, errOut, code := runGrep(t, "", "foo\nbar\n", "-e", "")
+	if code != 0 || errOut != "" || out != "foo\nbar\n" {
+		t.Fatalf("empty -e pattern = (%q, %q, %d), want every input line", out, errOut, code)
+	}
+
+	dir := t.TempDir()
+	writeFile(t, dir, "patterns", "foo\n")
+	writeFile(t, dir, "match", "foo\n")
+	writeFile(t, dir, "miss", "bar\n")
+	out, errOut, code = runGrep(t, dir, "", "-q", "-l", "foo", "match")
+	if code != 0 || errOut != "" || out != "" {
+		t.Fatalf("-q should suppress normal output: (%q, %q, %d)", out, errOut, code)
+	}
+	_, errOut, code = runGrep(t, dir, "", "-f")
+	if code != 2 || !strings.Contains(errOut, "flag needs an argument") {
+		t.Fatalf("missing -f argument = (%q, %d), want option-argument error", errOut, code)
+	}
+}
+
 func TestGrepPatternFileNamedDashAndCombinedLists(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "-", "aa\nbb\n")

@@ -254,6 +254,25 @@ func TestUnsupportedSpecificationIsRefused(t *testing.T) {
 	}
 }
 
+func TestPOSIXArityAndOptionForms(t *testing.T) {
+	dir := t.TempDir()
+	if out, errb, code := runCmd(t, "-v", "", "_POSIX_PATH_MAX"); code != 0 || out != "256" || errb != "" {
+		t.Fatalf("empty -v specification should fall through: (%q, %q, %d)", out, errb, code)
+	}
+	if out, errb, code := runCmd(t, "NAME_MAX", dir); code != 0 || out == "" || errb != "" {
+		t.Fatalf("path_var pathname = (%q, %q, %d), want value", out, errb, code)
+	}
+	if _, errb, code := runCmd(t, "NAME_MAX"); code != 2 || !strings.Contains(errb, "NAME_MAX") {
+		t.Fatalf("path_var without pathname = (%q, %d), want unknown system variable usage error", errb, code)
+	}
+	if _, errb, code := runCmd(t, "_POSIX_PATH_MAX", dir); code != 2 || !strings.Contains(errb, "_POSIX_PATH_MAX") {
+		t.Fatalf("system_var with pathname = (%q, %d), want unknown path variable usage error", errb, code)
+	}
+	if _, errb, code := runCmd(t, "-v"); code != 2 || !strings.Contains(errb, "flag needs an argument") {
+		t.Fatalf("missing -v argument = (%q, %d), want option-argument error", errb, code)
+	}
+}
+
 func TestMissingOperand(t *testing.T) {
 	if _, _, code := runCmd(t); code == 0 {
 		t.Error("no operand must be a usage error")
