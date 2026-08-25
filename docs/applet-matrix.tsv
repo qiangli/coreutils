@@ -25,7 +25,7 @@ cksum	cmds/cksum		GNU Coreutils	yes	yes	1	10
 clip	cmds/clip		Bashy/other extension	no	no	1	1
 cmp	cmds/cmp		POSIX/Unix utility	no	yes	2	14
 comm	cmds/comm		GNU Coreutils	yes	yes	1	16
-cp	cmds/cp		GNU Coreutils	yes	yes	6	54
+cp	cmds/cp		GNU Coreutils	yes	yes	7	62
 crontab	cmds/crontab		POSIX/Unix utility	no	yes	2	23
 csplit	cmds/csplit		GNU Coreutils	yes	yes	1	18
 ctags	cmds/posixproviders		POSIX external provider	no	yes	3	20
