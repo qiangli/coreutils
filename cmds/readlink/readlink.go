@@ -53,7 +53,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if *zero {
 		delim = "\x00"
 	}
-	verbose := lastQSV(args) == 'v' || os.Getenv("POSIXLY_CORRECT") != ""
+	verbose := lastQSV(args) == 'v' || rc.Getenv("POSIXLY_CORRECT") != ""
 
 	mode := lastFEM(args) // GNU: the last of -f/-e/-m wins; 0 = plain readlink
 	status := 0

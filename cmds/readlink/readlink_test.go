@@ -13,15 +13,33 @@ import (
 )
 
 func runIn(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
+	return runInEnv(t, dir, nil, args...)
+}
+
+func runInEnv(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+func TestReadlinkPOSIXLYCorrectForcesDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"f"}, {"-q", "f"}} {
+		out, errb, code := runInEnv(t, dir, []string{"POSIXLY_CORRECT=1"}, args...)
+		if code != 1 || out != "" || !strings.Contains(errb, "readlink: f:") {
+			t.Errorf("readlink %v under POSIXLY_CORRECT = (%q, %q, %d), want diagnosed failure", args, out, errb, code)
+		}
+	}
 }
 
 func resolvedTempDir(t *testing.T) string {
