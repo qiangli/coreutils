@@ -86,7 +86,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "cannot split in more than one way")
 	}
 
-	if fs.Changed("suffix-length") && *suffixLen < 0 {
+	if fs.Changed("suffix-length") && *suffixLen < 1 {
 		return tool.UsageError(rc, cmd, "invalid suffix length: %q", strconv.Itoa(*suffixLen))
 	}
 

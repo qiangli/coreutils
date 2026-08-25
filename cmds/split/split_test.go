@@ -132,6 +132,17 @@ func TestSplitSuffixExhaustion(t *testing.T) {
 	}
 }
 
+func TestSplitSuffixLengthMustBePositive(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "line\n", "-a", "0", "-l", "1")
+	if code == 0 || !strings.Contains(errb, "invalid suffix length") {
+		t.Fatalf("split -a 0 = (stderr %q, code %d), want usage failure", errb, code)
+	}
+	if files := listFiles(t, dir); len(files) != 0 {
+		t.Fatalf("split -a 0 created output before validation: %v", files)
+	}
+}
+
 func TestSplitAutoWiden(t *testing.T) {
 	dir := t.TempDir()
 	// 91 pieces, numeric, auto width: x00..x89 then x9000 (GNU
@@ -150,25 +161,29 @@ func TestSplitAutoWiden(t *testing.T) {
 }
 
 func TestSplitPOSIXDefaultSuffixExhaustion(t *testing.T) {
-	dir := t.TempDir()
 	var input strings.Builder
 	for i := 0; i < 677; i++ {
 		input.WriteString("x\n")
 	}
-	var out, errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"},
-		Stdio: tool.Stdio{In: strings.NewReader(input.String()), Out: &out, Err: &errb},
-	}
-	if code := run(rc, []string{"-l", "1"}); code != 1 {
-		t.Fatalf("exit %d, want 1 after the 676 two-letter suffixes", code)
-	}
-	if !strings.Contains(errb.String(), "suffixes exhausted") {
-		t.Fatalf("stderr %q does not report suffix exhaustion", errb.String())
-	}
-	files := listFiles(t, dir)
-	if len(files) != 676 || files[0] != "xaa" || files[len(files)-1] != "xzz" {
-		t.Fatalf("POSIX suffix namespace: count=%d first=%q last=%q", len(files), files[0], files[len(files)-1])
+	for _, env := range []string{"POSIXLY_CORRECT=1", "POSIXLY_CORRECT="} {
+		t.Run(env, func(t *testing.T) {
+			dir := t.TempDir()
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: dir, Env: []string{env},
+				Stdio: tool.Stdio{In: strings.NewReader(input.String()), Out: &out, Err: &errb},
+			}
+			if code := run(rc, []string{"-l", "1"}); code != 1 {
+				t.Fatalf("exit %d, want 1 after the 676 two-letter suffixes", code)
+			}
+			if !strings.Contains(errb.String(), "suffixes exhausted") {
+				t.Fatalf("stderr %q does not report suffix exhaustion", errb.String())
+			}
+			files := listFiles(t, dir)
+			if len(files) != 676 || files[0] != "xaa" || files[len(files)-1] != "xzz" {
+				t.Fatalf("POSIX suffix namespace: count=%d first=%q last=%q", len(files), files[0], files[len(files)-1])
+			}
+		})
 	}
 }
 
