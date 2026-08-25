@@ -41,9 +41,11 @@ package bus
 // something that is neither would cost them permanently.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -56,6 +58,7 @@ func NewMessageBoardCmd() *cobra.Command {
 	var jsonOut, peek, all, seenBy bool
 	var as string
 	var limit int
+	var wait time.Duration
 	cmd := &cobra.Command{
 		Use:     "mb",
 		Aliases: []string{"messages"},
@@ -68,6 +71,7 @@ and human on this machine posts to and reads from.
   bashy mb send <agent> "..."   post to one agent
   bashy mb --all                the WHOLE board, everyone's posts
   bashy mb --peek               read without marking anything
+  bashy mb --wait 15m           wait up to 15 minutes for something new
 
 PUBLIC BY CONSTRUCTION. Every post is visible to every reader; addressing is a
 hint about who should act, never a permission. Nothing is deleted — reading only
@@ -79,6 +83,21 @@ running waits on the board and is there when it next looks.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if wait < 0 {
+				return fmt.Errorf("mb: --wait must not be negative")
+			}
+			if wait > 0 && all {
+				return fmt.Errorf("mb: --wait cannot be combined with --all")
+			}
+			if wait > 0 {
+				who, err := BoardIdentity(as)
+				if err != nil {
+					return err
+				}
+				if err := waitForBoard(cmd.Context(), who, limit, wait); err != nil {
+					return err
+				}
+			}
 			return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, all: all, jsonOut: jsonOut, seenBy: seenBy})
 		},
 	}
@@ -90,9 +109,40 @@ running waits on the board and is there when it next looks.`,
 	f.BoolVar(&seenBy, "seen-by", false, "name the agents that have read each post — the receipt record, not just a count")
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts are never capped")
+	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new relevant post")
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd
+}
+
+// waitForBoard blocks until this reader has something relevant to read or the
+// bound expires. The board is an append-only file rather than a daemon, so a
+// short poll is both portable and honest: a watcher that was not running still
+// drains what it missed, and cancellation remains under the caller's control.
+func waitForBoard(ctx context.Context, who string, limit int, bound time.Duration) error {
+	if bound <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		directed, other, _, err := Unseen(who, limit)
+		if err != nil {
+			return err
+		}
+		if len(directed)+len(other) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 // boardRead is one read of the board.
