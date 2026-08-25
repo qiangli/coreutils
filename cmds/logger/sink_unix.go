@@ -25,12 +25,19 @@ import (
 // for, never less), so it is documented rather than made an error; a caller who
 // needs the pid suppressed needs a transport this package does not implement.
 func dialSystemLog(rc *tool.RunContext, prio priority, tag string) (sink, error) {
-	w, err := syslog.Dial("", "", syslog.Priority(prio), tag)
+	w, err := dialSyslog("", "", syslog.Priority(prio), tag)
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect to the system log: %w", err)
 	}
 	return &syslogSink{w: w, dialed: prio, tag: tag}, nil
 }
+
+// dialSyslog is the single transport seam used by tests. Production retains
+// log/syslog's empty-network local-socket discovery; a test substitutes one
+// function that explicitly dials its own Unix datagram receiver. Keeping the
+// complete target in one function avoids a separately mutable network/address
+// pair that a future parallel test could observe inconsistently.
+var dialSyslog = syslog.Dial
 
 type syslogSink struct {
 	w *syslog.Writer
