@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 25 |
-| Evidence | Unverified | 89 |
+| Evidence | Partial | 35 |
+| Evidence | Unverified | 79 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -540,7 +540,7 @@ cd -
 
 ## `chgrp`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -557,21 +557,21 @@ chgrp -R [-H|-L|-P] group file...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `group; file`. UNVERIFIED
+**Operands:** `group; file`. First operand is the group: looked up as a group name in the group database first and read as a numeric group ID only when no such name exists, so a numeric operand that exists as a group name selects that group's ID; each following file operand is processed independently and a failure (unreadable operand, unreadable directory during -R, failed change) is diagnosed, sets exit >0, and continues with the rest of the hierarchy and the remaining operands.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -H/-L/-P are recognized only with -R, mutually override with the last one specified winning (including within clusters such as -RLP), and without any of them -R defaults to -P physical traversal (POSIX leaves the default unspecified; -P is the pinned choice); -H follows a symbolic-link operand (through a whole link chain) but no link met during descent, -L follows every link to a directory with cycle detection, -P follows none and changes the link's own group; -h targets the link instead of the referent and is orthogonal to traversal; -- ends options so a following operand spelled like -H or -h is a filename; - is an ordinary filename, never standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used (extension: -v/-c reports).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Sets the group ID of each selected file via an unconditional chown()/lchown()-equivalent call, issued even when the file already has the requested group, so the kernel's POSIX side effects (clearing set-user-ID/set-group-ID on regular files for unprivileged callers, ctime update) still occur.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the utility executed successfully and all requested changes were made; greater than 0 if an error occurred (1 for operational failures, 2 for usage errors per the documented repo deviation, both within the POSIX >0 contract).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -583,13 +583,13 @@ chgrp -R [-H|-L|-P] group file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chgrp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/chgrp/chgrp_test.go#TestChgrpSelf;cmds/chgrp/chgrp_test.go#TestChgrpErrors;cmds/chgrp/chgrp_test.go#TestChgrpNoDereference;cmds/chgrp/chgrp_test.go#TestChgrpWindows;cmds/chgrp/hierarchy_unix_test.go#TestChgrpTraversalModes;cmds/chgrp/hierarchy_unix_test.go#TestChgrpSymbolicLinkTargetOfTheChange;cmds/chgrp/hierarchy_unix_test.go#TestChgrpTraversalAndDereferenceAreOrthogonal;cmds/chgrp/hierarchy_unix_test.go#TestChgrpCommandLineLinkChainIsFollowed;cmds/chgrp/hierarchy_unix_test.go#TestChgrpNameIsPreferredOverNumber;cmds/chgrp/hierarchy_unix_test.go#TestChgrpUnchangedGroupStillCallsChown;cmds/chgrp/hierarchy_unix_test.go#TestChgrpContinuesPastFailures;cmds/chgrp/hierarchy_unix_test.go#TestChgrpDanglingSymbolicLink;cmds/chgrp/hierarchy_unix_test.go#TestChgrpSymbolicLinkCycleTerminates;cmds/chgrp/hierarchy_unix_test.go#TestChgrpDoubleDashEndsOptions;cmds/chgrp/hierarchy_unix_test.go#TestChgrpDashOperandIsAFileName;cmds/chgrp/hierarchy_unix_test.go#TestChgrpCycleDiagnostic;cmds/chgrp/hierarchy_unix_test.go#TestChgrpOutputFailureSetsStatusAndContinues`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [chgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chgrp.html).
 
 ## `chmod`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -605,21 +605,21 @@ chmod [-R] mode file...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `mode; file`. UNVERIFIED
+**Operands:** `mode; file`. The first non-option operand (or a leading dash-prefixed argument whose body is entirely mode characters, e.g. -w or -rx, rescued before flag parsing) is the mode; every following file operand is processed independently and a failure is diagnosed and continues with the rest at exit >0; -R changes each directory operand and every file in the hierarchy below it (symlinks are never themselves changed and by default -R neither follows symlink operands nor symlinks met during descent, with cycle detection by resolved path); without -R a symlink operand is dereferenced.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** mode is octal (up to 07777; set absolutely in POSIX mode per Issue 7, while outside POSIX mode a mode of fewer than five digits preserves a directory's setuid/setgid bits as the recorded GNU default) or the full Issue 7 symbolic grammar: comma-separated clauses, who ugoa, one or more actions per clause with op + - =, permlist rwxXst, or a single permcopy ugo; an omitted who applies the file mode creation mask to + - = and bare = clears all of the file mode bits; X yields execute only for directories or files whose original unmodified mode has an execute bit; who o with perm s is accepted and leaves the set-id bits unmodified; a mode operand may begin with -.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used (extension: -v/-c per-file reports).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages (the -f extension suppresses per-file diagnostics without changing the exit status; invalid-mode and usage diagnostics are never suppressed).
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Sets each named file's 07777 mode bits as computed from the mode operand via chmod(), which updates the file's last file status change timestamp; set-id requests on non-regular files pass through to the OS, whose honoring is implementation-defined; on Windows every invocation fails loudly with exit 1 because no POSIX file mode bits exist.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every requested mode change was made; greater than 0 if an error occurred (usage errors exit 2 per the documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -631,13 +631,13 @@ chmod [-R] mode file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chmod`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chmod:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/chmod/chmod_test.go#TestModeApply;cmds/chmod/chmod_test.go#TestParseModeInvalid;cmds/chmod/chmod_test.go#TestExtractDashMode;cmds/chmod/chmod_test.go#TestChmodFiles;cmds/chmod/chmod_test.go#TestChmodRecursive;cmds/chmod/chmod_test.go#TestChmodErrors;cmds/chmod/chmod_test.go#TestChmodWindows;cmds/chmod/chmod_test.go#TestChmodDefaultDereferencesSymlinkOperand;cmds/chmod/chmod_posix_test.go#TestModeApplyXUsesOriginalUnmodifiedMode;cmds/chmod/chmod_posix_test.go#TestModeApplyBareOpAndOWithS;cmds/chmod/chmod_posix_test.go#TestModeApplyPOSIXOctalAbsolute;cmds/chmod/chmod_posix_test.go#TestChmodPOSIXModeOctalClearsDirectorySetID;cmds/chmod/chmod_posix_test.go#TestChmodReferenceCopiesExactModeToDirectory;cmds/chmod/chmod_posix_test.go#TestChmodContinuesAfterOperandError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chmod:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [chmod](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chmod.html).
 
 ## `chown`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -654,21 +654,21 @@ chown -R [-H|-L|-P] owner[:group] file...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `owner[:group]; file`. UNVERIFIED
+**Operands:** `owner[:group]; file`. First operand is owner[:group]: each half is looked up as a name in the user/group database first and read as a numeric ID only when no such name exists (a numeric spelling that exists as a name selects that account's ID); with no colon the group is unchanged; extensions accept :group (owner unchanged), owner: (owner's login group), and : (no-op); an invalid half is an invalid user/invalid group diagnostic at exit 1; each following file operand is processed independently and a failure is diagnosed, sets exit >0, and continues with the rest.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -H/-L/-P are recognized only with -R, mutually override with the last one specified winning (including within clusters such as -RLP), and without any of them -R defaults to -P physical traversal (POSIX leaves the default unspecified; -P is the pinned choice); -H follows a symbolic-link operand (through a whole link chain) but no link met during descent, -L follows every link to a directory with cycle/loop detection, -P follows none and changes the link's own IDs; -h targets the link instead of the referent and is orthogonal to traversal; -- ends options so a following operand spelled like -H or -h is a filename; - is an ordinary filename, never standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used (extension: -v/-c reports).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Sets the user ID (and, when a group was given, the group ID) of each selected file via an unconditional chown()/lchown()-equivalent call, issued even when the file already has the requested IDs, so the kernel's POSIX side effects (clearing set-user-ID/set-group-ID on regular files for unprivileged callers, ctime update) still occur.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the utility executed successfully and all requested changes were made; greater than 0 if an error occurred (1 for operational failures, 2 for usage errors per the documented repo deviation, both within the POSIX >0 contract).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -680,7 +680,7 @@ chown -R [-H|-L|-P] owner[:group] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chown`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chown:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/chown/chown_test.go#TestChownSelf;cmds/chown/chown_test.go#TestChownErrors;cmds/chown/chown_test.go#TestChownNoDereference;cmds/chown/chown_test.go#TestChownWindows;cmds/chown/hierarchy_unix_test.go#TestChownTraversalModes;cmds/chown/hierarchy_unix_test.go#TestChownSymbolicLinkTargetOfTheChange;cmds/chown/hierarchy_unix_test.go#TestChownTraversalAndDereferenceAreOrthogonal;cmds/chown/hierarchy_unix_test.go#TestChownCommandLineLinkChainIsFollowed;cmds/chown/hierarchy_unix_test.go#TestChownNameIsPreferredOverNumber;cmds/chown/hierarchy_unix_test.go#TestChownUnchangedOwnershipStillCallsChown;cmds/chown/hierarchy_unix_test.go#TestChownContinuesPastFailures;cmds/chown/hierarchy_unix_test.go#TestChownDanglingSymbolicLink;cmds/chown/hierarchy_unix_test.go#TestChownSymbolicLinkCycleTerminates;cmds/chown/hierarchy_unix_test.go#TestChownMutualSymbolicLinkLoopTerminates;cmds/chown/hierarchy_unix_test.go#TestChownDoubleDashEndsOptions;cmds/chown/hierarchy_unix_test.go#TestChownDashOperandIsAFileName;cmds/chown/hierarchy_unix_test.go#TestChownCycleDiagnostic;cmds/chown/hierarchy_unix_test.go#TestChownOutputFailureSetsStatusAndContinues`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chown:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [chown](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chown.html).
 
@@ -879,7 +879,7 @@ command [-p][-v|-V] command_name
 
 ## `cp`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -897,21 +897,21 @@ cp -R [-H|-L|-P] [-fip] source_file... target
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `source_file; target_file; target`. UNVERIFIED
+**Operands:** `source_file; target_file; target`. Two operands where neither names an existing directory copy source_file (or its referent when it is a symbolic link) to target_file; with more operands or an existing-directory target each source is copied to target/ plus its last component (-R: its pathname relative to the source's parent), and a non-directory target with multiple sources is an error before any copy; -R with exactly two operands and an absent target copies the source hierarchy as target; a source directory without -R gets a diagnostic and is skipped; a source that is the same file as its destination is diagnosed and skipped before any -i prompt, as are a destination directory that a non-directory cannot replace and a directory copied into itself; each source_file is processed independently and a failure continues with the rest; - is an ordinary pathname for both source and target, never stdin/stdout.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Of -H, -L, and -P the last specified wins; without -R a symbolic-link source is followed unless -P; with -R and none of the three (unspecified per Issue 7) the copy is physical (-P): every symlink is recreated with the identical target pathname; -H follows only symlinks named as operands while links met during traversal stay physical; -L follows every symlink (a dangling link or traversal cycle is diagnosed); -R duplicates FIFOs, sockets, and where the platform allows device nodes as nodes of the same type, and creates each new directory with source-mode-modified-by-umask OR S_IRWXU while populating, restoring the umask-filtered (with -p exact) source mode afterwards; an existing destination directory's mode is left alone; -f unlinks a destination whose open failed and retries once; -p duplicates atime/mtime, uid/gid, and permission bits including S_ISUID/S_ISGID, clearing those two bits when uid/gid cannot be duplicated (ownership failure itself is silent and not an error, mode/time failures are diagnosed); -i prompts on stderr before copying to any existing non-directory destination.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read only for the response line to an -i prompt (affirmative per the C-locale yesexpr anchored at byte zero, plus the provisioned de_DE catalog; other locales are refused loudly); otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used (the -v/--debug extensions emit traces only when requested).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for the -i overwrite prompt, which contains the destination pathname, and for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Duplicates the contents of each source_file at the destination path (existing regular destinations are truncated and rewritten, absent ones created with the source permission bits as the open mode); -R duplicates whole hierarchies including special files and symlinks per the selected -H/-L/-P token; -p additionally duplicates timestamps, ownership, and mode with the setuid/setgid clearing rule; -f removes an unopenable destination before retrying; nothing is written to a destination whose source was diagnosed as the same file, a directory without -R, or unreadable.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all source files were copied successfully, including runs whose only skips are declined -i responses (pinned as not an error); greater than 0 if any diagnostic was written (same file, omitted directory, skipped hierarchy, failed open/read/write, failed mode or time preservation), with processing always continuing to the remaining operands first.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -923,7 +923,7 @@ cp -R [-H|-L|-P] [-fip] source_file... target
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cp/cp_test.go#TestCpFile;cmds/cp/cp_test.go#TestCpIntoDir;cmds/cp/cp_test.go#TestCpMultipleToNonDir;cmds/cp/cp_test.go#TestCpOmitsDirWithoutR;cmds/cp/cp_test.go#TestCpRecursive;cmds/cp/cp_test.go#TestCpSameFile;cmds/cp/cp_test.go#TestCpIntoItself;cmds/cp/cp_test.go#TestCpSymlinkInTree;cmds/cp/cp_test.go#TestCpRecursiveDereferenceAllSymlinks;cmds/cp/cp_test.go#TestCpDereferenceOptionOrdering;cmds/cp/cp_test.go#TestCpForceUnwritableDest;cmds/cp/cp_test.go#TestCpPreserve;cmds/cp/cp_test.go#TestCpInteractiveDecline;cmds/cp/cp_test.go#TestCpInteractiveEOFDeclines;cmds/cp/cp_test.go#TestCpInteractiveDeclineContinues;cmds/cp/cp_test.go#TestCpInteractiveDeclineThenError;cmds/cp/cp_test.go#TestCpInteractiveAffirmativeMatching;cmds/cp/cp_test.go#TestCpInteractiveAccept;cmds/cp/cp_test.go#TestCpMissingSource;cmds/cp/cp_posix_test.go#TestCpInteractiveSameFileDiagnosesWithoutPrompt;cmds/cp/cp_posix_test.go#TestCpInteractiveDirDestDiagnosesWithoutPrompt;cmds/cp/cp_posix_test.go#TestCpRecursiveDirOverExistingNonDirContinues;cmds/cp/cp_posix_test.go#TestCpDashOperandsAreOrdinaryPathnames;cmds/cp/cp_posix_unix_test.go#TestCpPreserveModeAppliedAfterOwnership;cmds/cp/cp_posix_unix_test.go#TestCpPreserveClearsSetuidWhenOwnershipFails;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveNewDirUmaskFinalMode;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveNewDirPreserveModeIgnoresUmask;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveReadOnlySourceDirPopulates;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveExistingDirKeepsMode;cmds/cp/cp_fifo_unix_test.go#TestCpFIFORecursiveRecreatesNode`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cp.html).
 
@@ -2486,7 +2486,7 @@ kill [-signal_number] pid...
 
 ## `ln`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2503,21 +2503,21 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `source_file; target_file; target_dir`. UNVERIFIED
+**Operands:** `source_file; target_file; target_dir`. Both synopsis forms are implemented: with two operands where the last is not an existing directory the new entry is target_file, and with an existing-directory last operand (or more than two operands) each source_file is linked at target_dir/basename(source_file); more than two operands with a non-directory last operand is a diagnostic at exit >0; if the destination exists without -f a diagnostic is written, that source_file is abandoned, remaining source_files are still processed, and the exit status is >0; a destination naming the same directory entry as its source_file draws a diagnostic and is left untouched even under -f (checked by inode identity, so hard-link aliases are caught); with -s the source_file need not exist and its text is stored verbatim, including dangling and self-referential names; slash-terminated or otherwise uncreatable destinations fail loudly via the underlying link/symlink call.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -L and -P apply only when creating a hard link to a source_file that is a symbolic link: -L links to the referenced file, -P links to the symlink itself; specifying both is not an error and the last one specified wins (including combined short forms); with -s both are silently ignored; when neither is given the implementation-defined default is documented as -P on every platform (linkat without AT_SYMLINK_FOLLOW).
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used by any POSIX form; the extension -i prompt reads confirmations from standard input.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used by any POSIX form; the extension -v prints one line per created link.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages (and the extension -i prompt).
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Creates a new directory entry (hard link) for each source_file, or with -s a symbolic link containing the operand text verbatim; with -f an existing non-identical destination is removed first via unlink; nothing is modified when the destination names the same directory entry as the source_file.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all specified files were linked successfully; greater than 0 if an error occurred (usage errors exit 2 per the documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2529,7 +2529,7 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ln`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/ln/ln_test.go#TestLnHard;cmds/ln/ln_test.go#TestLnSymbolic;cmds/ln/ln_test.go#TestLnIntoDirectory;cmds/ln/ln_test.go#TestLnForce;cmds/ln/ln_test.go#TestLnLogicalAndPhysicalSourceSymlink;cmds/ln/ln_test.go#TestLnDefaultHardLinkToSymlinkIsPhysical;cmds/ln/ln_test.go#TestLnLastOfLogicalPhysicalWins;cmds/ln/ln_test.go#TestLnSymbolicIgnoresLogicalPhysical;cmds/ln/ln_test.go#TestLnSymbolicDanglingSource;cmds/ln/ln_test.go#TestLnExistingDestinationDiagnosesAndContinues;cmds/ln/ln_test.go#TestLnSameFile;cmds/ln/ln_test.go#TestLnSameFileThroughHardLinkAlias;cmds/ln/ln_test.go#TestLnSymbolicSameFile;cmds/ln/ln_test.go#TestLnSameFileDirectoryForm;cmds/ln/ln_test.go#TestLnErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [ln](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ln.html).
 
@@ -3067,7 +3067,7 @@ mesg [y|n]
 
 ## `mkdir`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3083,21 +3083,21 @@ mkdir [-p] [-m mode] dir...
 
 **Issue 7 option-argument candidate:** `-m=<mode>`.
 
-**Operands:** `dir`. UNVERIFIED
+**Operands:** `dir`. Each dir operand is processed independently and a failure continues with the rest; without -p an operand naming an existing file or directory is an error, and with -p an operand naming an existing directory is ignored without error; a trailing / or /. names the same directory as the trimmed path; without -m the directory is created with a=rwx filtered by the file mode creation mask; -p creates each missing intermediate with mode (S_IWUSR|S_IXUSR|~filemask)&0777 so descent succeeds under a restrictive umask, while -m applies to the final directory only; an empty operand is a diagnosed error.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -m accepts octal modes (including setuid/setgid/sticky digits) and the chmod symbolic_mode grammar; the op characters + and - are interpreted relative to the assumed initial mode a=rwx, with the umask consulted only for clauses whose who is implicit, exactly as the chmod grammar directs; - is an ordinary pathname; -m is refused loudly on Windows (no POSIX mode bits).
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used (-v created-directory messages are a documented extension).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Creates each named directory with the -m mode or the umask-filtered a=rwx default; with -p also creates missing ancestors, each retaining owner write and search; nothing else in the filesystem is touched.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every specified directory was created or already existed under -p; 1 when any operand failed (remaining operands still processed); 2 on usage errors (documented repo deviation within the >0 latitude).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3109,13 +3109,13 @@ mkdir [-p] [-m mode] dir...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mkdir`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mkdir/mkdir_test.go#TestMkdirSimple;cmds/mkdir/mkdir_test.go#TestMkdirExisting;cmds/mkdir/mkdir_test.go#TestMkdirParents;cmds/mkdir/mkdir_test.go#TestMkdirParentsTrailingSlash;cmds/mkdir/mkdir_test.go#TestMkdirContinuesAfterOperandError;cmds/mkdir/mkdir_test.go#TestMkdirMissingParentWithoutP;cmds/mkdir/mkdir_test.go#TestMkdirMode;cmds/mkdir/mkdir_test.go#TestMkdirModeErrors;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicMode;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicModeStartsAtDefault;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicModeSubtractsFromDefault;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicModeApply;cmds/mkdir/mkdir_test.go#TestMkdirUsageErrors;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsRetainOwnerWriteAndSearch;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsTrailingSlashFinalMode;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsRejectsDanglingSymlink`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [mkdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkdir.html).
 
 ## `mkfifo`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3131,21 +3131,21 @@ mkfifo [-m mode] file...
 
 **Issue 7 option-argument candidate:** `-m=<mode>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Each file operand is a pathname at which a FIFO is created and each operand is processed independently: a failure (including an existing entry) draws a cannot-create diagnostic and processing continues with the remaining operands at exit >0; without -m the FIFO is created with a=rw (0666) modified by the file mode creation mask (the embedding shell's virtual umask when supplied, otherwise the process umask applied by mkfifo(2)); zero operands is a missing-operand diagnostic at exit 1.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a file operand of - is an ordinary pathname naming a FIFO called -; no other token is special.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Creates a FIFO special file at each operand pathname; with -m the file permission bits are set to exactly the chmod-grammar mode value (octal up to 7777 or symbolic clauses, applied via a follow-up chmod so the creation mask cannot leak in), with + and - in symbolic strings interpreted relative to an assumed initial mode of a=rw and clauses that omit who leaving umask-selected bits unchanged; on Windows every invocation fails loudly per operand rather than approximating.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all the specified FIFO special files were created successfully; greater than 0 if an error occurred (invalid -m and missing operand exit 1; unknown options exit 2 per the documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3157,7 +3157,7 @@ mkfifo [-m mode] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mkfifo`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mkfifo/mkfifo_test.go#TestMkfifoCreatesFIFO;cmds/mkfifo/mkfifo_test.go#TestMkfifoDefaultModeHonorsVirtualUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoDefaultModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicModeHonorsOmittedWhoUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoSymbolicModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoOctalSpecialBits;cmds/mkfifo/mkfifo_test.go#TestMkfifoMultipleOperands;cmds/mkfifo/mkfifo_test.go#TestMkfifoPartialFailureContinues;cmds/mkfifo/mkfifo_test.go#TestMkfifoDashOperandIsPathname;cmds/mkfifo/mkfifo_test.go#TestMkfifoErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [mkfifo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkfifo.html).
 
@@ -3211,7 +3211,7 @@ mkfifo [-m mode] file...
 
 ## `mv`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3228,21 +3228,21 @@ mv [-if] source_file... target_dir
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `source_file; target_file; target_dir`. UNVERIFIED
+**Operands:** `source_file; target_file; target_dir`. A final operand naming an existing directory selects the target_dir form and each source_file moves to target_dir/basename; otherwise exactly two operands and source_file is renamed to target_file; each source is processed independently, with a per-operand failure or non-affirmative prompt reply skipping that source and continuing; the move is rename() equivalence first (an existing empty destination directory is replaced, a non-empty one is a diagnosed error), and on cross-device failure a copy+remove fallback that first unlinks/rmdirs the existing destination entry, refuses directory/non-directory type mismatches, duplicates the hierarchy with symbolic links copied as links, and removes the source only after successful duplication; a source and destination resolving to the same file are diagnosed and neither is removed (the diagnostic-and-status branch of the Issue 7 same-file alternatives); the step-1 prompt precedes same-file resolution per the page's step order.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; -f and -i override each other by last occurrence, including within short clusters and abbreviated long spellings; a lone - is an ordinary pathname, not standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used only to read one response line per overwrite prompt written to standard error (affirmative per the C-locale yesexpr plus the provisioned de_DE catalog; other locales are refused loudly); otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Overwrite prompts (under -i, or when an existing destination's permissions deny writing, standard input is a terminal, and -f is absent) and diagnostic messages, including non-fatal characteristic-preservation warnings.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Renames each source to its destination path as by rename(); across filesystems removes the existing destination entry, duplicates the source hierarchy (symbolic links as links; last-data-modification and last-access times, user and group ID, and file mode duplicated, with S_ISUID/S_ISGID dropped when ownership cannot be duplicated), then removes the source hierarchy.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all input files were moved successfully (a non-affirmative prompt response skips the source without error); greater than 0 if an error occurred; failure to duplicate file characteristics in the cross-device fallback is diagnosed but does not modify the exit status; usage errors exit 2 (documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3254,7 +3254,7 @@ mv [-if] source_file... target_dir
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mv`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mv/mv_test.go#TestMvRenameFile;cmds/mv/mv_test.go#TestMvIntoDir;cmds/mv/mv_test.go#TestMvDirRename;cmds/mv/mv_test.go#TestMvDirectoryOntoExistingDirectoryInTarget;cmds/mv/mv_test.go#TestMvMultipleToNonDir;cmds/mv/mv_test.go#TestMvMissingSource;cmds/mv/mv_test.go#TestMvSameFile;cmds/mv/mv_test.go#TestMvPromptsBeforeSameFileResolution;cmds/mv/mv_test.go#TestMvLastOverwriteOptionWins;cmds/mv/mv_test.go#TestMvPromptUnwritable;cmds/mv/mv_test.go#TestMvInteractiveRefusal;cmds/mv/mv_test.go#TestMvInteractiveRefusalContinuesAndFails;cmds/mv/mv_test.go#TestMvInteractiveLeadingWhitespaceIsNotAffirmative;cmds/mv/mv_test.go#TestMvUnsupportedLCMessagesFailsClosed;cmds/mv/mv_test.go#TestMvCopyFallback;cmds/mv/mv_test.go#TestMvCopyFallbackFailures;cmds/mv/mv_test.go#TestMvEXDEVCharacteristicFailuresDiagnoseButStillMove;cmds/mv/mv_test.go#TestMvEXDEVDirectoryCharacteristicFailureDiagnosesButStillMoves;cmds/mv/mv_test.go#TestMvEXDEVSymlinkCharacteristicFailuresDiagnoseButStillMove;cmds/mv/mv_test.go#TestMvEXDEVReplacesEmptyDestinationDirectoryBeforeDuplication;cmds/mv/mv_test.go#TestMvEXDEVDoesNotRecursivelyRemoveNonemptyDestination;cmds/mv/mv_test.go#TestMvContinuesPastOperandErrors;cmds/mv/mv_test.go#TestMvSymlinkOperandMovesLinkItself;cmds/mv/mv_test.go#TestMvUsageErrors;cmds/mv/mv_symlink_attrs_unix_test.go#TestMvEXDEVPreservesSymlinkAttributes`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [mv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mv.html).
 
@@ -3985,7 +3985,7 @@ renice [-g|-p|-u] -n increment ID...
 
 ## `rm`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4002,21 +4002,21 @@ rm -f [-iRr] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Each file operand is processed independently in order, with failures diagnosed and processing continuing; an operand whose basename portion is dot or dot-dot, or one that resolves to the root directory where a removal would be attempted (-r/-R and the -d extension), is refused before any prompt or filesystem operation; a nonexistent operand is a diagnosed error unless -f; a directory requires -r/-R (diagnosed Is-a-directory otherwise) and is descended depth-first excluding dot and dot-dot without following symbolic links, each directory removed after its entries; a symbolic link operand is unlinked, never followed; with -f the file operand list may be empty.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; -R is equivalent to -r; -f and -i override each other by last occurrence including within short-option clusters; a lone - is an ordinary pathname.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used only to read one response line per prompt (before each non-directory, before descending a directory whose permissions deny writing when standard input is a terminal or under -i, and again after a directory is emptied under -i; affirmative per the C-locale yesexpr plus the provisioned de_DE catalog, other locales refused loudly); otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Prompts (-i before each entry and again for each directory after its entries; write-protected non-symlink entries when standard input is a terminal and -f is absent) and diagnostic messages.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Removes each named directory entry as by unlink()/rmdir(); -r removes hierarchies depth-first, removing each directory after its entries; a non-affirmative response leaves the entry (and, pre-descent, the whole hierarchy below it) untouched.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when each named directory entry was removed or its removal was canceled by a non-affirmative prompt response, and under -f also with no operands or nonexistent operands (no diagnostic, no status effect); greater than 0 if an error occurred; usage errors exit 2 (documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4028,7 +4028,7 @@ rm -f [-iRr] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/rm`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:rm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/rm/rm_test.go#TestRmFile;cmds/rm/rm_test.go#TestRmMissing;cmds/rm/rm_test.go#TestRmOperandErrors;cmds/rm/rm_test.go#TestRmDirWithoutR;cmds/rm/rm_test.go#TestRmRecursive;cmds/rm/rm_test.go#TestRmCapitalRAlias;cmds/rm/rm_test.go#TestRmInteractivePrompt;cmds/rm/rm_test.go#TestRmRecursiveInteractivePrompts;cmds/rm/rm_test.go#TestRmRecursiveInteractiveDeclinedBranch;cmds/rm/rm_test.go#TestRmImplicitPromptForUnwritable;cmds/rm/rm_test.go#TestRmImplicitDirectoryPromptPrecedesDescent;cmds/rm/rm_test.go#TestRmImplicitPromptSkipsSymlinkOperands;cmds/rm/rm_test.go#TestRmLastPromptOptionWins;cmds/rm/rm_test.go#TestRmRejectsDotAndDotDotOperands;cmds/rm/rm_test.go#TestRmRejectsDotComponentsBeforeTraversal;cmds/rm/rm_test.go#TestRmAllowsDotComponentsBeforeFinalName;cmds/rm/rm_test.go#TestRmRootRefused;cmds/rm/rm_test.go#TestRmPreserveRootFinalSymlinkPolicy;cmds/rm/rm_test.go#TestRmPreserveRootGuardsDashDRemoval;cmds/rm/rm_test.go#TestRmContinuesPastErrors;cmds/rm/rm_test.go#TestRmInteractiveLeadingWhitespaceIsNotAffirmative;cmds/rm/rm_test.go#TestRmInteractiveUsesGermanYesexpr;cmds/rm/rm_test.go#TestRmInteractiveRejectsUnsupportedLCMessages`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:rm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [rm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rm.html).
 
@@ -4522,7 +4522,7 @@ tabs [-T type] n[[sep[+]n]...]
 
 ## `tail`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4538,21 +4538,21 @@ tail [-f] [-c number|-n number] [file]
 
 **Issue 7 option-argument candidate:** `-c=<number>; -n=<number>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. POSIX admits one optional file operand; more than one is accepted as a documented extension with each preceded by a ==> name <== header and, under -f, followed sequentially rather than concurrently; with no operand (or the operand -) standard input is read; the copied portion defaults to the last 10 lines; when -c and -n are both given the last one on the command line wins (extension resolution of a combination the POSIX synopsis makes exclusive); each failing operand is diagnosed and the rest still processed.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -c/-n numbers take an optional sign with origin 1: +N copies from byte/line N onward (the N-1 skip is performed by reading, so it works on non-seekable input), unsigned or -N copies the last N; multiplier suffixes (b, K, KiB, kB, ...) are accepted as extensions; a leading -NUM first argument is rewritten to -n NUM (obsolescent-form extension retained) while +NUM is an ordinary pathname (Issue 7 removed the obsolescent plus form); - means standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used when no file operand is given or the operand is -; with -f, a pipe or FIFO on standard input is read once to EOF and -f is ignored per the Issue 7 rule, while a regular file on standard input is followed by descriptor.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** The designated portion of the input file; headers appear only with -v or multiple file operands (extension).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages (--debug tracing is an extension).
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads only; with -f does not terminate at EOF but polls at --sleep-interval for growth until context cancellation or --pid death, keeping a FIFO's read descriptor open across writer disconnects; --follow=name reopens on rotation, truncation, or max-unchanged-stats (shrink/rename handling is implementation-defined per POSIX; descriptor mode leaves a truncated file at its old offset and emits nothing further).`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on success including a cancelled -f follow; 1 on open, read, or standard-output write failure; 2 on usage errors (documented repo deviation within the >0 latitude).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4564,7 +4564,7 @@ tail [-f] [-c number|-n number] [file]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tail`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tail:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tail/tail_test.go#TestTail;cmds/tail/tail_test.go#TestTailSingleFileExactStdout;cmds/tail/tail_test.go#TestTailHeaders;cmds/tail/tail_test.go#TestTailErrors;cmds/tail/tail_test.go#TestTailWriteFailure;cmds/tail/tail_test.go#TestTailFollowDescriptor;cmds/tail/tail_test.go#TestTailFollowStdinPipeIgnoresFollow;cmds/tail/tail_test.go#TestTailFollowStdinRegularFile;cmds/tail/tail_test.go#TestTailFollowByName;cmds/tail/tail_test.go#TestTailFollowNotSupported;cmds/tail/tail_test.go#TestTailFollowSleepIntervalInvalid;cmds/tail/tail_fifo_unix_test.go#TestTailFollowFIFOAcrossWriters`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tail:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tail](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tail.html).
 

@@ -45,9 +45,13 @@ func TestChgrpSelf(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, errb, code := runTool(t, dir, spec, "f")
+		out, errb, code := runTool(t, dir, spec, "f")
 		if code != 0 || errb != "" {
 			t.Errorf("chgrp %q: code=%d err=%q", spec, code, errb)
+		}
+		// POSIX: standard output is not used.
+		if out != "" {
+			t.Errorf("chgrp %q wrote to stdout: %q", spec, out)
 		}
 	}
 }

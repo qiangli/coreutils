@@ -82,6 +82,42 @@ func TestMkdirParents(t *testing.T) {
 	}
 }
 
+// TestMkdirParentsTrailingSlash pins the cross-platform half of the
+// POSIX pathname rule: "-p dir/" creates dir, and "-p existing/" is
+// ignored without error.
+func TestMkdirParentsTrailingSlash(t *testing.T) {
+	dir := t.TempDir()
+	out, errb, code := runTool(t, dir, "-p", "a/b/")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf("mkdir -p a/b/: code=%d out=%q err=%q", code, out, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "a", "b"))
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("a/b not created: %v", err)
+	}
+	out, errb, code = runTool(t, dir, "-p", "a/b/")
+	if code != 0 || out != "" || errb != "" {
+		t.Errorf("mkdir -p existing with trailing slash: code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+// TestMkdirContinuesAfterOperandError pins the Issue 7 multi-operand
+// contract: a failing dir operand is diagnosed, the remaining operands
+// are still processed, and the final status is >0.
+func TestMkdirContinuesAfterOperandError(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, filepath.Join("missing", "child"), "ok")
+	if code != 1 {
+		t.Fatalf("code=%d, want 1", code)
+	}
+	if !strings.Contains(errb, "cannot create directory") {
+		t.Errorf("missing diagnostic: %q", errb)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "ok")); err != nil || !fi.IsDir() {
+		t.Errorf("later operand 'ok' not created after earlier failure: %v", err)
+	}
+}
+
 func TestMkdirMissingParentWithoutP(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, filepath.Join("a", "b"))

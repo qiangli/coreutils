@@ -165,7 +165,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if *symbolic {
 			err = os.Symlink(linkTarget, destPath)
 		} else {
-			err = createHardLink(rc.Path(target), destPath, *logical, *physical)
+			err = createHardLink(rc.Path(target), destPath, *logical)
 		}
 		if err != nil {
 			kind := "hard"
@@ -236,7 +236,13 @@ func prepareExistingDestination(rc *tool.RunContext, dest, destPath, backupMode,
 	return true
 }
 
-func createHardLink(targetPath, destPath string, logical, physical bool) error {
+// createHardLink makes the new directory entry for a hard link.  POSIX
+// Issue 7 leaves the -L/-P default implementation-defined when source_file
+// is a symbolic link; this implementation documents -P (link to the symlink
+// itself) as the default on every platform, matching GNU ln and Linux
+// link(2).  os.Link cannot express that portably — darwin's link(2)
+// follows symlinks — so the default shares the -P path.
+func createHardLink(targetPath, destPath string, logical bool) error {
 	if logical {
 		resolved, err := filepath.EvalSymlinks(targetPath)
 		if err != nil {
@@ -244,10 +250,7 @@ func createHardLink(targetPath, destPath string, logical, physical bool) error {
 		}
 		return os.Link(resolved, destPath)
 	}
-	if physical {
-		return hardLinkPhysical(targetPath, destPath)
-	}
-	return os.Link(targetPath, destPath)
+	return hardLinkPhysical(targetPath, destPath)
 }
 
 func readYes(reader *bufio.Reader) (bool, error) {

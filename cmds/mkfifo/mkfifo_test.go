@@ -41,6 +41,7 @@ func TestMkfifoSymbolicModeHonorsOmittedWhoUmask(t *testing.T) {
 		{name: "equals omitted", mode: "=rw", mask: 0o077, want: 0o600},
 		{name: "plus omitted", mode: "+x", mask: 0o077, want: 0o766},
 		{name: "explicit all exempt", mode: "a=rw", mask: 0o077, want: 0o666},
+		{name: "minus omitted", mode: "-w", mask: 0o027, want: 0o466},
 		{name: "explicit group exempt", mode: "g+w", mask: 0o027, want: 0o666},
 		{name: "mixed clauses", mode: "=rw,o+x", mask: 0o027, want: 0o641},
 	}
@@ -288,6 +289,26 @@ func TestMkfifoOctalSpecialBits(t *testing.T) {
 	}
 }
 
+// POSIX Issue 7: each file operand is a pathname; "-" has no stdin meaning
+// for mkfifo and names an ordinary FIFO called "-".
+func TestMkfifoDashOperandIsPathname(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-")
+	if code != 0 || errb != "" {
+		t.Fatalf("mkfifo -: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, "-"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("mode=%v, want named pipe", fi.Mode())
+	}
+}
+
 func TestMkfifoErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir)
@@ -301,6 +322,14 @@ func TestMkfifoErrors(t *testing.T) {
 	_, errb, code = runTool(t, dir, "-m", "u+q", "pipe")
 	if code != 1 || errb != "mkfifo: invalid mode\n" {
 		t.Errorf("invalid symbolic mode: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-m", "u+rw,", "pipe")
+	if code != 1 || errb != "mkfifo: invalid mode\n" {
+		t.Errorf("trailing-comma mode: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-m", "", "pipe")
+	if code != 1 || errb != "mkfifo: invalid mode\n" {
+		t.Errorf("empty mode: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "--frobnicate", "pipe")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {

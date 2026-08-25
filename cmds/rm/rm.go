@@ -135,8 +135,13 @@ func (r *remover) remove(op string) {
 	// A trailing separator requires the final component to resolve as a
 	// directory. rc.Path normalizes that separator away, so retain the
 	// operand-level signal for the preserve-root identity check.
+	// POSIX Issue 7 (2016 edition) requires refusal of any operand that
+	// resolves to the root directory before doing anything more with it;
+	// -d reaches a removal attempt just as -r does, so the failsafe must
+	// cover both (a bare `rm /` already stops at the Is-a-directory
+	// diagnostic below without attempting removal).
 	trailingSeparator := len(op) > 0 && os.IsPathSeparator(op[len(op)-1])
-	if r.recursive && r.preserveRoot && (fi.IsDir() || trailingSeparator) &&
+	if (r.recursive || r.dir) && r.preserveRoot && (fi.IsDir() || trailingSeparator) &&
 		isFilesystemRoot(rp, true) {
 		r.errf("it is dangerous to operate recursively on '%s'%s",
 			op, rootguard.AliasSuffix(op, rp))
@@ -148,7 +153,7 @@ func (r *remover) remove(op string) {
 			return
 		}
 		if r.dir && !r.recursive {
-			if r.shouldPrompt(rp) && !r.confirm(op) {
+			if r.shouldPrompt(rp, fi) && !r.confirm(op) {
 				return
 			}
 			r.removeFile(op)
@@ -158,13 +163,13 @@ func (r *remover) remove(op string) {
 		// directory.  Waiting until after removeTree would let a negative reply
 		// preserve the directory only after its children had already been
 		// removed.
-		if r.shouldPrompt(rp) && !r.confirm(op) {
+		if r.shouldPrompt(rp, fi) && !r.confirm(op) {
 			return
 		}
 		r.removeTree(op)
 		return
 	}
-	if r.shouldPrompt(rp) && !r.confirm(op) {
+	if r.shouldPrompt(rp, fi) && !r.confirm(op) {
 		return
 	}
 	r.removeFile(op)
@@ -352,12 +357,20 @@ func reason(err error) string {
 	return string(r)
 }
 
-func (r *remover) shouldPrompt(rp string) bool {
+func (r *remover) shouldPrompt(rp string, fi os.FileInfo) bool {
 	if r.force {
 		return false
 	}
 	if r.interactive {
 		return true
+	}
+	// The implicit write-protection prompt keys on the permissions of the
+	// file being removed. A symbolic link is removed by unlink() on the
+	// link itself, whose own permissions never deny writing; access(2)
+	// would wrongly consult the referent (and fail for a dangling link),
+	// so symlink operands never trigger the implicit prompt.
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return false
 	}
 	if r.isTerminal && !writableForPrompt(rp) {
 		return true

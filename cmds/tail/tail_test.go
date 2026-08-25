@@ -154,6 +154,41 @@ func TestTailErrors(t *testing.T) {
 	}
 }
 
+// TestTailSingleFileExactStdout pins the Issue 7 STDOUT contract for the
+// one-file synopsis: exactly the designated portion, no header, nothing
+// else.
+func TestTailSingleFileExactStdout(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", twelveLines())
+	out, errb, code := runTool(t, dir, "", "a")
+	want := "line3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\n"
+	if code != 0 || out != want || errb != "" {
+		t.Fatalf("tail a: code=%d out=%q err=%q, want exactly last 10 lines", code, out, errb)
+	}
+}
+
+// failWriter models a full/broken stdout so the write-failure status
+// contract (diagnostic on stderr, exit >0) is pinned.
+type failWriter struct{}
+
+func (failWriter) Write(p []byte) (int, error) { return 0, fmt.Errorf("boom") }
+
+func TestTailWriteFailure(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\nb\n"), Out: failWriter{}, Err: &errb},
+	}
+	code := cmd.Run(rc, nil)
+	if code != 1 {
+		t.Fatalf("write failure: code=%d, want 1 (stderr %q)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "tail: write error") {
+		t.Errorf("write failure diagnostic missing: %q", errb.String())
+	}
+}
+
 func TestTailHelpVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
 	if code != 0 || !strings.Contains(out, "Usage: tail") {

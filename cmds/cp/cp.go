@@ -427,12 +427,9 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		if c.update && !sourceNewer(sp, dp) {
 			return
 		}
-		if c.interactive && !c.confirm(dst) {
-			// POSIX: a declined -i reply means "do nothing more with
-			// source_file, go on to any remaining files" — a successful
-			// skip, not an error, so the exit status is unaffected.
-			return
-		}
+		// POSIX step 1 precedes step 3's prompt: a source that is the
+		// same file as the destination (or a destination directory that
+		// a non-directory cannot replace) is diagnosed without asking.
 		if ds, err := os.Stat(dp); err == nil {
 			if ss, err := os.Stat(sp); err == nil && os.SameFile(ss, ds) {
 				c.errf("'%s' and '%s' are the same file", src, dst)
@@ -442,6 +439,12 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 				c.errf("cannot overwrite directory '%s' with non-directory", dst)
 				return
 			}
+		}
+		if c.interactive && !c.confirm(dst) {
+			// POSIX: a declined -i reply means "do nothing more with
+			// source_file, go on to any remaining files" — a successful
+			// skip, not an error, so the exit status is unaffected.
+			return
 		}
 		if c.backup && !c.backupDest(dst) {
 			return
@@ -606,14 +609,24 @@ func sourceNewer(src, dst string) bool {
 // (GNU -p rule); mode/time failures are diagnosed.
 func (c *copier) preserveAttrs(src, dst string, fi os.FileInfo) {
 	dp := c.path(dst)
+	// Ownership is duplicated before the mode: several kernels clear
+	// S_ISUID/S_ISGID as a side effect of chown() even for a no-op
+	// change by the owner, so the bits survive only when chmod runs
+	// after chown (POSIX leaves the duplication order unspecified).
+	ownershipDuplicated := true
+	if c.preserve.ownership {
+		ownershipDuplicated = preserveOwner(dp, fi)
+	}
 	if c.preserve.mode {
 		mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+		if !ownershipDuplicated {
+			// POSIX -p: if the user ID or group ID cannot be duplicated,
+			// the S_ISUID and S_ISGID bits shall be cleared.
+			mode &^= os.ModeSetuid | os.ModeSetgid
+		}
 		if err := os.Chmod(dp, mode); err != nil {
 			c.errf("preserving permissions for '%s': %s", dst, reason(err))
 		}
-	}
-	if c.preserve.ownership {
-		preserveOwner(dp, fi)
 	}
 	if c.preserve.timestamps {
 		if err := os.Chtimes(dp, atime(fi), fi.ModTime()); err != nil {

@@ -129,6 +129,12 @@ func (m *maker) make(op string) {
 		return
 	}
 	if m.parents {
+		// POSIX pathname resolution: "a/b/" (and "a/b/.") name the same
+		// directory as "a/b". Without trimming, filepath.Dir("a/b/") is
+		// "a/b", so the parent recursion would create the FINAL component
+		// as an intermediate — giving it the u+wx intermediate mode and
+		// silently skipping -m.
+		op = trimTrailingSep(op)
 		ok, createdFinal := m.makeAll(op, true)
 		if ok && createdFinal {
 			m.applyMode(op)
@@ -141,6 +147,24 @@ func (m *maker) make(op string) {
 	}
 	m.verbosef("mkdir: created directory '%s'", op)
 	m.applyMode(op)
+}
+
+// trimTrailingSep drops trailing path separators (and a trailing "/."
+// component) so the -p walk treats "a/b/" and "a/b/." as naming the
+// directory a/b. It never trims below a root or volume root, and it
+// leaves "." and ".." intact (dot-dot resolution stays with the OS).
+func trimTrailingSep(op string) string {
+	vol := len(filepath.VolumeName(op))
+	for {
+		switch {
+		case len(op) > vol+1 && os.IsPathSeparator(op[len(op)-1]):
+			op = op[:len(op)-1]
+		case len(op) >= vol+2 && op[len(op)-1] == '.' && os.IsPathSeparator(op[len(op)-2]):
+			op = op[:len(op)-1]
+		default:
+			return op
+		}
+	}
 }
 
 // makeAll is the -p path: create each missing component, reporting

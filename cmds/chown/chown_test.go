@@ -55,9 +55,13 @@ func TestChownSelf(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, errb, code := runTool(t, dir, spec, "f")
+		out, errb, code := runTool(t, dir, spec, "f")
 		if code != 0 || errb != "" {
 			t.Errorf("chown %q: code=%d err=%q", spec, code, errb)
+		}
+		// POSIX: standard output is not used.
+		if out != "" {
+			t.Errorf("chown %q wrote to stdout: %q", spec, out)
 		}
 	}
 }
@@ -100,6 +104,12 @@ func TestChownErrors(t *testing.T) {
 	_, errb, code = runTool(t, dir, "no-such-user-xyzzy", "f")
 	if code != 1 || !strings.Contains(errb, "invalid user: 'no-such-user-xyzzy'") {
 		t.Errorf("invalid user: code=%d err=%q", code, errb)
+	}
+	// The group half of owner[:group] resolves independently: a bad
+	// group is diagnosed even when the owner half is omitted.
+	_, errb, code = runTool(t, dir, ":no-such-group-xyzzy", "f")
+	if code != 1 || !strings.Contains(errb, "invalid group: ':no-such-group-xyzzy'") {
+		t.Errorf("invalid group: code=%d err=%q", code, errb)
 	}
 	u := currentUser(t)
 	_, errb, code = runTool(t, dir, u.Uid, "no-such-file")

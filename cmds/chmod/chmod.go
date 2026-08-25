@@ -10,7 +10,11 @@
 // full GNU clause grammar (comma-separated clauses, multiple operators
 // per clause, rwxXst perms, u/g/o permission copying, umask handling
 // for empty who, setuid/setgid/sticky); octal modes up to 7777 with the
-// GNU keep-directory-setid rule for fewer than 5 digits.
+// GNU keep-directory-setid rule for fewer than 5 digits. In POSIX mode
+// (POSIXLY_CORRECT present in the invocation environment) an octal mode
+// is set absolutely, as Issue 7 requires ("the file mode bits shall be
+// set absolutely"); the keep-directory-setid rule is the non-POSIX GNU
+// default only.
 package chmodcmd
 
 import (
@@ -69,7 +73,9 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "chmod: cannot stat '%s': %v\n", *reference, err)
 			return 1
 		}
-		refMode := fmt.Sprintf("%04o", fileModeToBits(fi.Mode()))
+		// Five digits: --reference means "use RFILE's mode" exactly, so
+		// the short-octal keep-directory-setid rule must not apply.
+		refMode := fmt.Sprintf("%05o", fileModeToBits(fi.Mode()))
 		change, err := parseMode(refMode)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "chmod: invalid mode from reference: '%s'\n", refMode)
@@ -91,6 +97,9 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "chmod: invalid mode: '%s'\n", operands[0])
 		return 1
 	}
+	// POSIX mode: Issue 7 requires an octal mode to be set absolutely,
+	// so the GNU keep-directory-setid rule is suppressed.
+	change.absolute = envPresent(rc.Env, "POSIXLY_CORRECT")
 	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, noDereference, false, cmdLineH, followAll)
 }
 
@@ -173,10 +182,24 @@ type symOp struct {
 }
 
 type modeChange struct {
-	octal  bool
-	val    uint32
-	digits int
-	ops    []symOp
+	octal    bool
+	val      uint32
+	digits   int
+	absolute bool // POSIX mode: octal modes are set absolutely (no setid keep)
+	ops      []symOp
+}
+
+// envPresent reports whether key is assigned in the invocation
+// environment, even to an empty value; POSIXLY_CORRECT takes effect on
+// presence alone.
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 var errInvalidMode = errors.New("invalid mode")
@@ -277,7 +300,9 @@ func (mc *modeChange) apply(old uint32, isDir bool, um uint32) uint32 {
 		v := mc.val
 		// GNU: a numeric mode of 4 or fewer digits leaves a directory's
 		// setuid/setgid bits alone (they can be set, not cleared).
-		if isDir && mc.digits < 5 {
+		// POSIX Issue 7 instead requires octal modes to be set
+		// absolutely; mc.absolute (POSIX mode, --reference) wins.
+		if isDir && mc.digits < 5 && !mc.absolute {
 			v |= old & 0o6000
 		}
 		return v
@@ -293,7 +318,11 @@ func (mc *modeChange) apply(old uint32, isDir bool, um uint32) uint32 {
 		case 'o':
 			perm = cur & 7
 		}
-		if so.condX && (isDir || cur&0o111 != 0) {
+		// POSIX Issue 7: X applies when the file is a directory or the
+		// "current (unmodified)" mode has an execute bit — the mode the
+		// file had before this chmod, not the in-progress value, so
+		// "a-x,a+X" on an executable file keeps it executable.
+		if so.condX && (isDir || old&0o111 != 0) {
 			perm |= 1
 		}
 		who := so.who

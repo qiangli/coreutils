@@ -98,7 +98,7 @@ type moverDeps struct {
 
 func defaultMoverDeps() moverDeps {
 	return moverDeps{
-		rename: os.Rename, remove: os.Remove, removeAll: os.RemoveAll,
+		rename: rename, remove: os.Remove, removeAll: os.RemoveAll,
 		chmod: os.Chmod, chtimes: os.Chtimes, preserveOwner: preserveOwner,
 		fchmod:            func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) },
 		preserveFileOwner: preserveFileOwner, preserveFileTimes: preserveFileTimes,

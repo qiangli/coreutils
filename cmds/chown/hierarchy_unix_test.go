@@ -604,6 +604,54 @@ func TestChownCommandLineLinkChainIsFollowed(t *testing.T) {
 	}
 }
 
+// POSIX Utility Syntax Guideline 10: "--" ends the options, and what
+// follows is operands even when spelled like an option. The traversal
+// pre-scan must honor it too, or a file named "-H" would silently
+// switch a recursive walk into command-line mode instead of being
+// operated on.
+func TestChownDoubleDashEndsOptions(t *testing.T) {
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-H"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "-v", "-R", "--", u.Uid, "-H")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown -R -- uid -H: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != "-H" {
+		t.Errorf("reached %q, want the file named -H alone", got)
+	}
+	// -h after "--" is likewise an operand, not --no-dereference.
+	if err := os.WriteFile(filepath.Join(dir, "-h"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runTool(t, dir, "-v", "--", u.Uid, "-h")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown -- uid -h: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != "-h" {
+		t.Errorf("reached %q, want the file named -h alone", got)
+	}
+}
+
+// POSIX gives '-' no special meaning for chown: it names a file called
+// "-", it does not select standard input.
+func TestChownDashOperandIsAFileName(t *testing.T) {
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "-v", u.Uid, "-")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown uid -: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != "-" {
+		t.Errorf("reached %q, want the file named - alone", got)
+	}
+}
+
 type failingOutputWriter struct{ err error }
 
 func (w failingOutputWriter) Write([]byte) (int, error) { return 0, w.err }

@@ -4,6 +4,8 @@ package cpcmd
 
 import "os"
 
-// preserveOwner is a no-op where POSIX ownership does not apply
-// (windows has no uid/gid; -p still preserves mode and timestamps).
-func preserveOwner(dst string, fi os.FileInfo) {}
+// preserveOwner reports false where POSIX ownership cannot be
+// duplicated (windows has no uid/gid). -p still preserves mode and
+// timestamps; the caller clears S_ISUID/S_ISGID, which are no-op
+// bits on these platforms.
+func preserveOwner(dst string, fi os.FileInfo) bool { return false }

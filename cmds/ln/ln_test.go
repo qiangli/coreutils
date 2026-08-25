@@ -310,6 +310,135 @@ func TestLnLogicalAndPhysicalSourceSymlink(t *testing.T) {
 	}
 }
 
+// POSIX Issue 7: the -L/-P default for a symlink source_file is
+// implementation-defined; this implementation documents -P (link to the
+// symlink itself) on every platform.  darwin's link(2) follows symlinks,
+// so this pins that the default does not silently become -L there.
+func TestLnDefaultHardLinkToSymlinkIsPhysical(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real"), "real")
+	if err := os.Symlink("real", filepath.Join(dir, "sym")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "sym", "out")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln sym out: code=%d err=%q", code, errb)
+	}
+	target, err := os.Readlink(filepath.Join(dir, "out"))
+	if err != nil || target != "real" {
+		t.Errorf("default hard link readlink=%q err=%v, want symlink to 'real' (-P default)", target, err)
+	}
+}
+
+// POSIX Issue 7: specifying both -L and -P is not an error; the last one
+// specified determines the behavior.
+func TestLnLastOfLogicalPhysicalWins(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real"), "real")
+	if err := os.Symlink("real", filepath.Join(dir, "sym")); err != nil {
+		t.Fatal(err)
+	}
+	// -L then -P: physical wins -> new name is itself a symlink.
+	_, errb, code := runTool(t, dir, "-L", "-P", "sym", "lp")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -L -P: code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "lp")); err != nil || target != "real" {
+		t.Errorf("-L -P readlink=%q err=%v, want physical link to symlink", target, err)
+	}
+	// -P then -L: logical wins -> new name is a hard link to the referenced file.
+	_, errb, code = runTool(t, dir, "-P", "-L", "sym", "pl")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -P -L: code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "pl")); err == nil {
+		t.Fatalf("-P -L created link to symlink (%q), want dereferenced file", target)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "pl")); string(got) != "real" {
+		t.Errorf("-P -L content=%q", got)
+	}
+	// Combined short form: -PL is equivalent to -P -L.
+	_, errb, code = runTool(t, dir, "-PL", "sym", "combined")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -PL: code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "combined")); err == nil {
+		t.Fatalf("-PL created link to symlink (%q), want dereferenced file", target)
+	}
+}
+
+// POSIX Issue 7: if -s is specified, -L and -P are silently ignored.
+func TestLnSymbolicIgnoresLogicalPhysical(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real"), "real")
+	if err := os.Symlink("real", filepath.Join(dir, "sym")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"-s", "-L", "sym", "outL"},
+		{"-s", "-P", "sym", "outP"},
+		{"-sLP", "sym", "outLP"},
+	} {
+		_, errb, code := runTool(t, dir, args...)
+		if code != 0 || errb != "" {
+			t.Fatalf("ln %v: code=%d err=%q", args, code, errb)
+		}
+		out := args[len(args)-1]
+		if target, err := os.Readlink(filepath.Join(dir, out)); err != nil || target != "sym" {
+			t.Errorf("ln %v readlink=%q err=%v, want verbatim 'sym'", args, target, err)
+		}
+	}
+}
+
+// POSIX Issue 7 -s: source_file need not exist; a dangling target and even
+// a self-referential name are stored verbatim.
+func TestLnSymbolicDanglingSource(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-s", "no-such-file", "l")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -s dangling: code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "l")); err != nil || target != "no-such-file" {
+		t.Errorf("dangling readlink=%q err=%v", target, err)
+	}
+	// Self-loop: the destination does not exist yet, so the same-entry
+	// diagnostic must not fire and the link is created.
+	_, errb, code = runTool(t, dir, "-s", "a", "a")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -s a a (absent): code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "a")); err != nil || target != "a" {
+		t.Errorf("self-loop readlink=%q err=%v", target, err)
+	}
+}
+
+// POSIX Issue 7: an existing destination without -f draws a diagnostic,
+// processing of that source_file stops, remaining source_files are still
+// processed, and the exit status is >0.
+func TestLnExistingDestinationDiagnosesAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "s1"), "1")
+	write(t, filepath.Join(dir, "s2"), "2")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "d", "s1"), "old")
+	_, errb, code := runTool(t, dir, "s1", "s2", "d")
+	if code != 1 || !strings.Contains(errb, "d/s1") {
+		t.Fatalf("ln s1 s2 d: code=%d err=%q, want diagnostic naming d/s1 and exit 1", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "d", "s1")); string(got) != "old" {
+		t.Errorf("existing destination modified without -f: %q", got)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "d", "s2")); err != nil || string(got) != "2" {
+		t.Errorf("remaining source not processed: content=%q err=%v", got, err)
+	}
+}
+
 func TestLnVerbose(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "a")

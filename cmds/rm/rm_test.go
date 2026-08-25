@@ -573,6 +573,71 @@ func TestRmImplicitDirectoryPromptPrecedesDescent(t *testing.T) {
 	}
 }
 
+// POSIX Issue 7 (2016 edition): "if an operand resolves to the root
+// directory, rm shall write a diagnostic message to standard error and do
+// nothing more with such operands" — the -d removal path must hit the same
+// failsafe as -r, not attempt rmdir() on the root.
+func TestRmPreserveRootGuardsDashDRemoval(t *testing.T) {
+	dir := t.TempDir()
+	guarded := filepath.Join(dir, "guarded")
+	if err := os.Mkdir(guarded, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	old := isFilesystemRoot
+	isFilesystemRoot = func(path string, followFinal bool) bool {
+		return rootguard.SameFile(path, guarded, followFinal)
+	}
+	t.Cleanup(func() { isFilesystemRoot = old })
+
+	_, errb, code := runTool(t, dir, "-d", "guarded")
+	if code != 1 || !strings.Contains(errb, "it is dangerous to operate recursively on 'guarded'") {
+		t.Fatalf("rm -d root operand: code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Stat(guarded); err != nil || !fi.IsDir() {
+		t.Fatalf("root-resolving directory was removed by -d: %v", err)
+	}
+}
+
+// The implicit write-protection prompt (unwritable + terminal, no -f) must
+// not fire for symlink operands: unlink() removes the link itself, whose own
+// permissions never deny writing, and access(2) would consult the referent
+// (or fail outright for a dangling link).
+func TestRmImplicitPromptSkipsSymlinkOperands(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "referent"), "keep")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("referent", link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink("nowhere", dangling); err != nil {
+		t.Fatal(err)
+	}
+
+	oldIsTerminal := isTerminal
+	oldWritableForPrompt := writableForPrompt
+	t.Cleanup(func() {
+		isTerminal = oldIsTerminal
+		writableForPrompt = oldWritableForPrompt
+	})
+	isTerminal = func(io.Reader) bool { return true }
+	writableForPrompt = func(string) bool { return false }
+
+	_, errb, code := runToolIn(t, dir, "", "link", "dangling")
+	if code != 0 || errb != "" {
+		t.Fatalf("rm symlinks with unwritable referents: code=%d err=%q", code, errb)
+	}
+	for _, path := range []string{link, dangling} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("symlink %q survived without a prompt path: %v", path, err)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "referent")); err != nil || string(got) != "keep" {
+		t.Fatalf("referent disturbed: %q %v", got, err)
+	}
+}
+
 func TestRmInteractiveAfterForceNeedsOperand(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "-f", "-i")

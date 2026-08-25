@@ -872,6 +872,93 @@ func TestMvEXDEVRegularCharacteristicsStayBoundToCreatedDescriptor(t *testing.T)
 	}
 }
 
+// POSIX: an error on one source_file is diagnosed, affects the exit status,
+// and does not stop processing of the remaining source_files.
+func TestMvContinuesPastOperandErrors(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "good"), "payload")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "nope", "good", "d")
+	if code != 1 || !strings.Contains(errb, "cannot stat 'nope'") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "d", "good")) != "payload" {
+		t.Fatal("later operand not moved after earlier failure")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "good")); !os.IsNotExist(err) {
+		t.Fatal("moved source still present")
+	}
+}
+
+// rename() equivalence for the target_dir form: a source directory replaces
+// an existing EMPTY directory of the same name inside the target, and a
+// NON-EMPTY one is a diagnosed per-operand error (rename fails ENOTEMPTY /
+// EEXIST), leaving both hierarchies intact.
+func TestMvDirectoryOntoExistingDirectoryInTarget(t *testing.T) {
+	t.Run("empty destination replaced", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("MoveFileEx cannot replace an existing directory on Windows")
+		}
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "src", "fresh"), "new")
+		if err := os.MkdirAll(filepath.Join(dir, "target", "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, errb, code := runTool(t, dir, "src", "target")
+		if code != 0 || errb != "" {
+			t.Fatalf("code=%d err=%q", code, errb)
+		}
+		if read(t, filepath.Join(dir, "target", "src", "fresh")) != "new" {
+			t.Fatal("source hierarchy did not replace empty destination directory")
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "src")); !os.IsNotExist(err) {
+			t.Fatal("source directory still present")
+		}
+	})
+	t.Run("nonempty destination diagnosed", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "src", "fresh"), "new")
+		write(t, filepath.Join(dir, "target", "src", "stale"), "old")
+		_, errb, code := runTool(t, dir, "src", "target")
+		if code != 1 || !strings.Contains(errb, "cannot move 'src'") {
+			t.Fatalf("code=%d err=%q", code, errb)
+		}
+		if read(t, filepath.Join(dir, "target", "src", "stale")) != "old" {
+			t.Fatal("nonempty destination child modified")
+		}
+		if read(t, filepath.Join(dir, "src", "fresh")) != "new" {
+			t.Fatal("source hierarchy modified after failed rename")
+		}
+	})
+}
+
+// mv moves a symlink operand itself (the link, never its referent).
+func TestMvSymlinkOperandMovesLinkItself(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on some Windows hosts")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "referent"), "stay")
+	if err := os.Symlink("referent", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "link", "moved")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "moved")); err != nil || target != "referent" {
+		t.Fatalf("moved entry is not the original link: %q %v", target, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "link")); !os.IsNotExist(err) {
+		t.Fatal("source link still present")
+	}
+	if read(t, filepath.Join(dir, "referent")) != "stay" {
+		t.Fatal("referent disturbed")
+	}
+}
+
 func exdevDeps() moverDeps {
 	deps := defaultMoverDeps()
 	deps.rename = func(oldpath, newpath string) error {
