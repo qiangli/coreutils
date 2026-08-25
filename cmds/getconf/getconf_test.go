@@ -24,6 +24,9 @@ func runCmd(t *testing.T, args ...string) (string, string, int) {
 // yields a plausible-looking wrong integer, which no self-consistent test
 // would catch.
 func TestAgreesWithSystemGetconf(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("host libc differential is covered by the Darwin adapter")
+	}
 	sys, err := exec.LookPath("getconf")
 	if err != nil {
 		t.Skip("no system getconf to compare against")
@@ -57,12 +60,21 @@ func TestAgreesWithSystemGetconf(t *testing.T) {
 }
 
 func TestPathconfAgreesWithSystem(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("host libc differential is covered by the Darwin adapter")
+	}
 	sys, err := exec.LookPath("getconf")
 	if err != nil {
 		t.Skip("no system getconf")
 	}
 	dir := t.TempDir()
-	for _, name := range []string{"LINK_MAX", "NAME_MAX", "PATH_MAX", "PIPE_BUF", "_POSIX_CHOWN_RESTRICTED", "_POSIX_NO_TRUNC"} {
+	for _, name := range []string{
+		"LINK_MAX", "MAX_CANON", "MAX_INPUT", "NAME_MAX", "PATH_MAX", "PIPE_BUF",
+		"_POSIX_CHOWN_RESTRICTED", "_POSIX_NO_TRUNC", "_POSIX_VDISABLE",
+		"FILESIZEBITS", "POSIX2_SYMLINKS", "POSIX_ALLOC_SIZE_MIN",
+		"POSIX_REC_INCR_XFER_SIZE", "POSIX_REC_MAX_XFER_SIZE", "POSIX_REC_MIN_XFER_SIZE",
+		"POSIX_REC_XFER_ALIGN", "SYMLINK_MAX", "_POSIX_ASYNC_IO", "_POSIX_PRIO_IO", "_POSIX_SYNC_IO",
+	} {
 		want, err := exec.Command(sys, name, dir).Output()
 		if err != nil {
 			continue
@@ -71,6 +83,22 @@ func TestPathconfAgreesWithSystem(t *testing.T) {
 		got, _, code := runCmd(t, name, dir)
 		if code != 0 || got != expect {
 			t.Errorf("%s %s: ours %q (exit %d), system %q", name, dir, got, code, expect)
+		}
+	}
+}
+
+func TestDarwinConfstrAdapterMatchesEveryQueryableValue(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin adapter test")
+	}
+	for _, name := range confstrVars {
+		want, err := exec.Command("getconf", name).Output()
+		if err != nil { // Darwin deliberately has no V7 confstr environment.
+			continue
+		}
+		got, _, code := runCmd(t, name)
+		if code != 0 || got != strings.TrimSpace(string(want)) {
+			t.Errorf("%s: ours %q (exit %d), host %q", name, got, code, strings.TrimSpace(string(want)))
 		}
 	}
 }
@@ -181,6 +209,18 @@ func TestWindowsFailsClosed(t *testing.T) {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != undefined {
 			t.Errorf("%s = %q (exit %d), want undefined", name, got, code)
+		}
+	}
+}
+
+func TestLinuxDoesNotInventLibcValues(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux only")
+	}
+	for _, name := range []string{"ARG_MAX", "CLK_TCK", "PATH", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "RE_DUP_MAX", "SYMLOOP_MAX"} {
+		got, _, code := runCmd(t, name)
+		if code != 0 || got != undefined {
+			t.Errorf("%s = %q (exit %d), want undefined without a libc adapter", name, got, code)
 		}
 	}
 }

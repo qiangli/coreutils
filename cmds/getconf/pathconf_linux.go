@@ -3,11 +3,11 @@
 package getconfcmd
 
 import (
-	"path/filepath"
 	"strconv"
 
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/sys/unix"
+	"path/filepath"
 )
 
 // Selector numbers from glibc bits/confname.h. They are userspace ABI and
@@ -32,13 +32,23 @@ const (
 	pcChownRestricted = 6
 	pcNoTrunc         = 7
 	pcVdisable        = 8
+	pc2Symlinks       = pcUndefined
+	pcAllocSizeMin    = pcUndefined
+	pcAsyncIO         = pcUndefined
+	pcFilesizeBits    = pcUndefined
+	pcPrioIO          = pcUndefined
+	pcRecIncrXferSize = pcUndefined
+	pcRecMaxXferSize  = pcUndefined
+	pcRecMinXferSize  = pcUndefined
+	pcRecXferAlign    = pcUndefined
+	pcSymlinkMax      = pcUndefined
+	pcSyncIO          = pcUndefined
 )
 
-// Linux has no pathconf(2) — glibc computes it from fixed limits plus what the
-// filesystem reports. Do the same rather than pretend a syscall exists: the
-// only value that genuinely varies per filesystem is NAME_MAX, which statfs
-// supplies. The path is still stat'ed first so a missing operand is an error
-// rather than a silently fabricated constant.
+// Linux has no pathconf(2). glibc's answers are libc policy, not kernel API;
+// absent a libc adapter we only report the filesystem name limit that statfs
+// actually exposes. Every other value is deliberately undefined rather than a
+// POSIX minimum or a guessed glibc default.
 func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool) {
 	p := path
 	if !filepath.IsAbs(p) && rc != nil && rc.Dir != "" {
@@ -51,21 +61,8 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool) {
 	switch which {
 	case pcNameMax:
 		if st.Namelen > 0 {
-			return strconv.FormatInt(int64(st.Namelen), 10), true
+			return strconv.FormatUint(uint64(st.Namelen), 10), true
 		}
-		return "255", true
-	case pcPathMax:
-		return "4096", true
-	case pcPipeBuf:
-		return "4096", true
-	case pcLinkMax:
-		return "127", true
-	case pcMaxCanon, pcMaxInput:
-		return "255", true
-	case pcChownRestricted, pcNoTrunc:
-		return "1", true
-	case pcVdisable:
-		return "0", true
 	}
 	return undefined, true
 }

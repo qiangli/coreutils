@@ -25,10 +25,7 @@ func sysconfStr(which int) (string, bool) {
 	case scNprocessorsConf, scNprocessorsOnln:
 		return strconv.Itoa(runtime.NumCPU()), true
 	case scClkTck:
-		// 100 Hz is the value both Linux and Darwin report; it is part of the
-		// userspace ABI (times(2) is specified in these units) rather than a
-		// tunable.
-		return "100", true
+		return clockTicksStr()
 	case scOpenMax:
 		return rlimitStr(unix.RLIMIT_NOFILE)
 	case scArgMax:

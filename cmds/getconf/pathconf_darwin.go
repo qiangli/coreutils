@@ -32,6 +32,17 @@ const (
 	pcChownRestricted = 7
 	pcNoTrunc         = 8
 	pcVdisable        = 9
+	pc2Symlinks       = 15
+	pcAllocSizeMin    = 16
+	pcAsyncIO         = 17
+	pcFilesizeBits    = 18
+	pcPrioIO          = 19
+	pcRecIncrXferSize = 20
+	pcRecMaxXferSize  = 21
+	pcRecMinXferSize  = 22
+	pcRecXferAlign    = 23
+	pcSymlinkMax      = 24
+	pcSyncIO          = 25
 )
 
 // Darwin has a real pathconf(2), so ask the kernel. A negative result with no
