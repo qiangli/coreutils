@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// A platform with no kernel-version symbol (Windows) probes version as
-// ""; the field must be skipped for -v and -a alike so that -a -v stays
-// byte-identical to -a and no empty field is joined into the line.
-func TestAssembleSkipsEmptyVersion(t *testing.T) {
+// A synthetic or failed probe can lack a version value. Assembly must not
+// introduce an empty output column, although every supported platform probe
+// is required to provide a non-empty POSIX -v symbol.
+func TestAssembleSkipsSyntheticEmptyVersion(t *testing.T) {
 	info := sysinfo{sysname: "S", nodename: "N", release: "R", version: "", machine: "M"}
 	want := []string{"S", "N", "R", "M"}
 	if got := assemble(info, selection{all: true}); !reflect.DeepEqual(got, want) {

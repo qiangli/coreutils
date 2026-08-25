@@ -25,7 +25,7 @@ command-specific residuals below make the remaining boundary explicit.
 | `nohup` | [Issue 7 nohup](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nohup.html) | partial | Translated diagnostics absent. The 126/127 exit partition, SIGHUP immunity of both the utility and the nohup invocation itself, terminal stdout/stderr redirection to `nohup.out` (invocation dir then `$HOME`), the required appending notice, and environment passthrough are all pinned by tests; the earlier 125/`POSIXLY_CORRECT` design was removed in 9c85d14 and status 127 is now unconditional, confirmed by test across environments. Residuals: `--help`/`--version` as a sole argument answer about nohup instead of invoking a utility of that name (GNU-shaped extension); `nohup.out` create mode passes 0600 to open but is not re-chmodded against the umask, and no test stats the created mode or proves append-after-existing-content; the "neither file can be opened ⇒ utility not invoked" double-failure case and the non-ENOENT start-failure branch (currently 126) are untested; a terminal stdin is redirected to a write-only /dev/null, so the child reads EBADF rather than EOF (within the "may redirect from an unspecified file" latitude, pinned by test); pty-dependent tests skip silently where no pty exists. |
 | `paste` | [Issue 7 paste](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/paste.html) | partial | Translated diagnostics absent. Parallel and serial modes, delimiter cycling and per-line/per-file reset, `\n`/`\t`/`\\`/`\0` escapes, EOF-as-empty-lines, the `-s` empty-file bare newline, circular multi-`-` stdin reads (parallel), and the no-output-on-open-failure rule are pinned. Residuals: zero operands default to stdin (extension beyond the `file...` synopsis); delimiter lists are decoded as UTF-8 unconditionally, and a test pins that non-locale-aware behavior although LC_CTYPE is normative; repeated `-` under `-s` sits on a genuine OPERANDS/`-s` clause conflict, resolved silently (first `-` drains stdin) and untested; the 12-operand minimum, `\\` escape, serial `\0`, mid-file read errors, and stdout write failure are untested. |
 | `touch` | [Issue 7 touch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/touch.html) | partial | Translated diagnostics absent. This batch fixes the `-t` SS=60 clause: 60 now means one second after :59 at every position, including 23:59 where the stamp rolls into the next day/month/year (previously "invalid date format"). Remaining: `-t` stamps before the portable signed-32-bit boundary are rejected as a syntax error (an implementation limit reported with a misleading diagnostic, deliberately pinned by test); the `--stamp` long spelling bypasses the one-time-source exclusivity that `-t` enforces; `-r` atime propagation is untested everywhere and wrong on non-linux/darwin/windows builds (`atime_other.go` substitutes mtime); creation mode 0666, `-c` on existing files, multi-operand error continuation, and `-t` field-range rejections are untested. |
-| `uname` | [Issue 7 uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html) | partial | Translated diagnostics absent. Fixed field order, `-a` ≡ `-mnrsv` with extensions excluded, and operand rejection are pinned. This batch fixes the Windows `-a -v` shape: the empty version symbol is now skipped consistently (previously `-a -v` joined an empty field, emitting a double space and breaking `-a -v` ≡ `-a`), with the assembly extracted into a pure helper and fixture-tested on every host. Remaining: on Windows plain `-v` still writes an empty line because no kernel-version symbol exists there — a documented platform choice, not conformance; probe values are asserted for internal consistency, not against a reference uname; utsname whitespace runs are collapsed; no Windows runtime test exists. |
+| `uname` | [Issue 7 uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html) | partial | Translated diagnostics absent. Fixed field order, `-a` ≡ `-mnrsv` with extensions excluded, and operand rejection are pinned. This batch closes the Windows `-v` omission: the implementation-defined version symbol is now `Build N` from `RtlGetVersion`, while output assembly defensively avoids empty fields and repeated selectors. The Windows-tagged test pins the non-empty version contract and is compiled by the cross-OS gate; probe values are otherwise asserted for internal consistency rather than against a separate reference uname, utsname whitespace runs are collapsed, and no Windows runtime runner is available in this gate. |
 
 ## Fixes applied in this batch
 
@@ -46,11 +46,13 @@ Bounded, confirmed-defect fixes only; no GNU 9.11 broadening:
   sequence truncated at EOF now records its discard. Tests:
   `iconv_discard_state_test.go#TestDiscardStatusSurvivesLaterEmptyOperand`,
   `#TestDiscardTruncatedGB18030FourByteTailFails`.
-- `cmds/uname/uname.go` — output assembly extracted into `assemble()`; an
-  empty kernel-version symbol is skipped for `-v` and `-a` alike so
-  `-a -v` stays byte-identical to `-a` on Windows. Tests:
-  `uname_assemble_test.go#TestAssembleSkipsEmptyVersion`,
-  `#TestAssembleFixedOrderWithVersion`.
+- `cmds/uname/uname.go` and `uname_windows.go` — output assembly extracted
+  into `assemble()` and Windows now supplies the required implementation-
+  defined `-v` symbol as `Build N` from `RtlGetVersion`; repeated selectors
+  do not duplicate fields. Tests:
+  `uname_assemble_test.go#TestAssembleSkipsSyntheticEmptyVersion`,
+  `#TestAssembleFixedOrderWithVersion`, and
+  `uname_windows_test.go#TestWindowsProbeHasPOSIXVersion`.
 
 All four fixes were verified fail-closed: the new tests fail against the
 pre-fix sources and pass after.
@@ -71,7 +73,8 @@ pre-fix sources and pass after.
   unconditionally (125/`POSIXLY_CORRECT` removed), the invocation itself
   survives SIGHUP, `paste -s` emits a bare newline for an empty file,
   `touch` treats `-` as an ordinary pathname, and `uname -a` excludes `-o`
-  while `-a -v` equals `-a` (now also on Windows, per the fix above).
+  while `-a -v` equals `-a`; Windows now also supplies a non-empty `-v`
+  implementation string.
 
 ## Supersessions of stale audit statements
 

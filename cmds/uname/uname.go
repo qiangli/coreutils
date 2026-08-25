@@ -6,14 +6,14 @@
 // -s/-r/-m report what the platform's own uname reports (e.g. "Darwin
 // ... arm64" on Apple Silicon). On Windows the kernel name is
 // "Windows_NT", the release is "major.minor.build" from RtlGetVersion,
-// and the machine maps GOARCH to the GNU spelling (x86_64, aarch64).
+// the version is "Build N", and the machine maps GOARCH to the GNU spelling
+// (x86_64, aarch64).
 //
 // -a is exactly -mnrsv, as Issue 7 requires ("Behave as though all of
 // the options -mnrsv were specified"), and prints the selected symbols
 // in the required s n r v m order. The non-POSIX -o/-p/-i fields are
 // printed only when explicitly requested, never implied by -a. The
-// kernel-version field is omitted on platforms that do not provide one
-// (Windows), where that implementation-defined symbol does not exist.
+// version symbol is implementation-defined, as POSIX permits.
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/uname/uname.go (BSD-3-Clause)
 // and https://github.com/guonaihong/coreutils uname/uname.go (Apache-2.0).
@@ -42,7 +42,7 @@ type sysinfo struct {
 	sysname          string // -s: kernel name
 	nodename         string // -n: network node hostname
 	release          string // -r: kernel release
-	version          string // kernel version; printed only by -a, "" = omit
+	version          string // -v: implementation-defined kernel/OS version
 	machine          string // -m: machine hardware name
 	processor        string // -p: processor type
 	hardwarePlatform string // -i: hardware platform
@@ -127,9 +127,8 @@ type selection struct {
 // (sysname nodename release version machine), independent of the order
 // the flags were typed. -a behaves as though -mnrsv were specified and
 // selects nothing else: -o, -p, and -i are extensions and stay opt-in.
-// A platform with no kernel-version symbol (Windows) reports version
-// as ""; that field is skipped everywhere so that -a -v remains
-// byte-identical to -a and no empty field is joined into the line.
+// A failed or synthetic probe can still lack a version value; skip an empty
+// field defensively so repeated selectors never introduce an empty column.
 func assemble(info sysinfo, sel selection) []string {
 	var parts []string
 	if sel.sysname || sel.all {

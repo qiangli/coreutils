@@ -760,7 +760,7 @@ cmp [-l|-s] file1 file2
 
 **Standard output:** Default mode writes "%s %s differ: char %d, line %d" for the first difference; -l lists every difference as "%d %o %o" per line, exactly in POSIX mode (POSIXLY_CORRECT) and with GNU-diffutils column alignment otherwise; -s writes nothing.
 
-**Standard error:** Used only for diagnostic messages; a shorter identical-prefix file yields "cmp: EOF on %s" plus blank-led additional info in default and -l modes.
+**Standard error:** Used only for diagnostic messages; a shorter identical-prefix file yields "cmp: EOF on %s" plus implementation-defined additional information in default and -l modes.
 
 **Effects:** `Reads inputs without modifying them; no output files.`.
 
@@ -4779,7 +4779,7 @@ touch [-acm] [-r ref_file|-t time|-d date_time] file...
 
 **Issue 7 option-argument candidate:** `-d=<date_time>; -r=<ref_file>; -t=<time>`.
 
-**Operands:** `file`. Each file operand is processed independently and a failure continues with the rest; an absent file is created empty with mode 0666 unless -c (whose suppressed creation is not an error); neither -a nor -m selects both; without -r, -t, or -d the current time is used; - is an ordinary pathname.
+**Operands:** `file`. Each file operand is processed independently and a failure continues with the rest; an absent file is created empty with mode 0666 unless -c (whose suppressed creation is not an error); if neither -a nor -m is supplied, both timestamps are selected; without -r, -t, or -d the current time is used; - is an ordinary pathname.
 
 **Special tokens:** -r, -t, and -d are mutually exclusive time sources; -t accepts [[CC]YY]MMDDhhmm[.SS] with 69-99/00-68 century windowing and SS=60 meaning one second after :59 (rolling into the next day at 23:59); -d accepts YYYY-MM-DDThh:mm:SS with T or space separator, period or comma fraction, and empty (local) or Z (UTC) timezone; option parsing stops at the first operand.
 
@@ -5175,11 +5175,11 @@ uname [-amnrsv]
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** One line of the selected symbols in the fixed order sysname nodename release version machine regardless of flag order, separated by single spaces; no flags means -s; -a selects exactly -mnrsv; a platform without a kernel-version symbol omits that field consistently so -a -v equals -a.
+**Standard output:** One line of the selected symbols in the fixed order sysname nodename release version machine regardless of flag order, separated by single spaces; no flags means -s; -a selects exactly -mnrsv; all supported platform probes provide every selected POSIX symbol; repeated selectors do not duplicate fields.
 
 **Standard error:** Used only for diagnostic messages.
 
-**Effects:** `Values come from uname(2) on unix (whitespace runs collapsed); on Windows the kernel name is Windows_NT, the release is major.minor.build from RtlGetVersion, the machine maps GOARCH to the GNU spelling, and no kernel-version symbol exists.`.
+**Effects:** `Values come from uname(2) on unix (whitespace runs collapsed); on Windows the kernel name is Windows_NT, release is major.minor.build, version is Build N from RtlGetVersion, and machine maps GOARCH to the GNU spelling.`.
 
 **Exit status:** 0 when the requested information was written; 1 when the system probe fails; 2 usage.
 
@@ -5193,7 +5193,7 @@ uname [-amnrsv]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uname`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/uname/uname_test.go#TestUnameDefaultIsKernelName;cmds/uname/uname_test.go#TestUnameFields;cmds/uname/uname_test.go#TestUnameCombinedAndAll;cmds/uname/uname_test.go#TestUnameAllIsExactlyMNRSV;cmds/uname/uname_test.go#TestUnameErrors;cmds/uname/uname_assemble_test.go#TestAssembleSkipsEmptyVersion;cmds/uname/uname_assemble_test.go#TestAssembleFixedOrderWithVersion`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/uname/uname_test.go#TestUnameDefaultIsKernelName;cmds/uname/uname_test.go#TestUnameFields;cmds/uname/uname_test.go#TestUnameCombinedAndAll;cmds/uname/uname_test.go#TestUnameAllIsExactlyMNRSV;cmds/uname/uname_test.go#TestUnameErrors;cmds/uname/uname_assemble_test.go#TestAssembleSkipsSyntheticEmptyVersion;cmds/uname/uname_assemble_test.go#TestAssembleFixedOrderWithVersion;cmds/uname/uname_windows_test.go#TestWindowsProbeHasPOSIXVersion`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html).
 
