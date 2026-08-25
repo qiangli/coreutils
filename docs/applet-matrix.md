@@ -111,7 +111,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 26 |
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 22 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
-| `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 22 |
+| `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 3 | 32 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 48 |
@@ -121,7 +121,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
 | `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 7 |
-| `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 2 | 20 |
+| `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 3 | 33 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 14 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
@@ -152,7 +152,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `pwd` | `cmds/pwd` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `readlink` | `cmds/readlink` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `realpath` | `cmds/realpath` | — | GNU Coreutils | yes | no | 1 | 10 |
-| `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 3 | 7 |
+| `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 4 | 32 |
 | `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 29 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 4 | 63 |
