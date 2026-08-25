@@ -1142,7 +1142,7 @@ date [-u] [+format]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `+format; mmddhhmm[[cc]yy]`. A leading + marks the format operand: conversion specifications (all Issue 7 specifiers including the %E/%O modified forms) are replaced and other characters copied, newline-terminated; the XSI mmddhhmm[[cc]yy] set-date operand is recognized and refused loudly as unsupported without writing to standard output.
+**Operands:** `+format; mmddhhmm[[cc]yy]`. A leading + marks the format operand: conversion specifications (all Issue 7 specifiers including the %E/%O modified forms) are replaced and other characters copied, newline-terminated; the XSI mmddhhmm[[cc]yy] operand validates and sets the system clock, using the current year when omitted and the specified Issue 7 two-digit-year mapping.
 
 **Special tokens:** %% literal percent; %n newline; %t tab; E and O modifier prefixes render as the unmodified conversion; an unknown conversion specification is copied literally.
 
@@ -1150,13 +1150,13 @@ date [-u] [+format]
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Standard output:** With no operand, the POSIX default format "+%a %b %e %H:%M:%S %Z %Y"; with +format, the expanded format; always newline-terminated.
+**Standard output:** With no operand, the POSIX default format "+%a %b %e %H:%M:%S %Z %Y"; with +format, the expanded format; after a successful XSI set, the resulting date in the default format; always newline-terminated.
 
 **Standard error:** Used only for diagnostic messages.
 
-**Effects:** `Read-only: the base form never modifies system state; -u formats as if TZ were UTC0, otherwise TZ from the invocation environment selects the timezone.`.
+**Effects:** `The XSI operand sets the system clock through the platform clock API; -u interprets and formats as if TZ were UTC0, otherwise TZ from the invocation environment selects the timezone.`.
 
-**Exit status:** 0 when the date was written successfully; greater than 0 if an error occurred, including the refused XSI set form.
+**Exit status:** 0 when the date was written or set and reported successfully; greater than 0 if validation, clock setting, formatting, or output failed.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1168,7 +1168,7 @@ date [-u] [+format]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/date`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/date/date_test.go#TestDateFormats;cmds/date/date_test.go#TestDateAlternativeModifiers;cmds/date/date_test.go#TestDateTZ;cmds/date/date_test.go#TestDateLCTimePrecedence;cmds/date/date_test.go#TestDateDefaultShape;cmds/date/date_test.go#TestDateXSISetDateOperandRefusedLoudly;cmds/date/date_test.go#TestDateErrors;cmds/date/date_test.go#TestDateInvalidUsageDiagnostics;cmds/date/date_test.go#TestDateWriteErrorDiagnostic`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:date:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/date/date_test.go#TestDateFormats;cmds/date/date_test.go#TestDateAlternativeModifiers;cmds/date/date_test.go#TestDateTZ;cmds/date/date_test.go#TestDateLCTimePrecedence;cmds/date/date_test.go#TestDateLCTimeCompleteFormatsAndUnsupported;cmds/date/date_test.go#TestDateDefaultShape;cmds/date/date_test.go#TestDateXSISetDateOperand;cmds/date/date_test.go#TestDateXSISetDateRejectsBeforeMutationAndPropagatesFailure;cmds/date/date_test.go#TestDateXSIYearDefaultUsesSelectedTimezone;cmds/date/date_test.go#TestDateErrors;cmds/date/date_test.go#TestDateInvalidUsageDiagnostics;cmds/date/date_test.go#TestDateWriteErrorDiagnostic`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:date:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [date](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/date.html).
 
