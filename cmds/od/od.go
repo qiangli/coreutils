@@ -46,7 +46,7 @@ type dumpFormat struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	args = normalizeTypeAliasArgs(args)
+	args = expandFormatArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	addrRadix := fs.StringP("address-radix", "A", "o", "select offset radix: d, o, x, or n")
 	formats := fs.StringArrayP("format", "t", nil, "select output format; repeat for multiple formats")
@@ -79,23 +79,51 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if len(operands) > 0 && strings.HasPrefix(operands[len(operands)-1], "+") {
-		traditionalSkip, err := parseTraditionalOffset(strings.TrimPrefix(operands[len(operands)-1], "+"))
-		if err != nil || traditionalSkip < 0 {
-			return tool.UsageError(rc, cmd, "invalid traditional skip offset: %q", operands[len(operands)-1])
+	// Alias-derived -t values carry aliasMark; a value without it proves
+	// a literal -t/--format on the command line (the offset gate below
+	// distinguishes the two: XSI -bcdosx do not close the gate, -t does).
+	selectedFormats := make([]string, 0, len(*formats))
+	explicitFormat := false
+	for _, v := range *formats {
+		if stripped, ok := strings.CutPrefix(v, aliasMark); ok {
+			selectedFormats = append(selectedFormats, stripped)
+		} else {
+			explicitFormat = true
+			selectedFormats = append(selectedFormats, v)
 		}
-		*skipText = strconv.FormatInt(traditionalSkip, 10)
-		operands = operands[:len(operands)-1]
+	}
+	// XSI offset operand [+]offset[.][b] (POSIX.1-2016 od OPERANDS):
+	// recognized only when there are no more than two operands, none of
+	// -A, -j, -N, -t, or -v is specified, and the last operand begins
+	// with '+' — or is the second of exactly two operands and begins
+	// with a digit. --traditional additionally accepts a trailing or
+	// leading +offset regardless of those conditions (GNU third form).
+	if len(operands) > 0 {
+		last := operands[len(operands)-1]
+		plusForm := strings.HasPrefix(last, "+")
+		digitForm := len(operands) == 2 && len(last) > 0 && last[0] >= '0' && last[0] <= '9'
+		gateOpen := len(operands) <= 2 && !explicitFormat &&
+			!fs.Lookup("address-radix").Changed &&
+			!fs.Lookup("skip-bytes").Changed &&
+			!fs.Lookup("read-bytes").Changed &&
+			!fs.Lookup("output-duplicates").Changed
+		if (gateOpen && (plusForm || digitForm)) || (*traditional && plusForm) {
+			off, err := parseTraditionalOffset(strings.TrimPrefix(last, "+"))
+			if err != nil || off < 0 {
+				return tool.UsageError(rc, cmd, "invalid offset: %q", last)
+			}
+			*skipText = strconv.FormatInt(off, 10)
+			operands = operands[:len(operands)-1]
+		}
 	}
 	if *traditional && len(operands) > 0 && strings.HasPrefix(operands[0], "+") {
 		traditionalSkip, err := parseTraditionalOffset(strings.TrimPrefix(operands[0], "+"))
 		if err != nil || traditionalSkip < 0 {
-			return tool.UsageError(rc, cmd, "invalid traditional skip offset: %q", operands[0])
+			return tool.UsageError(rc, cmd, "invalid offset: %q", operands[0])
 		}
 		*skipText = strconv.FormatInt(traditionalSkip, 10)
 		operands = operands[1:]
 	}
-	selectedFormats := append([]string{}, *formats...)
 	for _, choice := range []struct {
 		on     bool
 		format string
@@ -196,40 +224,85 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-func normalizeTypeAliasArgs(args []string) []string {
-	aliases := map[string]string{
-		"-D": "u4",
-		"-F": "f8",
-		"-H": "x4",
-		"-I": "d4",
-		"-L": "d8",
-		"-O": "o4",
-		"-X": "x4",
-		"-e": "f8",
-		"-f": "f4",
-		"-i": "d4",
-		"-l": "d8",
-		"-s": "d2",
-	}
+// aliasMark prefixes -t values synthesized from format alias options so
+// run can tell them apart from a literal -t/--format (which closes the
+// XSI offset-operand gate). NUL cannot appear in a real argv string.
+const aliasMark = "\x00"
+
+// formatAliasFlags maps od's single-letter format options — the XSI
+// -bcdosx set plus -a and GNU's traditional type aliases — to their -t
+// equivalents. POSIX requires output lines in the order the type
+// options appear, so expandFormatArgs rewrites each occurrence to a -t
+// token in place instead of collecting the flags after parsing.
+var formatAliasFlags = map[byte]string{
+	'a': "a", 'b': "o1", 'c': "c", 'd': "u2", 'o': "o2", 's': "d2", 'x': "x2",
+	'D': "u4", 'F': "f8", 'H': "x4", 'I': "d4", 'L': "d8", 'O': "o4", 'X': "x4",
+	'e': "f8", 'f': "f4", 'i': "d4", 'l': "d8",
+}
+
+// longFormatAliasFlags are the exact long spellings of the same format
+// options (extensions; POSIX defines only the short forms).
+var longFormatAliasFlags = map[string]string{
+	"--named-chars": "a", "--octal-bytes": "o1", "--characters": "c",
+	"--unsigned-decimal-2": "u2", "--octal-2": "o2", "--hex-2": "x2",
+	"--unsigned-int": "u4", "--float-double": "f8", "--hex-int": "x4",
+	"--decimal-int": "d4", "--decimal-long": "d8", "--octal-int": "o4",
+	"--hex-cap": "x4", "--float-double-short": "f8", "--float-single": "f4",
+	"--signed-int": "d4", "--signed-long": "d8", "--signed-short": "d2",
+}
+
+// valueShorthands are od's short options that take an option-argument;
+// inside a bundle the rest of the bundle (or the next arg) is theirs.
+var valueShorthands = map[byte]bool{'A': true, 'j': true, 'N': true, 't': true, 'S': true, 'w': true}
+
+func expandFormatArgs(args []string) []string {
 	out := make([]string, 0, len(args))
-	rest := false
-	for _, arg := range args {
-		if rest {
-			out = append(out, arg)
-			continue
-		}
+	for idx, arg := range args {
 		if arg == "--" {
-			rest = true
+			out = append(out, args[idx:]...)
+			break
+		}
+		if format, ok := longFormatAliasFlags[arg]; ok {
+			out = append(out, "-t", aliasMark+format)
+			continue
+		}
+		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
 			out = append(out, arg)
 			continue
 		}
-		if format, ok := aliases[arg]; ok {
-			out = append(out, "-t", format)
+		expanded, ok := expandShortBundle(arg)
+		if !ok {
+			out = append(out, arg)
 			continue
 		}
-		out = append(out, arg)
+		out = append(out, expanded...)
 	}
 	return out
+}
+
+// expandShortBundle splits a short-option bundle like -bcx or -vtx1 so
+// each format alias becomes its own ordered -t token. Bundles holding
+// an unknown shorthand are left untouched for pflag to diagnose.
+func expandShortBundle(arg string) ([]string, bool) {
+	var out []string
+	body := arg[1:]
+	for i := 0; i < len(body); i++ {
+		ch := body[i]
+		if format, ok := formatAliasFlags[ch]; ok {
+			out = append(out, "-t", aliasMark+format)
+			continue
+		}
+		if ch == 'v' {
+			out = append(out, "-v")
+			continue
+		}
+		if valueShorthands[ch] {
+			out = append(out, "-"+body[i:])
+			return out, true
+		}
+		return nil, false
+	}
+	return out, true
 }
 
 func openInputs(rc *tool.RunContext, operands []string) (io.Reader, []io.Closer, int) {
@@ -523,46 +596,24 @@ func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
 		matched := false
 		for name, alias := range formatAliases {
 			if len(name) > 1 && strings.HasPrefix(s[i:], name) {
-				// Found a multi-character named alias
-				typeChar := alias[0] // Get the first char of the alias (e.g., 'o' from "octal")
+				typeChar := alias[0] // e.g. 'o' from "octal"
 				i += len(name)
-
-				// Now collect the size specifier that follows
 				start := i
-				// Consume leading digits
 				for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 					i++
 				}
-				// Then optionally one uppercase letter for C type codes
-				if i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
+				if i == start && i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
 					i++
 				}
-
-				sizeModifiers := s[start:i]
-				sizeText := sizeModifiers
-
+				sizeText := s[start:i]
 				if sizeText == "" {
 					formats = append(formats, parseFormatWithDefault(string(typeChar)))
 				} else {
-					// Handle C type codes (F, D, L, etc.)
-					cTypeSize := cTypeCodeToSize(sizeText)
-					if cTypeSize > 0 {
-						sizeText = fmt.Sprintf("%d", cTypeSize)
-					} else if alias, ok := sizeAliases[sizeText]; ok {
-						sizeText = alias
+					f, err := formatForType(typeChar, sizeText, s)
+					if err != nil {
+						return nil, err
 					}
-
-					// Parse numeric size
-					size, err := strconv.Atoi(sizeText)
-					if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
-						return nil, fmt.Errorf("unsupported output format: %q", s)
-					}
-
-					if (string(typeChar) == "f" && size != 4 && size != 8) || (string(typeChar) != "x" && string(typeChar) != "o" && string(typeChar) != "u" && string(typeChar) != "d" && string(typeChar) != "f") {
-						return nil, fmt.Errorf("unsupported output format: %q", s)
-					}
-
-					formats = append(formats, dumpFormat{kind: string(typeChar) + fmt.Sprintf("%d", size), size: size})
+					formats = append(formats, f)
 				}
 				matched = true
 				break
@@ -581,132 +632,113 @@ func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
 		typeChar := s[i]
 		i++
 
-		// Special handling for single-char formats
+		// a and c never take a size (POSIX)
 		if typeChar == 'a' || typeChar == 'c' {
 			formats = append(formats, dumpFormat{kind: string(typeChar), size: 1})
 			continue
 		}
 
-		// Collect size specifier: digits and single uppercase letter (C type codes)
-		// OR named sizes (char, short, int, long)
-		start := i
-
-		// Try to match named sizes first (char, short, int, long)
-		sizeMatched := false
-		for name, alias := range sizeAliases {
-			if len(name) > 1 && strings.HasPrefix(s[i:], name) {
-				// Named size found
-				i += len(name)
-				sizeText := alias
-
-				size, err := strconv.Atoi(sizeText)
-				if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
-					return nil, fmt.Errorf("unsupported output format: %q", s)
-				}
-
-				if (string(typeChar) == "f" && size != 4 && size != 8) || (string(typeChar) != "x" && string(typeChar) != "o" && string(typeChar) != "u" && string(typeChar) != "d" && string(typeChar) != "f") {
-					return nil, fmt.Errorf("unsupported output format: %q", s)
-				}
-
-				formats = append(formats, dumpFormat{kind: string(typeChar) + sizeText, size: size})
-				sizeMatched = true
+		// Named word sizes (extension): xchar, dshort, uint, olong
+		namedSize := ""
+		for _, name := range []string{"char", "short", "int", "long"} {
+			if strings.HasPrefix(s[i:], name) {
+				namedSize = name
 				break
 			}
 		}
-
-		if sizeMatched {
+		if namedSize != "" {
+			i += len(namedSize)
+			f, err := formatForType(typeChar, namedSize, s)
+			if err != nil {
+				return nil, err
+			}
+			formats = append(formats, f)
 			continue
 		}
 
-		// Collect numeric and uppercase letter modifiers
+		// A decimal byte count, or one POSIX size letter
+		start := i
 		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 			i++
 		}
-		// Then optionally one uppercase letter for C type codes (F, D, L, etc.)
-		if i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
+		if i == start && i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
 			i++
 		}
-
-		sizeModifiers := s[start:i]
-		if sizeModifiers == "" {
-			// No explicit size given, use default
+		sizeText := s[start:i]
+		if sizeText == "" {
 			formats = append(formats, parseFormatWithDefault(string(typeChar)))
 			continue
 		}
-
-		prefix := string(typeChar)
-		sizeText := sizeModifiers
-
-		// Handle C type codes (F, D, L, etc.)
-		cTypeSize := cTypeCodeToSize(sizeText)
-		if cTypeSize > 0 {
-			sizeText = fmt.Sprintf("%d", cTypeSize)
-		} else if alias, ok := sizeAliases[sizeText]; ok {
-			sizeText = alias
+		f, err := formatForType(typeChar, sizeText, s)
+		if err != nil {
+			return nil, err
 		}
-
-		// Parse numeric size
-		size, err := strconv.Atoi(sizeText)
-		if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
-			return nil, fmt.Errorf("unsupported output format: %q", s)
-		}
-
-		if (prefix == "f" && size != 4 && size != 8) || (prefix != "x" && prefix != "o" && prefix != "u" && prefix != "d" && prefix != "f") {
-			return nil, fmt.Errorf("unsupported output format: %q", s)
-		}
-
-		formats = append(formats, dumpFormat{kind: prefix + fmt.Sprintf("%d", size), size: size})
+		formats = append(formats, f)
 	}
 
 	return formats, nil
+}
+
+// formatForType builds the dump format for one type letter with an
+// explicit size modifier; spec is the whole type_string, for errors.
+func formatForType(typeChar byte, sizeText, spec string) (dumpFormat, error) {
+	if typeChar != 'x' && typeChar != 'o' && typeChar != 'u' && typeChar != 'd' && typeChar != 'f' {
+		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
+	}
+	if n, ok := sizeFromLetter(typeChar, sizeText); ok {
+		sizeText = strconv.Itoa(n)
+	}
+	size, err := strconv.Atoi(sizeText)
+	if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
+		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
+	}
+	if typeChar == 'f' && size != 4 && size != 8 {
+		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", spec)
+	}
+	return dumpFormat{kind: string(typeChar) + strconv.Itoa(size), size: size}, nil
+}
+
+// sizeFromLetter resolves the POSIX size letters: after f only F, D,
+// or L (float, double, long double); after d/o/u/x only C, S, I, or L
+// (char, short, int, long), plus their word spellings (extension).
+// long double maps to 8 bytes: Go has no wider float type and
+// sizeof(long double) is 8 on this implementation's primary targets.
+func sizeFromLetter(typeChar byte, mod string) (int, bool) {
+	if typeChar == 'f' {
+		switch mod {
+		case "F":
+			return 4, true
+		case "D", "L":
+			return 8, true
+		}
+		return 0, false
+	}
+	switch mod {
+	case "C", "char":
+		return 1, true
+	case "S", "short":
+		return 2, true
+	case "I", "int":
+		return 4, true
+	case "L", "long":
+		return 8, true
+	}
+	return 0, false
 }
 
 func parseFormatWithDefault(prefix string) dumpFormat {
 	switch prefix {
 	case "f":
 		return dumpFormat{kind: "f8", size: 8} // double
-	case "x", "o", "u", "d":
-		return dumpFormat{kind: prefix + "4", size: 4} // int
+	case "a", "c":
+		return dumpFormat{kind: prefix, size: 1}
 	default:
-		return dumpFormat{kind: prefix + "1", size: 1} // fallback
+		return dumpFormat{kind: prefix + "4", size: 4} // int
 	}
 }
 
 func isFormatTypeChar(c byte) bool {
 	return c == 'a' || c == 'c' || c == 'd' || c == 'f' || c == 'o' || c == 'u' || c == 'x'
-}
-
-// cTypeCodeToSize maps C type codes to byte sizes
-func cTypeCodeToSize(code string) int {
-	switch code {
-	// Float types
-	case "F":
-		return 4 // float
-	case "D":
-		return 8 // double
-	case "LD", "Ld":
-		return 16 // long double (or 8 on some platforms, but POSIX allows this)
-	// Integer size codes (used with d/o/u/x)
-	case "C":
-		return 1 // char
-	case "S":
-		return 2 // short
-	case "I":
-		return 4 // int
-	case "L":
-		return 8 // long
-	// Named sizes (in case someone uses them)
-	case "char":
-		return 1
-	case "short":
-		return 2
-	case "int":
-		return 4
-	case "long":
-		return 8
-	default:
-		return 0
-	}
 }
 
 var formatAliases = map[string]string{
@@ -719,17 +751,6 @@ var formatAliases = map[string]string{
 	"hex":      "x",
 	"signed":   "d",
 	"unsigned": "u",
-}
-
-var sizeAliases = map[string]string{
-	"C":     "1",
-	"S":     "2",
-	"I":     "4",
-	"L":     "8",
-	"char":  "1",
-	"short": "2",
-	"int":   "4",
-	"long":  "8",
 }
 
 func formatOffset(n int64, radix string) string {

@@ -157,17 +157,24 @@ func TestODDuplicateSuppression(t *testing.T) {
 	}
 }
 
-// The traditional +offset operand is octal by default; '.' means
-// decimal and a trailing 'b' multiplies by 512.
+// The XSI +offset operand is octal by default; '.' means decimal and a
+// trailing 'b' multiplies by 512. -b (an XSI type alias, unlike -t)
+// keeps the offset operand recognized.
 func TestODTraditionalOffsetRadix(t *testing.T) {
 	data := strings.Repeat("x", 20)
-	out, _, code := runOD(t, t.TempDir(), data, "-t", "o1", "+20")
+	out, _, code := runOD(t, t.TempDir(), data, "-b", "+20")
 	if code != 0 || !strings.HasPrefix(out, "0000020 170 170 170 170\n") {
 		t.Fatalf("od +20 (octal) = (%q, %d)", out, code)
 	}
-	out, _, code = runOD(t, t.TempDir(), data, "-t", "o1", "+16.")
+	out, _, code = runOD(t, t.TempDir(), data, "-b", "+16.")
 	if code != 0 || !strings.HasPrefix(out, "0000020 170 170 170 170\n") {
 		t.Fatalf("od +16. (decimal) = (%q, %d)", out, code)
+	}
+	// --traditional keeps the trailing +offset form even when -t closes
+	// the POSIX gate.
+	out, _, code = runOD(t, t.TempDir(), data, "--traditional", "-t", "o1", "+20")
+	if code != 0 || !strings.HasPrefix(out, "0000020 170 170 170 170\n") {
+		t.Fatalf("od --traditional -t o1 +20 = (%q, %d)", out, code)
 	}
 }
 
@@ -363,8 +370,9 @@ func TestODShortTypeAliases(t *testing.T) {
 			t.Fatalf("od %s = (%q, %d), want (%q, 0)", tc.flag, out, code, tc.want)
 		}
 	}
+	// POSIX: output lines appear in the order the type options were given.
 	out, _, code := runOD(t, t.TempDir(), "ABCD", "-x", "-d", "-A", "n")
-	if want := " 16961 17475\n 4241 4443\n"; out != want || code != 0 {
+	if want := " 4241 4443\n 16961 17475\n"; out != want || code != 0 {
 		t.Fatalf("od -x -d = (%q, %d), want (%q, 0)", out, code, want)
 	}
 }
@@ -399,15 +407,15 @@ func TestODCTypeCodeFormats(t *testing.T) {
 		want   string
 	}{
 		// Float C type codes
-		{"fF", "\x00\x00\x80\x3f", " 1\n"},           // float (4 bytes)
+		{"fF", "\x00\x00\x80\x3f", " 1\n"},                 // float (4 bytes)
 		{"fD", "\x00\x00\x00\x00\x00\x00\xf0\x3f", " 1\n"}, // double (8 bytes)
 		// Integer C type codes
-		{"dC", "A", "   65\n"},        // char (1 byte signed)
-		{"dS", "AB", " 16961\n"},      // short (2 bytes signed, little-endian)
-		{"dI", "ABCD", " 1145258561\n"}, // int (4 bytes signed, little-endian)
+		{"dC", "A", "   65\n"},                       // char (1 byte signed)
+		{"dS", "AB", " 16961\n"},                     // short (2 bytes signed, little-endian)
+		{"dI", "ABCD", " 1145258561\n"},              // int (4 bytes signed, little-endian)
 		{"dL", "ABCDEFGH", " 5208208757389214273\n"}, // long (8 bytes signed, little-endian)
 		// Hex with C type codes
-		{"xC", "AB", " 41 42\n"},      // byte hex
+		{"xC", "AB", " 41 42\n"},       // byte hex
 		{"xS", "ABCD", " 4241 4443\n"}, // short hex
 	}
 	for _, tc := range cases {
@@ -472,5 +480,221 @@ func TestODByteExactOffsetAndLimit(t *testing.T) {
 	if !strings.Contains(out, "2") && !strings.Contains(out, "234") {
 		// Should start at offset 2 (decimal) and read 3 bytes
 		t.Fatalf("od -j 2 -N 3 = (%q, %d), format not as expected", out, code)
+	}
+}
+
+// POSIX: output lines are written in the order the type options appear
+// on the command line, across repeated -t and the XSI -bcdosx aliases,
+// including bundled short flags.
+func TestODFormatOrderMatchesCommandLine(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		data string
+		want string
+	}{
+		{"b then c", []string{"-A", "n", "-b", "-c"}, "A", " 101\n   A\n"},
+		{"c then b", []string{"-A", "n", "-c", "-b"}, "A", "   A\n 101\n"},
+		{"bundled bc", []string{"-A", "n", "-bc"}, "A", " 101\n   A\n"},
+		{"bundled cb", []string{"-A", "n", "-cb"}, "A", "   A\n 101\n"},
+		{"t then alias", []string{"-A", "n", "-t", "x1", "-c"}, "A", " 41\n   A\n"},
+		{"alias then t", []string{"-A", "n", "-c", "-t", "x1"}, "A", "   A\n 41\n"},
+		{"d t o1 x", []string{"-A", "n", "-d", "-t", "o1", "-x"}, "AB", " 16961\n 101 102\n 4241\n"},
+	}
+	for _, tc := range cases {
+		out, errb, code := runOD(t, t.TempDir(), tc.data, tc.args...)
+		if out != tc.want || errb != "" || code != 0 {
+			t.Errorf("od %s = (%q, %q, %d), want (%q, \"\", 0)", tc.name, out, errb, code, tc.want)
+		}
+	}
+	// With addresses: only the first line of a block carries the offset;
+	// continuation lines are blank-prefixed to the same width.
+	out, errb, code := runOD(t, t.TempDir(), "A", "-b", "-c")
+	want := "0000000 101\n          A\n0000001\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("od -b -c = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// POSIX (XSI): the [+]offset operand is recognized only when there are
+// no more than two operands and none of -A, -j, -N, -t, or -v is
+// specified. Otherwise it is a plain filename.
+func TestODXSIOffsetGating(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("abcd"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// -t present: +2 is a filename; f1 still dumps, exit 1.
+	out, errb, code := runOD(t, dir, "", "-t", "o1", "f1", "+2")
+	if code != 1 || !strings.Contains(errb, "+2") {
+		t.Fatalf("od -t o1 f1 +2 = (stderr %q, code %d), want +2 open error and exit 1", errb, code)
+	}
+	if want := "0000000 141 142 143 144\n0000004\n"; out != want {
+		t.Fatalf("od -t o1 f1 +2 stdout = %q, want %q", out, want)
+	}
+	// -A, -j, -N, and -v close the gate too.
+	for _, extra := range [][]string{{"-A", "o"}, {"-j", "1"}, {"-N", "2"}, {"-v"}} {
+		args := append(append([]string{}, extra...), "f1", "+2")
+		_, errb, code := runOD(t, dir, "", args...)
+		if code != 1 || !strings.Contains(errb, "+2") {
+			t.Errorf("od %v f1 +2 = (stderr %q, code %d), want +2 open error and exit 1", extra, errb, code)
+		}
+	}
+	// More than two operands: the trailing +2 is a filename.
+	_, errb, code = runOD(t, dir, "", "f1", "f1", "+2")
+	if code != 1 || !strings.Contains(errb, "+2") {
+		t.Fatalf("od f1 f1 +2 = (stderr %q, code %d), want +2 open error and exit 1", errb, code)
+	}
+	// The XSI type aliases do NOT close the gate.
+	out, errb, code = runOD(t, dir, "", "-b", "f1", "+2")
+	if want := "0000002 143 144\n0000004\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -b f1 +2 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// POSIX (XSI): with exactly two operands and the last beginning with a
+// digit, the last operand is an offset — octal by default, decimal
+// with a trailing '.', units of 512 bytes with a trailing 'b'.
+func TestODXSITwoOperandNumericOffset(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("0123456789abcdef"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := "0000010   8   9   a   b   c   d   e   f\n0000020\n"
+	for _, offset := range []string{"10", "8."} {
+		out, errb, code := runOD(t, dir, "", "-c", "f", offset)
+		if out != want || errb != "" || code != 0 {
+			t.Errorf("od -c f %s = (%q, %q, %d), want (%q, \"\", 0)", offset, out, errb, code, want)
+		}
+	}
+	// 'b' multiplies by 512.
+	if err := os.WriteFile(filepath.Join(dir, "big"), []byte(strings.Repeat("x", 514)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runOD(t, dir, "", "-c", "big", "1b")
+	if want := "0001000   x   x\n0001002\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -c big 1b = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+	// A single numeric operand is a filename (offset without a file
+	// needs a leading '+').
+	_, errb, code = runOD(t, dir, "", "10")
+	if code != 1 || !strings.Contains(errb, "10") {
+		t.Fatalf("od 10 = (stderr %q, code %d), want open error for file \"10\" and exit 1", errb, code)
+	}
+	// A digit-leading last operand that is not a valid offset is a
+	// usage error, not a silent filename fallback.
+	_, errb, code = runOD(t, dir, "", "f", "12x4")
+	if code != 2 || !strings.Contains(errb, "invalid offset") {
+		t.Fatalf("od f 12x4 = (stderr %q, code %d), want invalid offset and exit 2", errb, code)
+	}
+}
+
+// POSIX: f takes the size letters F (float), D (double), and L (long
+// double); d/o/u/x take C, S, I, and L. Cross-class letters are errors.
+func TestODFloatSizeLetters(t *testing.T) {
+	float1 := "\x00\x00\x80\x3f"                  // float32 1.0
+	double1 := "\x00\x00\x00\x00\x00\x00\xf0\x3f" // float64 1.0
+	cases := []struct {
+		format string
+		data   string
+		want   string
+	}{
+		{"fF", float1, " 1\n"},
+		{"fD", double1, " 1\n"},
+		{"fL", double1, " 1\n"},
+	}
+	for _, tc := range cases {
+		out, errb, code := runOD(t, t.TempDir(), tc.data, "-A", "n", "-t", tc.format)
+		if out != tc.want || errb != "" || code != 0 {
+			t.Errorf("od -t %s = (%q, %q, %d), want (%q, \"\", 0)", tc.format, out, errb, code, tc.want)
+		}
+	}
+	for _, format := range []string{"fC", "fS", "fI", "dF", "xD", "uF", "oD"} {
+		_, errb, code := runOD(t, t.TempDir(), "ABCDEFGH", "-t", format)
+		if code != 2 || !strings.Contains(errb, "unsupported output format") {
+			t.Errorf("od -t %s = (stderr %q, code %d), want unsupported output format and exit 2", format, errb, code)
+		}
+	}
+}
+
+// POSIX: -N larger than the available input is not an error.
+func TestODReadBytesBeyondEOFNotError(t *testing.T) {
+	out, errb, code := runOD(t, t.TempDir(), "hi", "-N", "100")
+	if want := "0000000 064550\n0000002\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -N 100 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// POSIX (XSI): -o is equivalent to -t o2.
+func TestODOFlagOctal2(t *testing.T) {
+	out, errb, code := runOD(t, t.TempDir(), "ab", "-o")
+	if want := "0000000 061141\n0000002\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -o = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// POSIX: the size letter L after x selects 8-byte words.
+func TestODHexLongSizeLetter(t *testing.T) {
+	out, errb, code := runOD(t, t.TempDir(), "ABCDEFGH", "-A", "n", "-t", "xL")
+	if want := " 4847464544434241\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -t xL = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// POSIX: skip and count apply to the concatenated input, with the
+// cumulative offset carried across file boundaries.
+func TestODSkipAndCountAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("abcd"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("efgh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// -j spans past the first file into the second.
+	out, errb, code := runOD(t, dir, "", "-t", "c", "-j", "6", "f1", "f2")
+	if want := "0000006   g   h\n0000010\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -j 6 f1 f2 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+	// -N crosses the file boundary.
+	out, errb, code = runOD(t, dir, "", "-A", "n", "-t", "c", "-N", "6", "f1", "f2")
+	if want := "   a   b   c   d   e   f\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -N 6 f1 f2 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+	// -j and -N combined straddle the boundary.
+	out, errb, code = runOD(t, dir, "", "-t", "c", "-j", "2", "-N", "4", "f1", "f2")
+	if want := "0000002   c   d   e   f\n0000006\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od -j 2 -N 4 f1 f2 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// POSIX: '-' means stdin and may be mixed with named files.
+func TestODDashMixedWithFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("C"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runOD(t, dir, "B", "-A", "n", "-t", "c", "f1", "-", "f2")
+	if want := "   A   B   C\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od f1 - f2 = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+// An unreadable operand yields a diagnostic and exit 1, but the
+// remaining files are still dumped.
+func TestODMissingFileContinues(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("efgh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runOD(t, dir, "", "-A", "n", "-t", "c", "missing", "f2")
+	if code != 1 || !strings.Contains(errb, "missing") {
+		t.Fatalf("od missing f2 = (stderr %q, code %d), want diagnostic and exit 1", errb, code)
+	}
+	if want := "   e   f   g   h\n"; out != want {
+		t.Fatalf("od missing f2 stdout = %q, want %q", out, want)
 	}
 }
