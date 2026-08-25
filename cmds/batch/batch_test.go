@@ -253,7 +253,18 @@ func TestBatchDiagnosticUsesInvocationTZAndLCTIME(t *testing.T) {
 	if out.String() != "" {
 		t.Fatalf("stdout=%q", out.String())
 	}
-	if !strings.Contains(errb.String(), " at Di ") {
-		t.Fatalf("localized diagnostic=%q", errb.String())
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("stored jobs=%v err=%v", jobs, err)
+	}
+	loc, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := jobs[0].NextRun.In(loc)
+	germanWeekday := [...]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}[when.Weekday()]
+	if !strings.Contains(errb.String(), " at "+germanWeekday+" ") ||
+		!strings.Contains(errb.String(), when.Format("15:04:05")) {
+		t.Fatalf("localized diagnostic=%q, want German weekday %q and Berlin time %s", errb.String(), germanWeekday, when.Format("15:04:05"))
 	}
 }
