@@ -152,8 +152,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `pwd` | `cmds/pwd` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `readlink` | `cmds/readlink` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `realpath` | `cmds/realpath` | — | GNU Coreutils | yes | no | 1 | 10 |
-| `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 3 | 6 |
-| `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 22 |
+| `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 3 | 7 |
+| `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 24 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 4 | 61 |
 | `seq` | `cmds/seq` | — | GNU Coreutils | yes | no | 1 | 3 |
