@@ -190,6 +190,37 @@ func TestMinimalIdentification(t *testing.T) {
 	}
 }
 
+func TestMinimalIdentificationSymlinkAndStandardInput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on some Windows hosts")
+	}
+	dir := t.TempDir()
+	put(t, dir, "target", []byte("payload\n"))
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing", filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+
+	// -i still follows a usable symbolic link by default, but -h (and a
+	// dangling link) identify the link itself. This is the portable way for a
+	// shell script to distinguish a regular file from the other file types.
+	out, errb, code := invoke(t, dir, "", "-i", "link", "dangling")
+	want := "link: regular file\ndangling: symbolic link to missing\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("file -i links = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	out, errb, code = invoke(t, dir, "", "-i", "-h", "link")
+	if out != "link: symbolic link to target\n" || errb != "" || code != 0 {
+		t.Fatalf("file -i -h link = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = invoke(t, dir, "stream", "-i", "-")
+	if out != "-: regular file\n" || errb != "" || code != 0 {
+		t.Fatalf("file -i - = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestMagicGrammarComparisonsContinuationsAndFormatting(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "strings", []byte("hi there!"))
@@ -218,6 +249,27 @@ func TestMagicGrammarComparisonsContinuationsAndFormatting(t *testing.T) {
 	want := "strings: string=hi there\nnumeric: masked=160\nhigh: high=201\nsigned: signed=-1\nlow: low=9\nallbits: allbits=7\nmissingbit: missingbit=1\ncontinued: root; byte=7\ntabbed:  leading message\n"
 	if out != want || errb != "" || code != 0 {
 		t.Fatalf("portable magic = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+}
+
+func TestMagicContinuationGatingAndShortValues(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "gated", []byte("BA\x07"))
+	put(t, dir, "short", []byte("A"))
+	put(t, dir, "magic", []byte(strings.Join([]string{
+		"0\tstring\tAB\twrong",
+		">2\tbyte\tx\t must-not-print-%u",
+		"0\tstring\tBA\tright",
+		">2\tbyte\tx\t byte=%u",
+		"0\tstring\tABCD\ttoo-short",
+	}, "\n")+"\n"))
+
+	// A continuation is gated by its immediately preceding primary test, and
+	// both string and numeric tests fail when their full value is not present.
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "gated", "short")
+	want := "gated: right byte=7\nshort: data\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("file continuation/short value = (%q, %q, %d), want %q", out, errb, code, want)
 	}
 }
 
