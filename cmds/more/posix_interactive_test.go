@@ -118,6 +118,63 @@ func TestPOSIXSkipStartsCountLinesAfterLastDisplayed(t *testing.T) {
 	}
 }
 
+func TestPOSIXLineScrollWritesEntireCountButScreenScrollDoesNot(t *testing.T) {
+	text := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n"
+	for _, tt := range []struct {
+		name string
+		cmd  moreCommand
+		top  int
+		want string
+	}{
+		{"space", moreCommand{key: ' ', count: 5, counted: true}, 0, "4\n5\n6\n7\n8\n"},
+		{"k", moreCommand{key: 'k', count: 5, counted: true}, 7, "3\n4\n5\n6\n7\n"},
+		{"u", moreCommand{key: 'u', count: 5, counted: true}, 7, "3\n4\n5\n6\n7\n"},
+		{"f", moreCommand{key: 'f', count: 5, counted: true}, 0, "6\n7\n8\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p, out, _ := memoryPager(text, 3)
+			p.top, p.next = tt.top, tt.top+3
+			if !p.execute(tt.cmd, false) || !p.render() {
+				t.Fatal("command/render failed")
+			}
+			if err := p.out.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); got != tt.want {
+				t.Fatalf("output=%q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPOSIXInsufficientRegularFileMovementKeepsScreen(t *testing.T) {
+	for _, cmd := range []moreCommand{
+		{key: ' ', count: 99, counted: true},
+		{key: 'b', count: 99, counted: true},
+		{key: 'g', count: 99, counted: true},
+		{key: 'G', count: 99, counted: true},
+	} {
+		p, _, errb := memoryPager("1\n2\n3\n4\n5\n", 3)
+		p.top, p.next = 1, 4
+		if !p.execute(cmd, false) || p.top != 1 || !strings.Contains(errb.String(), "\a") {
+			t.Fatalf("command=%#v top=%d stderr=%q", cmd, p.top, errb.String())
+		}
+	}
+}
+
+func TestPOSIXFileNavigationPastBoundsRepromptsUnchanged(t *testing.T) {
+	p, _, errb := memoryPager("one\ntwo\n", 2)
+	p.files, p.fileIndex, p.top, p.next = []string{"fixture"}, 0, 0, 2
+	for _, cmd := range []moreCommand{{key: ':', sub: 'n', count: 2, counted: true}, {key: ':', sub: 'p'}} {
+		if !p.execute(cmd, false) || p.doc.name != "fixture" || p.top != 0 || p.next != 2 {
+			t.Fatalf("command=%#v changed state name=%q top=%d next=%d", cmd, p.doc.name, p.top, p.next)
+		}
+	}
+	if strings.Count(errb.String(), "no file in requested direction") != 2 {
+		t.Fatalf("navigation diagnostics=%q", errb.String())
+	}
+}
+
 func TestPOSIXSearchIgnoreCaseInvertRepeatAndReverse(t *testing.T) {
 	p, _, errb := memoryPager("Alpha\nbeta\nGAMMA\nbeta two\n", 2)
 	p.o.ignoreCase = true
@@ -135,12 +192,57 @@ func TestPOSIXSearchIgnoreCaseInvertRepeatAndReverse(t *testing.T) {
 	}
 }
 
-func TestPOSIXTagLineAndPatternStart(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "source"), []byte("one\ntwo\nneedle\nfour\n"), 0o644); err != nil {
+func TestPOSIXSearchHonorsCarriedCharacterLocales(t *testing.T) {
+	cMode, err := moreCharacterMode("POSIX")
+	if err != nil || cMode != charactersByte {
+		t.Fatalf("POSIX mode=%v,%v", cMode, err)
+	}
+	cMatcher, err := compileMoreMatcher(options{charMode: cMode, ctypeName: "POSIX", collateName: "POSIX", ignoreCase: true}, "Ä")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "tags"), []byte("line\tsource\t3\npat\tsource\t/^needle$/;\"\n"), 0o644); err != nil {
+	if matched, err := cMatcher("ä"); err != nil || matched {
+		t.Fatalf("C/POSIX -i matched non-ASCII bytes: matched=%v err=%v", matched, err)
+	}
+	utfMode, err := moreCharacterMode("de_DE.UTF-8")
+	if err != nil || utfMode != charactersUTF8 {
+		t.Fatalf("UTF-8 mode=%v,%v", utfMode, err)
+	}
+	utfMatcher, err := compileMoreMatcher(options{charMode: utfMode, ctypeName: "de_DE.UTF-8", collateName: "de_DE.UTF-8", ignoreCase: true}, "Ä")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := utfMatcher("ä"); err != nil || !matched {
+		t.Fatalf("UTF-8 -i match=%v err=%v", matched, err)
+	}
+	if _, err := compileMoreMatcher(options{charMode: utfMode, ctypeName: "de_DE.UTF-8", collateName: "de_DE.UTF-8"}, "[[:alpha:]]"); err == nil {
+		t.Fatal("unsupported UTF-8 locale class did not fail closed")
+	}
+	if isoMode, err := moreCharacterMode("de_DE.ISO-8859-1"); err != nil || isoMode != charactersByte {
+		t.Fatalf("ISO-8859-1 mode=%v,%v", isoMode, err)
+	}
+}
+
+func TestPOSIXFoldingUsesByteOrUTF8CharacterSemantics(t *testing.T) {
+	iso := newDocument("iso", bytes.NewReader([]byte{0xe4, 0xf6, '\n'}), nil, 1, options{charMode: charactersByte})
+	iso.all()
+	if len(iso.rows) != 2 || !bytes.Equal(iso.rows[0].data, []byte{0xe4}) || !bytes.Equal(iso.rows[1].data, []byte{0xf6, '\n'}) {
+		t.Fatalf("single-byte locale rows=%+v", iso.rows)
+	}
+	utf := newDocument("utf", strings.NewReader("ää\n"), nil, 1, options{charMode: charactersUTF8})
+	utf.all()
+	if len(utf.rows) != 2 || string(utf.rows[0].data) != "ä" || string(utf.rows[1].data) != "ä\n" {
+		t.Fatalf("UTF-8 locale rows=%+v", utf.rows)
+	}
+}
+
+func TestPOSIXTagLineAndPatternStart(t *testing.T) {
+	dir := t.TempDir()
+	content := "one\nneedle extra\ntwo\nneedle\nfour\n"
+	if err := os.WriteFile(filepath.Join(dir, "source"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tags"), []byte("line\tsource\t4\npat\tsource\t/^needle$/;\"\nbeyond\tsource\t99\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, tag := range []string{"line", "pat"} {
@@ -149,9 +251,36 @@ func TestPOSIXTagLineAndPatternStart(t *testing.T) {
 			t.Errorf("more -t %s = (%q,%q,%d)", tag, out, errb, code)
 		}
 	}
-	_, errb, code := runMore(t, dir, "", "-t", "missing")
+	_, _, pat, err := resolveTag(&tool.RunContext{Dir: dir}, "pat")
+	if err != nil || pat != "^needle$" {
+		t.Fatalf("anchored tag pattern=%q,%v", pat, err)
+	}
+	out, errb, code := runMore(t, dir, "", "-t", "beyond", "-p", "q")
+	if code != 0 || out != content || !strings.Contains(errb, "line 99 does not exist") {
+		t.Fatalf("beyond -t with -p = (%q,%q,%d)", out, errb, code)
+	}
+	_, errb, code = runMore(t, dir, "", "-t", "missing")
 	if code == 0 || !strings.Contains(errb, "not found") {
 		t.Fatalf("missing tag code=%d stderr=%q", code, errb)
+	}
+}
+
+func TestPOSIXColonTagBeyondEOFUsesDefaultScreen(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "source"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tags"), []byte("beyond\tsource\t99\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	p := &pager{rc: rc, out: bufio.NewWriter(&out), o: options{screenful: 2, width: 80}, files: []string{"source"}, suppressCommands: make(map[int]bool)}
+	if !p.openFile(0) || !p.execute(moreCommand{key: ':', sub: 't', arg: " beyond"}, false) || p.top != 0 {
+		t.Fatalf(":t beyond top=%d stderr=%q", p.top, errb.String())
+	}
+	if !strings.Contains(errb.String(), "line 99 does not exist") {
+		t.Fatalf(":t beyond missing informational message: %q", errb.String())
 	}
 }
 
@@ -353,7 +482,14 @@ func TestPOSIXEOFAdvanceOpensNextFile(t *testing.T) {
 
 func TestPOSIXWordExpansionUsesWholeVariableNamesAndInProcessCommandSubstitution(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "only.txt"), nil, 0o644); err != nil {
+	processDir, err := os.Getwd()
+	if err != nil || filepath.Clean(processDir) == filepath.Clean(dir) {
+		t.Fatalf("test requires process cwd distinct from RunContext.Dir: cwd=%q dir=%q err=%v", processDir, dir, err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "only.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rc := &tool.RunContext{Dir: dir, Env: []string{"HOME=" + dir, "FOO=value", "FOObar=whole"}}
@@ -363,7 +499,7 @@ func TestPOSIXWordExpansionUsesWholeVariableNamesAndInProcessCommandSubstitution
 	if got, err := expandFilename(rc, `"${FOO} bar"`); err != nil || got != "value bar" {
 		t.Fatalf("quoted expansion=%q,%v", got, err)
 	}
-	if got, err := expandFilename(rc, `*.txt`); err != nil || got != "only.txt" {
+	if got, err := expandFilename(rc, `nested/*.txt`); err != nil || got != "nested/only.txt" {
 		t.Fatalf("pathname expansion=%q,%v", got, err)
 	}
 	if got, err := expandFilename(rc, `$(printf safe)`); err != nil || got != "safe" {

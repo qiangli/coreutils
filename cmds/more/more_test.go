@@ -1,6 +1,7 @@
 package morecmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -118,7 +119,7 @@ func TestMoreRejectsInteractiveFlags(t *testing.T) {
 
 func TestMoreCommandOptionSupportsPOSIXMovementAndQuit(t *testing.T) {
 	out, errb, code := runMore(t, t.TempDir(), "a\n", "-p", " ")
-	if code != 0 || out != "a\n" || errb != "" {
+	if code != 0 || out != "a\n" || errb != "\a" {
 		t.Fatalf("-p space = (%q, %q, %d)", out, errb, code)
 	}
 	out, errb, code = runMore(t, t.TempDir(), "a\n", "-p", "q")
@@ -246,8 +247,28 @@ func TestNormalizeTerminalLinePOSIXOverstrikesAndPlainMode(t *testing.T) {
 	if got, want := string(normalizeTerminalLine(input, false)), "a b c y\n"; got != want {
 		t.Fatalf("normalizeTerminalLine = %q, want %q", got, want)
 	}
-	if got := normalizeTerminalLine(input, true); !bytes.Equal(got, input) {
-		t.Fatalf("-u normalization = %q, want byte-for-byte %q", got, input)
+	if got, want := string(normalizeTerminalLine(input, true)), "a^H_ _^Hb c^Hc x^Hy^M\n"; got != want {
+		t.Fatalf("-u normalization = %q, want visible controls %q", got, want)
+	}
+}
+
+func TestNormalizeTerminalLineMultiColumnUnderlineAndRepeatedBold(t *testing.T) {
+	for _, tt := range []struct{ input, want string }{
+		{"界\b\b__\n", "界\n"},
+		{"__\b\b界\n", "界\n"},
+		{"界\b\b界\b\b界\n", "界\n"},
+	} {
+		if got := string(normalizeTerminalLine([]byte(tt.input), false)); got != tt.want {
+			t.Errorf("normalize %q = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestPlainModeRendersBackspaceAndCarriageReturnVisibly(t *testing.T) {
+	d := newDocument("fixture", strings.NewReader("\b\r\n"), nil, 2, options{plain: true, charMode: charactersUTF8})
+	d.all()
+	if len(d.rows) != 2 || string(d.rows[0].data) != "^H" || string(d.rows[1].data) != "^M\n" {
+		t.Fatalf("-u display rows=%+v", d.rows)
 	}
 }
 
@@ -259,6 +280,22 @@ func TestFoldLinePreservesUTF8GlyphBoundariesAndDisplayWidth(t *testing.T) {
 	rows = foldLine([]byte("界界\n"), 2, false)
 	if len(rows) != 2 || string(rows[0]) != "界" || string(rows[1]) != "界\n" {
 		t.Fatalf("double-column UTF-8 rows=%q", rows)
+	}
+}
+
+func TestFoldedDisplayRowsTrackExactOriginalByteBoundaries(t *testing.T) {
+	d := newDocument("fixture", strings.NewReader("ééé\n"), nil, 2, options{})
+	d.all()
+	if len(d.rows) != 2 || d.rows[0].byteEnd != 4 || d.rows[1].byteEnd != 7 {
+		t.Fatalf("folded row boundaries=%+v, want byte ends 4 and 7", d.rows)
+	}
+	var out, errb bytes.Buffer
+	p := &pager{
+		rc: &tool.RunContext{Stdio: tool.Stdio{Out: &out, Err: &errb}}, out: bufio.NewWriter(&out),
+		o: options{screenful: 1, width: 2}, files: []string{"fixture"}, doc: d, next: 1,
+	}
+	if !p.position() || !strings.Contains(errb.String(), "byte 4/7") {
+		t.Fatalf("folded position=%q", errb.String())
 	}
 }
 

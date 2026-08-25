@@ -12,7 +12,9 @@ this issue.
   terminal geometry; `COLUMNS` supplies display width.
 - Honors the required nonterminal rule: only `-s` changes copied content.
 - Pages an input incrementally, folds display rows at the selected width, and
-  applies the specified CR, backspace/overstrike, and `-u` behavior.
+  applies the specified CR, width-aware backspace/overstrike, and visibly
+  rendered `-u` control-character behavior. Folded rows retain exact source
+  byte boundaries for position reports.
 - Implements the Issue 7 command grammar, including numeric prefixes,
   line/screen/half-screen movement, searches and repeat/reverse/inversion,
   marks, refresh/re-read, file navigation, tag navigation, position reports,
@@ -23,6 +25,12 @@ this issue.
 - Uses `MORE`, `LINES`, `COLUMNS`, `EDITOR`, and `TERM`; `TERM=dumb` avoids ANSI
   clearing and highlighting. Editor launch is the sole permitted external
   process and `vi`/`ex` receive the current line with `-c`.
+- Resolves `LC_CTYPE` and `LC_COLLATE` with POSIX precedence. C/POSIX uses
+  byte-oriented folding, classes, ranges, and ASCII case folding;
+  de_DE.ISO-8859-1 uses the reviewed pure-Go/glibc providers; UTF-8 locales use
+  glyph-aware folding and Unicode literal/case matching. Locale-sensitive
+  UTF-8 bracket expressions fail closed because no reviewed UTF-8 collation
+  provider is carried.
 - Keeps file bytes on standard output and prompts/diagnostics on the terminal
   channel. Read, write, flush, close, cancellation, and unavailable-terminal
   errors are covered by hermetic seams.
@@ -39,9 +47,8 @@ platform-specific controlling-terminal tests.
   external utility is rejected so this interface cannot evade the pure-Go/no
   process-launch boundary. POSIX leaves multiple resulting pathnames
   unspecified; this implementation diagnoses them.
-- BRE matching uses the repository's pure-Go BRE engine. `-i` is Unicode-aware,
-  but host locale collation and translated `LC_MESSAGES`/`NLSPATH` catalogs are
-  not synthesized by the Go runtime.
+- Diagnostics are invariant English strings; translated `LC_MESSAGES` and
+  `NLSPATH` catalogs are not shipped.
 - Historical underline/bold overstrikes are normalized to their displayed
   glyph. The implementation does not recreate terminal-specific visual
   attributes when no portable terminal capability API is available.

@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/term"
 
+	corelocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -34,22 +35,32 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type options struct {
-	squeeze    bool
-	lines      int
-	fromLine   int
-	pattern    string
-	plain      bool   // -u: treat backspace as printable, keep trailing CR
-	exitOnEof  bool   // -e: exit after the last line of the last file
-	cleanPrint bool   // -c: redraw not scroll (may be ignored per POSIX)
-	command    string // -p: more-command run at each new file's first screen
-	ignoreCase bool   // -i: case-insensitive interactive BRE searches
-	tag        string // -t: initial ctags entry
+	squeeze     bool
+	lines       int
+	fromLine    int
+	pattern     string
+	plain       bool   // -u: treat backspace as printable, keep trailing CR
+	exitOnEof   bool   // -e: exit after the last line of the last file
+	cleanPrint  bool   // -c: redraw not scroll (may be ignored per POSIX)
+	command     string // -p: more-command run at each new file's first screen
+	ignoreCase  bool   // -i: case-insensitive interactive BRE searches
+	tag         string // -t: initial ctags entry
+	charMode    characterMode
+	ctypeName   string
+	collateName string
 
 	// Terminal-mode geometry (unused in the non-interactive path).
 	rows      int
 	width     int
 	screenful int
 }
+
+type characterMode uint8
+
+const (
+	charactersUTF8 characterMode = iota
+	charactersByte
+)
 
 var isTerminal = func(w io.Writer) bool {
 	if f, ok := w.(interface{ Fd() uintptr }); ok {
@@ -154,6 +165,16 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 	}
+	ctypeName := corelocale.Resolve(rc.Env, corelocale.CType)
+	collateName := corelocale.Resolve(rc.Env, corelocale.Collate)
+	charMode, localeErr := moreCharacterMode(ctypeName)
+	if terminal && localeErr != nil {
+		if ch != nil {
+			_ = ch.close()
+		}
+		fmt.Fprintf(rc.Err, "more: LC_CTYPE: %v\n", localeErr)
+		return 1
+	}
 	if !terminal {
 		// POSIX: when stdout is not a terminal only -s takes effect.
 		*fromLine = 1
@@ -161,16 +182,19 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	o := options{
-		squeeze:    *squeeze,
-		lines:      *lines,
-		fromLine:   *fromLine,
-		pattern:    *pattern,
-		plain:      *plain,
-		exitOnEof:  *exitOnEof,
-		cleanPrint: *cleanPrint,
-		command:    *command,
-		ignoreCase: *ignoreCase,
-		tag:        *tag,
+		squeeze:     *squeeze,
+		lines:       *lines,
+		fromLine:    *fromLine,
+		pattern:     *pattern,
+		plain:       *plain,
+		exitOnEof:   *exitOnEof,
+		cleanPrint:  *cleanPrint,
+		command:     *command,
+		ignoreCase:  *ignoreCase,
+		tag:         *tag,
+		charMode:    charMode,
+		ctypeName:   ctypeName,
+		collateName: collateName,
 	}
 	files := operands
 	if len(files) == 0 && (!terminal || *tag == "") {
@@ -221,6 +245,21 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return exit
+}
+
+func moreCharacterMode(name string) (characterMode, error) {
+	if name == "C" || name == "POSIX" {
+		return charactersByte, nil
+	}
+	lower := strings.ToLower(name)
+	switch lower {
+	case "de_de.iso-8859-1", "de_de.iso88591":
+		return charactersByte, nil
+	}
+	if strings.HasSuffix(strings.ReplaceAll(lower, "-", ""), ".utf8") {
+		return charactersUTF8, nil
+	}
+	return 0, fmt.Errorf("unsupported locale %q", name)
 }
 
 func copyMore(w *bufio.Writer, errW io.Writer, r io.Reader, o options) error {

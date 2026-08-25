@@ -16,6 +16,8 @@ import (
 
 	"github.com/mattn/go-runewidth"
 	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
@@ -65,6 +67,10 @@ type displayRow struct {
 	data          []byte
 	line, byteEnd int
 }
+type foldedRow struct {
+	data []byte
+	end  int
+}
 
 // document caches input incrementally. Backwards commands can revisit cached
 // rows while the first page of a pipe is still displayed before EOF is read.
@@ -101,14 +107,15 @@ func (d *document) loadLine() {
 	}
 	b, err := d.r.ReadBytes('\n')
 	if len(b) > 0 {
+		base := d.total
 		d.total += len(b)
 		line := len(d.lines) + 1
 		d.lines = append(d.lines, string(b))
-		normalized := normalizeTerminalLine(b, d.o.plain)
+		normalized, boundaries := normalizeTerminalLineMapped(b, d.o.plain, d.o.charMode)
 		blank := string(normalized) == "\n"
 		if !(d.o.squeeze && blank && d.lastBlank) {
-			for _, part := range foldLine(normalized, d.width, d.o.plain) {
-				d.rows = append(d.rows, displayRow{part, line, d.total})
+			for _, part := range foldLineMapped(normalized, boundaries, d.width, d.o.plain, d.o.charMode) {
+				d.rows = append(d.rows, displayRow{part.data, line, base + part.end})
 			}
 		}
 		d.lastBlank = blank
@@ -122,38 +129,136 @@ func (d *document) loadLine() {
 }
 
 func normalizeTerminalLine(line []byte, plain bool) []byte {
+	normalized, _ := normalizeTerminalLineMapped(line, plain, charactersUTF8)
+	return normalized
+}
+
+func normalizeTerminalLineMapped(line []byte, plain bool, mode characterMode) ([]byte, []int) {
 	if plain {
-		return append([]byte(nil), line...)
-	}
-	line = append([]byte(nil), line...)
-	if len(line) >= 2 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
-		line = append(line[:len(line)-2], '\n')
+		var out []byte
+		var boundaries []int
+		for i, b := range line {
+			switch b {
+			case '\b':
+				out = append(out, '^', 'H')
+				boundaries = append(boundaries, i+1, i+1)
+			case '\r':
+				out = append(out, '^', 'M')
+				boundaries = append(boundaries, i+1, i+1)
+			default:
+				out = append(out, b)
+				boundaries = append(boundaries, i+1)
+			}
+		}
+		return out, boundaries
 	}
 	var out []byte
-	for i := 0; i < len(line); i++ {
-		if i+2 < len(line) && line[i+1] == '\b' &&
-			(line[i+2] == '_' || line[i] == '_' || line[i] == line[i+2]) {
-			if line[i] == '_' {
-				out = append(out, line[i+2])
-			} else {
-				out = append(out, line[i])
-			}
-			i += 2
+	var boundaries []int
+	for i := 0; i < len(line); {
+		if i == len(line)-2 && line[i] == '\r' && line[i+1] == '\n' {
+			i++
 			continue
 		}
-		if line[i] == '\b' {
-			if len(out) > 0 {
-				_, size := utf8.DecodeLastRune(out)
-				if size < 1 {
-					size = 1
+		r, size := decodeDisplayRune(line[i:], mode)
+		width := displayRuneWidth(r, mode)
+
+		// character + n backspaces + n underscores: underlined glyph.
+		j := i + size
+		if matchByteCount(line, j, '\b', width) && matchByteCount(line, j+width, '_', width) {
+			end := j + 2*width
+			appendMapped(&out, &boundaries, line[i:i+size], end)
+			i = end
+			continue
+		}
+		// n underscores + n backspaces + a width-n glyph: underlined glyph.
+		if r == '_' {
+			underscores := 0
+			for i+underscores < len(line) && line[i+underscores] == '_' {
+				underscores++
+			}
+			j = i + underscores
+			if underscores > 0 && matchByteCount(line, j, '\b', underscores) {
+				next := j + underscores
+				r2, size2 := decodeDisplayRune(line[next:], mode)
+				if next < len(line) && displayRuneWidth(r2, mode) == underscores {
+					end := next + size2
+					appendMapped(&out, &boundaries, line[next:end], end)
+					i = end
+					continue
 				}
-				out = out[:len(out)-size]
 			}
+		}
+		// glyph + repeated (n backspaces + identical glyph): bold glyph.
+		j = i + size
+		end := j
+		for matchByteCount(line, end, '\b', width) {
+			next := end + width
+			r2, size2 := decodeDisplayRune(line[next:], mode)
+			if next >= len(line) || r2 != r {
+				break
+			}
+			end = next + size2
+		}
+		if end > j {
+			appendMapped(&out, &boundaries, line[i:i+size], end)
+			i = end
 			continue
 		}
-		out = append(out, line[i])
+		if r == '\b' {
+			if len(out) > 0 {
+				outSize := 1
+				if mode != charactersByte {
+					_, outSize = utf8.DecodeLastRune(out)
+					if outSize < 1 {
+						outSize = 1
+					}
+				}
+				out = out[:len(out)-outSize]
+				boundaries = boundaries[:len(boundaries)-outSize]
+			}
+			i += size
+			continue
+		}
+		appendMapped(&out, &boundaries, line[i:i+size], i+size)
+		i += size
 	}
-	return out
+	return out, boundaries
+}
+
+func decodeDisplayRune(data []byte, mode characterMode) (rune, int) {
+	if len(data) == 0 {
+		return utf8.RuneError, 0
+	}
+	if mode == charactersByte {
+		return rune(data[0]), 1
+	}
+	return utf8.DecodeRune(data)
+}
+
+func displayRuneWidth(r rune, mode characterMode) int {
+	if mode == charactersByte {
+		return 1
+	}
+	return max(1, runewidth.RuneWidth(r))
+}
+
+func matchByteCount(line []byte, start int, want byte, count int) bool {
+	if start < 0 || count < 0 || start+count > len(line) {
+		return false
+	}
+	for _, b := range line[start : start+count] {
+		if b != want {
+			return false
+		}
+	}
+	return true
+}
+
+func appendMapped(out *[]byte, boundaries *[]int, data []byte, sourceEnd int) {
+	*out = append(*out, data...)
+	for range data {
+		*boundaries = append(*boundaries, sourceEnd)
+	}
 }
 func (d *document) ensure(n int) {
 	for len(d.rows) < n && !d.eof {
@@ -167,15 +272,31 @@ func (d *document) all() {
 }
 
 func foldLine(line []byte, width int, plain bool) [][]byte {
+	boundaries := make([]int, len(line))
+	for i := range boundaries {
+		boundaries[i] = i + 1
+	}
+	parts := foldLineMapped(line, boundaries, width, plain, charactersUTF8)
+	rows := make([][]byte, len(parts))
+	for i := range parts {
+		rows[i] = parts[i].data
+	}
+	return rows
+}
+
+func foldLineMapped(line []byte, boundaries []int, width int, plain bool, mode characterMode) []foldedRow {
 	if width < 1 {
 		width = 80
 	}
-	var rows [][]byte
+	var rows []foldedRow
 	start, col := 0, 0
 	for i := 0; i < len(line); {
-		r, size := utf8.DecodeRune(line[i:])
-		if r == utf8.RuneError && size == 0 {
-			size = 1
+		var r rune
+		size := 1
+		if mode == charactersByte {
+			r = rune(line[i])
+		} else {
+			r, size = utf8.DecodeRune(line[i:])
 		}
 		advance := runewidth.RuneWidth(r)
 		if advance < 0 || plain && advance == 0 && r != '\n' {
@@ -200,7 +321,7 @@ func foldLine(line []byte, width int, plain bool) [][]byte {
 			}
 		}
 		if col+advance > width && i > start {
-			rows = append(rows, append([]byte(nil), line[start:i]...))
+			rows = append(rows, foldedRow{append([]byte(nil), line[start:i]...), boundaries[i-1]})
 			start, col = i, 0
 			if r == '\t' {
 				advance = 8
@@ -208,13 +329,13 @@ func foldLine(line []byte, width int, plain bool) [][]byte {
 		}
 		col += advance
 		if r == '\n' {
-			rows = append(rows, append([]byte(nil), line[start:i+size]...))
+			rows = append(rows, foldedRow{append([]byte(nil), line[start:i+size]...), boundaries[i+size-1]})
 			start, col = i+size, 0
 		}
 		i += size
 	}
 	if start < len(line) {
-		rows = append(rows, append([]byte(nil), line[start:]...))
+		rows = append(rows, foldedRow{append([]byte(nil), line[start:]...), boundaries[len(line)-1]})
 	}
 	return rows
 }
@@ -232,19 +353,19 @@ type searchState struct {
 }
 type displayPosition struct{ row, offset int }
 type pager struct {
-	rc                                   *tool.RunContext
-	out                                  *bufio.Writer
-	tty                                  *ttyChannel
-	o                                    options
-	files                                []string
-	doc                                  *document
-	fileIndex, top, next, half, exitCode int
-	previous                             displayPosition
-	marks                                map[byte]displayPosition
-	suppressCommands                     map[int]bool
-	search                               searchState
-	previousExamined                     string
-	quit, commandFailed                  bool
+	rc                                                            *tool.RunContext
+	out                                                           *bufio.Writer
+	tty                                                           *ttyChannel
+	o                                                             options
+	files                                                         []string
+	doc                                                           *document
+	fileIndex, top, next, half, outputStart, outputSpan, exitCode int
+	previous                                                      displayPosition
+	marks                                                         map[byte]displayPosition
+	suppressCommands                                              map[int]bool
+	search                                                        searchState
+	previousExamined                                              string
+	quit, commandFailed                                           bool
 }
 
 func (p *pager) canceled() bool              { return p.rc.Ctx != nil && p.rc.Ctx.Err() != nil }
@@ -299,7 +420,7 @@ func (p *pager) openFileMode(i int, requireSeekable bool) bool {
 		}
 	}
 	p.doc = newDocument(name, r, c, p.o.width, p.o)
-	p.fileIndex, p.top, p.next = i, 0, 0
+	p.fileIndex, p.top, p.next, p.outputStart, p.outputSpan = i, 0, 0, 0, 0
 	p.previous = displayPosition{}
 	p.marks = make(map[byte]displayPosition)
 	return true
@@ -351,7 +472,13 @@ func (p *pager) run() int {
 			return p.exitCode
 		}
 		if line > 0 {
-			p.top = p.rowForLine(line)
+			if row, found := p.rowForLineFound(line); found {
+				p.top = row
+			} else {
+				p.top = 0
+				p.diagnose("tag %s: line %d does not exist", p.o.tag, line)
+				p.suppressCommands[p.fileIndex] = true
+			}
 		} else if pattern != "" && !p.searchFor(pattern, true, false, 1, -1) {
 			p.diagnose("tag %s: pattern not found", p.o.tag)
 			p.suppressCommands[p.fileIndex] = true
@@ -395,17 +522,24 @@ func (p *pager) run() int {
 }
 func (p *pager) failCode(f string, a ...any) int { p.fail(f, a...); return p.exitCode }
 func (p *pager) render() bool {
-	p.doc.ensure(p.top + p.o.screenful)
+	start := p.top
+	span := p.o.screenful
+	if p.outputSpan > 0 {
+		start = p.outputStart
+		span = p.outputSpan
+		p.outputSpan = 0
+	}
+	p.doc.ensure(start + span)
 	if p.doc.readErr != nil {
 		return p.fail("%s: %v", p.doc.name, tool.SysErr(p.doc.readErr))
 	}
-	end := min(len(p.doc.rows), p.top+p.o.screenful)
-	for _, r := range p.doc.rows[p.top:end] {
+	end := min(len(p.doc.rows), start+span)
+	for _, r := range p.doc.rows[start:end] {
 		if _, e := p.out.Write(r.data); e != nil {
 			return p.fail("write error: %v", e)
 		}
 	}
-	p.next = end
+	p.next = min(len(p.doc.rows), p.top+p.o.screenful)
 	if p.doc.readErr != nil {
 		return p.fail("%s: %v", p.doc.name, tool.SysErr(p.doc.readErr))
 	}
@@ -527,7 +661,11 @@ func (p *pager) initialCommands(s string) {
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n > 0 {
 		// The decimal -p shorthand places the requested file line at the
 		// standard current position, normally the third display line.
-		p.moveLarge(max(0, p.rowForLine(n)-2))
+		if row, found := p.rowForLineFound(n); found {
+			p.moveLarge(max(0, row-2))
+		} else {
+			p.moveTo(len(p.doc.rows), p.o.screenful)
+		}
 		return
 	}
 	in := &stringInput{strings.NewReader(s)}
@@ -571,12 +709,37 @@ func (p *pager) currentPosition() displayPosition {
 func (p *pager) restorePosition(pos displayPosition) { p.top = max(0, pos.row-pos.offset) }
 
 func (p *pager) moveForward(n int) {
-	target := p.top + max(0, n)
-	p.doc.ensure(target + p.o.screenful)
-	if p.doc.eof {
-		target = min(target, max(0, len(p.doc.rows)-1))
+	p.moveTo(p.top+max(0, n), p.o.screenful)
+}
+
+func (p *pager) moveTo(target, span int) bool {
+	p.doc.all()
+	if target < 0 || target >= len(p.doc.rows) {
+		p.commandFailed = true
+		_ = p.writeUI("\a")
+		if p.doc.name == "-" {
+			p.top = max(0, len(p.doc.rows)-max(1, span))
+		}
+		return false
 	}
 	p.top = target
+	return true
+}
+
+func (p *pager) scrollForwardLines(step int) bool {
+	p.doc.all()
+	if p.top+step >= len(p.doc.rows) || p.next+step > len(p.doc.rows) {
+		p.commandFailed = true
+		_ = p.writeUI("\a")
+		if p.doc.name == "-" && p.next < len(p.doc.rows) {
+			p.top, p.outputStart = p.next, p.next
+			p.outputSpan = len(p.doc.rows) - p.next
+		}
+		return false
+	}
+	p.outputStart, p.outputSpan = p.next, step
+	p.top += step
+	return true
 }
 
 func (p *pager) execute(c moreCommand, eof bool) bool {
@@ -621,7 +784,7 @@ func (p *pager) executeCommand(c moreCommand, eof bool) bool {
 		if !c.counted && c.key == ' ' {
 			step = p.o.screenful
 		}
-		p.moveForward(step)
+		p.scrollForwardLines(step)
 		return true
 	case 'f', 0x06:
 		step := n
@@ -635,10 +798,12 @@ func (p *pager) executeCommand(c moreCommand, eof bool) bool {
 		if !c.counted {
 			step = p.o.screenful
 		}
-		p.top = max(0, p.top-step)
+		p.moveTo(p.top-step, p.o.screenful)
 		return true
 	case 'k':
-		p.top = max(0, p.top-n)
+		if p.moveTo(p.top-n, n) {
+			p.outputStart, p.outputSpan = p.top, n
+		}
 		return true
 	case 'd', 0x04:
 		if c.counted {
@@ -650,18 +815,28 @@ func (p *pager) executeCommand(c moreCommand, eof bool) bool {
 		if c.counted {
 			p.half = n
 		}
-		p.top = max(0, p.top-p.half)
+		if p.moveTo(p.top-p.half, p.half) {
+			p.outputStart, p.outputSpan = p.top, p.half
+		}
 		return true
 	case 's':
 		p.doc.all()
 		p.top = min(max(0, len(p.doc.rows)-p.o.screenful), p.next+n-1)
 		return true
 	case 'g':
-		p.moveLarge(p.rowForLine(n))
+		if row, found := p.rowForLineFound(n); found {
+			p.moveLarge(row)
+		} else {
+			p.moveTo(len(p.doc.rows), p.o.screenful)
+		}
 		return true
 	case 'G':
 		if c.counted {
-			p.moveLarge(p.rowForLine(n))
+			if row, found := p.rowForLineFound(n); found {
+				p.moveLarge(row)
+			} else {
+				p.moveTo(len(p.doc.rows), p.o.screenful)
+			}
 		} else {
 			p.doc.all()
 			p.moveLarge(max(0, len(p.doc.rows)-p.o.screenful))
@@ -743,9 +918,9 @@ func advancesAtEOF(c moreCommand) bool {
 func (p *pager) colon(c moreCommand) bool {
 	switch c.sub {
 	case 'n':
-		return p.openReachable(p.fileIndex+count(c, 1), 1, true)
+		return p.navigate(p.fileIndex+count(c, 1), 1)
 	case 'p':
-		return p.openReachable(p.fileIndex-count(c, 1), -1, true)
+		return p.navigate(p.fileIndex-count(c, 1), -1)
 	case 'e':
 		name := strings.TrimSpace(c.arg)
 		if name == "" {
@@ -786,7 +961,12 @@ func (p *pager) colon(c moreCommand) bool {
 		}
 		if opened {
 			if line > 0 {
-				p.top = p.rowForLine(line)
+				if row, found := p.rowForLineFound(line); found {
+					p.top = row
+				} else {
+					p.top = 0
+					p.commandError("tag: line %d does not exist", line)
+				}
 			} else if pat != "" && !p.searchFor(pat, true, false, 1, -1) {
 				p.commandError("tag pattern not found")
 			}
@@ -795,6 +975,17 @@ func (p *pager) colon(c moreCommand) bool {
 		return true
 	}
 	p.commandError("unknown command: :%c", c.sub)
+	return true
+}
+
+func (p *pager) navigate(start, step int) bool {
+	if start < 0 || start >= len(p.files) {
+		p.commandError("no file in requested direction")
+		return true
+	}
+	if !p.openReachable(start, step, true) {
+		p.commandError("no accessible file in requested direction")
+	}
 	return true
 }
 func (p *pager) rowForLine(n int) int {
@@ -811,6 +1002,14 @@ func (p *pager) rowForLine(n int) int {
 	}
 	return max(0, len(p.doc.rows)-p.o.screenful)
 }
+
+func (p *pager) rowForLineFound(n int) (int, bool) {
+	p.doc.all()
+	if n < 1 || n > len(p.doc.lines) {
+		return 0, false
+	}
+	return p.rowForLine(n), true
+}
 func (p *pager) literalSearch(s string) bool {
 	p.doc.all()
 	for i, r := range p.doc.rows {
@@ -824,11 +1023,7 @@ func (p *pager) literalSearch(s string) bool {
 }
 func (p *pager) searchFor(pattern string, forward, invert bool, n, from int) bool {
 	p.doc.all()
-	flags := ""
-	if p.o.ignoreCase {
-		flags = "(?i)"
-	}
-	re, e := bre.CompileWithFlags(pattern, flags)
+	match, e := compileMoreMatcher(p.o, pattern)
 	if e != nil {
 		p.diagnose("invalid pattern: %v", e)
 		return false
@@ -840,7 +1035,12 @@ func (p *pager) searchFor(pattern string, forward, invert bool, n, from int) boo
 	seen := 0
 	if forward {
 		for i, line := range p.doc.lines {
-			if i+1 <= start || re.MatchString(strings.TrimRight(line, "\r\n")) == invert {
+			matched, err := match(strings.TrimRight(line, "\r\n"))
+			if err != nil {
+				p.diagnose("pattern match: %v", err)
+				return false
+			}
+			if i+1 <= start || matched == invert {
 				continue
 			}
 			seen++
@@ -855,7 +1055,12 @@ func (p *pager) searchFor(pattern string, forward, invert bool, n, from int) boo
 			start = len(p.doc.lines) + 1
 		}
 		for i := min(len(p.doc.lines), start-1) - 1; i >= 0; i-- {
-			if re.MatchString(strings.TrimRight(p.doc.lines[i], "\r\n")) == invert {
+			matched, err := match(strings.TrimRight(p.doc.lines[i], "\r\n"))
+			if err != nil {
+				p.diagnose("pattern match: %v", err)
+				return false
+			}
+			if matched == invert {
 				continue
 			}
 			seen++
@@ -867,6 +1072,58 @@ func (p *pager) searchFor(pattern string, forward, invert bool, n, from int) boo
 		}
 	}
 	return false
+}
+
+func compileMoreMatcher(o options, pattern string) (func(string) (bool, error), error) {
+	if o.charMode == charactersUTF8 {
+		if strings.Contains(pattern, "[") && o.ctypeName != "C" && o.ctypeName != "POSIX" {
+			return nil, fmt.Errorf("locale-sensitive UTF-8 bracket expressions are unavailable for %s", o.ctypeName)
+		}
+		flags := ""
+		if o.ignoreCase {
+			flags = "(?i)"
+		}
+		re, err := bre.CompileWithFlags(pattern, flags)
+		if err != nil {
+			return nil, err
+		}
+		return func(s string) (bool, error) { return re.MatchString(s), nil }, nil
+	}
+
+	var ctypeProvider *ctype.Provider
+	var byteProvider bre.ByteCtype
+	var err error
+	if o.ctypeName != "C" && o.ctypeName != "POSIX" {
+		ctypeProvider, err = ctype.Open(o.ctypeName)
+		if err != nil {
+			return nil, err
+		}
+		defer ctypeProvider.Close()
+		byteProvider = ctypeProvider
+	}
+	tables, err := bre.SnapshotLocaleByteCtypeTables(byteProvider)
+	if err != nil {
+		return nil, err
+	}
+	if o.collateName != "C" && o.collateName != "POSIX" {
+		provider, openErr := collate.Open(o.collateName)
+		if openErr != nil {
+			return nil, openErr
+		}
+		tables, err = tables.WithCollation(provider)
+		closeErr := provider.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpBRE, FoldCase: o.ignoreCase})
+	if err != nil {
+		return nil, err
+	}
+	return re.MatchString, nil
 }
 func (p *pager) help() bool {
 	const summary = "more commands\n" +
@@ -973,9 +1230,11 @@ func expandFilename(rc *tool.RunContext, raw string) (string, error) {
 	}
 	env := append(append([]string(nil), rc.Env...), "PWD="+rc.Dir)
 	fields, err := expand.Fields(&expand.Config{
-		Env:      expand.ListEnviron(env...),
-		ReadDir2: os.ReadDir,
-		Lang:     syntax.LangPOSIX,
+		Env: expand.ListEnviron(env...),
+		ReadDir2: func(path string) ([]os.DirEntry, error) {
+			return os.ReadDir(rc.Path(path))
+		},
+		Lang: syntax.LangPOSIX,
 		CmdSubst: func(w io.Writer, cs *syntax.CmdSubst) error {
 			ctx := rc.Ctx
 			if ctx == nil {
@@ -1021,8 +1280,8 @@ func resolveTag(rc *tool.RunContext, tag string) (string, int, string, error) {
 			return f[1], n, "", nil
 		}
 		if len(ex) >= 2 && (ex[0] == '/' || ex[0] == '?') && ex[len(ex)-1] == ex[0] {
-			pat := strings.TrimSuffix(strings.TrimPrefix(ex[1:len(ex)-1], "^"), "$")
-			pat = strings.ReplaceAll(pat, `\/`, `/`)
+			pat := ex[1 : len(ex)-1]
+			pat = strings.ReplaceAll(pat, `\`+string(ex[0]), string(ex[0]))
 			return f[1], 0, pat, nil
 		}
 		return "", 0, "", fmt.Errorf("unsupported tag address %q", ex)
