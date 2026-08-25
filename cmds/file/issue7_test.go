@@ -20,9 +20,9 @@ import (
 // the standard-output "<file>: <type>" line carries "cannot open". So an
 // inaccessible operand in the middle leaves the status 0, keeps its stdout
 // line in operand order, and processing continues with later operands. The
-// absence of a second stderr diagnostic and the exact ASCII/directory labels
-// below pin Bashy's deterministic choices; POSIX does not require those
-// particular classification strings or forbid an additional diagnostic.
+// absence of a second stderr diagnostic and the exact "ASCII text" label
+// below pin Bashy's deterministic choices; POSIX does not require that text
+// label or forbid an additional diagnostic. The word "directory" is required.
 func TestFileIssue7OperandOrderPreserved(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "good", []byte("hello\n"))
@@ -31,7 +31,7 @@ func TestFileIssue7OperandOrderPreserved(t *testing.T) {
 	}
 	out, errb, code := invoke(t, dir, "", "good", "missing", "sub")
 	if code != 0 || errb != "" {
-		t.Fatalf("code=%d err=%q, want status 0 with no diagnostic per the XCU file exception", code, errb)
+		t.Fatalf("code=%d err=%q, want status 0 and Bashy's deterministic stderr silence", code, errb)
 	}
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if len(lines) != 3 {
