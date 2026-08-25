@@ -17,8 +17,8 @@ import (
 var cmd = &tool.Tool{
 	Name:     "uudecode",
 	Synopsis: "Decode a uuencoded file.",
-	Usage: "uudecode [-o OUTFILE] [FILE]\n\n" +
-		"Decode traditional or begin-base64 data from FILE, or standard input.\n\n" +
+	Usage: "uudecode [OPTION]... [FILE]...\n\n" +
+		"Decode traditional or begin-base64 data from FILEs, or standard input.\n\n" +
 		"  -o, --output-file=FILE  write to FILE instead of the header name\n\n" +
 		"Header output names use ordinary pathname semantics.",
 }
@@ -38,8 +38,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if len(operands) > 1 {
+	if envPresent(rc.Env, "POSIXLY_CORRECT") && len(operands) > 1 {
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
+	}
+	if *output != "" && len(operands) > 1 {
+		return tool.UsageError(rc, cmd, "--output-file cannot be used with multiple input files")
 	}
 	if len(operands) == 0 {
 		if decodeInput(rc, "standard input", rc.In, *output) {
@@ -48,21 +51,37 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
-	operand := operands[0]
-	f, err := os.Open(rc.Path(operand))
-	if err != nil {
-		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
-		return 1
+	failed := false
+	for _, operand := range operands {
+		f, err := os.Open(rc.Path(operand))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
+			failed = true
+			continue
+		}
+		ok := decodeInput(rc, operand, f, *output)
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
+			ok = false
+		}
+		if !ok {
+			failed = true
+		}
 	}
-	ok := decodeInput(rc, operand, f, *output)
-	if err := f.Close(); err != nil {
-		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
-		ok = false
-	}
-	if !ok {
+	if failed {
 		return 1
 	}
 	return 0
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeInput scans the entire input because mailboxes commonly contain more

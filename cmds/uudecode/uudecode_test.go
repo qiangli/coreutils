@@ -14,9 +14,13 @@ import (
 )
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	return runToolEnv(t, dir, stdin, nil, args...)
+}
+
+func runToolEnv(t *testing.T, dir, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, err bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &err}}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: env, Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &err}}
 	code := cmd.Run(rc, args)
 	return out.String(), err.String(), code
 }
@@ -120,17 +124,37 @@ func TestPOSIXRejectsMultipleInputFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, errb, code := runTool(t, dir, "", "one.uue", "two.uue")
-	if code != 2 || !strings.Contains(errb, "extra operand") {
-		t.Fatalf("multiple inputs: err=%q code=%d", errb, code)
+	for _, value := range []string{"", "1"} {
+		_, errb, code := runToolEnv(t, dir, "", []string{"POSIXLY_CORRECT=" + value}, "one.uue", "two.uue")
+		if code != 2 || !strings.Contains(errb, "extra operand") {
+			t.Fatalf("POSIXLY_CORRECT=%q multiple inputs: err=%q code=%d", value, errb, code)
+		}
 	}
-	_, errb, code = runTool(t, dir, "", "-o", "result", "one.uue", "two.uue")
-	if code != 2 || !strings.Contains(errb, "extra operand") {
-		t.Fatalf("-o with multiple inputs: err=%q code=%d", errb, code)
-	}
-	for _, name := range []string{"one", "two", "result"} {
+	for _, name := range []string{"one", "two"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			t.Fatalf("usage error created %q: %v", name, err)
+		}
+	}
+}
+
+func TestNonPOSIXDecodesMultipleInputFiles(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{
+		"one.uue": "begin 600 one\n#0V%T\n \nend\n",
+		"two.uue": "begin-base64 600 two\nRG9uZQ==\n====\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, errb, code := runTool(t, dir, "", "one.uue", "two.uue")
+	if code != 0 || errb != "" {
+		t.Fatalf("multiple inputs extension: err=%q code=%d", errb, code)
+	}
+	for name, want := range map[string]string{"one": "Cat", "two": "Done"} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", name, got, err, want)
 		}
 	}
 }
