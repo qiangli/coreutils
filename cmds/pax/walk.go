@@ -1,13 +1,42 @@
 package paxcmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+// errTraversalCycle is returned after the required diagnostic has already
+// been written. POSIX requires pax to terminate when an ancestor loop is
+// detected, so callers must stop processing subsequent operands while still
+// closing any partially written archive cleanly.
+var errTraversalCycle = errors.New("filesystem cycle detected")
+
+// sourceTraversalError distinguishes a source-side lookup/read failure from
+// an archive-stream write failure. Copy mode must diagnose the former and
+// continue with later operands while keeping the pipe a valid archive; a sink
+// failure cannot be recovered that way.
+type sourceTraversalError struct{ err error }
+
+func (e *sourceTraversalError) Error() string { return e.err.Error() }
+func (e *sourceTraversalError) Unwrap() error { return e.err }
+
+func sourceTraversalFailure(err error) bool {
+	var target *sourceTraversalError
+	return errors.As(err, &target)
+}
+
+func sourceTraversalErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &sourceTraversalError{err: err}
+}
 
 // followMode is the POSIX pax symlink traversal policy. The default is
 // physical: symbolic links are archived as symbolic links. -H resolves only
@@ -22,10 +51,10 @@ const (
 )
 
 // walkEntry is one source file surfaced by the walker. member is the archive
-// pathname, spelled from the operand exactly as the caller wrote it (POSIX
-// stores the pathname "as specified", so "./src" stays "./src", never a
-// cleaned relative form). abs is the filesystem path to read from. fi is the
-// lstat result, or the stat result when the follow policy resolved a symlink.
+// pathname. Safe relative spelling is preserved (so "./src" stays "./src");
+// unsafe absolute or parent-escaping roots use their basename so the archive
+// remains consumable by the fail-closed reader. abs is the filesystem path to
+// read from. fi is the lstat result, or the stat result when following a link.
 type walkEntry struct {
 	member string
 	abs    string
@@ -58,25 +87,25 @@ type walker struct {
 
 	rootDev   uint64
 	ancestors []walkAncestor
-	diagnosed bool // a cycle was reported on stderr; exit must be nonzero
+	diagnosed bool // a source traversal error was reported; exit must be nonzero
 }
 
 // walkOperand traverses one command-line file operand under the -H/-L/-X/-d
 // policy in effect and calls fn once per source file, in deterministic
 // (lexical) order. It is the single traversal shared by the tar writer, the
 // cpio writer, and copy mode. The returned bool reports whether a diagnostic
-// was already written (a filesystem cycle); the error is fatal for this
-// operand and has not been printed.
+// was already written; the error is fatal for this operand and has not been
+// printed, except errTraversalCycle whose required diagnostic is already done.
 func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry) error) (bool, error) {
 	full := resolve(rc, name)
 	fi, err := os.Lstat(full)
 	if err != nil {
-		return false, err
+		return false, sourceTraversalErr(err)
 	}
 	// -H and -L both resolve a symlink named on the command line.
 	if fi.Mode()&os.ModeSymlink != 0 && o.follow != followNone {
 		if fi, err = os.Stat(full); err != nil {
-			return false, err
+			return false, sourceTraversalErr(err)
 		}
 	}
 	w := &walker{rc: rc, o: o, fn: fn}
@@ -87,12 +116,37 @@ func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry
 		}
 		w.rootDev = dev
 	}
-	err = w.walk(filepath.ToSlash(name), full, fi)
+	err = w.walk(archiveMemberRoot(name, full), full, fi)
 	return w.diagnosed, err
+}
+
+// archiveMemberRoot preserves safe relative operand spelling (including a
+// leading "./"), but retains the historical basename behavior for absolute
+// or parent-escaping operands. That keeps write-mode archives consumable by
+// our fail-closed extractor and makes copy mode a genuine write-then-read
+// operation instead of generating a member it must reject as unsafe.
+func archiveMemberRoot(name, full string) string {
+	slashed := filepath.ToSlash(name)
+	clean := path.Clean(slashed)
+	unsafe := filepath.IsAbs(name) || filepath.VolumeName(name) != "" ||
+		clean == ".." || strings.HasPrefix(clean, "../")
+	if !unsafe {
+		return slashed
+	}
+	base := filepath.Base(filepath.Clean(full))
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return "."
+	}
+	return filepath.ToSlash(base)
 }
 
 func (w *walker) walk(member, abs string, fi os.FileInfo) error {
 	if err := w.fn(walkEntry{member: member, abs: abs, fi: fi}); err != nil {
+		if sourceTraversalFailure(err) {
+			fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", member, err)
+			w.diagnosed = true
+			return nil
+		}
 		return err
 	}
 	if !fi.IsDir() || w.o.dirsNoDescend {
@@ -113,8 +167,7 @@ func (w *walker) walk(member, abs string, fi os.FileInfo) error {
 	// Ancestor-only cycle detection: descending into a directory that is
 	// already on the current descent path (reachable only through a followed
 	// symlink or an equivalent mount trick) would never terminate. POSIX
-	// requires the loop be diagnosed and the exit status be nonzero; siblings
-	// keep archiving.
+	// requires the loop be diagnosed and the pax invocation to terminate.
 	anc := walkAncestor{}
 	if id := identityOf(fi); id.ok {
 		anc.id, anc.idOK = id.key(), true
@@ -124,9 +177,9 @@ func (w *walker) walk(member, abs string, fi os.FileInfo) error {
 	for _, a := range w.ancestors {
 		if (anc.idOK && a.idOK && anc.id == a.id) ||
 			(!anc.idOK && !a.idOK && anc.resolved != "" && anc.resolved == a.resolved) {
-			fmt.Fprintf(w.rc.Err, "pax: %s: filesystem cycle detected; directory not descended\n", member)
+			fmt.Fprintf(w.rc.Err, "pax: %s: filesystem cycle detected; terminating\n", member)
 			w.diagnosed = true
-			return nil
+			return errTraversalCycle
 		}
 	}
 	w.ancestors = append(w.ancestors, anc)
@@ -134,20 +187,26 @@ func (w *walker) walk(member, abs string, fi os.FileInfo) error {
 
 	entries, err := os.ReadDir(abs) // sorted by name: deterministic member order
 	if err != nil {
-		return err
+		fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", member, err)
+		w.diagnosed = true
+		return nil
 	}
 	base := strings.TrimRight(member, "/")
 	for _, e := range entries {
 		childAbs := filepath.Join(abs, e.Name())
 		cfi, err := e.Info() // lstat semantics
 		if err != nil {
-			return err
+			fmt.Fprintf(w.rc.Err, "pax: %s/%s: %v\n", base, e.Name(), err)
+			w.diagnosed = true
+			continue
 		}
 		// Only -L resolves symlinks encountered below an operand; under -H
 		// they are archived as the symlinks they are.
 		if cfi.Mode()&os.ModeSymlink != 0 && w.o.follow == followAll {
 			if cfi, err = os.Stat(childAbs); err != nil {
-				return err
+				fmt.Fprintf(w.rc.Err, "pax: %s/%s: %v\n", base, e.Name(), err)
+				w.diagnosed = true
+				continue
 			}
 		}
 		if err := w.walk(base+"/"+e.Name(), childAbs, cfi); err != nil {

@@ -1,11 +1,24 @@
 package paxcmd
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCopySourceFileDoesNotMisclassifyStreamFailures(t *testing.T) {
+	readErr := copySourceFile(io.Discard, &errorAfterReader{data: []byte("x")})
+	if sourceTraversalFailure(readErr) || !strings.Contains(readErr.Error(), "injected read failure") {
+		t.Fatalf("read failure classification = %T %v", readErr, readErr)
+	}
+	writeErr := copySourceFile(shortWriter{}, strings.NewReader("x"))
+	if sourceTraversalFailure(writeErr) || !errors.Is(writeErr, io.ErrShortWrite) {
+		t.Fatalf("write failure classification = %T %v", writeErr, writeErr)
+	}
+}
 
 // The -H/-L/-X traversal tests. Every format goes through the one shared
 // walker (walkOperand), so each behavior is asserted per archive lane —
@@ -178,9 +191,9 @@ func TestLastOfRepeatedFollowOptionsWins(t *testing.T) {
 }
 
 // A followed symlink that leads back to an ancestor of the current descent is
-// a filesystem cycle: it must be diagnosed, force a nonzero exit, and stop
-// only that descent — siblings are still archived.
-func TestFollowCycleIsDiagnosedAndNonzero(t *testing.T) {
+// a filesystem cycle: it must be diagnosed, force a nonzero exit, and
+// terminate the pax invocation without processing later operands.
+func TestFollowCycleTerminatesPax(t *testing.T) {
 	d := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(d, "loop", "sub"), 0o755); err != nil {
 		t.Fatal(err)
@@ -188,10 +201,13 @@ func TestFollowCycleIsDiagnosedAndNonzero(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(d, "loop", "a.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(d, "later.txt"), []byte("later"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	mustSymlink(t, filepath.Join("..", "..", "loop"), filepath.Join(d, "loop", "sub", "back"))
 
 	arc := filepath.Join(d, "cycle.arc")
-	_, errs, code := exec(t, d, "", "-w", "-L", "-f", arc, "loop")
+	_, errs, code := exec(t, d, "", "-w", "-L", "-f", arc, "loop", "later.txt")
 	if code == 0 {
 		t.Fatalf("a traversal cycle must exit nonzero; stderr %q", errs)
 	}
@@ -203,8 +219,73 @@ func TestFollowCycleIsDiagnosedAndNonzero(t *testing.T) {
 		t.Fatalf("listing the partial archive failed: %d %s", code, errs2)
 	}
 	if !strings.Contains(out, "loop/a.txt") {
-		t.Errorf("siblings of the cycle must still be archived; got %q", out)
+		t.Errorf("members visited before the cycle should remain in the partial archive; got %q", out)
 	}
+	if strings.Contains(out, "later.txt") {
+		t.Errorf("pax must terminate after detecting the cycle; got %q", out)
+	}
+}
+
+// A file that disappears (or a dangling symlink followed by -L) must be
+// diagnosed and make the status nonzero, but POSIX requires write processing
+// to continue with later files.
+func TestDashLBrokenSymlinkContinuesDirectory(t *testing.T) {
+	for _, format := range followFormats {
+		t.Run(format, func(t *testing.T) {
+			d := t.TempDir()
+			if err := os.Mkdir(filepath.Join(d, "src"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustSymlink(t, "missing", filepath.Join(d, "src", "a-broken"))
+			if err := os.WriteFile(filepath.Join(d, "src", "z-good"), []byte("good"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			arc := filepath.Join(d, "broken-"+format+".arc")
+			_, errs, code := exec(t, d, "", "-w", "-L", "-x", format, "-f", arc, "src")
+			if code == 0 || !strings.Contains(errs, "a-broken") {
+				t.Fatalf("broken followed link = code %d, stderr %q", code, errs)
+			}
+			out, listErr, listCode := exec(t, d, "", "-f", arc)
+			if listCode != 0 {
+				t.Fatalf("list partial archive: code %d, stderr %q", listCode, listErr)
+			}
+			if !strings.Contains(out, "src/z-good") {
+				t.Fatalf("later file omitted after broken link: %q", out)
+			}
+		})
+	}
+}
+
+func TestCopyModeSourceErrorsContinue(t *testing.T) {
+	t.Run("missing operand does not discard later operand", func(t *testing.T) {
+		d := t.TempDir()
+		if err := os.WriteFile(filepath.Join(d, "good"), []byte("good"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		_, errs, code := exec(t, d, "", "-r", "-w", "missing", "good", dest)
+		if code == 0 || !strings.Contains(errs, "missing") {
+			t.Fatalf("missing source = code %d, stderr %q", code, errs)
+		}
+		mustBeRegularWith(t, filepath.Join(dest, "good"), "good")
+	})
+
+	t.Run("broken followed descendant does not discard later member", func(t *testing.T) {
+		d := t.TempDir()
+		if err := os.Mkdir(filepath.Join(d, "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mustSymlink(t, "missing", filepath.Join(d, "src", "a-broken"))
+		if err := os.WriteFile(filepath.Join(d, "src", "z-good"), []byte("good"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		_, errs, code := exec(t, d, "", "-r", "-w", "-L", "src", dest)
+		if code == 0 || !strings.Contains(errs, "a-broken") {
+			t.Fatalf("broken followed source = code %d, stderr %q", code, errs)
+		}
+		mustBeRegularWith(t, filepath.Join(dest, "src", "z-good"), "good")
+	})
 }
 
 // Ancestor-only means a DAG is not a cycle: two sibling symlinks into the
@@ -350,8 +431,8 @@ func TestFollowOptionsAreNoOpsInListAndRead(t *testing.T) {
 	mustBeRegularWith(t, filepath.Join(dest, "src", "a.txt"), "alpha")
 }
 
-// The archive pathname is the operand as the caller spelled it, not a cleaned
-// relative form: "./sub/dir" stays "./sub/dir", and copy mode recreates the
+// A safe relative archive pathname retains the caller's spelling rather than
+// being cleaned: "./sub/dir" stays "./sub/dir", and copy mode recreates the
 // full operand path under the destination.
 func TestOperandSpellingIsPreservedAsArchivePath(t *testing.T) {
 	d := t.TempDir()
@@ -380,4 +461,53 @@ func TestOperandSpellingIsPreservedAsArchivePath(t *testing.T) {
 		t.Fatalf("copy failed: %d %s", code, errs)
 	}
 	mustBeRegularWith(t, filepath.Join(dest, "sub", "dir", "f.txt"), "x")
+}
+
+// Absolute and parent-escaping operands retain the pre-walker basename
+// behavior. They must never create an archive member that the fail-closed
+// reader rejects, especially because copy mode is implemented by piping the
+// writer into that reader.
+func TestUnsafeOperandSpellingUsesSafeBasename(t *testing.T) {
+	d := t.TempDir()
+	src := filepath.Join(d, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		workdir string
+		operand string
+	}{
+		{"absolute", d, src},
+		{"parent", filepath.Join(d, "child"), "../src"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.MkdirAll(tc.workdir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dest := t.TempDir()
+			if _, errs, code := exec(t, tc.workdir, "", "-r", "-w", tc.operand, dest); code != 0 {
+				t.Fatalf("copy %q failed: %d %s", tc.operand, code, errs)
+			}
+			mustBeRegularWith(t, filepath.Join(dest, "src", "f.txt"), "x")
+		})
+	}
+
+	arc := filepath.Join(d, "absolute.arc")
+	if _, errs, code := exec(t, d, "", "-w", "-f", arc, src); code != 0 {
+		t.Fatalf("archive absolute operand failed: %d %s", code, errs)
+	}
+	listed, errs, code := exec(t, d, "", "-f", arc)
+	if code != 0 || !strings.Contains(listed, "src/f.txt") || strings.Contains(listed, filepath.ToSlash(src)) {
+		t.Fatalf("absolute operand members = (%q, %q, %d)", listed, errs, code)
+	}
+	extract := t.TempDir()
+	if _, errs, code := exec(t, extract, "", "-r", "-f", arc); code != 0 {
+		t.Fatalf("extract own absolute-operand archive failed: %d %s", code, errs)
+	}
+	mustBeRegularWith(t, filepath.Join(extract, "src", "f.txt"), "x")
 }

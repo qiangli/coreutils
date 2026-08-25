@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -372,11 +373,14 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		tw := tar.NewWriter(out)
 		for _, name := range files {
 			diagnosed, err := addPath(rc, o, tw, name)
-			if err != nil {
+			if err != nil && !errors.Is(err, errTraversalCycle) {
 				fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
 			}
 			if err != nil || diagnosed {
 				status = 1
+			}
+			if errors.Is(err, errTraversalCycle) {
+				break
 			}
 		}
 		if err := tw.Close(); err != nil {
@@ -606,11 +610,14 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 	var members []cpioMember
 	for _, name := range files {
 		diagnosed, err := collectCPIOPath(rc, o, &members, name)
-		if err != nil {
+		if err != nil && !errors.Is(err, errTraversalCycle) {
 			fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
 		}
 		if err != nil || diagnosed {
 			status = 1
+		}
+		if errors.Is(err, errTraversalCycle) {
+			break
 		}
 	}
 	ids := odcIdentities(members)
@@ -662,7 +669,7 @@ func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, nam
 			data = []byte(target)
 		}
 		if err != nil {
-			return err
+			return sourceTraversalErr(err)
 		}
 		*members = append(*members, cpioMember{name: out, fi: e.fi, id: identityOf(e.fi), data: data})
 		return nil
@@ -676,7 +683,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if fi.Mode()&os.ModeSymlink != 0 {
 			var err error
 			if link, err = os.Readlink(e.abs); err != nil {
-				return err
+				return sourceTraversalErr(err)
 			}
 		}
 		out := applySubstitutions(o.subst, e.member, rc.Err)
@@ -688,7 +695,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		}
 		h, err := headerFor(out, fi, link)
 		if err != nil {
-			return err
+			return sourceTraversalErr(err)
 		}
 		h.Format = tarFormat(o.format)
 		id := identityOf(fi)
@@ -745,10 +752,10 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if fi.Mode().IsRegular() && !hardlink {
 			f, err := os.Open(e.abs)
 			if err != nil {
-				return err
+				return sourceTraversalErr(err)
 			}
 			defer f.Close()
-			if _, err := io.Copy(tw, f); err != nil {
+			if err := copySourceFile(tw, f); err != nil {
 				return err
 			}
 		}
@@ -757,6 +764,33 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		}
 		return nil
 	})
+}
+
+// copySourceFile keeps archive sink failures precise. A mid-file source read
+// failure is also fatal to this stream: the tar header has already promised
+// the full file size, so continuing would leave an invalid member. Lookup,
+// open, stat, and readlink failures are classified before a header is emitted
+// and remain safely recoverable by copy mode.
+func copySourceFile(dst io.Writer, src io.Reader) error {
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			written, writeErr := dst.Write(buf[:n])
+			if writeErr != nil {
+				return writeErr
+			}
+			if written != n {
+				return io.ErrShortWrite
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
 }
 
 func newerThanArchive(o *options, name string, mtime time.Time) bool {
@@ -785,9 +819,9 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	}
 
 	pr, pw := io.Pipe()
-	// diagCh carries the write side's already-printed cycle diagnostics to
-	// the exit status; the channel receive after readMode is the
-	// synchronization point.
+	// diagCh carries the write side's already-printed traversal diagnostics to
+	// the exit status; the channel receive after readMode is the synchronization
+	// point.
 	diagCh := make(chan bool, 1)
 	go func() {
 		tw := tar.NewWriter(pw)
@@ -796,8 +830,17 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		for _, name := range files {
 			d, e := addPath(rc, o, tw, name)
 			diagnosed = diagnosed || d
+			if errors.Is(e, errTraversalCycle) {
+				break
+			}
+			if sourceTraversalFailure(e) {
+				fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, e)
+				diagnosed = true
+				continue
+			}
 			if e != nil && werr == nil {
 				werr = e
+				break
 			}
 		}
 		if e := tw.Close(); e != nil && werr == nil {
