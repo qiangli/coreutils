@@ -12,10 +12,10 @@ import (
 // per-terminal device path; the console device name "CON" is
 // reported, mirroring what GNU tty builds print in Windows
 // environments.
-func ttyName(f *os.File) (string, bool) {
+func ttyName(f *os.File) (string, bool, error) {
 	var mode uint32
 	if err := windows.GetConsoleMode(windows.Handle(f.Fd()), &mode); err != nil {
-		return "", false
+		return "", false, nil
 	}
-	return "CON", true
+	return "CON", true, nil
 }

@@ -3,6 +3,7 @@
 package ttycmd
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 
@@ -27,18 +28,18 @@ import (
 // /dev/profile, …) share rdev 0, so rdev matching alone could return
 // the wrong node. The inode uniquely identifies the device node that
 // fstat saw on the descriptor.
-func ttyName(f *os.File) (string, bool) {
+func ttyName(f *os.File) (string, bool, error) {
 	fd := int(f.Fd())
 	if _, err := unix.IoctlGetTermios(fd, unix.TIOCGETA); err != nil {
-		return "", false
+		return "", false, nil
 	}
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
-		return "", false
+		return "", false, err
 	}
 	entries, err := os.ReadDir("/dev")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	for _, e := range entries {
 		path := "/dev/" + e.Name()
@@ -54,8 +55,8 @@ func ttyName(f *os.File) (string, bool) {
 			continue
 		}
 		if uint64(sys.Rdev) == uint64(st.Rdev) && sys.Ino == st.Ino {
-			return path, true
+			return path, true, nil
 		}
 	}
-	return "", false
+	return "", false, fmt.Errorf("terminal device pathname not found")
 }

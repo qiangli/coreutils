@@ -2,6 +2,7 @@ package lognamecmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"runtime"
@@ -39,7 +40,15 @@ func runWith(rc *tool.RunContext, args []string, resolve func() string) int {
 		fmt.Fprintln(rc.Err, "logname: no login name")
 		return 1
 	}
-	fmt.Fprintln(rc.Out, name)
+	line := name + "\n"
+	n, err := io.WriteString(rc.Out, line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		fmt.Fprintf(rc.Err, "logname: write error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

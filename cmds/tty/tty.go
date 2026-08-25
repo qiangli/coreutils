@@ -17,6 +17,7 @@ package ttycmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/qiangli/coreutils/tool"
@@ -44,7 +45,16 @@ func run(rc *tool.RunContext, args []string) int {
 
 	name, isTTY := "", false
 	if f, ok := rc.In.(*os.File); ok {
-		name, isTTY = ttyName(f)
+		if _, err := f.Stat(); err != nil {
+			fmt.Fprintf(rc.Err, "tty: standard input: %v\n", err)
+			return 2
+		}
+		var err error
+		name, isTTY, err = ttyName(f)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "tty: standard input: %v\n", err)
+			return 2
+		}
 	}
 	if !*silent && !*quiet {
 		// GNU prints the diagnosis on stdout, not stderr; a write
@@ -54,7 +64,12 @@ func run(rc *tool.RunContext, args []string) int {
 		if !isTTY {
 			line = "not a tty"
 		}
-		if _, err := fmt.Fprintf(rc.Out, "%s\n", line); err != nil {
+		line += "\n"
+		n, err := io.WriteString(rc.Out, line)
+		if err == nil && n != len(line) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
 			fmt.Fprintf(rc.Err, "tty: write error: %v\n", err)
 			return 3
 		}

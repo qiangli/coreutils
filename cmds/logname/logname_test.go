@@ -3,6 +3,8 @@ package lognamecmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os/user"
 	"runtime"
 	"strings"
@@ -64,6 +66,41 @@ func TestLognameNoLoginName(t *testing.T) {
 		t.Fatalf("stderr=%q, want %q", got, want)
 	}
 }
+
+type lognameFailWriter struct {
+	short bool
+}
+
+func (w lognameFailWriter) Write(p []byte) (int, error) {
+	if w.short {
+		return len(p) - 1, nil
+	}
+	return 0, errors.New("injected output failure")
+}
+
+func TestLognameOutputErrorsAndRunContextIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		want string
+	}{
+		{"error", lognameFailWriter{}, "injected output failure"},
+		{"short", lognameFailWriter{short: true}, io.ErrShortWrite.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LOGNAME=forged", "USER=forged"},
+				Stdio: tool.Stdio{In: panicLognameReader{}, Out: tc.out, Err: &errOut}}
+			if code := runWith(rc, nil, func() string { return "session-user" }); code != 1 || !strings.Contains(errOut.String(), tc.want) {
+				t.Fatalf("code=%d err=%q", code, errOut.String())
+			}
+		})
+	}
+}
+
+type panicLognameReader struct{}
+
+func (panicLognameReader) Read([]byte) (int, error) { panic("logname read stdin") }
 
 func TestLognameRejectsOperandsAndUnknownOptions(t *testing.T) {
 	for _, args := range [][]string{{"extra"}, {"--unknown"}} {

@@ -82,7 +82,7 @@ func TestTTYRealTerminal(t *testing.T) {
 	if !ok {
 		t.Skip("no *os.File stdin")
 	}
-	if _, isTTY := ttyName(f); !isTTY {
+	if _, isTTY, err := ttyName(f); err != nil || !isTTY {
 		t.Skip("stdin is not a terminal in this environment")
 	}
 	out, _, code := runTool(t, f)
@@ -98,6 +98,10 @@ func TestTTYRealTerminal(t *testing.T) {
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func TestTTYWriteError(t *testing.T) {
 	// GNU manual: exit status 3 if a write error occurs — it takes
@@ -125,6 +129,28 @@ func TestTTYWriteError(t *testing.T) {
 	}
 	if errb.Len() != 0 {
 		t.Errorf("tty -s with broken stdout: stderr=%q, want empty", errb.String())
+	}
+}
+
+func TestTTYShortWriteAndInvalidDescriptorAreErrors(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: shortWriter{}, Err: &errb}}
+	if code := cmd.Run(rc, nil); code != 3 || !strings.Contains(errb.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("short write: code=%d err=%q", code, errb.String())
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	rc.Stdio = tool.Stdio{In: f, Out: &bytes.Buffer{}, Err: &errb}
+	if code := cmd.Run(rc, nil); code <= 1 || !strings.Contains(errb.String(), "standard input") {
+		t.Fatalf("closed stdin: code=%d err=%q", code, errb.String())
 	}
 }
 

@@ -26,8 +26,8 @@ func TestTTYDevConsole(t *testing.T) {
 		t.Skip("/dev/console is not a terminal in this environment")
 	}
 
-	name, isTTY := ttyName(f)
-	if !isTTY {
+	name, isTTY, nameErr := ttyName(f)
+	if nameErr != nil || !isTTY {
 		t.Fatalf("ttyName(/dev/console) = (\"\", false); want the device name — " +
 			"a terminal whose /dev entry does not begin with \"tty\" was " +
 			"misreported as not-a-tty")
