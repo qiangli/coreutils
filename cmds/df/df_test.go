@@ -353,11 +353,25 @@ func TestNonexistentOperand(t *testing.T) {
 	if code != 1 || !strings.Contains(errb, "definitely-not-here") {
 		t.Errorf("df missing file: code=%d err=%q", code, errb)
 	}
-	if !strings.Contains(errb, "no file systems processed") {
-		t.Errorf("df missing file stderr = %q, want trailing summary error", errb)
+	if strings.Contains(errb, "no file systems processed") {
+		t.Errorf("df missing file stderr = %q, must contain only the operand diagnostic", errb)
 	}
 	if out != "" {
 		t.Errorf("df missing file stdout = %q, want empty", out)
+	}
+}
+
+func TestMixedOperandsPreserveSuccessfulOutput(t *testing.T) {
+	out, errb, code := runTool(t, ".", "definitely-not-here")
+	if code != 1 {
+		t.Errorf("df mixed operands code = %d, want 1", code)
+	}
+	if !strings.Contains(errb, "definitely-not-here") {
+		t.Errorf("df mixed operands stderr = %q, want failed operand", errb)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Errorf("df mixed operands stdout = %q, want header + successful operand", out)
 	}
 }
 

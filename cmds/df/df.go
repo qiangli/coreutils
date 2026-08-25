@@ -142,7 +142,6 @@ func run(rc *tool.RunContext, args []string) int {
 			rows = append(rows, mounts[idx])
 		}
 		if len(rows) == 0 {
-			fmt.Fprintln(rc.Err, "df: no file systems processed")
 			return 1
 		}
 	} else {
