@@ -472,3 +472,86 @@ func atoi(t *testing.T, s string) int {
 	}
 	return n
 }
+
+// The two option groups are orthogonal and POSIX defines them
+// separately: -H/-L/-P decide which files a recursive walk reaches,
+// -h decides which file the change lands on once it is reached. Their
+// product is where an implementation that conflates them goes wrong, so
+// every combination is pinned over one hierarchy that contains both an
+// operand link and an interior link.
+func TestChownTraversalAndDereferenceAreOrthogonal(t *testing.T) {
+	u := currentUser(t)
+	other := strconv.Itoa(atoi(t, u.Uid) + 1)
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		// -P reaches only the operand link, and cannot reach a
+		// referent, so the link itself is what changes.
+		{"-R -P", []string{"-R", "-P"}, "lchown toplink " + other},
+		// -H follows the operand link for the traversal. The change
+		// still defaults to the referent, for the operand link and for
+		// the interior link the walk does not follow.
+		{"-R -H", []string{"-R", "-H"},
+			"chown link " + other + "; chown f " + other + "; chown sub " + other + "; chown toplink " + other},
+		// -h moves every one of those changes onto the link, without
+		// changing which files the walk reached.
+		{"-R -H -h", []string{"-R", "-H", "-h"},
+			"lchown link " + other + "; lchown f " + other + "; lchown sub " + other + "; lchown toplink " + other},
+		// -L additionally follows the interior link, so d/sub is
+		// reached twice — once through the link, once by its name.
+		{"-R -L", []string{"-R", "-L"},
+			"chown f " + other + "; chown link " + other + "; chown f " + other +
+				"; chown sub " + other + "; chown toplink " + other},
+		{"-R -L -h", []string{"-R", "-L", "-h"},
+			"lchown f " + other + "; lchown link " + other + "; lchown f " + other +
+				"; lchown sub " + other + "; lchown toplink " + other},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := linkTree(t)
+			calls := recordChanges(t)
+			_, errb, code := runTool(t, dir, append(append([]string{}, tc.args...), other, "toplink")...)
+			if code != 0 || errb != "" {
+				t.Fatalf("chown %v: code=%d err=%q", tc.args, code, errb)
+			}
+			if got := strings.Join(*calls, "; "); got != tc.want {
+				t.Errorf("chown %v issued\n %q, want\n %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// POSIX -H follows "a symbolic link named as an operand". An operand
+// that resolves through more than one link is still one operand: the
+// whole chain is followed, and only the chain's first link is the file
+// -h would act on.
+func TestChownCommandLineLinkChainIsFollowed(t *testing.T) {
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "d", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d", "sub", "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, "d", filepath.Join(dir, "hop"))
+	symlink(t, "hop", filepath.Join(dir, "top"))
+
+	out, errb, code := runTool(t, dir, "-v", "-R", "-H", u.Uid, "top")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown -R -H: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != filepath.FromSlash("top/sub/f top/sub top") {
+		t.Errorf("-H over a link chain reached %q", got)
+	}
+	// -P does not follow it, whatever the chain resolves to.
+	out, errb, code = runTool(t, dir, "-v", "-R", "-P", u.Uid, "top")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown -R -P: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != "top" {
+		t.Errorf("-P over a link chain reached %q, want the operand alone", got)
+	}
+}

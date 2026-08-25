@@ -271,3 +271,107 @@ func TestWalkCorruptHierarchyIsReportedNotDescended(t *testing.T) {
 		t.Errorf("-L visited %q", got)
 	}
 }
+
+// POSIX -H follows "a symbolic link named as an operand". A link whose
+// referent is itself a link is still one operand, so the whole chain is
+// resolved before the question of descending is asked.
+func TestWalkCommandLineFollowsAChainOfOperandLinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "d", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d", "sub", "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustSymlink(t, "d", filepath.Join(dir, "hop"))
+	mustSymlink(t, "hop", filepath.Join(dir, "top"))
+
+	r := &record{}
+	r.walker(CommandLine, true).Walk(filepath.Join(dir, "top"), "top")
+	if got := strings.Join(r.visited, " "); got != filepath.FromSlash("top/sub/f top/sub top") {
+		t.Errorf("-H over a link chain visited %q", got)
+	}
+	// The operand is still a symbolic link, whatever it resolves to:
+	// -h has to be able to land the change on it.
+	if got := strings.Join(r.links, " "); got != "top" {
+		t.Errorf("-H over a link chain reported links %q, want the operand", got)
+	}
+}
+
+// A cycle stops one subtree, not the walk. POSIX has the utility report
+// the failure and keep going, so every sibling of the cyclic directory
+// is still reached and the ancestor set is unchanged by the detour.
+func TestWalkCorruptHierarchyDoesNotAbortSiblings(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"a/loop", "b/keep"} {
+		if err := os.MkdirAll(filepath.Join(dir, "d", sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d", "b", "keep", "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := sameFile
+	sameFile = func(_, b os.FileInfo) bool { return b.Name() == "loop" }
+	t.Cleanup(func() { sameFile = restore })
+
+	r := &record{}
+	r.walker(Physical, true).Walk(filepath.Join(dir, "d"), "d")
+	if got := strings.Join(r.cycles, " "); got != filepath.FromSlash("d/a/loop") {
+		t.Errorf("cycles %q, want only the cyclic directory", got)
+	}
+	if got := strings.Join(r.visited, " "); got != filepath.FromSlash("d/a d/b/keep/f d/b/keep d/b d") {
+		t.Errorf("visited %q; the sibling subtree after the cycle was not walked", got)
+	}
+}
+
+// The ancestor set is threaded down the recursion as a slice, so a
+// subtree must not be able to corrupt what its siblings compare
+// against. Two subtrees of equal depth are the case that would expose a
+// shared backing array: the second one's ancestors would read the
+// first one's entries.
+func TestWalkSiblingSubtreesDoNotShareAncestors(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"a/x/deep", "b/y/deep"} {
+		if err := os.MkdirAll(filepath.Join(dir, "d", sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &record{}
+	r.walker(Physical, true).Walk(filepath.Join(dir, "d"), "d")
+	want := filepath.FromSlash("d/a/x/deep d/a/x d/a d/b/y/deep d/b/y d/b d")
+	if got := strings.Join(r.visited, " "); got != want {
+		t.Errorf("visited %q, want %q", got, want)
+	}
+	if len(r.cycles) != 0 {
+		t.Errorf("equal-depth siblings reported a cycle: %v", r.cycles)
+	}
+}
+
+// -L follows every directory link, so a loop of three directories is
+// walkable forever unless the ancestor check stops it. Each directory
+// is reached once under its real name and once through the link that
+// closes the loop; neither is a corrupt hierarchy, so nothing is
+// reported.
+func TestWalkLogicalThreeWayLoopTerminates(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustSymlink(t, "../b", filepath.Join(dir, "a", "next"))
+	mustSymlink(t, "../c", filepath.Join(dir, "b", "next"))
+	mustSymlink(t, "../a", filepath.Join(dir, "c", "next"))
+
+	r := &record{}
+	r.walker(Logical, true).Walk(filepath.Join(dir, "a"), "a")
+	want := filepath.FromSlash("a/next/next/next a/next/next a/next a")
+	if got := strings.Join(r.visited, " "); got != want {
+		t.Errorf("-L over a three-way loop visited %q, want %q", got, want)
+	}
+	if len(r.cycles) != 0 {
+		t.Errorf("-L reported a corrupt hierarchy for a symbolic-link loop: %v", r.cycles)
+	}
+}

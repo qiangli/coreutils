@@ -91,7 +91,12 @@ func TestChgrpTraversalModes(t *testing.T) {
 		{"-L then -P", []string{"-R", "-L", "-P"}, "d", "d/link d/sub/f d/sub d"},
 		{"-P then -L", []string{"-R", "-P", "-L"}, "d", "d/link/f d/link d/sub/f d/sub d"},
 		{"-L then -H", []string{"-R", "-L", "-H"}, "toplink", "toplink/link toplink/sub/f toplink/sub toplink"},
+		{"-H then -L", []string{"-R", "-H", "-L"}, "d", "d/link/f d/link d/sub/f d/sub d"},
 		{"clustered last wins", []string{"-RLP"}, "d", "d/link d/sub/f d/sub d"},
+		{"clustered -H after -L", []string{"-RL", "-H"}, "toplink", "toplink/link toplink/sub/f toplink/sub toplink"},
+		{"explicit -P", []string{"-R", "-P"}, "d", "d/link d/sub/f d/sub d"},
+		{"default operand link", []string{"-R"}, "toplink", "toplink"},
+		{"-L operand link", []string{"-R", "-L"}, "toplink", "toplink/link/f toplink/link toplink/sub/f toplink/sub toplink"},
 		// Without -R the traversal options are ignored entirely.
 		{"-L without -R", []string{"-L"}, "d", "d"},
 		{"-H without -R", []string{"-H"}, "toplink", "toplink"},
@@ -432,4 +437,110 @@ func atoi(t *testing.T, s string) int {
 		t.Skipf("non-numeric id %q: %v", s, err)
 	}
 	return n
+}
+
+// The two option groups are orthogonal and POSIX defines them
+// separately: -H/-L/-P decide which files a recursive walk reaches,
+// -h decides which file the change lands on once it is reached. Their
+// product is where an implementation that conflates them goes wrong, so
+// every combination is pinned over one hierarchy that contains both an
+// operand link and an interior link.
+func TestChgrpTraversalAndDereferenceAreOrthogonal(t *testing.T) {
+	other := strconv.Itoa(atoi(t, currentGroup(t)) + 1)
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		// -P reaches only the operand link, and cannot reach a
+		// referent, so the link itself is what changes.
+		{"-R -P", []string{"-R", "-P"}, "lchown toplink " + other},
+		// -H follows the operand link for the traversal. The change
+		// still defaults to the referent, for the operand link and for
+		// the interior link the walk does not follow.
+		{"-R -H", []string{"-R", "-H"},
+			"chown link " + other + "; chown f " + other + "; chown sub " + other + "; chown toplink " + other},
+		// -h moves every one of those changes onto the link, without
+		// changing which files the walk reached.
+		{"-R -H -h", []string{"-R", "-H", "-h"},
+			"lchown link " + other + "; lchown f " + other + "; lchown sub " + other + "; lchown toplink " + other},
+		// -L additionally follows the interior link, so d/sub is
+		// reached twice — once through the link, once by its name.
+		{"-R -L", []string{"-R", "-L"},
+			"chown f " + other + "; chown link " + other + "; chown f " + other +
+				"; chown sub " + other + "; chown toplink " + other},
+		{"-R -L -h", []string{"-R", "-L", "-h"},
+			"lchown f " + other + "; lchown link " + other + "; lchown f " + other +
+				"; lchown sub " + other + "; lchown toplink " + other},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := linkTree(t)
+			calls := recordChanges(t)
+			_, errb, code := runTool(t, dir, append(append([]string{}, tc.args...), other, "toplink")...)
+			if code != 0 || errb != "" {
+				t.Fatalf("chgrp %v: code=%d err=%q", tc.args, code, errb)
+			}
+			if got := strings.Join(*calls, "; "); got != tc.want {
+				t.Errorf("chgrp %v issued\n %q, want\n %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// POSIX -H follows "a symbolic link named as an operand". An operand
+// that resolves through more than one link is still one operand, so the
+// whole chain is followed; -P follows none of it.
+func TestChgrpCommandLineLinkChainIsFollowed(t *testing.T) {
+	gid := currentGroup(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "d", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d", "sub", "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, "d", filepath.Join(dir, "hop"))
+	symlink(t, "hop", filepath.Join(dir, "top"))
+
+	out, errb, code := runTool(t, dir, "-v", "-R", "-H", gid, "top")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp -R -H: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != filepath.FromSlash("top/sub/f top/sub top") {
+		t.Errorf("-H over a link chain reached %q", got)
+	}
+	out, errb, code = runTool(t, dir, "-v", "-R", "-P", gid, "top")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp -R -P: code=%d err=%q", code, errb)
+	}
+	if got := visited(t, out); got != "top" {
+		t.Errorf("-P over a link chain reached %q, want the operand alone", got)
+	}
+}
+
+// The -v report names the group the file kept, which is not the group
+// that was asked for when --from declined the change. Reporting the
+// requested id there states something untrue about the file.
+func TestChgrpVerboseNamesTheGroupTheFileKept(t *testing.T) {
+	gid := currentGroup(t)
+	other := strconv.Itoa(atoi(t, gid) + 1)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := recordChanges(t)
+
+	// The file's group is gid, so --from a different group matches
+	// nothing and the file keeps gid.
+	out, errb, code := runTool(t, dir, "-v", "--from=:"+other, other, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp --from: code=%d err=%q", code, errb)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("--from mismatch still changed the file: %v", *calls)
+	}
+	if want := "group of 'f' retained as " + gid + "\n"; out != want {
+		t.Errorf("verbose report = %q, want %q", out, want)
+	}
 }

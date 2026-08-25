@@ -82,7 +82,7 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 		Mode:      opts.mode,
 		Recursive: opts.recursive,
 		Visit: func(path, name string, isLink bool) {
-			changed, statErr, chgrpErr := chgrpOne(path, opts)
+			changed, held, statErr, chgrpErr := chgrpOne(path, opts)
 			switch {
 			case statErr != nil:
 				reportUnreachable(rc, name, isLink && opts.affectReferent, opts, statErr)
@@ -91,7 +91,7 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 				reportChange(rc, name, opts, chgrpErr)
 				ok = false
 			default:
-				chgrpVerbose(rc.Out, name, changed, opts)
+				chgrpVerbose(rc.Out, name, changed, held, opts)
 			}
 		},
 		StatError: func(_, name string, err error) {
@@ -123,38 +123,45 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 
 // chgrpOne applies the change to one file. Reading the current
 // ownership and changing it fail with different diagnostics, so they
-// are returned separately.
-func chgrpOne(path string, opts chgrpOpts) (changed bool, statErr, chgrpErr error) {
+// are returned separately. held is the group the file still has when no
+// change was made, which is what the -v report has to name: with
+// --from in play that is not the requested group.
+func chgrpOne(path string, opts chgrpOpts) (changed bool, held int, statErr, chgrpErr error) {
 	stat := os.Lstat
 	if opts.affectReferent {
 		stat = os.Stat
 	}
 	fi, err := stat(path)
 	if err != nil {
-		return false, err, nil
+		return false, -1, err, nil
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		held = int(st.Gid)
 		if opts.fromUid >= 0 && int(st.Uid) != opts.fromUid {
-			return false, nil, nil
+			return false, held, nil, nil
 		}
-		if opts.fromGid >= 0 && int(st.Gid) != opts.fromGid {
-			return false, nil, nil
+		if opts.fromGid >= 0 && held != opts.fromGid {
+			return false, held, nil, nil
 		}
 		// chown(2) clears the set-user-ID and set-group-ID bits of an
 		// executable it changes, even when the id it writes is the one
 		// already there. A file that already has the requested group
 		// must therefore be left alone entirely.
-		if int(st.Gid) == opts.gid {
-			return false, nil, nil
+		if held == opts.gid {
+			return false, held, nil, nil
 		}
 	}
 	if err := changeGroup(path, opts.gid, opts.affectReferent); err != nil {
-		return false, nil, err
+		return false, held, nil, err
 	}
-	return true, nil, nil
+	return true, opts.gid, nil, nil
 }
 
-func chgrpVerbose(out io.Writer, name string, changed bool, opts chgrpOpts) {
+// chgrpVerbose reports one file. held is the group the file kept, not
+// the group that was asked for: a file --from skipped keeps a group the
+// command line never named, and reporting the requested id there would
+// state something untrue about the file.
+func chgrpVerbose(out io.Writer, name string, changed bool, held int, opts chgrpOpts) {
 	if !opts.verbose {
 		return
 	}
@@ -164,7 +171,7 @@ func chgrpVerbose(out io.Writer, name string, changed bool, opts chgrpOpts) {
 	if changed {
 		fmt.Fprintf(out, "changed group of '%s'\n", name)
 	} else if !opts.changes {
-		fmt.Fprintf(out, "group of '%s' retained as %d\n", name, opts.gid)
+		fmt.Fprintf(out, "group of '%s' retained as %d\n", name, held)
 	}
 }
 
