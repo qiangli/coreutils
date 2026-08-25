@@ -32,11 +32,11 @@ var (
 // substitute it to observe which call each file takes — chown for a
 // referent, lchown for a link. The real syscall path stays covered by
 // the self-chgrp tests.
-var changeGroup = func(path string, gid int, follow bool) error {
+var changeGroup = func(path string, uid, gid int, follow bool) error {
 	if follow {
-		return os.Chown(path, -1, gid)
+		return os.Chown(path, uid, gid)
 	}
-	return os.Lchown(path, -1, gid)
+	return os.Lchown(path, uid, gid)
 }
 
 type chgrpOpts struct {
@@ -81,7 +81,7 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts, output
 	walker := &hierwalk.Walker{
 		Mode:      opts.mode,
 		Recursive: opts.recursive,
-		Visit: func(path, name string, isLink bool) {
+		Visit: func(path, name string, isLink, _ bool) {
 			changed, held, statErr, chgrpErr := chgrpOne(path, opts)
 			switch {
 			case statErr != nil:
@@ -136,10 +136,8 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts, output
 // change was made, which is what the -v report has to name: with
 // --from in play that is not the requested group.
 func chgrpOne(path string, opts chgrpOpts) (changed bool, held int, statErr, chgrpErr error) {
-	// If the platform does not expose syscall.Stat_t, conservatively report
-	// that the requested operation changed the file. The syscall is required
-	// either way; changed only controls -c/-v reporting.
-	changed = true
+	// The exact current uid and gid are required for the specified chown()
+	// equivalent. A platform that cannot expose them must fail closed.
 	stat := os.Lstat
 	if opts.affectReferent {
 		stat = os.Stat
@@ -148,17 +146,27 @@ func chgrpOne(path string, opts chgrpOpts) (changed bool, held int, statErr, chg
 	if err != nil {
 		return false, -1, err, nil
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		held = int(st.Gid)
-		if opts.fromUid >= 0 && int(st.Uid) != opts.fromUid {
-			return false, held, nil, nil
-		}
-		if opts.fromGid >= 0 && held != opts.fromGid {
-			return false, held, nil, nil
-		}
-		changed = held != opts.gid
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, -1, errors.New("ownership metadata is unavailable on this platform"), nil
 	}
-	if err := changeGroup(path, opts.gid, opts.affectReferent); err != nil {
+	uid, uidOK := representableNumericID(uint64(st.Uid))
+	held, gidOK := representableNumericID(uint64(st.Gid))
+	if !uidOK || !gidOK {
+		return false, -1, errors.New("ownership metadata is not representable on this platform"), nil
+	}
+	if opts.fromUid >= 0 && uid != opts.fromUid {
+		return false, held, nil, nil
+	}
+	if opts.fromGid >= 0 && held != opts.fromGid {
+		return false, held, nil, nil
+	}
+	changed = held != opts.gid
+	// POSIX specifies an action equivalent to chown(path, current_uid,
+	// requested_gid), not the extension spelling chown(path, -1, gid).
+	// Passing the observed owner also preserves the standard's exact
+	// permission checking and set-ID consequences.
+	if err := changeGroup(path, uid, opts.gid, opts.affectReferent); err != nil {
 		return false, held, nil, err
 	}
 	return changed, opts.gid, nil, nil
@@ -238,18 +246,51 @@ func unwrapPathError(err error) error {
 // up as a group name first and read as a numeric id only when no such
 // group exists.
 func parseGroup(spec string) (int, error) {
-	if g, err := lookupGroup(spec); err == nil {
-		gid, cerr := strconv.Atoi(g.Gid)
-		if cerr != nil {
+	g, lookupErr := lookupGroup(spec)
+	if lookupErr == nil {
+		gid, ok := parseNumericID(g.Gid)
+		if !ok {
 			return -1, fmt.Errorf("invalid group: '%s'", spec)
 		}
 		return gid, nil
 	}
-	id, err := strconv.Atoi(spec)
-	if err != nil || id < 0 {
+	var unknown user.UnknownGroupError
+	if !errors.As(lookupErr, &unknown) {
+		return -1, fmt.Errorf("cannot resolve group '%s': %v", spec, lookupErr)
+	}
+	id, ok := parseNumericID(spec)
+	if !ok {
 		return -1, fmt.Errorf("invalid group: '%s'", spec)
 	}
 	return id, nil
+}
+
+// parseNumericID accepts the POSIX numeric-ID spelling: one or more decimal
+// digits in the usable 32-bit uid_t/gid_t range that the host Go int can
+// represent. The all-ones value is the chown(2) "leave unchanged" sentinel
+// and therefore cannot name an ID to set.
+func parseNumericID(s string) (int, bool) {
+	if s == "" {
+		return -1, false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return -1, false
+		}
+	}
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return -1, false
+	}
+	return representableNumericID(v)
+}
+
+func representableNumericID(v uint64) (int, bool) {
+	maxInt := uint64(^uint(0) >> 1)
+	if v == 1<<32-1 || v > maxInt {
+		return -1, false
+	}
+	return int(v), true
 }
 
 func parseFromSpec(spec string) (uid, gid int, err error) {
@@ -260,17 +301,20 @@ func parseFromSpec(spec string) (uid, gid int, err error) {
 	ownerStr, groupStr, hasColon := strings.Cut(spec, ":")
 	if ownerStr != "" {
 		u, uerr := lookupUser(ownerStr)
-		switch {
-		case uerr == nil:
-			if uid, err = strconv.Atoi(u.Uid); err != nil {
+		if uerr == nil {
+			var ok bool
+			if uid, ok = parseNumericID(u.Uid); !ok {
 				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
 			}
-		default:
-			id, aerr := strconv.Atoi(ownerStr)
-			if aerr != nil || id < 0 {
+		} else {
+			var unknown user.UnknownUserError
+			if !errors.As(uerr, &unknown) {
+				return -1, -1, fmt.Errorf("cannot resolve user '%s': %v", ownerStr, uerr)
+			}
+			var ok bool
+			if uid, ok = parseNumericID(ownerStr); !ok {
 				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
 			}
-			uid = id
 		}
 	}
 	if !hasColon || groupStr == "" {
@@ -300,7 +344,11 @@ func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("cannot stat %s", path)
 	}
-	return &refFileInfo{gid: int(st.Gid)}, nil
+	gid, ok := representableNumericID(uint64(st.Gid))
+	if !ok {
+		return nil, fmt.Errorf("cannot represent group id for %s", path)
+	}
+	return &refFileInfo{gid: gid}, nil
 }
 
 type refFileInfo struct {

@@ -12,8 +12,7 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-// runToolEnv is runTool with an invocation environment (POSIX mode is
-// keyed on the presence of POSIXLY_CORRECT in rc.Env).
+// runToolEnv is runTool with an explicit invocation environment.
 func runToolEnv(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
@@ -53,31 +52,30 @@ func TestModeApplyXUsesOriginalUnmodifiedMode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parseMode(%q): %v", c.mode, err)
 		}
-		mc.posix = true
 		if got := mc.apply(c.old, c.isDir, 0); got != c.want {
 			t.Errorf("%q on %04o (dir=%v) = %04o, want %04o", c.mode, c.old, c.isDir, got, c.want)
 		}
 	}
 }
 
-// Outside POSIX mode, preserve GNU Coreutils 9.11's clause-by-clause X
-// behavior: X observes the in-progress mode after earlier symbolic clauses.
+// The historical test name is retained because generated evidence manifests
+// refer to it. Its former GNU branch is intentionally gone: Issue 7's
+// unmodified-mode rule now applies even when POSIXLY_CORRECT is absent.
 func TestModeApplyXPreservesGNUBehaviorOutsidePOSIXMode(t *testing.T) {
-	cases := []struct {
+	for _, tc := range []struct {
 		mode string
 		old  uint32
 		want uint32
 	}{
-		{"a-x,a+X", 0o755, 0o644},
-		{"u+x,a+X", 0o644, 0o755},
-	}
-	for _, c := range cases {
-		mc, err := parseMode(c.mode)
+		{"a-x,a+X", 0o755, 0o755},
+		{"u+x,a+X", 0o644, 0o744},
+	} {
+		mc, err := parseMode(tc.mode)
 		if err != nil {
-			t.Fatalf("parseMode(%q): %v", c.mode, err)
+			t.Fatal(err)
 		}
-		if got := mc.apply(c.old, false, 0); got != c.want {
-			t.Errorf("GNU %q on %04o = %04o, want %04o", c.mode, c.old, got, c.want)
+		if got := mc.apply(tc.old, false, 0); got != tc.want {
+			t.Errorf("%q on %04o = %04o, want Issue 7 %04o", tc.mode, tc.old, got, tc.want)
 		}
 	}
 }
@@ -115,21 +113,15 @@ func TestModeApplyBareOpAndOWithS(t *testing.T) {
 	}
 }
 
-// TestModeApplyPOSIXOctalAbsolute pins the Issue 7 rule that an octal
-// mode operand sets the file mode bits absolutely: in POSIX mode the
-// GNU keep-directory-setid rule must not preserve a directory's
-// setuid/setgid bits.
+// TestModeApplyPOSIXOctalAbsolute pins the Issue 7 rule that an octal mode
+// operand sets the file mode bits absolutely in every invocation.
 func TestModeApplyPOSIXOctalAbsolute(t *testing.T) {
 	mc, err := parseMode("755")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := mc.apply(0o2775, true, 0); got != 0o2755 {
-		t.Errorf("non-POSIX default: 755 on dir 02775 = %04o, want 02755", got)
-	}
-	mc.posix = true
 	if got := mc.apply(0o2775, true, 0); got != 0o755 {
-		t.Errorf("POSIX absolute: 755 on dir 02775 = %04o, want 0755", got)
+		t.Errorf("755 on dir 02775 = %04o, want absolute 0755", got)
 	}
 }
 
@@ -154,10 +146,9 @@ func makeSetgidDir(t *testing.T, parent string) string {
 	return dir
 }
 
-// TestChmodPOSIXModeOctalClearsDirectorySetID drives the POSIX-mode
-// gate end to end: with POSIXLY_CORRECT present, "chmod 755 dir" sets
-// the mode absolutely and clears setgid; without it, the GNU
-// keep-directory-setid default is retained.
+// TestChmodPOSIXModeOctalClearsDirectorySetID drives the absolute octal rule
+// end to end and proves that an environment variable cannot select a
+// different mode language. The historical name remains a manifest anchor.
 func TestChmodPOSIXModeOctalClearsDirectorySetID(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod is unix-only")
@@ -165,36 +156,24 @@ func TestChmodPOSIXModeOctalClearsDirectorySetID(t *testing.T) {
 	parent := t.TempDir()
 	dir := makeSetgidDir(t, parent)
 
-	if _, errb, code := runToolEnv(t, parent, nil, "755", "sgdir"); code != 0 {
-		t.Fatalf("chmod 755 (default): code=%d err=%q", code, errb)
+	if _, errb, code := runToolEnv(t, parent, []string{"POSIXLY_CORRECT=0"}, "755", "sgdir"); code != 0 {
+		t.Fatalf("chmod 755: code=%d err=%q", code, errb)
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode()&os.ModeSetgid == 0 {
-		t.Fatalf("non-POSIX default cleared directory setgid: mode=%v", fi.Mode())
-	}
-
-	if _, errb, code := runToolEnv(t, parent, []string{"POSIXLY_CORRECT="}, "755", "sgdir"); code != 0 {
-		t.Fatalf("chmod 755 (POSIX mode): code=%d err=%q", code, errb)
-	}
-	fi, err = os.Stat(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if fi.Mode()&os.ModeSetgid != 0 {
-		t.Fatalf("POSIX mode kept directory setgid: mode=%v", fi.Mode())
+		t.Fatalf("absolute octal mode kept directory setgid: mode=%v", fi.Mode())
 	}
 	if fi.Mode().Perm() != 0o755 {
 		t.Fatalf("POSIX mode perm=%#o, want 0755", fi.Mode().Perm())
 	}
 }
 
-// TestChmodReferenceCopiesExactModeToDirectory pins the --reference
-// extension to its GNU-documented meaning "use RFILE's mode": the
-// short-octal keep-directory-setid rule must not leak the target
-// directory's setgid bit into the copied mode.
+// TestChmodReferenceCopiesExactModeToDirectory pins the --reference extension
+// to its documented meaning "use RFILE's mode": target set-ID bits absent
+// from the reference cannot leak into the copied mode.
 func TestChmodReferenceCopiesExactModeToDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod is unix-only")

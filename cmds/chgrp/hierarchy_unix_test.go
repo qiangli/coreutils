@@ -125,7 +125,7 @@ func recordChanges(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
 	restore := changeGroup
-	changeGroup = func(path string, gid int, follow bool) error {
+	changeGroup = func(path string, _, gid int, follow bool) error {
 		call := "lchown"
 		if follow {
 			call = "chown"
@@ -215,11 +215,11 @@ func TestChgrpUnchangedGroupStillCallsChown(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("set-ID clearing is implementation-defined for privileged callers")
 	}
-	changeGroup = func(path string, gid int, follow bool) error {
+	changeGroup = func(path string, uid, gid int, follow bool) error {
 		if follow {
-			return os.Chown(path, -1, gid)
+			return os.Chown(path, uid, gid)
 		}
-		return os.Lchown(path, -1, gid)
+		return os.Lchown(path, uid, gid)
 	}
 	if _, errb, code := runTool(t, dir, "-R", gid, "d"); code != 0 || errb != "" {
 		t.Fatalf("chgrp -R self: code=%d err=%q", code, errb)
@@ -351,7 +351,7 @@ func TestChgrpNameIsPreferredOverNumber(t *testing.T) {
 		if name == "42" {
 			return &user.Group{Gid: "7"}, nil
 		}
-		return nil, errors.New("no such group")
+		return nil, user.UnknownGroupError(name)
 	}
 	t.Cleanup(func() { lookupGroup = restore })
 

@@ -21,7 +21,7 @@ func (r *record) walker(mode Mode, recursive bool) *Walker {
 	return &Walker{
 		Mode:      mode,
 		Recursive: recursive,
-		Visit: func(_, display string, isLink bool) {
+		Visit: func(_, display string, isLink, _ bool) {
 			r.visited = append(r.visited, display)
 			if isLink {
 				r.links = append(r.links, display)
