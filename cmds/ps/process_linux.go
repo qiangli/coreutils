@@ -11,7 +11,12 @@ import (
 )
 
 func enrich(p *process) {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(p.pid) + "/stat")
+	enrichWithReader(p, os.ReadFile)
+}
+
+func enrichWithReader(p *process, readFile func(string) ([]byte, error)) {
+	root := "/proc/" + strconv.Itoa(p.pid)
+	b, err := readFile(root + "/stat")
 	if err != nil {
 		return
 	}
@@ -20,21 +25,55 @@ func enrich(p *process) {
 		return
 	}
 	f := strings.Fields(string(b[i+2:]))
-	if len(f) < 22 {
+	if len(f) < 24 {
 		return
 	}
-	p.pgid, _ = strconv.Atoi(f[2])
-	p.sid, _ = strconv.Atoi(f[3])
+	p.state = f[0]
+	if ppid, err := strconv.Atoi(f[1]); err == nil {
+		p.ppid = ppid
+	}
+	if pgid, err := strconv.Atoi(f[2]); err == nil {
+		p.pgid, p.pgidKnown = pgid, true
+	}
+	if sid, err := strconv.Atoi(f[3]); err == nil {
+		p.sid = sid
+	}
 	tty, _ := strconv.ParseUint(f[4], 10, 64)
 	if tty != 0 {
 		p.tty = ttyName(tty)
 	}
-	ut, _ := strconv.ParseInt(f[11], 10, 64)
-	st, _ := strconv.ParseInt(f[12], 10, 64)
-	p.cpu = time.Duration((ut + st) * int64(time.Second) / clockTicks())
-	p.nice, _ = strconv.Atoi(f[16])
-	p.vsz, _ = strconv.ParseUint(f[20], 10, 64)
-	if status, err := os.ReadFile("/proc/" + strconv.Itoa(p.pid) + "/status"); err == nil {
+	ut, utErr := strconv.ParseInt(f[11], 10, 64)
+	st, stErr := strconv.ParseInt(f[12], 10, 64)
+	if utErr == nil && stErr == nil {
+		p.cpu = time.Duration((ut + st) * int64(time.Second) / clockTicks())
+		p.cpuKnown = true
+	}
+	if flags, err := strconv.ParseUint(f[6], 10, 64); err == nil {
+		p.flags, p.flagsKnown = flags, true
+	}
+	if priority, err := strconv.Atoi(f[15]); err == nil {
+		p.priority, p.priorityKnown = priority, true
+	}
+	if nice, err := strconv.Atoi(f[16]); err == nil {
+		p.nice, p.niceKnown = nice, true
+	}
+	if vsz, err := strconv.ParseUint(f[20], 10, 64); err == nil {
+		p.vsz, p.vszKnown = vsz, true
+	}
+	if statm, err := readFile(root + "/statm"); err == nil {
+		if values := strings.Fields(string(statm)); len(values) != 0 {
+			if sz, err := strconv.ParseUint(values[0], 10, 64); err == nil {
+				p.sz, p.szKnown = sz, true
+			}
+		}
+	}
+	if addr, err := strconv.ParseUint(f[23], 10, 64); err == nil && addr != 0 {
+		p.addr, p.addrKnown = addr, true
+	}
+	if wchan, err := readFile(root + "/wchan"); err == nil {
+		p.wchan = strings.TrimSpace(string(wchan))
+	}
+	if status, err := readFile(root + "/status"); err == nil {
 		for _, line := range strings.Split(string(status), "\n") {
 			fields := strings.Fields(line)
 			switch {
