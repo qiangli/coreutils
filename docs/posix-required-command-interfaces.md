@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 0 |
-| Evidence | Partial | 3 |
-| Evidence | Unverified | 113 |
+| Evidence | Partial | 2 |
+| Evidence | Unverified | 114 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` fails until all 116 rows have focused behavioral evidence
@@ -1216,7 +1216,7 @@ dd [operand...]
 
 ## `df`
 
-**Evidence state:** `partial`.
+**Evidence state:** `unverified`.
 
 **Applicability:** `xsi`.
 
@@ -1258,7 +1258,7 @@ dd [operand...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/df`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/df/df_test.go#TestPortableExactOutput;cmds/df/df_test.go#TestKFlagSelects1024;cmds/df/df_test.go#TestXSITotalsOption;cmds/df/df_test.go#TestPortableRoundsPercentUp`; shell=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [df](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/df.html).
 

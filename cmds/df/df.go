@@ -7,10 +7,11 @@
 //   - -P produces the POSIX portable format: header "Filesystem
 //     512-blocks Used Available Capacity Mounted on" (1024-blocks with
 //     -k), one line per file system, percentage rounded up.
-//   - -t is the XSI no-argument totals option (include total
-//     allocated-space figures), equivalent to GNU --total. GNU's
-//     type filtering is available only under its long spelling
-//     --type=TYPE; -t never consumes an argument.
+//   - -t is the XSI no-argument option requiring total allocated-space
+//     figures in each filesystem record. The default implementation-defined
+//     table already includes that field, so -t is idempotent; it never adds a
+//     synthetic record. GNU --total remains a separate grand-total extension.
+//     GNU type filtering is available only as --type=TYPE.
 //
 // -h/-H print human-readable sizes (GNU extension). With FILE
 // arguments, only the file system containing each file is shown.
@@ -60,7 +61,7 @@ type mountEntry struct {
 func run(rc *tool.RunContext, args []string) int {
 	args = normalizeBlockSizeArgs(args)
 	// -k has no GNU long form; -V is a uutils alias for --version.
-	rest, seenShort := extractShort(args, "kV")
+	rest, seenShort := extractShort(args, "ktV")
 	if seenShort['V'] {
 		rest = append([]string{"--version"}, rest...)
 	}
@@ -85,7 +86,8 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.StringArrayVarP(&excludeTypes, "exclude-type", "x", nil, "limit listing to file systems not of type TYPE")
 	output := fs.String("output", "", "use the output format defined by FIELD_LIST, or all fields if FIELD_LIST is omitted")
 	fs.Lookup("output").NoOptDefVal = defaultOutputFields
-	total := fs.BoolP("total", "t", false, "include total allocated-space figures (POSIX XSI -t)")
+	xsiTotal := fs.BoolP("xsi-total-space", "t", false, "include total allocated-space in each record (POSIX XSI)")
+	gnuTotal := fs.Bool("total", false, "produce a grand total (GNU extension)")
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -93,6 +95,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if *versionAlias {
 		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 		return 0
+	}
+	if *portable && (seenShort['t'] || *xsiTotal) {
+		return tool.UsageError(rc, cmd, "options -P and -t are mutually exclusive")
 	}
 	_ = noSync // accepted for uutils/GNU compatibility; no-sync is the default.
 	if *doSync {
@@ -159,7 +164,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	rows = filterRows(rows, includeTypes, excludeTypes, *local)
-	if *total {
+	// The implementation-defined default table already contains m.total in
+	// every row, which satisfies XSI -t. Only GNU --total appends a synthetic
+	// aggregate row; POSIX -t never does.
+	if *gnuTotal {
 		rows = append(rows, totalRow(rows))
 	}
 	if *output != "" {

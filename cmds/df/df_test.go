@@ -270,19 +270,24 @@ func TestTypeFilterIsLongOnly(t *testing.T) {
 	}
 }
 
-// TestXSITotalsOption pins POSIX XSI -t: a no-argument totals option,
-// NOT GNU's -t TYPE filter. A word after -t is an operand, never a
-// file-system type.
-func TestXSITotalsOption(t *testing.T) {
-	for _, argv := range [][]string{{"-t"}, {"--total"}, {"-kt"}, {"-tk"}} {
+// TestXSITotalAllocatedSpaceOption pins POSIX XSI -t: it takes no argument,
+// includes total allocated space in each filesystem record, and never appends
+// GNU's synthetic grand-total record. The default implementation-defined
+// table already includes the total-space column, making -t idempotent.
+func TestXSITotalAllocatedSpaceOption(t *testing.T) {
+	for _, argv := range [][]string{{"-t"}, {"-kt"}, {"-tk"}} {
 		out, errb, code := runTool(t, argv...)
 		if code != 0 {
 			t.Fatalf("df %v code = %d, stderr = %q", argv, code, errb)
 		}
 		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-		last := lines[len(lines)-1]
-		if !strings.HasPrefix(last, "total") {
-			t.Errorf("df %v last line = %q, want totals row", argv, last)
+		if len(lines) < 2 || !strings.Contains(lines[0], "blocks") {
+			t.Errorf("df %v = %q, want header and per-filesystem total-space field", argv, out)
+		}
+		for _, line := range lines[1:] {
+			if strings.HasPrefix(line, "total") {
+				t.Errorf("df %v appended a GNU grand-total record: %q", argv, line)
+			}
 		}
 	}
 
@@ -300,19 +305,35 @@ func TestXSITotalsOption(t *testing.T) {
 	}
 }
 
-// TestXSITotalsWithOperand covers -t combined with a file operand:
-// the containing file system plus a totals row.
-func TestXSITotalsWithOperand(t *testing.T) {
+func TestXSITotalAllocatedSpaceWithOperand(t *testing.T) {
 	out, errb, code := runTool(t, "-t", ".")
 	if code != 0 {
 		t.Fatalf("df -t . code = %d, stderr = %q", code, errb)
 	}
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("df -t . = %q, want header + mount + totals", out)
+	if len(lines) != 2 {
+		t.Fatalf("df -t . = %q, want header + one filesystem record", out)
 	}
-	if !strings.HasPrefix(lines[2], "total") {
-		t.Errorf("df -t . last line = %q, want totals row", lines[2])
+	if fields := strings.Fields(lines[1]); len(fields) < 6 || fields[0] == "total" {
+		t.Errorf("df -t . record = %q, want per-filesystem total-space field", lines[1])
+	}
+}
+
+func TestGNUTotalRemainsSeparateLongExtension(t *testing.T) {
+	out, errb, code := runTool(t, "--total", ".")
+	if code != 0 {
+		t.Fatalf("df --total . code = %d, stderr = %q", code, errb)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[2], "total") {
+		t.Errorf("df --total . = %q, want header + filesystem + grand total", out)
+	}
+}
+
+func TestPOSIXPortableAndTotalAreMutuallyExclusive(t *testing.T) {
+	_, errb, code := runTool(t, "-Pt")
+	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
+		t.Errorf("df -Pt: code=%d stderr=%q", code, errb)
 	}
 }
 
