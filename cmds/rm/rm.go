@@ -22,6 +22,7 @@ import (
 
 	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
+	"golang.org/x/term"
 )
 
 var isFilesystemRoot = rootguard.IsRoot
@@ -46,6 +47,7 @@ type remover struct {
 	verbose      bool
 	failed       bool
 	in           *bufio.Reader
+	isTerminal   bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -90,6 +92,7 @@ func run(rc *tool.RunContext, args []string) int {
 		rc: rc, recursive: *recursive, force: forceMode, dir: *dir,
 		interactive: ask, preserveRoot: *preserveRoot && !*noPreserveRoot,
 		verbose: *verbose, in: inputReader(rc.In),
+		isTerminal: isTerminal(rc.In),
 	}
 	for _, op := range operands {
 		r.remove(op)
@@ -142,17 +145,20 @@ func (r *remover) remove(op string) {
 			r.errf("cannot remove '%s': Is a directory", op)
 			return
 		}
-		if r.interactive && !r.confirm(op) {
+		if r.dir && !r.recursive {
+			if r.shouldPrompt(rp) && !r.confirm(op) {
+				return
+			}
+			r.removeFile(op)
 			return
 		}
-		if r.dir && !r.recursive {
-			r.removeFile(op)
+		if r.interactive && !r.confirm(op) {
 			return
 		}
 		r.removeTree(op)
 		return
 	}
-	if r.interactive && !r.confirm(op) {
+	if r.shouldPrompt(rp) && !r.confirm(op) {
 		return
 	}
 	r.removeFile(op)
@@ -198,7 +204,7 @@ func (r *remover) removeTree(op string) {
 		r.remove(child)
 	}
 
-	if r.interactive && !r.confirm(op) {
+	if r.shouldPrompt(r.rc.Path(op)) && !r.confirm(op) {
 		return
 	}
 
@@ -332,4 +338,24 @@ func reason(err error) string {
 	r := []rune(s)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+func (r *remover) shouldPrompt(rp string) bool {
+	if r.force {
+		return false
+	}
+	if r.interactive {
+		return true
+	}
+	if r.isTerminal && !isWritable(rp) {
+		return true
+	}
+	return false
+}
+
+var isTerminal = func(r io.Reader) bool {
+	if f, ok := r.(interface{ Fd() uintptr }); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return false
 }

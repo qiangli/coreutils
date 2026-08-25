@@ -3,6 +3,7 @@ package rmcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -422,6 +423,76 @@ func TestRmLastPromptOptionWins(t *testing.T) {
 				t.Fatalf("present=%v, want %v", err == nil, tc.wantPresent)
 			}
 		})
+	}
+}
+
+func TestRmImplicitPromptForUnwritable(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "unwritable")
+	write(t, file, "x")
+	if err := os.Chmod(file, 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	oldIsTerminal := isTerminal
+	t.Cleanup(func() { isTerminal = oldIsTerminal })
+	isTerminal = func(r io.Reader) bool { return true }
+
+	// Test 1: terminal is true, file unwritable, no -f, input 'y' -> removes
+	_, errb, code := runToolIn(t, dir, "y\n", "unwritable")
+	if code != 0 {
+		t.Errorf("expected code 0, got %d", code)
+	}
+	if !strings.Contains(errb, "remove 'unwritable'?") {
+		t.Errorf("expected prompt for unwritable file, got %q", errb)
+	}
+	if _, err := os.Stat(file); err == nil {
+		t.Error("file not removed after 'y' to implicit prompt")
+	}
+
+	// Test 2: terminal is true, unwritable, input 'n' -> doesn't remove
+	file2 := filepath.Join(dir, "unwritable2")
+	write(t, file2, "x")
+	os.Chmod(file2, 0o444)
+	_, errb, code = runToolIn(t, dir, "n\n", "unwritable2")
+	if code != 0 {
+		t.Errorf("expected code 0 on decline, got %d", code)
+	}
+	if !strings.Contains(errb, "remove 'unwritable2'?") {
+		t.Errorf("expected prompt for unwritable file, got %q", errb)
+	}
+	if _, err := os.Stat(file2); os.IsNotExist(err) {
+		t.Error("file removed after 'n' to implicit prompt")
+	}
+	// Test 3: non-terminal, unwritable -> NO PROMPT, removes directly
+	file3 := filepath.Join(dir, "unwritable3")
+	write(t, file3, "x")
+	os.Chmod(file3, 0o444)
+	isTerminal = func(r io.Reader) bool { return false }
+	_, errb, code = runToolIn(t, dir, "", "unwritable3")
+	if code != 0 {
+		t.Errorf("expected code 0 for non-terminal, got %d", code)
+	}
+	if strings.Contains(errb, "remove") {
+		t.Errorf("unexpected prompt for non-terminal: %q", errb)
+	}
+	if _, err := os.Stat(file3); err == nil {
+		t.Error("file not removed without prompt")
+	}
+
+	// Test 4: terminal is true, unwritable directory, input 'n'
+	d := filepath.Join(dir, "udir")
+	os.Mkdir(d, 0o555)
+	isTerminal = func(r io.Reader) bool { return true }
+	_, errb, code = runToolIn(t, dir, "n\n", "-r", "udir")
+	if code != 0 {
+		t.Errorf("expected code 0, got %d", code)
+	}
+	if !strings.Contains(errb, "remove 'udir'?") {
+		t.Errorf("expected prompt for unwritable directory, got %q", errb)
+	}
+	if _, err := os.Stat(d); os.IsNotExist(err) {
+		t.Error("directory removed after 'n' to implicit prompt")
 	}
 }
 

@@ -50,6 +50,21 @@ func TestInvalidIncrementIsRejected(t *testing.T) {
 	}
 }
 
+func TestInvalidIDsAreRejected(t *testing.T) {
+	tests := []string{"-1", "+1", "abc", "1.5"}
+	for _, id := range tests {
+		t.Run(id, func(t *testing.T) {
+			_, errs, code := exec(t, "-n", "0", "--", id)
+			if code == 0 {
+				t.Errorf("expected error for ID %q, got success", id)
+			}
+			if !strings.Contains(errs, "invalid ID") && !strings.Contains(errs, "invalid syntax") {
+				t.Errorf("expected invalid ID error in stderr for %q, got: %q", id, errs)
+			}
+		})
+	}
+}
+
 // The obsolescent form takes the increment as the first operand; dropping it
 // would silently treat the increment as a PID.
 func TestObsolescentFormTakesIncrementAsFirstOperand(t *testing.T) {

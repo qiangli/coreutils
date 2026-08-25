@@ -126,9 +126,9 @@ func resolveID(op string, asUser bool) (int, error) {
 			return strconv.Atoi(u.Uid)
 		}
 	}
-	n, err := strconv.Atoi(op)
+	n, err := strconv.ParseUint(op, 10, 32)
 	if err != nil {
 		return 0, fmt.Errorf("invalid ID %q", op)
 	}
-	return n, nil
+	return int(n), nil
 }
