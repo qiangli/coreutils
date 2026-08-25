@@ -97,8 +97,8 @@ class ManifestValidationTest(unittest.TestCase):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
         self.assertIn("| Evidence | Verified | 2 |", rendered)
-        self.assertIn("| Evidence | Partial | 75 |", rendered)
-        self.assertIn("| Evidence | Unverified | 39 |", rendered)
+        self.assertIn("| Evidence | Partial | 93 |", rendered)
+        self.assertIn("| Evidence | Unverified | 21 |", rendered)
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)
@@ -441,8 +441,17 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_verified_go_evidence_requires_an_explicit_test_id(self) -> None:
         self.assertRejected(
-            self.changed("xargs", evidence_state="verified"),
+            self.changed(
+                "xargs", evidence_state="verified",
+                go_evidence="cmds/xargs/xargs_test.go",
+            ),
             "verified state launders.*focused behavioral evidence",
+        )
+
+    def test_partial_go_evidence_requires_explicit_test_ids(self) -> None:
+        self.assertRejected(
+            self.changed("xargs", go_evidence="cmds/xargs/xargs_test.go"),
+            "partial state requires focused evidence",
         )
 
     def test_state_laundering_is_rejected(self) -> None:
@@ -467,6 +476,16 @@ class ManifestValidationTest(unittest.TestCase):
                 required_options="-Z", go_evidence="cmds/basename/basename_test.go",
             ),
             "verified state launders",
+        )
+
+    def test_owned_partial_and_unverified_rows_require_complete_semantics(self) -> None:
+        self.assertRejected(
+            self.changed("xargs", operand_rules=manifest.UNVERIFIED),
+            "owned row has incomplete normative semantics.*operand_rules",
+        )
+        self.assertRejected(
+            self.changed("bg", stdout=manifest.UNVERIFIED),
+            "owned row has incomplete normative semantics.*stdout",
         )
 
     def test_parser_source_comparison_covers_every_go_selected_row(self) -> None:

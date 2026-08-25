@@ -595,6 +595,15 @@ def validate(
             if row[field] == "-":
                 missing_semantics.append(field)
         missing_semantics = list(dict.fromkeys(missing_semantics))
+        if (
+            expected_owner in OWNED_IMPLEMENTATION_OWNERS
+            and row["evidence_state"] != "verified"
+            and missing_semantics
+        ):
+            raise ManifestError(
+                f"{command}: owned row has incomplete normative semantics: "
+                + ",".join(missing_semantics)
+            )
         if row["evidence_state"] == "verified":
             if (
                 missing_semantics or not evidence_count or not evidence_available
@@ -618,7 +627,7 @@ def validate(
                     f"{command}: verified state launders missing semantics/evidence: {detail}"
                 )
         if row["evidence_state"] == "partial" and (
-            not evidence_count or not evidence_available
+            not evidence_count or not evidence_available or not explicit_tests
         ):
             detail = (
                 "focused semantic evidence"
