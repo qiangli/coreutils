@@ -56,7 +56,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `bc` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `browser` | `cmds/browser` | — | Bashy/other extension | no | no | 1 | 9 |
 | `cal` | `cmds/cal` | — | Bashy/other extension | no | no | 1 | 6 |
-| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 2 | 9 |
+| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 3 | 11 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 3 | 32 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 3 | 27 |

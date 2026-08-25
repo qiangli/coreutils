@@ -488,7 +488,7 @@ cat [-u] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cat`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/cat/cat_test.go#TestCat;cmds/cat/cat_test.go#TestCatFiles;cmds/cat/cat_test.go#TestCatUnbufferedFlushesBeforeEOF;cmds/cat/cat_test.go#TestCatErrors;cmds/cat/cat_test.go#TestCatSameFile;cmds/cat/cat_test.go#TestCatWriteError;cmds/cat/cat_fifo_test.go#TestCatFIFOSymlink`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cat/cat_test.go#TestCat;cmds/cat/cat_test.go#TestCatFiles;cmds/cat/cat_test.go#TestCatUnbufferedFlushesBeforeEOF;cmds/cat/cat_test.go#TestCatErrors;cmds/cat/cat_test.go#TestCatSameFile;cmds/cat/cat_test.go#TestCatWriteError;cmds/cat/cat_fifo_test.go#TestCatFIFOSymlink;cmds/cat/cat_io_test.go#TestCatInjectedReadErrorContinues;cmds/cat/cat_io_test.go#TestCatSpecialFileOperands`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cat](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cat.html).
 

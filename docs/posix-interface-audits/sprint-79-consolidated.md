@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `94a4a7b`
+This report reconciles the Sprint 79 interface ledger through coreutils `4c3d133`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -126,7 +126,8 @@ lower-ranked edges.
 | 3 | `renice` | `EFFECTS`, `EXIT_STATUS` | Add a hermetic scheduler seam for exact `which` dispatch and mixed ID success, plus privilege-contained real priority-change tests and Windows disposition. |
 | 3 | `stty`, `tabs`, `tput` | terminal `STDIN`/`STDOUT`, `EFFECTS` | Run required forms against real terminal/terminfo databases across supported platforms, including Windows disposition, unavailable capabilities, atomic state, write errors, and exact statuses. |
 | 3 | `who`, `write` | `INPUT_FILES`, `OUTPUT_FILES`, terminal effects | Add live login-database and PTY fixtures across supported ABIs, credentials, terminal ownership/activity/permission state, interruption, framing, close errors, and platform fail-closed behavior. |
-| 4 | `basename`, `cat`, `cksum`, `cmp`, `dirname`, `env`, `head`, `ln`, `mesg`, `rmdir`, `sleep`, `split`, `strings`, `tail`, `tee`, `tsort`, `uname`, `xargs` | command-specific stream/status edge | The closure audits find the main C/POSIX algorithm supportable, but each row still names concrete unproved I/O, signal, special-file, platform, or locale branches. Add exactly the missing observable test listed in its closure audit; no synthetic per-command catalog fixture is imposed. |
+| 4 | `cat` | command-specific stream/status edge | Accepted tests now prove injected mid-stream stdin read failures through both the copy and line loops (diagnostic naming the operand, status 1, later operands still processed), directory and dangling-symlink operands with continuation, `/dev/null` alone and interleaved, and FIFO-through-symlink streaming. Remaining: unlocalized diagnostics in non-C locales (superseded product gap), Windows special-file behavior, and the process-level SIGPIPE/default broken-pipe disposition, which is not recorded as evidence (XCU cat ASYNCHRONOUS EVENTS is Default). |
+| 4 | `basename`, `cksum`, `cmp`, `dirname`, `env`, `head`, `ln`, `mesg`, `rmdir`, `sleep`, `split`, `strings`, `tail`, `tee`, `tsort`, `uname`, `xargs` | command-specific stream/status edge | The closure audits find the main C/POSIX algorithm supportable, but each row still names concrete unproved I/O, signal, special-file, platform, or locale branches. Add exactly the missing observable test listed in its closure audit; no synthetic per-command catalog fixture is imposed. |
 
 Detailed residual wording is in the accepted `go-evidence-closure-batch-1.md`
 through `go-evidence-closure-batch-7c.md` reports. Their command-specific
@@ -167,14 +168,17 @@ waves and their current test declarations: `more` through `b899308`, `4e78606`,
 through `e461654` and matrix refresh `c354351`; `getconf` through
 `ceae89d`, `2fbc91c`, and matrix refresh `07e9f17`; `expand` through
 `e038148` and matrix refresh `befd0dc`; `cut` through `185851f` and matrix
-refresh `110c1f4`; and `paste` through `7a93e44` and matrix refresh `94a4a7b`.
+refresh `110c1f4`; and `paste` through `7a93e44` and matrix refresh `94a4a7b`;
+and `cat` read-error/special-file evidence through `a843aea` and review
+amendment `4c3d133`.
 
 The machine-readable evidence lanes name the exact current test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
 pax interactive/preservation/extended-header families, iconv
 charmap/stream/status matrix, fold locale/byte/error matrix, getconf
 inventory/platform/error matrix, cut and expand locale/byte/error matrices,
-and paste locale-delimiter/error matrix.
+paste locale-delimiter/error matrix, and cat injected-read/special-file
+continuation evidence.
 These recently accepted locale/platform waves remain partial because their
 locale-provider and platform residuals are stated explicitly above.
 
