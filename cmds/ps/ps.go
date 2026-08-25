@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
 	portableps "github.com/tklauser/ps"
 
 	"github.com/qiangli/coreutils/cmds/internal/tzenv"
@@ -84,9 +85,10 @@ func (liveProcessSource) processes() ([]process, error) {
 }
 
 type renderContext struct {
-	now time.Time
-	tf  locale.TimeFormatter
-	loc *time.Location
+	now       time.Time
+	tf        locale.TimeFormatter
+	loc       *time.Location
+	multibyte bool
 }
 
 type column struct {
@@ -169,7 +171,7 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	}
 	procs = selectedProcs
 	sort.Slice(procs, func(i, j int) bool { return procs[i].pid < procs[j].pid })
-	render := renderContext{now: now(), tf: tf, loc: tzenv.Location(rc.Env)}
+	render := renderContext{now: now(), tf: tf, loc: tzenv.Location(rc.Env), multibyte: utf8Locale(locale.Resolve(rc.Env, locale.CType))}
 	if err := printTableWithContext(rc, procs, o.format, render, displayColumns(rc.Env)); err != nil {
 		fmt.Fprintf(rc.Err, "ps: write error: %v\n", err)
 		return 1
@@ -205,12 +207,14 @@ func selected(p process, o options) bool {
 
 func parseFormat(specs []string, o options) ([]column, error) {
 	if len(specs) == 0 {
-		if o.long {
-			specs = []string{"f,s,uid,pid,ppid,c,pri,nice,addr,sz,wchan,tty,time,comm=CMD"}
+		if o.long && o.full {
+			specs = []string{"f,s,user=UID,pid,ppid,c,pri,nice,addr,sz,wchan,start,tty=TTY,time,args=CMD"}
+		} else if o.long {
+			specs = []string{"f,s,uid,pid,ppid,c,pri,nice,addr,sz,wchan,tty=TTY,time,comm=CMD"}
 		} else if o.full {
-			specs = []string{"uid,pid,ppid,c,start,tty,time,args=CMD"}
+			specs = []string{"user=UID,pid,ppid,c,start,tty=TTY,time,args=CMD"}
 		} else {
-			specs = []string{"pid,tty,time,comm=CMD"}
+			specs = []string{"pid,tty=TTY,time,comm=CMD"}
 		}
 	}
 	var out []column
@@ -314,7 +318,7 @@ func printTableWithContext(rc *tool.RunContext, ps []process, cols []column, ren
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	return writeLimited(rc.Out, output.Bytes(), columns)
+	return writeLimited(rc.Out, output.Bytes(), columns, render.multibyte)
 }
 
 func value(p process, name string) string {
@@ -428,6 +432,9 @@ func valueAt(p process, name string, render renderContext) string {
 	case "comm":
 		return p.command
 	case "args":
+		if p.state == "Z" {
+			return "<defunct>"
+		}
 		return p.args
 	}
 	return ""
@@ -543,6 +550,16 @@ func displayColumns(env []string) int {
 	return 0
 }
 
+func utf8Locale(name string) bool {
+	name, _, _ = strings.Cut(name, "@")
+	_, codeset, ok := strings.Cut(name, ".")
+	if !ok {
+		return false
+	}
+	codeset = strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset))
+	return codeset == "UTF8"
+}
+
 func writeAll(out io.Writer, p []byte) error {
 	for len(p) > 0 {
 		n, err := out.Write(p)
@@ -557,7 +574,7 @@ func writeAll(out io.Writer, p []byte) error {
 	return nil
 }
 
-func writeLimited(out io.Writer, data []byte, columns int) error {
+func writeLimited(out io.Writer, data []byte, columns int, multibyte bool) error {
 	if columns <= 0 {
 		return writeAll(out, data)
 	}
@@ -570,13 +587,25 @@ func writeLimited(out io.Writer, data []byte, columns int) error {
 			line, data = data[:i], data[i+1:]
 		}
 		limited := line
-		for n, at := 0, 0; at < len(line); n++ {
-			if n == columns {
-				limited = line[:at]
-				break
+		if !multibyte && len(limited) > columns {
+			// In the single-byte C/POSIX locale every byte is one text
+			// column, including bytes that happen to form UTF-8 elsewhere.
+			limited = limited[:columns]
+		} else if multibyte {
+			used, at := 0, 0
+			for at < len(line) {
+				r, size := utf8.DecodeRune(line[at:])
+				width := runewidth.RuneWidth(r)
+				if width < 0 {
+					width = 0
+				}
+				if used+width > columns {
+					limited = line[:at]
+					break
+				}
+				used += width
+				at += size
 			}
-			_, size := utf8.DecodeRune(line[at:])
-			at += size
 		}
 		if err := writeAll(out, limited); err != nil {
 			return err

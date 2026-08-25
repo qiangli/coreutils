@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	osuser "os/user"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -235,9 +236,10 @@ func TestPSXSIStandardDefaultLayouts(t *testing.T) {
 		want    []string
 		headers []string
 	}{
-		{"default", options{}, []string{"pid", "tty", "time", "comm"}, []string{"PID", "TT", "TIME", "CMD"}},
-		{"full", options{full: true}, []string{"uid", "pid", "ppid", "c", "start", "tty", "time", "args"}, []string{"UID", "PID", "PPID", "C", "STIME", "TT", "TIME", "CMD"}},
-		{"long", options{long: true}, []string{"f", "s", "uid", "pid", "ppid", "c", "pri", "nice", "addr", "sz", "wchan", "tty", "time", "comm"}, []string{"F", "S", "UID", "PID", "PPID", "C", "PRI", "NI", "ADDR", "SZ", "WCHAN", "TT", "TIME", "CMD"}},
+		{"default", options{}, []string{"pid", "tty", "time", "comm"}, []string{"PID", "TTY", "TIME", "CMD"}},
+		{"full", options{full: true}, []string{"user", "pid", "ppid", "c", "start", "tty", "time", "args"}, []string{"UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"}},
+		{"long", options{long: true}, []string{"f", "s", "uid", "pid", "ppid", "c", "pri", "nice", "addr", "sz", "wchan", "tty", "time", "comm"}, []string{"F", "S", "UID", "PID", "PPID", "C", "PRI", "NI", "ADDR", "SZ", "WCHAN", "TTY", "TIME", "CMD"}},
+		{"full long", options{full: true, long: true}, []string{"f", "s", "user", "pid", "ppid", "c", "pri", "nice", "addr", "sz", "wchan", "start", "tty", "time", "args"}, []string{"F", "S", "UID", "PID", "PPID", "C", "PRI", "NI", "ADDR", "SZ", "WCHAN", "STIME", "TTY", "TIME", "CMD"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -254,6 +256,55 @@ func TestPSXSIStandardDefaultLayouts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPSFullUIDIsLoginNameAndExplicitUIDStaysNumeric(t *testing.T) {
+	uid := os.Geteuid()
+	current, err := osuser.Current()
+	if err != nil || current.Username == "" {
+		t.Skip("current login name unavailable")
+	}
+	cols, err := parseFormat(nil, options{full: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cols[0] != (column{name: "user", header: "UID"}) {
+		t.Fatalf("-f UID column=%#v, want textual user with UID heading", cols[0])
+	}
+	p := process{euid: uid}
+	if got := value(p, "user"); got != current.Username {
+		t.Fatalf("-f user value=%q, want login name %q", got, current.Username)
+	}
+	if got := value(p, "uid"); got != strconv.Itoa(uid) {
+		t.Fatalf("explicit -o uid value=%q, want numeric %d", got, uid)
+	}
+}
+
+func TestPSCombinedFullLongFlagsAreAdditive(t *testing.T) {
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C", "TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+	p := process{pid: 1, state: "S", start: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), args: "init --full"}
+	if code := runWithSource(rc, []string{"-A", "-fl"}, fakeProcessSource{ps: []process{p}}, func() time.Time { return time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC) }); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut.String())
+	}
+	line, _, _ := strings.Cut(out.String(), "\n")
+	want := []string{"F", "S", "UID", "PID", "PPID", "C", "PRI", "NI", "ADDR", "SZ", "WCHAN", "STIME", "TTY", "TIME", "CMD"}
+	if got := strings.Fields(line); !reflect.DeepEqual(got, want) {
+		t.Fatalf("-fl headings=%q, want %q (output %q)", got, want, out.String())
+	}
+	if !strings.Contains(out.String(), "init --full") {
+		t.Fatalf("-fl did not retain full arguments: %q", out.String())
+	}
+}
+
+func TestPSZombieArgumentsAreDefunct(t *testing.T) {
+	p := process{state: "Z", command: "child", args: "child --still-present-in-proc"}
+	if got := value(p, "args"); got != "<defunct>" {
+		t.Fatalf("zombie args=%q, want <defunct>", got)
+	}
+	if got := value(p, "comm"); got != "child" {
+		t.Fatalf("zombie comm=%q, want argv[0]", got)
 	}
 }
 
@@ -337,13 +388,39 @@ func TestPSDisplayColumnsPresenceAndValidation(t *testing.T) {
 	}
 }
 
+func TestPSColumnsUsesLocaleTextColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+		in   string
+		cols int
+		want string
+	}{
+		{"C counts UTF-8 bytes separately", []string{"LC_ALL=C"}, "éX\n", 2, "é\n"},
+		{"de UTF-8 wide rune occupies two", []string{"LC_ALL=de_DE.UTF-8"}, "界X\n", 2, "界\n"},
+		{"de UTF-8 combining rune occupies zero", []string{"LC_ALL=de_DE.UTF-8"}, "e\u0301X\n", 2, "e\u0301X\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			multibyte := utf8Locale(locale.Resolve(tt.env, locale.CType))
+			if err := writeLimited(&out, []byte(tt.in), tt.cols, multibyte); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); got != tt.want {
+				t.Fatalf("limited output=%q, want %q (multibyte=%v)", got, tt.want, multibyte)
+			}
+		})
+	}
+}
+
 func TestPSEnrichLinuxProcFixture(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux procfs evidence")
 	}
 	const pid = 4242
 	files := map[string]string{
-		"/proc/4242/stat":   "4242 (name with ) char) S 1 2 3 34817 0 4194560 0 0 0 0 120 30 0 0 20 5 1 0 100 8192 2 0 4096",
+		"/proc/4242/stat":   "4242 (name with ) char) Z 1 2 3 34817 0 4194560 0 0 0 0 120 30 0 0 20 5 1 0 100 8192 2 0 4096",
 		"/proc/4242/status": "Name:\tfixture\nUid:\t101\t102\t103\t104\nGid:\t201\t202\t203\t204\n",
 		"/proc/4242/wchan":  "futex_wait_queue\n",
 		"/proc/4242/statm":  "2 1 0 1 0 0 0\n",
@@ -354,10 +431,13 @@ func TestPSEnrichLinuxProcFixture(t *testing.T) {
 		}
 		return nil, os.ErrNotExist
 	}
-	p := process{pid: pid}
+	p := process{pid: pid, args: "stale zombie argv"}
 	enrichWithReader(&p, readFile)
-	if p.state != "S" || p.ppid != 1 || p.pgid != 2 || p.sid != 3 || !p.pgidKnown {
+	if p.state != "Z" || p.ppid != 1 || p.pgid != 2 || p.sid != 3 || !p.pgidKnown {
 		t.Fatalf("identity/state not parsed: %#v", p)
+	}
+	if got := value(p, "args"); got != "<defunct>" {
+		t.Fatalf("procfs zombie args=%q, want <defunct>", got)
 	}
 	if p.tty != "pts/1" {
 		t.Fatalf("tty=%q, want pts/1", p.tty)
