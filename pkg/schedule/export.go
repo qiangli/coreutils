@@ -21,6 +21,11 @@ type Store struct{ path string }
 // NewStore returns a path-scoped schedule store.
 func NewStore(path string) *Store { return &Store{path: path} }
 
+// ValidateJobExecution reports whether this build can provide every execution
+// invariant recorded by job. POSIX command adapters call it before persisting
+// a job so an unsupported target cannot accept work it will never execute.
+func ValidateJobExecution(job *Job) error { return validateJobPlatform(job) }
+
 // StatePathFor resolves the schedule store from an invocation directory and
 // environment. Relative values are resolved against dir. It returns an empty
 // path when that would require consulting the process working directory.

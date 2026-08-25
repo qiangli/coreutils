@@ -175,6 +175,10 @@ func run(rc *tool.RunContext, args []string) int {
 	} else if mask, ok := processUmask(); ok {
 		j.Umask, j.UmaskSet = mask, true
 	}
+	if err := schedule.ValidateJobExecution(j); err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
+		return 1
+	}
 
 	formatted, err := formatJobTime(rc, when)
 	if err != nil {

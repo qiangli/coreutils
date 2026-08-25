@@ -39,6 +39,10 @@ func serviceElectionLockPath() string {
 	return filepath.Join(filepath.Dir(statePath()), "schedule-daemon-lease.lock")
 }
 
+func serviceStopPath(identity daemonIdentity) string {
+	return filepath.Join(filepath.Dir(statePath()), strings.TrimSuffix(identity.Lease, ".lock")+".stop")
+}
+
 func writeIdentity(path string, identity daemonIdentity) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -97,9 +101,19 @@ func identityIsLive(identity daemonIdentity) bool {
 	if identity.PID <= 0 || !validLeaseName(identity.Lease) {
 		return false
 	}
-	_, elected := lockfile.Owner(serviceElectionLockPath())
-	_, held := lockfile.Owner(leasePath(identity))
-	return elected && held
+	electionOwner, elected := lockfile.Owner(serviceElectionLockPath())
+	identityOwner, held := lockfile.Owner(leasePath(identity))
+	if !elected || !held {
+		return false
+	}
+	// Both independently authoritative kernel locks must carry the exact same
+	// unguessable generation and process identity as the atomic publication.
+	// A held global election lock plus an unrelated stale per-generation lock
+	// is not proof that the published PID is the daemon.
+	return electionOwner.Name == "bashy-schedule-daemon" &&
+		electionOwner.PID == identity.PID && electionOwner.Intent == identity.Lease &&
+		identityOwner.Name == electionOwner.Name &&
+		identityOwner.PID == electionOwner.PID && identityOwner.Intent == electionOwner.Intent
 }
 
 func serviceStatusLocked() (ServiceStatus, daemonIdentity) {
@@ -141,18 +155,17 @@ func (l *daemonLease) Release() error {
 }
 
 func claimDaemonLease() (*daemonLease, daemonIdentity, error) {
+	name, err := newLeaseName()
+	if err != nil {
+		return nil, daemonIdentity{}, err
+	}
+	identity := daemonIdentity{PID: os.Getpid(), Lease: name}
 	election, err := lockfile.TryAcquire(serviceElectionLockPath(), lockfile.Holder{
-		Name: "bashy-schedule-daemon", Intent: "daemon lifetime election",
+		Name: "bashy-schedule-daemon", PID: identity.PID, Intent: identity.Lease,
 	})
 	if err != nil {
 		return nil, daemonIdentity{}, fmt.Errorf("schedule daemon already running: %w", err)
 	}
-	name, err := newLeaseName()
-	if err != nil {
-		_ = election.Release()
-		return nil, daemonIdentity{}, err
-	}
-	identity := daemonIdentity{PID: os.Getpid(), Lease: name}
 	identityLease, err := lockfile.TryAcquire(leasePath(identity), lockfile.Holder{
 		Name: "bashy-schedule-daemon", PID: identity.PID, Intent: name,
 	})
@@ -166,7 +179,20 @@ func claimDaemonLease() (*daemonLease, daemonIdentity, error) {
 		_ = os.Remove(leasePath(identity))
 		return nil, daemonIdentity{}, err
 	}
+	_ = os.Remove(serviceStopPath(identity))
 	return lease, identity, nil
+}
+
+func requestDaemonStop(identity daemonIdentity) error {
+	if !validLeaseName(identity.Lease) {
+		return errors.New("invalid schedule daemon identity")
+	}
+	return os.WriteFile(serviceStopPath(identity), []byte(identity.Lease+"\n"), 0o600)
+}
+
+func daemonStopRequested(identity daemonIdentity) bool {
+	b, err := os.ReadFile(serviceStopPath(identity))
+	return err == nil && strings.TrimSpace(string(b)) == identity.Lease
 }
 
 type serviceCommandFactory func(executable string, args ...string) *exec.Cmd
@@ -246,9 +272,16 @@ func waitLeaseRelease(identity daemonIdentity, timeout time.Duration) bool {
 	return !identityIsLive(identity)
 }
 
-// StopService does not clear identity or allow a replacement until the
-// verified old daemon has released its lifetime lease.
+// StopService never signals a numeric PID. PID validation followed by kill(2)
+// has an unavoidable exit/reuse race, so stop uses the daemon's unguessable
+// lifetime generation as a cooperative request and waits for that exact pair
+// of kernel leases to be released. An unresponsive daemon remains reported as
+// running; an unrelated process can never be killed as an escalation fallback.
 func StopService() ServiceStatus {
+	return stopService(serviceStopTimeout)
+}
+
+func stopService(timeout time.Duration) ServiceStatus {
 	p := servicePidPath()
 	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
 		Name: "bashy-schedule", Intent: "stop schedule daemon",
@@ -266,19 +299,17 @@ func StopService() ServiceStatus {
 		}
 		return ServiceStatus{PidFile: p}
 	}
-	if identityIsLive(identity) {
-		_ = signalStop(identity.PID)
+	if err := requestDaemonStop(identity); err != nil {
+		return ServiceStatus{Running: true, PID: identity.PID, PidFile: p}
 	}
-	if !waitLeaseRelease(identity, serviceStopTimeout) && identityIsLive(identity) {
-		_ = signalKill(identity.PID)
-	}
-	if !waitLeaseRelease(identity, serviceStopTimeout) {
+	if !waitLeaseRelease(identity, timeout) {
 		return ServiceStatus{Running: true, PID: identity.PID, PidFile: p}
 	}
 	if current, err := readIdentity(p); err == nil && current == identity {
 		_ = os.Remove(p)
 	}
 	_ = os.Remove(leasePath(identity))
+	_ = os.Remove(serviceStopPath(identity))
 	return ServiceStatus{PidFile: p}
 }
 

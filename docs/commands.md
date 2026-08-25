@@ -312,7 +312,11 @@ input. Cron jobs use an absolute `/bin/sh` default, an invocation-independent
 `HOME`/`LOGNAME`/`PATH`/`SHELL` environment, and umask 0022. A scheduler host
 must supply output-mail delivery; without one, cron execution fails before the
 job is claimed or run. POSIX cron installation and execution fail closed on
-Windows because shell and umask semantics cannot be guaranteed there.
+Windows because shell and umask semantics cannot be guaranteed there. POSIX
+`at`/`batch` execution likewise fails closed on non-Unix targets that cannot
+provide the saved umask, separate session and process group, and no-controlling-
+terminal guarantees; those targets remain build-supported, not silently
+POSIX-emulated.
 
 TODO (execution semantics): unattended `at`/`batch`/`crontab` execution
 requires either (a) auto-starting `schedule daemon` from the submit path

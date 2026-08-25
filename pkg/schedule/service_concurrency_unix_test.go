@@ -4,9 +4,9 @@ package schedule
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 func appendServiceLog(text string) {
@@ -30,9 +32,6 @@ func TestManagedDaemonProcessHelper(t *testing.T) {
 	if os.Getenv("BASHY_MANAGED_DAEMON_HELPER") != "1" {
 		return
 	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM)
-	defer signal.Stop(sig)
 	lease, identity, err := claimDaemonLease()
 	if err != nil {
 		t.Fatal(err)
@@ -43,17 +42,20 @@ func TestManagedDaemonProcessHelper(t *testing.T) {
 		}
 		_ = lease.Release()
 		_ = os.Remove(leasePath(identity))
+		_ = os.Remove(serviceStopPath(identity))
 	}()
 	appendServiceLog("start " + strconv.Itoa(identity.PID))
-	<-sig
-	appendServiceLog("term-start " + strconv.Itoa(identity.PID))
-	if os.Getenv("BASHY_SERVICE_IGNORE_TERM") == "1" {
+	for !daemonStopRequested(identity) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	appendServiceLog("stop-start " + strconv.Itoa(identity.PID))
+	if os.Getenv("BASHY_SERVICE_IGNORE_STOP") == "1" {
 		select {}
 	}
 	if delay, err := time.ParseDuration(os.Getenv("BASHY_SERVICE_TERM_DELAY")); err == nil {
 		time.Sleep(delay)
 	}
-	appendServiceLog("term-end " + strconv.Itoa(identity.PID))
+	appendServiceLog("stop-end " + strconv.Itoa(identity.PID))
 }
 
 func managedDaemonCommand(string, ...string) *exec.Cmd {
@@ -125,9 +127,18 @@ func TestStartServiceIsAtomicAcrossProcessesAndReplacesStalePID(t *testing.T) {
 			t.Fatalf("concurrent starts returned PIDs %q", results)
 		}
 	}
-	b, err := os.ReadFile(logPath)
+	deadline := time.Now().Add(time.Second)
+	var b []byte
+	var err error
+	for time.Now().Before(deadline) {
+		b, err = os.ReadFile(logPath)
+		if err == nil && len(strings.Split(strings.TrimSpace(string(b)), "\n")) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if err != nil || len(strings.Split(strings.TrimSpace(string(b)), "\n")) != 1 {
-		t.Fatalf("daemon starts=%q err=%v", b, err)
+		t.Fatalf("daemon did not publish one ready event: log=%q err=%v", b, err)
 	}
 	st := ServiceStatusOf()
 	if !st.Running || strconv.Itoa(st.PID) != results[0] {
@@ -176,6 +187,95 @@ func TestDaemonElectionLeaseRejectsSecondClaim(t *testing.T) {
 	}
 }
 
+func TestDaemonIdentityRequiresBothLeaseHoldersToMatchPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		identityPID    int
+		electionPID    int
+		electionIntent string
+		leasePID       int
+		leaseIntent    string
+	}{
+		{name: "identity lease generation mismatch", identityPID: os.Getpid(), electionPID: os.Getpid(), leasePID: os.Getpid(), leaseIntent: "different-generation.lock"},
+		{name: "identity lease PID mismatch", identityPID: os.Getpid(), electionPID: os.Getpid(), leasePID: os.Getpid() + 1},
+		{name: "election generation mismatch", identityPID: os.Getpid(), electionPID: os.Getpid(), electionIntent: "different-generation.lock", leasePID: os.Getpid()},
+		{name: "election PID mismatch", identityPID: os.Getpid(), electionPID: os.Getpid() + 1, leasePID: os.Getpid()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withState(t)
+			name, err := newLeaseName()
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity := daemonIdentity{PID: tc.identityPID, Lease: name}
+			electionIntent := tc.electionIntent
+			if electionIntent == "" {
+				electionIntent = identity.Lease
+			}
+			election, err := lockfile.TryAcquire(serviceElectionLockPath(), lockfile.Holder{
+				Name: "bashy-schedule-daemon", PID: tc.electionPID, Intent: electionIntent,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer election.Release()
+			intent := tc.leaseIntent
+			if intent == "" {
+				intent = identity.Lease
+			}
+			wrong, err := lockfile.TryAcquire(leasePath(identity), lockfile.Holder{
+				Name: "bashy-schedule-daemon", PID: tc.leasePID, Intent: intent,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer wrong.Release()
+			if identityIsLive(identity) {
+				t.Fatal("mismatched lifetime lock holders authenticated a daemon")
+			}
+		})
+	}
+}
+
+func TestRealDaemonConsumesGenerationStopAndCleansIdentity(t *testing.T) {
+	withState(t)
+	daemon := NewScheduleCmd()
+	daemon.SetArgs([]string{"daemon", "--interval", "1h"})
+	daemon.SetOut(io.Discard)
+	daemon.SetErr(io.Discard)
+	done := make(chan error, 1)
+	go func() { done <- daemon.Execute() }()
+
+	var identity daemonIdentity
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		identity, _ = readIdentity(servicePidPath())
+		if identityIsLive(identity) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !identityIsLive(identity) {
+		t.Fatal("real daemon did not publish its lifetime identity")
+	}
+	if err := requestDaemonStop(identity); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("real daemon did not consume its generation stop request")
+	}
+	for _, path := range []string{servicePidPath(), leasePath(identity), serviceStopPath(identity)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("daemon artifact %s survived clean stop: %v", path, err)
+		}
+	}
+}
+
 func TestStopWaitsForLeaseReleaseBeforeConcurrentReplacement(t *testing.T) {
 	state := withState(t)
 	logPath := filepath.Join(filepath.Dir(state), "lifecycle")
@@ -199,12 +299,19 @@ func TestStopWaitsForLeaseReleaseBeforeConcurrentReplacement(t *testing.T) {
 	if first.PID == second.PID {
 		t.Fatalf("replacement reused old daemon pid %d", first.PID)
 	}
-	b, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(time.Second)
+	want := []string{"start " + strconv.Itoa(first.PID), "stop-start " + strconv.Itoa(first.PID), "stop-end " + strconv.Itoa(first.PID), "start " + strconv.Itoa(second.PID)}
+	var lines []string
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(logPath)
+		if err == nil {
+			lines = strings.Split(strings.TrimSpace(string(b)), "\n")
+			if strings.Join(lines, "|") == strings.Join(want, "|") {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	want := []string{"start " + strconv.Itoa(first.PID), "term-start " + strconv.Itoa(first.PID), "term-end " + strconv.Itoa(first.PID), "start " + strconv.Itoa(second.PID)}
 	if strings.Join(lines, "|") != strings.Join(want, "|") {
 		t.Fatalf("lifecycle ordering=%q, want %q", lines, want)
 	}
@@ -219,20 +326,31 @@ func TestStopWaitsForLeaseReleaseBeforeConcurrentReplacement(t *testing.T) {
 	}
 }
 
-func TestStopEscalatesAndWaitsForLeaseRelease(t *testing.T) {
+func TestStopNeverEscalatesToUnsafePIDSignal(t *testing.T) {
 	withState(t)
-	t.Setenv("BASHY_SERVICE_IGNORE_TERM", "1")
-	if _, err := startService(time.Minute, managedDaemonCommand); err != nil {
+	t.Setenv("BASHY_SERVICE_IGNORE_STOP", "1")
+	startedDaemon, err := startService(time.Minute, managedDaemonCommand)
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if proc, findErr := os.FindProcess(startedDaemon.PID); findErr == nil {
+			_ = proc.Kill()
+		}
+		deadline := time.Now().Add(time.Second)
+		for ServiceStatusOf().Running && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
 	started := time.Now()
-	if st := StopService(); st.Running {
-		t.Fatalf("escalated stop left daemon running: %+v", st)
+	testTimeout := 100 * time.Millisecond
+	if st := stopService(testTimeout); !st.Running || st.PID != startedDaemon.PID {
+		t.Fatalf("unresponsive daemon was not retained as running: %+v", st)
 	}
-	if elapsed := time.Since(started); elapsed < serviceStopTimeout || elapsed > 3*serviceStopTimeout {
-		t.Fatalf("bounded escalation elapsed=%v", elapsed)
+	if elapsed := time.Since(started); elapsed < testTimeout || elapsed > 2*testTimeout {
+		t.Fatalf("bounded cooperative stop elapsed=%v", elapsed)
 	}
-	if st := ServiceStatusOf(); st.Running {
-		t.Fatalf("daemon lease still held after escalation: %+v", st)
+	if st := ServiceStatusOf(); !st.Running || st.PID != startedDaemon.PID {
+		t.Fatalf("stop falsely cleared live unresponsive daemon: %+v", st)
 	}
 }

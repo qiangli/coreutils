@@ -598,16 +598,23 @@ func daemonCmd() *cobra.Command {
 				}
 				_ = lease.Release()
 				_ = os.Remove(leasePath(identity))
+				_ = os.Remove(serviceStopPath(identity))
 			}()
 			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: ticking every %s (state %s)\n", interval, statePath()); err != nil {
 				return err
 			}
 			t := time.NewTicker(interval)
 			defer t.Stop()
+			stopPoll := time.NewTicker(10 * time.Millisecond)
+			defer stopPoll.Stop()
 			for {
 				select {
 				case <-cmd.Context().Done():
 					return nil
+				case <-stopPoll.C:
+					if daemonStopRequested(identity) {
+						return nil
+					}
 				case <-t.C:
 					deliver, mailErr := DiscoverMailDelivery()
 					if mailErr != nil {
