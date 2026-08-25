@@ -30,6 +30,17 @@ func TestMain(m *testing.M) {
 				fmt.Println(a)
 			}
 		}
+		// FIND_HELPER_LOG=<path>: append every argument after argv[0],
+		// one per line, to the named file — a real filesystem side
+		// effect the parent can count per invocation and per path.
+		if p := os.Getenv("FIND_HELPER_LOG"); p != "" {
+			if f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				for _, a := range os.Args[1:] {
+					fmt.Fprintln(f, a)
+				}
+				f.Close()
+			}
+		}
 		// Optionally kill ourselves with a signal so the parent can
 		// assert the 128+signal exit-status mapping (no-op on Windows,
 		// which has no POSIX signals — the test that uses it is unix).

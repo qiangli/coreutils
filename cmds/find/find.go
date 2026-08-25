@@ -36,6 +36,13 @@
 // -execdir, -okdir and -delete remain unsupported and fail with the
 // standard contract error.
 //
+// POSIX mode: when POSIXLY_CORRECT is present in the invocation
+// environment — even set to an empty value — the Issue 7 synopsis is
+// enforced and at least one path operand is required; a no-argument or
+// expression-first invocation is a usage error instead of silently
+// defaulting the start point to '.'. Outside POSIX mode the no-path
+// default of '.' remains, as a documented extension.
+//
 // Deviations from GNU worth knowing: traversal order is deterministic
 // lexical (GNU uses directory order); parse/usage errors exit 2 per
 // this repo's contract (GNU find exits 1); paths are printed with
@@ -77,7 +84,8 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 const helpText = `Usage: find [-H | -L | -P] [PATH...] [EXPRESSION]
 Search for files in a directory hierarchy.
 
-Default PATH is '.'; default expression is -print.
+Outside POSIX mode, default PATH is '.'; with POSIXLY_CORRECT a PATH is required.
+The default expression is -print.
 
 Options (before PATH):
   -P  never follow symlinks (default); -L  follow all symlinks;
@@ -173,6 +181,23 @@ leading:
 		i++
 	}
 	if len(paths) == 0 {
+		// POSIX Issue 7 SYNOPSIS/OPERANDS: `find [-H|-L] path...
+		// [expression]` — one or more path operands are required, and an
+		// expression-first invocation is unspecified. The no-path default
+		// of '.' is this repo's extension (GNU's), so it is kept only
+		// outside POSIX mode: POSIXLY_CORRECT — selected by presence
+		// alone, even to an empty value, like every other gate in this
+		// repo — turns the missing operand into a usage error naming
+		// what was wrong.
+		if _, posix := lookupEnv(rc.Env, "POSIXLY_CORRECT"); posix {
+			if i < len(args) {
+				return tool.UsageError(rc, cmd,
+					"paths must precede expression: '%s' (POSIXLY_CORRECT: a path operand is required before the expression)",
+					args[i])
+			}
+			return tool.UsageError(rc, cmd,
+				"missing path operand (POSIXLY_CORRECT: at least one path is required; the no-path '.' default is a non-POSIX extension)")
+		}
 		paths = []string{"."}
 	}
 
