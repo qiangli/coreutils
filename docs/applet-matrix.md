@@ -185,7 +185,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 15 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
-| `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 26 |
+| `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 27 |
 | `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 1 | 18 |
 | `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
@@ -194,7 +194,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tsort` | `cmds/tsort` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 13 |
 | `tz` | `cmds/tz` | — | Bashy/other extension | no | no | 1 | 2 |
-| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 1 | 6 |
+| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 1 | 15 |
 | `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 1 | 4 |
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
