@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/spf13/pflag"
 )
@@ -274,15 +275,8 @@ func looksLikeC(text string) bool {
 }
 
 func localeAllowsUTF8(rc *tool.RunContext) bool {
-	locale := rc.Getenv("LC_ALL")
-	if locale == "" {
-		locale = rc.Getenv("LC_CTYPE")
-	}
-	if locale == "" {
-		locale = rc.Getenv("LANG")
-	}
-	locale = strings.ToLower(locale)
-	return strings.Contains(locale, "utf-8") || strings.Contains(locale, "utf8")
+	name := strings.ToLower(locale.Resolve(rc.Env, locale.CType))
+	return strings.Contains(name, "utf-8") || strings.Contains(name, "utf8")
 }
 
 // classify remains the direct built-in classifier used by focused signature

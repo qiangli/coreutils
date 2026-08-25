@@ -250,7 +250,12 @@ func parseMagicType(field string) (magicType, error) {
 	}
 	switch rest {
 	case "":
-		t.size = strconv.IntSize / 8
+		// POSIX specifies the bare d and u forms in terms of the C int
+		// type, not the host word size. Go's int is 64 bits on most of our
+		// targets, whereas the C ABI's int is 32 bits on every supported Go
+		// target. Keep this independent of the Go word size so a portable
+		// magic entry such as "0 d 0x04030201" reads four bytes everywhere.
+		t.size = cIntSize()
 	case "C":
 		t.size = 1
 	case "S":
@@ -268,6 +273,8 @@ func parseMagicType(field string) (magicType, error) {
 	}
 	return t, nil
 }
+
+func cIntSize() int { return 4 }
 
 func cLongSize() int {
 	if runtime.GOOS == "windows" {

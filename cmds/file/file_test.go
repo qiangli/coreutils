@@ -252,6 +252,20 @@ func TestMagicGrammarComparisonsContinuationsAndFormatting(t *testing.T) {
 	}
 }
 
+func TestMagicBareDecimalUsesCIntWidth(t *testing.T) {
+	dir := t.TempDir()
+	// A bare d is the C int type. On a 64-bit Go host it must still read
+	// four bytes, rather than silently becoming an eight-byte Go int test.
+	word := make([]byte, 4)
+	binary.NativeEndian.PutUint32(word, 0x01020304)
+	put(t, dir, "word", word)
+	put(t, dir, "magic", []byte("0\td\t0x01020304\tc int=%u\n"))
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "word")
+	if out != "word: c int=16909060\n" || errb != "" || code != 0 {
+		t.Fatalf("file bare d = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestMagicContinuationGatingAndShortValues(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "gated", []byte("BA\x07"))
@@ -306,6 +320,12 @@ func TestRequiredProgramTextAndRunContextLocale(t *testing.T) {
 	out, errb, code = invokeEnv(t, dir, "", []string{"LANG=C.UTF-8", "LC_CTYPE=C"}, "utf8")
 	if out != "utf8: data\n" || errb != "" || code != 0 {
 		t.Fatalf("LC_CTYPE override = (%q, %q, %d)", out, errb, code)
+	}
+	// Invocation-owned environments can contain repeated assignments; the last
+	// one wins, and must not leak in process-global locale state.
+	out, errb, code = invokeEnv(t, dir, "", []string{"LC_CTYPE=C", "LC_CTYPE=C.UTF-8"}, "utf8")
+	if out != "utf8: Unicode text, UTF-8 text\n" || errb != "" || code != 0 {
+		t.Fatalf("RunContext LC_CTYPE = (%q, %q, %d)", out, errb, code)
 	}
 }
 
