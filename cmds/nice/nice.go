@@ -28,11 +28,16 @@ const (
 var longOptions = []string{"--adjustment", "--help", "--version"}
 
 func run(rc *tool.RunContext, args []string) int {
-	adjust, given, command, code := parseNice(rc, args)
+	posixMode := rc.Getenv("POSIXLY_CORRECT") != ""
+	adjust, given, command, code := parseNice(rc, args, posixMode)
 	if code >= 0 {
 		return code
 	}
 	if len(command) == 0 {
+		if posixMode {
+			fmt.Fprintln(rc.Err, "nice: missing utility operand")
+			return 125
+		}
 		if given {
 			fmt.Fprintln(rc.Err, "nice: a command must be given with an adjustment")
 			return 125
@@ -45,7 +50,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 // parseNice returns the adjustment, whether one was given, the COMMAND operand
 // and its arguments, and an exit code (negative when parsing succeeded).
-func parseNice(rc *tool.RunContext, args []string) (int, bool, []string, int) {
+func parseNice(rc *tool.RunContext, args []string, posixMode bool) (int, bool, []string, int) {
 	adjust := defaultAdjustment
 	given := false
 	setAdjust := func(s string) bool {
@@ -67,6 +72,10 @@ func parseNice(rc *tool.RunContext, args []string) (int, bool, []string, int) {
 		// The obsolete "-NUM", "--NUM" and "-+NUM" forms; the adjustment is
 		// everything after the leading dash, so "--5" means -5.
 		case isObsoleteAdjustment(a):
+			if posixMode {
+				fmt.Fprintf(rc.Err, "nice: invalid option -- '%s'\n", strings.TrimPrefix(a, "-"))
+				return 0, false, nil, 125
+			}
 			if !setAdjust(a[1:]) {
 				return 0, false, nil, 125
 			}
@@ -87,6 +96,10 @@ func parseNice(rc *tool.RunContext, args []string) (int, bool, []string, int) {
 			}
 
 		case strings.HasPrefix(a, "--"):
+			if posixMode {
+				fmt.Fprintf(rc.Err, "nice: invalid option -- '%s'\n", strings.TrimPrefix(a, "-"))
+				return 0, false, nil, 125
+			}
 			name, value, hasValue := strings.Cut(a, "=")
 			long, err := matchLongOption(name)
 			if err != nil {

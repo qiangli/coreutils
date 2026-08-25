@@ -209,6 +209,28 @@ func TestMoreNonTerminalIgnoresFAndP(t *testing.T) {
 	}
 }
 
+func TestMorePOSIXNonTerminalOnlySqueezeTakesEffect(t *testing.T) {
+	input := "one\n\n\ntwo\nthree\n"
+	out, errb, code := runMoreNonTerminal(t, t.TempDir(), input, "-s", "-n", "1", "-p", "q")
+	if want := "one\n\ntwo\nthree\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more non-terminal POSIX option effects = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+
+	var terminalOut, terminalErr bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &terminalOut, Err: &terminalErr},
+	}
+	withPagerTTY(t, rc.Out, commandTTY(" "), 2, 80)
+	if code := cmd.Run(rc, []string{"-s", "-n", "1", "-p", "q"}); code != 0 {
+		t.Fatalf("terminal more code=%d stderr=%q", code, terminalErr.String())
+	}
+	if terminalOut.String() != "" {
+		t.Fatalf("terminal -p q should quit before content, got %q", terminalOut.String())
+	}
+}
+
 func TestMoreSqueezeCRLF(t *testing.T) {
 	// -s squeezes only repeated empty text lines (\n)
 	// CR-containing lines (\r\n) are non-empty.

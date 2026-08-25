@@ -464,6 +464,24 @@ func TestShellThatCannotStartIsAnError(t *testing.T) {
 	}
 }
 
+func TestSuccessfulGroupChangePropagatesShellStatusThroughSpawnSeam(t *testing.T) {
+	h := install(t)
+	h.spawn.status = 42
+	_, errOut, code := runCmd(t, testEnv, "staff")
+	if errOut != "" {
+		t.Fatalf("stderr=%q", errOut)
+	}
+	if len(h.spawn.calls) != 1 {
+		t.Fatalf("spawns=%d want 1", len(h.spawn.calls))
+	}
+	if plannedGID(h.spawn.calls[0]) != "20" {
+		t.Fatalf("planned gid=%q want 20", plannedGID(h.spawn.calls[0]))
+	}
+	if code != 42 {
+		t.Fatalf("exit=%d want shell status 42", code)
+	}
+}
+
 // A usage error is not "the group change failed": the command was not
 // understood, so there is no request to honour and no shell to start.
 func TestUsageErrorsStartNoShell(t *testing.T) {

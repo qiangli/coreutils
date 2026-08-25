@@ -48,7 +48,7 @@ func TestParseNiceOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
 			rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
-			adjust, given, command, code := parseNice(rc, tt.args)
+			adjust, given, command, code := parseNice(rc, tt.args, false)
 			if code >= 0 {
 				t.Fatalf("unexpected early exit code=%d err=%q", code, errb.String())
 			}
@@ -62,6 +62,55 @@ func TestParseNiceOptions(t *testing.T) {
 				t.Errorf("command=%q want %q", command, tt.command)
 			}
 		})
+	}
+}
+
+func TestParseNicePOSIXModeAcceptsOnlyPOSIXAdjustmentForm(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"obsolete positive", []string{"-5", "echo"}},
+		{"obsolete negative", []string{"--5", "echo"}},
+		{"long adjustment", []string{"--adjustment=5", "echo"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+			_, _, _, code := parseNice(rc, tt.args, true)
+			if code != 125 {
+				t.Fatalf("code=%d want 125", code)
+			}
+			if !strings.Contains(errb.String(), "invalid option") {
+				t.Errorf("stderr=%q", errb.String())
+			}
+		})
+	}
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	adjust, given, command, code := parseNice(rc, []string{"-n", "5", "echo", "-n", "ignored"}, true)
+	if code >= 0 || adjust != 5 || !given || !reflect.DeepEqual(command, []string{"echo", "-n", "ignored"}) {
+		t.Fatalf("POSIX -n parse = adjust %d given %v command %q code %d err %q", adjust, given, command, code, errb.String())
+	}
+}
+
+func TestNicePOSIXModeRequiresUtilityOperand(t *testing.T) {
+	for _, args := range [][]string{nil, {"-n", "5"}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Env:   []string{"POSIXLY_CORRECT=1"},
+			Stdio: tool.Stdio{Out: &out, Err: &errb},
+		}
+		code := run(rc, args)
+		if code != 125 {
+			t.Fatalf("nice %v code=%d want 125", args, code)
+		}
+		if out.String() != "" || !strings.Contains(errb.String(), "missing utility operand") {
+			t.Fatalf("nice %v stdout=%q stderr=%q", args, out.String(), errb.String())
+		}
 	}
 }
 
@@ -145,7 +194,7 @@ func TestParseNiceInvalidAdjustment(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
 			rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
-			_, _, _, code := parseNice(rc, tt.args)
+			_, _, _, code := parseNice(rc, tt.args, false)
 			if code != 125 {
 				t.Fatalf("code=%d want 125", code)
 			}
@@ -159,7 +208,7 @@ func TestParseNiceInvalidAdjustment(t *testing.T) {
 func TestParseNiceMissingArgument(t *testing.T) {
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	_, _, _, code := parseNice(rc, []string{"-n"})
+	_, _, _, code := parseNice(rc, []string{"-n"}, false)
 	if code != 125 {
 		t.Fatalf("code=%d want 125", code)
 	}
@@ -181,7 +230,7 @@ func TestParseNiceRejectsUnknownOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
 			rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
-			_, _, _, code := parseNice(rc, tt.args)
+			_, _, _, code := parseNice(rc, tt.args, false)
 			if code != 125 {
 				t.Fatalf("code=%d want 125", code)
 			}
@@ -196,7 +245,7 @@ func TestParseNiceRejectsUnknownOptions(t *testing.T) {
 func TestParseNiceDashIsOperand(t *testing.T) {
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	_, _, command, code := parseNice(rc, []string{"-"})
+	_, _, command, code := parseNice(rc, []string{"-"}, false)
 	if code >= 0 {
 		t.Fatalf("code=%d err=%q", code, errb.String())
 	}
