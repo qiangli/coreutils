@@ -96,9 +96,10 @@ class ManifestValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "heading count/order"):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
-        self.assertIn("| Evidence | Verified | 2 |", rendered)
-        self.assertIn("| Evidence | Partial | 98 |", rendered)
+        self.assertIn("| Evidence | Verified | 3 |", rendered)
+        self.assertIn("| Evidence | Partial | 97 |", rendered)
         self.assertIn("| Evidence | Unverified | 16 |", rendered)
+        self.assertEqual(self.row("nice")["evidence_state"], "verified")
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)

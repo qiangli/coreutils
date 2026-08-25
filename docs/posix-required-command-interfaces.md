@@ -16,8 +16,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Go | 78 |
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
-| Evidence | Verified | 2 |
-| Evidence | Partial | 98 |
+| Evidence | Verified | 3 |
+| Evidence | Partial | 97 |
 | Evidence | Unverified | 16 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
@@ -2271,7 +2271,7 @@ iconv -l
 
 **Standard error:** Used only for diagnostic messages; -s suppresses invalid-character conversion messages without changing the exit status.
 
-**Effects:** `Reads inputs without modifying them; -c omits characters that cannot be converted while keeping the failure status, and a discard recorded for one operand survives later operands.`.
+**Effects:** `Reads inputs without modifying them; -c omits invalid input characters and characters unavailable in the target while preserving failure status; codeset operands use the carried encodings and aliases, slash-containing operands symbolically join two charmap files, decoders reset per operand, and one encoder produces the concatenated output stream.`.
 
 **Exit status:** 0 successful conversion of all input; greater than 0 if an error occurs; -s never changes the status and -c keeps discarded characters counted as a failure.
 
@@ -2285,7 +2285,7 @@ iconv -l
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/iconv`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/iconv/iconv_test.go#TestUTF8ToISO88591;cmds/iconv/iconv_test.go#TestFilesResolveAgainstRunContextDir;cmds/iconv/iconv_test.go#TestMalformedInputFailsAndSilentOnlySuppressesConversionMessage;cmds/iconv/iconv_test.go#TestUnrepresentableOutputFails;cmds/iconv/iconv_test.go#TestUnsupportedEncodingFailsLoudly;cmds/iconv/iconv_test.go#TestDiscardInvalidOmitsUntranslatableCharacters;cmds/iconv/iconv_test.go#TestOmittedEncodingUsesLocaleCodeset;cmds/iconv/iconv_test.go#TestOmittedEncodingHonorsLocaleCodeset;cmds/iconv/iconv_test.go#TestListEncodings;cmds/iconv/iconv_test.go#TestSuffixRejectionPreIO;cmds/iconv/iconv_discard_state_test.go#TestDiscardStatusSurvivesLaterEmptyOperand;cmds/iconv/iconv_discard_state_test.go#TestDiscardTruncatedGB18030FourByteTailFails`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:iconv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/iconv/iconv_test.go#TestUTF8ToISO88591;cmds/iconv/iconv_test.go#TestFilesResolveAgainstRunContextDir;cmds/iconv/iconv_test.go#TestMalformedInputFailsAndSilentOnlySuppressesConversionMessage;cmds/iconv/iconv_test.go#TestUnrepresentableOutputFails;cmds/iconv/iconv_test.go#TestUnsupportedEncodingFailsLoudly;cmds/iconv/iconv_test.go#TestDiscardInvalidOmitsUntranslatableCharacters;cmds/iconv/iconv_test.go#TestOmittedEncodingUsesLocaleCodeset;cmds/iconv/iconv_test.go#TestOmittedEncodingHonorsLocaleCodeset;cmds/iconv/iconv_test.go#TestListEncodings;cmds/iconv/iconv_test.go#TestSuffixRejectionPreIO;cmds/iconv/iconv_discard_state_test.go#TestDiscardStatusSurvivesLaterEmptyOperand;cmds/iconv/iconv_discard_state_test.go#TestDiscardTruncatedGB18030FourByteTailFails;cmds/iconv/issue723_posix_test.go#TestIssue723MalformedStatusDoesNotDependOnDiscard;cmds/iconv/issue723_posix_test.go#TestIssue723CharmapPathnamesUseSymbolicJoin;cmds/iconv/issue723_posix_test.go#TestIssue723SilentDoesNotSuppressInputIOErrors;cmds/iconv/issue723_posix_test.go#TestIssue723ShortWritesFailForCharmapAndList;cmds/iconv/issue732_audit_test.go#TestIssue732DiscardMalformedAndTruncatedSequences;cmds/iconv/issue732_audit_test.go#TestIssue732SilentDoesNotSuppressShortOutputWrite;cmds/iconv/issue732_audit_test.go#TestIssue732LocalePrecedenceForOmittedEncoding;cmds/iconv/issue732_audit_test.go#TestIssue732FileAndStandardInputOperandsAreOrderedStreams;cmds/iconv/issue732_audit_test.go#TestIssue732ValidMultibyteCharactersCrossEveryReadBoundary;cmds/iconv/issue732_audit_test.go#TestIssue732OpenFailureContinuesAndSilentDoesNotHideIt;cmds/iconv/issue732_audit_test.go#TestIssue732HelpShowsAllPOSIXSynopses;cmds/iconv/issue732_audit_test.go#TestIssue732CharmapDropsWholeUnrepresentableMultibyteCharacter`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:iconv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [iconv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/iconv.html).
 
@@ -3291,7 +3291,7 @@ newgrp [-l] [group]
 
 **Standard error:** Used for diagnostics and for the terminal password prompt.
 
-**Effects:** `Starts a child shell rather than replacing the embedding process; on Unix the child receives the requested real/effective gid and adjusted supplementary list when privilege permits, otherwise a retry starts it unchanged; on Windows the command fails loudly because POSIX group identity has no equivalent.`.
+**Effects:** `Starts a child shell rather than replacing the embedding process; on Unix the child receives equal requested real/effective gids and the required supplementary-group plan when privilege permits, otherwise authorization/database/kernel refusal diagnoses and starts the shell with inherited credentials; no operand rebuilds the password-database primary and supplementary groups; non-login preserves cwd, environment, streams, and virtual umask, while -l supplies login argv0, home cwd, and the documented clean login environment; Windows fails loudly because POSIX group identity has no equivalent.`.
 
 **Exit status:** If a shell is created, exits with that shell's status whether or not the group changed; otherwise exits greater than 0 for usage, database, platform, or shell-start errors.
 
@@ -3305,13 +3305,13 @@ newgrp [-l] [group]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/newgrp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/newgrp/newgrp_test.go#TestNoOperandRevertsToThePrimaryGroup;cmds/newgrp/newgrp_test.go#TestNumericOperandPrefersTheGroupName;cmds/newgrp/newgrp_test.go#TestRefusedChangeStillStartsTheShellWithTheGroupUnchanged;cmds/newgrp/newgrp_test.go#TestKernelRefusalRetriesWithoutTheCredential;cmds/newgrp/newgrp_test.go#TestSuccessfulGroupChangePropagatesShellStatusThroughSpawnSeam;cmds/newgrp/newgrp_test.go#TestLoginShellArgv0AndDirectory;cmds/newgrp/newgrp_test.go#TestLoginEnvironment;cmds/newgrp/newgrp_test.go#TestUsageErrorsStartNoShell;cmds/newgrp/spawn_unix_test.go#TestSyscallCredentialImplementsThePlan;cmds/newgrp/spawn_windows_test.go#TestWindowsSpawnFailsLoudly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/newgrp/newgrp_test.go#TestNoOperandRevertsToThePrimaryGroup;cmds/newgrp/newgrp_test.go#TestNoOperandDatabaseGroupFailureStillLaunchesUnchanged;cmds/newgrp/newgrp_test.go#TestNumericOperandPrefersTheGroupName;cmds/newgrp/newgrp_test.go#TestNumericOperandUsesTheNonNegativeGIDValue;cmds/newgrp/newgrp_test.go#TestSupplementaryGroupChangeRules;cmds/newgrp/newgrp_test.go#TestRefusedChangeStillStartsTheShellWithTheGroupUnchanged;cmds/newgrp/newgrp_test.go#TestKernelRefusalRetriesWithoutTheCredential;cmds/newgrp/newgrp_test.go#TestSuccessfulGroupChangePropagatesShellStatusThroughSpawnSeam;cmds/newgrp/newgrp_test.go#TestLoginShellArgv0AndDirectory;cmds/newgrp/newgrp_test.go#TestLoginEnvironment;cmds/newgrp/newgrp_test.go#TestLoginEnvironmentAndStatusSurviveKernelAssignmentFailure;cmds/newgrp/newgrp_test.go#TestUsageErrorsStartNoShell;cmds/newgrp/newgrp_test.go#TestAuthorize;cmds/newgrp/newgrp_test.go#TestPromptFailureIsDeniedNotAssumed;cmds/newgrp/spawn_unix_test.go#TestSyscallCredentialImplementsThePlan;cmds/newgrp/spawn_unix_test.go#TestSupplementaryCapacityFallbackRetainsMandatoryGIDPlan;cmds/newgrp/spawn_unix_test.go#TestSupplementaryCapacityFallbackIsNarrow;cmds/newgrp/spawn_unix_test.go#TestPasswordPromptUsesStderrAndReadsControllingTTY;cmds/newgrp/spawn_unix_test.go#TestDefaultSpawnShellPreservesArgumentsDirectoryEnvironmentAndIO;cmds/newgrp/spawn_unix_test.go#TestDefaultSpawnShellAppliesRunContextVirtualUmask;cmds/newgrp/spawn_unix_test.go#TestRunUmaskHelperRequiresCompleteControlAndPreservesExecInputs;cmds/newgrp/spawn_unix_test.go#TestRunUmaskHelperRejectsInvalidControlOrMaskWithoutExec;cmds/newgrp/spawn_unix_test.go#TestDefaultSpawnShellPropagatesSignalStatus;cmds/newgrp/spawn_windows_test.go#TestWindowsSpawnFailsLoudly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [newgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/newgrp.html).
 
 ## `nice`
 
-**Evidence state:** `partial`.
+**Evidence state:** `verified`.
 
 **Applicability:** `base`.
 
@@ -3339,7 +3339,7 @@ nice [-n increment] utility [argument...]
 
 **Standard error:** Diagnostics only, including non-fatal niceness-adjustment warnings.
 
-**Effects:** `Invokes the utility as the documented command-operand exception; attempts to apply the requested priority to the child immediately after start so an embedded host's own priority is not changed; a pre-exec race for very short-lived children remains explicitly residual.`.
+**Effects:** `Invokes the utility as the documented command-operand exception; on Unix a blocked pure-Go child helper cannot begin user code until the parent has attempted its absolute nice value, then overlays itself with the utility; adjustment failure emits a permitted warning but still invokes the utility unchanged, and the embedding host's priority is never modified; non-Unix invokes with a deterministic unsupported-adjustment warning.`.
 
 **Exit status:** If the utility is invoked, exits with the utility's status, including 128+signal for signaled children while recording the raw signal in RunContext.ExitSignal for a standalone boundary; otherwise 125 for nice utility errors, 126 when found but not invokable, and 127 when the utility cannot be found.
 
@@ -3353,7 +3353,7 @@ nice [-n increment] utility [argument...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/nice`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/nice/nice_posix_test.go#TestParseNiceOptions;cmds/nice/nice_posix_test.go#TestNicePOSIXModeRequiresUtilityOperand;cmds/nice/nice_posix_test.go#TestNiceCommandExitStatuses;cmds/nice/nice_resolve_test.go#TestNicePathUnsetFindsCommand;cmds/nice/nice_resolve_test.go#TestNiceChildExitPropagates;cmds/nice/nice_resolve_test.go#TestNiceDoubleDashStopsOptionParsing;cmds/nice/nice_priority_test.go#TestNiceDoesNotAlterOwnPriority;cmds/nice/nice_priority_test.go#TestNiceReportsSignalExitCode;cmds/nice/nice_exec_unix_test.go#TestNiceRunsExecutableTextWithoutShebang`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/nice/nice_posix_test.go#TestParseNiceOptions;cmds/nice/nice_posix_test.go#TestNicePOSIXModeRequiresUtilityOperand;cmds/nice/nice_posix_test.go#TestNiceCommandExitStatuses;cmds/nice/nice_posix_test.go#TestResolveCommandResolvesPathEntriesFromRunContext;cmds/nice/nice_resolve_test.go#TestNicePathUnsetFindsCommand;cmds/nice/nice_resolve_test.go#TestNiceChildExitPropagates;cmds/nice/nice_resolve_test.go#TestNiceDoubleDashStopsOptionParsing;cmds/nice/nice_priority_test.go#TestNiceDoesNotAlterOwnPriority;cmds/nice/nice_priority_test.go#TestNiceReportsSignalExitCode;cmds/nice/nice_exec_unix_test.go#TestNiceRunsExecutableTextWithoutShebang;cmds/nice/nice_barrier_unix_test.go#TestPriorityHelperWaitsForBarrierBeforeExec;cmds/nice/nice_barrier_unix_test.go#TestNicePreservesEnvironmentThatCollidesWithFormerHelperMarker;cmds/nice/nice_barrier_unix_test.go#TestPriorityHelperPreservesENOEXECScriptFallback;cmds/nice/nice_barrier_unix_test.go#TestNiceUtilityStartsAtAdjustedPriority;cmds/nice/nice_barrier_unix_test.go#TestNicePassesUtilityArgumentsAndStandardStreamsUnchanged;cmds/nice/nice_barrier_unix_test.go#TestNiceAdjustmentFailureStillInvokesUtilityAndUtilityStatusWins;cmds/nice/nice_barrier_unix_test.go#TestPriorityHelperExecFailuresUsePOSIXStatuses`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [nice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nice.html).
 
@@ -3694,7 +3694,7 @@ pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [f
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pax`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/pax/pax_test.go#TestWriteThenListThenExtractRoundTrips;cmds/pax/archive_lane_test.go#TestBlockSizeGrammar;cmds/pax/archive_lane_test.go#TestWriteWithoutOperandsReadsStdinAndContinuesAfterPathFailure;cmds/pax/follow_test.go#TestDashHFollowsCommandLineSymlinksOnly;cmds/pax/wave_test.go#TestModeOptionLegality;cmds/pax/list_io_test.go#TestPaxListModePropagatesOutputErrors;cmds/pax/issue715_test.go#TestInteractiveReadPreflightsAndRenamesHardlinks;cmds/pax/issue716_test.go#TestPreservationGrammarOrderedAndRepeated`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/pax/pax_test.go#TestWriteThenListThenExtractRoundTrips;cmds/pax/archive_lane_test.go#TestBlockSizeGrammar;cmds/pax/archive_lane_test.go#TestWriteWithoutOperandsReadsStdinAndContinuesAfterPathFailure;cmds/pax/follow_test.go#TestDashHFollowsCommandLineSymlinksOnly;cmds/pax/wave_test.go#TestModeOptionLegality;cmds/pax/list_io_test.go#TestPaxListModePropagatesOutputErrors;cmds/pax/issue715_test.go#TestInteractiveReadPreflightsAndRenamesHardlinks;cmds/pax/issue715_test.go#TestInteractiveFailuresAreImmediateAndNonzero;cmds/pax/issue715_test.go#TestCopyLinkRegularAndSymlinkFollowModes;cmds/pax/issue715_test.go#TestResetAccessTimesWriteAndCopyAndFailureStatus;cmds/pax/issue716_test.go#TestPreservationGrammarOrderedAndRepeated;cmds/pax/issue716_test.go#TestExtractDefaultCreationAndPreservedMode;cmds/pax/issue716_test.go#TestPreservationFailuresKeepFilesClearSetIDAndContinue;cmds/pax/issue716_test.go#TestSymlinkPreservationUsesNoFollowOwnerAndTimes;cmds/pax/issue717_test.go#TestPAXOptionGrammarWhitespaceEscapedCommaAndTrailingComma;cmds/pax/issue717_test.go#TestPAXOptionRepeatedPrecedenceDeleteAdditiveAndListConcatenation;cmds/pax/issue717_test.go#TestPAXOptionModeAndFormatApplicabilityFailClosed;cmds/pax/issue717_test.go#TestPAXReadAndListHeaderPrecedence;cmds/pax/issue717_test.go#TestPAXInvalidActionsBypassAndUTF8;cmds/pax/issue717_test.go#TestPAXListFormatConversionsAndConcatenation;cmds/pax/issue717_test.go#TestPAXCarriedCodesetByteTranscoding;cmds/pax/issue717_test.go#TestPAXListTimeCompleteIssue7DateConversions;cmds/pax/issue717_test.go#TestPAXMalformedListFormatFailsClosed`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [pax](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html).
 

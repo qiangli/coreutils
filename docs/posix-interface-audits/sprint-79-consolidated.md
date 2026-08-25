@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger at coreutils `266f353`
+This report reconciles the Sprint 79 interface ledger at coreutils `056e48a`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -10,19 +10,23 @@ GNU extension behavior is not certification evidence.
 
 The ledger contains exactly 116 required names: 78 effective Go-owned, 22
 effective shell-owned, and 16 external-provider-owned. The current evidence
-states are **2 verified, 98 partial, and 16 unverified**.
+states are **3 verified, 97 partial, and 16 unverified**.
 
 | Effective owner | Verified | Partial | Unverified | Total |
 | --- | ---: | ---: | ---: | ---: |
-| Go | 0 | 78 | 0 | 78 |
+| Go | 1 | 77 | 0 | 78 |
 | Shell | 2 | 20 | 0 | 22 |
 | External provider | 0 | 0 | 16 | 16 |
-| Total | 2 | 98 | 16 | 116 |
+| Total | 3 | 97 | 16 | 116 |
 
-The only verified owned interfaces are shell-selected `false` and `true`.
-Their status-only interfaces have both command-specific semantic evidence in
-`sh` and command-specific Profile B routing evidence in `bashy`. No Go row is
-promoted merely because its package suite is dense.
+The verified owned interfaces are shell-selected `false` and `true`, plus
+Go-selected `nice`. The two status-only shell interfaces have both
+command-specific semantic evidence in `sh` and command-specific Profile B
+routing evidence in `bashy`. `nice` is promoted on the accepted process-level
+barrier evidence at canonical `afee303`: user code cannot begin before the
+priority attempt, adjustment refusal still invokes the utility unchanged, and
+utility/126/127/signal statuses, argv, environment, and streams are exact. No
+Go row is promoted merely because its package suite is dense.
 
 ## Exact owned inventory
 
@@ -89,9 +93,6 @@ lower-ranked edges.
 
 | Rank | Command(s) | Missing clause | Concrete product behavior and focused test needed |
 | ---: | --- | --- | --- |
-| 0 | `pax` | `OPTIONS`, `STDIN`, `STDOUT`, `OUTPUT_FILES`, `EXIT_STATUS` | Current pin still rejects every `-o` keyword invocation. Merge the separately reviewed `pax -o` source wave, then add named end-to-end tests for each supported Issue 7 keyword family, ordered repeated `-o`, archive/list effects, diagnostics, and status. Do not credit the active wave before its canonical SHA is present. |
-| 0 | `nice` | `EFFECTS`, `EXIT_STATUS` | Await the active nice correction wave. The child must not execute before priority adjustment. A process-boundary barrier test must prove ordering, adjustment failure prevents execution, and 126/127/child/signal statuses remain exact. |
-| 0 | `newgrp` | `STDIN`, `ENVIRONMENT_VARIABLES`, `EFFECTS`, `EXIT_STATUS` | Await the active newgrp correction wave. A privilege-contained integration test must prove password input routing, real/supplementary group state, login environment, shell replacement-equivalent behavior, refusal behavior, and propagated shell status. |
 | 1 | `bg`, `fg` | `EFFECTS`, `EXIT_STATUS`, terminal/job-control consequences | Accepted sibling-sh tests now prove parser/default selection, real process-group continuation, foreground terminal ownership, reads, waits, restoration, and completed status. Still add stopped/signaled/multi-job failure products, disabled-job-control behavior through the selected process route, required diagnostics/statuses, and platform-specific job-control disposition. |
 | 1 | `jobs` | `STDOUT`, `EXIT_STATUS` | `TestJobsIssue7ParserAndFormatting` proves required parsing and principal formats. Still add asynchronous real job-table transitions for every required state/signal rendering, multiple-process `-l`, invalid/stale job IDs, locale strings, and output failures. |
 | 1 | `fc` | `OPERANDS`, `STDOUT`, `EFFECTS`, `EXIT_STATUS` | Accepted tests prove form validation, first-only substitution, and multiline listing. Still add real editor invocation, forward/reverse/clamped ranges, history persistence limits, command re-execution state and status, `FCEDIT`/`HISTFILE`/`HISTSIZE`, and I/O/locale failures. |
@@ -99,8 +100,7 @@ lower-ranked edges.
 | 2 | `at`, `batch`, `crontab` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add scheduler integration tests for access policy, delivery/mail behavior, load gating, all locale time grammars, daemon handoff, and persisted execution environment. |
 | 2 | `awk`, `comm`, `csplit`, `cut`, `expand`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `tr`, `unexpand`, `uniq`, `wc` | `ENVIRONMENT_VARIABLES`, algorithmic `STDOUT` | Add non-C multibyte `LC_CTYPE`/`LC_COLLATE`/`LC_NUMERIC` fixtures that discriminate character boundaries, classes, equivalence, ranges, ordering, blanks, widths, and numeric rendering for each named command. |
 | 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add privileged clock-set integration coverage, leap-second rendering, additional platform setters, and a complete installed-locale `LC_TIME` matrix with mutation-after-validation checks. |
-| 2 | `getconf` | `OPERANDS`, `STDOUT` | Add a generated exhaustive test for every required sysconf/pathconf/confstr/minimum name, pathname-vs-system routing, undefined/indeterminate output, specification operands, and status. |
-| 2 | `iconv` | `OPTIONS`, `ENVIRONMENT_VARIABLES`, `EXIT_STATUS` | Implement charmap-file operands and strict invalid-sequence detection so `-c` never changes status; test omitted encodings from locale, read errors under `-s`, every accepted encoding name, and malformed/truncated sequences. |
+| 2 | `getconf` | `OPERANDS`, `STDOUT` | Add a generated exhaustive test for every required sysconf/pathconf/confstr/minimum name, pathname-vs-system routing, undefined/indeterminate output, specification operands, and status. Issue 734 is active and intentionally not credited at this pin. |
 | 2 | `file` | `OPTIONS`, `STDOUT` | Add complete magic-file grammar and required type-string tests, including `-d`, `-i`, `-M`, symlink policy, stdin, inaccessible operands, and locale effects. |
 | 2 | `find` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Reject the omitted-path extension in POSIX mode or document a gated route; add all primary/action products, real ownership databases, locale `-ok`/pattern behavior, filesystem failures, and `-exec` side effects. |
 | 2 | `id` | `STDOUT` | Add named-user default/group output, lookup-failure fallbacks, a real set-ID process fixture, and executable non-Unix behavior or an explicit platform conformance disposition. |
@@ -113,11 +113,14 @@ lower-ranked edges.
 | 2 | `more` | `ENVIRONMENT_VARIABLES`, terminal integration | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are unavailable UTF-8 collation providers and terminal-capability/platform integration—not absent translated catalogs or unsupported `-i`, `-p`, or `-t`. |
 | 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, and Windows runtime paths. |
 | 2 | `touch` | `OUTPUT_FILES`, platform/error integration | Accepted source now obtains reference atime on supported stat layouts and fails loudly when unavailable; literal `-`, TZ, leap second, near-PATH_MAX, and reference-time paths are tested. Remaining: real atime propagation on every target, 0666 creation through umask, `-c` existing-file and multi-operand failure products, and full range rejection. |
+| 2 | `iconv` | `ENVIRONMENT_VARIABLES`, locale-provider integration | Accepted source implements pathname charmaps, strict malformed/truncated detection across every carried multibyte family, `-c` status invariance, exact `-s` scope, locale-derived omitted encodings, aliases, file/stdin ordering, and read/write failures. Remaining: locale codeset discovery is a deterministic carried corpus rather than `nl_langinfo(CODESET)`; unknown unqualified installed locales fail closed. |
 | 3 | `chgrp`, `chown`, `chmod`, `mkdir`, `mkfifo`, `mv`, `rm`, `uudecode`, `uuencode` | `OUTPUT_FILES`, `CONSEQUENCES_OF_ERRORS` | Add privilege-contained kernel/filesystem tests for ownership, mode/set-ID/ctime, symlink/hard-link identity, special files, permission failures, and platform-specific implementations rather than seam-only proof. |
 | 3 | `df`, `du` | `STDOUT`, `CONSEQUENCES_OF_ERRORS` | Add mounted cross-device fixtures, real mount discovery, hard-link products, free-slot/space accounting, output failures, and platform-specific formats. |
 | 3 | `logger` | `EFFECTS`, `EXIT_STATUS` | Add a real local syslog receiver and Windows disposition test; prove message persistence, zero-operand stdin behavior, open/send/close errors, and statuses. |
 | 3 | `nohup` | `OUTPUT_FILES`, `EXIT_STATUS` | Test `nohup.out` mode through umask, append preservation, both output-open failures preventing execution, non-ENOENT start failures, and non-skipping PTY paths. |
 | 3 | `ps` | `STDOUT`, `ENVIRONMENT_VARIABLES` | Add runtime providers for non-Linux targets and tests for every required field, identity lookup, unavailable-data representation, terminal width, locale time, and live selection semantics. |
+| 3 | `newgrp` | `EFFECTS`, privilege/host integration | Accepted source proves name-before-numeric lookup, membership/password/TTY policy, supplementary capacity fallback, equal real/effective GID plans, unchanged-shell retry after refusal, login argv0/environment/cwd, virtual umask, streams, and shell status/signal propagation. Remaining: a real setuid-root credential transition, attended controlling-terminal password entry, NSS/PAM policy, and non-Unix disposition are host/privilege integration boundaries. |
+| 3 | `pax` | `OUTPUT_FILES`, platform/filesystem integration | Accepted issues 715-717 now cover interactive rename, copy links, source-atime reset, ordered `-p`, preservation failures, the full `-o` grammar/precedence families, extended-header transcoding, complete list formats, locale time, and deterministic errors. Remaining: special-file extraction, privileged ownership/device products, unsupported no-follow metadata platforms, real terminal breadth, and uncarried legacy locale encodings. |
 | 3 | `renice` | `EFFECTS`, `EXIT_STATUS` | Add a hermetic scheduler seam for exact `which` dispatch and mixed ID success, plus privilege-contained real priority-change tests and Windows disposition. |
 | 3 | `stty`, `tabs`, `tput` | terminal `STDIN`/`STDOUT`, `EFFECTS` | Run required forms against real terminal/terminfo databases across supported platforms, including Windows disposition, unavailable capabilities, atomic state, write errors, and exact statuses. |
 | 3 | `who`, `write` | `INPUT_FILES`, `OUTPUT_FILES`, terminal effects | Add live login-database and PTY fixtures across supported ABIs, credentials, terminal ownership/activity/permission state, interruption, framing, close errors, and platform fail-closed behavior. |
@@ -136,27 +139,37 @@ argv0=`sh` strict POSIX route. The same-name Go applets are therefore not the
 direct shell owner for `echo`, `false`, `kill`, `printf`, `pwd`, `test`,
 `time`, and `true`.
 
-All 22 shell names now have currently resolvable, command-specific semantic
-and routing references. `false` and `true` are verified. The other twenty
-remain partial because their
-closure audits identify concrete locale, interactive, process, filesystem,
-or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs` references are
+All 22 shell names have currently resolvable, command-specific semantic and
+routing references. `false` and `true` are verified. The other twenty remain
+partial because their closure audits identify concrete locale, interactive,
+process, filesystem, or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs`
+references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
-uses Bashy's process-level entrypoint contract from `852c1ec` alongside its
-two independent route/strict-mode tests. No shell repository is modified by
-this reconciliation. These path-and-test references are not immutable commit
-identifiers and do not prove complete clause coverage: that is why twenty rows
-remain partial. Calling them "stable" without that qualification would
-overstate the evidence.
+uses Bashy's process-level entrypoint contract alongside its two independent
+route/strict-mode tests. Validator evidence is pinned to the current canonical
+trees `/Users/qiangli/projects/poc/dhnt/sh` at `7a1dfac` and
+`/Users/qiangli/projects/poc/dhnt/bashy` at `cef3ba4`; the retained weave
+siblings are not authoritative evidence roots. No shell repository is modified
+by this reconciliation. These path-and-test references do not prove complete
+clause coverage: that is why twenty rows remain partial.
 
-## Active source waves are not credited
+## Accepted source-wave reconciliation
 
-This report is deliberately pinned to `266f353`. The accepted `touch` and `cp`
-waves are present and credited through their exact current tests. The active
-`pax -o`, `nice`, and `newgrp` waves are not present at this pin and are not
-treated as implementation or evidence. After root supplies canonical merged
-SHAs, each affected row must be re-audited against the merged source and exact
-tests before its residual can change.
+This report is pinned to canonical `056e48a`. It credits the accepted command
+waves and their current test declarations: `more` through `b899308`, `4e78606`,
+`27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
+`014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
+`newgrp` through `2c459cc` and `0d24315`; `pax` issues 715-717 through
+`b614e20`, `27c4c30`, `8b7c051`, `6cd55bc`, `af1fd00`, `ddbe753`,
+`7fff4b6`, `4741bf9`, `dd63476`, `3aefbac`, `9ef3a43`, and matrix refresh
+`dc79ecd`; and `iconv` through `70bc09b` and matrix refresh `056e48a`.
+
+The machine-readable evidence lanes name the exact current test IDs, including
+the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
+pax interactive/preservation/extended-header families, and iconv
+charmap/stream/status matrix. Active getconf issue 734 and fold issue 735 are
+not present at this pin and are intentionally not claimed or folded into these
+counts.
 
 ## Reproduction
 
@@ -167,8 +180,7 @@ python3 -m unittest scripts/posix_manifest_test.py
 scripts/applet-matrix.py --check
 ```
 
-The owned-completion command is expected to fail at this snapshot with 98
-items: all 78 Go rows and 20 shell rows are partial. Equivalently, all 78 Go
-rows and 20 of 22 shell rows
-remain incomplete.
+The owned-completion command is expected to fail at this snapshot with 97
+items: 77 of 78 Go rows and 20 shell rows are partial. Equivalently, `nice` is
+the sole verified Go row and 20 of 22 shell rows remain incomplete.
 That failure is the truthful Sprint 79 residual, not a waived gate.
