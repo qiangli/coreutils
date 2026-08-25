@@ -116,11 +116,13 @@ var spawnShell = defaultSpawnShell
 // be changed — the POSIX "diagnostic written, environment unchanged, shell
 // still started" path.
 type shellSpec struct {
-	Path  string // the executable
-	Argv0 string // argv[0]: "-sh" under -l, "sh" otherwise
-	Dir   string // working directory
-	GID   string // "" = leave the group alone
-	UID   string
+	Path   string // the executable
+	Argv0  string // argv[0]: "-sh" under -l, "sh" otherwise
+	Dir    string // working directory
+	GID    string // "" = leave the group alone
+	UID    string
+	Groups []string // the supplementary groups to set; nil means do not change
+	Env    []string // the environment to run the shell in; nil means use rc.Env
 }
 
 // errGroupChange marks a spawn failure caused by the credential change rather
@@ -154,19 +156,21 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
-	gid, changeErr := resolveTargetGroup(rc, u, operands)
+	gid, groups, changeErr := resolveTargetGroup(rc, u, operands)
 	if changeErr != nil {
 		// POSIX: diagnostic, environment unchanged, shell still started.
 		fmt.Fprintf(rc.Err, "newgrp: %v\n", changeErr)
 		gid = ""
+		groups = nil
 	}
 
 	spec := shellSpec{
-		Path:  shellPath(rc, u),
-		Dir:   rc.Dir,
-		GID:   gid,
-		UID:   u.UID,
-		Argv0: filepath.Base(shellPath(rc, u)),
+		Path:   shellPath(rc, u),
+		Dir:    rc.Dir,
+		GID:    gid,
+		UID:    u.UID,
+		Groups: groups,
+		Argv0:  filepath.Base(shellPath(rc, u)),
 	}
 	if *login {
 		// A login shell is signalled by a leading dash on argv[0] — the
@@ -175,9 +179,21 @@ func run(rc *tool.RunContext, args []string) int {
 		// half of "as if the user logged in again"; the profile the shell then
 		// reads rebuilds the rest of the environment, which is why newgrp does
 		// not scrub it here (unlike su, there is no target USER to switch to).
+		// Wait, POSIX says -l changes the environment to what would be expected
+		// if the user actually logged in again. We set login-expected environment.
 		spec.Argv0 = "-" + spec.Argv0
 		if u.Dir != "" {
 			spec.Dir = u.Dir
+		}
+		spec.Env = []string{
+			"HOME=" + u.Dir,
+			"SHELL=" + shellPath(rc, u),
+			"USER=" + u.Name,
+			"LOGNAME=" + u.Name,
+			"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+		}
+		if term := rc.Getenv("TERM"); term != "" {
+			spec.Env = append(spec.Env, "TERM="+term)
 		}
 	}
 
@@ -189,6 +205,7 @@ func run(rc *tool.RunContext, args []string) int {
 		// the user their shell with the group unchanged.
 		fmt.Fprintf(rc.Err, "newgrp: cannot change group: %v\n", groupErr)
 		spec.GID = ""
+		spec.Groups = nil
 		status, err = spawnShell(rc, spec)
 	}
 	if err != nil {
@@ -199,14 +216,13 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-// resolveTargetGroup returns the gid to switch to, or an error describing why
-// the switch must not happen. An error is never fatal here — see run.
-func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (string, error) {
+func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (string, []string, error) {
 	if len(operands) == 0 {
 		// No operand: revert to the primary group from the password database.
 		// There is nothing to authorize — it is the group the user already has
 		// by definition of "primary".
-		return u.GID, nil
+		// Revert supplementary groups as well.
+		return u.GID, u.Supplementary, nil
 	}
 
 	name := operands[0]
@@ -219,36 +235,56 @@ func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (str
 		}
 	}
 	if errors.Is(err, errNoSuchGroup) {
-		return "", fmt.Errorf("no such group: %s", name)
+		return "", nil, fmt.Errorf("no such group: %s", name)
 	}
 	if err != nil {
-		return "", fmt.Errorf("cannot read the group database: %w", err)
+		return "", nil, fmt.Errorf("cannot read the group database: %w", err)
 	}
 
+	var authErr error
 	switch authorize(u, g) {
 	case permit:
-		return g.GID, nil
-
+		// allowed
 	case challenge:
 		pw, err := promptPassword(rc, "Password: ")
 		if err != nil {
-			return "", fmt.Errorf("cannot read the group password: %w", err)
+			authErr = fmt.Errorf("cannot read the group password: %w", err)
+		} else {
+			ok, err := verifyCrypt(g.Password, pw)
+			if err != nil {
+				authErr = fmt.Errorf("cannot verify the password for group %s: %w", g.Name, err)
+			} else if !ok {
+				authErr = fmt.Errorf("permission denied")
+			}
 		}
-		ok, err := verifyCrypt(g.Password, pw)
-		if err != nil {
-			return "", fmt.Errorf("cannot verify the password for group %s: %w", g.Name, err)
-		}
-		if !ok {
-			return "", fmt.Errorf("permission denied")
-		}
-		return g.GID, nil
-
 	case unverifiable:
-		return "", fmt.Errorf("cannot read the group password database for %s", g.Name)
-
+		authErr = fmt.Errorf("cannot read the group password database for %s", g.Name)
 	default:
-		return "", fmt.Errorf("permission denied")
+		authErr = fmt.Errorf("permission denied")
 	}
+
+	if authErr != nil {
+		return "", nil, authErr
+	}
+
+	curr, err := currentGroups()
+	if err != nil {
+		curr = u.Supplementary
+	}
+
+	var newGroups []string
+	// The user remains a member of all supplementary groups that the user was a member
+	// of at the time of the execution of newgrp, except that if the new group is already
+	// a supplementary group, the supplementary group list may be changed.
+	// Rule: Add old primary to supplementary, remove new primary from supplementary.
+	newGroups = append(newGroups, u.GID)
+	for _, cg := range curr {
+		if cg != g.GID && cg != u.GID {
+			newGroups = append(newGroups, cg)
+		}
+	}
+
+	return g.GID, newGroups, nil
 }
 
 // shellPath chooses the replacement shell: $SHELL, then the password-database

@@ -100,17 +100,18 @@ func (s *spawned) run(_ *tool.RunContext, spec shellSpec) (int, error) {
 }
 
 type harness struct {
-	db      *fakeDB
-	spawn   *spawned
-	asked   []string // the prompts issued
-	answer  string
-	promptE error
+	db       *fakeDB
+	spawn    *spawned
+	asked    []string // the prompts issued
+	answer   string
+	promptE  error
+	currGids []string // stub for currentGroups
 }
 
 func install(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{db: &fakeDB{user: fixtureUser(), groups: fixtureGroups()}, spawn: &spawned{}}
-	oldDB, oldSpawn, oldPrompt := db, spawnShell, promptPassword
+	h := &harness{db: &fakeDB{user: fixtureUser(), groups: fixtureGroups()}, spawn: &spawned{}, currGids: []string{"1000", "12", "50"}}
+	oldDB, oldSpawn, oldPrompt, oldCurrentGroups := db, spawnShell, promptPassword, currentGroups
 	db = h.db
 	spawnShell = h.spawn.run
 	promptPassword = func(_ *tool.RunContext, prompt string) (string, error) {
@@ -120,7 +121,10 @@ func install(t *testing.T) *harness {
 		}
 		return h.answer, nil
 	}
-	t.Cleanup(func() { db, spawnShell, promptPassword = oldDB, oldSpawn, oldPrompt })
+	currentGroups = func() ([]string, error) {
+		return h.currGids, nil
+	}
+	t.Cleanup(func() { db, spawnShell, promptPassword, currentGroups = oldDB, oldSpawn, oldPrompt, oldCurrentGroups })
 	return h
 }
 
@@ -212,6 +216,11 @@ func TestNoOperandRevertsToThePrimaryGroup(t *testing.T) {
 	if len(h.spawn.calls) != 1 || h.spawn.calls[0].GID != "1000" {
 		t.Errorf("spawned %+v, want one call at the primary gid 1000", h.spawn.calls)
 	}
+	// Assert supplementary groups match DB
+	groups := strings.Join(h.spawn.calls[0].Groups, ",")
+	if groups != "1000,50" { // from fixtureUser()
+		t.Errorf("groups = %q, want \"1000,50\"", groups)
+	}
 }
 
 func TestGroupOperandByName(t *testing.T) {
@@ -221,6 +230,28 @@ func TestGroupOperandByName(t *testing.T) {
 	}
 	if h.spawn.calls[0].GID != "20" {
 		t.Errorf("gid = %q, want 20", h.spawn.calls[0].GID)
+	}
+	// The current supplementary groups were "1000", "12", "50".
+	// The rule is to add old primary "1000", and remove new primary "20".
+	// Since 20 wasn't in there, it just adds 1000 and deduplicates (wait, does it deduplicate? append(..., cg) where cg != 20 and cg != 1000).
+	// "1000" (newGroups), then cg=12 -> "1000,12", cg=50 -> "1000,12,50".
+	groups := strings.Join(h.spawn.calls[0].Groups, ",")
+	if groups != "1000,12,50" {
+		t.Errorf("groups = %q, want \"1000,12,50\"", groups)
+	}
+}
+
+func TestGroupChangeRemovesNewPrimaryFromSupplementary(t *testing.T) {
+	h := install(t)
+	h.currGids = []string{"1000", "20", "50"}
+	if _, errOut, code := runCmd(t, testEnv, "staff"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	// new primary is 20. old primary is 1000.
+	// newGroups should start with 1000, then cg=50 -> "1000,50".
+	groups := strings.Join(h.spawn.calls[0].Groups, ",")
+	if groups != "1000,50" {
+		t.Errorf("groups = %q, want \"1000,50\"", groups)
 	}
 }
 
@@ -461,6 +492,32 @@ func TestLoginShellArgv0AndDirectory(t *testing.T) {
 	}
 }
 
+func TestLoginEnvironment(t *testing.T) {
+	h := install(t)
+	// Provide TERM in testEnv to ensure it is propagated
+	env := append(testEnv, "TERM=xterm-256color")
+	if _, errOut, code := runCmd(t, env, "-l"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	got := h.spawn.calls[0]
+	wantEnv := []string{
+		"HOME=/home/alice",
+		"SHELL=/bin/testsh",
+		"USER=alice",
+		"LOGNAME=alice",
+		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+		"TERM=xterm-256color",
+	}
+	if len(got.Env) != len(wantEnv) {
+		t.Fatalf("env len = %d, want %d", len(got.Env), len(wantEnv))
+	}
+	for i, want := range wantEnv {
+		if got.Env[i] != want {
+			t.Errorf("env[%d] = %q, want %q", i, got.Env[i], want)
+		}
+	}
+}
+
 func TestNonLoginShellArgv0AndDirectory(t *testing.T) {
 	h := install(t)
 	if _, errOut, code := runCmd(t, testEnv); code != 0 {
@@ -472,6 +529,9 @@ func TestNonLoginShellArgv0AndDirectory(t *testing.T) {
 	}
 	if got.Dir != "/work" {
 		t.Errorf("dir = %q, want the invocation directory unchanged", got.Dir)
+	}
+	if got.Env != nil {
+		t.Errorf("env = %v, want nil (no environment replacement)", got.Env)
 	}
 }
 

@@ -25,11 +25,6 @@ const defaultShell = "/bin/sh"
 // these tools run in-process inside an embedding shell, so changing the caller
 // would silently re-credential every later command in that host — an effect
 // that outlives the invocation and that nothing reports.
-//
-// NoSetGroups is set because the supplementary group list must NOT be rebuilt:
-// setgroups(2) is privileged, and newgrp changes the REAL AND EFFECTIVE GROUP
-// ID, leaving the supplementary set alone. Uid is carried through unchanged so
-// the credential struct does not imply a user switch.
 func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 	ctx := rc.Ctx
 	if ctx == nil {
@@ -38,7 +33,9 @@ func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 	c := exec.CommandContext(ctx, spec.Path)
 	c.Args = []string{spec.Argv0}
 	c.Dir = spec.Dir
-	if rc.Env == nil {
+	if spec.Env != nil {
+		c.Env = spec.Env
+	} else if rc.Env == nil {
 		c.Env = []string{}
 	} else {
 		c.Env = rc.Env
@@ -54,12 +51,26 @@ func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 		if err != nil {
 			uid = os.Getuid()
 		}
+
+		cred := &syscall.Credential{
+			Uid:         uint32(uid),
+			Gid:         uint32(gid),
+			NoSetGroups: true,
+		}
+
+		if spec.Groups != nil {
+			var sysGroups []uint32
+			for _, g := range spec.Groups {
+				if sysGid, err := strconv.Atoi(g); err == nil {
+					sysGroups = append(sysGroups, uint32(sysGid))
+				}
+			}
+			cred.Groups = sysGroups
+			cred.NoSetGroups = false
+		}
+
 		c.SysProcAttr = &syscall.SysProcAttr{
-			Credential: &syscall.Credential{
-				Uid:         uint32(uid),
-				Gid:         uint32(gid),
-				NoSetGroups: true,
-			},
+			Credential: cred,
 		}
 	}
 
@@ -99,6 +110,9 @@ func defaultSpawnShell(rc *tool.RunContext, spec shellSpec) (int, error) {
 // and an agent harness owns stdin anyway. When there is no terminal there is no
 // safe way to ask, and saying so is better than reading a secret from wherever
 // stdin happens to point.
+//
+// The prompt is routed to stderr (rc.Err) so tests and programmatic callers
+// can observe or redirect it.
 func readPassword(rc *tool.RunContext, prompt string) (string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -106,9 +120,9 @@ func readPassword(rc *tool.RunContext, prompt string) (string, error) {
 	}
 	defer tty.Close()
 
-	fmt.Fprint(tty, prompt)
+	fmt.Fprint(rc.Err, prompt)
 	b, err := term.ReadPassword(int(tty.Fd()))
-	fmt.Fprintln(tty)
+	fmt.Fprintln(rc.Err)
 	if err != nil {
 		return "", err
 	}
