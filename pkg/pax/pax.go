@@ -44,22 +44,29 @@ type Member struct {
 type PlannedMember struct {
 	Member
 	Target string
+	// Index is the member's position in the archive it was planned from.
+	// Callers extract by index rather than by name because an archive may
+	// legitimately carry the same name twice (pax -w -u appends a newer copy),
+	// and only the surviving occurrence may be written to disk.
+	Index int
 }
 
 // RejectedMember is one member the planner refused before mutation.
 type RejectedMember struct {
 	Member
 	Reason string
+	Index  int
 }
 
 // Plan is the result of scanning and validating an archive for extraction.
 type Plan struct {
-	Root      string
-	Members   []PlannedMember
-	Rejected  []RejectedMember
-	Unsafe    bool
-	Formats   []tar.Format
-	FormatsBy map[tar.Format]int
+	Root       string
+	Members    []PlannedMember
+	Rejected   []RejectedMember
+	Superseded []Member
+	Unsafe     bool
+	Formats    []tar.Format
+	FormatsBy  map[tar.Format]int
 }
 
 // ErrDestinationExists marks the one rejection that is a POLICY decision rather
@@ -166,20 +173,50 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 		entries = append(entries, entry)
 	}
 
-	// Duplicates are rejected as a group: a later type cannot silently replace
-	// an earlier member, and a repeated type cannot make archive order semantic.
+	// Repeated destinations split into two very different cases.
+	//
+	// Different KINDS under one name is the type-substitution attack: a later
+	// symlink silently replacing the directory an earlier member created, or
+	// the reverse. Archive order must not decide what lands on disk, so the
+	// whole group is rejected and the archive is unusable.
+	//
+	// The same kind repeated is an ordinary archive update - pax -w -u appends
+	// a newer copy of a member under its existing name, and POSIX says the
+	// later member is the one that counts. Rejecting those made every updated
+	// archive unextractable. The last occurrence is planned; the earlier ones
+	// are superseded, meaning dropped from the plan entirely so their stale
+	// content is never written, not rejected (which callers treat as fatal).
+	superseded := make(map[int]bool)
 	for target, indexes := range byTarget {
 		if len(indexes) < 2 {
 			continue
 		}
+		kind := entries[indexes[0]].member.Kind
+		uniform := true
 		for _, i := range indexes {
-			entries[i].reject(fmt.Sprintf("duplicate destination %q", target))
+			if entries[i].member.Kind != kind {
+				uniform = false
+				break
+			}
+		}
+		if !uniform {
+			for _, i := range indexes {
+				entries[i].reject(fmt.Sprintf("duplicate destination %q", target))
+			}
+			continue
+		}
+		for _, i := range indexes[:len(indexes)-1] {
+			// An occurrence already rejected on its own merits keeps its
+			// verdict: a superseded member must never launder a safety failure.
+			if entries[i].reason == "" {
+				superseded[i] = true
+			}
 		}
 	}
 
 	valid := make(map[string]int)
 	for i := range entries {
-		if entries[i].reason != "" {
+		if entries[i].reason != "" || superseded[i] {
 			continue
 		}
 		if err := validateExistingTarget(filesystem, entries[i].target, entries[i].member.Kind); err != nil {
@@ -197,7 +234,7 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 	for changed := true; changed; {
 		changed = false
 		for i := range entries {
-			if entries[i].reason != "" {
+			if entries[i].reason != "" || superseded[i] {
 				continue
 			}
 			if err := validateArchiveParents(entries[i].target, root, valid, entries); err != nil {
@@ -212,7 +249,7 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 	for changed := true; changed; {
 		changed = false
 		for i := range entries {
-			if entries[i].reason != "" || entries[i].member.Kind != KindHardlink {
+			if entries[i].reason != "" || superseded[i] || entries[i].member.Kind != KindHardlink {
 				continue
 			}
 			if err := validateHardlink(i, root, entries, valid, filesystem); err != nil {
@@ -222,12 +259,16 @@ func PlanExtraction(r io.Reader, root string, filesystem FS) (*Plan, error) {
 			}
 		}
 	}
-	for _, entry := range entries {
+	for i, entry := range entries {
 		if entry.reason != "" {
-			plan.Rejected = append(plan.Rejected, RejectedMember{Member: entry.member, Reason: entry.reason})
+			plan.Rejected = append(plan.Rejected, RejectedMember{Member: entry.member, Reason: entry.reason, Index: i})
 			continue
 		}
-		plan.Members = append(plan.Members, PlannedMember{Member: entry.member, Target: entry.target})
+		if superseded[i] {
+			plan.Superseded = append(plan.Superseded, entry.member)
+			continue
+		}
+		plan.Members = append(plan.Members, PlannedMember{Member: entry.member, Target: entry.target, Index: i})
 	}
 	plan.Unsafe = len(plan.Rejected) != 0
 	plan.Formats = sortedFormats(plan.FormatsBy)

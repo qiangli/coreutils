@@ -16,15 +16,73 @@ import (
 )
 
 func TestBlockSizeGrammar(t *testing.T) {
-	for _, value := range []string{"", "0", "+512", "-1", " 512", "512 ", "10k", "0x200", "１２", "32257", "999999999999999999999"} {
-		if _, err := parseBlockSize(value); err == nil {
-			t.Errorf("parseBlockSize(%q) succeeded", value)
+	// The POSIX pax size grammar: decimal factors joined by 'x', each
+	// optionally suffixed b (512), k (1024) or m (1048576). The product must be
+	// positive, a multiple of 512, and no more than 32256.
+	valid := map[string]int{
+		"512":     512,
+		"1024":    1024,
+		"10k":     10240,
+		"1b":      512,
+		"20b":     10240,
+		"10x512":  5120,
+		"5x1024":  5120,
+		"2x5x512": 5120,
+		"512x1":   512,
+		"32256":   32256,
+		"63b":     32256,
+	}
+	for value, want := range valid {
+		got, err := parseBlockSize(value)
+		if err != nil {
+			t.Errorf("parseBlockSize(%q): %v", value, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseBlockSize(%q) = %d, want %d", value, got, want)
 		}
 	}
-	for _, value := range []string{"1", "511", "512", "513", "32256"} {
-		if _, err := parseBlockSize(value); err != nil {
-			t.Errorf("parseBlockSize(%q): %v", value, err)
+	invalid := []string{
+		"",                                  // no value
+		"0",                                 // not positive
+		"0x512",                             // product is zero
+		"1",                                 // not a multiple of 512
+		"511",                               // not a multiple of 512
+		"513",                               // not a multiple of 512
+		"+512",                              // sign is not part of the grammar
+		"-512",                              // sign is not part of the grammar
+		" 512",                              // no surrounding blanks
+		"512 ",                              // no surrounding blanks
+		"0x200",                             // hexadecimal is not the grammar; 'x' joins factors
+		"512x",                              // empty trailing factor
+		"x512",                              // empty leading factor
+		"512xx1",                            // empty inner factor
+		"k",                                 // multiplier with no digits
+		"10K",                               // multipliers are lowercase
+		"1g",                                // no gigabyte multiplier
+		"１２",                                // non-ASCII digits
+		"32768",                             // above the maximum
+		"1m",                                // above the maximum
+		"64b",                               // above the maximum
+		"999999999999999999999",             // overflows a factor
+		"99999999999x99999999999x999999999", // overflows the product
+	}
+	for _, value := range invalid {
+		if got, err := parseBlockSize(value); err == nil {
+			t.Errorf("parseBlockSize(%q) = %d, want an error", value, got)
 		}
+	}
+}
+
+func TestBlockSizeMultiplicationIsChecked(t *testing.T) {
+	if _, err := mulChecked(1<<63, 4); err == nil {
+		t.Fatal("mulChecked did not report an overflow")
+	}
+	if got, err := mulChecked(0, 1<<63); err != nil || got != 0 {
+		t.Fatalf("mulChecked(0, ...) = %d, %v", got, err)
+	}
+	if got, err := mulChecked(3, 7); err != nil || got != 21 {
+		t.Fatalf("mulChecked(3, 7) = %d, %v", got, err)
 	}
 }
 
@@ -38,31 +96,110 @@ func (w *recordingWriter) Write(p []byte) (int, error) {
 	return w.Buffer.Write(p)
 }
 
-func TestBlockSizeControlsPhysicalWritesAndFinalPadding(t *testing.T) {
+// TestPhysicalBlockingDefaultsAndExplicitSizes pins the blocking contract:
+// pax/ustar default to 10240-byte blocks and cpio to 5120, an explicit -b
+// replaces the default, and every archive ends on a full zero-padded block
+// regardless of how much payload it carried.
+func TestPhysicalBlockingDefaultsAndExplicitSizes(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		block int
+	}{
+		{"pax-default", []string{"-w"}, 10240},
+		{"ustar-default", []string{"-w", "-x", "ustar"}, 10240},
+		{"cpio-default", []string{"-w", "-x", "cpio"}, 5120},
+		{"pax-explicit", []string{"-w", "-b", "10240"}, 10240},
+		{"cpio-explicit-suffix", []string{"-w", "-x", "cpio", "-b", "5k"}, 5120},
+		{"explicit-factors", []string{"-w", "-b", "2x512"}, 1024},
+		{"explicit-below-default", []string{"-w", "-x", "ustar", "-b", "512"}, 512},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := t.TempDir()
+			if err := os.WriteFile(filepath.Join(d, "file"), bytes.Repeat([]byte("x"), 777), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out recordingWriter
+			var errOut bytes.Buffer
+			rc := &tool.RunContext{Dir: d, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}}
+			if code := run(rc, append(append([]string{}, tc.args...), "file")); code != 0 {
+				t.Fatalf("write: code=%d stderr=%q", code, errOut.String())
+			}
+			if len(out.writes) == 0 {
+				t.Fatal("archive made no physical writes")
+			}
+			for i, n := range out.writes {
+				if n != tc.block {
+					t.Errorf("physical write %d had %d bytes, want %d", i, n, tc.block)
+				}
+			}
+			if out.Len()%tc.block != 0 {
+				t.Fatalf("archive length %d is not a whole number of %d-byte blocks", out.Len(), tc.block)
+			}
+			if tail := out.Bytes()[out.Len()-tc.block:]; !allZero(tail[len(tail)-16:]) {
+				t.Fatal("final block is not zero-padded")
+			}
+			archive, err := decodeArchive(out.Bytes())
+			if err != nil {
+				t.Fatalf("blocked output does not decode: %v", err)
+			}
+			h, err := tar.NewReader(bytes.NewReader(archive.tarData)).Next()
+			if err != nil || h.Name != "file" || h.Size != 777 {
+				t.Fatalf("blocked output is not a readable archive: header=%v err=%v", h, err)
+			}
+		})
+	}
+}
+
+// TestAppendKeepsArchiveBlockAlignment covers the append lane, where the block
+// boundary belongs to the ARCHIVE and not to this invocation: the end markers
+// sit at a 512-byte offset that is rarely a block boundary, so a writer that
+// restarted its block accounting at zero would leave a misaligned file.
+func TestAppendKeepsArchiveBlockAlignment(t *testing.T) {
 	d := t.TempDir()
-	if err := os.WriteFile(filepath.Join(d, "file"), bytes.Repeat([]byte("x"), 777), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out recordingWriter
-	var errOut bytes.Buffer
-	rc := &tool.RunContext{Dir: d, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}}
-	if code := run(rc, []string{"-w", "-b", "513", "file"}); code != 0 {
-		t.Fatalf("write: code=%d stderr=%q", code, errOut.String())
-	}
-	if len(out.writes) == 0 {
-		t.Fatal("archive made no physical writes")
-	}
-	for i, n := range out.writes {
-		if n != 513 {
-			t.Errorf("write %d had %d bytes, want 513", i, n)
+	arc := filepath.Join(d, "archive.tar")
+	for _, name := range []string{"first", "second"} {
+		if err := os.WriteFile(filepath.Join(d, name), bytes.Repeat([]byte(name), 900), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if out.Len()%513 != 0 {
-		t.Fatalf("archive length %d is not a full physical block", out.Len())
+	if _, errs, code := exec(t, d, "", "-w", "-b", "1024", "-f", arc, "first"); code != 0 {
+		t.Fatalf("create: %d %s", code, errs)
 	}
-	h, err := tar.NewReader(bytes.NewReader(out.Bytes())).Next()
-	if err != nil || h.Name != "file" {
-		t.Fatalf("blocked output is not a readable tar archive: header=%v err=%v", h, err)
+	if _, errs, code := exec(t, d, "", "-w", "-a", "-b", "1024", "-f", arc, "second"); code != 0 {
+		t.Fatalf("append: %d %s", code, errs)
+	}
+	fi, err := os.Stat(arc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size()%1024 != 0 {
+		t.Fatalf("appended archive length %d is not block aligned", fi.Size())
+	}
+	out, errs, code := exec(t, d, "", "-f", arc)
+	if code != 0 || strings.Join(strings.Fields(out), ",") != "first,second" {
+		t.Fatalf("appended archive lists %q (code=%d err=%q)", out, code, errs)
+	}
+}
+
+func TestBlockWriterHonorsNonBlockStartOffset(t *testing.T) {
+	var out recordingWriter
+	w := newBlockWriter(&out, 1024, 512)
+	if _, err := w.Write(bytes.Repeat([]byte("a"), 1024)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Starting 512 bytes into a 1024-byte block, the first physical write must
+	// close that block (512 bytes) and the rest must be whole blocks.
+	want := []int{512, 1024}
+	if fmt.Sprint(out.writes) != fmt.Sprint(want) {
+		t.Fatalf("writes = %v, want %v", out.writes, want)
+	}
+	if (512+out.Len())%1024 != 0 {
+		t.Fatalf("archive offset %d is not block aligned", 512+out.Len())
 	}
 }
 

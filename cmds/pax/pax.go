@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -45,8 +46,11 @@ type options struct {
 	blocksize    string // -b, parsed into blockBytes after option validation
 	blockBytes   int
 	archiveTimes map[string]time.Time
-	optionsStr   string // -o
-	t, X, H, L   bool
+	// links maps a source (device, inode) to the first name archived for it,
+	// so later names for the same inode become hardlink members.
+	links      map[devIno]string
+	optionsStr string // -o
+	t, X, H, L bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -69,7 +73,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolVarP(&o.invertMatch, "complement", "c", false, "select members NOT matching the patterns")
 	fs.BoolVarP(&o.selectNoPattern, "first", "n", false, "select only the first match per pattern")
 
-	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "block size")
+	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "physical block size: decimal factors joined by 'x', each optionally suffixed b (512), k (1024), or m (1048576); must be a positive multiple of 512 up to 32256 (default 10240, or 5120 for -x cpio)")
 	fs.StringVarP(&o.optionsStr, "options", "o", "", "format-specific options")
 	fs.BoolVarP(&o.t, "t", "t", false, "reset access times")
 	fs.BoolVarP(&o.X, "X", "X", false, "device boundary")
@@ -131,6 +135,11 @@ func run(rc *tool.RunContext, args []string) int {
 	default:
 		return tool.UsageError(rc, cmd, "unsupported format %q; pax, ustar, and cpio are supported", o.format)
 	}
+	// Physical blocking is not opt-in: POSIX pax always writes whole blocks.
+	// An explicit -b wins; otherwise the format's documented default applies.
+	if !fs.Changed("blocksize") {
+		o.blockBytes = defaultBlockSize(o.format)
+	}
 
 	switch {
 	case o.read && o.write:
@@ -144,23 +153,94 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 }
 
+// parseBlockSize implements the POSIX pax blocksize grammar. A size is one or
+// more factors joined by 'x' (their product), each factor a decimal digit
+// string optionally suffixed with a multiplier: 'b' = 512, 'k' = 1024,
+// 'm' = 1048576. The product must be positive, a multiple of 512, and no
+// larger than the 32256-byte maximum, so "10k" (10240) is accepted while a
+// bare "513" is not.
 func parseBlockSize(value string) (int, error) {
-	if value == "" {
-		return 0, fmt.Errorf("invalid block size %q: expected a positive decimal integer", value)
+	invalid := func() error {
+		return fmt.Errorf("invalid block size %q: expected decimal factors joined by 'x', each optionally suffixed b (512), k (1024), or m (1048576)", value)
 	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("invalid block size %q: expected a positive decimal integer", value)
+	if value == "" {
+		return 0, invalid()
+	}
+	product := uint64(1)
+	for _, factor := range strings.Split(value, "x") {
+		if factor == "" {
+			return 0, invalid()
+		}
+		multiplier := uint64(1)
+		switch factor[len(factor)-1] {
+		case 'b':
+			multiplier = 512
+		case 'k':
+			multiplier = 1024
+		case 'm':
+			multiplier = 1048576
+		}
+		digits := factor
+		if multiplier != 1 {
+			digits = factor[:len(factor)-1]
+		}
+		if digits == "" {
+			return 0, invalid()
+		}
+		for _, r := range digits {
+			if r < '0' || r > '9' {
+				return 0, invalid()
+			}
+		}
+		n, err := strconv.ParseUint(digits, 10, 64)
+		if err != nil {
+			return 0, invalid()
+		}
+		// Every step is checked: a size expression is attacker-reachable
+		// through a script, and a wrapped product would silently become a
+		// small, legal-looking block size.
+		scaled, err := mulChecked(n, multiplier)
+		if err != nil {
+			return 0, fmt.Errorf("invalid block size %q: %v", value, err)
+		}
+		product, err = mulChecked(product, scaled)
+		if err != nil {
+			return 0, fmt.Errorf("invalid block size %q: %v", value, err)
 		}
 	}
-	n, err := strconv.ParseUint(value, 10, 64)
-	if err != nil || n == 0 {
-		return 0, fmt.Errorf("invalid block size %q: expected a positive decimal integer", value)
+	if product == 0 {
+		return 0, fmt.Errorf("invalid block size %q: must be positive", value)
 	}
-	if n > 32256 {
-		return 0, fmt.Errorf("invalid block size %q: maximum supported size is 32256 bytes", value)
+	if product%512 != 0 {
+		return 0, fmt.Errorf("invalid block size %q: must be a multiple of 512 bytes", value)
 	}
-	return int(n), nil
+	if product > maxBlockSize {
+		return 0, fmt.Errorf("invalid block size %q: maximum supported size is %d bytes", value, maxBlockSize)
+	}
+	return int(product), nil
+}
+
+// maxBlockSize is the POSIX pax upper bound on -b.
+const maxBlockSize = 32256
+
+func mulChecked(a, b uint64) (uint64, error) {
+	if a == 0 || b == 0 {
+		return 0, nil
+	}
+	if a > math.MaxUint64/b {
+		return 0, fmt.Errorf("size overflows")
+	}
+	return a * b, nil
+}
+
+// defaultBlockSize is the physical block size pax uses when -b is absent:
+// POSIX fixes 10240 bytes (20 512-byte records) for the tar-derived formats
+// and 5120 bytes for cpio.
+func defaultBlockSize(format string) int {
+	if format == "cpio" {
+		return 5120
+	}
+	return 10240
 }
 
 // resolve makes a relative operand absolute against the caller's directory

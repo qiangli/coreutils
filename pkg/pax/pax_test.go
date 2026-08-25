@@ -53,7 +53,11 @@ func TestPlanExtractionRejectsUnsafeEntriesWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestPlanExtractionRejectsDuplicateDestinationsAndConflicts(t *testing.T) {
+// A repeated name of the SAME kind is an ordinary archive update: the last
+// occurrence wins and the earlier ones are superseded, not rejected. A
+// repeated name of DIFFERENT kinds is the type-substitution attack and stays
+// fatal for the whole group.
+func TestPlanExtractionSupersedesSameKindDuplicatesAndRejectsKindConflicts(t *testing.T) {
 	root := t.TempDir()
 	archive := makeArchive(t, []*tar.Header{
 		{Name: "same", Typeflag: tar.TypeReg, Size: 1},
@@ -65,13 +69,56 @@ func TestPlanExtractionRejectsDuplicateDestinationsAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Members) != 0 || len(plan.Rejected) != 4 {
-		t.Fatalf("plan = %#v", plan)
+	if len(plan.Members) != 1 || plan.Members[0].Path != "same" || plan.Members[0].Index != 1 {
+		t.Fatalf("members = %#v", plan.Members)
+	}
+	if len(plan.Superseded) != 1 || plan.Superseded[0].Path != "same" {
+		t.Fatalf("superseded = %#v", plan.Superseded)
+	}
+	if len(plan.Rejected) != 2 {
+		t.Fatalf("rejected = %#v", plan.Rejected)
 	}
 	for _, rejected := range plan.Rejected {
-		if !strings.Contains(rejected.Reason, "duplicate destination") {
+		if rejected.Path != "conflict" || !strings.Contains(rejected.Reason, "duplicate destination") {
 			t.Fatalf("rejection = %#v", rejected)
 		}
+	}
+	if !plan.Unsafe {
+		t.Fatal("a kind conflict must still mark the plan unsafe")
+	}
+}
+
+// A superseded occurrence must not launder a safety verdict: if the earlier
+// copy was rejected on its own merits, the rejection is still reported.
+func TestPlanExtractionSupersedeKeepsEarlierRejections(t *testing.T) {
+	archive := makeArchive(t, []*tar.Header{
+		{Name: "dev", Typeflag: tar.TypeChar},
+		{Name: "dev", Typeflag: tar.TypeChar},
+	})
+	plan, err := PlanExtraction(bytes.NewReader(archive), t.TempDir(), OSFS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Members) != 0 || len(plan.Rejected) != 2 || len(plan.Superseded) != 0 {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+// Duplicate hardlinks and duplicate symlinks are updates too, and the last
+// occurrence is the one whose link target the planner validated.
+func TestPlanExtractionSupersedesRepeatedSymlink(t *testing.T) {
+	root := t.TempDir()
+	archive := makeArchive(t, []*tar.Header{
+		{Name: "file", Typeflag: tar.TypeReg, Size: 0},
+		{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "file"},
+		{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "../escape"},
+	})
+	plan, err := PlanExtraction(bytes.NewReader(archive), root, OSFS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Rejected) != 1 || !strings.Contains(plan.Rejected[0].Reason, "escapes root") {
+		t.Fatalf("the surviving occurrence must be the one validated: %#v", plan.Rejected)
 	}
 }
 

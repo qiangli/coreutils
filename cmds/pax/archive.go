@@ -81,15 +81,25 @@ func scanTar(data []byte) (endOffset int64, paxFormat bool, err error) {
 	}
 }
 
+// blockWriter turns the logical archive byte stream into whole physical
+// blocks. It tracks the offset WITHIN THE ARCHIVE (not within this writer), so
+// an append that resumes at a non-block offset still emits block-aligned
+// physical writes and still ends on a block boundary.
 type blockWriter struct {
 	w    io.Writer
 	size int
+	pos  int64 // archive offset at which the buffered bytes begin
 	buf  []byte
 	err  error
 }
 
-func newBlockWriter(w io.Writer, size int) *blockWriter {
-	return &blockWriter{w: w, size: size, buf: make([]byte, 0, size)}
+func newBlockWriter(w io.Writer, size int, base int64) *blockWriter {
+	return &blockWriter{w: w, size: size, pos: base, buf: make([]byte, 0, size)}
+}
+
+// chunk is how many bytes the current physical block still spans.
+func (w *blockWriter) chunk() int {
+	return w.size - int(w.pos%int64(w.size))
 }
 
 func (w *blockWriter) Write(p []byte) (int, error) {
@@ -98,14 +108,14 @@ func (w *blockWriter) Write(p []byte) (int, error) {
 	}
 	written := 0
 	for len(p) > 0 {
-		need := w.size - len(w.buf)
+		need := w.chunk() - len(w.buf)
 		if need > len(p) {
 			need = len(p)
 		}
 		w.buf = append(w.buf, p[:need]...)
 		p = p[need:]
 		written += need
-		if len(w.buf) == w.size {
+		if len(w.buf) == w.chunk() {
 			if err := w.flushBlock(); err != nil {
 				return written, err
 			}
@@ -123,10 +133,13 @@ func (w *blockWriter) flushBlock() error {
 		w.err = err
 		return err
 	}
+	w.pos += int64(len(w.buf))
 	w.buf = w.buf[:0]
 	return nil
 }
 
+// Close zero-pads whatever is left to a full physical block. A stream that
+// already ended on a boundary needs no padding and gets none.
 func (w *blockWriter) Close() error {
 	if w.err != nil {
 		return w.err
@@ -134,9 +147,24 @@ func (w *blockWriter) Close() error {
 	if len(w.buf) == 0 {
 		return nil
 	}
-	w.buf = append(w.buf, make([]byte, w.size-len(w.buf))...)
+	w.buf = append(w.buf, make([]byte, w.chunk()-len(w.buf))...)
 	return w.flushBlock()
 }
+
+// fileIdentity is the source metadata a POSIX archive header carries that
+// os.FileInfo does not expose portably: the owning ids, the (device, inode)
+// pair that establishes hardlink identity, and the link count.
+type fileIdentity struct {
+	uid, gid uint64
+	dev, ino uint64
+	nlink    uint64
+	ok       bool
+}
+
+// devIno is a source file's hardlink identity.
+type devIno struct{ dev, ino uint64 }
+
+func (id fileIdentity) key() devIno { return devIno{id.dev, id.ino} }
 
 type cpioEntry struct {
 	name     string
@@ -148,12 +176,95 @@ type cpioEntry struct {
 	data     []byte
 }
 
+// cpioToTar converts a complete cpio archive to tar. It reads EVERY member
+// before emitting anything because hardlink groups cannot be resolved in one
+// pass: cpio is free to carry the file data on any member of a group (POSIX
+// and GNU cpio put it on the last), while tar requires the data to precede the
+// links that reference it. Buffering first lets every name in a group be
+// materialized with the right content and the right link.
 func cpioToTar(data []byte) ([]byte, error) {
+	entries, err := readCPIOEntries(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// first[key] is the archive-order index of the member that will carry the
+	// data for its hardlink group; groupData[key] is that data, taken from
+	// whichever member actually held it.
+	first := make(map[devIno]int)
+	groupData := make(map[devIno][]byte)
+	for i, entry := range entries {
+		if entry.mode&0o170000 != 0o100000 || entry.nlink <= 1 {
+			continue
+		}
+		key := devIno{entry.dev, entry.ino}
+		if _, ok := first[key]; !ok {
+			first[key] = i
+		}
+		if len(entry.data) > 0 && len(groupData[key]) == 0 {
+			groupData[key] = entry.data
+		}
+	}
+
 	var out bytes.Buffer
 	tw := tar.NewWriter(&out)
+	for i, entry := range entries {
+		h := &tar.Header{
+			Name:    entry.name,
+			Mode:    int64(entry.mode & 0o7777),
+			Uid:     int(entry.uid),
+			Gid:     int(entry.gid),
+			ModTime: time.Unix(int64(entry.mtime), 0),
+			Format:  tar.FormatPAX,
+		}
+		body := entry.data
+		switch entry.mode & 0o170000 {
+		case 0o040000:
+			h.Typeflag = tar.TypeDir
+			if h.Name != "" && h.Name[len(h.Name)-1] != '/' {
+				h.Name += "/"
+			}
+		case 0o120000:
+			h.Typeflag = tar.TypeSymlink
+			h.Linkname = string(entry.data)
+		case 0o100000:
+			key := devIno{entry.dev, entry.ino}
+			if head, ok := first[key]; ok && head != i {
+				h.Typeflag = tar.TypeLink
+				h.Linkname = entries[head].name
+				body = nil
+			} else {
+				h.Typeflag = tar.TypeReg
+				if ok {
+					body = groupData[key]
+				}
+				h.Size = int64(len(body))
+			}
+		case 0o010000:
+			h.Typeflag = tar.TypeFifo
+		default:
+			return nil, fmt.Errorf("cpio: unsupported member type %#o for %q", entry.mode&0o170000, entry.name)
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			return nil, err
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write(body); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// readCPIOEntries decodes every member up to the TRAILER!!! marker. A missing
+// trailer is fatal: a truncated archive must not be extracted as if complete.
+func readCPIOEntries(data []byte) ([]cpioEntry, error) {
+	var entries []cpioEntry
 	offset := 0
-	links := make(map[[2]uint64]string)
-	trailer := false
 	for offset < len(data) {
 		// A complete archive may contain arbitrary padding after its trailer.
 		if allZero(data[offset:]) {
@@ -165,59 +276,11 @@ func cpioToTar(data []byte) ([]byte, error) {
 		}
 		offset = next
 		if entry.name == "TRAILER!!!" {
-			trailer = true
-			break
+			return entries, nil
 		}
-		h := &tar.Header{
-			Name:    entry.name,
-			Mode:    int64(entry.mode & 0o7777),
-			Uid:     int(entry.uid),
-			Gid:     int(entry.gid),
-			ModTime: time.Unix(int64(entry.mtime), 0),
-			Format:  tar.FormatPAX,
-		}
-		switch entry.mode & 0o170000 {
-		case 0o040000:
-			h.Typeflag = tar.TypeDir
-			if h.Name != "" && h.Name[len(h.Name)-1] != '/' {
-				h.Name += "/"
-			}
-		case 0o120000:
-			h.Typeflag = tar.TypeSymlink
-			h.Linkname = string(entry.data)
-		case 0o100000:
-			key := [2]uint64{entry.dev, entry.ino}
-			if first, ok := links[key]; ok && entry.nlink > 1 && len(entry.data) == 0 {
-				h.Typeflag = tar.TypeLink
-				h.Linkname = first
-			} else {
-				h.Typeflag = tar.TypeReg
-				h.Size = int64(len(entry.data))
-				if entry.nlink > 1 {
-					links[key] = h.Name
-				}
-			}
-		case 0o010000:
-			h.Typeflag = tar.TypeFifo
-		default:
-			return nil, fmt.Errorf("cpio: unsupported member type %#o for %q", entry.mode&0o170000, entry.name)
-		}
-		if err := tw.WriteHeader(h); err != nil {
-			return nil, err
-		}
-		if h.Typeflag == tar.TypeReg {
-			if _, err := tw.Write(entry.data); err != nil {
-				return nil, err
-			}
-		}
+		entries = append(entries, entry)
 	}
-	if !trailer {
-		return nil, fmt.Errorf("cpio: missing TRAILER!!! entry")
-	}
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return nil, fmt.Errorf("cpio: missing TRAILER!!! entry")
 }
 
 func readCPIOEntry(data []byte, offset int) (cpioEntry, int, error) {
@@ -310,7 +373,30 @@ func readNewcEntry(data []byte, offset int) (cpioEntry, int, error) {
 		values[i] = v
 	}
 	e := cpioEntry{ino: values[0], mode: values[1], uid: values[2], gid: values[3], nlink: values[4], mtime: values[5], dev: values[7]<<32 | values[8]}
-	return finishCPIOEntry(data, offset+headerSize, values[11], values[6], e, 4)
+	entry, next, err := finishCPIOEntry(data, offset+headerSize, values[11], values[6], e, 4)
+	if err != nil {
+		return cpioEntry{}, 0, err
+	}
+	// 070702 is the CRC variant: the check field is the simple sum of the
+	// member's data bytes, taken as unsigned chars, modulo 2^32. Verifying it
+	// here means a corrupted archive is refused during decode, before the
+	// extraction planner has looked at a single destination.
+	if string(h[:6]) == "070702" {
+		if sum := uint64(cpioDataChecksum(entry.data)); sum != values[12] {
+			return cpioEntry{}, 0, fmt.Errorf("cpio: checksum mismatch for %q: header %#08x, data %#08x", entry.name, values[12], sum)
+		}
+	}
+	return entry, next, nil
+}
+
+// cpioDataChecksum is the newc CRC: an unsigned 32-bit sum of the data bytes,
+// which is what 070702 stores despite the name.
+func cpioDataChecksum(data []byte) uint32 {
+	var sum uint32
+	for _, b := range data {
+		sum += uint32(b)
+	}
+	return sum
 }
 
 func finishCPIOEntry(data []byte, pos int, namesize, filesize uint64, e cpioEntry, alignment int) (cpioEntry, int, error) {

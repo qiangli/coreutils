@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,13 +125,16 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	}
 
 	fatal := false
-	overwrite := map[string]string{}
+	// allow is keyed by ARCHIVE POSITION, not by name: an updated archive can
+	// carry the same name more than once, and only the occurrence the planner
+	// kept may be written. Keying by name would resurrect the stale copies.
+	allow := map[int]string{}
 	for _, rej := range plan.Rejected {
 		if pax.IsDestinationExists(rej.Reason) {
 			if o.noOverwrite {
 				continue // -k: silently keep what is already there
 			}
-			overwrite[rej.Path] = filepath.Join(root, filepath.FromSlash(rej.Path))
+			allow[rej.Index] = filepath.Join(root, filepath.FromSlash(rej.Path))
 			continue
 		}
 		fmt.Fprintf(rc.Err, "pax: refusing %s: %s\n", rej.Path, rej.Reason)
@@ -141,16 +145,12 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		return 1
 	}
 
-	allow := map[string]string{}
-	for p, t := range overwrite {
-		allow[p] = t
-	}
 	for _, m := range plan.Members {
-		allow[m.Path] = m.Target
+		allow[m.Index] = m.Target
 	}
 
 	tr2 := tar.NewReader(bytes.NewReader(data))
-	for {
+	for index := 0; ; index++ {
 		h, err := tr2.Next()
 		if err == io.EOF {
 			break
@@ -159,7 +159,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
 		}
-		target, ok := allow[h.Name]
+		target, ok := allow[index]
 		if !ok {
 			continue
 		}
@@ -229,6 +229,21 @@ func rootOf(target, name string) string {
 	return strings.TrimSuffix(target, filepath.FromSlash(name))
 }
 
+// archiveSink is the seekable archive file. writeMode takes it through an
+// interface rather than *os.File so the append lane's seek, truncate and close
+// failures - the paths that decide whether a half-rewritten archive is
+// reported or silently accepted - are reachable from tests.
+type archiveSink interface {
+	io.Writer
+	io.Seeker
+	Truncate(size int64) error
+	Close() error
+}
+
+var openArchiveSink = func(path string, flags int, perm os.FileMode) (archiveSink, error) {
+	return os.OpenFile(path, flags, perm)
+}
+
 // writeMode creates an archive from the named files.
 func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	status := 0
@@ -245,6 +260,14 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	archivePath := ""
 	if o.archive != "" && o.archive != "-" {
 		archivePath = resolve(rc, o.archive)
+	}
+	// -a and -u both have to read the archive they are about to extend. On a
+	// pipe there is nothing to read and nothing to seek back to, so the
+	// documented semantics cannot be honored - say so rather than silently
+	// writing a fresh archive that ignores the option.
+	if (o.appendMode || o.newerOnly) && archivePath == "" {
+		fmt.Fprintln(rc.Err, "pax: appending or updating requires a seekable archive file")
+		return 1
 	}
 	appendExisting := o.appendMode
 	var existing []byte
@@ -283,20 +306,20 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			}
 		}
 	}
-	if appendExisting && archivePath == "" {
-		fmt.Fprintln(rc.Err, "pax: appending requires a seekable archive file")
-		return 1
-	}
 
 	var out io.Writer = rc.Out
-	var file *os.File
+	var file archiveSink
+	// base is the archive offset at which this run starts writing. It is
+	// non-zero only when appending, and it is what keeps physical blocking
+	// aligned to the archive rather than to this invocation.
+	var base int64
 	if archivePath != "" {
 		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 		if appendExisting && len(existing) != 0 {
 			flags = os.O_RDWR
 		}
 		var err error
-		file, err = os.OpenFile(archivePath, flags, 0o644)
+		file, err = openArchiveSink(archivePath, flags, 0o644)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
@@ -313,15 +336,15 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 				fmt.Fprintf(rc.Err, "pax: %v\n", err)
 				return 1
 			}
+			base = end
 		}
 		out = file
 	}
 
-	var blocker *blockWriter
-	if o.blockBytes > 0 {
-		blocker = newBlockWriter(out, o.blockBytes)
-		out = blocker
-	}
+	// POSIX pax always writes whole physical blocks; blockBytes is either the
+	// explicit -b or the format default, never zero.
+	blocker := newBlockWriter(out, o.blockBytes, base)
+	out = blocker
 	if o.format == "cpio" {
 		if writeStatus := writeCPIOMode(rc, o, out, files); writeStatus != 0 {
 			status = 1
@@ -339,11 +362,9 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			status = 1
 		}
 	}
-	if blocker != nil {
-		if err := blocker.Close(); err != nil {
-			fmt.Fprintf(rc.Err, "pax: %v\n", err)
-			status = 1
-		}
+	if err := blocker.Close(); err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		status = 1
 	}
 	if file != nil {
 		if appendExisting && len(existing) != 0 {
@@ -363,6 +384,10 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	return status
 }
 
+// readPathnames reads the operand list from standard input, one pathname per
+// line. An empty line names no file and an unterminated final line is a
+// truncated request; both are reported and the exit status reflects them
+// rather than letting pax archive something the caller did not ask for.
 func readPathnames(rc *tool.RunContext) ([]string, int) {
 	reader := bufio.NewReader(rc.In)
 	var paths []string
@@ -376,7 +401,12 @@ func readPathnames(rc *tool.RunContext) ([]string, int) {
 				fmt.Fprintln(rc.Err, "pax: unterminated pathname on standard input")
 				status = 1
 			}
-			paths = append(paths, line)
+			if line == "" {
+				fmt.Fprintln(rc.Err, "pax: empty pathname on standard input")
+				status = 1
+			} else {
+				paths = append(paths, line)
+			}
 		}
 		if err != nil {
 			if err != io.EOF {
@@ -408,9 +438,8 @@ func archiveMemberTimes(data []byte) (map[string]time.Time, error) {
 
 // cpioWriter emits the POSIX Issue 7 octet-oriented cpio interchange format.
 type cpioWriter struct {
-	w       io.Writer
-	offset  int64
-	nextIno uint64
+	w      io.Writer
+	offset int64
 }
 
 func (w *cpioWriter) write(p []byte) error {
@@ -430,7 +459,10 @@ func (w *cpioWriter) pad(alignment int64) error {
 	return w.write(make([]byte, need))
 }
 
-func (w *cpioWriter) add(name string, fi os.FileInfo, data []byte) error {
+// add writes one member. id carries the SOURCE metadata (owner and link count
+// are written through verbatim) while emitted carries the c_dev/c_ino pair
+// chosen by odcIdentities, which is what encodes hardlink identity.
+func (w *cpioWriter) add(name string, fi os.FileInfo, id fileIdentity, emitted devIno, data []byte) error {
 	mode := uint64(fi.Mode().Perm())
 	switch {
 	case fi.Mode().IsRegular():
@@ -443,32 +475,41 @@ func (w *cpioWriter) add(name string, fi os.FileInfo, data []byte) error {
 		return fmt.Errorf("unsupported cpio member type %s", fi.Mode())
 	}
 	name = filepath.ToSlash(name)
-	w.nextIno++
+	nlink, uid, gid := uint64(1), uint64(0), uint64(0)
+	if id.ok {
+		if id.nlink > 0 {
+			nlink = id.nlink
+		}
+		uid, gid = id.uid, id.gid
+	}
 	namesize := uint64(len([]byte(name)) + 1)
 	mtime := uint64(0)
 	if fi.ModTime().Unix() > 0 {
 		mtime = uint64(fi.ModTime().Unix())
 	}
-	if w.nextIno > 0o777777 || mode > 0o777777 || namesize > 0o777777 || mtime > 0o77777777777 || uint64(len(data)) > 0o77777777777 {
+	const octal6Max = 0o777777
+	for _, field := range []uint64{emitted.dev, emitted.ino, mode, uid, gid, nlink, namesize} {
+		if field > octal6Max {
+			return fmt.Errorf("cpio member %q exceeds POSIX header limits", name)
+		}
+	}
+	if mtime > 0o77777777777 || uint64(len(data)) > 0o77777777777 {
 		return fmt.Errorf("cpio member %q exceeds POSIX header limits", name)
 	}
 	header := fmt.Sprintf("070707%06o%06o%06o%06o%06o%06o%06o%011o%06o%011o",
-		0, w.nextIno, mode, 0, 0, 1, 0, mtime, namesize, len(data))
+		emitted.dev, emitted.ino, mode, uid, gid, nlink, 0, mtime, namesize, len(data))
 	if len(header) != 76 {
 		return fmt.Errorf("internal cpio header length %d", len(header))
 	}
 	if err := w.write(append([]byte(header), append([]byte(name), 0)...)); err != nil {
 		return err
 	}
-	if err := w.write(data); err != nil {
-		return err
-	}
-	return nil
+	return w.write(data)
 }
 
 func (w *cpioWriter) close() error {
 	info := syntheticFileInfo{name: "TRAILER!!!"}
-	if err := w.add("TRAILER!!!", info, nil); err != nil {
+	if err := w.add("TRAILER!!!", info, fileIdentity{}, devIno{}, nil); err != nil {
 		return err
 	}
 	return w.pad(512)
@@ -483,13 +524,87 @@ func (f syntheticFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
 func (f syntheticFileInfo) IsDir() bool        { return false }
 func (f syntheticFileInfo) Sys() any           { return nil }
 
+// cpioMember is one collected source file.
+type cpioMember struct {
+	name string
+	fi   os.FileInfo
+	id   fileIdentity
+	data []byte
+}
+
+// odcIdentities chooses the c_dev/c_ino pair written for each member. The
+// POSIX cpio header gives those fields six octal digits, which a modern inode
+// number routinely overflows, so the source values are written verbatim only
+// when every member's pair fits; otherwise the whole archive is remapped onto
+// small sequential values. Both mappings are one-to-one, so equal source pairs
+// - and only equal source pairs - share a c_dev/c_ino, which is what carries
+// hardlink identity through the archive.
+func odcIdentities(members []cpioMember) []devIno {
+	const octal6Max = 0o777777
+	exact := true
+	for _, m := range members {
+		if !m.id.ok || m.id.dev > octal6Max || m.id.ino > octal6Max {
+			exact = false
+			break
+		}
+	}
+	out := make([]devIno, len(members))
+	if exact {
+		for i, m := range members {
+			out[i] = m.id.key()
+		}
+		return out
+	}
+	assigned := make(map[devIno]devIno)
+	next := uint64(0)
+	for i, m := range members {
+		if m.id.ok {
+			if v, ok := assigned[m.id.key()]; ok {
+				out[i] = v
+				continue
+			}
+		}
+		next++
+		out[i] = devIno{ino: next}
+		if m.id.ok {
+			assigned[m.id.key()] = out[i]
+		}
+	}
+	return out
+}
+
+// writeCPIOMode buffers the whole member list before emitting anything: POSIX
+// cpio carries a hardlink group's file data on the LAST member of the group,
+// which is not knowable while the walk is still running.
 func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []string) int {
-	w := &cpioWriter{w: out}
 	status := 0
+	var members []cpioMember
 	for _, name := range files {
-		if err := addCPIOPath(rc, o, w, name); err != nil {
+		if err := collectCPIOPath(rc, o, &members, name); err != nil {
 			fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
 			status = 1
+		}
+	}
+	ids := odcIdentities(members)
+	dataHolder := make(map[devIno]int)
+	for i, m := range members {
+		if m.fi.Mode().IsRegular() && m.id.ok && m.id.nlink > 1 {
+			dataHolder[ids[i]] = i
+		}
+	}
+	w := &cpioWriter{w: out}
+	for i, m := range members {
+		data := m.data
+		if holder, ok := dataHolder[ids[i]]; ok && holder != i {
+			data = nil
+		}
+		if err := w.add(m.name, m.fi, m.id, ids[i], data); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %s: %v\n", m.name, err)
+			status = 1
+			continue
+		}
+		if o.verbose {
+			fmt.Fprintln(rc.Err, m.name)
 		}
 	}
 	if err := w.close(); err != nil {
@@ -499,13 +614,13 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 	return status
 }
 
-func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) error {
+func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, name string) error {
 	full := resolve(rc, name)
 	fi, err := os.Lstat(full)
 	if err != nil {
 		return err
 	}
-	write := func(rel, abs string, fi os.FileInfo) error {
+	collect := func(rel, abs string, fi os.FileInfo) error {
 		out := applySubstitutions(o.subst, filepath.ToSlash(rel), rc.Err)
 		if out == "" {
 			return nil
@@ -514,6 +629,7 @@ func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) er
 			return nil
 		}
 		var data []byte
+		var err error
 		switch {
 		case fi.Mode().IsRegular():
 			data, err = os.ReadFile(abs)
@@ -525,16 +641,11 @@ func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) er
 		if err != nil {
 			return err
 		}
-		if err := w.add(out, fi, data); err != nil {
-			return err
-		}
-		if o.verbose {
-			fmt.Fprintln(rc.Err, out)
-		}
+		*members = append(*members, cpioMember{name: out, fi: fi, id: identityOf(fi), data: data})
 		return nil
 	}
 	if !fi.IsDir() || o.dirsNoDescend {
-		return write(name, full, fi)
+		return collect(name, full, fi)
 	}
 	return filepath.Walk(full, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -544,7 +655,7 @@ func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) er
 		if relErr != nil {
 			return relErr
 		}
-		return write(rel, path, info)
+		return collect(rel, path, info)
 	})
 }
 
@@ -573,6 +684,24 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 			return err
 		}
 		h.Format = tarFormat(o.format)
+		id := identityOf(fi)
+		// A second name for an already-archived inode becomes a hardlink
+		// member rather than a second copy of the data, which is what makes
+		// the extracted tree share inodes the way the source did.
+		hardlink := false
+		if fi.Mode().IsRegular() && id.ok && id.nlink > 1 {
+			if o.links == nil {
+				o.links = make(map[devIno]string)
+			}
+			if first, seen := o.links[id.key()]; seen {
+				h.Typeflag = tar.TypeLink
+				h.Linkname = first
+				h.Size = 0
+				hardlink = true
+			} else {
+				o.links[id.key()] = out
+			}
+		}
 		if h.Format == tar.FormatPAX {
 			if h.PAXRecords == nil {
 				h.PAXRecords = make(map[string]string)
@@ -581,6 +710,16 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 			// disk. This implementation keyword makes the selected format
 			// detectable so a later -a can reject a mismatched -x format.
 			h.PAXRecords["COREUTILS.format"] = "pax"
+			// ustar fields cover the owner but not the source device, inode or
+			// link count. pax extended records can, under the long-standing
+			// star/schily keywords, so a pax archive carries the identity a
+			// cpio header would have held.
+			if id.ok {
+				h.Uid, h.Gid = int(id.uid), int(id.gid)
+				h.PAXRecords["SCHILY.dev"] = strconv.FormatUint(id.dev, 10)
+				h.PAXRecords["SCHILY.ino"] = strconv.FormatUint(id.ino, 10)
+				h.PAXRecords["SCHILY.nlink"] = strconv.FormatUint(id.nlink, 10)
+			}
 		}
 		if h.Format == tar.FormatUSTAR {
 			// USTAR carries mtime but has no fields for atime, ctime, xattrs,
@@ -596,7 +735,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 		if err := tw.WriteHeader(h); err != nil {
 			return err
 		}
-		if fi.Mode().IsRegular() {
+		if fi.Mode().IsRegular() && !hardlink {
 			f, err := os.Open(abs)
 			if err != nil {
 				return err
