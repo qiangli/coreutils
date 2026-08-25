@@ -51,20 +51,39 @@ standard streams, effects/output files, status, and all required XCU clause
 IDs. Every cited Go reference names an existing `Test...` declaration in that
 command's package. This is an inventory result, not a conformance result.
 
-All 78 Go rows remain partial for at least this exact common blocker:
+The earlier universal per-command message-catalog blocker was too broad and is
+withdrawn. Issue 7 has four distinct requirements:
 
-| Commands | Missing Issue 7 clauses | Product behavior and focused test required before verification |
-| --- | --- | --- |
-| all 78 Go-owned names above | `ENVIRONMENT_VARIABLES`, and the command's diagnostic obligations in `STDERR`/`CONSEQUENCES_OF_ERRORS` | Resolve `LC_ALL` over `LC_MESSAGES`, use `NLSPATH` where XSI applies, select a real message catalog, and emit a translated command-specific diagnostic without mutating process-global locale state. Add a package-local `Test<Command>LCMessagesCatalogPrecedence` that installs at least two distinguishable catalogs, proves `LC_ALL` precedence, proves `NLSPATH` selection, and asserts stderr plus non-zero status. Commands with no success-path diagnostic must drive a real required error branch. |
+1. Each utility's `ENVIRONMENT VARIABLES` clause says the listed variables
+   affect execution. `LC_ALL` precedence over `LC_MESSAGES` is mandatory, and
+   a recognized selected locale must be honored. The XBD
+   [Internationalization Variables](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/basedefs/V1_chap08.html)
+   clause also says an unrecognized locale has unspecified behavior.
+2. `LC_MESSAGES` selects affirmative/negative response rules and the language
+   and cultural conventions in which messages *should* be written. The XCU
+   [`STDERR` default](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap01.html)
+   likewise uses *should*, not *shall*, for unspecified-format diagnostic and
+   informative messages.
+3. `NLSPATH` determines catalog lookup through `catopen()` only where XSI is
+   applicable. The ledger now records it explicitly as `xsi:NLSPATH`; it is
+   not an unconditional Base-profile variable.
+4. Neither clause requires every utility to own or ship a translated catalog,
+   much less two synthetic catalogs. Absence of shipped translations is a
+   localization product gap, not by itself a failed POSIX utility interface.
 
-The repository has bounded locale providers for selected commands, but no
-general message-catalog implementation proving that obligation for every Go
-utility. Therefore even rows whose C/POSIX algorithms are otherwise closed
-cannot truthfully be verified yet.
+Certification remains fail-closed on observable requirements. Every command
+must still prove its required diagnostics, stream, continuation, and status
+behavior in the POSIX locale. Commands whose normative behavior depends on
+`LC_MESSAGES` data (for example affirmative-response parsing) need focused
+locale tests. A shared locale/catalog subsystem may prove category precedence
+and XSI lookup once, with command-specific evidence that the utility actually
+uses that subsystem; repeated two-catalog fixtures in all 78 packages are not
+required. This correction alone promotes no row: every partial owned row still
+has one or more command-specific residuals below or in its closure audit.
 
 ## Ranked command-specific residuals
 
-The table records the highest-yield blocker beyond the universal catalog test.
+The table records the highest-yield command-specific blocker.
 The accepted per-command closure audits remain authoritative for additional
 lower-ranked edges.
 
@@ -73,7 +92,7 @@ lower-ranked edges.
 | 0 | `pax` | `OPTIONS`, `STDIN`, `STDOUT`, `OUTPUT_FILES`, `EXIT_STATUS` | Current pin still rejects every `-o` keyword invocation. Merge the separately reviewed `pax -o` source wave, then add named end-to-end tests for each supported Issue 7 keyword family, ordered repeated `-o`, archive/list effects, diagnostics, and status. Do not credit the active wave before its canonical SHA is present. |
 | 0 | `nice` | `EFFECTS`, `EXIT_STATUS` | Await the active nice correction wave. The child must not execute before priority adjustment. A process-boundary barrier test must prove ordering, adjustment failure prevents execution, and 126/127/child/signal statuses remain exact. |
 | 0 | `newgrp` | `STDIN`, `ENVIRONMENT_VARIABLES`, `EFFECTS`, `EXIT_STATUS` | Await the active newgrp correction wave. A privilege-contained integration test must prove password input routing, real/supplementary group state, login environment, shell replacement-equivalent behavior, refusal behavior, and propagated shell status. |
-| 1 | `bg`, `fg` | `EFFECTS`, `EXIT_STATUS`, terminal/job-control consequences | Accepted sibling-sh tests now prove parser/default selection, real process-group continuation, foreground terminal ownership, reads, waits, restoration, and completed status. Still add stopped/signaled/multi-job failure products, disabled-job-control behavior through the selected process route, locale diagnostics, and platform-specific job-control disposition. |
+| 1 | `bg`, `fg` | `EFFECTS`, `EXIT_STATUS`, terminal/job-control consequences | Accepted sibling-sh tests now prove parser/default selection, real process-group continuation, foreground terminal ownership, reads, waits, restoration, and completed status. Still add stopped/signaled/multi-job failure products, disabled-job-control behavior through the selected process route, required diagnostics/statuses, and platform-specific job-control disposition. |
 | 1 | `jobs` | `STDOUT`, `EXIT_STATUS` | `TestJobsIssue7ParserAndFormatting` proves required parsing and principal formats. Still add asynchronous real job-table transitions for every required state/signal rendering, multiple-process `-l`, invalid/stale job IDs, locale strings, and output failures. |
 | 1 | `fc` | `OPERANDS`, `STDOUT`, `EFFECTS`, `EXIT_STATUS` | Accepted tests prove form validation, first-only substitution, and multiline listing. Still add real editor invocation, forward/reverse/clamped ranges, history persistence limits, command re-execution state and status, `FCEDIT`/`HISTFILE`/`HISTSIZE`, and I/O/locale failures. |
 | 1 | `sh` | shell-language clauses beyond entrypoint selection | The process-level Bashy test proves the selected `sh` utility route, `-c`, script-file and stdin forms, `$0`/positional arguments, empty command, missing-file status, and argv0 strict-POSIX engagement. It does not prove the complete shell grammar, expansions, redirections, traps, environments, interactive/job-control behavior, and every 1-127 status consequence; retain partial. |
@@ -88,12 +107,12 @@ lower-ranked edges.
 | 2 | `logname` | `STDOUT`, `EXIT_STATUS` | Current tests prove no effective/environment-user fallback, required no-login failure, RunContext isolation, and output/short-write errors. A real login-session fixture is still required on each supported non-Linux platform; Linux also needs a session where getlogin succeeds without audit loginuid. |
 | 2 | `od` | `ENVIRONMENT_VARIABLES`, `STDOUT` | Add a non-C `LC_CTYPE` `-c` rendering fixture and non-C `LC_NUMERIC` floating-format fixture across all required type strings and ABI sizes. |
 | 2 | `paste` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `STDOUT` | Add locale-aware delimiter decoding, repeated `-` under `-s`, twelve-operand coverage, serial `\\0`, input read errors, and stdout failure. |
-| 2 | `pathchk` | `OPERANDS`, `EXIT_STATUS` | Current source queries containing-filesystem limits and preserves symlink-before-`..` resolution, with focused tests for both. Still implement and test the required default invalid-byte-sequence check, pathconf failure/indeterminate results, differing mounted limits, and translated diagnostics. |
+| 2 | `pathchk` | `OPERANDS`, `EXIT_STATUS` | Current source queries containing-filesystem limits and preserves symlink-before-`..` resolution, with focused tests for both. Still implement and test the required default invalid-byte-sequence check, pathconf failure/indeterminate results, differing mounted limits, and required diagnostics/statuses. |
 | 2 | `pr` | `OPTIONS`, `ENVIRONMENT_VARIABLES`, `STDOUT` | Add exact Issue 7 optional-argument grammar, every column/merge/page interaction, locale date/header width, terminal pause/interruption, input/output failure, and status matrix. |
-| 2 | `tty` | `STDOUT`, `EXIT_STATUS` | Linux and Darwin now have real terminal-name tests; Windows console behavior, silent mode, invalid descriptors, output errors, and short writes are covered. Add truthful terminal pathname lookup on the remaining POSIX targets and locale-sensitive nonterminal output/diagnostics before verification. |
-| 2 | `more` | `ENVIRONMENT_VARIABLES`, diagnostic catalogs | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are translated `LC_MESSAGES`/`NLSPATH`, unavailable UTF-8 collation providers, and terminal-capability/platform integration—not unsupported `-i`, `-p`, or `-t`. |
-| 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, Windows runtime paths, and translated diagnostics. |
-| 2 | `touch` | `OUTPUT_FILES`, platform/error integration | Accepted source now obtains reference atime on supported stat layouts and fails loudly when unavailable; literal `-`, TZ, leap second, near-PATH_MAX, and reference-time paths are tested. Remaining: real atime propagation on every target, 0666 creation through umask, `-c` existing-file and multi-operand failure products, full range rejection, and translated diagnostics. |
+| 2 | `tty` | `STDOUT`, `EXIT_STATUS` | Linux and Darwin now have real terminal-name tests; Windows console behavior, silent mode, invalid descriptors, output errors, and short writes are covered. Add truthful terminal pathname lookup on the remaining POSIX targets and the specified POSIX-locale nonterminal output before verification. |
+| 2 | `more` | `ENVIRONMENT_VARIABLES`, terminal integration | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are unavailable UTF-8 collation providers and terminal-capability/platform integration—not absent translated catalogs or unsupported `-i`, `-p`, or `-t`. |
+| 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, and Windows runtime paths. |
+| 2 | `touch` | `OUTPUT_FILES`, platform/error integration | Accepted source now obtains reference atime on supported stat layouts and fails loudly when unavailable; literal `-`, TZ, leap second, near-PATH_MAX, and reference-time paths are tested. Remaining: real atime propagation on every target, 0666 creation through umask, `-c` existing-file and multi-operand failure products, and full range rejection. |
 | 3 | `chgrp`, `chown`, `chmod`, `mkdir`, `mkfifo`, `mv`, `rm`, `uudecode`, `uuencode` | `OUTPUT_FILES`, `CONSEQUENCES_OF_ERRORS` | Add privilege-contained kernel/filesystem tests for ownership, mode/set-ID/ctime, symlink/hard-link identity, special files, permission failures, and platform-specific implementations rather than seam-only proof. |
 | 3 | `df`, `du` | `STDOUT`, `CONSEQUENCES_OF_ERRORS` | Add mounted cross-device fixtures, real mount discovery, hard-link products, free-slot/space accounting, output failures, and platform-specific formats. |
 | 3 | `logger` | `EFFECTS`, `EXIT_STATUS` | Add a real local syslog receiver and Windows disposition test; prove message persistence, zero-operand stdin behavior, open/send/close errors, and statuses. |
@@ -102,10 +121,13 @@ lower-ranked edges.
 | 3 | `renice` | `EFFECTS`, `EXIT_STATUS` | Add a hermetic scheduler seam for exact `which` dispatch and mixed ID success, plus privilege-contained real priority-change tests and Windows disposition. |
 | 3 | `stty`, `tabs`, `tput` | terminal `STDIN`/`STDOUT`, `EFFECTS` | Run required forms against real terminal/terminfo databases across supported platforms, including Windows disposition, unavailable capabilities, atomic state, write errors, and exact statuses. |
 | 3 | `who`, `write` | `INPUT_FILES`, `OUTPUT_FILES`, terminal effects | Add live login-database and PTY fixtures across supported ABIs, credentials, terminal ownership/activity/permission state, interruption, framing, close errors, and platform fail-closed behavior. |
-| 4 | `basename`, `cat`, `cksum`, `cmp`, `dirname`, `env`, `head`, `ln`, `mesg`, `rmdir`, `sleep`, `split`, `strings`, `tail`, `tee`, `tsort`, `uname`, `xargs` | command-specific stream/status edge plus universal catalog blocker | The closure audits find the main C/POSIX algorithm supportable, but each row still names concrete unproved I/O, signal, special-file, platform, or locale branches. Add exactly the missing test listed in its closure audit, then the command-specific catalog-precedence test above. |
+| 4 | `basename`, `cat`, `cksum`, `cmp`, `dirname`, `env`, `head`, `ln`, `mesg`, `rmdir`, `sleep`, `split`, `strings`, `tail`, `tee`, `tsort`, `uname`, `xargs` | command-specific stream/status edge | The closure audits find the main C/POSIX algorithm supportable, but each row still names concrete unproved I/O, signal, special-file, platform, or locale branches. Add exactly the missing observable test listed in its closure audit; no synthetic per-command catalog fixture is imposed. |
 
 Detailed residual wording is in the accepted `go-evidence-closure-batch-1.md`
-through `go-evidence-closure-batch-7c.md` reports.
+through `go-evidence-closure-batch-7c.md` reports. Their command-specific
+behavioral gaps remain useful, but any statement that absence of translated
+diagnostics or per-command `NLSPATH` catalogs alone blocks verification is
+superseded by the normative policy above.
 
 ## Shell-selected routing and evidence
 
@@ -114,14 +136,18 @@ argv0=`sh` strict POSIX route. The same-name Go applets are therefore not the
 direct shell owner for `echo`, `false`, `kill`, `printf`, `pwd`, `test`,
 `time`, and `true`.
 
-All 22 shell names now have stable semantic and routing references. `false`
-and `true` are verified. The other twenty remain partial because their
+All 22 shell names now have currently resolvable, command-specific semantic
+and routing references. `false` and `true` are verified. The other twenty
+remain partial because their
 closure audits identify concrete locale, interactive, process, filesystem,
 or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs` references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
 uses Bashy's process-level entrypoint contract from `852c1ec` alongside its
 two independent route/strict-mode tests. No shell repository is modified by
-this reconciliation.
+this reconciliation. These path-and-test references are not immutable commit
+identifiers and do not prove complete clause coverage: that is why twenty rows
+remain partial. Calling them "stable" without that qualification would
+overstate the evidence.
 
 ## Active source waves are not credited
 

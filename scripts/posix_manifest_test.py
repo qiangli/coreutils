@@ -383,6 +383,37 @@ class ManifestValidationTest(unittest.TestCase):
                         rf"verified state launders.*{field}",
                     )
 
+    def test_nlspath_is_recorded_as_xsi_applicable(self) -> None:
+        environment = next(
+            row["environment"] for row in self.rows if row["command"] == "cat"
+        )
+        self.assertIn("xsi:NLSPATH", environment)
+        self.assertNotRegex(environment, manifest.BARE_NLSPATH)
+        self.assertRejected(
+            self.changed(
+                "cat", environment=environment.replace("xsi:NLSPATH", "NLSPATH"),
+            ),
+            "NLSPATH must be recorded with xsi: applicability",
+        )
+
+    def test_xsi_nlspath_requires_lc_messages(self) -> None:
+        environment = next(
+            row["environment"] for row in self.rows if row["command"] == "cat"
+        )
+        self.assertRejected(
+            self.changed("cat", environment=environment.replace("LC_MESSAGES;", "")),
+            "xsi:NLSPATH requires the LC_MESSAGES category",
+        )
+
+    def test_lc_messages_keeps_the_xsi_nlspath_disposition(self) -> None:
+        environment = next(
+            row["environment"] for row in self.rows if row["command"] == "cat"
+        )
+        self.assertRejected(
+            self.changed("cat", environment=environment.replace(";xsi:NLSPATH", "")),
+            "LC_MESSAGES requires the XSI NLSPATH disposition",
+        )
+
     def test_explicit_none_is_distinct_from_missing_normative_data(self) -> None:
         self.assertEqual(manifest._tokens("true", "options", manifest.EXPLICIT_NONE), [])
         self.assertEqual(manifest._display(manifest.EXPLICIT_NONE), "none")

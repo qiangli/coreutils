@@ -67,7 +67,7 @@ alias [alias-name[=string]...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write requested or all alias definitions in reusable quoted form, one per line; no output is required when only definitions are made.
 
@@ -127,7 +127,7 @@ ar -r -i [-cuv] posname archive file...
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TMPDIR; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TMPDIR; TZ`.
 
 **Standard output:** UNVERIFIED
 
@@ -179,7 +179,7 @@ at -l [at_job_id...]
 
 **Standard input:** Read text commands from stdin unless -f names the source.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; LC_TIME; SHELL; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; LC_TIME; SHELL; TZ`.
 
 **Standard output:** -l writes id<TAB>date lines; submission writes nothing to stdout.
 
@@ -228,7 +228,7 @@ awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 
 **Standard input:** Used as program source for -f -; otherwise used as input when no file operand is supplied or when an input file operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH. ENVIRON receives invocation variables;  LC_CTYPE and LC_COLLATE are wired for regex character classes/equivalence in the evidenced public locale path. LC_NUMERIC language semantics remain residual.`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; xsi:NLSPATH; PATH. ENVIRON receives invocation variables;  LC_CTYPE and LC_COLLATE are wired for regex character classes/equivalence in the evidenced public locale path. LC_NUMERIC language semantics remain residual.`.
 
 **Standard output:** Program-defined standard output with deterministic LF output.
 
@@ -276,7 +276,7 @@ basename string [suffix]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write the resulting string followed by a newline.
 
@@ -324,7 +324,7 @@ batch
 
 **Standard input:** Read a text shell program from stdin; empty input is valid.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; SHELL; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; SHELL; TZ`.
 
 **Standard output:** No stdout on successful submission.
 
@@ -372,7 +372,7 @@ bc [-l] [file...]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -420,7 +420,7 @@ bc [-l] [file...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write one line per resumed job as [job-number] command.
 
@@ -468,7 +468,7 @@ cat [-u] [file...]
 
 **Standard input:** Used when no file operands are given and at each - operand, without closing or reopening the stream.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write exactly the sequence of bytes read from the inputs and nothing else; the implementation may reject a regular output file that is also an input file.
 
@@ -517,7 +517,7 @@ cd -
 
 **Standard input:** Not used.
 
-**Environment:** `CDPATH; HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; OLDPWD; PWD`.
+**Environment:** `CDPATH; HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; OLDPWD; PWD`.
 
 **Standard output:** Write the new directory followed by a newline for cd - and for a successful non-empty CDPATH search; otherwise no output. A write failure makes the command fail after the directory change has occurred.
 
@@ -566,7 +566,7 @@ chgrp -R [-H|-L|-P] group file...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used (extension: -v/-c reports).
 
@@ -614,7 +614,7 @@ chmod [-R] mode file...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used (extension: -v/-c per-file reports).
 
@@ -663,7 +663,7 @@ chown -R [-H|-L|-P] owner[:group] file...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used (extension: -v/-c reports).
 
@@ -711,7 +711,7 @@ cksum [file...]
 
 **Standard input:** Used when no file operand is supplied and for each - operand; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** For each successful named file write checksum, octet count, pathname, and newline separated by spaces; omit pathname and its leading space for no-operand standard input.
 
@@ -759,7 +759,7 @@ cmp [-l|-s] file1 file2
 
 **Standard input:** Used only when a file operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Default mode writes "%s %s differ: char %d, line %d" for the first difference; -l lists every difference as "%d %o %o" per line, exactly in POSIX mode (POSIXLY_CORRECT) and with GNU-diffutils column alignment otherwise; -s writes nothing.
 
@@ -807,7 +807,7 @@ comm [-123] file1 file2
 
 **Standard input:** Read for whichever single operand is -; not read when both operands name files.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Three columns (lines only in file1, lines only in file2, lines common to both), each non-suppressed column indented by one <tab> per non-suppressed column printed before it; -1/-2/-3 suppress their columns and suppressing all three writes nothing.
 
@@ -856,7 +856,7 @@ command [-p][-v|-V] command_name
 
 **Standard input:** Not read by command itself; an invoked command inherits standard input.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** An invoked command inherits standard output. -v writes one reusable resolution per found name and -V writes a descriptive resolution; an unresolved -v name is silent.
 
@@ -906,7 +906,7 @@ cp -R [-H|-L|-P] [-fip] source_file... target
 
 **Standard input:** Read only for the response line to an -i prompt (affirmative per the C-locale yesexpr anchored at byte zero, plus the provisioned de_DE catalog; other locales are refused loudly); otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used (the -v/--debug extensions emit traces only when requested).
 
@@ -955,7 +955,7 @@ crontab [file]
 
 **Standard input:** Read replacement table from stdin only when file is omitted.
 
-**Environment:** `EDITOR; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `EDITOR; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** -l writes the installed source; successful install/remove are silent.
 
@@ -1003,7 +1003,7 @@ csplit [-ks] [-f prefix] [-n number] file arg...
 
 **Standard input:** Read when the file operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Unless POSIX -s or the GNU -q/--quiet extension is selected, write the decimal byte count of each written piece on its own line, in order.
 
@@ -1052,7 +1052,7 @@ ctags -x pathname...
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -1102,7 +1102,7 @@ cut -f list [-d delim] [-s] [file...]
 
 **Standard input:** Read when no file operand is given or for each - operand.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** For each input line, the selected bytes, characters, or fields in input order with overlapping and adjacent ranges merged; in field mode a line containing no delimiter is written unchanged unless -s.
 
@@ -1151,7 +1151,7 @@ date [-u] [+format]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TZ`.
 
 **Standard output:** With no operand, the POSIX default format "+%a %b %e %H:%M:%S %Z %Y"; with +format, the expanded format; after a successful XSI set, the resulting date in the default format; always newline-terminated.
 
@@ -1199,7 +1199,7 @@ dd [operand...]
 
 **Standard input:** Read stdin when if is absent.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write converted records to stdout when of is absent.
 
@@ -1247,7 +1247,7 @@ dd [operand...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write filesystem rows; default/-k include free slots; -P writes six portable fields; -t includes allocated space without a synthetic total.
 
@@ -1295,7 +1295,7 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 
 **Standard input:** Read stdin only for one - operand.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TZ`.
 
 **Standard output:** Write normal, ed, forward-ed, context, or unified difference output to stdout.
 
@@ -1343,7 +1343,7 @@ dirname string
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** The resulting directory-name string followed by a newline, one per operand (a NUL terminator under the -z GNU extension).
 
@@ -1391,7 +1391,7 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 
 **Standard input:** Not used; no operand reads standard input.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** For each visited directory and, with -a, each non-directory file: one line of the form "%d %s", <blocks> <space> <path>, where the default block size is 512 bytes, rounded up, and -k selects 1024-byte units; -s emits exactly one such line per operand.
 
@@ -1439,7 +1439,7 @@ echo [string...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write the string operands separated by single spaces and followed by a newline; with no operands, write only a newline. XSI escape processing can suppress that newline with \c.
 
@@ -1487,7 +1487,7 @@ ed [-p string] [-s] [file]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -1535,7 +1535,7 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Standard input:** Not read by env; when utility is present, pass standard input through to that utility.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** With no utility, write each resulting name=value entry followed by a newline; with a utility, env writes nothing and passes through the utility standard output.
 
@@ -1583,7 +1583,7 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `COLUMNS; EXINIT; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LINES; NLSPATH; PATH; SHELL; TERM`.
+**Environment:** `COLUMNS; EXINIT; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LINES; xsi:NLSPATH; PATH; SHELL; TERM`.
 
 **Standard output:** UNVERIFIED
 
@@ -1631,7 +1631,7 @@ expand [-t tablist] [file...]
 
 **Standard input:** Read when no file operand is given or for each - operand.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Each input line with every <tab> replaced by the number of <space> characters needed to reach the next tab stop; all other bytes are copied unchanged.
 
@@ -1679,7 +1679,7 @@ expr operand...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH. C/POSIX-locale expression semantics are evidenced;  locale collation, character classes beyond the implemented BRE subset, translated diagnostics, and catalog lookup remain residual.`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. C/POSIX-locale expression semantics are evidenced;  locale collation and character classes beyond the implemented BRE subset remain residual.`.
 
 **Standard output:** Write the expression result followed by a newline on successful evaluation.
 
@@ -1777,7 +1777,7 @@ fc -s [old=new] [first]
 
 **Standard input:** Not used.
 
-**Environment:** `FCEDIT; HISTFILE; HISTSIZE; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `FCEDIT; HISTFILE; HISTSIZE; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Under -l, write each selected command as line-number, tab, command and indent continuation lines; -n suppresses line numbers.
 
@@ -1825,7 +1825,7 @@ fc -s [old=new] [first]
 
 **Standard input:** Not used by fg itself; the resumed foreground job receives the shell foreground terminal/input according to job control.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write the selected job command line followed by a newline.
 
@@ -1874,7 +1874,7 @@ file -i [-h] file...
 
 **Standard input:** Bashy reads standard input when and only when an operand is exactly -, reporting it under that name; POSIX permits this implementation-defined interpretation.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** One line per operand of the form "%s: %s\n", <file> colon <space> <type>. A nonexistent, unreadable, or undetermined operand still produces its line containing "cannot open" and does not by itself change the exit status.
 
@@ -1922,7 +1922,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Standard input:** Not used by any primary except -ok, which reads one affirmative reply line per invocation from standard input.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** Each matching path is written by -print (the default action when the expression contains no other action), one per line, spelled as it was reached from the path operand.
 
@@ -1970,7 +1970,7 @@ fold [-bs] [-w width] [file...]
 
 **Standard input:** Read when no file operands are given or when an operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH. Fixed UTF-8 behavior is evidenced;  C/POSIX byte interpretation, other public-locale charmap decoding and translated diagnostics/catalog lookup remain residual.`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. Fixed UTF-8 behavior is evidenced;  C/POSIX byte interpretation and other public-locale charmap decoding remain residual.`.
 
 **Standard output:** Write folded input in operand order, inserting newlines as needed; no metadata is written.
 
@@ -2019,7 +2019,7 @@ getconf [-v specification] path_var pathname
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write the variable value followed by a newline, or undefined for a known variable with no determinate value or no limit.
 
@@ -2067,7 +2067,7 @@ getopts optstring name [arg...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; OPTIND`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; OPTIND`.
 
 **Standard output:** Not used.
 
@@ -2117,7 +2117,7 @@ grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 
 **Standard input:** Read as input when no file operands are supplied, for file operand -, and for -f - when no file named - exists.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH. LC_ALL/category/LANG precedence is evidenced for C/POSIX and the built-in de_DE ISO-8859-1 certification locale;  broader public-locale regex behavior remains residual.`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. LC_ALL/category/LANG precedence is evidenced for C/POSIX and the built-in de_DE ISO-8859-1 certification locale;  broader public-locale regex behavior remains residual.`.
 
 **Standard output:** Write selected lines, counts, file names, or no normal output under -q according to the selected options; multiple files prefix names unless suppressed by extension flags.
 
@@ -2166,7 +2166,7 @@ hash -r
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** With no operands, write the remembered utility table; POSIX leaves its format unspecified. POSIX operand and -r forms otherwise write no output.
 
@@ -2214,7 +2214,7 @@ head [-n number] [file...]
 
 **Standard input:** Used when no file operand is supplied and for each - operand; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write each designated input portion; with multiple operands prefix the first with ==> pathname <== and later ones with a preceding newline before the same header form.
 
@@ -2265,7 +2265,7 @@ iconv -l
 
 **Standard input:** Used when no file operands are given and for each - operand.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** The input characters converted to the target codeset; -l writes the supported codeset names.
 
@@ -2316,7 +2316,7 @@ id -u [-nr] [user]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Default form writes "uid=%u(%s) gid=%u(%s)" with euid=/egid= inserted only when effective and real IDs differ and a groups= list of distinct affiliations; -u/-g write one ID as "%u" (the name with -n, the real ID with -r); -G writes all distinct group IDs space-separated; an unmappable name falls back to the bare number.
 
@@ -2364,7 +2364,7 @@ id -u [-nr] [user]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** With -p, write one process ID per line. Otherwise write job number, current-job marker, state, and command; -l also includes process-group/process IDs as specified.
 
@@ -2412,7 +2412,7 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 
 **Standard input:** Read only for one file operand spelled -; using - for both operands is rejected.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH. C/POSIX byte-collation behavior is evidenced;  locale collation/blank handling and translated diagnostics/catalog lookup remain residual.`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. C/POSIX byte-collation behavior is evidenced;  locale collation/blank handling remain residual.`.
 
 **Standard output:** Write joined and requested unpairable lines according to -a, -v, -e, -o, -t, and the selected join fields.
 
@@ -2463,7 +2463,7 @@ kill [-signal_number] pid...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Used by -l for signal names; otherwise not used.
 
@@ -2512,7 +2512,7 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Standard input:** Not used by any POSIX form; the extension -i prompt reads confirmations from standard input.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used by any POSIX form; the extension -v prints one line per created link.
 
@@ -2561,7 +2561,7 @@ locale [-ck] name...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_MONETARY; LC_NUMERIC; LC_TIME; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_MONETARY; LC_NUMERIC; LC_TIME; xsi:NLSPATH`.
 
 **Standard output:** Write requested locale environment variables (bare if set, double-quoted if derived/overridden), available locale names (-a), charmap names (-m), or keyword values (preceded by category name if -c, formatted as name="value" if -k).
 
@@ -2609,7 +2609,7 @@ localedef [-c] [-f charmap] [-i sourcefile] [-u code_set_name] name
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -2657,7 +2657,7 @@ logger string...
 
 **Standard input:** POSIX: not used; read only by the non-POSIX zero-operand extension form.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -2705,7 +2705,7 @@ logname
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** The login name followed by a newline, the "%s\n" format.
 
@@ -2753,7 +2753,7 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; LPDEST; NLSPATH; PRINTER; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; LPDEST; xsi:NLSPATH; PRINTER; TZ`.
 
 **Standard output:** UNVERIFIED
 
@@ -2801,7 +2801,7 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Standard input:** Not used.
 
-**Environment:** `COLUMNS; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; POSIXLY_CORRECT; TZ`.
+**Environment:** `COLUMNS; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; POSIXLY_CORRECT; TZ`.
 
 **Standard output:** Write entry names or long-format records (-l/-g/-n/-o), multi-column (-C/-x), stream (-m), or single-column (-1); include block counts (-s) using 512-byte blocks in POSIX mode (POSIXLY_CORRECT) or 1024-byte blocks with -k.
 
@@ -2849,7 +2849,7 @@ m4 [-s] [-D name[=val]]... [-U name]... file...
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -2900,7 +2900,7 @@ mailx -f [-HiNn] [-F] [file]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `DEAD; EDITOR; HOME; LANG; LC_ALL; LC_CTYPE; LC_TIME; LC_MESSAGES; LISTER; MAILRC; MBOX; NLSPATH; PAGER; SHELL; TERM; TZ; VISUAL`.
+**Environment:** `DEAD; EDITOR; HOME; LANG; LC_ALL; LC_CTYPE; LC_TIME; LC_MESSAGES; LISTER; MAILRC; MBOX; xsi:NLSPATH; PAGER; SHELL; TERM; TZ; VISUAL`.
 
 **Standard output:** UNVERIFIED
 
@@ -2948,7 +2948,7 @@ mailx -f [-HiNn] [-F] [file]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; MAKEFLAGS; NLSPATH; PROJECTDIR`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; MAKEFLAGS; xsi:NLSPATH; PROJECTDIR`.
 
 **Standard output:** UNVERIFIED
 
@@ -2996,7 +2996,7 @@ man [-k] name...
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PAGER`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PAGER`.
 
 **Standard output:** UNVERIFIED
 
@@ -3044,7 +3044,7 @@ mesg [y|n]
 
 **Standard input:** Examined first to identify an associated terminal; standard output and standard error are checked in that order if standard input is not a terminal.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** With no operand write terminal permission status ("is y\n" or "is n\n"); with y or n operand write nothing.
 
@@ -3092,7 +3092,7 @@ mkdir [-p] [-m mode] dir...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used (-v created-directory messages are a documented extension).
 
@@ -3140,7 +3140,7 @@ mkfifo [-m mode] file...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -3188,7 +3188,7 @@ mkfifo [-m mode] file...
 
 **Standard input:** Read when no file operand is supplied or an operand is -.
 
-**Environment:** `COLUMNS; EDITOR; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; LINES; MORE; TERM`.
+**Environment:** `COLUMNS; EDITOR; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; LINES; MORE; TERM`.
 
 **Standard output:** Copied input content, paginated only when stdout is a terminal; prompts and terminal UI are kept off stdout.
 
@@ -3237,7 +3237,7 @@ mv [-if] source_file... target_dir
 
 **Standard input:** Used only to read one response line per overwrite prompt written to standard error (affirmative per the C-locale yesexpr plus the provisioned de_DE catalog; other locales are refused loudly); otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -3285,7 +3285,7 @@ newgrp [-l] [group]
 
 **Standard input:** Not used; password input is read from the terminal device, not standard input.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -3333,7 +3333,7 @@ nice [-n increment] utility [argument...]
 
 **Standard input:** Passed through unchanged to the invoked utility.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** Not used by nice itself; inherited by the invoked utility.
 
@@ -3382,7 +3382,7 @@ nice [-n increment] utility [argument...]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -3430,7 +3430,7 @@ nohup utility [argument...]
 
 **Standard input:** A terminal standard input is redirected to an unreadable /dev/null before command lookup; a non-terminal standard input passes through to the utility.
 
-**Environment:** `HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** A terminal (or absent) standard output is appended to nohup.out in the invocation directory, else $HOME/nohup.out, created 0600; otherwise the utility inherits it unchanged and nohup writes nothing to it.
 
@@ -3479,7 +3479,7 @@ od [-v] [-A address_base] [-j skip] [-N count] [-t type_string]... [file...]
 
 **Standard input:** Used when no file operand is present and for each file operand of -; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; xsi:NLSPATH`.
 
 **Standard output:** Write the selected bytes in the requested formats, with the input offset at the start and after the final byte, suppressing duplicate groups unless -v is specified.
 
@@ -3527,7 +3527,7 @@ paste [-s] [-d list] file...
 
 **Standard input:** Used only when a file operand is - (or, as an extension, when no operands are given).
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** The concatenated lines separated by tabs or the -d delimiter elements, each output line newline-terminated.
 
@@ -3575,7 +3575,7 @@ patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; LC_TIME`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; LC_TIME`.
 
 **Standard output:** UNVERIFIED
 
@@ -3623,7 +3623,7 @@ pathchk [-p] [-P] pathname...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH. Translated diagnostics/catalog lookup remain residual.`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -3674,7 +3674,7 @@ pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [f
 
 **Standard input:** In write mode, used only when no file operand is present and then contains newline-terminated pathnames. In list/read mode, supplies the archive when -f is absent. Otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TMPDIR; TZ`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TMPDIR; TZ`.
 
 **Standard output:** In write mode without -f, write the archive. In list mode, write selected member pathnames or the specified list format; -v uses ls -l-shaped listings and identifies hard links.
 
@@ -3722,7 +3722,7 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 **Standard input:** Read as a text file when no file operand is given or when a file operand is -; /dev/tty supplies -p responses.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TZ`.
 
 **Standard output:** Write paginated input, including headers and trailers unless -t suppresses them; formatting is controlled by the declared page, column, tab, numbering, width, and merge options.
 
@@ -3770,7 +3770,7 @@ printf format [argument...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; xsi:NLSPATH`.
 
 **Standard output:** Write the expanded format, reusing it as necessary, with no implicit newline beyond one present in the format.
 
@@ -3818,7 +3818,7 @@ printf format [argument...]
 
 **Standard input:** Not used.
 
-**Environment:** `COLUMNS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
+**Environment:** `COLUMNS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TZ`.
 
 **Standard output:** Write information about selected processes. Without -o the base format is unspecified; XSI default, full, and long layouts and -o fields use the required headings, ordering, values, and user-supplied header overrides.
 
@@ -3866,7 +3866,7 @@ pwd [-L|-P]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_MESSAGES; NLSPATH; PWD`.
+**Environment:** `LANG; LC_ALL; LC_MESSAGES; xsi:NLSPATH; PWD`.
 
 **Standard output:** Write one absolute pathname of the current working directory followed by a newline; a standard-output failure is diagnosed and returns failure.
 
@@ -3914,7 +3914,7 @@ read [-r] var...
 
 **Standard input:** Read one logical line from standard input.
 
-**Environment:** `IFS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PS2`.
+**Environment:** `IFS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PS2`.
 
 **Standard output:** Not used by read itself.
 
@@ -3962,7 +3962,7 @@ renice [-g|-p|-u] -n increment ID...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -4011,7 +4011,7 @@ rm -f [-iRr] [file...]
 
 **Standard input:** Used only to read one response line per prompt (before each non-directory, before descending a directory whose permissions deny writing when standard input is a terminal or under -i, and again after a directory is emptied under -i; affirmative per the C-locale yesexpr plus the provisioned de_DE catalog, other locales refused loudly); otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -4059,7 +4059,7 @@ rmdir [-p] dir...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -4109,7 +4109,7 @@ sed [-n] [-e script]... -f script_file [-f script_file]... [file...]
 
 **Standard input:** Used when no file operand is present and for a file operand of -; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write input after applying the editing script; with -n, write only lines explicitly selected for output by the script.
 
@@ -4159,7 +4159,7 @@ sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...
 
 **Standard input:** Used with -s, when neither -c nor operands are present, and by executed commands that inherit it. The shell must not read ahead past commands and must enable blocking reads on FIFO or terminal standard input.
 
-**Environment:** `ENV; FCEDIT; HISTFILE; HISTSIZE; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; MAIL; MAILCHECK; MAILPATH; NLSPATH; PATH; PWD`.
+**Environment:** `ENV; FCEDIT; HISTFILE; HISTSIZE; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; MAIL; MAILCHECK; MAILPATH; xsi:NLSPATH; PATH; PWD`.
 
 **Standard output:** Used by executed shell commands and by shell constructs whose specifications require standard output.
 
@@ -4207,7 +4207,7 @@ sleep time
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -4256,7 +4256,7 @@ sort [-c|-C] [-bdfinru] [-t char] [-k keydef] [file]
 
 **Standard input:** Used only when no file operand is present or when a file operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; xsi:NLSPATH`.
 
 **Standard output:** Unless -o or -c is in effect, write the sorted input. Merge and uniqueness affect the result; check mode writes no sorted result.
 
@@ -4305,7 +4305,7 @@ split -b n[k|m] [-a suffix_length] [file [name]]
 
 **Standard input:** Used when file is omitted or is -; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -4353,7 +4353,7 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Standard input:** Used only when no file operands are present.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write each printable character sequence of at least the selected length, optionally preceded by its file offset in the radix selected by -t.
 
@@ -4401,7 +4401,7 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** UNVERIFIED
 
@@ -4450,7 +4450,7 @@ stty operand...
 
 **Standard input:** The standard input shall be associated with the terminal whose characteristics are read or changed.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write the default, -a, or -g terminal settings report; setting-only invocations need not write output.
 
@@ -4499,7 +4499,7 @@ tabs [-T type] n[[sep[+]n]...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TERM`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; TERM`.
 
 **Standard output:** When standard output is a terminal, write the terminal-control sequence that clears and sets the requested tab stops; results are undefined when standard output is not a terminal.
 
@@ -4547,7 +4547,7 @@ tail [-f] [-c number|-n number] [file]
 
 **Standard input:** Used when no file operand is given or the operand is -; with -f, a pipe or FIFO on standard input is read once to EOF and -f is ignored per the Issue 7 rule, while a regular file on standard input is followed by descriptor.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** The designated portion of the input file; headers appear only with -v or multiple file operands (extension).
 
@@ -4595,7 +4595,7 @@ tail [-f] [-c number|-n number] [file]
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TERM`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; TERM`.
 
 **Standard output:** UNVERIFIED
 
@@ -4643,7 +4643,7 @@ tee [-ai] [file...]
 
 **Standard input:** Read as a byte stream of any type and copy without buffering.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write an exact copy of standard input.
 
@@ -4692,7 +4692,7 @@ test [expression]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -4740,7 +4740,7 @@ time [-p] utility [argument...]
 
 **Standard input:** Passed unchanged to the invoked utility; time itself does not read it.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; xsi:NLSPATH; PATH`.
 
 **Standard output:** Used only by the invoked utility; the timing report is not written here.
 
@@ -4788,7 +4788,7 @@ touch [-acm] [-r ref_file|-t time|-d date_time] file...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; TZ`.
 
 **Standard output:** Not used.
 
@@ -4836,7 +4836,7 @@ tput [-T type] operand...
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; TERM`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; TERM`.
 
 **Standard output:** When standard output is a terminal, write the requested clear, initialization, and reset sequences; results are undefined when standard output is not a terminal.
 
@@ -4887,7 +4887,7 @@ tr -ds [-c|-C] string1 string2
 
 **Standard input:** Read bytes or characters to transform from standard input; any file type is permitted.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write input identically except for the translations, deletions, and repeated-character squeezing requested.
 
@@ -4983,7 +4983,7 @@ tsort [file]
 
 **Standard input:** Used when file is omitted or is -; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write a text file containing one total ordering consistent with the partial-order input.
 
@@ -5031,7 +5031,7 @@ tty
 
 **Standard input:** Examined but not read to determine terminal status and name.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** For a terminal write its ttyname()-equivalent pathname and newline; otherwise write an informative message, exactly not a tty followed by newline in the POSIX locale.
 
@@ -5079,7 +5079,7 @@ umask [-S] [mask]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** With no mask, write the current mask in reusable default or -S symbolic form followed by a newline; otherwise write nothing.
 
@@ -5128,7 +5128,7 @@ unalias -a
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -5176,7 +5176,7 @@ uname [-amnrsv]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** One line of the selected symbols in the fixed order sysname nodename release version machine regardless of flag order, separated by single spaces; no flags means -s; -a selects exactly -mnrsv; all supported platform probes provide every selected POSIX symbol; repeated selectors do not duplicate fields.
 
@@ -5224,7 +5224,7 @@ unexpand [-a|-t tablist] [file...]
 
 **Standard input:** Used when no file operands are present and for a file operand of -.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write input equivalently, replacing the maximum eligible runs of spaces with tabs according to the default or selected tab stops.
 
@@ -5272,7 +5272,7 @@ uniq [-c|-d|-u] [-f fields] [-s char] [input_file [output_file]]
 
 **Standard input:** Read when no input_file is given or input_file is -.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH. C/POSIX byte-unit behavior is evidenced with LC_ALL=C and POSIXLY_CORRECT;  interpretation under any non-C LC_CTYPE, locale-specific blank classes, translated diagnostics, and catalog lookup remain residual.`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. C/POSIX byte-unit behavior is evidenced with LC_ALL=C and POSIXLY_CORRECT;  interpretation under any non-C LC_CTYPE and locale-specific blank classes remain residual.`.
 
 **Standard output:** Write the selected first line of each adjacent group by default, or counted/duplicate/unique output according to options, unless an output_file operand redirects output.
 
@@ -5320,7 +5320,7 @@ uudecode [-o outfile] [file]
 
 **Standard input:** Used when file is omitted; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Used only when the encoded header names - or /dev/stdout, or -o names /dev/stdout; then write the decoded original byte stream.
 
@@ -5368,7 +5368,7 @@ uuencode [-m] [file] decode_pathname
 
 **Standard input:** Used only when the file operand is omitted.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write the encoded text: historical uuencode framing by default or begin-base64 framing under -m, including the input access mode, decode pathname, bounded data lines, and required terminator.
 
@@ -5416,7 +5416,7 @@ uuencode [-m] [file] decode_pathname
 
 **Standard input:** UNVERIFIED
 
-**Environment:** `COLUMNS; EXINIT; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LINES; NLSPATH; PATH; SHELL; TERM`.
+**Environment:** `COLUMNS; EXINIT; HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LINES; xsi:NLSPATH; PATH; SHELL; TERM`.
 
 **Standard output:** UNVERIFIED
 
@@ -5464,7 +5464,7 @@ wait [pid...]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Not used.
 
@@ -5512,7 +5512,7 @@ wc [-c|-m] [-lw] [file...]
 
 **Standard input:** Used when no file operands are present and for a file operand of -; otherwise not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write selected newline, word, byte, or character counts in required order for each input; omit the pathname for sole stdin, and append a total line when more than one file operand is supplied.
 
@@ -5565,7 +5565,7 @@ who [-mTu] [file]
 
 **Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TZ`.
 
 **Standard output:** Write implementation-defined login information; XSI formats include the required fields, terminal-state form under -T, selector-specific records, and quick-list output under -q.
 
@@ -5613,7 +5613,7 @@ write user_name [terminal]
 
 **Standard input:** Read lines to copy to the recipient terminal.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
 **Standard output:** Write an informational message when the recipient is logged in more than once.
 
@@ -5661,7 +5661,7 @@ write user_name [terminal]
 
 **Standard input:** Read logical lines and construct arguments using blank, newline, quote, and backslash rules; /dev/tty supplies -p responses.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
 **Standard output:** Not used by xargs itself; the invoked utility can write to its inherited standard output.
 

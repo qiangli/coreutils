@@ -66,6 +66,7 @@ OPTION_ARGUMENT_OPTION = re.compile(
     r"^(?P<option>[+-](?:[A-Za-z0-9]+|<[a-z][a-z0-9_]*>))"
     r"(?:=<[^>]+>|\[[a-z_]+\](?:\[[a-z_]+\])*)$"
 )
+BARE_NLSPATH = re.compile(r"(?<![A-Za-z0-9_:])NLSPATH(?![A-Za-z0-9_])")
 AVAILABILITY = {"go", "shell_only", "external_provider"}
 OWNERS = {"go", "shell", "external_provider"}
 OWNED_IMPLEMENTATION_OWNERS = frozenset({"go", "shell"})
@@ -543,6 +544,20 @@ def validate(
             raise ManifestError(f"{command}: base synopsis/applicability mismatch")
         if not ({tag for tag, _ in synopses} | set(_conditional_options(row))) <= set(applicability):
             raise ManifestError(f"{command}: undeclared conditional applicability")
+
+        environment = row["environment"]
+        if BARE_NLSPATH.search(environment):
+            raise ManifestError(
+                f"{command}: NLSPATH must be recorded with xsi: applicability"
+            )
+        if "xsi:NLSPATH" in environment and "LC_MESSAGES" not in environment:
+            raise ManifestError(
+                f"{command}: xsi:NLSPATH requires the LC_MESSAGES category"
+            )
+        if "LC_MESSAGES" in environment and "xsi:NLSPATH" not in environment:
+            raise ManifestError(
+                f"{command}: LC_MESSAGES requires the XSI NLSPATH disposition"
+            )
         declared_options(row)
 
         if not row["clause_ids"].startswith(f"XCU:{command}:"):
