@@ -1,2 +1,4 @@
 {"op":"add","slug":"pathchk-empty-operands","tool":"codex-gpt5.6-luna-q","host":"dragon","episode":"weave-issue-641","at":"2026-08-13T13:11:25.482575Z"}
 {"op":"validate","slug":"pathchk-empty-operands","tool":"codex","host":"dragon","at":"2026-08-19T20:23:36Z"}
+{"op":"add","slug":"uuencode-stdin-and-zero-sextet-framing","tool":"codex-gpt5.6-terra-e","host":"dragon","episode":"weave-issue-57","at":"2026-08-25T02:42:08.417113Z"}
+{"op":"validate","slug":"uuencode-stdin-and-zero-sextet-framing","tool":"codex-gpt5.6-terra-e","host":"dragon","episode":"weave-issue-57","at":"2026-08-25T02:42:13.903369Z"}

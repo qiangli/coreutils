@@ -1,6 +1,5 @@
 // Package uudecodecmd implements decoding of the portable uuencode formats.
-// Header output names are restricted to safe relative basenames; use -o to
-// select an explicit path.
+// Header output names follow ordinary utility pathname semantics.
 package uudecodecmd
 
 import (
@@ -10,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -22,7 +20,7 @@ var cmd = &tool.Tool{
 	Usage: "uudecode [OPTION]... [FILE]...\n\n" +
 		"Decode traditional or begin-base64 data from FILEs, or standard input.\n\n" +
 		"  -o, --output-file=FILE  write to FILE instead of the header name; - means stdout\n\n" +
-		"Header output names are limited to safe relative basenames.",
+		"Header output names use ordinary pathname semantics.",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -52,12 +50,6 @@ func run(rc *tool.RunContext, args []string) int {
 
 	failed := false
 	for _, operand := range operands {
-		if operand == "-" {
-			if !decodeInput(rc, "standard input", rc.In, *output) {
-				failed = true
-			}
-			continue
-		}
 		f, err := os.Open(rc.Path(operand))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
@@ -127,20 +119,17 @@ func parseHeader(line string) (header, bool, error) {
 	if len(parts) != 2 || parts[1] == "" {
 		return header{}, false, fmt.Errorf("malformed 'begin' line")
 	}
-	mode, err := strconv.ParseUint(parts[0], 8, 12)
-	if err != nil || mode > 0o7777 {
+	mode, err := parseHeaderMode(parts[0])
+	if err != nil {
 		return header{}, false, fmt.Errorf("malformed 'begin' line")
 	}
-	return header{name: parts[1], mode: os.FileMode(mode) & 0o666, base64: base64Header}, true, nil
+	return header{name: parts[1], mode: mode, base64: base64Header}, true, nil
 }
 
 func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string) bool {
 	name := h.name
 	if override != "" {
 		name = override
-	} else if !stdoutName(name) && !safeHeaderName(name) {
-		fmt.Fprintf(rc.Err, "uudecode: unsafe output name in header: %q; use --output-file\n", name)
-		return false
 	}
 
 	decode := func(w io.Writer) error {
@@ -164,6 +153,9 @@ func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string)
 }
 
 func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) error) (err error) {
+	if err := checkOverwrite(path); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".uudecode-*")
 	if err != nil {
 		return err
@@ -189,10 +181,6 @@ func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) erro
 }
 
 func stdoutName(name string) bool { return name == "-" || name == "/dev/stdout" }
-
-func safeHeaderName(name string) bool {
-	return name != "" && name != "." && name != ".." && filepath.Base(name) == name && !filepath.IsAbs(name) && !strings.ContainsAny(name, `/\\`)
-}
 
 func readLine(r *bufio.Reader) (string, error) {
 	line, err := r.ReadString('\n')

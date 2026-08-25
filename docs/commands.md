@@ -183,7 +183,8 @@ or NO.
 Shipped: sed; xargs (command-wrapper tier, see the NO list — spawns
 COMMAND directly; GNU subset incl. -I, -P, -0, -d); awk (goawk);
 file (portable built-in signature set); iconv (Go IANA encoding registry);
-uuencode/uudecode (classic portable format); plus
+uuencode/uudecode (POSIX classic and `-m` base64 formats; omitted uuencode
+input reads standard input with the POSIX/reference 0644 header mode); plus
 the agent-oriented extras not tracked by this GNU-manual inventory
 (watch, tree, cal, time, timeout, at/atq/atrm/batch/crontab, browser,
 fetch, clip, tokens, duration, tz, ntp, why — see `cmds/all/all.go` for the

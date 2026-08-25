@@ -19,7 +19,7 @@ func runTool(t *testing.T, dir, stdin string, args ...string) (string, string, i
 	return out.String(), err.String(), code
 }
 
-const catFixture = "noise before header\nbegin 640 cat.txt\n#0V%T\n`\nend\n"
+const catFixture = "noise before header\nbegin 640 cat.txt\n#0V%T\n \nend\n"
 
 func TestDecodeHeaderOutputAndMode(t *testing.T) {
 	dir := t.TempDir()
@@ -50,27 +50,35 @@ func TestDecodeToStdoutAndFileOperand(t *testing.T) {
 	}
 }
 
-func TestUnsafeHeaderNamesRejectedUnlessOverridden(t *testing.T) {
-	for _, name := range []string{"../escape", "/tmp/escape", `dir\\escape`} {
-		dir := t.TempDir()
-		fixture := "begin 600 " + name + "\n`\nend\n"
-		_, errb, code := runTool(t, dir, fixture)
-		if code != 1 || !strings.Contains(errb, "unsafe output name") {
-			t.Errorf("name=%q err=%q code=%d", name, errb, code)
-		}
-	}
+func TestHeaderPathnamesAndSymbolicModes(t *testing.T) {
 	dir := t.TempDir()
-	_, errb, code := runTool(t, dir, "begin 600 ../escape\n#0V%T\n`\nend\n", "-o", "safe")
-	if code != 0 || errb != "" {
-		t.Fatalf("override err=%q code=%d", errb, code)
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "safe")); err != nil || string(b) != "Cat" {
+	_, errb, code := runTool(t, dir, "begin u=rw,g=r,o= nested/safe\n#0V%T\n \nend\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	path := filepath.Join(dir, "nested", "safe")
+	if b, err := os.ReadFile(path); err != nil || string(b) != "Cat" {
 		t.Fatalf("safe=%q err=%v", b, err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
+	}
+	// An absolute decode pathname is likewise passed to normal pathname handling.
+	abs := filepath.Join(dir, "absolute")
+	_, errb, code = runTool(t, dir, "begin 600 "+abs+"\n \nend\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("absolute err=%q code=%d", errb, code)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestMalformedAndUnsupportedInputs(t *testing.T) {
-	for _, in := range []string{"", "begin nope x\n`\nend\n", "begin 600 x\n#0V\n`\nend\n", "begin 600 x\n#0~%T\n`\nend\n", "begin 600 x\n#0V%T\n"} {
+	for _, in := range []string{"", "begin nope x\n \nend\n", "begin 600 x\n#0V\n \nend\n", "begin 600 x\n#0~%T\n \nend\n", "begin 600 x\n#0V%T\n"} {
 		_, errb, code := runTool(t, t.TempDir(), in, "-o", "-")
 		if code == 0 || errb == "" {
 			t.Errorf("input=%q err=%q code=%d", in, errb, code)
@@ -78,9 +86,16 @@ func TestMalformedAndUnsupportedInputs(t *testing.T) {
 	}
 }
 
+func TestClassicBacktickExtensionIsAccepted(t *testing.T) {
+	out, errb, code := runTool(t, t.TempDir(), "begin 600 ignored\n#0V%T\n`\nend\n", "-o", "-")
+	if code != 0 || errb != "" || out != "Cat" {
+		t.Fatalf("got (%q,%q,%d)", out, errb, code)
+	}
+}
+
 func TestDecodeBase64AndHeaderScanning(t *testing.T) {
 	dir := t.TempDir()
-	input := "preamble\nbegin 640 first\n#0V%T\n`\nend\ntrailer\nbegin-base64 600 second\nRG9uZQ==\n====\n"
+	input := "preamble\nbegin 640 first\n#0V%T\n \nend\ntrailer\nbegin-base64 600 second\nRG9uZQ==\n====\n"
 	_, errb, code := runTool(t, dir, input)
 	if code != 0 || errb != "" {
 		t.Fatalf("err=%q code=%d", errb, code)
@@ -96,7 +111,7 @@ func TestDecodeBase64AndHeaderScanning(t *testing.T) {
 func TestDecodeMultipleInputFilesAndOutputConflict(t *testing.T) {
 	dir := t.TempDir()
 	for name, data := range map[string]string{
-		"one.uue": "begin 600 one\n#0V%T\n`\nend\n",
+		"one.uue": "begin 600 one\n#0V%T\n \nend\n",
 		"two.uue": "begin-base64 600 two\nRG9uZQ==\n====\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
@@ -131,7 +146,7 @@ func TestDecodeOutputLifecycleAndMode(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("err=%q code=%d", errb, code)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o666 {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o777 {
 		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
 	}
 }

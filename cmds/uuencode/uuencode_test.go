@@ -21,8 +21,15 @@ func runTool(t *testing.T, dir, stdin string, args ...string) (string, string, i
 
 func TestEncodeKnownVectorFromStdin(t *testing.T) {
 	out, err, code := runTool(t, t.TempDir(), "Cat", "cat.txt")
-	if code != 0 || err != "" || out != "begin 666 cat.txt\n#0V%T\n`\nend\n" {
+	if code != 0 || err != "" || out != "begin 644 cat.txt\n#0V%T\n \nend\n" {
 		t.Fatalf("got (%q, %q, %d)", out, err, code)
+	}
+}
+
+func TestClassicUsesSpacesForZeroSextets(t *testing.T) {
+	out, errb, code := runTool(t, t.TempDir(), "\x00\x00\x00", "zeros")
+	if code != 0 || errb != "" || out != "begin 644 zeros\n#    \n \nend\n" {
+		t.Fatalf("got (%q, %q, %d)", out, errb, code)
 	}
 }
 
@@ -41,8 +48,25 @@ func TestEncodeFileAndMode(t *testing.T) {
 	}
 }
 
-func TestErrorsAndUnsupportedVariant(t *testing.T) {
-	for _, tc := range [][]string{{}, {"a", "b", "c"}, {"-m", "name"}, {"missing", "name"}} {
+func TestEncodeBase64AndModes(t *testing.T) {
+	data := strings.Repeat("x", 58)
+	out, errb, code := runTool(t, t.TempDir(), data, "-m", "remote")
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if code != 0 || errb != "" || lines[0] != "begin-base64 644 remote" || len(lines[1]) != 76 || lines[3] != "====" {
+		t.Fatalf("got (%q, %q, %d)", out, errb, code)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runTool(t, dir, "ignored", "-", "remote")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "begin 600 remote\n") {
+		t.Fatalf("dash input got (%q,%q,%d)", out, errb, code)
+	}
+}
+
+func TestErrors(t *testing.T) {
+	for _, tc := range [][]string{{}, {"a", "b", "c"}, {"missing", "name"}} {
 		_, err, code := runTool(t, t.TempDir(), "", tc...)
 		if code == 0 || err == "" {
 			t.Errorf("args %v: err=%q code=%d", tc, err, code)
