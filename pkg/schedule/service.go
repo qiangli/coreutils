@@ -43,6 +43,17 @@ func serviceStopPath(identity daemonIdentity) string {
 	return filepath.Join(filepath.Dir(statePath()), strings.TrimSuffix(identity.Lease, ".lock")+".stop")
 }
 
+func removeStaleStopTokens(keep daemonIdentity) {
+	paths, _ := filepath.Glob(filepath.Join(filepath.Dir(statePath()), "schedule-daemon-lease-*.stop"))
+	for _, path := range paths {
+		lease := strings.TrimSuffix(filepath.Base(path), ".stop") + ".lock"
+		if !validLeaseName(lease) || lease == keep.Lease {
+			continue
+		}
+		_ = os.Remove(path)
+	}
+}
+
 func writeIdentity(path string, identity daemonIdentity) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -155,6 +166,14 @@ func (l *daemonLease) Release() error {
 }
 
 func claimDaemonLease() (*daemonLease, daemonIdentity, error) {
+	lifecycle, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
+		Name: "bashy-schedule-daemon", Intent: "publish daemon generation",
+	})
+	if err != nil {
+		return nil, daemonIdentity{}, err
+	}
+	defer lifecycle.Release()
+
 	name, err := newLeaseName()
 	if err != nil {
 		return nil, daemonIdentity{}, err
@@ -166,6 +185,9 @@ func claimDaemonLease() (*daemonLease, daemonIdentity, error) {
 	if err != nil {
 		return nil, daemonIdentity{}, fmt.Errorf("schedule daemon already running: %w", err)
 	}
+	// Holding the election proves there is no live older generation. Clean any
+	// stop request orphaned by an abnormal exit before publishing this one.
+	removeStaleStopTokens(identity)
 	identityLease, err := lockfile.TryAcquire(leasePath(identity), lockfile.Holder{
 		Name: "bashy-schedule-daemon", PID: identity.PID, Intent: name,
 	})
@@ -177,6 +199,7 @@ func claimDaemonLease() (*daemonLease, daemonIdentity, error) {
 	if err := writeIdentity(servicePidPath(), identity); err != nil {
 		_ = lease.Release()
 		_ = os.Remove(leasePath(identity))
+		_ = os.Remove(serviceStopPath(identity))
 		return nil, daemonIdentity{}, err
 	}
 	_ = os.Remove(serviceStopPath(identity))
@@ -215,13 +238,20 @@ func startService(interval time.Duration, command serviceCommandFactory) (status
 	if err != nil {
 		return ServiceStatus{}, err
 	}
-	defer func() { retErr = errors.Join(retErr, startLock.Release()) }()
+	startLocked := true
+	defer func() {
+		if startLocked {
+			retErr = errors.Join(retErr, startLock.Release())
+		}
+	}()
 
 	if st, stale := serviceStatusLocked(); st.Running {
 		return st, nil
 	} else if validLeaseName(stale.Lease) {
 		_ = os.Remove(leasePath(stale))
+		_ = os.Remove(serviceStopPath(stale))
 	}
+	removeStaleStopTokens(daemonIdentity{})
 	p := servicePidPath()
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return ServiceStatus{}, err
@@ -240,6 +270,18 @@ func startService(interval time.Duration, command serviceCommandFactory) (status
 	if err := cmd.Start(); err != nil {
 		return ServiceStatus{}, err
 	}
+	// The launcher retains an unreaped process handle but releases the lifecycle
+	// lock before waiting. The child, like every directly invoked daemon, must
+	// acquire that lock around election and publication. Stop can therefore
+	// linearize before this not-yet-published start, while never overlapping a
+	// published replacement generation.
+	if err := startLock.Release(); err != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		startLocked = false
+		return ServiceStatus{}, err
+	}
+	startLocked = false
 	pid := cmd.Process.Pid
 	deadline := time.Now().Add(serviceReadyTimeout)
 	for time.Now().Before(deadline) {
@@ -260,6 +302,7 @@ func startService(interval time.Duration, command serviceCommandFactory) (status
 	if identity, err := readIdentity(p); err == nil && identity.PID == pid && !identityIsLive(identity) {
 		_ = os.Remove(p)
 		_ = os.Remove(leasePath(identity))
+		_ = os.Remove(serviceStopPath(identity))
 	}
 	return ServiceStatus{}, fmt.Errorf("schedule daemon pid %d did not publish its lifetime lease", pid)
 }
@@ -296,7 +339,9 @@ func stopService(timeout time.Duration) ServiceStatus {
 		_ = os.Remove(p)
 		if validLeaseName(identity.Lease) {
 			_ = os.Remove(leasePath(identity))
+			_ = os.Remove(serviceStopPath(identity))
 		}
+		removeStaleStopTokens(daemonIdentity{})
 		return ServiceStatus{PidFile: p}
 	}
 	if err := requestDaemonStop(identity); err != nil {

@@ -326,6 +326,129 @@ func TestStopWaitsForLeaseReleaseBeforeConcurrentReplacement(t *testing.T) {
 	}
 }
 
+func TestDirectDaemonCannotPublishDuringStopLifecycle(t *testing.T) {
+	state := withState(t)
+	logPath := filepath.Join(filepath.Dir(state), "direct-stop-order")
+	t.Setenv("BASHY_SERVICE_START_LOG", logPath)
+	t.Setenv("BASHY_SERVICE_TERM_DELAY", "250ms")
+	first, err := startService(time.Hour, managedDaemonCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstIdentity, err := readIdentity(servicePidPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopDone := make(chan ServiceStatus, 1)
+	go func() { stopDone <- StopService() }()
+	deadline := time.Now().Add(time.Second)
+	for !daemonStopRequested(firstIdentity) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !daemonStopRequested(firstIdentity) {
+		t.Fatal("stop did not publish the old generation request")
+	}
+
+	direct := exec.Command(os.Args[0], "-test.run=^TestManagedDaemonProcessHelper$")
+	direct.Env = append(os.Environ(),
+		"BASHY_MANAGED_DAEMON_HELPER=1",
+		"BASHY_SERVICE_START_LOG="+logPath,
+		"BASHY_SERVICE_TERM_DELAY=",
+		"BASHY_SCHEDULE_STATE="+state,
+	)
+	if err := direct.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = direct.Process.Kill()
+		_, _ = direct.Process.Wait()
+	}()
+
+	// The direct daemon is already executing claimDaemonLease, but the stop
+	// operation still owns the lifecycle lock while the old daemon drains.
+	time.Sleep(50 * time.Millisecond)
+	if current, err := readIdentity(servicePidPath()); err != nil || current != firstIdentity {
+		t.Fatalf("direct daemon published during stop: identity=%+v err=%v", current, err)
+	}
+	if stopped := <-stopDone; stopped.Running {
+		t.Fatalf("old daemon did not stop: %+v", stopped)
+	}
+
+	var replacement daemonIdentity
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		replacement, _ = readIdentity(servicePidPath())
+		if replacement != firstIdentity && identityIsLive(replacement) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if replacement == firstIdentity || !identityIsLive(replacement) {
+		t.Fatalf("direct replacement did not publish after stop: %+v", replacement)
+	}
+	if replacement.PID == first.PID {
+		t.Fatalf("replacement reused old generation PID %d", first.PID)
+	}
+	if st := StopService(); st.Running {
+		t.Fatalf("direct replacement did not consume stop request: %+v", st)
+	}
+
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	want := []string{"start " + strconv.Itoa(first.PID), "stop-start " + strconv.Itoa(first.PID), "stop-end " + strconv.Itoa(first.PID), "start " + strconv.Itoa(replacement.PID), "stop-start " + strconv.Itoa(replacement.PID), "stop-end " + strconv.Itoa(replacement.PID)}
+	if strings.Join(lines, "|") != strings.Join(want, "|") {
+		t.Fatalf("direct/stop lifecycle ordering=%q, want %q", lines, want)
+	}
+}
+
+func TestAbnormalDaemonExitStaleCleanupRemovesGenerationStop(t *testing.T) {
+	withState(t)
+	t.Setenv("BASHY_SERVICE_IGNORE_STOP", "1")
+	started, err := startService(time.Hour, managedDaemonCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := readIdentity(servicePidPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := stopService(50 * time.Millisecond); !st.Running {
+		t.Fatalf("unresponsive daemon unexpectedly stopped: %+v", st)
+	}
+	if _, err := os.Stat(serviceStopPath(identity)); err != nil {
+		t.Fatalf("generation stop token was not created: %v", err)
+	}
+	proc, err := os.FindProcess(started.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proc.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for identityIsLive(identity) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if identityIsLive(identity) {
+		t.Fatal("abnormally exited daemon retained its kernel leases")
+	}
+	orphan := daemonIdentity{Lease: "schedule-daemon-lease-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.lock"}
+	if err := os.WriteFile(serviceStopPath(orphan), []byte(orphan.Lease+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st := StopService(); st.Running {
+		t.Fatalf("stale cleanup reported running: %+v", st)
+	}
+	for _, path := range []string{servicePidPath(), leasePath(identity), serviceStopPath(identity), serviceStopPath(orphan)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stale artifact %s survived cleanup: %v", path, err)
+		}
+	}
+}
+
 func TestStopNeverEscalatesToUnsafePIDSignal(t *testing.T) {
 	withState(t)
 	t.Setenv("BASHY_SERVICE_IGNORE_STOP", "1")
