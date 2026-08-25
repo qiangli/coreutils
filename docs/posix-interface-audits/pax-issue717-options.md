@@ -1,11 +1,11 @@
 # pax `-o` POSIX Issue 7 audit (Sprint 79 issue 717)
 
-Scope: the normative `pax -o options` language in POSIX.1-2017 Issue 7,
+Scope: the normative `pax -o options` language in POSIX Issue 7, 2016 Edition,
 including List Mode Format Specifications and extended-header keyword
 precedence.  The authoritative reference is the Open Group `pax` utility
 page:
 
-<https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/utilities/pax.html>
+<https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html>
 
 ## Implemented and tested
 
