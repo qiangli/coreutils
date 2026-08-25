@@ -10,7 +10,7 @@ import (
 
 var umaskMu sync.Mutex
 
-func umask() uint32 {
+func processUmask() uint32 {
 	umaskMu.Lock()
 	defer umaskMu.Unlock()
 	old := unix.Umask(0)
