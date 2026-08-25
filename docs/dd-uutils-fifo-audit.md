@@ -28,6 +28,12 @@ the current record status once, returns 130 to embedded callers, and asks the
 standalone multicall boundary to terminate with SIGINT so the process wait
 status is `WIFSIGNALED` rather than a normal exit code.
 
+Overlapping embedded invocations that borrow the same descriptor share a
+reference-counted nonblocking lease. The original mode is restored through a
+private duplicate only after the final borrower exits, so an earlier completion
+cannot strand a remaining read or write and descriptor-number reuse cannot
+redirect the restore operation.
+
 Linux named-FIFO input uses an `O_NONBLOCK` read descriptor and a poll state
 machine. Linux retains `POLLHUP` when a writer opens and closes before the first
 read; `TestDdLinuxFIFOImmediateWriterOpenCloseBeforeFirstReadStress` exercises

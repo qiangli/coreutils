@@ -29,3 +29,15 @@ func moveDescriptor(fd int) int {
 	_ = unix.Close(fd)
 	return nfd
 }
+
+func duplicateDescriptor(fd int) (int, error) {
+	nfd, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD, 10)
+	if err != nil {
+		return -1, err
+	}
+	if _, err := unix.FcntlInt(uintptr(nfd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+		_ = unix.Close(nfd)
+		return -1, err
+	}
+	return nfd, nil
+}

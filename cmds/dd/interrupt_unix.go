@@ -132,42 +132,88 @@ func interruptSignalNumber() int {
 	return int(syscall.SIGINT)
 }
 
-// nonblockGuard remembers a descriptor's original O_NONBLOCK state. dd borrows
-// rc.In and rc.Out from the embedding host, and O_NONBLOCK lives on the shared
-// open file description, not on the descriptor: leaving a host's stdin or
-// stdout non-blocking would break every later reader or writer of that stream.
-// Every wrapper therefore restores what it found, on every exit path, and never
-// closes a stream it does not own.
-type nonblockGuard struct {
-	fd      int
-	orig    int
+// O_NONBLOCK belongs to an open file description, so overlapping embedded dd
+// calls that borrow the same descriptor must share one lease. Otherwise the
+// first call to finish can restore blocking mode while another call is still
+// inside the cancellable read/write loop. The duplicate anchor keeps the open
+// file description alive and also prevents a late restore from touching an
+// unrelated descriptor that reused the caller's numeric fd. The registry key
+// is the descriptor supplied by the RunContext: portable Unix has no API for
+// coalescing arbitrary, separately-numbered dup aliases. As with every borrowed
+// stream, its owner must not close or rebind it until Run returns.
+type nonblockLease struct {
+	anchor  int
+	refs    int
 	changed bool
 }
 
+var nonblockLeases = struct {
+	sync.Mutex
+	byFD map[int]*nonblockLease
+}{byFD: make(map[int]*nonblockLease)}
+
+type nonblockGuard struct {
+	fd    int
+	lease *nonblockLease
+	once  *sync.Once
+}
+
 func setNonblockSaving(fd int) (nonblockGuard, error) {
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	nonblockLeases.Lock()
+	defer nonblockLeases.Unlock()
+
+	if lease := nonblockLeases.byFD[fd]; lease != nil {
+		lease.refs++
+		return nonblockGuard{fd: fd, lease: lease, once: new(sync.Once)}, nil
+	}
+
+	anchor, err := duplicateDescriptor(fd)
 	if err != nil {
-		return nonblockGuard{fd: fd}, err
+		return nonblockGuard{}, err
 	}
-	g := nonblockGuard{fd: fd, orig: flags}
-	if flags&unix.O_NONBLOCK != 0 {
-		// Already non-blocking (a Go-poller-managed pipe, or a FIFO we opened
-		// that way ourselves): nothing to change and nothing to restore.
-		return g, nil
+	flags, err := unix.FcntlInt(uintptr(anchor), unix.F_GETFL, 0)
+	if err != nil {
+		_ = unix.Close(anchor)
+		return nonblockGuard{}, err
 	}
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags|unix.O_NONBLOCK); err != nil {
-		return g, err
+	lease := &nonblockLease{anchor: anchor, refs: 1}
+	if flags&unix.O_NONBLOCK == 0 {
+		if _, err := unix.FcntlInt(uintptr(anchor), unix.F_SETFL, flags|unix.O_NONBLOCK); err != nil {
+			_ = unix.Close(anchor)
+			return nonblockGuard{}, err
+		}
+		lease.changed = true
 	}
-	g.changed = true
-	return g, nil
+	nonblockLeases.byFD[fd] = lease
+	return nonblockGuard{fd: fd, lease: lease, once: new(sync.Once)}, nil
 }
 
 func (g *nonblockGuard) restore() {
-	if !g.changed {
+	if g.once == nil || g.lease == nil {
 		return
 	}
-	g.changed = false
-	_, _ = unix.FcntlInt(uintptr(g.fd), unix.F_SETFL, g.orig)
+	g.once.Do(func() {
+		nonblockLeases.Lock()
+		defer nonblockLeases.Unlock()
+
+		lease := nonblockLeases.byFD[g.fd]
+		if lease != g.lease {
+			return
+		}
+		lease.refs--
+		if lease.refs != 0 {
+			return
+		}
+		delete(nonblockLeases.byFD, g.fd)
+		if lease.changed {
+			// Clear only the bit dd borrowed. Replaying an old F_GETFL word
+			// could erase an unrelated status-flag update by the host.
+			if flags, err := unix.FcntlInt(uintptr(lease.anchor), unix.F_GETFL, 0); err == nil {
+				_, _ = unix.FcntlInt(uintptr(lease.anchor), unix.F_SETFL, flags&^unix.O_NONBLOCK)
+			}
+		}
+		_ = unix.Close(lease.anchor)
+	})
 }
 
 // rawDescriptor returns f's descriptor without os.File.Fd's side effect of

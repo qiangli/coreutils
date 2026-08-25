@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -412,6 +413,102 @@ func TestDdRestoresCallerDescriptorFlagsOnInterrupt(t *testing.T) {
 		t.Fatalf("stdout flags=%#x want %#x", got, beforeOut)
 	}
 	assertStreamsStillUsable(t, inR, inW, outR, outW)
+}
+
+// Overlapping embedded calls can borrow the exact same os.File. O_NONBLOCK is
+// shared by that open file description, so the first wrapper to finish must
+// not restore blocking mode out from under the remaining cancellable wrapper.
+func TestDdNonblockLeaseCoordinatesSharedBorrowedDescriptor(t *testing.T) {
+	for _, first := range []string{"older", "newer"} {
+		t.Run("reader releases "+first, func(t *testing.T) {
+			r, _ := blockingPipe(t)
+			before := descriptorFlags(t, r)
+			c1, c2 := newInterruptContext(), newInterruptContext()
+			defer c1.Stop()
+			defer c2.Stop()
+			r1, ok1 := newInterruptReader(r, c1, false)
+			r2, ok2 := newInterruptReader(r, c2, false)
+			if !ok1 || !ok2 {
+				t.Fatal("shared pipe readers were not wrapped")
+			}
+			survivor, survivorContext := r2, c2
+			if first == "older" {
+				_ = r1.Close()
+			} else {
+				_ = r2.Close()
+				survivor, survivorContext = r1, c1
+			}
+			if got := descriptorFlags(t, r); got&unix.O_NONBLOCK == 0 {
+				t.Fatalf("first release restored blocking mode: flags=%#x", got)
+			}
+			survivorContext.interrupt(int(syscall.SIGINT))
+			if n, err := survivor.Read(make([]byte, 1)); n != 0 || !errors.Is(err, errInterrupted) {
+				t.Fatalf("surviving read=(%d, %v), want (0, interrupted)", n, err)
+			}
+			_ = survivor.Close()
+			if got := descriptorFlags(t, r); got != before {
+				t.Fatalf("final reader release flags=%#x want %#x", got, before)
+			}
+		})
+
+		t.Run("writer releases "+first, func(t *testing.T) {
+			_, w := blockingPipe(t)
+			before := descriptorFlags(t, w)
+			c1, c2 := newInterruptContext(), newInterruptContext()
+			defer c1.Stop()
+			defer c2.Stop()
+			w1, ok1 := newInterruptWriter(w, c1)
+			w2, ok2 := newInterruptWriter(w, c2)
+			if !ok1 || !ok2 {
+				t.Fatal("shared pipe writers were not wrapped")
+			}
+			survivor, survivorContext := w2, c2
+			if first == "older" {
+				_ = w1.Close()
+			} else {
+				_ = w2.Close()
+				survivor, survivorContext = w1, c1
+			}
+			if got := descriptorFlags(t, w); got&unix.O_NONBLOCK == 0 {
+				t.Fatalf("first release restored blocking mode: flags=%#x", got)
+			}
+			survivorContext.interrupt(int(syscall.SIGINT))
+			if n, err := survivor.Write([]byte("x")); n != 0 || !errors.Is(err, errInterrupted) {
+				t.Fatalf("surviving write=(%d, %v), want (0, interrupted)", n, err)
+			}
+			_ = survivor.Close()
+			if got := descriptorFlags(t, w); got != before {
+				t.Fatalf("final writer release flags=%#x want %#x", got, before)
+			}
+		})
+	}
+}
+
+func TestDdNonblockLeasePreservesPreexistingNonblock(t *testing.T) {
+	r, _ := blockingPipe(t)
+	fd, ok := rawDescriptor(r)
+	if !ok {
+		t.Fatal("pipe descriptor unavailable")
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unix.SetNonblock(fd, false) })
+	g1, err := setNonblockSaving(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2, err := setNonblockSaving(fd)
+	if err != nil {
+		g1.restore()
+		t.Fatal(err)
+	}
+	g1.restore()
+	g1.restore()
+	g2.restore()
+	if got := descriptorFlags(t, r); got&unix.O_NONBLOCK == 0 {
+		t.Fatalf("preexisting O_NONBLOCK was cleared: flags=%#x", got)
+	}
 }
 
 func TestDdRestoresCallerDescriptorFlagsOnNormalExit(t *testing.T) {

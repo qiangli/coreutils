@@ -22,3 +22,7 @@ func moveDescriptor(fd int) int {
 	}
 	return fd
 }
+
+func duplicateDescriptor(fd int) (int, error) {
+	return unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 10)
+}
