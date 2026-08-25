@@ -115,19 +115,31 @@ func (r *rm) remove1(op, displayOp string) bool {
 		r.errf("failed to remove '': No such file or directory")
 		return false
 	}
-	// POSIX rmdir must reject a path whose final component is "." or ".."
+	// POSIX rmdir must reject a path whose final component is "."
 	// with EINVAL ("Invalid argument") on every platform — it is a portable
 	// semantic guarantee, not an OS accident. This must happen BEFORE the
 	// filesystem call: RunContext.Path normalizes a relative operand, so a
 	// bare "." would otherwise resolve to the working directory itself and
-	// (on some platforms, notably Windows) let os.Remove succeed against it.
+	// (on some platforms, notably Windows, which silently strips a trailing
+	// single dot during path canonicalization) let os.Remove succeed against
+	// an otherwise-empty directory instead of failing as POSIX requires.
+	//
+	// A final component of ".." is deliberately NOT special-cased here.
+	// POSIX's rmdir() only mandates EINVAL for dot; the errno for dot-dot is
+	// unspecified, and real kernels (confirmed on Darwin, documented for
+	// Linux's rmdir(2): "pathname has .. as its final component" under
+	// ENOTEMPTY) simply let it fail naturally: the directory ".." resolves to
+	// always still contains the child entry the operand traversed through, so
+	// it can never be empty. Hardcoding EINVAL here previously produced the
+	// wrong diagnostic and, worse, bypassed --ignore-fail-on-non-empty, which
+	// must suppress this exactly like any other non-empty-directory failure.
 	//
 	// The base is taken from the uncleaned native path, NOT from
-	// filepath.Clean(op): Clean collapses "a/." to "a" and "a/b/.." to "a",
-	// silently swallowing the trailing dot/dotdot that POSIX mandates the
-	// kernel reject. Separator normalization preserves path components, so
-	// "a/.", "a/./", "a/b/..", etc. are all caught here.
-	if base := filepath.Base(op); base == "." || base == ".." {
+	// filepath.Clean(op): Clean collapses "a/." to "a", silently swallowing
+	// the trailing dot that POSIX mandates the kernel reject. Separator
+	// normalization preserves path components, so "a/." and "a/./" are both
+	// caught here.
+	if base := filepath.Base(op); base == "." {
 		r.errf("failed to remove '%s': Invalid argument", displayOp)
 		return false
 	}
