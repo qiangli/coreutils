@@ -13,10 +13,16 @@ import (
 
 func runToolDir(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolDirEnv(t, dir, nil, stdin, args...)
+}
+
+func runToolDirEnv(t *testing.T, dir string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -38,79 +44,91 @@ func TestPasteParallel(t *testing.T) {
 	cases := []struct {
 		name  string
 		files map[string]string
+		env   []string
 		args  []string
 		want  string
 	}{
 		{
 			"two files default tab",
 			map[string]string{"f1": "a\nb\n", "f2": "1\n2\n"},
+			nil,
 			[]string{"f1", "f2"},
 			"a\t1\nb\t2\n",
 		},
 		{
 			"first file longer keeps trailing delimiter",
 			map[string]string{"f1": "a\nb\n", "f2": "1\n"},
+			nil,
 			[]string{"f1", "f2"},
 			"a\t1\nb\t\n",
 		},
 		{
 			"first file shorter keeps leading delimiter",
 			map[string]string{"f1": "a\n", "f2": "1\n2\n"},
+			nil,
 			[]string{"f1", "f2"},
 			"a\t1\n\t2\n",
 		},
 		{
 			"delimiter list cycles and resets per line",
 			map[string]string{"f1": "a\nA\n", "f2": "b\nB\n", "f3": "c\nC\n"},
+			nil,
 			[]string{"-d", ",;", "f1", "f2", "f3"},
 			"a,b;c\nA,B;C\n",
 		},
 		{
 			"backslash-zero is no delimiter",
 			map[string]string{"f1": "a\n", "f2": "b\n"},
+			nil,
 			[]string{"-d", "\\0", "f1", "f2"},
 			"ab\n",
 		},
 		{
 			"escaped tab and newline delimiters",
 			map[string]string{"f1": "a\n", "f2": "b\n", "f3": "c\n"},
+			nil,
 			[]string{"-d", "\\n\\t", "f1", "f2", "f3"},
 			"a\nb\tc\n",
 		},
 		{
-			"multibyte delimiter characters",
+			"multibyte delimiter characters (C.UTF-8 LC_CTYPE)",
 			map[string]string{"f1": "a\nA\n", "f2": "b\nB\n", "f3": "c\nC\n"},
+			[]string{"LC_ALL=C.UTF-8"},
 			[]string{"-d", "αβ", "f1", "f2", "f3"},
 			"aαbβc\nAαBβC\n",
 		},
 		{
-			"escaped multibyte delimiter character",
+			"escaped multibyte delimiter character (C.UTF-8 LC_CTYPE)",
 			map[string]string{"f1": "a\n", "f2": "b\n", "f3": "c\n"},
+			[]string{"LC_ALL=C.UTF-8"},
 			[]string{"-d", "\\αβ", "f1", "f2", "f3"},
 			"aαbβc\n",
 		},
 		{
 			"single file passthrough adds final newline",
 			map[string]string{"f1": "a\nb"},
+			nil,
 			[]string{"f1"},
 			"a\nb\n",
 		},
 		{
 			"empty files produce nothing",
 			map[string]string{"f1": "", "f2": ""},
+			nil,
 			[]string{"f1", "f2"},
 			"",
 		},
 		{
 			"missing final newline still pastes",
 			map[string]string{"f1": "a\nb", "f2": "1\n2"},
+			nil,
 			[]string{"f1", "f2"},
 			"a\t1\nb\t2\n",
 		},
 	}
 	for _, c := range cases {
 		dir := writeFiles(t, c.files)
-		out, errb, code := runToolDir(t, dir, "", c.args...)
+		out, errb, code := runToolDirEnv(t, dir, c.env, "", c.args...)
 		if out != c.want || code != 0 {
 			t.Errorf("%s: paste %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
 		}

@@ -6,7 +6,9 @@
 // per output line in parallel mode and per file in serial mode; a
 // delimiter position is consumed for every file, including exhausted
 // ones, with the trailing delimiter of each line removed; "\0" in the
-// -d LIST means "no delimiter").
+// -d LIST means "no delimiter"). The -d LIST is split into delimiter
+// characters per the invocation's LC_CTYPE (POSIX Issue 7 OPERANDS):
+// see resolveCharacterModel.
 package pastecmd
 
 import (
@@ -15,8 +17,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -40,7 +44,15 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	dl, errMsg := parseDelims(*delims)
+	// LC_CTYPE must be resolved and validated before any operand is
+	// opened: an unsupported locale is a hard failure, not a silent
+	// fallback to C or UTF-8.
+	model, err := resolveCharacterModel(rc.Env)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "paste: %v\n", err)
+		return 1
+	}
+	dl, errMsg := parseDelims(*delims, model)
 	if errMsg != "" {
 		fmt.Fprintf(rc.Err, "paste: %s\n", errMsg)
 		return 1
@@ -87,8 +99,11 @@ func run(rc *tool.RunContext, args []string) int {
 
 // parseDelims expands the -d LIST escapes the GNU manual defines:
 // \n \t \\ \b \f \r \v, and \0 meaning "no delimiter at this position".
-// Any other backslash-escaped character stands for itself.
-func parseDelims(list string) ([][]byte, string) {
+// Any other backslash-escaped character stands for itself. Unescaped
+// (and escaped-default) characters are split into delimiter elements
+// per model, so the original bytes of each element are preserved
+// exactly regardless of locale.
+func parseDelims(list string, model *characterModel) ([][]byte, string) {
 	if list == "" {
 		return nil, "no delimiters specified"
 	}
@@ -97,7 +112,7 @@ func parseDelims(list string) ([][]byte, string) {
 	for i := 0; i < len(list); i++ {
 		c := list[i]
 		if c != '\\' {
-			_, size := utf8.DecodeRuneInString(list[i:])
+			size := characterSize(list[i:], model)
 			out = append(out, []byte(list[i:i+size]))
 			i += size - 1
 			continue
@@ -124,12 +139,72 @@ func parseDelims(list string) ([][]byte, string) {
 		case '\\':
 			out = append(out, []byte{'\\'})
 		default:
-			_, size := utf8.DecodeRuneInString(list[i:])
+			size := characterSize(list[i:], model)
 			out = append(out, []byte(list[i:i+size]))
 			i += size - 1
 		}
 	}
 	return out, ""
+}
+
+// encodingMode is how -d LIST bytes are split into delimiter characters.
+type encodingMode int
+
+const (
+	// encodingSingleByte treats every byte as one character: the C/POSIX
+	// locale and the repository's carried de_DE.ISO-8859-1 alias.
+	encodingSingleByte encodingMode = iota
+	// encodingUTF8 decodes each character as a UTF-8 rune, for the C/POSIX
+	// UTF-8 codeset aliases (e.g. "C.UTF-8").
+	encodingUTF8
+)
+
+// characterModel is the invocation-resolved LC_CTYPE character boundary
+// rule used to split -d LIST into delimiter elements.
+type characterModel struct {
+	encoding encodingMode
+}
+
+// resolveCharacterModel resolves LC_CTYPE (LC_ALL > LC_CTYPE > LANG >
+// POSIX default, per pkg/locale) to a bounded, carried character model.
+// Locales outside that carried set fail loudly rather than silently
+// falling back to single-byte or UTF-8 decoding.
+func resolveCharacterModel(env []string) (*characterModel, error) {
+	name := locale.Resolve(env, locale.CType)
+	base, codeset := splitLocaleName(name)
+	switch {
+	case (base == "C" || base == "POSIX") && codeset == "":
+		return &characterModel{encoding: encodingSingleByte}, nil
+	case (base == "C" || base == "POSIX") && normalizeCodeset(codeset) == "UTF8":
+		return &characterModel{encoding: encodingUTF8}, nil
+	case strings.EqualFold(base, "de_DE") && normalizeCodeset(codeset) == "ISO88591":
+		return &characterModel{encoding: encodingSingleByte}, nil
+	default:
+		return nil, fmt.Errorf(
+			"LC_CTYPE %q is unavailable; supported locales are C/POSIX, their UTF-8 aliases, and de_DE.ISO-8859-1",
+			name,
+		)
+	}
+}
+
+func splitLocaleName(name string) (base, codeset string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ = strings.Cut(name, ".")
+	return base, codeset
+}
+
+func normalizeCodeset(name string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+}
+
+// characterSize reports how many leading bytes of s form one delimiter
+// character under model.
+func characterSize(s string, model *characterModel) int {
+	if model.encoding != encodingUTF8 {
+		return 1
+	}
+	_, size := utf8.DecodeRuneInString(s)
+	return size
 }
 
 // delimCycle hands out delimiters one after the other, restarting at
