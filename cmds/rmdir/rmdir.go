@@ -125,14 +125,10 @@ func (r *rm) remove1(op, displayOp string) bool {
 	// an otherwise-empty directory instead of failing as POSIX requires.
 	//
 	// A final component of ".." is deliberately NOT special-cased here.
-	// POSIX's rmdir() only mandates EINVAL for dot; the errno for dot-dot is
-	// unspecified, and real kernels (confirmed on Darwin, documented for
-	// Linux's rmdir(2): "pathname has .. as its final component" under
-	// ENOTEMPTY) simply let it fail naturally: the directory ".." resolves to
-	// always still contains the child entry the operand traversed through, so
-	// it can never be empty. Hardcoding EINVAL here previously produced the
-	// wrong diagnostic and, worse, bypassed --ignore-fail-on-non-empty, which
-	// must suppress this exactly like any other non-empty-directory failure.
+	// POSIX requires the removal to fail but does not prescribe its errno.
+	// Preserve the component for the host's pathname walk so an invalid prefix
+	// still fails with its native error (for example ENOENT for missing/.. or
+	// ENOTDIR for file/..) and a valid child/.. gets the host's native result.
 	//
 	// The base is taken from the uncleaned native path, NOT from
 	// filepath.Clean(op): Clean collapses "a/." to "a", silently swallowing
@@ -143,7 +139,7 @@ func (r *rm) remove1(op, displayOp string) bool {
 		r.errf("failed to remove '%s': Invalid argument", displayOp)
 		return false
 	}
-	rp := r.rc.Path(op)
+	rp := rawOperandPath(r.rc, op)
 	fi, err := os.Lstat(rp)
 	if err != nil {
 		r.errf("failed to remove '%s': %s", displayOp, reason(err))
@@ -161,6 +157,21 @@ func (r *rm) remove1(op, displayOp string) bool {
 		return false
 	}
 	return true
+}
+
+// rawOperandPath resolves a relative operand under the invocation directory
+// without filepath.Join's lexical Clean. The kernel must see every pathname
+// component: cleaning f/.. or missing/.. would incorrectly turn either into
+// the working directory and could remove that directory instead of reporting
+// the invalid prefix. Absolute operands already carry their own base.
+func rawOperandPath(rc *tool.RunContext, operand string) string {
+	if filepath.IsAbs(operand) || rc.Dir == "" {
+		return operand
+	}
+	if strings.HasSuffix(rc.Dir, string(filepath.Separator)) {
+		return rc.Dir + operand
+	}
+	return rc.Dir + string(filepath.Separator) + operand
 }
 
 func isNonEmpty(err error) bool {

@@ -49,23 +49,21 @@ Evidence: `TestRmdirParents`, `TestRmdirParentsExplicitCurrentDirectory`,
 ## 3. Dot, Dot-Dot, and Trailing Slash
 
 POSIX's `rmdir()` function mandates `[EINVAL]` when the pathname's final
-component is `.`, checked here before any filesystem call (a bare `.`
-would otherwise resolve through `RunContext.Path` to the working directory
-itself, and on Windows a trailing single dot is silently stripped during
-path canonicalization, which would let the removal spuriously succeed
-instead of failing as POSIX requires). `.` is checked both in bare form
+component is `.`, checked here before any filesystem call (a bare `.` would
+otherwise name the working directory itself, and on Windows a trailing single
+dot may be stripped during path canonicalization, which could let the removal
+spuriously succeed instead of failing as POSIX requires). `.` is checked both in bare form
 (`.`) and inside a longer operand (`a/.`, `a/./`), since `filepath.Clean`
 would otherwise silently collapse the trailing dot away before the check
 ever saw it.
 
-A final component of `..` was previously — incorrectly — special-cased to
-the same hardcoded EINVAL. POSIX's `rmdir()` errors specification does not
-list `..` under `[EINVAL]`; on this host (Darwin) and per Linux's
-documented `rmdir(2)` behavior, `rmdir some/path/..` fails naturally with
-`ENOTEMPTY`/`EEXIST`, because the directory `..` resolves to always still
-contains the child entry (`some/path`) the operand traversed through, so
-it can never be empty. This was confirmed directly against this host's
-`/bin/rmdir`:
+A final component of `..` was previously special-cased to the same hardcoded
+EINVAL. Issue 7 instead requires the operation to fail while leaving the
+specific errno unspecified. The complete lexical pathname must therefore
+reach the host pathname walk: `missing/..` fails at the missing component,
+`file/..` fails at the non-directory component, and a valid `child/..` gets
+the host's native final-dot-dot result. This was confirmed directly against
+this host's `/bin/rmdir`:
 
 ```
 $ /bin/rmdir "$T/a/.."
@@ -74,22 +72,25 @@ $ /bin/rmdir "$T/."
 rmdir: /tmp/.../.: Invalid argument
 ```
 
-This was a **confirmed Bashy-owned defect**, fixed in this pass: the
-hardcoded EINVAL for `..` produced the wrong diagnostic text and — more
-importantly — bypassed `--ignore-fail-on-non-empty`, which must suppress a
-non-empty-directory failure regardless of which pathname component
-triggered it. The fix removes the `..` special case entirely and lets it
-fall through to the real `os.Remove` call, so it is now classified and
-(when requested) ignored exactly like any other non-empty-directory
-failure.
+This was a **confirmed Bashy-owned defect**, fixed in this pass. Removing the
+hardcoded EINVAL guard alone was insufficient because `RunContext.Path` uses
+`filepath.Join`, which lexically collapses `..` before the filesystem sees it.
+`rmdir` now resolves relative operands beneath `RunContext.Dir` with a local
+raw-path helper and passes the preserved pathname to both `os.Lstat` and
+`os.Remove`. The GNU extension suppresses the result only when the native
+error is actually `ENOTEMPTY`/`EEXIST`; it does not suppress invalid-prefix
+`ENOENT`/`ENOTDIR` failures.
 
 A trailing slash on an otherwise-removable directory (`d/`) is accepted
 and the directory is removed; the diagnostic (when `-v` requests one)
 echoes the operand exactly as given, trailing slash included.
 
-Evidence: `TestRmdirDotBare`, `TestRmdirDotDotBareIsNotEinval`,
-`TestRmdirDotDotIgnoreFailOnNonEmpty`, `TestRmdirTrailingDotComponent`,
-`TestRmdirTrailingDotDotComponent`, `TestRmdirTrailingSlash`.
+Evidence: `TestRmdirDotBare`, `TestRmdirDotDotBareFailsNaturally`,
+`TestRmdirRealDirectoryDotDotMayBeIgnored`,
+`TestRmdirMissingPrefixDotDotIsNotCleaned`,
+`TestRmdirNonDirectoryPrefixDotDotIsNotIgnored`,
+`TestRmdirTrailingDotComponent`, `TestRmdirTrailingDotDotComponent`,
+`TestRmdirTrailingSlash`.
 
 ## 4. Non-Empty / Ignore-Failure Handling
 
@@ -103,7 +104,10 @@ even with the flag present.
 
 Evidence: `TestRmdirNonEmpty`, `TestRmdirIgnoreFailOnNonEmpty`,
 `TestRmdirIgnoreNonEmptyDoesNotIgnoreOtherErrors`,
-`TestRmdirIgnoreNonEmptyWithParents`, `TestRmdirDotDotIgnoreFailOnNonEmpty`.
+`TestRmdirIgnoreNonEmptyWithParents`,
+`TestRmdirRealDirectoryDotDotMayBeIgnored`,
+`TestRmdirMissingPrefixDotDotIsNotCleaned`,
+`TestRmdirNonDirectoryPrefixDotDotIsNotIgnored`.
 
 ## 5. Permission Failures and Continuation
 
@@ -164,9 +168,10 @@ not implemented (consistent with the rest of the repo's POSIX-required
 surface). The filesystem-root stop in the `-p` ancestor walk is verified by
 code inspection and against the loop's termination arithmetic, not by a
 live test that reaches an actual `/`, since constructing such a test would
-require directory state outside the test's own sandboxed temp tree. `-v`
-and `--ignore-fail-on-non-empty` remain supported GNU extensions outside
-the Issue 7 evidence surface, unaffected by this audit's scope.
+require directory state outside the test's own sandboxed temp tree. `-v` and
+`--ignore-fail-on-non-empty` remain supported GNU extensions outside the
+required Issue 7 interface. The latter is included in focused regression
+coverage because it must not hide native invalid-prefix failures.
 
 ## 10. Gate Record
 
@@ -202,18 +207,13 @@ Results:
   runs) passed.
 * Native and Linux/Darwin/Windows/FreeBSD vet passed; `GOOS=aix
   GOARCH=ppc64 go build ./cmds/rmdir` passed.
-* `./scripts/fmtcheck.sh` passed (2015 files).
+* `./scripts/fmtcheck.sh` passed (2016 files).
 * `bash scripts/applet-test-coverage.sh` passed (154 shipped packages).
-* `python3 scripts/applet-matrix.py --check` and `python3
-  scripts/posix_manifest.py --check` both fail on this branch, but fail
-  identically on unmodified main (`9982454`) before this change: the
-  matrix-staleness and `sh` partial-semantic-evidence findings are
-  pre-existing, unrelated to `rmdir`, and reproduced by `git stash`-ing this
-  change and re-running both checks. `scripts/crossvet.sh` stops at the
-  same pre-existing `applet matrix was stale` gate before reaching its
-  per-target build step, matching the same known condition recorded in
-  `docs/posix-interface-audits/mkdir-s79.md`; the affected target
-  builds/vets above were run directly instead.
+* `python3 scripts/applet-matrix.py --check` passed after updating rmdir's
+  generated count to two test files and 29 named top-level tests.
+* `python3 scripts/posix_manifest.py --check` still fails on the pre-existing
+  `sh: partial state requires focused semantic evidence` finding, unrelated to
+  rmdir. The TSV and rendered Markdown rmdir entries were updated together.
 * Repository-wide `go vet` (excluding `external/`) passed with no findings.
 * Repository-wide `go test` (excluding `external/`) — see the "Default
   regression" note below.
