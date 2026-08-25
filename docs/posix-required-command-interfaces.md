@@ -21,8 +21,18 @@ GNU compatibility is explicitly out of scope and deferred.
 | Evidence | Unverified | 114 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
---require-complete` fails until all 116 rows are verified and every
-Go-selected parser recognizes every declared required option and argument.
+--require-complete` fails until all 116 rows have focused behavioral evidence
+and complete normative semantics. The parser scan below is only a conservative
+source-token audit; finding a token is never proof of runtime behavior.
+
+Evidence is lane-specific. Go references stay in `cmds/<command>`; provider
+references name a command-specific test in `cmds/posixproviders`; shell
+references use `sh:<path>#<TestID>` against the sibling sh repository. A
+missing cross-repository shell reference cannot support partial or verified state.
+
+For verified rows, `NONE` explicitly records an empty option-argument or
+operand set; `-` in those normative slots means missing data. Likewise, paired
+`-` synopsis or option fields are incomplete, and normative prose cannot be `-`.
 
 ## `alias`
 
@@ -66,7 +76,7 @@ alias [alias-name[=string]...]
 
 **Implementation:** `shell:alias`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:alias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -126,7 +136,7 @@ ar -r -i [-cuv] posname archive file...
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#ar`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ar:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -178,7 +188,7 @@ at -l [at_job_id...]
 
 **Implementation:** `cmds/at`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=-m; argument-form gaps=none; source `cmds/at`.
+**Conservative source-token audit:** token gaps: options=-m; argument-form gaps=none; source `cmds/at`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -227,7 +237,7 @@ awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 
 **Implementation:** `cmds/awk`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/awk`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/awk`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:awk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -275,7 +285,7 @@ basename string [suffix]
 
 **Implementation:** `cmds/basename`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/basename`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/basename`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -323,7 +333,7 @@ batch
 
 **Implementation:** `cmds/batch`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/batch`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/batch`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -371,7 +381,7 @@ bc [-l] [file...]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#bc`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:bc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -419,7 +429,7 @@ bc [-l] [file...]
 
 **Implementation:** `shell:bg`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:bg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -467,7 +477,7 @@ cat [-u] [file...]
 
 **Implementation:** `cmds/cat`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cat`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cat`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -516,7 +526,7 @@ cd -
 
 **Implementation:** `shell:cd`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -565,7 +575,7 @@ chgrp -R [-H|-L|-P] group file...
 
 **Implementation:** `cmds/chgrp`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/chgrp`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chgrp`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:chgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -613,7 +623,7 @@ chmod [-R] mode file...
 
 **Implementation:** `cmds/chmod`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/chmod`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chmod`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:chmod:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -662,7 +672,7 @@ chown -R [-H|-L|-P] owner[:group] file...
 
 **Implementation:** `cmds/chown`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/chown`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chown`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:chown:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -710,7 +720,7 @@ cksum [file...]
 
 **Implementation:** `cmds/cksum`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cksum`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cksum`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -758,7 +768,7 @@ cmp [-l|-s] file1 file2
 
 **Implementation:** `cmds/cmp`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cmp`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cmp`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cmp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -806,7 +816,7 @@ comm [-123] file1 file2
 
 **Implementation:** `cmds/comm`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/comm`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/comm`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:comm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -855,7 +865,7 @@ command [-p][-v|-V] command_name
 
 **Implementation:** `shell:command`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:command:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -905,7 +915,7 @@ cp -R [-H|-L|-P] [-fip] source_file... target
 
 **Implementation:** `cmds/cp`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cp`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cp`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -954,7 +964,7 @@ crontab [file]
 
 **Implementation:** `cmds/crontab`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/crontab`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/crontab`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1002,7 +1012,7 @@ csplit [-ks] [-f prefix] [-n number] file arg...
 
 **Implementation:** `cmds/csplit`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/csplit`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/csplit`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:csplit:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1051,7 +1061,7 @@ ctags -x pathname...
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#ctags`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ctags:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1101,7 +1111,7 @@ cut -f list [-d delim] [-s] [file...]
 
 **Implementation:** `cmds/cut`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/cut`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cut`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1150,7 +1160,7 @@ date [-u] [+format]
 
 **Implementation:** `cmds/date`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/date`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/date`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:date:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1198,7 +1208,7 @@ dd [operand...]
 
 **Implementation:** `cmds/dd`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/dd`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/dd`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:dd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1246,7 +1256,7 @@ dd [operand...]
 
 **Implementation:** `cmds/df`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/df`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/df`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1294,7 +1304,7 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 
 **Implementation:** `cmds/diff`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=none; argument-form gaps=-C=<n>, -U=<n>; source `cmds/diff`.
+**Conservative source-token audit:** token gaps: options=none; argument-form gaps=-C=<n>, -U=<n>; source `cmds/diff`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1342,7 +1352,7 @@ dirname string
 
 **Implementation:** `cmds/dirname`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/dirname`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/dirname`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1390,7 +1400,7 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 
 **Implementation:** `cmds/du`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/du`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/du`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:du:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1438,7 +1448,7 @@ echo [string...]
 
 **Implementation:** `shell:echo`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:echo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1486,7 +1496,7 @@ ed [-p string] [-s] [file]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#ed`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1534,7 +1544,7 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Implementation:** `cmds/env`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/env`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/env`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:env:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1582,7 +1592,7 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#ex`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ex:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1630,7 +1640,7 @@ expand [-t tablist] [file...]
 
 **Implementation:** `cmds/expand`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/expand`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/expand`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1678,7 +1688,7 @@ expr operand...
 
 **Implementation:** `cmds/expr`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/expr`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/expr`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1726,7 +1736,7 @@ false
 
 **Implementation:** `shell:false`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:false:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1776,7 +1786,7 @@ fc -s [old=new] [first]
 
 **Implementation:** `shell:fc`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:fc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1824,7 +1834,7 @@ fc -s [old=new] [first]
 
 **Implementation:** `shell:fg`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:fg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1873,7 +1883,7 @@ file -i [-h] file...
 
 **Implementation:** `cmds/file`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=-M, -d, -i; argument-form gaps=-M=<file>; source `cmds/file`.
+**Conservative source-token audit:** token gaps: options=-M, -d, -i; argument-form gaps=-M=<file>; source `cmds/file`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1921,7 +1931,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Implementation:** `cmds/find`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/find`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/find`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -1969,7 +1979,7 @@ fold [-bs] [-w width] [file...]
 
 **Implementation:** `cmds/fold`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/fold`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/fold`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:fold:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2018,7 +2028,7 @@ getconf [-v specification] path_var pathname
 
 **Implementation:** `cmds/getconf`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/getconf`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/getconf`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:getconf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2066,7 +2076,7 @@ getopts optstring name [arg...]
 
 **Implementation:** `shell:getopts`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:getopts:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2116,7 +2126,7 @@ grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 
 **Implementation:** `cmds/grep`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/grep`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/grep`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:grep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2165,7 +2175,7 @@ hash -r
 
 **Implementation:** `shell:hash`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:hash:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2213,7 +2223,7 @@ head [-n number] [file...]
 
 **Implementation:** `cmds/head`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/head`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/head`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2264,7 +2274,7 @@ iconv -l
 
 **Implementation:** `cmds/iconv`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/iconv`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/iconv`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:iconv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2315,7 +2325,7 @@ id -u [-nr] [user]
 
 **Implementation:** `cmds/id`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/id`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/id`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:id:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2363,7 +2373,7 @@ id -u [-nr] [user]
 
 **Implementation:** `shell:jobs`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:jobs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2411,7 +2421,7 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 
 **Implementation:** `cmds/join`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=none; argument-form gaps=-1=<field>, -2=<field>, -a=<file_number>, -e=<string>, -o=<list>, -t=<char>, -v=<file_number>; source `cmds/join`.
+**Conservative source-token audit:** token gaps: options=none; argument-form gaps=-1=<field>, -2=<field>, -a=<file_number>, -e=<string>, -o=<list>, -t=<char>, -v=<file_number>; source `cmds/join`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2462,7 +2472,7 @@ kill [-signal_number] pid...
 
 **Implementation:** `shell:kill`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:kill:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2511,7 +2521,7 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Implementation:** `cmds/ln`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/ln`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ln`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2560,7 +2570,7 @@ locale [-ck] name...
 
 **Implementation:** `cmds/locale`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/locale`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/locale`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:locale:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2608,7 +2618,7 @@ localedef [-c] [-f charmap] [-i sourcefile] [-u code_set_name] name
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#localedef`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:localedef:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2656,7 +2666,7 @@ logger string...
 
 **Implementation:** `cmds/logger`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/logger`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/logger`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:logger:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2704,7 +2714,7 @@ logname
 
 **Implementation:** `cmds/logname`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/logname`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/logname`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:logname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2752,7 +2762,7 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#lp`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2800,7 +2810,7 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Implementation:** `cmds/ls`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/ls`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ls`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ls:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2848,7 +2858,7 @@ m4 [-s] [-D name[=val]]... [-U name]... file...
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#m4`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2899,7 +2909,7 @@ mailx -f [-HiNn] [-F] [file]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#mailx`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mailx:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2947,7 +2957,7 @@ mailx -f [-HiNn] [-F] [file]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#make`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:make:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -2995,7 +3005,7 @@ man [-k] name...
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#man`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:man:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3043,7 +3053,7 @@ mesg [y|n]
 
 **Implementation:** `cmds/mesg`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mesg`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mesg`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3091,7 +3101,7 @@ mkdir [-p] [-m mode] dir...
 
 **Implementation:** `cmds/mkdir`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mkdir`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mkdir`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mkdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3139,7 +3149,7 @@ mkfifo [-m mode] file...
 
 **Implementation:** `cmds/mkfifo`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mkfifo`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mkfifo`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3187,7 +3197,7 @@ mkfifo [-m mode] file...
 
 **Implementation:** `cmds/more`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=-i, -t; argument-form gaps=-p=<command>, -t=<tagstring>; source `cmds/more`.
+**Conservative source-token audit:** token gaps: options=-i, -t; argument-form gaps=-p=<command>, -t=<tagstring>; source `cmds/more`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:more:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3236,7 +3246,7 @@ mv [-if] source_file... target_dir
 
 **Implementation:** `cmds/mv`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/mv`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mv`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:mv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3284,7 +3294,7 @@ newgrp [-l] [group]
 
 **Implementation:** `cmds/newgrp`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/newgrp`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/newgrp`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3332,7 +3342,7 @@ nice [-n increment] utility [argument...]
 
 **Implementation:** `cmds/nice`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/nice`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/nice`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3381,7 +3391,7 @@ nice [-n increment] utility [argument...]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#nm`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:nm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3429,7 +3439,7 @@ nohup utility [argument...]
 
 **Implementation:** `cmds/nohup`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/nohup`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/nohup`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:nohup:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3478,7 +3488,7 @@ od [-v] [-A address_base] [-j skip] [-N count] [-t type_string]... [file...]
 
 **Implementation:** `cmds/od`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/od`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/od`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:od:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3526,7 +3536,7 @@ paste [-s] [-d list] file...
 
 **Implementation:** `cmds/paste`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/paste`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/paste`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:paste:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3574,7 +3584,7 @@ patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#patch`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:patch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3622,7 +3632,7 @@ pathchk [-p] [-P] pathname...
 
 **Implementation:** `cmds/pathchk`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/pathchk`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pathchk`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pathchk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3673,7 +3683,7 @@ pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [f
 
 **Implementation:** `cmds/pax`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=-H, -L, -X, -b, -o, -t; argument-form gaps=-b=<blocksize>, -o=<options>; source `cmds/pax`.
+**Conservative source-token audit:** token gaps: options=-H, -L, -X, -b, -o, -t; argument-form gaps=-b=<blocksize>, -o=<options>; source `cmds/pax`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3721,7 +3731,7 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 **Implementation:** `cmds/pr`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=+<page>, -p; argument-form gaps=none; source `cmds/pr`.
+**Conservative source-token audit:** token gaps: options=+<page>, -p; argument-form gaps=none; source `cmds/pr`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/pr/pr_test.go`; shell=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3769,7 +3779,7 @@ printf format [argument...]
 
 **Implementation:** `shell:printf`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:printf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3817,7 +3827,7 @@ printf format [argument...]
 
 **Implementation:** `cmds/ps`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/ps`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ps`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:ps:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3865,7 +3875,7 @@ pwd [-L|-P]
 
 **Implementation:** `shell:pwd`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pwd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3913,7 +3923,7 @@ read [-r] var...
 
 **Implementation:** `shell:read`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:read:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -3961,7 +3971,7 @@ renice [-g|-p|-u] -n increment ID...
 
 **Implementation:** `cmds/renice`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/renice`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/renice`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:renice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4010,7 +4020,7 @@ rm -f [-iRr] [file...]
 
 **Implementation:** `cmds/rm`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/rm`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/rm`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:rm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4058,7 +4068,7 @@ rmdir [-p] dir...
 
 **Implementation:** `cmds/rmdir`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/rmdir`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/rmdir`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:rmdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4108,7 +4118,7 @@ sed [-n] [-e script]... -f script_file [-f script_file]... [file...]
 
 **Implementation:** `cmds/sed`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/sed`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sed`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4158,7 +4168,7 @@ sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...
 
 **Implementation:** `shell:sh`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sh:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4206,7 +4216,7 @@ sleep time
 
 **Implementation:** `cmds/sleep`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/sleep`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sleep`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4255,7 +4265,7 @@ sort [-c|-C] [-bdfinru] [-t char] [-k keydef] [file]
 
 **Implementation:** `cmds/sort`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/sort`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sort`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:sort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4304,7 +4314,7 @@ split -b n[k|m] [-a suffix_length] [file [name]]
 
 **Implementation:** `cmds/split`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/split`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/split`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:split:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4352,7 +4362,7 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Implementation:** `cmds/strings`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/strings`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/strings`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:strings:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4400,7 +4410,7 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#strip`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:strip:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4449,7 +4459,7 @@ stty operand...
 
 **Implementation:** `cmds/stty`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/stty`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/stty`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:stty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4498,7 +4508,7 @@ tabs [-T type] n[[sep[+]n]...]
 
 **Implementation:** `cmds/tabs`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=-<n>, -a2, -c2, -c3; argument-form gaps=none; source `cmds/tabs`.
+**Conservative source-token audit:** token gaps: options=-<n>, -a2, -c2, -c3; argument-form gaps=none; source `cmds/tabs`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tabs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4546,7 +4556,7 @@ tail [-f] [-c number|-n number] [file]
 
 **Implementation:** `cmds/tail`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tail`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tail`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tail:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4594,7 +4604,7 @@ tail [-f] [-c number|-n number] [file]
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#talk`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4642,7 +4652,7 @@ tee [-ai] [file...]
 
 **Implementation:** `cmds/tee`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tee`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tee`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4691,7 +4701,7 @@ test [expression]
 
 **Implementation:** `shell:test`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:test:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4739,7 +4749,7 @@ time [-p] utility [argument...]
 
 **Implementation:** `shell:time`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:time:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4787,7 +4797,7 @@ touch [-acm] [-r ref_file|-t time|-d date_time] file...
 
 **Implementation:** `cmds/touch`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/touch`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/touch`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:touch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4835,7 +4845,7 @@ tput [-T type] operand...
 
 **Implementation:** `cmds/tput`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tput`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tput`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tput:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4886,7 +4896,7 @@ tr -ds [-c|-C] string1 string2
 
 **Implementation:** `cmds/tr`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tr`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tr`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4934,7 +4944,7 @@ true
 
 **Implementation:** `shell:true`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:true:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -4982,7 +4992,7 @@ tsort [file]
 
 **Implementation:** `cmds/tsort`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tsort`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tsort`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5030,7 +5040,7 @@ tty
 
 **Implementation:** `cmds/tty`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/tty`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tty`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5078,7 +5088,7 @@ umask [-S] [mask]
 
 **Implementation:** `shell:umask`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:umask:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5127,7 +5137,7 @@ unalias -a
 
 **Implementation:** `shell:unalias`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:unalias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5175,7 +5185,7 @@ uname [-amnrsv]
 
 **Implementation:** `cmds/uname`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/uname`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uname`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5223,7 +5233,7 @@ unexpand [-a|-t tablist] [file...]
 
 **Implementation:** `cmds/unexpand`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/unexpand`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/unexpand`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:unexpand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5271,7 +5281,7 @@ uniq [-c|-d|-u] [-f fields] [-s char] [input_file [output_file]]
 
 **Implementation:** `cmds/uniq`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/uniq`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uniq`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uniq:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5319,7 +5329,7 @@ uudecode [-o outfile] [file]
 
 **Implementation:** `cmds/uudecode`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/uudecode`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uudecode`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uudecode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5367,7 +5377,7 @@ uuencode [-m] [file] decode_pathname
 
 **Implementation:** `cmds/uuencode`.
 
-**Parser/source comparison:** INCOMPLETE: option gaps=-m; argument-form gaps=none; source `cmds/uuencode`.
+**Conservative source-token audit:** token gaps: options=-m; argument-form gaps=none; source `cmds/uuencode`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uuencode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5415,7 +5425,7 @@ uuencode [-m] [file] decode_pathname
 
 **Implementation:** `pkg/posixprovider/manifest.tsv#vi`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:vi:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5463,7 +5473,7 @@ wait [pid...]
 
 **Implementation:** `shell:wait`.
 
-**Parser/source comparison:** not a Go-selected parser; source `-`.
+**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:wait:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5511,7 +5521,7 @@ wc [-c|-m] [-lw] [file...]
 
 **Implementation:** `cmds/wc`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/wc`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/wc`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:wc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5563,7 +5573,7 @@ who am I
 
 **Implementation:** `cmds/who`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/who`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/who`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:who:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5611,7 +5621,7 @@ write user_name [terminal]
 
 **Implementation:** `cmds/write`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/write`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/write`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:write:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
@@ -5659,7 +5669,7 @@ write user_name [terminal]
 
 **Implementation:** `cmds/xargs`.
 
-**Parser/source comparison:** PASS: all declared options and argument forms found in parser source; source `cmds/xargs`.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/xargs`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/xargs/xargs_test.go;cmds/xargs/xargs_resolve_test.go`; shell=`-`; provider=`-`; clauses=`XCU:xargs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 

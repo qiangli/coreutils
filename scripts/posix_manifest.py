@@ -55,7 +55,7 @@ RENDER_LABELS = (
     "Operands", "Special tokens", "Standard input", "Environment",
     "Standard output", "Standard error", "Effects", "Exit status",
     "Compatibility scope", "Availability", "Effective owner",
-    "Implementation", "Parser/source comparison", "Evidence lanes",
+    "Implementation", "Conservative source-token audit", "Evidence lanes",
     "Issue 7 source",
 )
 
@@ -83,6 +83,19 @@ POSIX_EVIDENCE_PREFIX = (
 )
 COMPATIBILITY_SCOPE = "POSIX Issue 7 only; GNU compatibility is out of scope"
 UNVERIFIED = "UNVERIFIED"
+EXPLICIT_NONE = "NONE"
+NORMATIVE_SEMANTIC_FIELDS = (
+    "base_synopsis", "conditional_synopsis", "required_options",
+    "conditional_options", "option_arguments", "operands", "operand_rules",
+    "special_tokens", "stdin", "environment", "stdout", "stderr", "effects",
+    "exit_status",
+)
+EVIDENCE_REF = re.compile(
+    r"^(?P<path>[^#]+\.go)(?:#(?P<test>Test[A-Za-z0-9_]+))?$"
+)
+SHELL_EVIDENCE_REF = re.compile(
+    r"^sh:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
+)
 GENERIC_PROSE = (
     "where POSIX Utility Syntax Guideline 10 applies",
     "POSIX STDIN clause remains authoritative",
@@ -138,7 +151,7 @@ def read_legacy_map(path: Path = LEGACY_MAP) -> list[dict[str, str]]:
 
 
 def _tokens(command: str, field: str, raw: str) -> list[str]:
-    if raw == "-":
+    if raw in {"-", EXPLICIT_NONE}:
         return []
     tokens = raw.split(";")
     malformed = [token for token in tokens if not OPTION_TOKEN.fullmatch(token)]
@@ -150,7 +163,7 @@ def _tokens(command: str, field: str, raw: str) -> list[str]:
 
 
 def _conditional_options(row: dict[str, str]) -> dict[str, list[str]]:
-    if row["conditional_options"] == "-":
+    if row["conditional_options"] in {"-", EXPLICIT_NONE}:
         return {}
     result = {}
     for group in row["conditional_options"].split(";"):
@@ -183,7 +196,7 @@ def _conditional_synopses(row: dict[str, str]) -> list[tuple[str, str]]:
 def declared_options(row: dict[str, str]) -> set[str]:
     result = set(_tokens(row["command"], "required options", row["required_options"]))
     result.update(value for values in _conditional_options(row).values() for value in values)
-    if row["option_arguments"] != "-":
+    if row["option_arguments"] not in {"-", EXPLICIT_NONE}:
         for item in row["option_arguments"].split(";"):
             match = OPTION_ARGUMENT_OPTION.fullmatch(item)
             if not match:
@@ -197,7 +210,7 @@ def declared_options(row: dict[str, str]) -> set[str]:
 
 
 def recognized_go_options(row: dict[str, str], root: Path = ROOT) -> set[str]:
-    """Extract short options from the selected package's non-test parser source."""
+    """Conservatively find option-shaped tokens in non-test parser source."""
     package = root / row["go_package"]
     source = "\n".join(
         path.read_text() for path in sorted(package.glob("*.go"))
@@ -230,7 +243,7 @@ def recognized_go_options(row: dict[str, str], root: Path = ROOT) -> set[str]:
 
 def declared_option_arguments(row: dict[str, str]) -> dict[str, str]:
     result = {}
-    if row["option_arguments"] == "-":
+    if row["option_arguments"] in {"-", EXPLICIT_NONE}:
         return result
     for item in row["option_arguments"].split(";"):
         match = OPTION_ARGUMENT_OPTION.fullmatch(item)
@@ -243,7 +256,7 @@ def declared_option_arguments(row: dict[str, str]) -> dict[str, str]:
 def recognized_go_option_arguments(
     row: dict[str, str], root: Path = ROOT,
 ) -> set[str]:
-    """Find declared argument forms with command-specific parser-source support."""
+    """Conservatively find declared argument-form tokens in parser source."""
     if row["effective_owner"] != "go":
         return set()
     package = root / row["go_package"]
@@ -292,12 +305,86 @@ def option_argument_gaps(row: dict[str, str], root: Path = ROOT) -> set[str]:
     return set(declared_option_arguments(row)) - recognized_go_option_arguments(row, root)
 
 
-def _evidence_paths(row: dict[str, str]) -> list[str]:
-    result = []
-    for field in ("go_evidence", "shell_evidence", "provider_evidence"):
-        if row[field] != "-":
-            result.extend(row[field].split(";"))
-    return result
+def _test_is_declared(path: Path, test: str) -> bool:
+    return bool(re.search(rf"^func\s+{re.escape(test)}\s*\(", path.read_text(), re.MULTILINE))
+
+
+def _command_test_name(command: str, test: str) -> bool:
+    """Require a provider test ID to name the command, not merely contain its letters."""
+    suffix = test.removeprefix("Test")
+    words = re.findall(r"[A-Z]+(?=[A-Z][a-z]|[0-9_]|$)|[A-Z]?[a-z]+|[0-9]+", suffix)
+    if command.casefold() in {word.casefold() for word in words}:
+        return True
+    # Preserve names such as m4 as a single command token while rejecting an
+    # accidental substring such as ar in TestArgvPassthrough.
+    length = len(command)
+    return (
+        suffix[:length].casefold() == command.casefold()
+        and (len(suffix) == length or not suffix[length].islower())
+    )
+
+
+def _local_evidence_ref(command: str, raw: str, lane: str, root: Path) -> bool:
+    match = EVIDENCE_REF.fullmatch(raw)
+    if not match:
+        raise ManifestError(f"{command}: malformed {lane} evidence reference: {raw}")
+    relative = Path(match.group("path"))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ManifestError(f"{command}: evidence path escapes its repository: {raw}")
+    path = root / relative
+    if not path.is_file() or not path.name.endswith("_test.go"):
+        raise ManifestError(f"{command}: evidence path absent or not a focused test: {raw}")
+    test = match.group("test")
+    if test and not _test_is_declared(path, test):
+        raise ManifestError(f"{command}: evidence test ID is absent: {raw}")
+    if lane == "go_evidence":
+        package = Path("cmds") / command
+        if relative.parent != package:
+            raise ManifestError(f"{command}: Go evidence is not command-package-focused")
+    elif lane == "provider_evidence":
+        if relative.parent != Path("cmds/posixproviders"):
+            raise ManifestError(f"{command}: provider evidence is not in cmds/posixproviders")
+        if not test or not _command_test_name(command, test):
+            raise ManifestError(
+                f"{command}: provider evidence is not command-specific; "
+                "name an explicit command test ID"
+            )
+    return test is not None
+
+
+def _shell_evidence_ref(command: str, raw: str, root: Path) -> bool:
+    match = SHELL_EVIDENCE_REF.fullmatch(raw)
+    if not match:
+        raise ManifestError(
+            f"{command}: shell evidence must use sh:<repo-path>#<test-ID> contract"
+        )
+    relative = Path(match.group("path"))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ManifestError(f"{command}: shell evidence path escapes the sh repository")
+    shell_root = root.parent / "sh"
+    path = shell_root / relative
+    if not path.is_file() or not _test_is_declared(path, match.group("test")):
+        return False
+    if not _command_test_name(command, match.group("test")):
+        raise ManifestError(f"{command}: shell evidence test ID is not command-specific")
+    return True
+
+
+def _validate_evidence(
+    row: dict[str, str], lane: str, root: Path,
+) -> tuple[int, bool, bool]:
+    raw = row[lane]
+    if raw == "-":
+        return 0, True, False
+    refs = raw.split(";")
+    available = True
+    explicit = True
+    for ref in refs:
+        if lane == "shell_evidence":
+            available = _shell_evidence_ref(row["command"], ref, root) and available
+        else:
+            explicit = _local_evidence_ref(row["command"], ref, lane, root) and explicit
+    return len(refs), available, explicit
 
 
 def validate(
@@ -399,26 +486,38 @@ def validate(
         for other in {"go_evidence", "shell_evidence", "provider_evidence"} - {lane}:
             if row[other] != "-":
                 raise ManifestError(f"{command}: evidence crossed implementation lanes")
-        evidence = _evidence_paths(row)
-        for value in evidence:
-            path = root / value
-            if not path.is_file() or not path.name.endswith("_test.go"):
-                raise ManifestError(f"{command}: evidence path absent or not a focused test: {value}")
-            package_prefix = row["go_package"] + "/" if lane == "go_evidence" else ""
-            if package_prefix and not value.startswith(package_prefix):
-                raise ManifestError(f"{command}: Go evidence is not package-focused")
-
-        semantics = (
-            row["operand_rules"], row["special_tokens"], row["stdin"],
-            row["stdout"], row["stderr"], row["effects"], row["exit_status"],
+        evidence_count, evidence_available, explicit_tests = _validate_evidence(
+            row, lane, root
         )
+
+        missing_semantics = [
+            field for field in NORMATIVE_SEMANTIC_FIELDS
+            if not row[field].strip() or UNVERIFIED in row[field]
+        ]
+        if row["base_synopsis"] == "-" and row["conditional_synopsis"] == "-":
+            missing_semantics.extend(("base_synopsis", "conditional_synopsis"))
+        if row["required_options"] == "-" and row["conditional_options"] == "-":
+            missing_semantics.extend(("required_options", "conditional_options"))
+        for field in (
+            "option_arguments", "operands", "operand_rules", "special_tokens",
+            "stdin", "environment", "stdout", "stderr", "effects", "exit_status",
+        ):
+            if row[field] == "-":
+                missing_semantics.append(field)
+        missing_semantics = list(dict.fromkeys(missing_semantics))
         if row["evidence_state"] == "verified":
             if (
-                UNVERIFIED in semantics or not evidence or parser_gaps(row, root)
-                or option_argument_gaps(row, root)
+                missing_semantics or not evidence_count or not evidence_available
+                or not explicit_tests
+                or parser_gaps(row, root) or option_argument_gaps(row, root)
             ):
-                raise ManifestError(f"{command}: verified state launders missing semantics/evidence")
-        if row["evidence_state"] == "partial" and not evidence:
+                detail = ",".join(missing_semantics) or "focused behavioral evidence"
+                raise ManifestError(
+                    f"{command}: verified state launders missing semantics/evidence: {detail}"
+                )
+        if row["evidence_state"] == "partial" and (
+            not evidence_count or not evidence_available
+        ):
             raise ManifestError(f"{command}: partial state requires focused evidence")
 
     availability = Counter(row["availability"] for row in rows)
@@ -446,7 +545,7 @@ def completion_errors(rows: list[dict[str, str]], root: Path = ROOT) -> list[str
 
 
 def _display(raw: str) -> str:
-    return "none" if raw == "-" else raw.replace(";", "; ")
+    return "none" if raw in {"-", EXPLICIT_NONE} else raw.replace(";", "; ")
 
 
 def _synopsis(row: dict[str, str]) -> str:
@@ -478,17 +577,25 @@ def render(rows: list[dict[str, str]]) -> str:
         f"| Evidence | Partial | {states['partial']} |",
         f"| Evidence | Unverified | {states['unverified']} |", "",
         "Completion is deliberately fail-closed: `scripts/posix_manifest.py",
-        "--require-complete` fails until all 116 rows are verified and every",
-        "Go-selected parser recognizes every declared required option and argument.", "",
+        "--require-complete` fails until all 116 rows have focused behavioral evidence",
+        "and complete normative semantics. The parser scan below is only a conservative",
+        "source-token audit; finding a token is never proof of runtime behavior.", "",
+        "Evidence is lane-specific. Go references stay in `cmds/<command>`; provider",
+        "references name a command-specific test in `cmds/posixproviders`; shell",
+        "references use `sh:<path>#<TestID>` against the sibling sh repository. A",
+        "missing cross-repository shell reference cannot support partial or verified state.", "",
+        "For verified rows, `NONE` explicitly records an empty option-argument or",
+        "operand set; `-` in those normative slots means missing data. Likewise, paired",
+        "`-` synopsis or option fields are incomplete, and normative prose cannot be `-`.", "",
     ]
     for row in rows:
         standard_url = row["standard_source"].split(":", 1)[1]
         gaps = sorted(parser_gaps(row))
         argument_gaps = sorted(option_argument_gaps(row))
-        parser_result = "not a Go-selected parser" if row["effective_owner"] != "go" else (
-            "PASS: all declared options and argument forms found in parser source"
+        parser_result = "not applicable to a Go-selected parser" if row["effective_owner"] != "go" else (
+            "tokens found for all declared options and argument forms; behavioral evidence still required"
             if not gaps and not argument_gaps else
-            "INCOMPLETE: option gaps=" + (", ".join(gaps) or "none")
+            "token gaps: options=" + (", ".join(gaps) or "none")
             + "; argument-form gaps=" + (", ".join(argument_gaps) or "none")
         )
         lines.extend([
@@ -511,7 +618,8 @@ def render(rows: list[dict[str, str]]) -> str:
             f"**Availability:** `{row['availability']}`.", "",
             f"**Effective owner:** `{row['effective_owner']}` (`{row['parser_model']}`).", "",
             f"**Implementation:** `{row['implementation_source']}`.", "",
-            f"**Parser/source comparison:** {parser_result}; source `{row['parser_source']}`.", "",
+            f"**Conservative source-token audit:** {parser_result}; source `{row['parser_source']}`. "
+            "This audit is not proof of behavior.", "",
             "**Evidence lanes:** "
             f"Go=`{row['go_evidence']}`; shell=`{row['shell_evidence']}`; "
             f"provider=`{row['provider_evidence']}`; clauses=`{row['clause_ids']}`.", "",
@@ -538,7 +646,7 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="validate and fail if output is stale")
     parser.add_argument(
         "--require-complete", action="store_true",
-        help="also fail unless all interfaces and Go parser comparisons are verified",
+        help="also fail unless all interfaces have complete semantics and behavioral evidence",
     )
     args = parser.parse_args()
     rows = read_manifest()

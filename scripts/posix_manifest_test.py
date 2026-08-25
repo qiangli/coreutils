@@ -34,6 +34,27 @@ class ManifestValidationTest(unittest.TestCase):
     def row(self, name: str) -> dict[str, str]:
         return next(row for row in self.rows if row["command"] == name)
 
+    def completed_semantics(self, name: str) -> dict[str, str]:
+        row = self.row(name)
+        changes = {
+            field: "Specified by the command-specific POSIX interface."
+            for field in manifest.NORMATIVE_SEMANTIC_FIELDS
+            if manifest.UNVERIFIED in row[field]
+        }
+        if row["required_options"] == row["conditional_options"] == "-":
+            changes["required_options"] = manifest.EXPLICIT_NONE
+        if row["option_arguments"] == "-":
+            changes["option_arguments"] = manifest.EXPLICIT_NONE
+        if row["operands"] == "-":
+            changes["operands"] = manifest.EXPLICIT_NONE
+        for field in (
+            "operand_rules", "special_tokens", "stdin", "environment", "stdout",
+            "stderr", "effects", "exit_status",
+        ):
+            if row[field] == "-":
+                changes[field] = "Not used."
+        return changes
+
     def assertRejected(self, rows: list[dict[str, str]], message: str) -> None:
         with self.assertRaisesRegex(manifest.ManifestError, message):
             manifest.validate(rows, self.providers, self.packages, self.flagsets)
@@ -126,11 +147,104 @@ class ManifestValidationTest(unittest.TestCase):
             "evidence crossed implementation lanes",
         )
 
+    def test_xargs_operands_and_environment_cannot_be_laundered(self) -> None:
+        evidence = "cmds/xargs/xargs_test.go#TestXargsDefaultEcho"
+        for field in ("operands", "environment"):
+            for missing in (manifest.UNVERIFIED, "-"):
+                with self.subTest(field=field, missing=missing):
+                    self.assertRejected(
+                        self.changed(
+                            "xargs", evidence_state="verified", go_evidence=evidence,
+                            **{field: missing},
+                        ),
+                        rf"verified state launders.*{field}",
+                    )
+
+    def test_explicit_none_is_distinct_from_missing_normative_data(self) -> None:
+        self.assertEqual(manifest._tokens("true", "options", manifest.EXPLICIT_NONE), [])
+        self.assertEqual(manifest._display(manifest.EXPLICIT_NONE), "none")
+
+    def test_true_cannot_substitute_pr_test_as_shell_evidence(self) -> None:
+        changes = self.completed_semantics("true")
+        changes.update(
+            evidence_state="verified",
+            shell_evidence="cmds/pr/pr_test.go#TestPRDefaultPageStructure",
+        )
+        self.assertRejected(
+            self.changed("true", **changes),
+            "shell evidence must use sh:<repo-path>#<test-ID> contract",
+        )
+
+    def test_ar_cannot_substitute_pr_test_as_provider_evidence(self) -> None:
+        changes = self.completed_semantics("ar")
+        changes.update(
+            evidence_state="verified",
+            provider_evidence="cmds/pr/pr_test.go#TestPRDefaultPageStructure",
+        )
+        self.assertRejected(
+            self.changed("ar", **changes),
+            "provider evidence is not in cmds/posixproviders",
+        )
+
+    def test_ar_cannot_use_an_unrelated_provider_test(self) -> None:
+        self.assertRejected(
+            self.changed(
+                "ar",
+                provider_evidence=(
+                    "cmds/posixproviders/posixproviders_test.go"
+                    "#TestMaterializedManifestMatchesTheEmbeddedOne"
+                ),
+            ),
+            "provider evidence is not command-specific",
+        )
+
+    def test_command_specific_provider_test_ids_have_token_boundaries(self) -> None:
+        self.assertTrue(manifest._command_test_name("ar", "TestArOperands"))
+        self.assertTrue(manifest._command_test_name("m4", "TestM4Diagnostics"))
+        self.assertFalse(manifest._command_test_name("ar", "TestArgvPassthrough"))
+
+    def test_unavailable_cross_repo_shell_evidence_cannot_be_focused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "coreutils"
+            root.mkdir()
+            self.assertFalse(
+                manifest._shell_evidence_ref(
+                    "true", "sh:interp/true_test.go#TestTrueExitStatus", root
+                )
+            )
+        self.assertRejected(
+            self.changed(
+                "true", **self.completed_semantics("true"),
+                evidence_state="verified",
+                shell_evidence=(
+                    "sh:interp/posix_true_evidence_test.go#TestTrueIssue7Interface"
+                ),
+            ),
+            "verified state launders.*focused behavioral evidence",
+        )
+
+    def test_verified_go_evidence_requires_an_explicit_test_id(self) -> None:
+        self.assertRejected(
+            self.changed("xargs", evidence_state="verified"),
+            "verified state launders.*focused behavioral evidence",
+        )
+
     def test_state_laundering_is_rejected(self) -> None:
         self.assertRejected(
             self.changed("true", evidence_state="verified"),
             "verified state launders",
         )
+
+    def test_all_normative_semantic_fields_are_fail_closed(self) -> None:
+        evidence = "cmds/xargs/xargs_test.go#TestXargsDefaultEcho"
+        for field in manifest.NORMATIVE_SEMANTIC_FIELDS:
+            for missing in ("", manifest.UNVERIFIED):
+                with self.subTest(field=field, missing=missing):
+                    rows = self.changed(
+                        "xargs", evidence_state="verified", go_evidence=evidence,
+                        **{field: missing},
+                    )
+                    self.assertRejected(rows, "missing field" if not missing else ".+")
         self.assertRejected(
             self.changed(
                 "basename", evidence_state="verified",
@@ -155,6 +269,12 @@ class ManifestValidationTest(unittest.TestCase):
                 )
                 if gaps or argument_gaps:
                     self.assertNotEqual(row["evidence_state"], "verified")
+
+    def test_render_calls_parser_scan_a_conservative_token_audit(self) -> None:
+        rendered = manifest.render(self.rows)
+        self.assertIn("conservative source-token audit", rendered.lower())
+        self.assertIn("never proof of runtime behavior", rendered)
+        self.assertNotIn("PASS: all declared options", rendered)
 
     def test_fabricated_parser_option_is_reported_as_gap(self) -> None:
         row = copy.deepcopy(self.row("basename"))
