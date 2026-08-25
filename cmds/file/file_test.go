@@ -623,6 +623,83 @@ func TestMagicMessageUsesPrintfFormatSemantics(t *testing.T) {
 	}
 }
 
+func TestMagicMessageFormattingIsByteAccurate(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "utf8", []byte("é"))
+	for _, tc := range []struct {
+		name, format string
+		want         []byte
+	}{
+		{"string-c", "%c", []byte{'v', '=', 0xc3, '\n'}},
+		{"string-precision", "%.1s", []byte{'v', '=', 0xc3, '\n'}},
+		{"b-precision", "%.1b", []byte{'v', '=', 0xc3, '\n'}},
+		{"left-width-after-byte-precision", "%-4.1s", []byte{'v', '=', 0xc3, ' ', ' ', ' ', '\n'}},
+		{"right-width-after-byte-precision", "%4.1b", []byte{'v', '=', ' ', ' ', ' ', 0xc3, '\n'}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			put(t, dir, "magic", []byte("0\tstring\té\tv="+tc.format+"\n"))
+			out, errb, code := invoke(t, dir, "", "-b", "-M", "magic", "utf8")
+			if code != 0 || errb != "" || !bytes.Equal([]byte(out), tc.want) {
+				t.Fatalf("format %q = (% x, %q, %d), want % x", tc.format, []byte(out), errb, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestMagicMessageCrossTypeConversions(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "decimal", []byte("123"))
+	put(t, dir, "hex", []byte("0x2a"))
+	put(t, dir, "signed", []byte("-7"))
+	put(t, dir, "numeric-s", []byte{7})
+	put(t, dir, "numeric-c", []byte{65})
+	put(t, dir, "numeric-b", []byte{8})
+	put(t, dir, "missing", []byte("miss"))
+	put(t, dir, "magic", []byte(strings.Join([]string{
+		"0\tstring\t123\tdecimal=%d",
+		"0\tstring\t0x2a\thex=%x",
+		"0\tstring\t-7\tsigned=%i",
+		"0\tuC\t=7\tstring=%s",
+		"0\tuC\t=65\tbyte=%c",
+		"0\tuC\t=8\tb=%b",
+		"0\tstring\tmiss\tmissing=%s/%s/%u",
+	}, "\n")+"\n"))
+
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "decimal", "hex", "signed", "numeric-s", "numeric-c", "numeric-b", "missing")
+	want := "decimal: decimal=123\nhex: hex=2a\nsigned: signed=-7\nnumeric-s: string=7\nnumeric-c: byte=A\nnumeric-b: b=8\nmissing: missing=miss//0\n"
+	if out != want || errb != "" || code != 0 || strings.Contains(out, "%!") {
+		t.Fatalf("cross-type formats = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+}
+
+func TestMagicMessageAllPortableCrossTypeConversions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		arg  any
+		want map[byte]string
+	}{
+		{
+			name: "string",
+			arg:  "65",
+			want: map[byte]string{'b': "65", 'c': "6", 's': "65", 'd': "65", 'i': "65", 'o': "101", 'u': "65", 'x': "41", 'X': "41"},
+		},
+		{
+			name: "numeric",
+			arg:  magicNumberArg{value: 65, size: 1},
+			want: map[byte]string{'b': "65", 'c': "A", 's': "65", 'd': "65", 'i': "65", 'o': "101", 'u': "65", 'x': "41", 'X': "41"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for conv, want := range tc.want {
+				got, err := renderMagicMessage("%"+string(conv), tc.arg)
+				if err != nil || got != want || strings.Contains(got, "%!") {
+					t.Errorf("%%%c = (%q, %v), want %q", conv, got, err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestArchiveAndExecutableSignatures(t *testing.T) {
 	elf := make([]byte, 18)
 	copy(elf, []byte{0x7f, 'E', 'L', 'F', 2, 1})

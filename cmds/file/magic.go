@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -561,16 +560,37 @@ func renderMagicMessage(message string, arg any) (string, error) {
 		}
 		start := i
 		i++
+		flagsStart := i
 		for i < len(message) && strings.ContainsRune("#0- +", rune(message[i])) {
 			i++
 		}
+		flags := message[flagsStart:i]
+		widthStart := i
 		for i < len(message) && message[i] >= '0' && message[i] <= '9' {
 			i++
 		}
+		width := 0
+		if widthStart != i {
+			var err error
+			width, err = strconv.Atoi(message[widthStart:i])
+			if err != nil {
+				return "", fmt.Errorf("magic message field width is too large")
+			}
+		}
+		precision := -1
 		if i < len(message) && message[i] == '.' {
 			i++
+			precisionStart := i
 			for i < len(message) && message[i] >= '0' && message[i] <= '9' {
 				i++
+			}
+			precision = 0
+			if precisionStart != i {
+				var err error
+				precision, err = strconv.Atoi(message[precisionStart:i])
+				if err != nil {
+					return "", fmt.Errorf("magic message precision is too large")
+				}
 			}
 		}
 		for i < len(message) && strings.ContainsRune("hljztL", rune(message[i])) {
@@ -589,45 +609,31 @@ func renderMagicMessage(message string, arg any) (string, error) {
 		}
 		formatArg := arg
 		if usedArgument {
-			if conv == 'c' {
-				formatArg = rune(0)
-			} else if strings.ContainsRune("bs", rune(conv)) {
+			if strings.ContainsRune("bcs", rune(conv)) {
 				formatArg = ""
 			} else {
 				formatArg = uint64(0)
 			}
-		} else if number, ok := arg.(magicNumberArg); ok {
-			switch conv {
-			case 'd', 'i':
-				if number.signed {
-					formatArg = signExtend(number.value, number.size)
-				} else {
-					formatArg = number.value
-				}
-			case 'c':
-				formatArg = rune(number.value)
-			default:
-				formatArg = number.value
-			}
-		} else if text, ok := arg.(string); ok && conv == 'c' {
-			formatArg = rune(0)
-			if first, _ := utf8.DecodeRuneInString(text); len(text) != 0 {
-				formatArg = first
-			}
 		}
-		if conv == 'b' {
-			value, halt, err := magicBString(formatArg)
+		if strings.ContainsRune("bcs", rune(conv)) {
+			value, halt, err := magicStringConversion(formatArg, conv)
 			if err != nil {
 				return "", err
 			}
-			spec = spec[:len(spec)-1] + "s"
-			out.WriteString(fmt.Sprintf(spec, value))
+			if precision >= 0 && conv != 'c' && len(value) > precision {
+				value = value[:precision]
+			}
+			out.WriteString(formatMagicBytes(value, width, strings.Contains(flags, "-")))
 			if halt {
 				return out.String(), nil
 			}
 			usedArgument = true
 			i++
 			continue
+		}
+		formatArg, err := magicNumericConversion(formatArg, conv)
+		if err != nil {
+			return "", err
 		}
 		out.WriteString(fmt.Sprintf(spec, formatArg))
 		usedArgument = true
@@ -636,20 +642,100 @@ func renderMagicMessage(message string, arg any) (string, error) {
 	return out.String(), nil
 }
 
-func magicBString(arg any) (string, bool, error) {
-	var input string
+func magicStringConversion(arg any, conv byte) (string, bool, error) {
+	if conv == 'c' {
+		switch value := arg.(type) {
+		case string:
+			if value == "" {
+				// POSIX permits either no byte or a null byte for a missing or
+				// empty %c operand. Choose the former.
+				return "", false, nil
+			}
+			return value[:1], false, nil
+		case magicNumberArg:
+			return string([]byte{byte(value.value)}), false, nil
+		default:
+			text := fmt.Sprint(value)
+			if text == "" {
+				return "", false, nil
+			}
+			return text[:1], false, nil
+		}
+	}
+	input := magicArgumentString(arg)
+	if conv == 'b' {
+		return magicBString(input)
+	}
+	return input, false, nil
+}
+
+func magicArgumentString(arg any) string {
 	switch value := arg.(type) {
 	case string:
-		input = value
+		return value
 	case magicNumberArg:
 		if value.signed {
-			input = strconv.FormatInt(signExtend(value.value, value.size), 10)
-		} else {
-			input = strconv.FormatUint(value.value, 10)
+			return strconv.FormatInt(signExtend(value.value, value.size), 10)
 		}
+		return strconv.FormatUint(value.value, 10)
 	default:
-		input = fmt.Sprint(value)
+		return fmt.Sprint(value)
 	}
+}
+
+func formatMagicBytes(value string, width int, left bool) string {
+	if width <= len(value) {
+		return value
+	}
+	padding := strings.Repeat(" ", width-len(value))
+	if left {
+		return value + padding
+	}
+	return padding + value
+}
+
+func magicNumericConversion(arg any, conv byte) (any, error) {
+	switch value := arg.(type) {
+	case magicNumberArg:
+		if (conv == 'd' || conv == 'i') && value.signed {
+			return signExtend(value.value, value.size), nil
+		}
+		return value.value, nil
+	case string:
+		return parseMagicPrintfInteger(value, conv)
+	default:
+		return arg, nil
+	}
+}
+
+func parseMagicPrintfInteger(value string, conv byte) (any, error) {
+	if len(value) >= 2 && (value[0] == '\'' || value[0] == '"') {
+		return uint64(value[1]), nil
+	}
+	if value == "" {
+		return uint64(0), nil
+	}
+	if strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
+		n, err := strconv.ParseInt(value, 0, 64)
+		if err != nil {
+			return nil, fmt.Errorf("magic message %%%c argument %q is not a valid integer", conv, value)
+		}
+		if conv == 'd' || conv == 'i' {
+			return n, nil
+		}
+		return uint64(n), nil
+	}
+	n, err := strconv.ParseUint(value, 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("magic message %%%c argument %q is not a valid integer", conv, value)
+	}
+	if conv == 'd' || conv == 'i' {
+		return int64(n), nil
+	}
+	return n, nil
+}
+
+func magicBString(input string) (string, bool, error) {
 	var out strings.Builder
 	for i := 0; i < len(input); {
 		if input[i] != '\\' {
