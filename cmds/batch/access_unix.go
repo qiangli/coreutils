@@ -3,7 +3,7 @@
 package batchcmd
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/user"
@@ -15,6 +15,11 @@ import (
 
 var batchAccessDirs = []string{"/usr/lib/cron", "/etc/cron.d", "/etc"}
 
+// checkBatchAccess enforces the same at.allow/at.deny policy as at(1): batch
+// is defined as at -q b -m now, so its authorization files are at's. The
+// format is one user name per line; an unreadable file, a stat failure, or a
+// malformed line is a security-relevant ambiguity and fails closed rather
+// than being skipped.
 func checkBatchAccess(rc *tool.RunContext) int {
 	name := ""
 	if current, err := user.Current(); err == nil {
@@ -23,45 +28,59 @@ func checkBatchAccess(rc *tool.RunContext) int {
 	if name == "" {
 		name = rc.Getenv("LOGNAME")
 	}
+	deny := func() int {
+		fmt.Fprintf(rc.Err, "batch: user %s is not authorized\n", name)
+		return 1
+	}
 	for _, dir := range batchAccessDirs {
-		allow := filepath.Join(dir, "at.allow")
-		deny := filepath.Join(dir, "at.deny")
-		if _, err := os.Stat(allow); err == nil {
-			ok, err := accessFileContains(allow, name)
-			if err != nil || !ok {
-				fmt.Fprintf(rc.Err, "batch: user %s is not authorized\n", name)
-				return 1
+		allowPath := filepath.Join(dir, "at.allow")
+		denyPath := filepath.Join(dir, "at.deny")
+		if _, err := os.Stat(allowPath); err == nil {
+			permitted, policyErr := accessFileContains(allowPath, name)
+			if policyErr != nil || !permitted {
+				return deny()
 			}
 			return 0
+		} else if !os.IsNotExist(err) {
+			return deny()
 		}
-		if _, err := os.Stat(deny); err == nil {
-			blocked, err := accessFileContains(deny, name)
-			if err != nil || blocked {
-				fmt.Fprintf(rc.Err, "batch: user %s is not authorized\n", name)
-				return 1
+		if _, err := os.Stat(denyPath); err == nil {
+			blocked, policyErr := accessFileContains(denyPath, name)
+			if policyErr != nil || blocked {
+				return deny()
 			}
 			return 0
+		} else if !os.IsNotExist(err) {
+			return deny()
 		}
 	}
 	if os.Geteuid() == 0 {
 		return 0
 	}
-	fmt.Fprintf(rc.Err, "batch: user %s is not authorized\n", name)
-	return 1
+	return deny()
 }
 
+// accessFileContains reports whether the policy file lists username. The
+// format is exactly one user name per line; blank lines and lines containing
+// whitespace are malformed and surface as errors so the caller fails closed.
 func accessFileContains(path, username string) (bool, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(strings.SplitN(scanner.Text(), "#", 2)[0])
+	found := false
+	lines := bytes.Split(data, []byte{'\n'})
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
+	}
+	for index, raw := range lines {
+		line := string(raw)
+		if line == "" || strings.ContainsAny(line, " \t\r\v\f") {
+			return false, fmt.Errorf("malformed policy line %d", index+1)
+		}
 		if line == username {
-			return true, nil
+			found = true
 		}
 	}
-	return false, scanner.Err()
+	return found, nil
 }
