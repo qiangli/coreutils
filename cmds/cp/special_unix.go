@@ -59,7 +59,13 @@ func (c *copier) copySpecial(src, dst string, fi os.FileInfo) {
 		}
 	}
 
-	mode := uint32(fi.Mode().Perm())
+	finalMode := fi.Mode().Perm()
+	if c.rc.UmaskSet && !c.preserve.mode {
+		finalMode &^= c.rc.Umask.Perm()
+	}
+	// Pass the virtual-mask result to node-creation syscalls so an unrelated
+	// permissive host umask cannot expose broader permissions before chmod.
+	mode := uint32(finalMode)
 	var err error
 	switch {
 	case fi.Mode()&os.ModeNamedPipe != 0:
@@ -89,6 +95,14 @@ func (c *copier) copySpecial(src, dst string, fi os.FileInfo) {
 	if err != nil {
 		c.errf("cannot create special file '%s': %s", dst, reason(err))
 		return
+	}
+	if c.rc.UmaskSet {
+		// The host umask may have removed additional bits, so establish the
+		// exact shell-owned result after successful creation.
+		if err := os.Chmod(dp, finalMode); err != nil {
+			c.errf("setting permissions for '%s': %s", dst, reason(err))
+			return
+		}
 	}
 	if c.preserve.any() {
 		c.preserveAttrs(src, dst, fi)

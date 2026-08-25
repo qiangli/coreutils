@@ -3,10 +3,16 @@
 package cpcmd
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/qiangli/coreutils/tool"
+	"golang.org/x/sys/unix"
 )
 
 // withUmask runs fn under the given file creation mask and restores the
@@ -18,6 +24,61 @@ func withUmask(t *testing.T, mask int, fn func()) {
 	old := syscall.Umask(mask)
 	defer syscall.Umask(old)
 	fn()
+}
+
+func runToolVirtualUmask(t *testing.T, dir string, mask os.FileMode, args ...string) (string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:      context.Background(),
+		Dir:      dir,
+		Stdio:    tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Umask:    mask,
+		UmaskSet: true,
+	}
+	code := cmd.Run(rc, args)
+	return errb.String(), code
+}
+
+func TestCpRecursiveHonorsVirtualUmaskForAllCreatedTypes(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	write(t, filepath.Join(src, "file"), "payload")
+	if err := unix.Mkfifo(filepath.Join(src, "fifo"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(src, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(src, "file"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(src, "fifo"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the host umask deliberately different. The in-process command
+	// must use only RunContext.Umask and must not mutate the host mask.
+	withUmask(t, 0, func() {
+		errOut, code := runToolVirtualUmask(t, dir, 0o027, "-R", "src", "dst")
+		if code != 0 || errOut != "" {
+			t.Fatalf("cp -R: code=%d err=%q", code, errOut)
+		}
+	})
+
+	for path, want := range map[string]os.FileMode{
+		filepath.Join(dir, "dst"):         0o750,
+		filepath.Join(dir, "dst", "file"): 0o640,
+		filepath.Join(dir, "dst", "fifo"): 0o640,
+	} {
+		fi, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Errorf("%s mode=%03o, want %03o", path, got, want)
+		}
+	}
 }
 
 // TestCpRecursiveNewDirUmaskFinalMode pins POSIX cp step 2.d: without -p,

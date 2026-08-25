@@ -61,6 +61,7 @@ type copier struct {
 	rootDev        devID
 	haveRootDev    bool
 	dirStack       []os.FileInfo
+	umask          os.FileMode
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -164,6 +165,9 @@ func run(rc *tool.RunContext, args []string) int {
 		messagesGerman: strings.HasPrefix(
 			strings.ToLower(locale.Resolve(rc.Env, locale.Messages)), "de_de"),
 		in: inputReader(rc.In),
+	}
+	if c.recursive {
+		c.umask = invocationUmask(rc)
 	}
 	defer c.paths.close()
 	// GNU rule: of -f and -n, the one given last takes effect.
@@ -286,7 +290,7 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 	// finalPerm is the mode a newly created directory receives after the
 	// tree is populated when -p does not preserve the mode: the source
 	// mode as modified by the invoking umask (POSIX cp step 2.d).
-	finalPerm := fi.Mode().Perm()
+	finalPerm := fi.Mode().Perm() &^ c.umask
 	if di, err := os.Lstat(c.path(dst)); err == nil {
 		if !di.IsDir() {
 			c.errf("cannot overwrite non-directory '%s' with directory '%s'", dst, src)
@@ -294,18 +298,11 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 		}
 	} else {
 		// POSIX: the directory is created with the source mode modified
-		// by the umask (Mkdir applies the process umask), then OR'd with
+		// by the umask, then OR'd with
 		// S_IRWXU so children can land regardless of the source mode (the
 		// GNU manual's read-only-source-dir behavior). The umask-filtered
 		// mode is read back before widening so the final mode retains the
 		// filtering.
-		if err := os.Mkdir(c.path(dst), fi.Mode().Perm()); err != nil {
-			c.errf("cannot create directory '%s': %s", dst, reason(err))
-			return
-		}
-		if di, err := os.Lstat(c.path(dst)); err == nil {
-			finalPerm = di.Mode().Perm()
-		}
 		population := finalPerm | 0o700
 		if c.preserve.ownership {
 			// Ownership may change after population. Until then, do not
@@ -316,11 +313,17 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			// write access while children are still being copied.
 			population &^= 0o022
 		}
-		if population != finalPerm {
-			if err := os.Chmod(c.path(dst), population); err != nil {
-				c.errf("setting permissions for '%s': %s", dst, reason(err))
-				return
-			}
+		// Create at the restricted population mode from the outset. The
+		// host umask can only remove bits, never expose extra ones; chmod
+		// then establishes the exact invocation-owned result so a stricter
+		// host mask cannot prevent recursive population.
+		if err := os.Mkdir(c.path(dst), population); err != nil {
+			c.errf("cannot create directory '%s': %s", dst, reason(err))
+			return
+		}
+		if err := os.Chmod(c.path(dst), population); err != nil {
+			c.errf("setting permissions for '%s': %s", dst, reason(err))
+			return
 		}
 		created = true
 	}
@@ -483,12 +486,12 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 	if !c.attrsOnly {
 		flags |= os.O_TRUNC
 	}
-	out, err := os.OpenFile(dp, flags, fi.Mode().Perm())
+	out, err := c.rc.OpenFile(dp, flags, fi.Mode().Perm())
 	if err != nil && c.force {
 		// -f: if an existing destination file cannot be opened,
 		// remove it and try again.
 		if os.Remove(dp) == nil {
-			out, err = os.OpenFile(dp, flags, fi.Mode().Perm())
+			out, err = c.rc.OpenFile(dp, flags, fi.Mode().Perm())
 		}
 	}
 	if err != nil {
