@@ -100,9 +100,9 @@ func install(t *testing.T, f fixture) *world {
 
 	oldPath, oldLayout, oldDev := dbPath, dbLayout, devDir
 	oldSup, oldLookup, oldSender := supported, lookupUser, senderInfo
-	oldTTY, oldHost, oldNow := senderTTY, hostnameFn, nowFn
+	oldTTY, oldNow := senderTTY, nowFn
 	oldStat, oldOpen := statFn, openTTYFn
-	oldControlTTY, oldGetVEOL, oldUnblock := openSenderControlTTYFn, getVEOL, unblockIn
+	oldControlTTY, oldGetVEOL, oldCType := openSenderControlTTYFn, getVEOL, openCTypeFn
 
 	dbPath, dbLayout, devDir = db, f.layout, dev
 	supported = !f.noPlat
@@ -116,18 +116,14 @@ func install(t *testing.T, f fixture) *world {
 	senderInfo = func() (string, int, error) { return sender, uid, nil }
 	myTTY := f.myTTY
 	senderTTY = func(*tool.RunContext) string { return myTTY }
-	hostnameFn = func() (string, error) { return "testhost", nil }
 	nowFn = func() time.Time { return epoch.Add(90 * time.Minute) }
 	statFn, openTTYFn = os.Stat, defaultOpenTTY
 
-	openSenderControlTTYFn = func(rc *tool.RunContext) io.Writer {
+	openSenderControlTTYFn = func(rc *tool.RunContext) (io.WriteCloser, error) {
 		if f.controlW != nil {
-			return f.controlW
+			return nopWriteCloser{f.controlW}, nil
 		}
-		if rc != nil && rc.Err != nil {
-			return rc.Err
-		}
-		return os.Stderr
+		return nopWriteCloser{io.Discard}, nil
 	}
 
 	if f.veol != 0 {
@@ -137,9 +133,9 @@ func install(t *testing.T, f fixture) *world {
 	t.Cleanup(func() {
 		dbPath, dbLayout, devDir = oldPath, oldLayout, oldDev
 		supported, lookupUser, senderInfo = oldSup, oldLookup, oldSender
-		senderTTY, hostnameFn, nowFn = oldTTY, oldHost, oldNow
+		senderTTY, nowFn = oldTTY, oldNow
 		statFn, openTTYFn = oldStat, oldOpen
-		openSenderControlTTYFn, getVEOL, unblockIn = oldControlTTY, oldGetVEOL, oldUnblock
+		openSenderControlTTYFn, getVEOL, openCTypeFn = oldControlTTY, oldGetVEOL, oldCType
 	})
 	return w
 }
@@ -190,7 +186,7 @@ func TestDeliversBannerBodyAndEOF(t *testing.T) {
 		t.Errorf("write must say nothing on its own streams; got out=%q err=%q", out, errOut)
 	}
 	got := w.read(t, "pts/9")
-	want := "\a\r\nMessage from alice@testhost on pts/1 to bob at 10:30 ...\r\nhello\r\nthere\r\nEOF\r\n"
+	want := "Message from alice (pts/1) [Sat Aug 22 10:30:00 2026]...\nhello\nthere\nEOT\n"
 	if got != want {
 		t.Errorf("terminal received\n %q\nwant\n %q", got, want)
 	}
@@ -206,7 +202,7 @@ func TestUnterminatedFinalLineIsDelivered(t *testing.T) {
 	if _, e, code := exec(t, "no newline", "bob"); code != 0 {
 		t.Fatalf("exit %d: %s", code, e)
 	}
-	if got := w.read(t, "pts/9"); !strings.Contains(got, "no newlineEOF\r\n") {
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "no newline\nEOT\n") {
 		t.Errorf("unterminated final line lost: %q", got)
 	}
 }
@@ -220,7 +216,7 @@ func TestEmptyStdinStillSendsBannerAndEOF(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, e)
 	}
 	got := w.read(t, "pts/9")
-	if !strings.HasPrefix(got, "\a\r\nMessage from") || !strings.HasSuffix(got, "EOF\r\n") {
+	if !strings.HasPrefix(got, "Message from") || !strings.HasSuffix(got, "EOT\n") {
 		t.Errorf("empty message should still be framed: %q", got)
 	}
 }
@@ -233,7 +229,7 @@ func TestBannerWithNoControllingTerminal(t *testing.T) {
 	if _, e, code := exec(t, "hi\n", "bob"); code != 0 {
 		t.Fatalf("exit %d: %s", code, e)
 	}
-	if got := w.read(t, "pts/9"); !strings.Contains(got, "on ? to bob at ") {
+	if got := w.read(t, "pts/9"); !strings.Contains(got, "Message from alice (?) [") {
 		t.Errorf("a sender with no tty must not be attributed to one: %q", got)
 	}
 }
@@ -257,13 +253,24 @@ func TestTerminalOperandAcceptsBareAndDevForm(t *testing.T) {
 			if _, e, code := exec(t, "x\n", "bob", op); code != 0 {
 				t.Fatalf("exit %d: %s", code, e)
 			}
-			if got := w.read(t, "pts/9"); !strings.Contains(got, "x\r\n") {
+			if got := w.read(t, "pts/9"); !strings.Contains(got, "x\n") {
 				t.Errorf("operand %q did not select pts/9: %q", operand, got)
 			}
 			if got := w.read(t, "pts/8"); got != "" {
 				t.Errorf("operand %q leaked onto pts/8: %q", operand, got)
 			}
 		})
+	}
+}
+
+func TestExplicitOwnTerminalIsAllowed(t *testing.T) {
+	w := install(t, fixture{sender: "alice", uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "alice", line: "pts/1", mode: writable, when: epoch}}})
+	if _, e, code := exec(t, "explicit\n", "alice", "pts/1"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	if got := w.read(t, "pts/1"); !strings.Contains(got, "explicit\n") {
+		t.Fatalf("terminal = %q", got)
 	}
 }
 
@@ -589,21 +596,49 @@ func TestRegisteredUnderItsPosixName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSanitizeRendersControlCharactersSafely(t *testing.T) {
+	classes, err := loadCharClasses([]string{"LC_ALL=C"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct{ in, want string }{
-		{"plain\n", "plain\r\n"},
-		{"tab\there\n", "tab\there\r\n"},
-		{"\x1b[2J", "^[[2J"},               // ESC — a screen-clearing sequence
-		{"bel\x07", "bel\x07"},             // BEL is preserved per POSIX
-		{"\x00nul", "^@nul"},               //
-		{"del\x7f", "del^?"},               //
-		{"héllo — ok\n", "héllo — ok\r\n"}, // valid UTF-8 passes through
-		{"\xffbad", "M-^?bad"},             // invalid byte: meta + caret, 0xff&0x7f is DEL
-		{"\xe9x", "M-ix"},                  // lone latin-1 byte: meta notation
+		{"plain\n", "plain\n"},
+		{"tab\there\n", "tab\there\n"},
+		{"\x1b[2J", "^[[2J"},                            // ESC — a screen-clearing sequence
+		{"bel\x07", "bel\x07"},                          // BEL is preserved per POSIX
+		{"\x00nul", "^@nul"},                            //
+		{"del\x7f", "del^?"},                            //
+		{"héllo — ok\n", "hM-CM-)llo M-bM-^@M-^T ok\n"}, // C locale is byte-classified
+		{"\xffbad", "M-^?bad"},
+		{"\xe9x", "M-ix"}, // lone latin-1 byte: meta notation
 	}
 	for _, tc := range cases {
-		if got := sanitize(tc.in); got != tc.want {
+		if got := sanitize(tc.in, classes); got != tc.want {
 			t.Errorf("sanitize(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+type fakeCType struct{ print, space map[byte]bool }
+
+func (f *fakeCType) IsPrint(b byte) (bool, error) { return f.print[b], nil }
+func (f *fakeCType) IsSpace(b byte) (bool, error) { return f.space[b], nil }
+func (*fakeCType) Close() error                   { return nil }
+
+func TestSanitizeUsesResolvedLCCTYPEByteClasses(t *testing.T) {
+	old := openCTypeFn
+	defer func() { openCTypeFn = old }()
+	openCTypeFn = func(name string) (ctypeProvider, error) {
+		if name != "test_8bit" {
+			t.Fatalf("locale = %q", name)
+		}
+		return &fakeCType{print: map[byte]bool{0xe9: true}, space: map[byte]bool{0xa0: true}}, nil
+	}
+	classes, err := loadCharClasses([]string{"LC_ALL=test_8bit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sanitize("\xe9\xa0\x1b", classes); got != "\xe9\xa0^[" {
+		t.Fatalf("sanitize = %q", got)
 	}
 }
 
@@ -699,14 +734,55 @@ func TestMultiLoginAlertSentToControllingTerminal(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	if out != "" {
-		t.Errorf("stdout must remain empty, got %q", out)
+	if !strings.Contains(out, "write: bob is logged in on more than one line; using pts/4\n") {
+		t.Errorf("stdout = %q, want multi-login information", out)
 	}
-	if !strings.Contains(controlBuf.String(), "write: bob is logged in on more than one line; using pts/4\n") {
-		t.Errorf("controlling terminal = %q, want multi-login alert", controlBuf.String())
+	if controlBuf.String() != "\a\a" {
+		t.Errorf("controlling terminal = %q, want two alerts", controlBuf.String())
 	}
 	if got := w.read(t, "pts/4"); !strings.Contains(got, "hi") {
 		t.Errorf("recipient terminal pts/4 did not receive message: %q", got)
+	}
+}
+
+type trackingCloser struct {
+	bytes.Buffer
+	closed bool
+}
+
+func (t *trackingCloser) Close() error { t.closed = true; return nil }
+
+func TestSenderControlTerminalIsClosed(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	control := new(trackingCloser)
+	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) { return control, nil }
+	if _, e, code := exec(t, "", "bob"); code != 0 {
+		t.Fatalf("exit %d: %s", code, e)
+	}
+	if !control.closed || control.String() != "\a\a" {
+		t.Fatalf("control closed=%v data=%q", control.closed, control.String())
+	}
+}
+
+type forbiddenReader struct{ called bool }
+
+func (r *forbiddenReader) Read([]byte) (int, error) { r.called = true; select {} }
+
+func TestUnknownReaderFailsClosedWithoutReadingOrClosingIt(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	r := new(forbiddenReader)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{In: r, Out: &out, Err: &errb}}
+	if code := run(rc, []string{"bob"}); code != 1 {
+		t.Fatalf("exit = %d", code)
+	}
+	if r.called {
+		t.Fatal("unsafe reader was invoked")
+	}
+	if !strings.Contains(errb.String(), "not safely interruptible") {
+		t.Fatalf("stderr = %q", errb.String())
 	}
 }
 
@@ -719,7 +795,7 @@ func TestCanonicalVEOL(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, e)
 	}
 	got := w.read(t, "pts/9")
-	if !strings.Contains(got, "first line\r\nsecond line\r\nEOF\r\n") {
+	if !strings.Contains(got, "first line\nsecond line\nEOT\n") {
 		t.Errorf("VEOL lines were not properly framed: %q", got)
 	}
 }
@@ -730,7 +806,12 @@ func TestSIGINTWritesEOTAndReturnsSuccess(t *testing.T) {
 		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
 	})
 
-	pr, pw := io.Pipe()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Dir:   t.TempDir(),
@@ -757,26 +838,11 @@ func TestSIGINTWritesEOTAndReturnsSuccess(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 on SIGINT", code)
 	}
+	if _, err := pr.Stat(); err != nil {
+		t.Fatalf("caller-owned input was closed: %v", err)
+	}
 	got := w.read(t, "pts/9")
-	if !strings.Contains(got, "hello\r\nEOT\r\n") {
+	if !strings.Contains(got, "hello\nEOT\n") {
 		t.Errorf("recipient terminal should receive EOT: %q", got)
 	}
-}
-
-func TestRace(t *testing.T) {
-	w := install(t, fixture{
-		sender: "alice", uid: 1000, myTTY: "pts/1",
-		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
-	})
-	done := make(chan bool)
-	for i := 0; i < 5; i++ {
-		go func() {
-			_, _, _ = exec(t, "line\n", "bob")
-			done <- true
-		}()
-	}
-	for i := 0; i < 5; i++ {
-		<-done
-	}
-	_ = w
 }

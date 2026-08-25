@@ -68,8 +68,29 @@ func TestPTYBackedWriteLinux(t *testing.T) {
 	_ = master.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	n, _ := master.Read(buf)
 	got := string(buf[:n])
-	if !strings.Contains(got, "Message from alice@testhost") || !strings.Contains(got, "pty test\r\n") {
+	if !strings.Contains(got, "Message from alice (pts/999)") || !strings.Contains(got, "pty test\r\n") {
 		t.Errorf("master PTY received: %q", got)
 	}
 	_ = w
+}
+
+func TestPTYCanonicalVEOLDiscoveryLinux(t *testing.T) {
+	master, slave, _, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("PTY creation skipped: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	term, err := getTermios(int(slave.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const veol = byte(0x1d)
+	term.Cc[unix.VEOL] = veol
+	if err := unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, term); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultGetVEOL(slave); got != veol {
+		t.Fatalf("defaultGetVEOL(real PTY) = %#x, want %#x", got, veol)
+	}
 }

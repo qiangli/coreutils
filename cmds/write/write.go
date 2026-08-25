@@ -27,6 +27,7 @@ package writecmd
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -39,9 +40,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -67,12 +68,59 @@ var (
 	senderTTY              = defaultSenderTTY
 	openSenderControlTTYFn = defaultOpenSenderControlTTY
 	getVEOL                = defaultGetVEOL
-	unblockIn              = defaultUnblockIn
-	hostnameFn             = os.Hostname
 	nowFn                  = time.Now
 	statFn                 = os.Stat
 	openTTYFn              = defaultOpenTTY
 )
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+type ctypeProvider interface {
+	IsPrint(byte) (bool, error)
+	IsSpace(byte) (bool, error)
+	Close() error
+}
+
+var openCTypeFn = func(name string) (ctypeProvider, error) { return ctype.Open(name) }
+
+type charClasses struct{ pass [256]bool }
+
+func loadCharClasses(env []string) (*charClasses, error) {
+	name := locale.Resolve(env, locale.CType)
+	c := new(charClasses)
+	if name == "C" || name == "POSIX" {
+		for b := byte(0x20); b <= 0x7e; b++ {
+			c.pass[b] = true
+		}
+		for _, b := range []byte{'\t', '\n', '\v', '\f', '\r'} {
+			c.pass[b] = true
+		}
+		return c, nil
+	}
+	p, err := openCTypeFn(name)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < 256; i++ {
+		printable, err := p.IsPrint(byte(i))
+		if err != nil {
+			_ = p.Close()
+			return nil, err
+		}
+		space, err := p.IsSpace(byte(i))
+		if err != nil {
+			_ = p.Close()
+			return nil, err
+		}
+		c.pass[i] = printable || space
+	}
+	if err := p.Close(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
 
 // defaultOpenTTY opens the recipient's terminal for writing. O_WRONLY only:
 // write never reads the device, and asking for read access on a terminal
@@ -128,30 +176,33 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	controlW := openSenderControlTTYFn(rc)
-
 	if !supported {
-		fmt.Fprintf(controlW, "write: %v\n", errPlatform)
+		fmt.Fprintf(rc.Err, "write: %v\n", errPlatform)
+		return 1
+	}
+	classes, err := loadCharClasses(rc.Env)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "write: LC_CTYPE=%s: %v\n", locale.Resolve(rc.Env, locale.CType), err)
 		return 1
 	}
 
 	if err := lookupUser(target); err != nil {
-		fmt.Fprintf(controlW, "write: %s: no such user\n", target)
+		fmt.Fprintf(rc.Err, "write: %s: no such user\n", target)
 		return 1
 	}
 
 	sender, uid, err := senderInfo()
 	if err != nil {
-		fmt.Fprintf(controlW, "write: cannot determine the sending user: %v\n", err)
+		fmt.Fprintf(rc.Err, "write: cannot determine the sending user: %v\n", err)
 		return 1
 	}
 
 	records, err := readUtmpFile(dbPath, dbLayout)
 	if err != nil {
 		if errors.Is(err, errNoLayout) {
-			fmt.Fprintf(controlW, "write: %v\n", err)
+			fmt.Fprintf(rc.Err, "write: %v\n", err)
 		} else {
-			fmt.Fprintf(controlW, "write: %s: %v\n", dbPath, err)
+			fmt.Fprintf(rc.Err, "write: %s: %v\n", dbPath, err)
 		}
 		return 1
 	}
@@ -159,23 +210,37 @@ func run(rc *tool.RunContext, args []string) int {
 	myTTY := senderTTY(rc)
 	line, failure, isMulti := selectTerminal(records, target, wantTTY, myTTY, uid == 0)
 	if failure != "" {
-		fmt.Fprintf(controlW, "write: %s\n", failure)
+		fmt.Fprintf(rc.Err, "write: %s\n", failure)
 		return 1
 	}
-	if isMulti {
-		fmt.Fprintf(controlW, "write: %s is logged in on more than one line; using %s\n", target, line)
-	}
-
 	path := ttyDevice(line)
 	term, err := openTTYFn(path)
 	if err != nil {
-		fmt.Fprintf(controlW, "write: %s: %v\n", path, err)
+		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
 	defer term.Close()
+	if isMulti {
+		fmt.Fprintf(rc.Out, "write: %s is logged in on more than one line; using %s\n", target, line)
+	}
+	control, err := openSenderControlTTYFn(rc)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", err)
+		return 1
+	}
+	_, alertErr := io.WriteString(control, "\a\a")
+	closeErr := control.Close()
+	if alertErr != nil {
+		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", alertErr)
+		return 1
+	}
+	if closeErr != nil {
+		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", closeErr)
+		return 1
+	}
 
-	if err := deliver(term, rc.In, sender, target, myTTY); err != nil {
-		fmt.Fprintf(controlW, "write: %s: %v\n", path, err)
+	if err := deliver(term, rc.In, sender, myTTY, classes); err != nil {
+		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
 	return 0
@@ -234,7 +299,7 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 	var denied []string
 	skippedSelf, missing := false, 0
 	for _, r := range candidates {
-		if myTTY != "" && normalizeTTY(r.Line) == myTTY {
+		if wantTTY == "" && myTTY != "" && normalizeTTY(r.Line) == myTTY {
 			skippedSelf = true
 			continue
 		}
@@ -265,7 +330,8 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 	}
 }
 
-// readLine reads bytes until newline (\n), canonical EOL (veol if non-zero), or EOF.
+// readLine reads bytes until newline, canonical EOL, or EOF and normalises a
+// completed input record to one newline byte.
 func readLine(br *bufio.Reader, veol byte) (string, error) {
 	var buf []byte
 	for {
@@ -274,168 +340,152 @@ func readLine(br *bufio.Reader, veol byte) (string, error) {
 			return string(buf), err
 		}
 		if b == '\n' || (veol != 0 && b == veol) {
-			return string(buf), nil
+			return string(append(buf, '\n')), nil
 		}
 		buf = append(buf, b)
 	}
 }
 
-// deliver writes the banner, the message body and the closing EOF/EOT marker.
-func deliver(w io.Writer, in io.Reader, sender, target, senderTTY string) error {
-	host, err := hostnameFn()
-	if err != nil || host == "" {
-		host = "localhost"
-	}
+// deliver writes the prescribed banner, message body, and EOT marker.
+func deliver(w io.Writer, in io.Reader, sender, senderTTY string, classes *charClasses) error {
 	from := senderTTY
 	if from == "" {
-		// No controlling terminal (a script, a pipe, an agent harness). The
-		// banner still has to say something, and "?" is the honest answer -
-		// inventing a plausible tty name would misattribute the message.
 		from = "?"
 	}
-	// The bell and the CR-LF pairs are the historical banner shape: the
-	// recipient's terminal may be in raw mode, where a bare LF would leave the
-	// cursor mid-line and shred the display of whatever they were running.
-	banner := fmt.Sprintf("\a\r\nMessage from %s@%s on %s to %s at %s ...\r\n",
-		sender, host, from, target, nowFn().Format("15:04"))
+
+	var owned *os.File
+	finite := false
+	switch r := in.(type) {
+	case nil:
+		finite = true
+	case *bytes.Buffer, *bytes.Reader, *strings.Reader:
+		finite = true
+	case *os.File:
+		var err error
+		owned, err = duplicateInputFile(r)
+		if err != nil {
+			return fmt.Errorf("cannot duplicate input: %w", err)
+		}
+		defer owned.Close()
+	default:
+		return errors.New("input reader is not safely interruptible")
+	}
+
+	banner := fmt.Sprintf("Message from %s (%s) [%s]...\n", sender, from, nowFn().Format(time.ANSIC))
 	if _, err := io.WriteString(w, banner); err != nil {
 		return err
 	}
-	if in != nil {
-		veol := getVEOL(in)
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
-		defer signal.Stop(sigCh)
 
-		type lineResult struct {
-			line string
-			err  error
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+	if finite {
+		return deliverFinite(w, in, getVEOL(in), classes, sigCh)
+	}
+	return deliverFile(w, owned, getVEOL(in), classes, sigCh)
+}
+
+func deliverFinite(w io.Writer, in io.Reader, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
+	if in == nil {
+		_, err := io.WriteString(w, "EOT\n")
+		return err
+	}
+	br := bufio.NewReader(in)
+	for {
+		select {
+		case <-sigCh:
+			_, err := io.WriteString(w, "EOT\n")
+			return err
+		default:
 		}
-		lineChan := make(chan lineResult)
-		stopReader := make(chan struct{})
-		readerDone := make(chan struct{})
-
-		go func() {
-			defer close(readerDone)
-			defer close(lineChan)
-			br := bufio.NewReader(in)
-			for {
-				line, rerr := readLine(br, veol)
-				if line != "" || rerr == nil {
-					select {
-					case lineChan <- lineResult{line: line, err: rerr}:
-					case <-stopReader:
-						return
-					}
-				}
-				if rerr != nil {
-					return
-				}
+		line, err := readLine(br, veol)
+		if line != "" {
+			if errors.Is(err, io.EOF) && !strings.HasSuffix(line, "\n") {
+				line += "\n"
 			}
-		}()
-
-		var sigintReceived bool
-		for {
-			select {
-			case <-sigCh:
-				sigintReceived = true
-				close(stopReader)
-				unblockIn(in)
-				<-readerDone
-			case res, ok := <-lineChan:
-				if !ok {
-					break
-				}
-				if res.err == nil {
-					if _, werr := io.WriteString(w, sanitize(res.line)+"\r\n"); werr != nil {
-						close(stopReader)
-						unblockIn(in)
-						<-readerDone
-						return werr
-					}
-				} else if errors.Is(res.err, io.EOF) {
-					if res.line != "" {
-						if _, werr := io.WriteString(w, sanitize(res.line)); werr != nil {
-							close(stopReader)
-							unblockIn(in)
-							<-readerDone
-							return werr
-						}
-					}
-				} else {
-					close(stopReader)
-					unblockIn(in)
-					<-readerDone
-					return res.err
-				}
-				continue
+			if _, werr := io.WriteString(w, sanitize(line, classes)); werr != nil {
+				return werr
 			}
-			break
 		}
-
-		if sigintReceived {
-			_, err = io.WriteString(w, "EOT\r\n")
+		if errors.Is(err, io.EOF) {
+			_, err = io.WriteString(w, "EOT\n")
+			return err
+		}
+		if err != nil {
 			return err
 		}
 	}
-	_, err = io.WriteString(w, "EOF\r\n")
-	return err
+}
+
+func deliverFile(w io.Writer, in *os.File, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
+	var line []byte
+	for {
+		select {
+		case <-sigCh:
+			_, err := io.WriteString(w, "EOT\n")
+			return err
+		default:
+		}
+		ready, err := waitInputReadable(in, 100*time.Millisecond)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			continue
+		}
+		var one [1]byte
+		n, rerr := in.Read(one[:])
+		if n == 1 {
+			if one[0] == '\n' || (veol != 0 && one[0] == veol) {
+				line = append(line, '\n')
+				if _, err := io.WriteString(w, sanitize(string(line), classes)); err != nil {
+					return err
+				}
+				line = line[:0]
+			} else {
+				line = append(line, one[0])
+			}
+		}
+		if errors.Is(rerr, io.EOF) {
+			if len(line) > 0 {
+				line = append(line, '\n')
+				if _, err := io.WriteString(w, sanitize(string(line), classes)); err != nil {
+					return err
+				}
+			}
+			_, err = io.WriteString(w, "EOT\n")
+			return err
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
 }
 
 // sanitize renders one line safely on someone else's terminal.
 //
-// Printable multi-byte UTF-8 passes through unchanged: mangling it would be a
-// gratuitous regression, and it cannot carry a control sequence.
-func sanitize(s string) string {
+// Classification is byte-oriented, as required by the locale provider used by
+// the rest of this package. BEL is the one unconditional pass-through byte;
+// all other bytes pass only when LC_CTYPE calls them printable or spacing.
+func sanitize(s string, classes *charClasses) string {
 	var b strings.Builder
 	b.Grow(len(s) + 8)
-	for i := 0; i < len(s); {
+	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
-		case c == '\a' || c == '\t' || c == '\r':
+		case c == '\a' || classes.pass[c]:
 			b.WriteByte(c)
-			i++
-		case c == '\n':
-			b.WriteString("\r\n")
-			i++
 		case c < 0x20 || c == 0x7f:
 			b.WriteByte('^')
 			b.WriteByte(c ^ 0x40)
-			i++
-		case c < 0x80:
-			b.WriteByte(c)
-			i++
 		default:
-			r, size := utf8.DecodeRuneInString(s[i:])
-			if r == utf8.RuneError && size == 1 {
-				// Not valid UTF-8: show the raw byte in meta notation rather
-				// than passing an unknown 8-bit byte to the terminal.
-				b.WriteString("M-")
-				lo := c & 0x7f
-				if lo < 0x20 || lo == 0x7f {
-					b.WriteByte('^')
-					lo ^= 0x40
-				}
-				b.WriteByte(lo)
-				i++
-				continue
+			b.WriteString("M-")
+			lo := c & 0x7f
+			if lo < 0x20 || lo == 0x7f {
+				b.WriteByte('^')
+				lo ^= 0x40
 			}
-			if unicode.IsPrint(r) {
-				b.WriteString(s[i : i+size])
-			} else {
-				if r <= 0xff {
-					b.WriteString("M-")
-					lo := byte(r) & 0x7f
-					if lo < 0x20 || lo == 0x7f {
-						b.WriteByte('^')
-						lo ^= 0x40
-					}
-					b.WriteByte(lo)
-				} else {
-					fmt.Fprintf(&b, "<U+%04X>", r)
-				}
-			}
-			i += size
+			b.WriteByte(lo)
 		}
 	}
 	return b.String()

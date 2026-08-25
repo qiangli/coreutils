@@ -3,6 +3,7 @@
 package writecmd
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -87,14 +88,8 @@ func rdevOf(fi fs.FileInfo) (uint64, bool) {
 	return uint64(st.Rdev), true
 }
 
-func defaultOpenSenderControlTTY(rc *tool.RunContext) io.Writer {
-	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
-		return tty
-	}
-	if rc != nil && rc.Err != nil {
-		return rc.Err
-	}
-	return os.Stderr
+func defaultOpenSenderControlTTY(*tool.RunContext) (io.WriteCloser, error) {
+	return os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 }
 
 func defaultGetVEOL(in io.Reader) byte {
@@ -109,10 +104,24 @@ func defaultGetVEOL(in io.Reader) byte {
 	return 0
 }
 
-func defaultUnblockIn(in io.Reader) {
-	if f, ok := in.(*os.File); ok {
-		_ = f.SetReadDeadline(time.Now())
-	} else if c, ok := in.(io.Closer); ok {
-		_ = c.Close()
+func duplicateInputFile(in *os.File) (*os.File, error) {
+	fd, err := unix.Dup(int(in.Fd()))
+	if err != nil {
+		return nil, err
 	}
+	dup := os.NewFile(uintptr(fd), in.Name())
+	if dup == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("cannot own duplicated input descriptor")
+	}
+	return dup, nil
+}
+
+func waitInputReadable(in *os.File, timeout time.Duration) (bool, error) {
+	fds := []unix.PollFd{{Fd: int32(in.Fd()), Events: unix.POLLIN | unix.POLLHUP}}
+	n, err := unix.Poll(fds, int(timeout.Milliseconds()))
+	if err == unix.EINTR {
+		return false, nil
+	}
+	return n > 0, err
 }

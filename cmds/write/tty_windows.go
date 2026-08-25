@@ -3,7 +3,10 @@
 package writecmd
 
 import (
+	"errors"
 	"io"
+	"os"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -14,13 +17,17 @@ import (
 // future Windows path cannot silently inherit a Unix assumption.
 func defaultSenderTTY(*tool.RunContext) string { return "" }
 
-func defaultOpenSenderControlTTY(rc *tool.RunContext) io.Writer {
+func defaultOpenSenderControlTTY(rc *tool.RunContext) (io.WriteCloser, error) {
 	if rc != nil && rc.Err != nil {
-		return rc.Err
+		return nopWriteCloser{rc.Err}, nil
 	}
-	return os.Stderr
+	return nopWriteCloser{os.Stderr}, nil
 }
 
 func defaultGetVEOL(io.Reader) byte { return 0 }
 
-func defaultUnblockIn(io.Reader) {}
+func duplicateInputFile(*os.File) (*os.File, error) {
+	return nil, errors.New("write: input duplication is unavailable on windows")
+}
+
+func waitInputReadable(*os.File, time.Duration) (bool, error) { return true, nil }
