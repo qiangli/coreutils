@@ -43,7 +43,7 @@ FIELDS = (
     "operands", "operand_rules", "special_tokens", "stdin", "environment",
     "stdout", "stderr", "effects", "exit_status", "clause_ids",
     "standard_source", "parser_source", "go_evidence", "shell_evidence",
-    "provider_evidence", "evidence_state",
+    "shell_routing_evidence", "provider_evidence", "evidence_state",
 )
 LEGACY_FIELDS = (
     "command", "coreutils_go_applet", "go_package", "shell_provided",
@@ -96,6 +96,12 @@ EVIDENCE_REF = re.compile(
 )
 SHELL_EVIDENCE_REF = re.compile(
     r"^sh:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
+)
+SHELL_ROUTING_EVIDENCE_REF = re.compile(
+    r"^bashy:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
+)
+BASHY_ROUTING_TEST_ROOTS = (
+    Path("internal/cli"),
 )
 GENERIC_PROSE = (
     "where POSIX Utility Syntax Guideline 10 applies",
@@ -371,6 +377,37 @@ def _shell_evidence_ref(command: str, raw: str, root: Path) -> bool:
     return True
 
 
+def _shell_routing_evidence_ref(command: str, raw: str, root: Path) -> bool:
+    match = SHELL_ROUTING_EVIDENCE_REF.fullmatch(raw)
+    if not match:
+        raise ManifestError(
+            f"{command}: shell routing evidence must use "
+            "bashy:<approved-path>#<test-ID> contract"
+        )
+    relative = Path(match.group("path"))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ManifestError(
+            f"{command}: shell routing evidence path escapes the bashy repository"
+        )
+    if not any(relative.is_relative_to(prefix) for prefix in BASHY_ROUTING_TEST_ROOTS):
+        raise ManifestError(
+            f"{command}: shell routing evidence is outside approved bashy integration paths"
+        )
+    bashy_root = (root.parent / "bashy").resolve()
+    path = (bashy_root / relative).resolve()
+    if not path.is_relative_to(bashy_root):
+        raise ManifestError(
+            f"{command}: shell routing evidence path escapes the bashy repository"
+        )
+    if not path.is_file() or not _test_is_declared(path, match.group("test")):
+        return False
+    if not _command_test_name(command, match.group("test")):
+        raise ManifestError(
+            f"{command}: shell routing evidence test ID is not command-specific"
+        )
+    return True
+
+
 def _validate_evidence(
     row: dict[str, str], lane: str, root: Path,
 ) -> tuple[int, bool, bool]:
@@ -383,6 +420,10 @@ def _validate_evidence(
     for ref in refs:
         if lane == "shell_evidence":
             available = _shell_evidence_ref(row["command"], ref, root) and available
+        elif lane == "shell_routing_evidence":
+            available = _shell_routing_evidence_ref(
+                row["command"], ref, root,
+            ) and available
         else:
             explicit = _local_evidence_ref(row["command"], ref, lane, root) and explicit
     return len(refs), available, explicit
@@ -491,12 +532,25 @@ def validate(
             "go": "go_evidence", "shell": "shell_evidence",
             "external_provider": "provider_evidence",
         }[expected_owner]
-        for other in {"go_evidence", "shell_evidence", "provider_evidence"} - {lane}:
+        for other in {
+            "go_evidence", "shell_evidence", "provider_evidence",
+        } - {lane}:
             if row[other] != "-":
                 raise ManifestError(f"{command}: evidence crossed implementation lanes")
+        if expected_owner != "shell" and row["shell_routing_evidence"] != "-":
+            raise ManifestError(
+                f"{command}: shell routing evidence is only valid for shell-selected commands"
+            )
         evidence_count, evidence_available, explicit_tests = _validate_evidence(
             row, lane, root
         )
+        routing_count = 0
+        routing_available = True
+        routing_explicit = False
+        if expected_owner == "shell":
+            routing_count, routing_available, routing_explicit = _validate_evidence(
+                row, "shell_routing_evidence", root,
+            )
 
         missing_semantics = [
             field for field in NORMATIVE_SEMANTIC_FIELDS
@@ -517,16 +571,36 @@ def validate(
             if (
                 missing_semantics or not evidence_count or not evidence_available
                 or not explicit_tests
+                or (
+                    expected_owner == "shell"
+                    and (
+                        not routing_count or not routing_available
+                        or not routing_explicit
+                    )
+                )
                 or parser_gaps(row, root) or option_argument_gaps(row, root)
             ):
-                detail = ",".join(missing_semantics) or "focused behavioral evidence"
+                if missing_semantics:
+                    detail = ",".join(missing_semantics)
+                elif not evidence_count or not evidence_available or not explicit_tests:
+                    detail = "focused behavioral evidence"
+                else:
+                    detail = "focused shell routing evidence"
                 raise ManifestError(
                     f"{command}: verified state launders missing semantics/evidence: {detail}"
                 )
         if row["evidence_state"] == "partial" and (
             not evidence_count or not evidence_available
         ):
-            raise ManifestError(f"{command}: partial state requires focused evidence")
+            detail = (
+                "focused semantic evidence"
+                if expected_owner == "shell" else "focused evidence"
+            )
+            raise ManifestError(f"{command}: partial state requires {detail}")
+        if routing_count and (not routing_available or not routing_explicit):
+            raise ManifestError(
+                f"{command}: shell routing evidence is unavailable or unfocused"
+            )
 
     availability = Counter(row["availability"] for row in rows)
     owners = Counter(row["effective_owner"] for row in rows)
@@ -589,9 +663,12 @@ def render(rows: list[dict[str, str]]) -> str:
         "and complete normative semantics. The parser scan below is only a conservative",
         "source-token audit; finding a token is never proof of runtime behavior.", "",
         "Evidence is lane-specific. Go references stay in `cmds/<command>`; provider",
-        "references name a command-specific test in `cmds/posixproviders`; shell",
-        "references use `sh:<path>#<TestID>` against the sibling sh repository. A",
-        "missing cross-repository shell reference cannot support partial or verified state.", "",
+        "references name a command-specific test in `cmds/posixproviders`; shell semantic",
+        "references use `sh:<path>#<TestID>` against the sibling sh repository. Shell",
+        "routing references separately use `bashy:<approved-path>#<TestID>` against the",
+        "sibling bashy repository and are legal only for shell-selected rows. Verified",
+        "shell rows require both lanes: routing evidence can never substitute for semantic",
+        "evidence, and a missing cross-repository reference fails closed.", "",
         "For verified rows, `NONE` explicitly records an empty option-argument or",
         "operand set; `-` in those normative slots means missing data. Likewise, paired",
         "`-` synopsis or option fields are incomplete, and normative prose cannot be `-`.", "",
@@ -629,7 +706,8 @@ def render(rows: list[dict[str, str]]) -> str:
             f"**Conservative source-token audit:** {parser_result}; source `{row['parser_source']}`. "
             "This audit is not proof of behavior.", "",
             "**Evidence lanes:** "
-            f"Go=`{row['go_evidence']}`; shell=`{row['shell_evidence']}`; "
+            f"Go=`{row['go_evidence']}`; shell semantic=`{row['shell_evidence']}`; "
+            f"shell routing=`{row['shell_routing_evidence']}`; "
             f"provider=`{row['provider_evidence']}`; clauses=`{row['clause_ids']}`.", "",
             f"**Issue 7 source:** [{row['command']}]({standard_url}).", "",
         ])

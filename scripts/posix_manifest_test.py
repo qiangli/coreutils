@@ -157,6 +157,151 @@ class ManifestValidationTest(unittest.TestCase):
             "evidence crossed implementation lanes",
         )
 
+    def test_shell_routing_lane_is_present_but_not_fabricated(self) -> None:
+        self.assertIn("shell_routing_evidence", manifest.FIELDS)
+        self.assertEqual(
+            {row["shell_routing_evidence"] for row in self.rows},
+            {"-"},
+        )
+
+    def test_shell_routing_evidence_is_shell_owner_only(self) -> None:
+        self.assertRejected(
+            self.changed(
+                "xargs",
+                shell_routing_evidence=(
+                    "bashy:internal/cli/posix_routing_test.go"
+                    "#TestXargsShellRouting"
+                ),
+            ),
+            "shell routing evidence is only valid for shell-selected commands",
+        )
+
+    def test_shell_routing_reference_contract_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "coreutils"
+            root.mkdir()
+            test_path = root.parent / "bashy/internal/cli/posix_routing_test.go"
+            test_path.parent.mkdir(parents=True)
+            test_path.write_text(
+                "package cli\n\n"
+                "func TestTrueShellWinsOverGoApplet(t *testing.T) {}\n"
+                "func TestEchoShellWinsOverGoApplet(t *testing.T) {}\n"
+            )
+            valid = (
+                "bashy:internal/cli/posix_routing_test.go"
+                "#TestTrueShellWinsOverGoApplet"
+            )
+            self.assertTrue(manifest._shell_routing_evidence_ref("true", valid, root))
+            self.assertFalse(
+                manifest._shell_routing_evidence_ref(
+                    "true",
+                    "bashy:internal/cli/posix_routing_test.go#TestTrueAbsent",
+                    root,
+                )
+            )
+            with self.assertRaisesRegex(
+                manifest.ManifestError, "not command-specific",
+            ):
+                manifest._shell_routing_evidence_ref(
+                    "true",
+                    "bashy:internal/cli/posix_routing_test.go"
+                    "#TestEchoShellWinsOverGoApplet",
+                    root,
+                )
+
+    def test_shell_routing_reference_rejects_wrong_repo_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "coreutils"
+            root.mkdir()
+            with self.assertRaisesRegex(
+                manifest.ManifestError, "must use bashy:<approved-path>",
+            ):
+                manifest._shell_routing_evidence_ref(
+                    "true", "sh:internal/cli/route_test.go#TestTrueRouting", root,
+                )
+            with self.assertRaisesRegex(manifest.ManifestError, "escapes"):
+                manifest._shell_routing_evidence_ref(
+                    "true",
+                    "bashy:internal/cli/../route_test.go#TestTrueRouting",
+                    root,
+                )
+            with self.assertRaisesRegex(manifest.ManifestError, "outside approved"):
+                manifest._shell_routing_evidence_ref(
+                    "true",
+                    "bashy:cmd/bashy/route_test.go#TestTrueRouting",
+                    root,
+                )
+            with self.assertRaisesRegex(manifest.ManifestError, "outside approved"):
+                manifest._shell_routing_evidence_ref(
+                    "true",
+                    "bashy:internal/agentos/route_test.go#TestTrueRouting",
+                    root,
+                )
+
+    def test_routing_evidence_cannot_substitute_for_shell_semantics(self) -> None:
+        rows = self.changed(
+            "true",
+            evidence_state="partial",
+            shell_routing_evidence=(
+                "bashy:internal/cli/posix_routing_test.go#TestTrueShellRouting"
+            ),
+        )
+        with mock.patch.object(
+            manifest, "_shell_routing_evidence_ref", return_value=True,
+        ):
+            self.assertRejected(rows, "partial state requires focused semantic evidence")
+
+    def test_verified_shell_row_requires_both_semantic_and_routing_lanes(self) -> None:
+        semantic = "sh:interp/posix_true_test.go#TestTrueIssue7Interface"
+        routing = (
+            "bashy:internal/cli/posix_routing_test.go#TestTrueShellRouting"
+        )
+        changes = self.completed_semantics("true")
+        changes.update(evidence_state="verified", shell_evidence=semantic)
+        with mock.patch.object(manifest, "_shell_evidence_ref", return_value=True):
+            self.assertRejected(
+                self.changed("true", **changes),
+                "focused shell routing evidence",
+            )
+
+        changes = self.completed_semantics("true")
+        changes.update(
+            evidence_state="verified",
+            shell_routing_evidence=routing,
+        )
+        with mock.patch.object(
+            manifest, "_shell_routing_evidence_ref", return_value=True,
+        ):
+            self.assertRejected(
+                self.changed("true", **changes),
+                "focused behavioral evidence",
+            )
+
+        changes["shell_evidence"] = semantic
+        with (
+            mock.patch.object(manifest, "_shell_evidence_ref", return_value=True),
+            mock.patch.object(
+                manifest, "_shell_routing_evidence_ref", return_value=True,
+            ),
+        ):
+            manifest.validate(
+                self.changed("true", **changes),
+                self.providers,
+                self.packages,
+                self.flagsets,
+            )
+
+    def test_unavailable_shell_routing_reference_is_rejected_even_unverified(self) -> None:
+        self.assertRejected(
+            self.changed(
+                "true",
+                shell_routing_evidence=(
+                    "bashy:internal/cli/not_present_test.go#TestTrueShellRouting"
+                ),
+            ),
+            "shell routing evidence is unavailable or unfocused",
+        )
+
     def test_xargs_operands_and_environment_cannot_be_laundered(self) -> None:
         evidence = "cmds/xargs/xargs_test.go#TestXargsDefaultEcho"
         for field in ("operands", "environment"):

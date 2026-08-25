@@ -12,10 +12,14 @@ that ledger or its generator.
 
 - **verified** means the complete applicable Issue 7 interface is both present
   in the selected shell path and covered by focused public repository evidence.
-  Promotion to verified requires a stable `sh:<path>#<TestID>` reference **and**
-  a separately-made promotion in the canonical ledger; source presence, focused
-  Go-applet tests, and an aggregate differential result are not sufficient.  No
-  command in this 22-name batch currently meets that bar.
+  Promotion to verified requires a stable semantic `sh:<path>#<TestID>`
+  reference, a distinct command-specific Bashy selection reference in the
+  `bashy:<approved-path>#<TestID>` routing lane, **and** a separately-made
+  promotion in the canonical ledger.  Routing can prove that the shell wins
+  over a same-name Go applet, but it cannot substitute for command behavior;
+  source presence, focused Go-applet tests, and an aggregate differential
+  result are not sufficient.  No command in this 22-name batch currently meets
+  that bar.
 - **implementation_gap** means source or retained Profile B results identify a
   Bashy-only behavior that still needs a code correction in the Bashy shell/job
   runtime (not a same-name Go applet).  A defect that fails **identically** in
@@ -107,6 +111,17 @@ have staged Go applets; `time` also has a Go applet.  Those PATH entries serve
 exec-style callers such as `env`, `xargs`, or `find -exec`.  They do not own a
 direct shell invocation.  A direct-shell defect must be fixed and evidenced in
 Bash/Bashy shell code; duplicating the change in `cmds/<name>` cannot close it.
+
+The canonical ledger represents those two proof obligations independently.
+`shell_evidence` accepts only focused semantic tests from the sibling shell as
+`sh:<path>#<TestID>`.  `shell_routing_evidence` accepts only command-specific
+integration tests from the sibling Bashy repository as
+`bashy:internal/cli/<file>_test.go#<TestID>`.  AgentOS tests are deliberately
+excluded because the AgentOS front door is not Profile D's `sh` route.  The
+routing lane is legal only when `effective_owner=shell`; a verified shell row
+must have valid references in both lanes.  Neither lane may stand in for the
+other.  The new routing cells deliberately remain `-` until those stable tests
+actually exist.
 
 **`sh` entrypoint reconciliation.**  The canonical interface ledger now records
 `sh` with `parser_model = shell_entrypoint` (commit `fe6f45d`), rather than the
@@ -234,10 +249,11 @@ Normative interface: [`wait [pid...]`](https://pubs.opengroup.org/onlinepubs/969
 ## Required next evidence
 
 The highest-value next batch is shell-owned, not Go-applet work: add stable
-`sh:<path>#<TestID>` evidence references for `sh`, `test`, `printf`, `cd`, and
-`command` (and, to enable their promotion out of evidence_gap, for the trivial
-`true`/`false` interfaces).  The `kill` job-carrier correction is already
-integrated (`54c05236` is patch-equivalent to the shipped `031d47e2`), so **no
+semantic `sh:<path>#<TestID>` references and independent command-specific
+`bashy:<approved-path>#<TestID>` routing references for `sh`, `test`, `printf`,
+`cd`, and `command` (and, to enable their promotion out of evidence_gap, for
+the trivial `true`/`false` interfaces).  The `kill` job-carrier correction is
+already integrated (`54c05236` is patch-equivalent to the shipped `031d47e2`), so **no
 reintegration or re-measurement is requested**; the residual `kill:TP9`/`TP8`
 are shared A/B results to attribute in the suite/environment, not code to
 change.  The targeted ARM `fc` control/candidate pair is already complete at
