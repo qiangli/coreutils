@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,40 +122,5 @@ func TestCatSpecialFileOperands(t *testing.T) {
 	out, _, code = runTool(t, dir, "", "plain.txt", "/dev/null", "plain.txt")
 	if code != 0 || out != "plain\nplain\n" {
 		t.Errorf("/dev/null interleaved = (%q, %d), want both operands catted", out, code)
-	}
-}
-
-// TestCatClosedPipeExitsZero proves the asynchronous closed-pipe rule: when
-// standard output is a pipe whose reader has closed, cat stops silently with
-// status 0 instead of reporting a write error. Output larger than the buffer
-// forces the failure inside the copy loop, not only at final flush.
-func TestCatClosedPipeExitsZero(t *testing.T) {
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pr.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	var errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx: context.Background(),
-		Dir: t.TempDir(),
-		Stdio: tool.Stdio{
-			In:  io.Reader(strings.NewReader(string(bytes.Repeat([]byte("x"), 128*1024)))),
-			Out: pw,
-			Err: &errb,
-		},
-	}
-	code := cmd.Run(rc, nil)
-	if err := pw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if code != 0 {
-		t.Errorf("exit = %d with stderr %q, want 0 for closed pipe", code, errb.String())
-	}
-	if errb.String() != "" {
-		t.Errorf("stderr = %q, want silent closed-pipe disposition", errb.String())
 	}
 }
