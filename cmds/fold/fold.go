@@ -8,8 +8,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -28,6 +30,47 @@ const (
 	countBytes
 	countCharacters
 )
+
+type encodingMode int
+
+const (
+	encodingSingleByte encodingMode = iota
+	encodingLatin1
+	encodingUTF8
+)
+
+type characterModel struct {
+	encoding encodingMode
+	width    *runewidth.Condition
+}
+
+func resolveCharacterModel(env []string) (*characterModel, error) {
+	name := locale.Resolve(env, locale.CType)
+	base, codeset := splitLocaleName(name)
+	switch {
+	case (base == "C" || base == "POSIX") && codeset == "":
+		return &characterModel{encoding: encodingSingleByte}, nil
+	case (base == "C" || base == "POSIX") && normalizeCodeset(codeset) == "UTF8":
+		return &characterModel{encoding: encodingUTF8, width: runewidth.NewCondition()}, nil
+	case strings.EqualFold(base, "de_DE") && normalizeCodeset(codeset) == "ISO88591":
+		return &characterModel{encoding: encodingLatin1}, nil
+	default:
+		return nil, fmt.Errorf(
+			"LC_CTYPE %q is unavailable; supported locales are C/POSIX, their UTF-8 aliases, and de_DE.ISO-8859-1",
+			name,
+		)
+	}
+}
+
+func splitLocaleName(name string) (base, codeset string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ = strings.Cut(name, ".")
+	return base, codeset
+}
+
+func normalizeCodeset(name string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+}
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
@@ -52,6 +95,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		operands = []string{"-"}
 	}
+	model, err := resolveCharacterModel(rc.Env)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "fold: %v\n", err)
+		return 1
+	}
 
 	out := bufio.NewWriter(rc.Out)
 	status := 0
@@ -62,7 +110,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := foldStream(r, out, width, mode, *spaces); err != nil {
+		if err := foldStream(r, out, width, mode, *spaces, model); err != nil {
 			fmt.Fprintf(rc.Err, "fold: %s: %v\n", name, err)
 			status = 1
 		}
@@ -105,58 +153,93 @@ func allDigits(s string) bool {
 	return s != ""
 }
 
-func foldStream(r io.Reader, w io.Writer, width int, mode countMode, spaces bool) error {
-	if mode == countBytes {
-		return foldBytesStream(r, w, width, spaces)
-	}
-	return foldColumnsStream(r, w, width, mode, spaces)
+type inputCharacter struct {
+	raw   []byte
+	rune  rune
+	valid bool
 }
 
-// foldColumnsStream folds counting display columns (default) or
-// characters (-c). Per POSIX/GNU, in both modes a tab advances to the
-// next multiple of 8, a backspace decreases the column count, and a
-// carriage return resets it to zero. Nothing is ever deleted: with -s
-// the break goes after the last blank (which is kept), and the
-// remainder keeps its leading blanks.
-func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spaces bool) error {
-	br := bufio.NewReader(r)
-	var line []rune
-	col := 0
-	adjust := func(c int, ch rune) int {
-		switch ch {
-		case '\b':
-			if c > 0 {
-				c--
-			}
-		case '\r':
-			c = 0
-		case '\t':
-			c += 8 - c%8
-		default:
-			cw := 1
-			if mode == countColumns {
-				cw = runewidth.RuneWidth(ch)
-				if cw < 0 {
-					cw = 1
-				}
-			}
-			c += cw
+type characterReader struct {
+	r     *bufio.Reader
+	model *characterModel
+}
+
+func (r *characterReader) next() (inputCharacter, error) {
+	if r.model.encoding != encodingUTF8 {
+		b, err := r.r.ReadByte()
+		if err != nil {
+			return inputCharacter{}, err
 		}
-		return c
+		return inputCharacter{raw: []byte{b}, rune: rune(b), valid: true}, nil
 	}
-	writeLine := func(rs []rune, nl bool) error {
-		if _, err := io.WriteString(w, string(rs)); err != nil {
-			return err
+	ch, size, err := r.r.ReadRune()
+	if err != nil {
+		return inputCharacter{}, err
+	}
+	if err := r.r.UnreadRune(); err != nil {
+		return inputCharacter{}, err
+	}
+	raw := make([]byte, size)
+	if _, err := io.ReadFull(r.r, raw); err != nil {
+		return inputCharacter{}, err
+	}
+	valid := ch != utf8.RuneError || size > 1
+	return inputCharacter{raw: raw, rune: ch, valid: valid}, nil
+}
+
+// foldStream retains the exact input bytes for every decoded character. The
+// locale controls character boundaries and display widths, never output
+// transcoding. This is load-bearing for single-byte locales and malformed
+// UTF-8: neither may turn into the UTF-8 encoding of U+FFFD.
+func foldStream(
+	r io.Reader, w io.Writer, width int, mode countMode, spaces bool,
+	model *characterModel,
+) error {
+	reader := &characterReader{r: bufio.NewReader(r), model: model}
+	var line []inputCharacter
+	col := 0
+
+	adjust := func(c int, ch inputCharacter) int {
+		if mode == countBytes {
+			return c + len(ch.raw)
 		}
-		if nl {
-			if _, err := io.WriteString(w, "\n"); err != nil {
+		if len(ch.raw) == 1 {
+			switch ch.raw[0] {
+			case '\b':
+				if c > 0 {
+					c--
+				}
+				return c
+			case '\r':
+				return 0
+			case '\t':
+				return c + 8 - c%8
+			}
+		}
+		if mode == countCharacters || model.encoding != encodingUTF8 || !ch.valid {
+			return c + 1
+		}
+		charWidth := model.width.RuneWidth(ch.rune)
+		if charWidth < 0 {
+			charWidth = 1
+		}
+		return c + charWidth
+	}
+
+	writeLine := func(chars []inputCharacter, newline bool) error {
+		for _, ch := range chars {
+			if err := writeFull(w, ch.raw); err != nil {
 				return err
 			}
 		}
+		if newline {
+			return writeFull(w, []byte{'\n'})
+		}
 		return nil
 	}
+
 	for {
-		ch, _, err := br.ReadRune()
+		ch, err := reader.next()
 		if err == io.EOF {
 			if len(line) > 0 {
 				return writeLine(line, false)
@@ -166,7 +249,7 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 		if err != nil {
 			return err
 		}
-		if ch == '\n' {
+		if len(ch.raw) == 1 && ch.raw[0] == '\n' {
 			if err := writeLine(line, true); err != nil {
 				return err
 			}
@@ -178,24 +261,20 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 		newCol := adjust(col, ch)
 		if newCol > width {
 			if spaces {
-				if i := lastBlankRune(line); i >= 0 {
-					// Break after the blank, keeping it; the remainder
-					// (leading blanks and all) starts the next line.
+				if i := lastBlank(line); i >= 0 {
 					if err := writeLine(line[:i+1], true); err != nil {
 						return err
 					}
 					line = append(line[:0], line[i+1:]...)
 					col = 0
-					for _, r := range line {
-						col = adjust(col, r)
+					for _, previous := range line {
+						col = adjust(col, previous)
 					}
 					goto rescan
 				}
 			}
 			if len(line) == 0 {
-				// A single unit wider than the width still goes out, but
-				// preserves the empty segment before it.
-				if _, err := io.WriteString(w, "\n"); err != nil {
+				if err := writeFull(w, []byte{'\n'}); err != nil {
 					return err
 				}
 				line = append(line, ch)
@@ -208,8 +287,6 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 			line = line[:0]
 			col = 0
 			if adjust(0, ch) > width {
-				// The preceding segment already supplied the break before
-				// this over-width unit; do not emit another empty segment.
 				line = append(line, ch)
 				col = adjust(0, ch)
 				continue
@@ -221,91 +298,17 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 	}
 }
 
-// foldBytesStream folds counting bytes (-b): tabs, backspaces, and
-// carriage returns each count one, like any other byte.
-func foldBytesStream(r io.Reader, w io.Writer, width int, spaces bool) error {
-	br := bufio.NewReader(r)
-	var line []byte
-	writeLine := func(bs []byte, nl bool) error {
-		if _, err := w.Write(bs); err != nil {
-			return err
-		}
-		if nl {
-			if _, err := io.WriteString(w, "\n"); err != nil {
-				return err
-			}
-		}
-		return nil
+func writeFull(w io.Writer, p []byte) error {
+	n, err := w.Write(p)
+	if err == nil && n != len(p) {
+		return io.ErrShortWrite
 	}
-	for {
-		ch, sz, err := br.ReadRune()
-		if err == io.EOF {
-			if len(line) > 0 {
-				return writeLine(line, false)
-			}
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if ch == '\n' {
-			if err := writeLine(line, true); err != nil {
-				return err
-			}
-			line = line[:0]
-			continue
-		}
-		if err := br.UnreadRune(); err != nil {
-			return err
-		}
-		chunk := make([]byte, sz)
-		if _, err := io.ReadFull(br, chunk); err != nil {
-			return err
-		}
-	rescan:
-		if len(line)+len(chunk) > width {
-			if spaces {
-				if i := lastBlankByte(line); i >= 0 {
-					if err := writeLine(line[:i+1], true); err != nil {
-						return err
-					}
-					line = append(line[:0], line[i+1:]...)
-					goto rescan
-				}
-			}
-			if len(line) == 0 {
-				if _, err := io.WriteString(w, "\n"); err != nil {
-					return err
-				}
-				line = append(line[:0], chunk...)
-				continue
-			}
-			if err := writeLine(line, true); err != nil {
-				return err
-			}
-			line = line[:0]
-			if len(chunk) > width {
-				line = append(line, chunk...)
-				continue
-			}
-			goto rescan
-		}
-		line = append(line, chunk...)
-	}
+	return err
 }
 
-func lastBlankRune(rs []rune) int {
-	for i := len(rs) - 1; i >= 0; i-- {
-		if rs[i] == ' ' || rs[i] == '\t' {
-			return i
-		}
-	}
-	return -1
-}
-
-func lastBlankByte(bs []byte) int {
-	for i := len(bs) - 1; i >= 0; i-- {
-		if bs[i] == ' ' || bs[i] == '\t' {
+func lastBlank(chars []inputCharacter) int {
+	for i := len(chars) - 1; i >= 0; i-- {
+		if len(chars[i].raw) == 1 && (chars[i].raw[0] == ' ' || chars[i].raw[0] == '\t') {
 			return i
 		}
 	}

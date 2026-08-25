@@ -14,7 +14,10 @@ import (
 func runFold(t *testing.T, input string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, err bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err}}
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"LC_ALL=C.UTF-8"},
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err},
+	}
 	code := run(rc, args)
 	return out.String(), err.String(), code
 }
