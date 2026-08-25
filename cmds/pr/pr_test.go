@@ -3,6 +3,7 @@ package prcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -22,6 +23,16 @@ func (w firstWriteSignal) Write(p []byte) (int, error) {
 	case w.ch <- struct{}{}:
 	default:
 	}
+	return len(p), nil
+}
+
+type orderedWriter struct {
+	events *[]string
+	label  string
+}
+
+func (w orderedWriter) Write(p []byte) (int, error) {
+	*w.events = append(*w.events, w.label)
 	return len(p), nil
 }
 
@@ -259,6 +270,348 @@ func TestPRFormFeedLowerEqualsUpper(t *testing.T) {
 	}
 	if outF != outf {
 		t.Fatalf("pr -f output differs from pr -F:\n-F: %q\n-f: %q", outF, outf)
+	}
+}
+
+// withTerminalStdout makes isTerminalFn report standard output as a
+// terminal for the duration of the test, restoring it on cleanup. Every
+// other -p/-f test in this file that does NOT call this proves the
+// noninteractive path (a bytes.Buffer, exactly what runPR uses): with
+// isTerminalFn left at its real default, that is always false.
+func withTerminalStdout(t *testing.T) {
+	t.Helper()
+	old := isTerminalFn
+	isTerminalFn = func(*tool.RunContext) bool { return true }
+	t.Cleanup(func() { isTerminalFn = old })
+}
+
+// withControlTTY overrides the /dev/tty seam and returns a pointer to a
+// counter of how many times it was opened, so tests can assert exactly one
+// pause (-f) versus one per page (-p).
+func withControlTTY(t *testing.T, open func() (io.ReadCloser, error)) *int {
+	t.Helper()
+	old := openControlTTYFn
+	calls := 0
+	openControlTTYFn = func() (io.ReadCloser, error) {
+		calls++
+		return open()
+	}
+	t.Cleanup(func() { openControlTTYFn = old })
+	return &calls
+}
+
+// withNoInterrupt overrides the interrupt seam with a channel that never
+// fires, so a pause under test runs to normal completion.
+func withNoInterrupt(t *testing.T) {
+	t.Helper()
+	old := watchInterruptFn
+	watchInterruptFn = func() (chan os.Signal, func()) { return make(chan os.Signal), func() {} }
+	t.Cleanup(func() { watchInterruptFn = old })
+}
+
+type failingReader struct{ err error }
+
+func (f failingReader) Read([]byte) (int, error) { return 0, f.err }
+
+type failingWriter struct{ err error }
+
+func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }
+
+func TestPRPausePerPageWritesAlertAndReadsDevTTY(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	calls := withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("\n")), nil
+	})
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\nb\n"), Out: &out, Err: &errb},
+	}
+	// -l 11 -> a 1-line body (11 - the 10-line header/trailer), so two input
+	// lines make exactly two pages: one pause expected per page.
+	if code := cmd.Run(rc, []string{"-p", "-l", "11"}); code != 0 {
+		t.Fatalf("pr -p = code %d, stderr %q", code, errb.String())
+	}
+	if *calls != 2 {
+		t.Fatalf("pr -p opened /dev/tty %d times, want 2 (one per page)", *calls)
+	}
+	if got := strings.Count(errb.String(), "\a"); got != 2 {
+		t.Fatalf("pr -p wrote %d alerts to stderr, want 2: %q", got, errb.String())
+	}
+	if !strings.Contains(out.String(), "a\n") || !strings.Contains(out.String(), "b\n") {
+		t.Fatalf("pr -p output missing paginated content: %q", out.String())
+	}
+}
+
+func TestPRMergePauseFlushesEachPageBeforeNextAlert(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("\n")), nil
+	})
+
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", "a\nb\n")
+	writeFixed(t, dir, "two", "c\nd\n")
+	var events []string
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir,
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: orderedWriter{events: &events, label: "page"},
+			Err: orderedWriter{events: &events, label: "pause"},
+		},
+	}
+	if code := cmd.Run(rc, []string{"-m", "-p", "-l", "11", "one", "two"}); code != 0 {
+		t.Fatalf("pr -m -p exited %d; events=%v", code, events)
+	}
+	want := []string{"pause", "page", "pause", "page"}
+	if len(events) != len(want) {
+		t.Fatalf("merge pause/write events=%v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("merge pause/write events=%v, want %v", events, want)
+		}
+	}
+}
+
+func TestPRMergeFlushErrorStopsBeforeAnotherPause(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	calls := withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("\n")), nil
+	})
+
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", "a\nb\n")
+	writeFixed(t, dir, "two", "c\nd\n")
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir,
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: failingWriter{err: errors.New("broken pipe")},
+			Err: &errb,
+		},
+	}
+	code := cmd.Run(rc, []string{"-m", "-p", "-l", "11", "one", "two"})
+	if code == 0 || !strings.Contains(strings.ToLower(errb.String()), "broken pipe") {
+		t.Fatalf("merge flush failure: code=%d stderr=%q", code, errb.String())
+	}
+	if *calls != 1 {
+		t.Fatalf("merge flush failure prompted %d times, want 1", *calls)
+	}
+}
+
+func TestPRPauseAcceptsCarriageReturnFromDevTTY(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	calls := withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("\r")), nil
+	})
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\n"), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"-p"}); code != 0 {
+		t.Fatalf("pr -p with carriage return = code %d, stderr %q", code, errb.String())
+	}
+	if *calls != 1 {
+		t.Fatalf("pr -p opened /dev/tty %d times, want 1", *calls)
+	}
+	if got := strings.Count(errb.String(), "\a"); got != 1 {
+		t.Fatalf("pr -p wrote %d alerts to stderr, want 1: %q", got, errb.String())
+	}
+	if !strings.Contains(out.String(), "a\n") {
+		t.Fatalf("pr -p output missing content after carriage return: %q", out.String())
+	}
+}
+
+func TestPRFormFeedLowerPausesOnlyBeforeFirstPageOnTerminal(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	calls := withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("\n")), nil
+	})
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\nb\n"), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"-f", "-l", "11"}); code != 0 {
+		t.Fatalf("pr -f = code %d, stderr %q", code, errb.String())
+	}
+	if *calls != 1 {
+		t.Fatalf("pr -f (XSI) opened /dev/tty %d times, want 1 (first page only)", *calls)
+	}
+	if got := strings.Count(errb.String(), "\a"); got != 1 {
+		t.Fatalf("pr -f wrote %d alerts to stderr, want 1: %q", got, errb.String())
+	}
+	if strings.Count(out.String(), "\f") == 0 {
+		t.Fatalf("pr -f output has no form-feed page separators: %q", out.String())
+	}
+}
+
+func TestPRPauseUnavailableControllingTerminal(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	withControlTTY(t, func() (io.ReadCloser, error) {
+		return nil, errors.New("no such device or address")
+	})
+
+	dir := t.TempDir()
+	writeFixed(t, dir, "in", "a\n")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir,
+		Stdio: tool.Stdio{In: nil, Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"-p", "in"})
+	if code == 0 {
+		t.Fatalf("pr -p with an unavailable controlling terminal must fail, got code 0, out=%q", out.String())
+	}
+	if !strings.Contains(errb.String(), "in") || !strings.Contains(errb.String(), "/dev/tty") {
+		t.Fatalf("pr -p diagnostic = %q, want it to name the file and /dev/tty", errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("pr -p must not print page content when the pause before it fails: %q", out.String())
+	}
+}
+
+func TestPRPauseDevTTYReadError(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(failingReader{err: errors.New("input/output error")}), nil
+	})
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\n"), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"-p"})
+	if code == 0 {
+		t.Fatalf("pr -p with a failing /dev/tty read must fail, got code 0")
+	}
+	if !strings.Contains(errb.String(), "/dev/tty") {
+		t.Fatalf("pr -p read-error diagnostic = %q, want it to name /dev/tty", errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("pr -p must not print page content when the pause read fails: %q", out.String())
+	}
+}
+
+func TestPRPauseAlertWriteError(t *testing.T) {
+	withTerminalStdout(t)
+	withNoInterrupt(t)
+	calls := withControlTTY(t, func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("\n")), nil
+	})
+
+	var out bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\n"), Out: &out, Err: failingWriter{err: errors.New("broken pipe")}},
+	}
+	code := cmd.Run(rc, []string{"-p"})
+	if code == 0 {
+		t.Fatalf("pr -p with a failing stderr alert write must fail, got code 0")
+	}
+	if *calls != 0 {
+		t.Fatalf("pr -p must not open /dev/tty once the alert write already failed, got %d opens", *calls)
+	}
+	if out.String() != "" {
+		t.Fatalf("pr -p must not print page content when the alert write fails: %q", out.String())
+	}
+}
+
+func TestPRPauseInterrupted(t *testing.T) {
+	withTerminalStdout(t)
+	// A real pipe that nothing ever writes to: the pause's read blocks until
+	// either data arrives or the pipe is closed, so this proves the select
+	// on the interrupt channel actually races a live, hanging read rather
+	// than a read that happens to return immediately.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	withControlTTY(t, func() (io.ReadCloser, error) { return pr, nil })
+
+	sig := make(chan os.Signal, 1)
+	sig <- os.Interrupt
+	old := watchInterruptFn
+	watchInterruptFn = func() (chan os.Signal, func()) { return sig, func() {} }
+	t.Cleanup(func() { watchInterruptFn = old })
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\nb\n"), Out: &out, Err: &errb},
+	}
+	done := make(chan int, 1)
+	go func() { done <- cmd.Run(rc, []string{"-p"}) }()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("pr -p interrupted while paused = code %d, want 0 (clean stop): stderr=%q", code, errb.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pr -p did not return after an interrupt while paused; it hung waiting on /dev/tty")
+	}
+	if out.String() != "" {
+		t.Fatalf("pr -p must not print page content once interrupted before it: %q", out.String())
+	}
+}
+
+func TestPRPauseFlagsNoOpWhenStdoutIsNotATerminal(t *testing.T) {
+	// isTerminalFn is deliberately left at its real default here: runPR's
+	// bytes.Buffer is never a terminal, matching every other test in this
+	// file, so this proves -p/-f's pause never engages in the gated
+	// noninteractive path all the other option coverage depends on.
+	var ttyCalls, sigCalls int
+	oldOpen, oldWatch := openControlTTYFn, watchInterruptFn
+	openControlTTYFn = func() (io.ReadCloser, error) {
+		ttyCalls++
+		return io.NopCloser(strings.NewReader("\n")), nil
+	}
+	watchInterruptFn = func() (chan os.Signal, func()) {
+		sigCalls++
+		return make(chan os.Signal), func() {}
+	}
+	t.Cleanup(func() { openControlTTYFn, watchInterruptFn = oldOpen, oldWatch })
+
+	// -p adds nothing but the pause, so its non-terminal output must equal
+	// plain pr exactly. -f also aliases -F's form feeds regardless of
+	// terminal status (that half is not gated), so it is compared against
+	// -F rather than against plain pr; TestPRFormFeedLowerEqualsUpper covers
+	// that pairing too, but repeating it here keeps this test self-contained
+	// against the same tty/sig call counters checked below.
+	plain, _, codePlain := runPR(t, t.TempDir(), "a\nb\n", "-l", "11")
+	paused, errb, codePaused := runPR(t, t.TempDir(), "a\nb\n", "-l", "11", "-p")
+	if codePlain != 0 || codePaused != 0 {
+		t.Fatalf("pr exit codes: plain=%d paused=%d", codePlain, codePaused)
+	}
+	if plain != paused {
+		t.Fatalf("pr -p on a non-terminal changed output:\nplain=%q\npaused=%q", plain, paused)
+	}
+	if errb != "" {
+		t.Fatalf("pr -p on a non-terminal must write no alert: stderr=%q", errb)
+	}
+	upperF, _, codeUpperF := runPR(t, t.TempDir(), "a\nb\n", "-F")
+	lowerF, _, codeLowerF := runPR(t, t.TempDir(), "a\nb\n", "-f")
+	if codeUpperF != 0 || codeLowerF != 0 {
+		t.Fatalf("pr exit codes: -F=%d -f=%d", codeUpperF, codeLowerF)
+	}
+	if upperF != lowerF {
+		t.Fatalf("pr -f on a non-terminal changed output vs -F:\n-F=%q\n-f=%q", upperF, lowerF)
+	}
+	if ttyCalls != 0 || sigCalls != 0 {
+		t.Fatalf("pr -p -f on a non-terminal must not touch /dev/tty or install an interrupt handler: ttyCalls=%d sigCalls=%d", ttyCalls, sigCalls)
 	}
 }
 

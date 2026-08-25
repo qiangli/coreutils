@@ -6,6 +6,21 @@
 //
 // Across-column output (-a) and parallel merging (-m) are supported.
 //
+// -p and the XSI first-page half of -f are POSIX terminal-interaction
+// requirements: -p pauses before every emitted page and -f pauses before
+// only the first, in both cases writing an <alert> to standard error and
+// waiting for a carriage return read from /dev/tty, but only when standard
+// output is a terminal — never in the noninteractive (redirected/piped)
+// case, which every other option in this file targets. Both requirements
+// funnel through pager.before (invoked at each emitted-page boundary in
+// printSingleColumn, printColumnChunk, and printMerge) and pause (the
+// actual alert/wait), gated by the isTerminalFn/openControlTTYFn seams so
+// the noninteractive path never touches a real terminal and headless tests
+// never block on one. An interrupt (SIGINT) during the wait ends the pause
+// and the whole invocation cleanly (exit 0), matching cmds/write's
+// interrupt convention; an unavailable /dev/tty or a read/write failure on
+// it is a normal diagnosed error.
+//
 // Documented deviation: like GNU pr, the header timestamp for standard
 // input (or when stat fails) is the current wall-clock time, so that
 // header line is nondeterministic.
@@ -13,12 +28,16 @@ package prcmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -66,6 +85,7 @@ type options struct {
 	outputTabChar  rune
 	outputTabWidth int
 	merge          bool
+	pager          *pager // nil unless -p or -f actually needs to pause (stdout is a terminal)
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -98,7 +118,8 @@ func run(rc *tool.RunContext, args []string) int {
 	sepString := fs.StringP("sep-string", "S", "", "separate columns by STRING")
 	merge := fs.BoolP("merge", "m", false, "print files in parallel, one per column")
 	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
-	formFeedLower := fs.BoolP("f", "f", false, "use form feed instead of blank lines to end pages")
+	formFeedLower := fs.BoolP("f", "f", false, "use form feed instead of blank lines to end pages; pause before the first page if standard output is a terminal")
+	pauseFlag := fs.BoolP("p", "p", false, "pause before beginning each page if standard output is a terminal")
 	pageWidth := fs.IntP("page-width", "W", 72, "set page width and truncate lines")
 	firstLineNum := fs.IntP("first-line-number", "N", 1, "start counting line numbers at NUMBER")
 	joinLines := fs.BoolP("join-lines", "J", false, "merge full-length lines (GNU compat, no-op in this subset)")
@@ -204,6 +225,12 @@ func run(rc *tool.RunContext, args []string) int {
 		o.expandTabs = true
 		o.outputTabs = true
 	}
+	// -p pauses before every emitted page; -f (XSI) pauses before only the
+	// first. Both apply only when standard output is a terminal: elsewhere
+	// -p is a no-op and -f is a plain alias of -F, per POSIX.
+	if (*pauseFlag || *formFeedLower) && isTerminalFn(rc) {
+		o.pager = &pager{errW: rc.Err, each: *pauseFlag, first: *formFeedLower}
+	}
 
 	// The GNU/POSIX +FIRST[:LAST] operand is an alternative page range.
 	var files []string
@@ -241,8 +268,16 @@ func run(rc *tool.RunContext, args []string) int {
 			continue
 		}
 		if err := printFile(r, w, label, stamp, o); err != nil {
+			if closer != nil {
+				closer.Close()
+			}
+			if errors.Is(err, errPauseInterrupted) {
+				w.Flush()
+				return 0
+			}
 			fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
 			exit = 1
+			continue
 		}
 		if closer != nil {
 			closer.Close()
@@ -281,6 +316,13 @@ func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) i
 		}
 	}()
 	if err := printMerge(readers, w, o); err != nil {
+		if errors.Is(err, errPauseInterrupted) {
+			if flushErr := w.Flush(); flushErr != nil {
+				fmt.Fprintf(rc.Err, "pr: write error: %v\n", flushErr)
+				return 1
+			}
+			return 0
+		}
 		fmt.Fprintf(rc.Err, "pr: merge: %v\n", tool.SysErr(err))
 		return 1
 	}
@@ -557,6 +599,11 @@ func printSingleColumn(r io.Reader, w *bufio.Writer, label string, stamp time.Ti
 
 	emitPage := func(chunk []string) error {
 		emit := inPageRange(page, o)
+		if emit {
+			if err := o.pager.before(); err != nil {
+				return err
+			}
+		}
 		if emit && !o.omitHeader {
 			if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); err != nil {
 				return err
@@ -706,6 +753,11 @@ func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
 	lineNo := o.firstLineNum
 	for page := 1; page <= pageCount; page++ {
 		emit := inPageRange(page, o)
+		if emit {
+			if err := o.pager.before(); err != nil {
+				return err
+			}
+		}
 		if emit && !o.omitHeader {
 			if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(label, stamp, page, o)); err != nil {
 				return err
@@ -741,6 +793,15 @@ func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
 					return err
 				}
 			} else if _, err := w.WriteString(strings.Repeat("\n", physBudget-rows*physPerLine+linesPerTrailer)); err != nil {
+				return err
+			}
+		}
+		if emit {
+			// A -p pause for page N+1 must never happen while page N is
+			// still buffered; the operator must see each acknowledged page
+			// before being asked to acknowledge the next one. This also
+			// surfaces output errors before another controlling-tty read.
+			if err := w.Flush(); err != nil {
 				return err
 			}
 		}
@@ -843,6 +904,11 @@ func printColumns(segments [][]string, w *bufio.Writer, headerLabel string, stam
 
 func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, headerLabel string, stamp time.Time, o options, physPerLine int) error {
 	emit := inPageRange(page, o)
+	if emit {
+		if err := o.pager.before(); err != nil {
+			return err
+		}
+	}
 	if emit && !o.omitHeader {
 		if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); err != nil {
 			return err
@@ -1122,4 +1188,103 @@ func strftimeLayout(format string) string {
 		format = strings.ReplaceAll(format, r.old, r.new)
 	}
 	return format
+}
+
+// Seams for the -p/-f terminal pause. Overridden in tests so the pause path
+// never touches a real terminal or blocks a headless run.
+var (
+	isTerminalFn = func(rc *tool.RunContext) bool {
+		f, ok := rc.Out.(*os.File)
+		return ok && term.IsTerminal(int(f.Fd()))
+	}
+	openControlTTYFn = defaultOpenControlTTY
+	watchInterruptFn = watchInterrupt
+)
+
+// errPauseInterrupted signals that a -p/-f pause ended because pr received
+// an interrupt while waiting on /dev/tty rather than because the user
+// supplied the required carriage return. Callers treat it as a clean early
+// stop (exit 0), matching cmds/write's interrupt convention, not a
+// diagnosed error.
+var errPauseInterrupted = errors.New("pr: interrupted while waiting for the terminal")
+
+// pager decides, at each emitted-page boundary, whether pr must pause: -p
+// pauses before every page, -f (XSI) only before the first. It is
+// constructed (non-nil) only when standard output is a terminal, so its
+// zero value (a nil *pager) makes every noninteractive call to before a
+// no-op, matching every other option's noninteractive behavior.
+type pager struct {
+	errW   io.Writer
+	each   bool
+	first  bool
+	primed bool
+}
+
+func (p *pager) before() error {
+	if p == nil {
+		return nil
+	}
+	fire := p.each || (p.first && !p.primed)
+	p.primed = true
+	if !fire {
+		return nil
+	}
+	return pause(p.errW)
+}
+
+// pause implements the POSIX -p wait: write an <alert> to standard error,
+// then wait for a <carriage return> read on /dev/tty. -f's XSI first-page
+// pause uses the same mechanism; POSIX leaves it otherwise unspecified.
+// The read runs in a goroutine so an interrupt can race it on sigCh without
+// blocking pr forever on a terminal that never answers.
+func pause(errW io.Writer) error {
+	if _, err := io.WriteString(errW, "\a"); err != nil {
+		return fmt.Errorf("alert: %w", err)
+	}
+	tty, err := openControlTTYFn()
+	if err != nil {
+		return fmt.Errorf("/dev/tty: %w", err)
+	}
+
+	sigCh, stop := watchInterruptFn()
+	defer stop()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- readPauseReturn(tty)
+	}()
+
+	select {
+	case err := <-done:
+		closeErr := tty.Close()
+		if err != nil {
+			return fmt.Errorf("/dev/tty: %w", err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("/dev/tty: %w", closeErr)
+		}
+		return nil
+	case <-sigCh:
+		_ = tty.Close()
+		return errPauseInterrupted
+	}
+}
+
+func readPauseReturn(r io.Reader) error {
+	br := bufio.NewReader(r)
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return err
+		}
+		if b == '\r' || b == '\n' {
+			return nil
+		}
+	}
+}
+
+func watchInterrupt() (chan os.Signal, func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	return ch, func() { signal.Stop(ch) }
 }

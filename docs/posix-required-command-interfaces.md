@@ -3731,7 +3731,7 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 **Implementation:** `cmds/pr`.
 
-**Conservative source-token audit:** token gaps: options=+<page>, -p; argument-form gaps=none; source `cmds/pr`. This audit is not proof of behavior.
+**Conservative source-token audit:** token gaps: options=+<page>; argument-form gaps=none; source `cmds/pr`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/pr/pr_test.go`; shell=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
