@@ -1,20 +1,17 @@
 # POSIX Interface Audit: Go Batch 5
 
-This fail-closed audit covers exactly 13 Go-owned commands against POSIX.1-2016 (Issue 7): `renice`, `rm`, `rmdir`, `sed`, `sleep`, `sort`, `split`, `strings`, `stty`, `tabs`, `tail`, `tee`, and `touch`. A package test passing proves only the behavior it asserts; untested mandatory behavior is an `evidence_gap`, and source-confirmed divergence is an `implementation_gap`.
+This fail-closed audit covers exactly 13 Go-owned commands against POSIX.1-2016 (Issue 7): `renice`, `rm`, `rmdir`, `sed`, `sleep`, `sort`, `split`, `strings`, `stty`, `tabs`, `tail`, `tee`, and `touch`. Its canonical implementation baseline is coreutils `1523713`. A package test passing proves only the behavior it asserts; untested mandatory behavior is an `evidence_gap`, and source-confirmed divergence is an `implementation_gap`.
 
 ## Ranked confirmed gaps
 
-1. **`stty` — critical:** the audited tree lacks most mandatory mode operands and real portable `-a`/restorable `-g`; corrective issue 53 is not yet reviewed or integrated.
-2. **`sed` — critical:** non-C BRE collation/equivalence/collating-element and back-reference routing is incomplete; corrective issue 52 remains pending.
-3. **`sort` — high:** `-bdfi` character handling is fixed ASCII/byte logic rather than `LC_CTYPE` behavior, and supported locale coverage is narrow.
-4. **`touch` — high:** the mandatory pathname operand `-` is rejected as unsupported.
-5. **`strings` — high:** the audited tree counts and classifies bytes, not locale characters; the published issue-45 fix is not in this tree.
-6. **`rm` — high:** the audited tree lacks the implicit unwritable-target terminal prompt, and affirmative responses ignore locale `yesexpr`; the published issue-36 prompt fixes are not in this tree.
-7. **`renice` — medium:** the audited tree accepts signed numeric IDs where unsigned decimal IDs are required; the published issue-36 fix is not in this tree.
-8. **`tabs` — medium:** unset/null `TERM` errors instead of selecting an unspecified supported default; the published issue-45 fix is not in this tree.
-9. **Evidence gaps:** `rmdir`, `sleep`, `split`, `tail`, and `tee` have supportable core implementations but lack focused evidence for every mandatory error/signal/locale edge; no locale-sensitive command is promoted merely from C/POSIX-locale tests.
+1. **`sed` — critical:** non-C BRE collation/equivalence/collating-element and back-reference routing is incomplete; corrective issue 52 remains pending review.
+2. **`sort` — high:** `-bdfi` character handling is fixed ASCII/byte logic rather than `LC_CTYPE` behavior, and supported locale coverage is narrow.
+3. **`touch` — high:** the mandatory pathname operand `-` is rejected as unsupported.
+4. **`rm` — high:** canonical commits `2102a00` and `51eeaee` close implicit write-protection prompting, including prompting before protected-directory descent, but affirmative responses still ignore `LC_MESSAGES` `yesexpr`.
+5. **`strings` — medium:** canonical commits `a84afe9` and `4879065` make scanning character-granular for C/POSIX, UTF-8, and the reviewed single-byte provider, but the provider deliberately rejects other non-UTF-8 locales.
+6. **Evidence gaps:** `renice`, `rmdir`, `sleep`, `split`, `stty`, `tabs`, `tail`, and `tee` have supportable core implementations but retain focused portability, terminal-provider, signal, error, or locale evidence gaps. In particular, canonical `stty` commit `1523713` closes the mandatory core interface and atomicity defects; its residuals are evidence/locale coverage, not the former interface gap.
 
-Published-but-unintegrated work is recorded for traceability, not counted as current-tree evidence: issue 36 (`34f1805`, followed by `41a5a90`) for `renice`/`rm`; issue 45 (`cf202f9`, followed by `505b469`) for `strings`/`tabs`; pending issue 52 (`f601cae`) for `sed`; and pending issue 53 (`c29fffd`) for `stty`.
+Canonical fixes reflected here are `2102a00` and `51eeaee` (with descendants) for `renice`/`rm`, `a84afe9` and `4879065` for `strings`/`tabs`, and accepted/integrated `1523713` for `stty`. Pending issue-52 commit `f601cae` for `sed` is recorded for traceability but is not counted as canonical evidence.
 
 ## `renice`
 
@@ -22,10 +19,9 @@ Published-but-unintegrated work is recorded for traceability, not counted as cur
 
 - **Interface:** `renice [-g|-p|-u] -n increment ID...`. `-g` selects process groups, `-p` processes (default), and `-u` users; `increment` is a signed decimal integer, while numeric IDs are unsigned decimal integers. Stdin/stdout are unused; diagnostics go to stderr; exit is 0 on success and greater than 0 on error.
 - **Environment:** `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `NLSPATH`.
-- **Status:** `implementation_gap` in this tree.
-- **Source evidence:** [`cmds/renice/renice.go`](../../cmds/renice/renice.go) uses `strconv.Atoi` for IDs and therefore accepts negative `-g`, `-p`, and numeric `-u` operands. It otherwise selects the correct target class, applies an increment, clamps to implementation limits, continues operands, and reports failures.
-- **Test evidence:** [`cmds/renice/renice_test.go`](../../cmds/renice/renice_test.go), notably `TestMutuallyExclusiveSelectors`, `TestMissingIncrementAndMissingID`, and `TestZeroIncrementPreservesCurrentValue`, lacks stable negative-ID rejection and `-g`/`-u` execution evidence in this tree.
-- **Published fix:** issue-36 commits `34f1805` and `41a5a90` add unsigned-ID seams/tests, but are not ancestors of this workspace and cannot justify `verified` here.
+- **Status:** `evidence_gap`; the confirmed numeric-ID implementation defect is closed canonically.
+- **Source evidence:** [`cmds/renice/renice.go`](../../cmds/renice/renice.go) uses `strconv.ParseUint` for numeric IDs, selects the correct target class, applies an increment, clamps to implementation limits, continues operands, and reports failures. This is the canonical result of `2102a00` (descended from the issue-36 work).
+- **Test evidence:** [`cmds/renice/renice_test.go`](../../cmds/renice/renice_test.go), notably `TestInvalidIDsAreRejected`, `TestMutuallyExclusiveSelectors`, `TestMissingIncrementAndMissingID`, and `TestZeroIncrementPreservesCurrentValue`, closes signed/non-decimal ID parsing and the stable process path. Privilege- and host-dependent `-g`/`-u` execution plus locale-sensitive diagnostics remain outside focused hermetic evidence.
 
 ## `rm`
 
@@ -34,9 +30,8 @@ Published-but-unintegrated work is recorded for traceability, not counted as cur
 - **Interfaces:** `rm [-iRr] file...` and `rm -f [-iRr] [file...]`. `-f` suppresses missing-file/no-operand failures and earlier `-i`; `-i` prompts and overrides earlier `-f`; `-R` and `-r` recurse. Stdin supplies prompt responses; prompts/diagnostics use stderr; no normal stdout; exit is 0 only when all required removals succeed.
 - **Environment:** `LANG`, `LC_ALL`, `LC_COLLATE`, `LC_CTYPE`, `LC_MESSAGES`, `NLSPATH`; `LC_MESSAGES` supplies the affirmative-response expression.
 - **Status:** `implementation_gap`.
-- **Source evidence:** [`cmds/rm/rm.go`](../../cmds/rm/rm.go) correctly preserves `rm -f` with zero operands, option precedence, dot/dot-dot/root refusal, non-following recursive traversal, and continuation. In this tree it prompts only for explicit interactive modes, not when a non-`-f` target is unwritable and stdin is a terminal. `confirm` accepts only hardcoded `y`, `Y`, or `yes`, ignoring locale `yesexpr`.
-- **Test evidence:** [`cmds/rm/rm_test.go`](../../cmds/rm/rm_test.go) includes `TestRmInteractivePrompt`, `TestRmRecursiveInteractivePrompts`, `TestRmLastPromptOptionWins`, and `TestRmInteractiveAfterForceNeedsOperand`; these encode explicit prompts but do not close the locale affirmative-response gap.
-- **Published fix:** issue-36 commits `34f1805` and `41a5a90` add the implicit file/directory prompt and protected-directory descent behavior. They are not in this audited tree, and the separate `LC_MESSAGES`/`yesexpr` gap remains even after those fixes.
+- **Source evidence:** [`cmds/rm/rm.go`](../../cmds/rm/rm.go) correctly preserves `rm -f` with zero operands, option precedence, dot/dot-dot/root refusal, non-following recursive traversal, continuation, and the terminal/unwritable implicit prompt before file removal or recursive protected-directory descent. Canonical commits `2102a00` and `51eeaee` close those prompt-order defects. `confirm` still accepts only hardcoded `y`, `Y`, or `yes`, ignoring locale `yesexpr`.
+- **Test evidence:** [`cmds/rm/rm_test.go`](../../cmds/rm/rm_test.go) includes `TestRmImplicitPromptForUnwritable`, `TestRmImplicitDirectoryPromptPrecedesDescent`, `TestRmInteractivePrompt`, `TestRmRecursiveInteractivePrompts`, `TestRmLastPromptOptionWins`, and `TestRmInteractiveAfterForceNeedsOperand`. These close the canonical prompt behavior but do not close the locale affirmative-response gap.
 
 ## `rmdir`
 
@@ -55,7 +50,7 @@ Published-but-unintegrated work is recorded for traceability, not counted as cur
 - **Interfaces:** `sed [-n] script [file...]`; `sed [-n] -e script [-e script]... [-f script_file]... [file...]`; and `sed [-n] [-e script]... -f script_file [-f script_file]... [file...]`. `-n` suppresses default output; `-e` and `-f` add scripts in command order. No file, and each file operand `-`, selects stdin. Output is the edited stream; diagnostics use stderr; exit is 0 on success and greater than 0 on error.
 - **Environment:** `LANG`, `LC_ALL`, `LC_COLLATE`, `LC_CTYPE`, `LC_MESSAGES`, `NLSPATH`.
 - **Status:** `implementation_gap` (corrective issue 52 pending review/integration).
-- **Source evidence:** [`cmds/sed/sed.go`](../../cmds/sed/sed.go), [`cmds/sed/internal/gosed`](../../cmds/sed/internal/gosed), and [`pkg/bre`](../../pkg/bre) implement the command language, ordered `-e`/`-f`, stdin `-`, C/POSIX BRE, and a narrow non-C `LC_CTYPE` route. The audited tree does not independently route `LC_COLLATE`, and non-C ranges, equivalence/collating constructs, and valid BRE back-references remain incomplete.
+- **Source evidence:** [`cmds/sed/sed.go`](../../cmds/sed/sed.go), [`cmds/sed/internal/gosed`](../../cmds/sed/internal/gosed), and [`pkg/bre`](../../pkg/bre) implement the command language, ordered `-e`/`-f`, stdin `-`, C/POSIX BRE, and a narrow non-C `LC_CTYPE` route. The canonical source does not independently route `LC_COLLATE`, and non-C ranges, equivalence/collating constructs, and valid BRE back-references remain incomplete.
 - **Test evidence:** [`cmds/sed/sed_test.go`](../../cmds/sed/sed_test.go) includes `TestSedPreservesMixedExpressionFileOrder`, `TestSedBREBackrefConformance`, and broad command coverage. [`cmds/sed/ctype_test.go`](../../cmds/sed/ctype_test.go) proves only the current provider slice and fail-closed errors, not full Issue-7 locale semantics.
 - **Pending fix:** issue-52 commit `f601cae` addresses separate category routing/ranges/backrefs but is still under review; multi-character collating elements remain deliberately fail-closed.
 
@@ -95,10 +90,9 @@ Published-but-unintegrated work is recorded for traceability, not counted as cur
 
 - **Interface:** `strings [-a] [-t format] [-n number] [file...]`; `format` is `d`, `o`, or `x`; `number` counts printable characters. With no file it reads stdin. A first argument `-` has unspecified results and must not be advertised as mandated stdin behavior. Output contains qualifying strings and optional byte offsets; exit is 0 or greater than 0.
 - **Environment:** `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `NLSPATH`.
-- **Status:** `implementation_gap` in this tree.
-- **Source evidence:** [`cmds/strings/strings.go`](../../cmds/strings/strings.go) implements options, files, offsets, continuation, and write errors, but hardcodes printable ASCII bytes and compares `-n` with byte length. It special-cases `-` as stdin as an allowed extension; the audit does not claim that behavior is required.
-- **Test evidence:** [`cmds/strings/strings_test.go`](../../cmds/strings/strings_test.go) includes `TestStrings`, `TestStringsFiles`, and `TestStringsErrors`, but the audited tree has no character-granular non-C `LC_CTYPE` evidence.
-- **Published fix:** issue-45 commits `cf202f9` and `505b469` add locale-aware character counting and invalid/UTF-8 handling, but are not present in this workspace and therefore do not change its classification.
+- **Status:** `implementation_gap` only for the deliberately limited non-UTF-8 locale-provider set; the former byte-counting defect is closed canonically.
+- **Source evidence:** [`cmds/strings/strings.go`](../../cmds/strings/strings.go) implements options, files, offsets, continuation, write errors, character-granular `-n`, exact byte preservation/offsets in UTF-8, C/POSIX classification, and reviewed single-byte `LC_CTYPE` classification. It correctly treats operand `-` as a pathname because POSIX leaves a first `-` unspecified rather than requiring stdin. Canonical commits `a84afe9` and `4879065` supply these fixes. [`pkg/ctype/ctype.go`](../../pkg/ctype/ctype.go) deliberately supports only C/POSIX and two ISO-8859-1 aliases and rejects other non-UTF-8 locale names.
+- **Test evidence:** [`cmds/strings/strings_test.go`](../../cmds/strings/strings_test.go) includes `TestStringsDashPathname`, `TestStringsUTF8`, `TestStringsUTF8ReplacementCharacterPreservesBytesAndOffset`, `TestStringsFiles`, and `TestStringsErrors`. It proves character counts, malformed UTF-8 boundaries, the valid replacement character, and byte offsets; it does not turn the limited provider set into general non-UTF-8 locale support.
 
 ## `stty`
 
@@ -106,10 +100,9 @@ Published-but-unintegrated work is recorded for traceability, not counted as cur
 
 - **Interfaces:** `stty [-a|-g]` for reports, or `stty operand...` for settings. Mandatory operands cover speeds; control/input/output/local modes and their negations; delay modes; `min`/`time`; rows/columns; and `eof`, `eol`, `erase`, `intr`, `kill`, `quit`, `susp`, `start`, and `stop` control characters. Stdin identifies the terminal; reports use stdout; diagnostics use stderr; exit is 0 or greater than 0.
 - **Environment:** `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `NLSPATH`.
-- **Status:** `implementation_gap` (corrective issue 53 pending review/integration).
-- **Source evidence:** [`cmds/stty/stty.go`](../../cmds/stty/stty.go) in the audited tree supports only a small mode/value subset, emits incomplete `-a`, and does not produce a genuinely restorable `-g` state. Required speeds, flags, delays, and control characters are largely absent.
-- **Test evidence:** [`cmds/stty/stty_test.go`](../../cmds/stty/stty_test.go), [`cmds/stty/stty_termios_test.go`](../../cmds/stty/stty_termios_test.go), and [`cmds/stty/stty_posix_test.go`](../../cmds/stty/stty_posix_test.go) cover the small implemented subset, not the complete Issue-7 interface.
-- **Pending fix:** issue-53 commit `c29fffd` contains the large atomic implementation and Linux PTY corrections, but remains pending independent review and is not current-tree evidence.
+- **Status:** `evidence_gap`; independently accepted issue-53 work is integrated canonically as `1523713`, closing the mandatory core-interface defect.
+- **Source evidence:** [`cmds/stty/stty.go`](../../cmds/stty/stty.go), [`cmds/stty/stty_termios.go`](../../cmds/stty/stty_termios.go), [`cmds/stty/stty_linux.go`](../../cmds/stty/stty_linux.go), and [`cmds/stty/stty_bsd.go`](../../cmds/stty/stty_bsd.go) implement mandatory speeds, modes and negations, delays, `min`/`time`, rows/columns, control characters, complete kernel-derived `-a`, versioned restorable `-g`, prevalidation, and rollback on application failure. POSIX terminal platforms have explicit termios backends; unsupported platforms fail closed.
+- **Test evidence:** [`cmds/stty/stty_test.go`](../../cmds/stty/stty_test.go), [`cmds/stty/stty_termios_test.go`](../../cmds/stty/stty_termios_test.go), and [`cmds/stty/stty_posix_test.go`](../../cmds/stty/stty_posix_test.go) exercise required modes against a PTY, `-a`, `-g` restore, speeds/control characters, decimal parsing, platform `_POSIX_VDISABLE`, invalid-later-operand atomicity, overflow, window sizes, and Linux PTY speed storage. Residual evidence is platform execution outside the exercised Linux/Darwin PTY paths and locale-sensitive diagnostic/display behavior; it is not a missing core operand/interface claim.
 
 ## `tabs`
 
@@ -117,10 +110,9 @@ Published-but-unintegrated work is recorded for traceability, not counted as cur
 
 - **Interfaces:** `tabs [-n|-a|-a2|-c|-c2|-c3|-f|-p|-s|-u] [-T type]` and `tabs [-T type] n[[sep[+]n]...]`; presets are XSI-shaded, `-n` is the single-digit repetitive form, and operands are ascending decimal stops with optional relative `+n` after the first. Stdin is unused; terminal-control output goes to stdout; diagnostics use stderr; exit is 0 or greater than 0.
 - **Environment:** `TERM` plus `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `NLSPATH`. With neither `-T` nor a usable `TERM`, an unspecified supported default terminal type is required.
-- **Status:** `implementation_gap` in this tree.
-- **Source evidence:** [`cmds/tabs/tabs.go`](../../cmds/tabs/tabs.go) implements repetitive/preset/explicit/incremental stops and preserves its published `+m[n]` margin and leading `+[n]` compatibility forms; those behaviors must not be deleted merely to simplify POSIX mode. The confirmed defect is returning a usage error when `TERM` is unset/null.
-- **Test evidence:** [`cmds/tabs/tabs_test.go`](../../cmds/tabs/tabs_test.go) includes `TestPresetColumnsMatchPOSIX`, `TestRepetitiveSpec`, `TestIncrementForm`, `TestMargin`, and `TestTerminalTypeResolution`.
-- **Published fix:** issue-45 commit `cf202f9` supplies the default terminal fallback while retaining the established forms, but is not in this audited tree.
+- **Status:** `evidence_gap`; the confirmed unset/null `TERM` defect is closed canonically.
+- **Source evidence:** [`cmds/tabs/tabs.go`](../../cmds/tabs/tabs.go) implements repetitive/preset/explicit/incremental stops, defaults an absent `-T`/`TERM` to the supported `ansi` entry, and preserves its published `+m[n]` margin and leading `+[n]` compatibility forms; canonical commit `a84afe9` supplies the terminal fallback without deleting those established forms.
+- **Test evidence:** [`cmds/tabs/tabs_test.go`](../../cmds/tabs/tabs_test.go) includes `TestPresetColumnsMatchPOSIX`, `TestRepetitiveSpec`, `TestIncrementForm`, `TestMargin`, and `TestTerminalTypeResolution`, including absent-`TERM` fallback. Remaining evidence is limited to the reviewed terminfo capability fixtures/system availability and does not establish every supported terminal type or locale-sensitive diagnostic.
 
 ## `tail`
 
