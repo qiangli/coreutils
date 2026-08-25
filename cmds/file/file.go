@@ -107,6 +107,7 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 	}
 	status := 0
 	for _, name := range operands {
+		forceName := false
 		typ, err := identify(rc, name, *noFollow && !*follow, *minimal, plan, open)
 		if err != nil {
 			var formatErr *magicEvaluationError
@@ -118,10 +119,11 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 				// operands SHALL NOT affect the exit status; the
 				// standard-output line carries "cannot open".
 				typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
+				forceName = true
 			}
 		}
 		var line string
-		if *brief {
+		if *brief && !forceName {
 			line = typ + "\n"
 		} else {
 			line = fmt.Sprintf("%s: %s\n", name, typ)

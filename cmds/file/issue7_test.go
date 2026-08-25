@@ -81,4 +81,69 @@ func TestFileIssue7MissingOperandIsUsageError(t *testing.T) {
 	}
 }
 
+// TestFileIssue7BriefInaccessibleStillNamesOperand pins the POSIX STDOUT
+// clause for inaccessible or undetermined operands. Even under -b, the line
+// must identify which file operand could not be read; otherwise a multi-file
+// invocation loses the required operand/type association.
+func TestFileIssue7BriefInaccessibleStillNamesOperand(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "good", []byte("hello\n"))
+	out, errb, code := invoke(t, dir, "", "-b", "good", "missing")
+	wantPrefix := "ASCII text\nmissing: cannot open"
+	if code != 0 || errb != "" || !strings.HasPrefix(out, wantPrefix) || !strings.HasSuffix(out, "\n") {
+		t.Fatalf("file -b inaccessible = (%q, %q, %d), want good brief line then named cannot-open line", out, errb, code)
+	}
+}
+
+// TestFileIssue7MagicOptionArgumentsAndPermutation pins the SYNOPSIS and
+// OPTIONS clauses for the parser behavior this command actually supports:
+// separate and attached -m/-M operands, repeated ordered sources, and
+// interspersed option parsing. POSIX requires the option arguments themselves;
+// pflag also supports the attached short-option form used below.
+func TestFileIssue7MagicOptionArgumentsAndPermutation(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "payload", []byte("ABCD\n"))
+	put(t, dir, "png", []byte("\x89PNG\r\n\x1a\nrest"))
+	put(t, dir, "first", []byte("0\tstring\tAB\tfirst\n"))
+	put(t, dir, "second", []byte("0\tstring\tAB\tsecond\n"))
+	put(t, dir, "pngmagic", []byte("0\tstring\t\\211PNG\tcustom png\n"))
+	put(t, dir, "miss", []byte("0\tstring\tZZ\tmiss\n"))
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"attached-magic", []string{"-Mfirst", "payload"}, "payload: first\n"},
+		{"separate-magic", []string{"-M", "first", "payload"}, "payload: first\n"},
+		{"repeated-replacement-order", []string{"-M", "miss", "-M", "second", "payload"}, "payload: second\n"},
+		{"interspersed-additional-before-default", []string{"payload", "-mfirst", "-d"}, "payload: first\n"},
+		{"interspersed-default-before-replacement", []string{"png", "-d", "-Mpngmagic"}, "png: PNG image data\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := invoke(t, dir, "", tc.args...)
+			if code != 0 || errb != "" || out != tc.want {
+				t.Fatalf("file %v = (%q, %q, %d), want %q", tc.args, out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
+// TestFileIssue7DoubleDashParsing documents -- only because the shared parser
+// supports it. After --, a dash-leading path is an operand, and unsupported
+// GNU-style long options still fail when they appear before --.
+func TestFileIssue7DoubleDashParsing(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "-dash", []byte("hello\n"))
+	out, errb, code := invoke(t, dir, "", "--", "-dash")
+	if out != "-dash: ASCII text\n" || errb != "" || code != 0 {
+		t.Fatalf("file -- -dash = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = invoke(t, dir, "", "--mime", "--", "-dash")
+	if out != "" || code != 2 || !strings.Contains(errb, "mime") {
+		t.Fatalf("file --mime -- -dash = (%q, %q, %d), want unsupported-option usage error", out, errb, code)
+	}
+}
+
 func mkdir(dir, name string) error { return os.Mkdir(filepath.Join(dir, name), 0o755) }
