@@ -91,7 +91,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 34 |
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 8 | 56 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
-| `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 1 | 20 |
+| `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 1 | 14 |
 | `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 3 | 37 |
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
