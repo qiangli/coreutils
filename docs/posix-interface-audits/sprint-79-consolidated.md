@@ -2,7 +2,7 @@
 
 This is the consolidated Sprint 79 status for the command interfaces selected
 by Profiles C and D.  The normative target is POSIX.1-2016 (Issue 7), not GNU
-Coreutils compatibility.  The source snapshot is coreutils `b1e934f` and the
+Coreutils compatibility.  The source snapshot is coreutils `c048634` and the
 inputs are the six accepted Go batch audits
 ([1](go-batch-1.md), [2](go-batch-2.md), [3](go-batch-3.md),
 [4](go-batch-4.md), [5](go-batch-5.md), [6](go-batch-6.md)), the accepted
@@ -53,11 +53,6 @@ findings are independent.
 | Critical | `getconf` | Much of the mandatory sysconf, pathconf, confstr, and minimum-name surface is absent. |
 | Critical | `pax` | Broad required archive interface is absent or silently ignored. |
 | Critical | `more` | Required options, `$MORE`, terminal paging, and the interactive command set are absent. |
-| Critical | `xargs` | Required batching/status/interactive surface remains outside canonical; the reviewed candidate still mishandles locale affirmative expressions. |
-| Critical | `who` | Required `am i`, option, record, time-zone, status, and file-error behavior is incomplete. |
-| Critical | `write` | Sender/recipient terminal protocol, exact banner/EOT, character filtering, canonical EOL, and interruption behavior remain incomplete in canonical. |
-| High | `df` | Defaults use 1024 instead of 512-byte units; `-P` headers are wrong; XSI `-t` is repurposed as GNU filesystem-type filtering. |
-| High | `du` | Defaults use 1024-byte units and output uses TAB instead of the required single space. |
 | High | `dd` | No required SIGINT status path, no XSI EBCDIC conversions, and default stderr adds a non-POSIX transfer line. |
 | High | `file` | Required `-d`, `-i`, and `-M` are absent; magic parsing is narrow; default symlink and required type-string behavior diverge. |
 | High | `at`, `batch` | Missing `-m`/mail and required scheduling forms; blank programs are rejected; `batch` is not equivalent to `at -q b -m now`. |
@@ -68,7 +63,6 @@ findings are independent.
 | High | `mv` | Prompt/status behavior and cross-filesystem ownership, timestamps, modes, and special-file copying diverge. |
 | High | `newgrp` | Login environment and supplementary-group changes are incomplete; password prompt routing diverges. |
 | High | `sed` | Required BRE/back-reference and locale-sensitive address/range semantics remain incomplete. |
-| High | `uudecode`, `uuencode` | Required mode/format/operand behavior remains incomplete in canonical. |
 | Medium | `date` | The XSI set-date operand `mmddhhmm[[cc]yy]` is absent. |
 | Medium | `iconv` | Required `-c` is refused and omitted `-f`/`-t` handling is incomplete. |
 | Medium | `id` | Default output does not correctly report distinct real and effective identities. |
@@ -104,6 +98,11 @@ not merely untranslated cosmetic output:
   providers rather than arbitrary installed locales.
 - `at`, `batch`, `cp`, and scheduling/time parsing have required affirmative,
   locale, or `TZ` effects in addition to their core gaps above.
+- `du` now closes its audited core interface; translated diagnostics through
+  `LC_MESSAGES`/`NLSPATH` remain an explicit catalog residual.
+- `write` now implements its accepted terminal-delivery and `LC_CTYPE`
+  behavior; translated diagnostics through `LC_MESSAGES`/`NLSPATH` remain an
+  explicit catalog residual.
 
 For `csplit`, `cut`, `date`, `dd`, `df`, `diff`, `dirname`, `du`, `env`,
 `expand`, `expr`, `file`, and `find`, the accepted Batch 2 audit distinguishes
@@ -128,7 +127,7 @@ The Batch 6 `tput` finding is now stale.  Canonical commits `f304822` and
 `0b3f2ae` implement sequential `clear`/`init`/`reset`, continuation after an
 unavailable operation, and the required exit semantics; `a4fbb7` refreshes its
 test matrix.  `tput` is therefore an evidence/message-locale residual, not a
-confirmed core implementation gap at `b1e934f`.
+confirmed core implementation gap at `c048634`.
 
 Other accepted fixes already present in this snapshot are:
 
@@ -138,21 +137,27 @@ Other accepted fixes already present in this snapshot are:
 | `strings`, `tabs` | `a84afe9`, `4879065` | Locale-aware string scanning, default `TERM`, original-byte preservation, and valid U+FFFD handling. |
 | `stty` | `1523713` | Atomic POSIX terminal-setting application. |
 | `tput` | `f304822`, `0b3f2ae`, `a4fbb7` | Sequential POSIX operations and operation-specific statuses. |
+| `df` | `8b4996a`, `64a9840`, `0f8e5fe`, `44fe7dc`, `e64042c` | POSIX/XSI units, portable rows, operand diagnostics, total-space semantics, and file-slot handling. |
+| `du` | `b59ac9f`, `1a8cbba` | 512-byte defaults, `-k`, single-space output, dereference ordering, filesystem boundaries, hard-link scope, and output errors. |
+| `xargs` | `cbdf03a`, `013ff7d`, `f702258`, `cfd341e` | XSI batching, limits/replacement semantics, and `LC_MESSAGES` affirmative expressions. |
+| `who` | `dc1e0b0`, `ec5a8a7`, `cec16e9` | Required records/options, native ABI decoding, fail-closed platforms, `TZ`, and locale behavior. |
+| `write` | `e56eb13`, `8e4840a`, `5dc3c12`, `11b8e4d`, `9e0b1aa`, `47b1d36` | Authenticated terminal selection, prescribed routing/framing, character handling, interruption, and native Linux utmp ABIs. |
+| `uudecode`, `uuencode` | `2135fab`, `df06a1f`, `d0df145`, `2098b3d` | POSIX formats, pathname/mode semantics, safe overwrite behavior, and existing-output handling. |
 
-### Reviewed work not yet canonical evidence
+These integrations close the implementation findings named here; they do not
+promote any ledger row or constitute certification evidence.  `du` retains the
+catalog residual above.  `write` deliberately fails closed on Darwin and on
+Linux architectures whose native utmp ABI or PID-to-terminal ownership cannot
+be authenticated, and also retains the catalog residual above.
 
-Candidate commits live in isolated Weave workspaces and must not be counted as
-this tree's implementation or evidence:
+### Active work not yet integrated
+
+Active corrections must not be counted as this tree's implementation or
+certification evidence:
 
 | Command | Candidate/review state | Remaining gate |
 | --- | --- | --- |
-| `xargs` | `632c922` with audit follow-up `010485a`; independently rejected | `-p` hard-codes `y/Y` instead of using `LC_MESSAGES` `yesexpr`; correction and rereview required. |
-| `sed` | `f601cae`; independently rejected | German equivalence classes and ranges do not implement required locale collation; correction is still in progress. |
-| `write` | corrected candidate `32010dc`; integration pending | Canonical review must accept terminal ownership, LC_CTYPE, EOL/SIGINT, PTY, and cross-build behavior. |
-| `who` | `25a0478` / review `d5924d4`; rejected | Record layouts are platform-fragile and `-r`, `-T`/`-d`, locale, and error paths remain wrong. |
-| `uudecode`, `uuencode` | corrected candidate `4294295`; rereview pending | Do not promote until independent rereview and canonical integration. |
-| `df` | initial candidate `dfde568`; rejected | It incorrectly treated XSI `-t` as a grand-total row; Issue 7 requires allocated-space figures in each applicable filesystem record. |
-| `du` | implementation work active | Review, integration, and stable evidence remain outstanding. |
+| `sed` | F1 integrated at `1a2c042`; broader correction remains active | F1 fixes ERE equivalence classes matching nothing. The separate `LC_COLLATE` routing and trustworthy locale equivalence/collation model remain open; see [`sed-locale-equivalence-review-s79.md`](../sed-locale-equivalence-review-s79.md). |
 
 ## Shell-selected Profile B routing and evidence
 
