@@ -726,6 +726,23 @@ func TestODCTypeSizesFollowTargetABI(t *testing.T) {
 			t.Errorf("%s/amd64 long double = (%d, %d), want 16-byte x87", goos, abi.longDoubleSize, abi.longDoubleEncoding)
 		}
 	}
+	for _, tc := range []struct {
+		goos, goarch string
+		size         int
+		encoding     floatEncoding
+	}{
+		{goos: "illumos", goarch: "amd64", size: 16, encoding: floatX87},
+		{goos: "ios", goarch: "arm64", size: 8, encoding: floatIEEE64},
+		{goos: "linux", goarch: "mips", size: 8, encoding: floatIEEE64},
+		{goos: "linux", goarch: "mipsle", size: 8, encoding: floatIEEE64},
+		{goos: "plan9", goarch: "arm", size: 0, encoding: floatNone},
+	} {
+		abi := abiFor(tc.goos, tc.goarch)
+		if abi.longDoubleSize != tc.size || abi.longDoubleEncoding != tc.encoding {
+			t.Errorf("%s/%s long double = (%d, %d), want (%d, %d)", tc.goos, tc.goarch,
+				abi.longDoubleSize, abi.longDoubleEncoding, tc.size, tc.encoding)
+		}
+	}
 }
 
 // The 16 bytes for 1.0L below are the oracle produced by
@@ -765,6 +782,45 @@ func TestODUbuntuAMD64LongDoubleGNUOracleAndPortableTargets(t *testing.T) {
 	}
 }
 
+// These byte strings are compiler oracles for 1/3 in the target formats. The
+// expected text is the numeric field emitted by GNU od 9.4 on Ubuntu 24.04
+// amd64 and arm64 (without GNU's implementation-specific field padding).
+// Keeping the exact significand through rendering produces digits that are
+// observably lost if either value is first converted to float64.
+func TestODLongDoublePrecisionOracles(t *testing.T) {
+	profile := runtimeProfile()
+	profile.abi, profile.endian = abiFor("linux", "amd64"), binary.LittleEndian
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "third", data: []byte{0xab, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xfd, 0x3f, 0, 0, 0, 0, 0, 0}, want: " 0.33333333333333333334\n"},
+		{name: "max finite", data: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0x7f, 0, 0, 0, 0, 0, 0}, want: " 1.189731495357231765e+4932\n"},
+	} {
+		out, errb, code := runODProfile(t, profile, t.TempDir(), string(tc.data), "-A", "n", "-t", "fL")
+		if out != tc.want || errb != "" || code != 0 {
+			t.Errorf("x87 %s = (%q, %q, %d), want (%q, empty, 0)", tc.name, out, errb, code, tc.want)
+		}
+	}
+
+	// IEEE binary128 1/3 is 0x3ffd5555555555555555555555555555.
+	profile.abi, profile.endian = abiFor("linux", "arm64"), binary.LittleEndian
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "third", data: []byte{0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0xfd, 0x3f}, want: " 0.3333333333333333333333333333333333\n"},
+		{name: "max finite", data: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0x7f}, want: " 1.189731495357231765085759326628007e+4932\n"},
+	} {
+		out, errb, code := runODProfile(t, profile, t.TempDir(), string(tc.data), "-A", "n", "-t", "fL")
+		if out != tc.want || errb != "" || code != 0 {
+			t.Errorf("IEEE128 %s = (%q, %q, %d), want (%q, empty, 0)", tc.name, out, errb, code, tc.want)
+		}
+	}
+}
+
 func TestODPartialItemAppendsNullBytes(t *testing.T) {
 	out, errb, code := runOD(t, t.TempDir(), "A", "-A", "n", "-t", "x2", "--endian=big")
 	if want := " 4100\n"; out != want || errb != "" || code != 0 {
@@ -775,7 +831,7 @@ func TestODPartialItemAppendsNullBytes(t *testing.T) {
 func TestODExactTypeGrammar(t *testing.T) {
 	profile := runtimeProfile()
 	profile.abi, profile.endian = abiFor("linux", "amd64"), binary.LittleEndian
-	for _, format := range []string{"", "a1", "cC", "fI", "fLD", "dD", "xF", "x0", "f3"} {
+	for _, format := range []string{"", "a1", "cC", "fI", "fLD", "dD", "xF", "x0", "f3", "x1,x2", "x1 x2", "x1\tx2"} {
 		_, errb, code := runODProfile(t, profile, t.TempDir(), "0123456789abcdef", "-t", format)
 		if code != 2 || !strings.Contains(errb, "unsupported output format") {
 			t.Errorf("od -t %s = (stderr %q, code %d), want grammar error/code 2", format, errb, code)
@@ -783,6 +839,15 @@ func TestODExactTypeGrammar(t *testing.T) {
 	}
 	if _, err := parseFormats([]string{"f16dI"}, profile.abi); err != nil {
 		t.Fatalf("valid concatenated f16dI rejected: %v", err)
+	}
+}
+
+func TestODTraditionalOffsetOverflow(t *testing.T) {
+	for _, offset := range []string{"+1000000000000000000b", "+2000000000000000000b"} {
+		_, errb, code := runOD(t, t.TempDir(), "A", offset)
+		if code != 2 || !strings.Contains(errb, "invalid offset") {
+			t.Errorf("od %s = (stderr %q, code %d), want invalid offset/code 2", offset, errb, code)
+		}
 	}
 }
 

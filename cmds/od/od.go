@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"os"
 	"runtime"
 	"strconv"
@@ -87,17 +88,25 @@ func abiFor(goos, goarch string) cABI {
 		abi.longSize = 8
 	}
 	switch {
-	case goos == "windows":
+	case goos == "windows" && (goarch == "386" || goarch == "amd64" || goarch == "arm64"):
 		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
-	case goos == "darwin" && goarch == "arm64":
+	case (goos == "darwin" || goos == "ios") && goarch == "arm64":
 		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
-	case (goos == "linux" || goos == "darwin" || goos == "freebsd" || goos == "solaris" || goos == "openbsd" || goos == "netbsd" || goos == "dragonfly") && goarch == "amd64":
+	case (goos == "linux" || goos == "android" || goos == "darwin" || goos == "ios" || goos == "freebsd" || goos == "solaris" || goos == "illumos" || goos == "openbsd" || goos == "netbsd" || goos == "dragonfly") && goarch == "amd64":
 		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatX87
-	case (goos == "linux" || goos == "freebsd") && goarch == "386":
+	case (goos == "linux" || goos == "android" || goos == "freebsd" || goos == "openbsd" || goos == "netbsd") && goarch == "386":
 		abi.longDoubleSize, abi.longDoubleEncoding = 12, floatX87
-	case goarch == "arm":
+	case (goos == "linux" || goos == "android" || goos == "freebsd" || goos == "openbsd" || goos == "netbsd") && goarch == "arm":
 		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
-	case goarch == "arm64" || goarch == "riscv64" || goarch == "s390x" || goarch == "mips64" || goarch == "mips64le" || goarch == "wasm":
+	case goos == "linux" && (goarch == "mips" || goarch == "mipsle"):
+		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
+	case (goos == "linux" || goos == "android" || goos == "freebsd" || goos == "openbsd" || goos == "netbsd") && goarch == "arm64":
+		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
+	case goos == "linux" && (goarch == "loong64" || goarch == "riscv64" || goarch == "s390x" || goarch == "mips64" || goarch == "mips64le"):
+		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
+	case goos == "openbsd" && goarch == "riscv64":
+		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
+	case (goos == "js" || goos == "wasip1") && goarch == "wasm":
 		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
 	// ppc64 ABIs commonly use IBM double-double. Leave it unsupported
 	// until that representation has a real decoder rather than guessing.
@@ -174,7 +183,9 @@ func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile)
 	// -A, -j, -N, -t, or -v is specified, and the last operand begins
 	// with '+' — or is the second of exactly two operands and begins
 	// with a digit. --traditional additionally accepts a trailing or
-	// leading +offset regardless of those conditions (GNU third form).
+	// leading +offset regardless of those conditions (a legacy subset).
+	// GNU's separate LABEL operand is outside the Sprint 79 POSIX scope;
+	// docs/commands.md records that deliberate deferral.
 	if len(operands) > 0 {
 		last := operands[len(operands)-1]
 		plusForm := strings.HasPrefix(last, "+")
@@ -570,7 +581,7 @@ func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.Byt
 	for i := 0; i < len(b); i += format.size {
 		item := make([]byte, format.size)
 		copy(item, b[i:min(i+format.size, len(b))])
-		var value float64
+		var value exactFloat
 		switch format.floatEnc {
 		case floatX87:
 			value = decodeX87(item, order)
@@ -579,50 +590,99 @@ func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.Byt
 		default:
 			return fmt.Errorf("unsupported %d-byte long double representation", format.size)
 		}
-		if _, err := fmt.Fprintf(w, " %.18g", value); err != nil {
+		if _, err := fmt.Fprintf(w, " %s", value.text(longDoubleDigits(format.floatEnc))); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// GNU od renders x87 and IEEE binary128 with enough significant decimal
+// digits to expose their extra precision: 20 and 34 respectively. These are
+// pinned against Ubuntu 24.04's native od in TestODLongDoublePrecisionOracles.
+func longDoubleDigits(enc floatEncoding) int {
+	if enc == floatIEEE128 {
+		return 34
+	}
+	return 20
+}
+
 // decodeX87 converts the 80 significant bits of an x87 extended value.
 // SysV amd64 stores them as a little-endian 64-bit explicit significand
 // followed by a sign/exponent word and six padding bytes. Reversing a
 // big-endian item first also handles --endian=big's byte-swapped form.
-func decodeX87(item []byte, order binary.ByteOrder) float64 {
+type floatClass uint8
+
+const (
+	floatFinite floatClass = iota
+	floatInfinity
+	floatNaN
+)
+
+// exactFloat retains the source format's complete significand. Converting an
+// x87 or IEEE binary128 value through float64 would discard respectively 11
+// or 60 bits before formatting it.
+type exactFloat struct {
+	class    floatClass
+	negative bool
+	value    *big.Float
+}
+
+func (f exactFloat) text(digits int) string {
+	switch f.class {
+	case floatInfinity:
+		if f.negative {
+			return "-Inf"
+		}
+		return "+Inf"
+	case floatNaN:
+		return "NaN"
+	}
+	if f.value == nil || f.value.Sign() == 0 {
+		if f.negative {
+			return "-0"
+		}
+		return "0"
+	}
+	return f.value.Text('g', digits)
+}
+
+func finiteBinaryFloat(significand *big.Int, exponent int, precision uint, negative bool) exactFloat {
+	value := new(big.Float).SetPrec(precision).SetMode(big.ToNearestEven).SetInt(significand)
+	value.SetMantExp(value, exponent)
+	if negative {
+		value.Neg(value)
+	}
+	return exactFloat{negative: negative, value: value}
+}
+
+func decodeX87(item []byte, order binary.ByteOrder) exactFloat {
 	if order == binary.BigEndian {
 		reverseBytes(item)
 	}
 	if len(item) < 10 {
-		return math.NaN()
+		return exactFloat{class: floatNaN}
 	}
 	sig := binary.LittleEndian.Uint64(item[:8])
 	se := binary.LittleEndian.Uint16(item[8:10])
 	negative := se&0x8000 != 0
 	exponent := int(se & 0x7fff)
-	var value float64
 	switch exponent {
 	case 0:
-		value = math.Ldexp(float64(sig), 1-16383-63)
+		return finiteBinaryFloat(new(big.Int).SetUint64(sig), 1-16383-63, 64, negative)
 	case 0x7fff:
 		if sig == uint64(1)<<63 {
-			value = math.Inf(1)
-		} else {
-			value = math.NaN()
+			return exactFloat{class: floatInfinity, negative: negative}
 		}
+		return exactFloat{class: floatNaN, negative: negative}
 	default:
-		value = math.Ldexp(float64(sig), exponent-16383-63)
+		return finiteBinaryFloat(new(big.Int).SetUint64(sig), exponent-16383-63, 64, negative)
 	}
-	if negative {
-		value = math.Copysign(value, -1)
-	}
-	return value
 }
 
-func decodeIEEE128(item []byte, order binary.ByteOrder) float64 {
+func decodeIEEE128(item []byte, order binary.ByteOrder) exactFloat {
 	if len(item) < 16 {
-		return math.NaN()
+		return exactFloat{class: floatNaN}
 	}
 	var hi, lo uint64
 	if order == binary.BigEndian {
@@ -633,24 +693,21 @@ func decodeIEEE128(item []byte, order binary.ByteOrder) float64 {
 	negative := hi>>63 != 0
 	exponent := int((hi >> 48) & 0x7fff)
 	fracHi := hi & (uint64(1)<<48 - 1)
-	fraction := math.Ldexp(float64(fracHi), -48) + math.Ldexp(float64(lo), -112)
-	var value float64
+	significand := new(big.Int).SetUint64(fracHi)
+	significand.Lsh(significand, 64)
+	significand.Or(significand, new(big.Int).SetUint64(lo))
 	switch exponent {
 	case 0:
-		value = math.Ldexp(fraction, 1-16383)
+		return finiteBinaryFloat(significand, 1-16383-112, 113, negative)
 	case 0x7fff:
 		if fracHi == 0 && lo == 0 {
-			value = math.Inf(1)
-		} else {
-			value = math.NaN()
+			return exactFloat{class: floatInfinity, negative: negative}
 		}
+		return exactFloat{class: floatNaN, negative: negative}
 	default:
-		value = math.Ldexp(1+fraction, exponent-16383)
+		significand.SetBit(significand, 112, 1)
+		return finiteBinaryFloat(significand, exponent-16383-112, 113, negative)
 	}
-	if negative {
-		value = math.Copysign(value, -1)
-	}
-	return value
 }
 
 func reverseBytes(b []byte) {
@@ -742,29 +799,18 @@ func isStringByte(c byte) bool {
 func parseFormats(values []string, abi cABI) ([]dumpFormat, error) {
 	var formats []dumpFormat
 	for _, value := range values {
-		before := len(formats)
-		// First split by spaces/commas/tabs (explicit separators)
-		for _, token := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-			// Check if the entire token is a format alias first
-			if alias, ok := formatAliases[token]; ok {
-				// It's a format alias like "char" -> "c"
-				fmts, err := parseConcatenatedFormats(alias, abi)
-				if err != nil {
-					return nil, err
-				}
-				formats = append(formats, fmts...)
-				continue
-			}
-			// Then parse concatenated format strings within each token
-			fmts, err := parseConcatenatedFormats(token, abi)
-			if err != nil {
-				return nil, err
-			}
-			formats = append(formats, fmts...)
+		original := value
+		if alias, ok := formatAliases[value]; ok {
+			value = alias
 		}
-		if len(formats) == before {
-			return nil, fmt.Errorf("unsupported output format: %q", value)
+		if value == "" {
+			return nil, fmt.Errorf("unsupported output format: %q", original)
 		}
+		fmts, err := parseConcatenatedFormats(value, abi)
+		if err != nil {
+			return nil, err
+		}
+		formats = append(formats, fmts...)
 	}
 	return formats, nil
 }
@@ -986,6 +1032,9 @@ func parseTraditionalOffset(s string) (int64, error) {
 	n, err := strconv.ParseInt(s, base, 64)
 	if err != nil {
 		return 0, err
+	}
+	if mult != 0 && n > math.MaxInt64/mult {
+		return 0, strconv.ErrRange
 	}
 	return n * mult, nil
 }
