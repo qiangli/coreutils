@@ -3,6 +3,7 @@ package datecmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,10 @@ import (
 type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -453,21 +458,32 @@ func TestDateInvalidUsageDiagnostics(t *testing.T) {
 }
 
 func TestDateWriteErrorDiagnostic(t *testing.T) {
-	var errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx: context.Background(),
-		Dir: t.TempDir(),
-		Stdio: tool.Stdio{
-			In:  strings.NewReader(""),
-			Out: failingWriter{err: os.ErrClosed},
-			Err: &errb,
-		},
-	}
-	if code := cmd.Run(rc, []string{"-u", "-d", "@0", "+%s"}); code != 1 {
-		t.Fatalf("write failure code=%d, want 1", code)
-	}
-	if got := errb.String(); !strings.Contains(got, "date: write error:") {
-		t.Fatalf("write failure stderr=%q, want diagnostic", got)
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		want string
+	}{
+		{"error", failingWriter{err: os.ErrClosed}, "date: write error:"},
+		{"short", shortWriter{}, io.ErrShortWrite.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(),
+				Dir: t.TempDir(),
+				Stdio: tool.Stdio{
+					In:  strings.NewReader(""),
+					Out: tc.out,
+					Err: &errb,
+				},
+			}
+			if code := cmd.Run(rc, []string{"-u", "-d", "@0", "+%s"}); code != 1 {
+				t.Fatalf("write failure code=%d, want 1", code)
+			}
+			if got := errb.String(); !strings.Contains(got, tc.want) {
+				t.Fatalf("write failure stderr=%q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

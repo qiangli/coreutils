@@ -29,6 +29,7 @@ package datecmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -181,7 +182,11 @@ func runWithClock(rc *tool.RunContext, args []string, now func() time.Time, setC
 // assertion 39 requires a diagnostic and non-zero status for write failures;
 // ignoring fmt's error made a closed pipe look like a successful date run.
 func writeOutput(rc *tool.RunContext, s string) int {
-	if _, err := fmt.Fprint(rc.Out, s); err != nil {
+	n, err := fmt.Fprint(rc.Out, s)
+	if err == nil && n != len(s) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		fmt.Fprintf(rc.Err, "date: write error: %v\n", err)
 		return 1
 	}
