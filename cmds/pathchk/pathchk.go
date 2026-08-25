@@ -61,6 +61,10 @@ func checkDefault(rc *tool.RunContext, p string) bool {
 	return checkDefaultWith(rc, p, filesystemLimits)
 }
 
+// limitLookup reports dir's {PATH_MAX} and {NAME_MAX}. A non-positive limit
+// with a nil error means the filesystem reports no limit for that variable
+// (pathconf's indeterminate result: -1 with errno unchanged), and the
+// corresponding length check is skipped rather than failed.
 type limitLookup func(string) (pathMax, nameMax int, err error)
 
 func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
@@ -75,7 +79,7 @@ func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
 		return false
 	}
 	// PATH_MAX includes the terminating NUL byte, unlike NAME_MAX.
-	if len(p) >= pathLimit {
+	if pathLimit > 0 && len(p) >= pathLimit {
 		fmt.Fprintf(rc.Err, "pathchk: path %q has length %d; exceeds limit %d\n", p, len(p), pathLimit)
 		return false
 	}
@@ -91,7 +95,7 @@ func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
 				return false
 			}
 		}
-		if len(c) > nameLimit {
+		if nameLimit > 0 && len(c) > nameLimit {
 			fmt.Fprintf(rc.Err, "pathchk: name %q has length %d; exceeds limit %d\n", c, len(c), nameLimit)
 			return false
 		}
