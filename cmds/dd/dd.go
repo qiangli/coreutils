@@ -7,6 +7,15 @@
 // re-blocked into obs-sized records; bs= disables re-blocking (each
 // input block is written as read), exactly as GNU documents.
 //
+// XSI codeset conversion (conv=ascii/ebcdic/ibm, POSIX.1-2016 XCU dd):
+// each requires cbs= and is mutually exclusive with the other two.
+// conv=ascii implies conv=unblock, applying the EBCDIC-to-ASCII table
+// before the unblock stage deletes trailing <space> characters.
+// conv=ebcdic/conv=ibm imply conv=block, applying the ASCII-to-EBCDIC (or
+// ASCII-to-IBM-EBCDIC) table after the block stage pads a short record
+// with trailing <space> characters. See conv_tables.go for the byte
+// tables and their FreeBSD prior-art provenance.
+//
 // Documented deviation: the default status trailer is a plain
 // "N bytes copied" line — GNU appends wall-clock time and throughput,
 // which this repo omits for deterministic output.
@@ -46,6 +55,9 @@ type config struct {
 	lcase        bool
 	ucase        bool
 	swab         bool
+	ascii        bool
+	ebcdic       bool
+	ibm          bool
 	status       string
 	reblock      bool
 }
@@ -145,6 +157,12 @@ func run(rc *tool.RunContext, args []string) int {
 					cfg.ucase = true
 				case "swab":
 					cfg.swab = true
+				case "ascii":
+					cfg.ascii = true
+				case "ebcdic":
+					cfg.ebcdic = true
+				case "ibm":
+					cfg.ibm = true
 				default:
 					return tool.NotSupported(rc, cmd, "conv="+conversion)
 				}
@@ -153,6 +171,34 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "unrecognized operand '%s'", op)
 		}
 	}
+	switch {
+	case cfg.ascii && cfg.ebcdic:
+		return tool.UsageError(rc, cmd, "conv=ascii and conv=ebcdic are mutually exclusive")
+	case cfg.ascii && cfg.ibm:
+		return tool.UsageError(rc, cmd, "conv=ascii and conv=ibm are mutually exclusive")
+	case cfg.ebcdic && cfg.ibm:
+		return tool.UsageError(rc, cmd, "conv=ebcdic and conv=ibm are mutually exclusive")
+	}
+	// POSIX: conv=ascii is EBCDIC-to-ASCII translation applied as part of
+	// conv=unblock; conv=ebcdic/conv=ibm are ASCII-to-EBCDIC (or
+	// ASCII-to-IBM-EBCDIC) translation applied as part of conv=block. An
+	// explicit request for the opposite reblocking mode conflicts; an
+	// explicit request for the matching one is redundant but accepted.
+	if cfg.ascii && cfg.block {
+		return tool.UsageError(rc, cmd, "conv=ascii and conv=block are mutually exclusive")
+	}
+	if cfg.ebcdic && cfg.unblock {
+		return tool.UsageError(rc, cmd, "conv=ebcdic and conv=unblock are mutually exclusive")
+	}
+	if cfg.ibm && cfg.unblock {
+		return tool.UsageError(rc, cmd, "conv=ibm and conv=unblock are mutually exclusive")
+	}
+	if cfg.ascii {
+		cfg.unblock = true
+	}
+	if cfg.ebcdic || cfg.ibm {
+		cfg.block = true
+	}
 	if cfg.block && cfg.unblock {
 		return tool.UsageError(rc, cmd, "conv=block and conv=unblock are mutually exclusive")
 	}
@@ -160,7 +206,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "conv=lcase and conv=ucase are mutually exclusive")
 	}
 	if (cfg.block || cfg.unblock) && cfg.cbs == 0 {
-		return tool.UsageError(rc, cmd, "cbs= is required with conv=block or conv=unblock")
+		return tool.UsageError(rc, cmd, "cbs= is required with conv=ascii, conv=ebcdic, conv=ibm, conv=block, or conv=unblock")
 	}
 	if bs > 0 {
 		// bs= takes precedence over ibs=/obs= regardless of operand order.
@@ -306,7 +352,14 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			return 1
 		}
 		if cfg.block {
-			blockConv = &blockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf)}
+			var translate *[256]byte
+			switch {
+			case cfg.ebcdic:
+				translate = &a2ePOSIX
+			case cfg.ibm:
+				translate = &a2ibmPOSIX
+			}
+			blockConv = &blockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf), translate: translate}
 			out = blockConv
 		} else {
 			unblockConv = &unblockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf)}
@@ -446,11 +499,15 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 }
 
 func padInputBlock(buf []byte, n int, cfg config) {
-	if cfg.block || cfg.unblock {
+	switch {
+	case cfg.block || cfg.unblock:
+		// POSIX conv=sync appends <space> bytes when block or unblock
+		// conversion applies.  They are input bytes and therefore still
+		// participate in every later conversion, including conv=ascii.
 		for i := n; i < len(buf); i++ {
 			buf[i] = ' '
 		}
-	} else {
+	default:
 		clear(buf[n:])
 	}
 }
@@ -458,6 +515,9 @@ func padInputBlock(buf []byte, n int, cfg config) {
 func convertBytes(p []byte, cfg config) {
 	if cfg.swab {
 		swabBytes(p)
+	}
+	if cfg.ascii {
+		translateBytes(p, &e2aPOSIX)
 	}
 	if cfg.lcase {
 		lowercaseBytes(p)
@@ -519,13 +579,18 @@ func (c *countWriter) Write(p []byte) (int, error) {
 
 // blockWriter converts newline-terminated variable-length records to fixed
 // width, space-padded records. Bytes beyond the conversion width are counted
-// as one truncated record and discarded through the next newline.
+// as one truncated record and discarded through the next newline. translate,
+// when non-nil (conv=ebcdic/conv=ibm), is applied to the padded record —
+// including the padding — right before it is written, per POSIX: "the
+// characters are converted to EBCDIC ... after any trailing <space>
+// characters are added".
 type blockWriter struct {
 	w         io.Writer
 	record    []byte
 	width     int
 	overflow  bool
 	truncated int64
+	translate *[256]byte
 }
 
 func (b *blockWriter) Write(p []byte) (int, error) {
@@ -548,6 +613,9 @@ func (b *blockWriter) Write(p []byte) (int, error) {
 func (b *blockWriter) emit() error {
 	for len(b.record) < b.width {
 		b.record = append(b.record, ' ')
+	}
+	if b.translate != nil {
+		translateBytes(b.record, b.translate)
 	}
 	if err := writeAll(b.w, b.record); err != nil {
 		return err

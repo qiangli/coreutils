@@ -16,6 +16,7 @@ GPL code is ever copied into this repository.
 | [tjfoc/gmsm](https://github.com/tjfoc/gmsm) | Apache-2.0 | cmds/cksum (`--algorithm=sm3`) |
 | [lukechampine/blake3](https://lukechampine.com/blake3) | MIT | cmds/cksum (`--algorithm=blake3`) |
 | [tklauser/ps](https://github.com/tklauser/ps) | BSD-3-Clause | cmds/ps process discovery |
+| [freebsd/freebsd-src](https://cgit.freebsd.org/src/tree/bin/dd/conv_tab.c?id=e043f37205ffbde5627ff299ad25cd532f2956f0) | BSD-3-Clause | cmds/dd (conv=ascii/ebcdic/ibm POSIX codeset conversion tables, `bin/dd/conv_tab.c` @ `e043f37205ffbde5627ff299ad25cd532f2956f0`) |
 | [pranshuparmar/witr](https://github.com/pranshuparmar/witr) | Apache-2.0 | cmds/why (managed external v0.3.3) |
 | [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.0; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
 
@@ -316,6 +317,52 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+```
+
+### freebsd/freebsd-src — BSD-3-Clause
+
+The `e2aPOSIX`, `a2ePOSIX`, and `a2ibmPOSIX` byte-translation tables in
+`cmds/dd/conv_tables.go` are transcribed (octal -> hex, C array -> Go
+array; no other change) from the `*_POSIX` tables in
+[`bin/dd/conv_tab.c`](https://cgit.freebsd.org/src/tree/bin/dd/conv_tab.c?id=e043f37205ffbde5627ff299ad25cd532f2956f0)
+at revision `e043f37205ffbde5627ff299ad25cd532f2956f0` (2023-11-24). Used
+for the POSIX XSI `conv=ascii`/`conv=ebcdic`/`conv=ibm` codeset
+conversions; the file's own historic (32V-compatible)
+`conv=oldascii`/`oldebcdic`/`oldibm` tables were not adapted.
+
+```
+SPDX-License-Identifier: BSD-3-Clause
+
+Copyright (c) 1991, 1993
+	The Regents of the University of California.  All rights reserved.
+
+This code is derived from software contributed to Berkeley by
+Keith Muller of the University of California, San Diego and Lance
+Visser of Convex Computer Corporation.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the University nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
 ```
 
 ### synseqack/aict — MIT
