@@ -140,14 +140,14 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `patch` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 2 | 14 |
-| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 5 | 83 |
+| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 6 | 85 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 3 | 20 |
 | `posixgate` | `cmds/posixgate` | — | Bashy/other extension | no | no | 1 | 32 |
 | `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 51 |
 | `printenv` | `cmds/printenv` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `printf` | `cmds/printf` | — | GNU Coreutils | yes | yes | 3 | 23 |
-| `ps` | `cmds/ps` | — | POSIX/Unix utility | no | yes | 1 | 3 |
+| `ps` | `cmds/ps` | — | POSIX/Unix utility | no | yes | 1 | 6 |
 | `ptx` | `cmds/ptx` | — | GNU Coreutils | yes | no | 1 | 14 |
 | `pwd` | `cmds/pwd` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `readlink` | `cmds/readlink` | — | GNU Coreutils | yes | no | 1 | 7 |
