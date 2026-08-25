@@ -186,15 +186,34 @@ func TestXargsInteractiveYesexprPrecedenceAndAnchoring(t *testing.T) {
 		{name: "POSIX yes", reply: "yes", env: []string{"LC_ALL=C"}, want: true},
 		{name: "POSIX leading blank", reply: " y", env: []string{"LC_ALL=C"}, want: false},
 		{name: "German category", reply: "ja", env: []string{"LANG=C", "LC_MESSAGES=de_DE.UTF-8"}, want: true},
+		{name: "German plus", reply: "+", env: []string{"LC_MESSAGES=de_DE"}, want: true},
+		{name: "German one", reply: "1", env: []string{"LC_MESSAGES=de_DE.iso88591"}, want: true},
 		{name: "LC_ALL overrides category", reply: "ja", env: []string{"LC_MESSAGES=de_DE.UTF-8", "LC_ALL=C"}, want: false},
 		{name: "empty LC_ALL falls through", reply: "J", env: []string{"LC_MESSAGES=de_DE.UTF-8", "LC_ALL="}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := affirmativeReply(tt.reply, tt.env); got != tt.want {
-				t.Errorf("affirmativeReply(%q, %v) = %v, want %v", tt.reply, tt.env, got, tt.want)
+			if got, err := affirmativeReply(tt.reply, tt.env); err != nil || got != tt.want {
+				t.Errorf("affirmativeReply(%q, %v) = (%v, %v), want %v", tt.reply, tt.env, got, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestXargsInteractiveRejectsUnsupportedLCMessages(t *testing.T) {
+	original := ttyOpener
+	t.Cleanup(func() { ttyOpener = original })
+	ttyOpener = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("yes\n")), nil
+	}
+
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"LC_MESSAGES=en_US.UTF-8"},
+		Stdio: tool.Stdio{In: strings.NewReader("a\n"), Out: &out, Err: &errOut},
+	}
+	if code := cmd.Run(rc, []string{"-p", "echo"}); code == 0 || out.Len() != 0 || !strings.Contains(errOut.String(), "unsupported LC_MESSAGES locale") {
+		t.Fatalf("unsupported LC_MESSAGES = code %d, stdout %q, stderr %q", code, out.String(), errOut.String())
 	}
 }
 

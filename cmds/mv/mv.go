@@ -85,8 +85,12 @@ type moverDeps struct {
 	removeAll         func(string) error
 	chmod             func(string, os.FileMode) error
 	chtimes           func(string, time.Time, time.Time) error
+	fchmod            func(*os.File, os.FileMode) error
 	preserveOwner     func(string, os.FileInfo) error
+	preserveFileOwner func(*os.File, os.FileInfo) error
+	preserveFileTimes func(*os.File, os.FileInfo) error
 	preserveLinkOwner func(string, os.FileInfo) error
+	preserveLinkMode  func(string, os.FileInfo) error
 	preserveLinkTimes func(string, os.FileInfo) error
 	writable          func(string) bool
 	terminal          func(io.Reader) bool
@@ -96,8 +100,11 @@ func defaultMoverDeps() moverDeps {
 	return moverDeps{
 		rename: os.Rename, remove: os.Remove, removeAll: os.RemoveAll,
 		chmod: os.Chmod, chtimes: os.Chtimes, preserveOwner: preserveOwner,
-		preserveLinkOwner: preserveLinkOwner, preserveLinkTimes: preserveLinkTimes,
-		writable: isWritable,
+		fchmod:            func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) },
+		preserveFileOwner: preserveFileOwner, preserveFileTimes: preserveFileTimes,
+		preserveLinkOwner: preserveLinkOwner, preserveLinkMode: preserveLinkMode,
+		preserveLinkTimes: preserveLinkTimes,
+		writable:          isWritable,
 		terminal: func(r io.Reader) bool {
 			f, ok := r.(interface{ Fd() uintptr })
 			return ok && term.IsTerminal(int(f.Fd()))
@@ -245,12 +252,6 @@ func (m *mover) move(src, dst string) {
 		if m.update && !sourceNewer(sp, dp) {
 			return
 		}
-		if si, e1 := os.Stat(sp); e1 == nil {
-			if dsi, e2 := os.Stat(dp); e2 == nil && os.SameFile(si, dsi) {
-				m.errf("'%s' and '%s' are the same file", src, dst)
-				return
-			}
-		}
 		if !m.force {
 			if m.interactive {
 				if !m.confirm(dst, false) {
@@ -262,6 +263,13 @@ func (m *mover) move(src, dst string) {
 						return
 					}
 				}
+			}
+		}
+		// POSIX Issue 7 orders confirmation before same-file resolution.
+		if si, e1 := os.Stat(sp); e1 == nil {
+			if dsi, e2 := os.Stat(dp); e2 == nil && os.SameFile(si, dsi) {
+				m.errf("'%s' and '%s' are the same file", src, dst)
+				return
 			}
 		}
 		if m.backup && !m.backupDest(dst) {
@@ -294,7 +302,12 @@ func (m *mover) confirm(dst string, unwritable bool) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	return locale.MatchAffirmative(m.rc.Env, line)
+	yes, matchErr := locale.MatchAffirmative(m.rc.Env, line)
+	if matchErr != nil {
+		m.errf("cannot interpret response: %s", matchErr)
+		return false
+	}
+	return yes
 }
 
 func inputReader(r io.Reader) *bufio.Reader {
@@ -376,10 +389,36 @@ func sourceNewer(src, dst string) bool {
 	return si.ModTime().After(di.ModTime())
 }
 
-// copyMove is the cross-filesystem fallback: copy the tree (mode and
-// mtime preserved; symlinks copied as symlinks), then remove the
-// source. The source is left in place if any part of the copy fails.
+// copyMove follows the POSIX Issue 7 EXDEV order: reject type mismatches,
+// remove an existing destination, duplicate a fresh hierarchy, then remove
+// the source. Characteristic failures are diagnosed by copyNode but are not
+// hierarchy failures and therefore do not prevent source removal.
 func (m *mover) copyMove(src, dst string) bool {
+	sp, dp := m.rc.Path(src), m.rc.Path(dst)
+	si, err := os.Lstat(sp)
+	if err != nil {
+		m.errf("cannot stat '%s': %s", src, reason(err))
+		return false
+	}
+	if di, err := os.Lstat(dp); err == nil {
+		if si.IsDir() != di.IsDir() {
+			if si.IsDir() {
+				m.errf("cannot overwrite non-directory '%s' with directory '%s'", dst, src)
+			} else {
+				m.errf("cannot overwrite directory '%s' with non-directory '%s'", dst, src)
+			}
+			return false
+		}
+		// POSIX step 5 removes the destination path itself (unlink/rmdir).
+		// It must not recursively erase a non-empty destination hierarchy.
+		if err := m.deps.remove(dp); err != nil {
+			m.errf("cannot remove '%s': %s", dst, reason(err))
+			return false
+		}
+	} else if !os.IsNotExist(err) {
+		m.errf("cannot access '%s': %s", dst, reason(err))
+		return false
+	}
 	if !m.copyNode(src, dst) {
 		return false
 	}
@@ -399,12 +438,7 @@ func (m *mover) copyNode(src, dst string) bool {
 	}
 	switch {
 	case fi.IsDir():
-		if di, err := os.Lstat(dp); err == nil {
-			if !di.IsDir() {
-				m.errf("cannot overwrite non-directory '%s' with directory '%s'", dst, src)
-				return false
-			}
-		} else if err := os.Mkdir(dp, fi.Mode().Perm()|0o700); err != nil {
+		if err := os.Mkdir(dp, fi.Mode().Perm()|0o700); err != nil {
 			m.errf("cannot create directory '%s': %s", dst, reason(err))
 			return false
 		}
@@ -419,37 +453,28 @@ func (m *mover) copyNode(src, dst string) bool {
 				ok = false
 			}
 		}
-		return m.preserveAttrs(dst, dp, fi) && ok
+		m.preserveAttrs(dst, dp, fi)
+		return ok
 	case fi.Mode()&os.ModeSymlink != 0:
 		target, err := os.Readlink(sp)
 		if err != nil {
 			m.errf("cannot read symbolic link '%s': %s", src, reason(err))
 			return false
 		}
-		if _, err := os.Lstat(dp); err == nil {
-			if err := m.deps.remove(dp); err != nil {
-				m.errf("cannot remove '%s': %s", dst, reason(err))
-				return false
-			}
-		}
 		if err := os.Symlink(target, dp); err != nil {
 			m.errf("cannot create symbolic link '%s': %s", dst, reason(err))
 			return false
 		}
-		return m.preserveSymlinkAttrs(dst, dp, fi)
+		m.preserveSymlinkAttrs(dst, dp, fi)
+		return true
 	case fi.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0:
-		if _, err := os.Lstat(dp); err == nil {
-			if err := m.deps.remove(dp); err != nil {
-				m.errf("cannot remove '%s': %s", dst, reason(err))
-				return false
-			}
-		}
 		err = copySpecialNode(dp, fi)
 		if err != nil {
 			m.errf("cannot create special file '%s': %s", dst, reason(err))
 			return false
 		}
-		return m.preserveAttrs(dst, dp, fi)
+		m.preserveAttrs(dst, dp, fi)
+		return true
 	default:
 		in, err := os.Open(sp)
 		if err != nil {
@@ -457,75 +482,76 @@ func (m *mover) copyNode(src, dst string) bool {
 			return false
 		}
 		defer in.Close()
-		if di, err := os.Lstat(dp); err == nil {
-			if di.IsDir() {
-				m.errf("cannot overwrite directory '%s' with non-directory '%s'", dst, src)
-				return false
-			}
-			if err := m.deps.remove(dp); err != nil {
-				m.errf("cannot remove '%s': %s", dst, reason(err))
-				return false
-			}
-		} else if !os.IsNotExist(err) {
-			m.errf("cannot access '%s': %s", dst, reason(err))
-			return false
-		}
-		// O_EXCL prevents a destination symlink introduced after Lstat/remove
-		// from being followed and truncating its referent.
+		// O_EXCL prevents a destination symlink introduced after the top-level
+		// removal, or during recursive duplication, from being followed.
 		out, err := os.OpenFile(dp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm())
 		if err != nil {
 			m.errf("cannot create regular file '%s': %s", dst, reason(err))
 			return false
 		}
 		_, werr := io.Copy(out, in)
-		cerr := out.Close()
-		if werr != nil || cerr != nil {
-			if werr == nil {
-				werr = cerr
-			}
+		if werr != nil {
+			_ = out.Close()
 			m.errf("error writing '%s': %s", dst, reason(werr))
 			return false
 		}
-		return m.preserveAttrs(dst, dp, fi)
+		m.preserveRegularAttrs(dst, out, fi)
+		if err := out.Close(); err != nil {
+			m.errf("error writing '%s': %s", dst, reason(err))
+			return false
+		}
+		return true
 	}
 }
 
-func (m *mover) preserveAttrs(dst, dp string, fi os.FileInfo) bool {
-	ok := true
+func (m *mover) preserveAttrs(dst, dp string, fi os.FileInfo) {
 	err := m.deps.preserveOwner(dp, fi)
 	mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 	if err != nil {
 		mode &^= (os.ModeSetuid | os.ModeSetgid)
-		m.errf("preserving ownership for '%s': %s", dst, reason(err))
-		ok = false
+		m.warnf("preserving ownership for '%s': %s", dst, reason(err))
 	}
 	if err := m.deps.chmod(dp, mode); err != nil {
-		m.errf("preserving permissions for '%s': %s", dst, reason(err))
-		ok = false
+		m.warnf("preserving permissions for '%s': %s", dst, reason(err))
 	}
 	if err := m.deps.chtimes(dp, atime(fi), fi.ModTime()); err != nil {
-		m.errf("preserving times for '%s': %s", dst, reason(err))
-		ok = false
+		m.warnf("preserving times for '%s': %s", dst, reason(err))
 	}
-	return ok
 }
 
-func (m *mover) preserveSymlinkAttrs(dst, dp string, fi os.FileInfo) bool {
-	ok := true
+func (m *mover) preserveRegularAttrs(dst string, out *os.File, fi os.FileInfo) {
+	mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	if err := m.deps.preserveFileOwner(out, fi); err != nil {
+		mode &^= (os.ModeSetuid | os.ModeSetgid)
+		m.warnf("preserving ownership for '%s': %s", dst, reason(err))
+	}
+	if err := m.deps.fchmod(out, mode); err != nil {
+		m.warnf("preserving permissions for '%s': %s", dst, reason(err))
+	}
+	if err := m.deps.preserveFileTimes(out, fi); err != nil {
+		m.warnf("preserving times for '%s': %s", dst, reason(err))
+	}
+}
+
+func (m *mover) preserveSymlinkAttrs(dst, dp string, fi os.FileInfo) {
 	if err := m.deps.preserveLinkOwner(dp, fi); err != nil {
-		m.errf("preserving symbolic link ownership for '%s': %s", dst, reason(err))
-		ok = false
+		m.warnf("preserving symbolic link ownership for '%s': %s", dst, reason(err))
+	}
+	if err := m.deps.preserveLinkMode(dp, fi); err != nil {
+		m.warnf("preserving symbolic link permissions for '%s': %s", dst, reason(err))
 	}
 	if err := m.deps.preserveLinkTimes(dp, fi); err != nil {
-		m.errf("preserving symbolic link times for '%s': %s", dst, reason(err))
-		ok = false
+		m.warnf("preserving symbolic link times for '%s': %s", dst, reason(err))
 	}
-	return ok
 }
 
 func (m *mover) errf(format string, a ...any) {
 	fmt.Fprintf(m.rc.Err, "mv: "+format+"\n", a...)
 	m.failed = true
+}
+
+func (m *mover) warnf(format string, a ...any) {
+	fmt.Fprintf(m.rc.Err, "mv: "+format+"\n", a...)
 }
 
 func (m *mover) verbosef(format string, a ...any) {

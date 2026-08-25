@@ -1,6 +1,10 @@
 package localecmd
 
-import "strconv"
+import (
+	"strconv"
+
+	corelocale "github.com/qiangli/coreutils/pkg/locale"
+)
 
 // The keyword tables for the POSIX (a.k.a. C) locale, transcribed from the
 // POSIX locale definition in XBD chapter 7.3. There is no libc bridge to ask;
@@ -57,6 +61,10 @@ var categories = []string{
 // they are derived from the locale's codeset rather than fixed — see
 // localeData.
 var posixKeywords = func() []keyword {
+	messages, ok := corelocale.LookupMessages("POSIX")
+	if !ok {
+		panic("POSIX LC_MESSAGES data is unavailable")
+	}
 	k := []keyword{
 		// LC_NUMERIC — XBD 7.3.4. The POSIX locale has no thousands separator
 		// and no grouping, both expressed as empty strings.
@@ -110,13 +118,22 @@ var posixKeywords = func() []keyword {
 		num("LC_MONETARY", "int_n_sign_posn", "-1"),
 
 		// LC_MESSAGES — XBD 7.3.6.
-		str("LC_MESSAGES", "yesexpr", "^[yY]"),
-		str("LC_MESSAGES", "noexpr", "^[nN]"),
-		str("LC_MESSAGES", "yesstr", ""),
-		str("LC_MESSAGES", "nostr", ""),
+		str("LC_MESSAGES", "yesexpr", messages.YesExpr),
+		str("LC_MESSAGES", "noexpr", messages.NoExpr),
+		str("LC_MESSAGES", "yesstr", messages.YesStr),
+		str("LC_MESSAGES", "nostr", messages.NoStr),
 	}
 	return k
 }()
+
+func messagesKeywords(d corelocale.MessagesData) []keyword {
+	return []keyword{
+		str("LC_MESSAGES", "yesexpr", d.YesExpr),
+		str("LC_MESSAGES", "noexpr", d.NoExpr),
+		str("LC_MESSAGES", "yesstr", d.YesStr),
+		str("LC_MESSAGES", "nostr", d.NoStr),
+	}
+}
 
 // germanISO88591TimeKeywords is the complete POSIX LC_TIME keyword set for
 // de_DE in its ISO-8859-1 encoding. The non-ASCII byte is deliberately kept as

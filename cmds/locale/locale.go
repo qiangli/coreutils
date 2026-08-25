@@ -250,6 +250,11 @@ func (d data) keyword(name string) (keyword, bool) {
 // or an error naming the locale this build cannot describe.
 func localeData(rc *tool.RunContext, cat string) (data, error) {
 	name := locale.Resolve(rc.Env, locale.Category(cat))
+	if cat == "LC_MESSAGES" {
+		if messages, ok := locale.LookupMessages(name); ok {
+			return data{name: name, keywords: messagesKeywords(messages)}, nil
+		}
+	}
 	base, codeset := splitLocaleName(name)
 	if base == "de_DE" && isISO88591(codeset) && cat == "LC_TIME" {
 		return data{name: name, keywords: germanISO88591TimeKeywords}, nil

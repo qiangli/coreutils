@@ -883,3 +883,25 @@ func TestCpInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
 		t.Fatalf("leading-space reply = (_, %q, %d), destination was not preserved", errb, code)
 	}
 }
+
+func TestCpInteractiveUsesGermanYesexpr(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_MESSAGES=de_DE.UTF-8"}, Stdio: tool.Stdio{In: strings.NewReader("+\n"), Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-i", "src", "dst"}); code != 0 || read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatalf("German yesexpr = (_, %q, %d)", errb.String(), code)
+	}
+}
+
+func TestCpInteractiveRejectsUnsupportedLCMessages(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_MESSAGES=en_US.UTF-8"}, Stdio: tool.Stdio{In: strings.NewReader("yes\n"), Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-i", "src", "dst"}); code != 1 || !strings.Contains(errb.String(), "unsupported LC_MESSAGES locale") || read(t, filepath.Join(dir, "dst")) != "old" {
+		t.Fatalf("unsupported LC_MESSAGES = (_, %q, %d)", errb.String(), code)
+	}
+}

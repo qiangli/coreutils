@@ -328,6 +328,14 @@ func TestGermanISO88591TimeData(t *testing.T) {
 	}
 }
 
+func TestGermanMessagesDataUsesAuthoritativeYesexpr(t *testing.T) {
+	out, errOut, code := runCmd(t, []string{"LC_MESSAGES=de_DE.UTF-8"}, "-k", "yesexpr", "yesstr", "noexpr", "nostr")
+	want := "yesexpr=\"^[+1jJyY]\"\nyesstr=\"ja\"\nnoexpr=\"^[-0nN]\"\nnostr=\"nein\"\n"
+	if code != 0 || errOut != "" || out != want {
+		t.Fatalf("German LC_MESSAGES = (%q, %q, %d), want %q", out, errOut, code, want)
+	}
+}
+
 // The refusal is per CATEGORY, because each category resolves its own locale.
 // A German LC_MONETARY must not poison an LC_TIME query that is still POSIX.
 func TestRefusalIsPerCategory(t *testing.T) {

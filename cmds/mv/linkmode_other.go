@@ -7,4 +7,4 @@ import (
 	"os"
 )
 
-func preserveLinkTimes(dst string, fi os.FileInfo) error { return errors.ErrUnsupported }
+func preserveLinkMode(dst string, fi os.FileInfo) error { return errors.ErrUnsupported }

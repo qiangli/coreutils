@@ -240,7 +240,12 @@ func (r *remover) confirm(op string) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	return locale.MatchAffirmative(r.rc.Env, line)
+	yes, matchErr := locale.MatchAffirmative(r.rc.Env, line)
+	if matchErr != nil {
+		r.errf("cannot interpret response: %s", matchErr)
+		return false
+	}
+	return yes
 }
 
 func inputReader(r io.Reader) *bufio.Reader {

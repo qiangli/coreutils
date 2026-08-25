@@ -578,6 +578,37 @@ func TestMvInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
 	}
 }
 
+func TestMvPromptsBeforeSameFileResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply string
+		wantCode    int
+		wantSame    bool
+	}{
+		{"declined", "n\n", 0, false},
+		{"accepted", "y\n", 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "same"), "keep")
+			_, errb, code := runToolInput(t, dir, tc.reply, "-i", "same", "same")
+			if code != tc.wantCode || !strings.Contains(errb, "overwrite 'same'?") || strings.Contains(errb, "same file") != tc.wantSame {
+				t.Fatalf("same-file prompt = (_, %q, %d)", errb, code)
+			}
+		})
+	}
+}
+
+func TestMvUnsupportedLCMessagesFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_MESSAGES=en_US.UTF-8"}, Stdio: tool.Stdio{In: strings.NewReader("yes\n"), Out: &out, Err: &errb}}
+	if code := runWithDeps(rc, []string{"-i", "src", "dst"}, defaultMoverDeps()); code != 1 || !strings.Contains(errb.String(), "unsupported LC_MESSAGES locale") || read(t, filepath.Join(dir, "dst")) != "old" {
+		t.Fatalf("unsupported LC_MESSAGES = (_, %q, %d)", errb.String(), code)
+	}
+}
+
 func TestMvLastOverwriteOptionWins(t *testing.T) {
 	for _, tc := range []struct {
 		name, input string
@@ -636,17 +667,17 @@ func TestMvPromptUnwritable(t *testing.T) {
 	}
 }
 
-func TestMvEXDEVMetadataFailuresReportAndRetainSource(t *testing.T) {
+func TestMvEXDEVCharacteristicFailuresDiagnoseButStillMove(t *testing.T) {
 	tests := []struct {
 		name, diagnostic string
 		fail             func(*moverDeps)
 	}{
 		{"ownership", "preserving ownership", func(d *moverDeps) {
-			d.preserveOwner = func(string, os.FileInfo) error { return errors.New("owner failed") }
+			d.preserveFileOwner = func(*os.File, os.FileInfo) error { return errors.New("owner failed") }
 		}},
-		{"permissions", "preserving permissions", func(d *moverDeps) { d.chmod = func(string, os.FileMode) error { return errors.New("mode failed") } }},
+		{"permissions", "preserving permissions", func(d *moverDeps) { d.fchmod = func(*os.File, os.FileMode) error { return errors.New("mode failed") } }},
 		{"times", "preserving times", func(d *moverDeps) {
-			d.chtimes = func(string, time.Time, time.Time) error { return errors.New("time failed") }
+			d.preserveFileTimes = func(*os.File, os.FileInfo) error { return errors.New("time failed") }
 		}},
 	}
 	for _, tc := range tests {
@@ -656,17 +687,39 @@ func TestMvEXDEVMetadataFailuresReportAndRetainSource(t *testing.T) {
 			deps := exdevDeps()
 			tc.fail(&deps)
 			_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
-			if code != 1 || !strings.Contains(errb, tc.diagnostic) || !strings.Contains(errb, "failed") {
+			if code != 0 || !strings.Contains(errb, tc.diagnostic) || !strings.Contains(errb, "failed") {
 				t.Fatalf("metadata failure = (_, %q, %d), want %q diagnostic", errb, code, tc.diagnostic)
 			}
-			if got := read(t, filepath.Join(dir, "src")); got != "payload" {
-				t.Fatalf("source content = %q, want retained", got)
+			if _, err := os.Lstat(filepath.Join(dir, "src")); !os.IsNotExist(err) {
+				t.Fatalf("source was not removed: %v", err)
+			}
+			if got := read(t, filepath.Join(dir, "dst")); got != "payload" {
+				t.Fatalf("destination content = %q", got)
 			}
 		})
 	}
 }
 
-func TestMvEXDEVSymlinkMetadataFailuresRetainSource(t *testing.T) {
+func TestMvEXDEVDirectoryCharacteristicFailureDiagnosesButStillMoves(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deps := exdevDeps()
+	deps.chmod = func(string, os.FileMode) error { return errors.New("directory mode failed") }
+	_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
+	if code != 0 || !strings.Contains(errb, "preserving permissions") || !strings.Contains(errb, "Directory mode failed") {
+		t.Fatalf("directory characteristic failure = (_, %q, %d)", errb, code)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "src")); !os.IsNotExist(err) {
+		t.Fatalf("source directory was not removed: %v", err)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "dst")); err != nil || !fi.IsDir() {
+		t.Fatalf("destination directory missing: %v, %v", fi, err)
+	}
+}
+
+func TestMvEXDEVSymlinkCharacteristicFailuresDiagnoseButStillMove(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs privileges on some Windows hosts")
 	}
@@ -676,6 +729,9 @@ func TestMvEXDEVSymlinkMetadataFailuresRetainSource(t *testing.T) {
 	}{
 		{"ownership", "preserving symbolic link ownership", func(d *moverDeps) {
 			d.preserveLinkOwner = func(string, os.FileInfo) error { return errors.New("link owner failed") }
+		}},
+		{"permissions", "preserving symbolic link permissions", func(d *moverDeps) {
+			d.preserveLinkMode = func(string, os.FileInfo) error { return errors.New("link mode failed") }
 		}},
 		{"times", "preserving symbolic link times", func(d *moverDeps) {
 			d.preserveLinkTimes = func(string, os.FileInfo) error { return errors.New("link time failed") }
@@ -689,11 +745,14 @@ func TestMvEXDEVSymlinkMetadataFailuresRetainSource(t *testing.T) {
 			deps := exdevDeps()
 			tc.fail(&deps)
 			_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
-			if code != 1 || !strings.Contains(errb, tc.diagnostic) {
+			if code != 0 || !strings.Contains(errb, tc.diagnostic) {
 				t.Fatalf("symlink metadata failure = (_, %q, %d)", errb, code)
 			}
-			if target, err := os.Readlink(filepath.Join(dir, "src")); err != nil || target != "target" {
-				t.Fatalf("source symlink = (%q, %v), want retained", target, err)
+			if _, err := os.Lstat(filepath.Join(dir, "src")); !os.IsNotExist(err) {
+				t.Fatalf("source symlink was not removed: %v", err)
+			}
+			if target, err := os.Readlink(filepath.Join(dir, "dst")); err != nil || target != "target" {
+				t.Fatalf("destination symlink = (%q, %v)", target, err)
 			}
 		})
 	}
@@ -718,6 +777,98 @@ func TestMvEXDEVRegularReplacementDoesNotFollowDestinationSymlink(t *testing.T) 
 	}
 	if fi, err := os.Lstat(filepath.Join(dir, "dst")); err != nil || fi.Mode()&os.ModeSymlink != 0 || read(t, filepath.Join(dir, "dst")) != "new" {
 		t.Fatalf("destination was not replaced by regular file: info=%v err=%v", fi, err)
+	}
+}
+
+func TestMvEXDEVReplacesEmptyDestinationDirectoryBeforeDuplication(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "fresh"), "new")
+	if err := os.MkdirAll(filepath.Join(dir, "target", "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runToolInputDeps(t, dir, "", exdevDeps(), "src", "target")
+	if code != 0 || errb != "" {
+		t.Fatalf("EXDEV directory replacement = (_, %q, %d)", errb, code)
+	}
+	if got := read(t, filepath.Join(dir, "target", "src", "fresh")); got != "new" {
+		t.Fatalf("fresh child = %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "src")); !os.IsNotExist(err) {
+		t.Fatalf("source hierarchy was not removed: %v", err)
+	}
+}
+
+func TestMvEXDEVDoesNotRecursivelyRemoveNonemptyDestination(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "fresh"), "new")
+	write(t, filepath.Join(dir, "target", "src", "stale"), "old")
+	_, errb, code := runToolInputDeps(t, dir, "", exdevDeps(), "src", "target")
+	if code != 1 || !strings.Contains(errb, "cannot remove 'target/src'") {
+		t.Fatalf("nonempty destination = (_, %q, %d)", errb, code)
+	}
+	if got := read(t, filepath.Join(dir, "target", "src", "stale")); got != "old" {
+		t.Fatalf("stale destination child was modified: %q", got)
+	}
+	if got := read(t, filepath.Join(dir, "src", "fresh")); got != "new" {
+		t.Fatalf("source hierarchy was modified: %q", got)
+	}
+}
+
+func TestMvEXDEVDestinationRemovalFailureRetainsSource(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	deps := exdevDeps()
+	deps.remove = func(path string) error {
+		if filepath.Base(path) == "dst" {
+			return errors.New("remove destination failed")
+		}
+		return os.Remove(path)
+	}
+	_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
+	if code != 1 || !strings.Contains(errb, "cannot remove 'dst'") || read(t, filepath.Join(dir, "src")) != "new" || read(t, filepath.Join(dir, "dst")) != "old" {
+		t.Fatalf("destination removal failure = (_, %q, %d)", errb, code)
+	}
+}
+
+func TestMvEXDEVRegularCharacteristicsStayBoundToCreatedDescriptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on some Windows hosts")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "payload")
+	referent := filepath.Join(dir, "referent")
+	write(t, referent, "guard")
+	wantReferentTime := time.Unix(1_500_000_000, 0)
+	if err := os.Chtimes(referent, wantReferentTime, wantReferentTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(referent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "dst")
+	deps := exdevDeps()
+	originalOwner := deps.preserveFileOwner
+	deps.preserveFileOwner = func(f *os.File, fi os.FileInfo) error {
+		if err := os.Remove(dst); err != nil {
+			return err
+		}
+		if err := os.Symlink("referent", dst); err != nil {
+			return err
+		}
+		return originalOwner(f, fi)
+	}
+	_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("descriptor-bound preservation = (_, %q, %d)", errb, code)
+	}
+	fi, err := os.Stat(referent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, referent); got != "guard" || fi.Mode().Perm() != 0o640 || !fi.ModTime().Equal(wantReferentTime) {
+		t.Fatalf("swapped symlink referent changed: content=%q mode=%o mtime=%v", got, fi.Mode().Perm(), fi.ModTime())
 	}
 }
 

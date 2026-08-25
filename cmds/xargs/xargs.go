@@ -715,7 +715,13 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 				return true
 			}
 			response := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-			if !affirmativeReply(response, rc.Env) {
+			affirmative, matchErr := affirmativeReply(response, rc.Env)
+			if matchErr != nil {
+				fmt.Fprintf(stderr, "\nxargs: cannot interpret response: %v\n", matchErr)
+				note(1)
+				return true
+			}
+			if !affirmative {
 				return false
 			}
 		} else if o.trace {
@@ -817,17 +823,8 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	return worst
 }
 
-// affirmativeReply matches the yesexpr carried by the repository's bounded
-// LC_MESSAGES provider.  The match is anchored at byte zero, as required by
-// the POSIX C/POSIX expression and the provisioned German expression; leading
-// white space therefore cannot turn a negative response into an affirmative.
-func affirmativeReply(reply string, env []string) bool {
-	if reply == "" {
-		return false
-	}
-	messages := strings.ToLower(locale.Resolve(env, locale.Messages))
-	if strings.HasPrefix(messages, "de_de") {
-		return reply[0] == 'j' || reply[0] == 'J' || reply[0] == 'y' || reply[0] == 'Y'
-	}
-	return reply[0] == 'y' || reply[0] == 'Y'
+// affirmativeReply matches the yesexpr carried by the repository's bounded,
+// shared LC_MESSAGES provider. Unsupported locales fail closed.
+func affirmativeReply(reply string, env []string) (bool, error) {
+	return locale.MatchAffirmative(env, reply)
 }

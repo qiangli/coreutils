@@ -438,6 +438,32 @@ func TestRmInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
 	}
 }
 
+func TestRmInteractiveUsesGermanYesexpr(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "victim"), "remove")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_MESSAGES=de_DE.UTF-8"}, Stdio: tool.Stdio{In: strings.NewReader("1\n"), Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-i", "victim"}); code != 0 {
+		t.Fatalf("German yesexpr = (_, %q, %d)", errb.String(), code)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "victim")); !os.IsNotExist(err) {
+		t.Fatalf("German affirmative did not remove victim: %v", err)
+	}
+}
+
+func TestRmInteractiveRejectsUnsupportedLCMessages(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "victim"), "keep")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_MESSAGES=en_US.UTF-8"}, Stdio: tool.Stdio{In: strings.NewReader("yes\n"), Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-i", "victim"}); code != 1 || !strings.Contains(errb.String(), "unsupported LC_MESSAGES locale") {
+		t.Fatalf("unsupported LC_MESSAGES = (_, %q, %d)", errb.String(), code)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "victim")); err != nil {
+		t.Fatalf("unsupported locale removed victim: %v", err)
+	}
+}
+
 func TestRmImplicitPromptForUnwritable(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "unwritable")

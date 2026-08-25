@@ -573,7 +573,12 @@ func (c *copier) confirm(dst string) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	return locale.MatchAffirmative(c.rc.Env, line)
+	yes, matchErr := locale.MatchAffirmative(c.rc.Env, line)
+	if matchErr != nil {
+		c.errf("cannot interpret response: %s", matchErr)
+		return false
+	}
+	return yes
 }
 
 func inputReader(r io.Reader) *bufio.Reader {

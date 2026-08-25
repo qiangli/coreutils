@@ -5,6 +5,7 @@ package mvcmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -22,6 +23,11 @@ func TestMvEXDEVPreservesSymlinkAttributes(t *testing.T) {
 	tv := []unix.Timeval{unix.NsecToTimeval(wantTime.UnixNano()), unix.NsecToTimeval(wantTime.UnixNano())}
 	if err := unix.Lutimes(src, tv); err != nil {
 		t.Skipf("setting symlink timestamps is unsupported: %v", err)
+	}
+	// BSDs which expose symlink modes can make this observably non-default;
+	// Linux reports EOPNOTSUPP and correctly retains its fixed 0777 mode.
+	if err := unix.Fchmodat(unix.AT_FDCWD, src, 0o751, unix.AT_SYMLINK_NOFOLLOW); err != nil && runtime.GOOS != "linux" {
+		t.Fatalf("setting supported symlink mode: %v", err)
 	}
 	before, err := os.Lstat(src)
 	if err != nil {
@@ -46,6 +52,9 @@ func TestMvEXDEVPreservesSymlinkAttributes(t *testing.T) {
 	}
 	if beforeStat.Uid != afterStat.Uid || beforeStat.Gid != afterStat.Gid {
 		t.Fatalf("symlink owner = %d:%d, want %d:%d", afterStat.Uid, afterStat.Gid, beforeStat.Uid, beforeStat.Gid)
+	}
+	if before.Mode().Perm() != after.Mode().Perm() {
+		t.Fatalf("symlink mode = %o, want %o", after.Mode().Perm(), before.Mode().Perm())
 	}
 	if delta := after.ModTime().Sub(before.ModTime()); delta < -time.Millisecond || delta > time.Millisecond {
 		t.Fatalf("symlink mtime = %v, want %v", after.ModTime(), before.ModTime())

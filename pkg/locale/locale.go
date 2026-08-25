@@ -17,7 +17,12 @@
 // expected to migrate here once grep is refactored onto the shared package.
 package locale
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 // Category identifies a POSIX locale category.
 type Category string
@@ -137,29 +142,90 @@ func getEnv(env []string, key string) (string, bool) {
 	return "", false
 }
 
-// MessageMatcher is an invocation-owned projection of the LC_MESSAGES
-// affirmative expression. Its match is anchored at the first response byte,
-// as POSIX yesexpr is; callers must not trim leading white space first.
-type MessageMatcher struct{ affirmativeInitials string }
+// MessagesData is the LC_MESSAGES data carried by the repository's bounded
+// locale provider. Keeping the expressions here gives locale(1) and utilities
+// which read affirmative responses one authoritative source.
+type MessagesData struct {
+	YesExpr string
+	NoExpr  string
+	YesStr  string
+	NoStr   string
+}
 
-// MessagesMatcher resolves the affirmative matcher for an invocation. The
-// deterministic C/POSIX expression is the fallback for locales whose catalog
-// is not embedded. German locales additionally accept their customary j/J.
-func MessagesMatcher(env []string) MessageMatcher {
-	name := strings.ToLower(Resolve(env, Messages))
-	if strings.HasPrefix(name, "de_de") {
-		return MessageMatcher{affirmativeInitials: "jJyY"}
+var ErrUnsupportedMessagesLocale = errors.New("unsupported LC_MESSAGES locale")
+
+// LookupMessages returns the exact data carried for name. Arbitrary locale
+// names are deliberately rejected rather than silently answered with C data.
+func LookupMessages(name string) (MessagesData, bool) {
+	switch name {
+	case "C", "POSIX":
+		return MessagesData{YesExpr: "^[yY]", NoExpr: "^[nN]"}, true
 	}
-	return MessageMatcher{affirmativeInitials: "yY"}
+	base, codeset := splitLocaleName(name)
+	if base == "C" && normalizeCodeset(codeset) == "UTF8" {
+		return MessagesData{YesExpr: "^[yY]", NoExpr: "^[nN]"}, true
+	}
+	if base != "de_DE" {
+		return MessagesData{}, false
+	}
+	switch normalizeCodeset(codeset) {
+	case "", "UTF8", "ISO88591", "ISO885915":
+		// glibc's de_DE expressions are ASCII in all carried encodings.
+		return MessagesData{YesExpr: "^[+1jJyY]", NoExpr: "^[-0nN]", YesStr: "ja", NoStr: "nein"}, true
+	default:
+		return MessagesData{}, false
+	}
+}
+
+func splitLocaleName(name string) (string, string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ := strings.Cut(name, ".")
+	return base, codeset
+}
+
+func normalizeCodeset(name string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+}
+
+// MessageMatcher is an invocation-owned compiled LC_MESSAGES yesexpr.
+type MessageMatcher struct{ yes *regexp.Regexp }
+
+// CompileMessageMatcher compiles provider-supplied POSIX ERE data. It is
+// exported so another bounded provider can supply a multibyte/general ERE
+// without reducing matching to a first-byte table.
+func CompileMessageMatcher(yesExpr string) (MessageMatcher, error) {
+	yes, err := regexp.CompilePOSIX(yesExpr)
+	if err != nil {
+		return MessageMatcher{}, fmt.Errorf("invalid LC_MESSAGES yesexpr %q: %w", yesExpr, err)
+	}
+	return MessageMatcher{yes: yes}, nil
+}
+
+// MessagesMatcher resolves and compiles the authoritative affirmative ERE for
+// an invocation. Unsupported locales return an error and never inherit C's
+// expression.
+func MessagesMatcher(env []string) (MessageMatcher, error) {
+	name := Resolve(env, Messages)
+	data, ok := LookupMessages(name)
+	if !ok {
+		return MessageMatcher{}, fmt.Errorf("%w %q", ErrUnsupportedMessagesLocale, name)
+	}
+	return CompileMessageMatcher(data.YesExpr)
 }
 
 // MatchAffirmative reports whether response matches the invocation's anchored
 // LC_MESSAGES affirmative expression.
-func MatchAffirmative(env []string, response string) bool {
-	return MessagesMatcher(env).MatchAffirmative(response)
+func MatchAffirmative(env []string, response string) (bool, error) {
+	matcher, err := MessagesMatcher(env)
+	if err != nil {
+		return false, err
+	}
+	return matcher.MatchAffirmative(response), nil
 }
 
-// MatchAffirmative applies the matcher's anchored affirmative expression.
+// MatchAffirmative applies the compiled affirmative ERE. Only line endings
+// are removed; leading white space remains significant to the anchored ERE.
 func (m MessageMatcher) MatchAffirmative(response string) bool {
-	return response != "" && strings.ContainsRune(m.affirmativeInitials, rune(response[0]))
+	response = strings.TrimRight(response, "\r\n")
+	return m.yes != nil && m.yes.MatchString(response)
 }

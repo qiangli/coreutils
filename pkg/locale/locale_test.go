@@ -1,6 +1,7 @@
 package locale
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -274,18 +275,63 @@ func TestMessageMatcherUsesAnchoredYesExpression(t *testing.T) {
 		{"leading tab stays negative", nil, "\tyes\n", false},
 		{"empty line", nil, "\n", false},
 		{"German ja", []string{"LC_MESSAGES=de_DE.UTF-8"}, "ja\n", true},
+		{"German plus", []string{"LC_MESSAGES=de_DE"}, "+\n", true},
+		{"German one", []string{"LC_MESSAGES=de_DE.ISO-8859-1"}, "1\n", true},
+		{"German Latin-9 euro", []string{"LC_MESSAGES=de_DE.ISO-8859-15@euro"}, "ja\n", true},
+		{"German yes", []string{"LC_MESSAGES=de_DE.UTF-8"}, "yes\n", true},
 		{"German leading space", []string{"LC_MESSAGES=de_DE.UTF-8"}, " ja\n", false},
 		{"LC_ALL precedence", []string{"LC_MESSAGES=de_DE", "LC_ALL=C"}, "ja\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			matcher := MessagesMatcher(tc.env)
+			matcher, err := MessagesMatcher(tc.env)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got := matcher.MatchAffirmative(tc.response); got != tc.want {
 				t.Fatalf("MatchAffirmative(%q) = %v, want %v", tc.response, got, tc.want)
 			}
-			if got := MatchAffirmative(tc.env, tc.response); got != tc.want {
-				t.Fatalf("shared MatchAffirmative(%q) = %v, want %v", tc.response, got, tc.want)
+			if got, err := MatchAffirmative(tc.env, tc.response); err != nil || got != tc.want {
+				t.Fatalf("shared MatchAffirmative(%q) = (%v, %v), want %v", tc.response, got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestMessagesMatcherFailsClosedForUnsupportedLocale(t *testing.T) {
+	matcher, err := MessagesMatcher([]string{"LC_MESSAGES=en_US.UTF-8"})
+	if err == nil || !errors.Is(err, ErrUnsupportedMessagesLocale) {
+		t.Fatalf("MessagesMatcher unsupported error = %v", err)
+	}
+	if matcher.MatchAffirmative("yes\n") {
+		t.Fatal("unsupported locale silently used the C yesexpr")
+	}
+}
+
+func TestMessagesProviderExplicitAliases(t *testing.T) {
+	for _, name := range []string{"C", "POSIX", "C.UTF-8", "C.utf8", "de_DE", "de_DE.UTF-8", "de_DE.iso88591", "de_DE.ISO-8859-15@euro"} {
+		if _, ok := LookupMessages(name); !ok {
+			t.Errorf("explicit LC_MESSAGES alias %q was rejected", name)
+		}
+	}
+	for _, name := range []string{"c", "en_US.UTF-8", "de_DE.ISO-8859-2", "de_DE.UTF-8x"} {
+		if _, ok := LookupMessages(name); ok {
+			t.Errorf("unsupported LC_MESSAGES locale %q was accepted", name)
+		}
+	}
+}
+
+func TestCompileMessageMatcherSupportsGeneralMultibyteERE(t *testing.T) {
+	matcher, err := CompileMessageMatcher(`^(sí|はい)$`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, response := range []string{"sí\n", "はい\n"} {
+		if !matcher.MatchAffirmative(response) {
+			t.Errorf("multibyte yesexpr rejected %q", response)
+		}
+	}
+	if matcher.MatchAffirmative(" はい\n") {
+		t.Fatal("multibyte yesexpr ignored its anchor")
 	}
 }
 
