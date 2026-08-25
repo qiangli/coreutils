@@ -18,9 +18,12 @@ Evidence added in this batch:
   covers repeatable `-f`, `-v assignment`, input-file operands, and
   `name=value` operand timing before the following input.
 - `cmds/awk/awk_test.go#TestAwkPOSIXProgramFromStdinAndEmptyProgram` covers
-  `-f -` program-source stdin and the valid empty program reading no input.
-- `cmds/awk/awk_test.go#TestAwkPOSIXInvalidAssignmentAndMissingInput` covers
-  invalid `-v assignment` diagnostics and inaccessible input status.
+  `-f -` program-source stdin and acceptance of a valid empty program.
+- `cmds/awk/awk_test.go#TestAwkInvalidAssignmentAndPOSIXMissingInput` covers
+  inaccessible-input status. Its invalid-assignment case is retained only as
+  implementation robustness evidence: Issue 7 requires conforming applications
+  to supply a valid assignment and does not make malformed assignments a
+  normative utility requirement.
 
 Existing evidence retained in the row covers the basic synopsis, `-F`, program
 files, POSIX numeric formatting cases, ERE leftmost-longest/dot-newline
@@ -45,9 +48,10 @@ Reference: https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilitie
 
 Evidence added in this batch:
 
-- `cmds/getconf/getconf_test.go#TestPOSIXArityAndOptionForms` covers empty
-  `-v`, missing `-v` option-argument diagnostics, `system_var` versus
-  `path_var pathname` arity, and wrong-kind variable diagnostics.
+- `cmds/getconf/getconf_test.go#TestPOSIXArityAndOptionForms` covers rejection
+  of an empty `-v specification`, missing `-v` option-argument diagnostics,
+  `system_var` versus `path_var pathname` arity, and wrong-kind variable
+  diagnostics.
 
 Existing evidence retained in the row covers host differentials on Darwin,
 known-versus-unknown variable behavior, POSIX compile-time minimums, inventory
@@ -76,8 +80,8 @@ Reference: https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilitie
 
 Evidence added in this batch:
 
-- `cmds/grep/grep_test.go#TestGrepPOSIXPatternListAndOptionPrecedence` covers
-  an empty `-e pattern_list`, `-q` suppression of normal output, and missing
+- `cmds/grep/grep_test.go#TestGrepPOSIXPatternListAndOptionArgument` covers
+  an empty `-e pattern_list` and missing
   `-f` option-argument diagnostics.
 
 Existing evidence retained in the row covers stdin and `-` operands, required

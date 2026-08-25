@@ -54,7 +54,7 @@ func run(rc *tool.RunContext, args []string) int {
 	// -v selects a programming environment. Only the environment this build
 	// actually targets is honoured; silently accepting another specification
 	// would report this environment's values under that name.
-	if *spec != "" && !knownSpecification(*spec) {
+	if fs.Changed("specification") && !knownSpecification(*spec) {
 		fmt.Fprintf(rc.Err, "getconf: unsupported specification: %s\n", *spec)
 		return 1
 	}

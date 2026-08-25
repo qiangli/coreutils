@@ -3,8 +3,6 @@ package awkcmd
 import (
 	"bytes"
 	"context"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,16 +193,12 @@ func TestAwkPOSIXProgramFromStdinAndEmptyProgram(t *testing.T) {
 		t.Fatalf("awk -f - should read program source only, got (%q, %q, %d)", out, errb, code)
 	}
 
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Stdio: tool.Stdio{In: errorReader{err: errors.New("input was read")}, Out: io.Discard, Err: io.Discard},
-	}
-	if code := cmd.Run(rc, []string{""}); code != 0 {
-		t.Fatalf("empty awk program returned %d, want 0 without reading input", code)
+	if out, errb, code := runTool(t, "", ""); code != 0 || out != "" || errb != "" {
+		t.Fatalf("empty awk program = (%q, %q, %d), want no output and status 0", out, errb, code)
 	}
 }
 
-func TestAwkPOSIXInvalidAssignmentAndMissingInput(t *testing.T) {
+func TestAwkInvalidAssignmentAndPOSIXMissingInput(t *testing.T) {
 	if _, errb, code := runTool(t, "", "-v", "1bad=x", `BEGIN { print "bad" }`); code != 2 || !strings.Contains(errb, "invalid -v assignment") {
 		t.Fatalf("invalid -v assignment = (%q, %d), want usage error", errb, code)
 	}
@@ -212,10 +206,6 @@ func TestAwkPOSIXInvalidAssignmentAndMissingInput(t *testing.T) {
 		t.Fatalf("missing input = (%q, %d), want diagnostic and non-zero status", errb, code)
 	}
 }
-
-type errorReader struct{ err error }
-
-func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
 
 func TestResolveFilesPreservesStandaloneOperandSpelling(t *testing.T) {
 	files := []string{" 123456789 ", "1.234", "+12345", "-12345", "x=1", "-"}

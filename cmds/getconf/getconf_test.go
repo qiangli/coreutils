@@ -256,8 +256,8 @@ func TestUnsupportedSpecificationIsRefused(t *testing.T) {
 
 func TestPOSIXArityAndOptionForms(t *testing.T) {
 	dir := t.TempDir()
-	if out, errb, code := runCmd(t, "-v", "", "_POSIX_PATH_MAX"); code != 0 || out != "256" || errb != "" {
-		t.Fatalf("empty -v specification should fall through: (%q, %q, %d)", out, errb, code)
+	if out, errb, code := runCmd(t, "-v", "", "_POSIX_PATH_MAX"); code == 0 || out != "" || !strings.Contains(errb, "unsupported specification") {
+		t.Fatalf("empty -v specification = (%q, %q, %d), want diagnostic and non-zero status", out, errb, code)
 	}
 	if out, errb, code := runCmd(t, "NAME_MAX", dir); code != 0 || out == "" || errb != "" {
 		t.Fatalf("path_var pathname = (%q, %q, %d), want value", out, errb, code)
