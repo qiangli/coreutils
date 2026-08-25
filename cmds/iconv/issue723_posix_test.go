@@ -163,6 +163,16 @@ func TestIssue723CharmapParserRejectsMalformedDefinitions(t *testing.T) {
 	}
 }
 
+func TestIssue723EllipsisInsideSingletonSymbolIsNotARange(t *testing.T) {
+	table, err := parseCharmap(strings.NewReader("CHARMAP\n<dot...name> \\x41\nEND CHARMAP\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := table.bySymbol["<dot...name>"]; !bytes.Equal(got, []byte{'A'}) {
+		t.Fatalf("mapping=%x", got)
+	}
+}
+
 type terminalErrorReader struct{ done bool }
 
 func (r *terminalErrorReader) Read(p []byte) (int, error) {

@@ -246,14 +246,15 @@ func digitRun(s string, base, max int) int {
 }
 
 func expandCharmapSymbols(field string, escape byte) ([]string, error) {
-	parts := strings.Split(field, "...")
-	if len(parts) == 1 {
-		if !validCharmapSymbol(parts[0]) {
+	separator := strings.Index(field, ">...<")
+	if separator < 0 {
+		if !validCharmapSymbol(field) {
 			return nil, fmt.Errorf("invalid symbolic name %q", field)
 		}
-		return []string{normalizeCharmapSymbol(parts[0], escape)}, nil
+		return []string{normalizeCharmapSymbol(field, escape)}, nil
 	}
-	if len(parts) != 2 || !validCharmapSymbol(parts[0]) || !validCharmapSymbol(parts[1]) {
+	parts := []string{field[:separator+1], field[separator+4:]}
+	if strings.Contains(parts[1], ">...<") || !validCharmapSymbol(parts[0]) || !validCharmapSymbol(parts[1]) {
 		return nil, fmt.Errorf("invalid symbolic range %q", field)
 	}
 	aPart := normalizeCharmapSymbol(parts[0], escape)
