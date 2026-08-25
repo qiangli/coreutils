@@ -424,9 +424,6 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		if c.noClobber {
 			return // -n: silently skip; exit status unaffected
 		}
-		if c.update && !sourceNewer(sp, dp) {
-			return
-		}
 		// POSIX step 1 precedes step 3's prompt: a source that is the
 		// same file as the destination (or a destination directory that
 		// a non-directory cannot replace) is diagnosed without asking.
@@ -439,6 +436,11 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 				c.errf("cannot overwrite directory '%s' with non-directory", dst)
 				return
 			}
+		}
+		// GNU -u is an extension, but it must not suppress the required
+		// same-file or type diagnostics above.
+		if c.update && !sourceNewer(sp, dp) {
+			return
 		}
 		if c.interactive && !c.confirm(dst) {
 			// POSIX: a declined -i reply means "do nothing more with

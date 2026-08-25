@@ -249,8 +249,22 @@ func (m *mover) move(src, dst string) {
 		}
 	}
 	if _, err := os.Lstat(dp); err == nil {
-		if m.update && !sourceNewer(sp, dp) {
-			return
+		sameEntry := false
+		if si, e1 := os.Lstat(sp); e1 == nil {
+			if dsi, e2 := os.Lstat(dp); e2 == nil {
+				sameEntry = os.SameFile(si, dsi)
+			}
+		}
+		if m.update {
+			// GNU -u is an extension. It still diagnoses identical entries
+			// instead of silently treating them as an update skip.
+			if sameEntry {
+				m.errf("'%s' and '%s' are the same file", src, dst)
+				return
+			}
+			if !sourceNewer(sp, dp) {
+				return
+			}
 		}
 		if !m.force {
 			if m.interactive {
@@ -266,11 +280,12 @@ func (m *mover) move(src, dst string) {
 			}
 		}
 		// POSIX Issue 7 orders confirmation before same-file resolution.
-		if si, e1 := os.Stat(sp); e1 == nil {
-			if dsi, e2 := os.Stat(dp); e2 == nil && os.SameFile(si, dsi) {
-				m.errf("'%s' and '%s' are the same file", src, dst)
-				return
-			}
+		// mv operates on directory entries, including a symbolic link itself,
+		// so compare Lstat identities rather than the referents selected by Stat.
+		// Distinct symlinks to one referent are distinct source/destination files.
+		if sameEntry {
+			m.errf("'%s' and '%s' are the same file", src, dst)
+			return
 		}
 		if m.backup && !m.backupDest(dst) {
 			return

@@ -99,7 +99,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	// POSIX mode: Issue 7 requires an octal mode to be set absolutely,
 	// so the GNU keep-directory-setid rule is suppressed.
-	change.absolute = envPresent(rc.Env, "POSIXLY_CORRECT")
+	change.posix = envPresent(rc.Env, "POSIXLY_CORRECT")
 	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, noDereference, false, cmdLineH, followAll)
 }
 
@@ -182,11 +182,11 @@ type symOp struct {
 }
 
 type modeChange struct {
-	octal    bool
-	val      uint32
-	digits   int
-	absolute bool // POSIX mode: octal modes are set absolutely (no setid keep)
-	ops      []symOp
+	octal  bool
+	val    uint32
+	digits int
+	posix  bool // POSIXLY_CORRECT selects Issue 7 numeric and symbolic rules
+	ops    []symOp
 }
 
 // envPresent reports whether key is assigned in the invocation
@@ -301,8 +301,8 @@ func (mc *modeChange) apply(old uint32, isDir bool, um uint32) uint32 {
 		// GNU: a numeric mode of 4 or fewer digits leaves a directory's
 		// setuid/setgid bits alone (they can be set, not cleared).
 		// POSIX Issue 7 instead requires octal modes to be set
-		// absolutely; mc.absolute (POSIX mode, --reference) wins.
-		if isDir && mc.digits < 5 && !mc.absolute {
+		// absolutely; mc.posix suppresses that GNU extension.
+		if isDir && mc.digits < 5 && !mc.posix {
 			v |= old & 0o6000
 		}
 		return v
@@ -318,11 +318,14 @@ func (mc *modeChange) apply(old uint32, isDir bool, um uint32) uint32 {
 		case 'o':
 			perm = cur & 7
 		}
-		// POSIX Issue 7: X applies when the file is a directory or the
-		// "current (unmodified)" mode has an execute bit — the mode the
-		// file had before this chmod, not the in-progress value, so
-		// "a-x,a+X" on an executable file keeps it executable.
-		if so.condX && (isDir || old&0o111 != 0) {
+		// POSIX Issue 7 evaluates X against the mode before this chmod;
+		// GNU evaluates it against the in-progress mode after earlier clauses.
+		// Preserve GNU 9.11 behavior outside POSIX mode.
+		xMode := cur
+		if mc.posix {
+			xMode = old
+		}
+		if so.condX && (isDir || xMode&0o111 != 0) {
 			perm |= 1
 		}
 		who := so.who

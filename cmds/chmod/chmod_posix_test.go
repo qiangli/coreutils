@@ -53,8 +53,31 @@ func TestModeApplyXUsesOriginalUnmodifiedMode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parseMode(%q): %v", c.mode, err)
 		}
+		mc.posix = true
 		if got := mc.apply(c.old, c.isDir, 0); got != c.want {
 			t.Errorf("%q on %04o (dir=%v) = %04o, want %04o", c.mode, c.old, c.isDir, got, c.want)
+		}
+	}
+}
+
+// Outside POSIX mode, preserve GNU Coreutils 9.11's clause-by-clause X
+// behavior: X observes the in-progress mode after earlier symbolic clauses.
+func TestModeApplyXPreservesGNUBehaviorOutsidePOSIXMode(t *testing.T) {
+	cases := []struct {
+		mode string
+		old  uint32
+		want uint32
+	}{
+		{"a-x,a+X", 0o755, 0o644},
+		{"u+x,a+X", 0o644, 0o755},
+	}
+	for _, c := range cases {
+		mc, err := parseMode(c.mode)
+		if err != nil {
+			t.Fatalf("parseMode(%q): %v", c.mode, err)
+		}
+		if got := mc.apply(c.old, false, 0); got != c.want {
+			t.Errorf("GNU %q on %04o = %04o, want %04o", c.mode, c.old, got, c.want)
 		}
 	}
 }
@@ -104,7 +127,7 @@ func TestModeApplyPOSIXOctalAbsolute(t *testing.T) {
 	if got := mc.apply(0o2775, true, 0); got != 0o2755 {
 		t.Errorf("non-POSIX default: 755 on dir 02775 = %04o, want 02755", got)
 	}
-	mc.absolute = true
+	mc.posix = true
 	if got := mc.apply(0o2775, true, 0); got != 0o755 {
 		t.Errorf("POSIX absolute: 755 on dir 02775 = %04o, want 0755", got)
 	}

@@ -959,6 +959,41 @@ func TestMvSymlinkOperandMovesLinkItself(t *testing.T) {
 	}
 }
 
+// Distinct symbolic-link directory entries remain distinct even when they
+// resolve to one referent. mv replaces the destination link with the source
+// link; referent identity must not trigger the same-file diagnostic.
+func TestMvDistinctSymlinksToSameReferentAreNotSameFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "referent"), "stay")
+	for _, name := range []string{"source", "dest"} {
+		if err := os.Symlink("referent", filepath.Join(dir, name)); err != nil {
+			t.Skipf("symlinks are unavailable: %v", err)
+		}
+	}
+	_, errb, code := runTool(t, dir, "source", "dest")
+	if code != 0 || errb != "" {
+		t.Fatalf("mv distinct links to one referent: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "source")); !os.IsNotExist(err) {
+		t.Fatalf("source link still exists: %v", err)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "dest")); err != nil || target != "referent" {
+		t.Fatalf("destination is not the moved source link: target=%q err=%v", target, err)
+	}
+	if got := read(t, filepath.Join(dir, "referent")); got != "stay" {
+		t.Fatalf("referent changed: %q", got)
+	}
+}
+
+func TestMvUpdateDoesNotBypassSameFileDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "same"), "keep")
+	_, errb, code := runTool(t, dir, "-u", "same", "same")
+	if code != 1 || !strings.Contains(errb, "'same' and 'same' are the same file") {
+		t.Fatalf("mv -u same same: code=%d err=%q", code, errb)
+	}
+}
+
 func exdevDeps() moverDeps {
 	deps := defaultMoverDeps()
 	deps.rename = func(oldpath, newpath string) error {

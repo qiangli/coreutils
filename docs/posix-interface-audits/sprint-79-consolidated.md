@@ -4,7 +4,7 @@ This is the consolidated Sprint 79 status for the command interfaces selected
 by Profiles C and D.  The normative target is POSIX.1-2016 (Issue 7), not GNU
 Coreutils compatibility.  The report was initially synthesized at coreutils
 `c048634` and is now a living status view reconciled with accepted evidence
-closures.  Its inputs are the six accepted Go batch audits
+closures.  Its inputs are the six accepted inventory audits
 ([1](go-batch-1.md), [2](go-batch-2.md), [3](go-batch-3.md),
 [4](go-batch-4.md), [5](go-batch-5.md), [6](go-batch-6.md)), the accepted
 [shell-selected audit](shell-selected.md),
@@ -12,9 +12,9 @@ closures.  Its inputs are the six accepted Go batch audits
 generated [interface ledger](../posix-required-command-interfaces.tsv).
 
 The canonical ledger remains the authority: its 116 rows are 78 Go-owned, 22
-shell-owned, and 16 external-provider-owned.  After the first two Go closure
+shell-owned, and 16 external-provider-owned.  After the first three Go closure
 batches and the five-command shell semantic batch, its evidence states are
-**2 verified, 25 partial, and 89 unverified**.  An audit's “supportable pass”
+**2 verified, 35 partial, and 79 unverified**.  An audit's “supportable pass”
 finding does not become certification evidence until a stable command-specific
 test reference and a separate ledger promotion are accepted.
 
@@ -56,11 +56,11 @@ findings are independent.
 | High | `dd` | No required SIGINT status path, no XSI EBCDIC conversions, and default stderr adds a non-POSIX transfer line. |
 | High | `file` | Required `-d`, `-i`, and `-M` are absent; magic parsing is narrow; default symlink and required type-string behavior diverge. |
 | High | `at`, `batch` | Missing `-m`/mail and required scheduling forms; blank programs are rejected; `batch` is not equivalent to `at -q b -m now`. |
-| High | `chgrp`, `chown` | Recursive `-H`/`-L`, last-option-wins, and same-ID ownership effects are absent. |
-| High | `cp` | Declining `-i` reports failure and recursive directory creation loses the umask. |
+| High | `chgrp`, `chown` | Required traversal and same-ID effects are now implemented and evidenced; translated diagnostics, Windows runtime support, privileged/kernel-owned set-ID and ctime behavior remain residual. |
+| High | `cp` | Required same-file ordering, recursive umask handling, and `-p` set-ID behavior are fixed; locale catalogs, device-node runtime proof, selected error injection, and physical-symlink overwrite identity remain residual. |
 | High | `od` | Required `-t` grammar/order and XSI offset processing are incomplete. |
-| High | `mkfifo` | Symbolic modes with omitted `who` fail to apply the chmod-style umask rule. |
-| High | `mv` | Prompt/status behavior and cross-filesystem ownership, timestamps, modes, and special-file copying diverge. |
+| High | `mkfifo` | Omitted-`who` symbolic umask behavior is now evidenced; Windows runtime support, translated diagnostics, and filesystem-dependent special bits remain residual. |
+| High | `mv` | Same-entry/symlink identity, update ordering, prompt/status, empty-directory rename equivalence, and cross-filesystem attributes are substantially fixed; Windows directory replacement, locales, and privileged special-node proof remain residual. |
 | High | `newgrp` | Login environment and supplementary-group changes are incomplete; password prompt routing diverges. |
 | High | `sed` | Required BRE/back-reference and locale-sensitive address/range semantics remain incomplete. |
 | Medium | `date` | The XSI set-date operand `mmddhhmm[[cc]yy]` is absent. |

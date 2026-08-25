@@ -31,6 +31,21 @@ func TestCpInteractiveSameFileDiagnosesWithoutPrompt(t *testing.T) {
 	}
 }
 
+// The GNU -u extension must not bypass POSIX step 1. Even when -u would
+// otherwise skip an equal-or-newer destination, identical source and target
+// are diagnosed before update and interactive handling.
+func TestCpUpdateDoesNotBypassSameFileDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "x")
+	_, errb, code := runToolWithInput(t, dir, "n\n", "-iu", "a", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Fatalf("cp -iu a a: code=%d err=%q", code, errb)
+	}
+	if strings.Contains(errb, "overwrite") {
+		t.Fatalf("cp -iu prompted before same-file diagnostic: %q", errb)
+	}
+}
+
 // TestCpInteractiveDirDestDiagnosesWithoutPrompt: overwriting a
 // directory with a non-directory is diagnosed without consuming an -i
 // response (the open of step 3 can never succeed, and GNU diagnoses

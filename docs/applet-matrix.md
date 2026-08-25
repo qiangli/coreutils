@@ -59,13 +59,13 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 2 | 9 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 3 | 32 |
-| `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 3 | 26 |
+| `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 3 | 27 |
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 3 | 31 |
 | `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 10 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 14 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 14 |
-| `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 6 | 53 |
+| `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 6 | 54 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 2 | 23 |
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
@@ -126,7 +126,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 3 | 31 |
-| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 42 |
+| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 44 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
 | `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 50 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
