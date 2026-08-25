@@ -1,15 +1,18 @@
 package odcmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -19,15 +22,265 @@ func runOD(t *testing.T, dir, stdin string, args ...string) (string, string, int
 }
 
 func runODProfile(t *testing.T, profile platformProfile, dir, stdin string, args ...string) (string, string, int) {
+	return runODProfileEnv(t, profile, nil, dir, stdin, args...)
+}
+
+func runODProfileEnv(t *testing.T, profile platformProfile, env []string, dir, stdin string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code := runWithProfile(rc, args, profile)
 	return out.String(), errb.String(), code
+}
+
+func TestODCTypeLocaleRenderingAndPrecedence(t *testing.T) {
+	profile := runtimeProfile()
+	cases := []struct {
+		name  string
+		env   []string
+		input string
+		want  string
+	}{
+		{name: "default-posix", input: "\xc3\xa4", want: " 303 244\n"},
+		{name: "c", env: []string{"LC_CTYPE=C"}, input: "\xc3\xa4", want: " 303 244\n"},
+		{name: "posix", env: []string{"LC_CTYPE=POSIX"}, input: "\xc3\xa4", want: " 303 244\n"},
+		{name: "c-utf8", env: []string{"LC_CTYPE=C.UTF-8"}, input: "\xc3\xa4", want: "   ä  **\n"},
+		{name: "posix-utf8-alias", env: []string{"LC_CTYPE=POSIX.utf8"}, input: "\xc3\xa4", want: "   ä  **\n"},
+		{name: "german-utf8", env: []string{"LC_CTYPE=de_DE.UTF-8"}, input: "\xc3\xa4", want: "   ä  **\n"},
+		{name: "german-latin1", env: []string{"LC_CTYPE=de_DE.ISO-8859-1"}, input: "\xe4", want: "   \xe4\n"},
+		{name: "lc-all-wins", env: []string{"LANG=de_DE.UTF-8", "LC_CTYPE=de_DE.UTF-8", "LC_ALL=C"}, input: "\xc3\xa4", want: " 303 244\n"},
+		{name: "ctype-wins-lang", env: []string{"LANG=C", "LC_CTYPE=de_DE.UTF-8"}, input: "\xc3\xa4", want: "   ä  **\n"},
+		{name: "empty-lc-all-falls-through", env: []string{"LANG=C", "LC_CTYPE=de_DE.UTF-8", "LC_ALL="}, input: "\xc3\xa4", want: "   ä  **\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runODProfileEnv(t, profile, tc.env, t.TempDir(), tc.input, "-A", "n", "-t", "c")
+			if out != tc.want || errb != "" || code != 0 {
+				t.Fatalf("od locale -t c = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestODCTypeUTF8ContinuationAcrossOutputGroups(t *testing.T) {
+	out, errb, code := runODProfileEnv(t, runtimeProfile(), []string{"LC_CTYPE=C.UTF-8"}, t.TempDir(), "XäY", "-A", "n", "-t", "c", "-w", "2")
+	if want := "   X   ä\n  **   Y\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("od split UTF-8 character = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+
+	// A valid but non-printable multibyte character is one octal field per
+	// encoded byte; malformed UTF-8 likewise never becomes U+FFFD.
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{name: "non-printable", input: "\xc2\x85", want: " 302 205\n"},
+		{name: "malformed", input: "\xc3X", want: " 303   X\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runODProfileEnv(t, runtimeProfile(), []string{"LC_CTYPE=C.UTF-8"}, t.TempDir(), tc.input, "-A", "n", "-t", "c")
+			if out != tc.want || errb != "" || code != 0 {
+				t.Fatalf("od %s UTF-8 = (%q, %q, %d), want (%q, empty, 0)", tc.name, out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestODCTypeRequiredEscapesAndOctalFields(t *testing.T) {
+	input := []byte{0, '\\', '\a', '\b', '\f', '\n', '\r', '\t', '\v', 0x1b}
+	fields, continuation := renderCFields(input, nil, ctypeModel{encoding: ctypeASCII}, 0)
+	want := []string{"\\0", "\\", "\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v", "033"}
+	if !equalStrings(fields, want) || continuation != 0 {
+		t.Fatalf("C/POSIX -t c fields = (%q, %d), want (%q, 0)", fields, continuation, want)
+	}
+
+	fields, continuation = renderCFields([]byte{0x9f, 0xa0, 0xe4}, nil, ctypeModel{encoding: ctypeLatin1}, 0)
+	want = []string{"237", string([]byte{0xa0}), string([]byte{0xe4})}
+	if !equalStrings(fields, want) || continuation != 0 {
+		t.Fatalf("ISO-8859-1 -t c fields = (%q, %d), want (%q, 0)", fields, continuation, want)
+	}
+}
+
+type channelODWriter struct{ writes chan []byte }
+
+func (w channelODWriter) Write(p []byte) (int, error) {
+	copyOfP := append([]byte(nil), p...)
+	w.writes <- copyOfP
+	return len(p), nil
+}
+
+func TestODUTF8FullASCIIGroupDoesNotWaitForLookahead(t *testing.T) {
+	reader, writer := io.Pipe()
+	writes := make(chan []byte, 32)
+	done := make(chan error, 1)
+	o := options{
+		addrRadix: "n",
+		formats:   []dumpFormat{{kind: "c", size: 1}},
+		endian:    binary.LittleEndian,
+		limit:     -1,
+		width:     4,
+		ctype:     ctypeModel{encoding: ctypeUTF8},
+		radix:     '.',
+	}
+	go func() {
+		// A one-byte buffer exposes writeLine's progress before dump waits
+		// for the next input group. Production buffering is a separate
+		// output policy; this test pins that the decoder itself does not
+		// demand bytes beyond a complete ASCII suffix.
+		out := bufio.NewWriterSize(channelODWriter{writes: writes}, 1)
+		err := dump(reader, out, o)
+		_ = out.Flush()
+		done <- err
+	}()
+	if _, err := writer.Write([]byte("ABCD")); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []byte
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for len(got) < len("   A   B   C   D") {
+		select {
+		case p := <-writes:
+			got = append(got, p...)
+		case err := <-done:
+			t.Fatalf("dump returned before rendering the full group: %v", err)
+		case <-timer.C:
+			_ = writer.Close()
+			t.Fatal("od waited for bytes beyond a complete ASCII output group")
+		}
+	}
+	if string(got) != "   A   B   C   D" {
+		t.Fatalf("first streamed group = %q, want ASCII group", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("dump after pipe EOF: %v", err)
+	}
+}
+
+func TestODUTF8BoundaryLookaheadIsExact(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		block []byte
+		want  int
+	}{
+		{name: "empty", block: nil, want: 0},
+		{name: "ascii", block: []byte("ABCD"), want: 0},
+		{name: "complete-two-byte", block: []byte("Aä"), want: 0},
+		{name: "two-byte-lead", block: []byte{'A', 0xc3}, want: 1},
+		{name: "three-byte-lead", block: []byte{'A', 0xe2}, want: 2},
+		{name: "three-byte-prefix", block: []byte{'A', 0xe2, 0x82}, want: 1},
+		{name: "four-byte-lead", block: []byte{'A', 0xf0}, want: 3},
+		{name: "stray-continuation", block: []byte{'A', 0x80}, want: 0},
+		{name: "invalid-lead", block: []byte{'A', 0xff}, want: 0},
+		{name: "invalid-prefix", block: []byte{'A', 0xe0, 0x80}, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := missingUTF8SuffixBytes(tc.block); got != tc.want {
+				t.Fatalf("missingUTF8SuffixBytes(% x) = %d, want %d", tc.block, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestODLocaleCategoriesFailClosedOnlyWhenUsed(t *testing.T) {
+	profile := runtimeProfile()
+	opened := false
+	profile.openInput = func(string) (io.ReadCloser, error) {
+		opened = true
+		return io.NopCloser(strings.NewReader("data")), nil
+	}
+
+	_, errb, code := runODProfileEnv(t, profile, []string{"LC_CTYPE=fr_FR.UTF-8"}, t.TempDir(), "", "-A", "n", "-t", "c", "input")
+	if code != 1 || !strings.Contains(errb, `LC_CTYPE "fr_FR.UTF-8" is unavailable`) || opened {
+		t.Fatalf("unsupported LC_CTYPE = (stderr %q, code %d, opened %v), want fail before open", errb, code, opened)
+	}
+
+	opened = false
+	_, errb, code = runODProfileEnv(t, profile, []string{"LC_NUMERIC=fr_FR.UTF-8"}, t.TempDir(), "", "-A", "n", "-t", "fD", "input")
+	if code != 1 || !strings.Contains(errb, `LC_NUMERIC "fr_FR.UTF-8" is unavailable`) || opened {
+		t.Fatalf("unsupported LC_NUMERIC = (stderr %q, code %d, opened %v), want fail before open", errb, code, opened)
+	}
+
+	// An irrelevant category cannot reject an invocation which never uses it.
+	out, errb, code := runODProfileEnv(t, runtimeProfile(), []string{"LC_CTYPE=fr_FR.UTF-8", "LC_NUMERIC=fr_FR.UTF-8"}, t.TempDir(), "A", "-A", "n", "-t", "x1")
+	if out != " 41\n" || errb != "" || code != 0 {
+		t.Fatalf("irrelevant locale categories = (%q, %q, %d), want hex success", out, errb, code)
+	}
+}
+
+func TestODNumericLocaleAllFloatingTypesAndABIs(t *testing.T) {
+	float32OneAndHalf := []byte{0, 0, 0xc0, 0x3f}
+	float64OneAndHalf := []byte{0, 0, 0, 0, 0, 0, 0xf8, 0x3f}
+	x87OneAndHalf16 := []byte{0, 0, 0, 0, 0, 0, 0, 0xc0, 0xff, 0x3f, 0, 0, 0, 0, 0, 0}
+	x87OneAndHalf12 := x87OneAndHalf16[:12]
+	ieee128OneAndHalf := make([]byte, 16)
+	binary.LittleEndian.PutUint64(ieee128OneAndHalf[8:], uint64(0x3fff)<<48|uint64(1)<<47)
+	ibmOneAndHalf := make([]byte, 16)
+	binary.BigEndian.PutUint64(ibmOneAndHalf[:8], math.Float64bits(1.5))
+
+	tests := []struct {
+		name    string
+		profile platformProfile
+		format  string
+		data    []byte
+	}{
+		{name: "fF", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "fF", data: float32OneAndHalf},
+		{name: "f4", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "f4", data: float32OneAndHalf},
+		{name: "fD", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "fD", data: float64OneAndHalf},
+		{name: "f8", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "f8", data: float64OneAndHalf},
+		{name: "bare-f", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "f", data: float64OneAndHalf},
+		{name: "x87-16", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "fL", data: x87OneAndHalf16},
+		{name: "x87-explicit-16", profile: platformProfile{abi: abiFor("linux", "amd64"), endian: binary.LittleEndian}, format: "f16", data: x87OneAndHalf16},
+		{name: "x87-12", profile: platformProfile{abi: abiFor("linux", "386"), endian: binary.LittleEndian}, format: "fL", data: x87OneAndHalf12},
+		{name: "x87-explicit-12", profile: platformProfile{abi: abiFor("linux", "386"), endian: binary.LittleEndian}, format: "f12", data: x87OneAndHalf12},
+		{name: "ieee64-long-double", profile: platformProfile{abi: abiFor("windows", "amd64"), endian: binary.LittleEndian}, format: "fL", data: float64OneAndHalf},
+		{name: "ieee128", profile: platformProfile{abi: abiFor("linux", "arm64"), endian: binary.LittleEndian}, format: "fL", data: ieee128OneAndHalf},
+		{name: "ieee128-explicit", profile: platformProfile{abi: abiFor("linux", "arm64"), endian: binary.LittleEndian}, format: "f16", data: ieee128OneAndHalf},
+		{name: "ibm-double-double", profile: platformProfile{abi: abiFor("linux", "ppc64"), endian: binary.BigEndian}, format: "fL", data: ibmOneAndHalf},
+		{name: "ibm-double-double-explicit", profile: platformProfile{abi: abiFor("linux", "ppc64"), endian: binary.BigEndian}, format: "f16", data: ibmOneAndHalf},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.profile.openInput = runtimeProfile().openInput
+			out, errb, code := runODProfileEnv(t, tc.profile, []string{"LC_NUMERIC=de_DE.UTF-8"}, t.TempDir(), string(tc.data), "-A", "n", "-t", tc.format)
+			if out != " 1,5\n" || errb != "" || code != 0 {
+				t.Fatalf("od %s German radix = (%q, %q, %d), want (1,5, empty, 0)", tc.format, out, errb, code)
+			}
+		})
+	}
+}
+
+func TestODNumericLocalePrecedenceAndScientificRadix(t *testing.T) {
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint64(data, math.Float64bits(1.25e20))
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{name: "numeric", env: []string{"LC_NUMERIC=de_DE.ISO-8859-1"}, want: " 1,25e+20\n"},
+		{name: "lang", env: []string{"LANG=de_DE.UTF-8"}, want: " 1,25e+20\n"},
+		{name: "lc-all-comma", env: []string{"LANG=C", "LC_NUMERIC=C", "LC_ALL=de_DE.UTF-8"}, want: " 1,25e+20\n"},
+		{name: "lc-all-posix", env: []string{"LANG=de_DE.UTF-8", "LC_NUMERIC=de_DE.UTF-8", "LC_ALL=POSIX"}, want: " 1.25e+20\n"},
+		{name: "empty-lc-all", env: []string{"LANG=C", "LC_NUMERIC=de_DE.UTF-8", "LC_ALL="}, want: " 1,25e+20\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := runtimeProfile()
+			profile.abi, profile.endian = abiFor("linux", "amd64"), binary.LittleEndian
+			out, errb, code := runODProfileEnv(t, profile, tc.env, t.TempDir(), string(data), "-A", "n", "-t", "fD")
+			if out != tc.want || errb != "" || code != 0 {
+				t.Fatalf("od numeric precedence = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, tc.want)
+			}
+		})
+	}
 }
 
 func TestODDefaultOctalWords(t *testing.T) {

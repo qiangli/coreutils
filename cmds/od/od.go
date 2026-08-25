@@ -16,7 +16,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -40,7 +43,22 @@ type options struct {
 	skip      int64
 	width     int
 	showAll   bool
+	ctype     ctypeModel
+	radix     byte
 }
+
+type ctypeEncoding uint8
+
+const (
+	ctypeASCII ctypeEncoding = iota
+	ctypeLatin1
+	ctypeUTF8
+)
+
+// ctypeModel is the bounded, invocation-owned LC_CTYPE model used only by
+// the character output type. It deliberately carries no process-global
+// locale state.
+type ctypeModel struct{ encoding ctypeEncoding }
 
 type dumpFormat struct {
 	kind     string
@@ -249,7 +267,6 @@ func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
-
 	limit := int64(-1)
 	if *limitText != "" {
 		n, err := parseBytes(*limitText)
@@ -287,12 +304,26 @@ func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile)
 			minString = n
 		}
 	}
-	o := options{addrRadix: *addrRadix, formats: parsedFormats, endian: byteOrder, strings: minString, limit: limit, skip: skip, width: *width, showAll: *showAll}
+	o := options{addrRadix: *addrRadix, formats: parsedFormats, endian: byteOrder, strings: minString, limit: limit, skip: skip, width: *width, showAll: *showAll, radix: '.'}
 	if o.addrRadix != "d" && o.addrRadix != "o" && o.addrRadix != "x" && o.addrRadix != "n" {
 		return tool.UsageError(rc, cmd, "invalid address radix: %q", o.addrRadix)
 	}
 	if o.width <= 0 {
 		return tool.UsageError(rc, cmd, "invalid output width: %d", o.width)
+	}
+	if formatsContain(parsedFormats, "c") {
+		o.ctype, err = resolveCType(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "od: %v\n", err)
+			return 1
+		}
+	}
+	if formatsContainFloat(parsedFormats) {
+		o.radix, err = resolveNumericRadix(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "od: %v\n", err)
+			return 1
+		}
 	}
 
 	r, closers, exit := openInputs(rc, operands, profile.openInput)
@@ -456,16 +487,32 @@ func dump(r io.Reader, w *bufio.Writer, o options) error {
 	if o.strings > 0 {
 		return dumpStrings(r, w, o)
 	}
+	buffered := bufio.NewReader(r)
 	block := make([]byte, o.width)
 	prev := make([]byte, 0, o.width)
+	var prevCFields []string
+	continuation := 0
 	offset := o.skip
 	suppressing := false
 	for {
-		n, err := io.ReadFull(r, block)
+		n, err := io.ReadFull(buffered, block)
 		if n > 0 {
+			var cFields []string
+			if formatsContain(o.formats, "c") {
+				var lookahead []byte
+				if o.ctype.encoding == ctypeUTF8 {
+					// Only an incomplete UTF-8 prefix at the group boundary
+					// needs lookahead. In particular, a full ASCII group must
+					// be rendered immediately rather than waiting for three
+					// future bytes from a FIFO or interactive stream.
+					lookahead = peekUTF8Continuation(buffered, block[:n])
+				}
+				cFields, continuation = renderCFields(block[:n], lookahead, o.ctype, continuation)
+			}
 			// GNU default: consecutive identical lines are elided and
 			// marked with a single "*"; -v outputs them all.
-			if !o.showAll && n == o.width && len(prev) == o.width && bytes.Equal(block[:n], prev) {
+			sameCFields := o.ctype.encoding != ctypeUTF8 || equalStrings(cFields, prevCFields)
+			if !o.showAll && n == o.width && len(prev) == o.width && bytes.Equal(block[:n], prev) && sameCFields {
 				if !suppressing {
 					if _, werr := w.WriteString("*\n"); werr != nil {
 						return werr
@@ -475,7 +522,8 @@ func dump(r io.Reader, w *bufio.Writer, o options) error {
 			} else {
 				suppressing = false
 				prev = append(prev[:0], block[:n]...)
-				if werr := writeLine(w, offset, block[:n], o); werr != nil {
+				prevCFields = append(prevCFields[:0], cFields...)
+				if werr := writeLine(w, offset, block[:n], cFields, o); werr != nil {
 					return werr
 				}
 			}
@@ -495,7 +543,7 @@ func dump(r io.Reader, w *bufio.Writer, o options) error {
 	return nil
 }
 
-func writeLine(w *bufio.Writer, offset int64, b []byte, o options) error {
+func writeLine(w *bufio.Writer, offset int64, b []byte, cFields []string, o options) error {
 	for i, format := range o.formats {
 		if o.addrRadix != "n" {
 			prefix := formatOffset(offset, o.addrRadix)
@@ -506,7 +554,7 @@ func writeLine(w *bufio.Writer, offset int64, b []byte, o options) error {
 				return err
 			}
 		}
-		if err := writeFormat(w, b, format, o.endian); err != nil {
+		if err := writeFormat(w, b, cFields, format, o.endian, o.radix); err != nil {
 			return err
 		}
 		if _, err := w.WriteString("\n"); err != nil {
@@ -516,7 +564,7 @@ func writeLine(w *bufio.Writer, offset int64, b []byte, o options) error {
 	return nil
 }
 
-func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.ByteOrder) error {
+func writeFormat(w *bufio.Writer, b []byte, cFields []string, format dumpFormat, order binary.ByteOrder, radix byte) error {
 	switch format.kind {
 	case "x1":
 		for _, c := range b {
@@ -560,17 +608,19 @@ func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.Byte
 		writeInts(w, b, 8, false, 10, order)
 	case "f4":
 		for _, v := range words(b, 4, order) {
-			fmt.Fprintf(w, " %.7g", math.Float32frombits(uint32(v)))
+			fmt.Fprintf(w, " %s", localizeRadix(fmt.Sprintf("%.7g", math.Float32frombits(uint32(v))), radix))
 		}
 	case "f8":
 		for _, v := range words(b, 8, order) {
-			fmt.Fprintf(w, " %.14g", math.Float64frombits(v))
+			fmt.Fprintf(w, " %s", localizeRadix(fmt.Sprintf("%.14g", math.Float64frombits(v)), radix))
 		}
 	case "f12", "f16":
-		return writeLongDoubles(w, b, format, order)
+		return writeLongDoubles(w, b, format, order, radix)
 	case "c":
-		for _, c := range b {
-			fmt.Fprintf(w, " %3s", cChar(c))
+		for _, field := range cFields {
+			if err := writeCField(w, field); err != nil {
+				return err
+			}
 		}
 	case "a":
 		for _, c := range b {
@@ -580,7 +630,24 @@ func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.Byte
 	return nil
 }
 
-func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.ByteOrder) error {
+// writeCField pads by character count while writing field's original bytes
+// verbatim. fmt's string precision repairs malformed UTF-8, which would
+// silently transcode a printable ISO-8859-1 byte into UTF-8.
+func writeCField(w io.Writer, field string) error {
+	width := utf8.RuneCountInString(field)
+	padding := 3 - width
+	if padding < 0 {
+		padding = 0
+	}
+	text := strings.Repeat(" ", 1+padding) + field
+	n, err := io.WriteString(w, text)
+	if err == nil && n != len(text) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.ByteOrder, radix byte) error {
 	for i := 0; i < len(b); i += format.size {
 		item := make([]byte, format.size)
 		copy(item, b[i:min(i+format.size, len(b))])
@@ -595,11 +662,232 @@ func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.Byt
 		default:
 			return fmt.Errorf("unsupported %d-byte long double representation", format.size)
 		}
-		if _, err := fmt.Fprintf(w, " %s", value.text(longDoubleDigits(format.floatEnc))); err != nil {
+		text := localizeRadix(value.text(longDoubleDigits(format.floatEnc)), radix)
+		if _, err := fmt.Fprintf(w, " %s", text); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func formatsContain(formats []dumpFormat, kind string) bool {
+	for _, format := range formats {
+		if format.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func formatsContainFloat(formats []dumpFormat) bool {
+	for _, format := range formats {
+		if format.floatEnc != floatNone {
+			return true
+		}
+	}
+	return false
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// missingUTF8SuffixBytes reports how many continuation bytes are required to
+// decide the only character that can cross an output-group boundary. A
+// complete rune, ASCII suffix, stray continuation byte, or already-invalid
+// sequence requires no lookahead. The result is bounded by UTFMax-1.
+func missingUTF8SuffixBytes(block []byte) int {
+	prefix, want := incompleteUTF8Suffix(block)
+	if prefix == nil {
+		return 0
+	}
+	return want - len(prefix)
+}
+
+func incompleteUTF8Suffix(block []byte) ([]byte, int) {
+	if len(block) == 0 {
+		return nil, 0
+	}
+	start := len(block) - 1
+	for start > 0 && len(block)-start < utf8.UTFMax && block[start]&0xc0 == 0x80 {
+		start--
+	}
+	prefix := block[start:]
+	if utf8.FullRune(prefix) {
+		return nil, 0
+	}
+	want := 0
+	switch first := prefix[0]; {
+	case first >= 0xc2 && first <= 0xdf:
+		want = 2
+	case first >= 0xe0 && first <= 0xef:
+		want = 3
+	case first >= 0xf0 && first <= 0xf4:
+		want = 4
+	default:
+		return nil, 0
+	}
+	for _, c := range prefix[1:] {
+		if c&0xc0 != 0x80 {
+			return nil, 0
+		}
+	}
+	if len(prefix) >= want {
+		return nil, 0
+	}
+	return prefix, want
+}
+
+// peekUTF8Continuation obtains one byte at a time and stops as soon as the
+// boundary sequence is decidable. If the first byte after a lead makes that
+// lead invalid, od does not wait for the rest of its nominal width.
+func peekUTF8Continuation(r *bufio.Reader, block []byte) []byte {
+	prefix, want := incompleteUTF8Suffix(block)
+	if prefix == nil {
+		return nil
+	}
+	need := want - len(prefix)
+	var peeked []byte
+	for n := 1; n <= need; n++ {
+		p, err := r.Peek(n)
+		peeked = p
+		candidate := append(append([]byte(nil), prefix...), p...)
+		if utf8.FullRune(candidate) || err != nil {
+			break
+		}
+	}
+	return peeked
+}
+
+func resolveCType(env []string) (ctypeModel, error) {
+	name := locale.Resolve(env, locale.CType)
+	base, codeset := splitLocale(name)
+	switch {
+	case (base == "C" || base == "POSIX") && codeset == "":
+		return ctypeModel{encoding: ctypeASCII}, nil
+	case (base == "C" || base == "POSIX" || strings.EqualFold(base, "de_DE")) && normalizeCodeset(codeset) == "UTF8":
+		return ctypeModel{encoding: ctypeUTF8}, nil
+	case strings.EqualFold(base, "de_DE") && normalizeCodeset(codeset) == "ISO88591":
+		return ctypeModel{encoding: ctypeLatin1}, nil
+	default:
+		return ctypeModel{}, fmt.Errorf("LC_CTYPE %q is unavailable; supported locales are C/POSIX, their UTF-8 aliases, de_DE.UTF-8, and de_DE.ISO-8859-1", name)
+	}
+}
+
+func resolveNumericRadix(env []string) (byte, error) {
+	name := locale.Resolve(env, locale.Numeric)
+	base, codeset := splitLocale(name)
+	switch {
+	case (base == "C" || base == "POSIX") && (codeset == "" || normalizeCodeset(codeset) == "UTF8"):
+		return '.', nil
+	case strings.EqualFold(base, "de_DE"):
+		switch normalizeCodeset(codeset) {
+		case "", "UTF8", "ISO88591", "ISO885915":
+			return ',', nil
+		}
+	}
+	return 0, fmt.Errorf("LC_NUMERIC %q is unavailable; supported locales are C/POSIX and de_DE", name)
+}
+
+func splitLocale(name string) (base, codeset string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ = strings.Cut(name, ".")
+	return base, codeset
+}
+
+func normalizeCodeset(name string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+}
+
+func localizeRadix(text string, radix byte) string {
+	if radix == '.' {
+		return text
+	}
+	return strings.Replace(text, ".", string(radix), 1)
+}
+
+// renderCFields returns exactly one display field for each input byte. For a
+// printable multibyte character the character occupies its first byte's
+// field and ** occupies every continuation-byte field, as Issue 7 requires.
+// continuation is the number of leading bytes in this group already owned by
+// a printable character that began in the preceding group.
+func renderCFields(block, lookahead []byte, model ctypeModel, continuation int) ([]string, int) {
+	fields := make([]string, len(block))
+	i := 0
+	for i < len(block) && continuation > 0 {
+		fields[i] = "**"
+		i++
+		continuation--
+	}
+	for i < len(block) {
+		if model.encoding != ctypeUTF8 {
+			fields[i] = cCharSingleByte(block[i], model.encoding)
+			i++
+			continue
+		}
+
+		available := append(append([]byte(nil), block[i:]...), lookahead...)
+		r, size := utf8.DecodeRune(available)
+		if r == utf8.RuneError && size == 1 {
+			fields[i] = fmt.Sprintf("%03o", block[i])
+			i++
+			continue
+		}
+		if size == 1 {
+			fields[i] = cCharSingleByte(block[i], ctypeASCII)
+			i++
+			continue
+		}
+		if !unicode.IsPrint(r) {
+			for j := 0; j < size && i+j < len(block); j++ {
+				fields[i+j] = fmt.Sprintf("%03o", block[i+j])
+			}
+			i += min(size, len(block)-i)
+			continue
+		}
+
+		fields[i] = string(available[:size])
+		inside := min(size, len(block)-i)
+		for j := 1; j < inside; j++ {
+			fields[i+j] = "**"
+		}
+		continuation = size - inside
+		i += inside
+	}
+	return fields, continuation
+}
+
+func cCharSingleByte(c byte, encoding ctypeEncoding) string {
+	switch c {
+	case 0:
+		return "\\0"
+	case '\a':
+		return "\\a"
+	case '\b':
+		return "\\b"
+	case '\t':
+		return "\\t"
+	case '\n':
+		return "\\n"
+	case '\v':
+		return "\\v"
+	case '\f':
+		return "\\f"
+	case '\r':
+		return "\\r"
+	}
+	if c >= 32 && c <= 126 || encoding == ctypeLatin1 && c >= 0xa0 {
+		return string([]byte{c})
+	}
+	return fmt.Sprintf("%03o", c)
 }
 
 // GNU od renders each long-double representation with enough significant
@@ -1123,34 +1411,6 @@ func parseTraditionalOffset(s string) (int64, error) {
 		return 0, strconv.ErrRange
 	}
 	return n * mult, nil
-}
-
-// cChar renders one byte for -t c: printable bytes as themselves
-// (space stays a blank), the C backslash escapes, 3-digit octal for
-// the rest.
-func cChar(c byte) string {
-	switch c {
-	case 0:
-		return "\\0"
-	case '\a':
-		return "\\a"
-	case '\b':
-		return "\\b"
-	case '\t':
-		return "\\t"
-	case '\n':
-		return "\\n"
-	case '\v':
-		return "\\v"
-	case '\f':
-		return "\\f"
-	case '\r':
-		return "\\r"
-	}
-	if c >= 32 && c <= 126 {
-		return string(c)
-	}
-	return fmt.Sprintf("%03o", c)
 }
 
 // asciiNames are the -t a named characters for bytes 0-32 (POSIX od).
