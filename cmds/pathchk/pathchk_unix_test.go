@@ -34,3 +34,23 @@ func TestPathchkRejectsDanglingSymlinkPrefix(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, errText)
 	}
 }
+
+func TestPathchkPreservesSymlinkBeforeDotDotResolution(t *testing.T) {
+	dir := t.TempDir()
+	for _, path := range []string{"a", "b", "b/c"} {
+		if err := os.Mkdir(filepath.Join(dir, path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b", "only"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../b/c", filepath.Join(dir, "a", "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	code, errText := runPathchk(t, dir, "a/link/../only/child")
+	if code != 1 || !strings.Contains(errText, "not a directory") {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+}

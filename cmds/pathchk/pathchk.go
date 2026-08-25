@@ -86,7 +86,7 @@ func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
 			continue
 		}
 		if !missing {
-			if _, searchErr := os.Stat(filepath.Join(current, ".")); searchErr != nil {
+			if _, searchErr := os.Stat(rawPathJoin(current, ".")); searchErr != nil {
 				fmt.Fprintf(rc.Err, "pathchk: %q: directory is not searchable at %q\n", p, current)
 				return false
 			}
@@ -98,7 +98,7 @@ func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
 		if missing {
 			continue
 		}
-		candidate := filepath.Join(current, c)
+		candidate := rawPathJoin(current, c)
 		st, lstatErr := os.Lstat(candidate)
 		if os.IsNotExist(lstatErr) {
 			missing = true
@@ -133,6 +133,16 @@ func checkDefaultWith(rc *tool.RunContext, p string, limits limitLookup) bool {
 		}
 	}
 	return true
+}
+
+// rawPathJoin appends one component without filepath.Join's lexical Clean.
+// Cleaning is incorrect for pathname validation: `symlink/..` must follow the
+// symlink before resolving `..`, exactly as the kernel pathname walk does.
+func rawPathJoin(dir, component string) string {
+	if strings.HasSuffix(dir, string(filepath.Separator)) {
+		return dir + component
+	}
+	return dir + string(filepath.Separator) + component
 }
 
 func pathParts(rc *tool.RunContext, p string) (base string, components []string, trailing bool) {
