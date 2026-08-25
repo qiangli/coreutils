@@ -30,14 +30,16 @@ type options struct {
 	pids, pgids, gids, eusers, rusers           map[int]bool
 	ttys                                        map[string]bool
 	format                                      []column
+	invokerUID                                  int
+	invokerTTY                                  string
 }
 
 type process struct {
-	pid, ppid, pgid, sid, uid, gid, nice int
-	command, args, tty                   string
-	start                                time.Time
-	cpu                                  time.Duration
-	vsz                                  uint64
+	pid, ppid, pgid, sid, ruid, euid, rgid, egid, nice int
+	command, args, tty                                 string
+	start                                              time.Time
+	cpu                                                time.Duration
+	vsz                                                uint64
 }
 
 type column struct {
@@ -69,11 +71,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) != 0 {
 		return usage(rc, "unexpected operand "+strconv.Quote(operands[0]))
 	}
-	if fs.Changed("name-list") {
-		return usage(rc, "option -n is not supported on this platform-independent implementation")
-	}
-
-	o := options{all: *allA || *alle, withTerminals: *alla, descendants: *desc, full: *full, long: *long}
+	// -n supplies an alternate kernel name list. The proc-backed enumerator
+	// needs no namelist, so accepting it as a no-op has the required observable
+	// behavior on systems where process data is available without one.
+	o := options{all: *allA || *alle, withTerminals: *alla, descendants: *desc, full: *full, long: *long,
+		invokerUID: currentUID(), invokerTTY: currentTTY()}
 	var err error
 	if o.pids, err = numberSet(*pids, nil); err != nil {
 		return usage(rc, err.Error())
@@ -103,7 +105,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	procs := make([]process, 0, len(base))
 	for _, p := range base {
-		q := process{pid: p.PID(), ppid: p.PPID(), uid: p.UID(), gid: p.GID(), command: p.Command(), start: p.CreationTime()}
+		q := process{pid: p.PID(), ppid: p.PPID(), ruid: p.UID(), euid: p.UID(), rgid: p.GID(), egid: p.GID(), command: p.Command(), start: p.CreationTime()}
 		q.args = strings.Join(p.ExecutableArgs(), " ")
 		if q.args == "" {
 			q.args = q.command
@@ -114,29 +116,37 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	sort.Slice(procs, func(i, j int) bool { return procs[i].pid < procs[j].pid })
-	printTable(rc, procs, o.format)
+	if err := printTable(rc, procs, o.format); err != nil {
+		fmt.Fprintf(rc.Err, "ps: write error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
 func selected(p process, o options) bool {
-	explicit := len(o.pids)+len(o.pgids)+len(o.gids)+len(o.eusers)+len(o.rusers)+len(o.ttys) > 0
-	match := o.pids[p.pid] || o.pgids[p.pgid] || o.gids[p.gid] || o.eusers[p.uid] || o.rusers[p.uid] || o.ttys[cleanTTY(p.tty)]
-	if explicit {
-		return match
-	}
+	explicit := o.all || o.withTerminals || o.descendants ||
+		len(o.pids)+len(o.pgids)+len(o.gids)+len(o.eusers)+len(o.rusers)+len(o.ttys) > 0
 	if o.all {
 		return true
 	}
-	if o.descendants {
-		return p.pid != p.sid
+	if o.withTerminals && p.pid != p.sid && p.tty != "" && p.tty != "?" {
+		return true
 	}
-	if o.withTerminals {
-		return p.tty != "" && p.tty != "?"
+	if o.descendants && p.pid != p.sid {
+		return true
 	}
-	// Portable and useful default: processes owned by the invoking effective
-	// user. Platforms that expose a controlling terminal further narrow this.
-	uid := currentUID()
-	return uid < 0 || p.uid == uid
+	if o.pids[p.pid] || o.pgids[p.pgid] || o.gids[p.rgid] || o.eusers[p.euid] ||
+		o.rusers[p.ruid] || o.ttys[cleanTTY(p.tty)] {
+		return true
+	}
+	if explicit {
+		return false
+	}
+	// With no selection option, POSIX selects processes with the same effective
+	// user and terminal as the invoker. A missing controlling terminal is a
+	// terminal identity too, so two "?" processes compare equal here.
+	return (o.invokerUID < 0 || p.euid == o.invokerUID) &&
+		cleanTTY(p.tty) == cleanTTY(o.invokerTTY)
 }
 
 func parseFormat(specs []string, o options) ([]column, error) {
@@ -182,7 +192,7 @@ func defaultHeader(s string) string {
 	return m[s]
 }
 
-func printTable(rc *tool.RunContext, ps []process, cols []column) {
+func printTable(rc *tool.RunContext, ps []process, cols []column) error {
 	w := tabwriter.NewWriter(rc.Out, 0, 1, 1, ' ', tabwriter.AlignRight)
 	showHeader := false
 	for _, c := range cols {
@@ -213,7 +223,7 @@ func printTable(rc *tool.RunContext, ps []process, cols []column) {
 		}
 		fmt.Fprintln(w)
 	}
-	_ = w.Flush()
+	return w.Flush()
 }
 
 func value(p process, name string) string {
@@ -223,13 +233,19 @@ func value(p process, name string) string {
 	case "s":
 		return "?"
 	case "uid":
-		return strconv.Itoa(p.uid)
+		return strconv.Itoa(p.euid)
 	case "gid":
-		return strconv.Itoa(p.gid)
+		return strconv.Itoa(p.egid)
 	case "user", "ruser":
-		return userName(p.uid)
+		if name == "ruser" {
+			return userName(p.ruid)
+		}
+		return userName(p.euid)
 	case "group", "rgroup":
-		return groupName(p.gid)
+		if name == "rgroup" {
+			return groupName(p.rgid)
+		}
+		return groupName(p.egid)
 	case "pid":
 		return strconv.Itoa(p.pid)
 	case "ppid":

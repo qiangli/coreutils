@@ -34,6 +34,19 @@ func enrich(p *process) {
 	p.cpu = time.Duration((ut + st) * int64(time.Second) / clockTicks())
 	p.nice, _ = strconv.Atoi(f[16])
 	p.vsz, _ = strconv.ParseUint(f[20], 10, 64)
+	if status, err := os.ReadFile("/proc/" + strconv.Itoa(p.pid) + "/status"); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			fields := strings.Fields(line)
+			switch {
+			case len(fields) >= 3 && fields[0] == "Uid:":
+				p.ruid, _ = strconv.Atoi(fields[1])
+				p.euid, _ = strconv.Atoi(fields[2])
+			case len(fields) >= 3 && fields[0] == "Gid:":
+				p.rgid, _ = strconv.Atoi(fields[1])
+				p.egid, _ = strconv.Atoi(fields[2])
+			}
+		}
+	}
 }
 
 func ttyName(dev uint64) string {
@@ -46,3 +59,8 @@ func ttyName(dev uint64) string {
 }
 func clockTicks() int64 { return 100 }
 func currentUID() int   { return os.Geteuid() }
+func currentTTY() string {
+	p := process{pid: os.Getpid()}
+	enrich(&p)
+	return p.tty
+}
