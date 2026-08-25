@@ -120,8 +120,9 @@ integration tests from the sibling Bashy repository as
 excluded because the AgentOS front door is not Profile D's `sh` route.  The
 routing lane is legal only when `effective_owner=shell`; a verified shell row
 must have valid references in both lanes.  Neither lane may stand in for the
-other.  The new routing cells deliberately remain `-` until those stable tests
-actually exist.
+other.  All 22 routing cells now name the command-specific tests accepted in
+Bashy commit `d851773`; this closes only the selection proof, so semantic
+evidence and evidence states remain unchanged.
 
 **`sh` entrypoint reconciliation.**  The canonical interface ledger now records
 `sh` with `parser_model = shell_entrypoint` (commit `fe6f45d`), rather than the

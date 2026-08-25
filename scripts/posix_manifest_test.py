@@ -194,11 +194,31 @@ class ManifestValidationTest(unittest.TestCase):
             "evidence crossed implementation lanes",
         )
 
-    def test_shell_routing_lane_is_present_but_not_fabricated(self) -> None:
+    def test_shell_routing_lane_names_every_accepted_profile_b_route(self) -> None:
         self.assertIn("shell_routing_evidence", manifest.FIELDS)
+        route_tests = {
+            "alias": "Alias", "bg": "Bg", "cd": "Cd", "command": "Command",
+            "echo": "Echo", "false": "False", "fc": "Fc", "fg": "Fg",
+            "getopts": "Getopts", "hash": "Hash", "jobs": "Jobs", "kill": "Kill",
+            "printf": "Printf", "pwd": "Pwd", "read": "Read", "sh": "Sh",
+            "test": "Test", "time": "Time", "true": "True", "umask": "Umask",
+            "unalias": "Unalias", "wait": "Wait",
+        }
+        expected = {
+            command: (
+                "bashy:internal/cli/profile_b_routing_test.go"
+                f"#TestProfileBRoute{suffix}"
+            )
+            for command, suffix in route_tests.items()
+        }
+        actual = {
+            row["command"]: row["shell_routing_evidence"]
+            for row in self.rows if row["shell_routing_evidence"] != "-"
+        }
+        self.assertEqual(actual, expected)
         self.assertEqual(
-            {row["shell_routing_evidence"] for row in self.rows},
-            {"-"},
+            {row["command"] for row in self.rows if row["effective_owner"] == "shell"},
+            set(expected),
         )
 
     def test_shell_routing_evidence_is_shell_owner_only(self) -> None:
@@ -291,10 +311,13 @@ class ManifestValidationTest(unittest.TestCase):
     def test_verified_shell_row_requires_both_semantic_and_routing_lanes(self) -> None:
         semantic = "sh:interp/posix_true_test.go#TestTrueIssue7Interface"
         routing = (
-            "bashy:internal/cli/posix_routing_test.go#TestTrueShellRouting"
+            "bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTrue"
         )
         changes = self.completed_semantics("true")
-        changes.update(evidence_state="verified", shell_evidence=semantic)
+        changes.update(
+            evidence_state="verified", shell_evidence=semantic,
+            shell_routing_evidence="-",
+        )
         with mock.patch.object(manifest, "_shell_evidence_ref", return_value=True):
             self.assertRejected(
                 self.changed("true", **changes),
