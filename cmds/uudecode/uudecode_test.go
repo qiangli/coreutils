@@ -3,6 +3,7 @@ package uudecodecmd
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -139,6 +140,9 @@ func TestDecodeOutputLifecycleAndMode(t *testing.T) {
 	if code == 0 || errb == "" {
 		t.Fatalf("malformed input: err=%q code=%d", errb, code)
 	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
+		t.Fatalf("malformed decode changed target: %q, %v", got, err)
+	}
 
 	_, errb, code = runTool(t, dir, "begin-base64 777 out\nRG9uZQ==\n====\n")
 	if code != 0 || errb != "" {
@@ -224,6 +228,32 @@ func TestOverwriteExistingRegularPreservesHardlink(t *testing.T) {
 	}
 	if got, err := os.ReadFile(alias); err != nil || string(got) != "Done" {
 		t.Fatalf("hardlink content=%q err=%v", got, err)
+	}
+}
+
+func TestInputFileCanAlsoBeDecodedOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "archive.uue")
+	payload := bytes.Repeat([]byte("same input and output\n"), 512)
+	var encoded strings.Builder
+	encoded.WriteString("begin-base64 600 archive.uue\n")
+	for remaining := payload; len(remaining) > 0; {
+		n := min(57, len(remaining))
+		encoded.WriteString(base64.StdEncoding.EncodeToString(remaining[:n]))
+		encoded.WriteByte('\n')
+		remaining = remaining[n:]
+	}
+	encoded.WriteString("====\n")
+	if err := os.WriteFile(path, []byte(encoded.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "", "archive.uue")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("decoded output length=%d err=%v; want length=%d", len(got), err, len(payload))
 	}
 }
 

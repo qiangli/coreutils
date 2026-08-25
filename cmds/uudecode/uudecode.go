@@ -203,13 +203,34 @@ func decodeExistingRegular(path string, mode os.FileMode, decode func(io.Writer)
 			_ = file.Close()
 		}
 	}()
+	// Decode before truncating the destination. In addition to leaving a valid
+	// existing file intact on malformed input, this is required when an input
+	// operand names the same file as the decoded output: the reader must be able
+	// to consume the complete encoded stream before that file is overwritten.
+	// Use the system temporary directory because POSIX only requires write
+	// permission on an existing output file, not on its parent directory.
+	staged, err := os.CreateTemp("", "uudecode-*")
+	if err != nil {
+		return nil, err
+	}
+	stagedName := staged.Name()
+	defer func() {
+		_ = staged.Close()
+		_ = os.Remove(stagedName)
+	}()
+	if err := decode(staged); err != nil {
+		return nil, err
+	}
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
 	if err := file.Truncate(0); err != nil {
 		return nil, err
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	if err := decode(file); err != nil {
+	if _, err := io.Copy(file, staged); err != nil {
 		return nil, err
 	}
 	chmodErr = chmodDecodedFile(file, mode.Perm())
