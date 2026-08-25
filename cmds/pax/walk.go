@@ -155,9 +155,8 @@ func (w *walker) walk(member, abs string, fi os.FileInfo, followed bool) error {
 			fmt.Fprintf(w.rc.Err, "pax: %s: cannot determine source access time on this platform\n", member)
 			w.diagnosed = true
 		} else {
-			mtime := fi.ModTime()
 			defer func() {
-				if err := restoreSourceTimesFn(abs, atime, mtime, fi.Mode()&os.ModeSymlink != 0 && !followed); err != nil {
+				if err := restoreSourceTimesFn(abs, atime, fi.Mode()&os.ModeSymlink != 0 && !followed); err != nil {
 					fmt.Fprintf(w.rc.Err, "pax: %s: restore source access time: %v\n", member, err)
 					w.diagnosed = true
 				}

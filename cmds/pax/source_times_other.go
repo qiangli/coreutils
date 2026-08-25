@@ -10,6 +10,6 @@ import (
 
 func sourceAccessTime(os.FileInfo) (time.Time, bool) { return time.Time{}, false }
 
-func restoreSourceTimes(string, time.Time, time.Time, bool) error {
+func restoreSourceTimes(string, time.Time, bool) error {
 	return errors.New("source access-time restoration is not supported on this platform")
 }

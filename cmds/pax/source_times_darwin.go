@@ -18,10 +18,17 @@ func sourceAccessTime(fi os.FileInfo) (time.Time, bool) {
 	return time.Unix(st.Atimespec.Sec, st.Atimespec.Nsec), true
 }
 
-func restoreSourceTimes(path string, atime, mtime time.Time, symlink bool) error {
-	if symlink {
-		times := []unix.Timespec{unix.NsecToTimespec(atime.UnixNano()), unix.NsecToTimespec(mtime.UnixNano())}
-		return unix.UtimesNanoAt(unix.AT_FDCWD, path, times, unix.AT_SYMLINK_NOFOLLOW)
+func restoreSourceTimes(path string, atime time.Time, symlink bool) error {
+	// Darwin's <sys/stat.h> defines UTIME_OMIT as -2, but x/sys/unix does
+	// not export the macro on this target.
+	const utimeOmit = -2
+	times := []unix.Timespec{
+		unix.NsecToTimespec(atime.UnixNano()),
+		{Nsec: utimeOmit},
 	}
-	return os.Chtimes(path, atime, mtime)
+	flags := 0
+	if symlink {
+		flags = unix.AT_SYMLINK_NOFOLLOW
+	}
+	return unix.UtimesNanoAt(unix.AT_FDCWD, path, times, flags)
 }

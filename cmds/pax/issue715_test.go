@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 type fakeInteractiveTTY struct {
@@ -284,6 +286,46 @@ func TestCopyLinkFallsBackAndKeepsDestinationSafe(t *testing.T) {
 	}
 }
 
+func TestCopyLinkDistinctSymlinksToSameReferentAreNotSameFile(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(d, "source-link")
+	if err := os.Symlink("file", source); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	dest := filepath.Join(d, "dest")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dest, "source-link")
+	// This is a distinct symlink directory entry whose referent is the same
+	// regular file. Stat says "same"; Lstat correctly says it must be replaced.
+	if err := os.Symlink("../file", target); err != nil {
+		t.Fatal(err)
+	}
+	beforeSource, _ := os.Lstat(source)
+	beforeTarget, _ := os.Lstat(target)
+	if os.SameFile(beforeSource, beforeTarget) {
+		t.Fatal("fixture symlinks unexpectedly share an inode before copy")
+	}
+	if _, errOut, code := exec(t, d, "", "-r", "-w", "-l", "source-link", "dest"); code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	afterSource, err := os.Lstat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterTarget, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterTarget.Mode()&os.ModeSymlink == 0 || !os.SameFile(afterSource, afterTarget) {
+		t.Fatalf("destination was not replaced by a physical hard link: source=%v target=%v", afterSource.Mode(), afterTarget.Mode())
+	}
+}
+
 func TestResetAccessTimesForDirectoriesAndSymlinks(t *testing.T) {
 	d := t.TempDir()
 	sourceDir := filepath.Join(d, "tree")
@@ -302,9 +344,14 @@ func TestResetAccessTimesForDirectoriesAndSymlinks(t *testing.T) {
 	if err := os.Chtimes(sourceDir, wantA, wantM); err != nil {
 		t.Fatal(err)
 	}
-	if err := restoreSourceTimes(symlink, wantA, wantM, true); err != nil {
+	if err := restoreSourceTimes(symlink, wantA, true); err != nil {
 		t.Skipf("symlink timestamp restoration unavailable: %v", err)
 	}
+	beforeSymlink, err := os.Lstat(symlink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSymlinkM := beforeSymlink.ModTime()
 	arc := filepath.Join(d, "tree.tar")
 	if _, errOut, code := exec(t, d, "", "-w", "-t", "-f", arc, "tree"); code != 0 || errOut != "" {
 		t.Fatalf("code=%d stderr=%q", code, errOut)
@@ -318,8 +365,8 @@ func TestResetAccessTimesForDirectoriesAndSymlinks(t *testing.T) {
 	if !ok {
 		t.Skip("platform does not expose symlink access time")
 	}
-	if gotA.UnixMicro() != wantA.UnixMicro() || fi.ModTime().UnixMicro() != wantM.UnixMicro() {
-		t.Fatalf("symlink times atime=%v mtime=%v, want %v %v", gotA, fi.ModTime(), wantA, wantM)
+	if gotA.UnixMicro() != wantA.UnixMicro() || fi.ModTime().UnixMicro() != wantSymlinkM.UnixMicro() {
+		t.Fatalf("symlink times atime=%v mtime=%v, want %v %v", gotA, fi.ModTime(), wantA, wantSymlinkM)
 	}
 }
 
@@ -350,11 +397,49 @@ func TestResetAccessTimesWriteAndCopyAndFailureStatus(t *testing.T) {
 	assertSourceTimes(t, source, wantA, wantM)
 
 	old := restoreSourceTimesFn
-	restoreSourceTimesFn = func(string, time.Time, time.Time, bool) error { return errors.New("restore denied") }
+	restoreSourceTimesFn = func(string, time.Time, bool) error { return errors.New("restore denied") }
 	defer func() { restoreSourceTimesFn = old }()
 	_, errOut, code := exec(t, d, "", "-w", "-t", "-f", filepath.Join(d, "failed.tar"), "source")
 	if code != 1 || !strings.Contains(errOut, "restore source access time: restore denied") {
 		t.Fatalf("restore failure code=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestResetAccessTimeDoesNotRollBackConcurrentMtimeChange(t *testing.T) {
+	d := t.TempDir()
+	path := filepath.Join(d, "source")
+	if err := os.WriteFile(path, []byte("body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalA := time.Unix(1000000000, 123000000)
+	originalM := time.Unix(1000000100, 456000000)
+	concurrentA := time.Unix(1000000200, 0)
+	concurrentM := time.Unix(1000000300, 789000000)
+	if err := os.Chtimes(path, originalA, originalM); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Dir: d, Stdio: tool.Stdio{Err: &errOut}}
+	diagnosed, err := walkOperand(rc, &options{t: true}, "source", func(e walkEntry) error {
+		// Model a writer changing mtime while pax is inside its source callback.
+		return os.Chtimes(e.abs, concurrentA, concurrentM)
+	})
+	if err != nil || diagnosed || errOut.Len() != 0 {
+		t.Fatalf("walk err=%v diagnosed=%v stderr=%q", err, diagnosed, errOut.String())
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotA, ok := sourceAccessTime(fi)
+	if !ok {
+		t.Skip("platform does not expose access time")
+	}
+	if gotA.UnixMicro() != originalA.UnixMicro() {
+		t.Fatalf("atime=%v, want restored %v", gotA, originalA)
+	}
+	if fi.ModTime().UnixMicro() != concurrentM.UnixMicro() {
+		t.Fatalf("mtime=%v, concurrent change %v was rolled back", fi.ModTime(), concurrentM)
 	}
 }
 

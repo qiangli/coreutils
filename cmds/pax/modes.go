@@ -1018,8 +1018,11 @@ func copyOneByLink(e walkEntry, target string) error {
 		source = resolved
 	}
 	if _, err := os.Lstat(target); err == nil {
-		sourceInfo, sourceErr := os.Stat(source)
-		targetInfo, targetErr := os.Stat(target)
+		// Compare directory entries, not referents. Two distinct symlinks may
+		// point at one file but are still distinct source/destination objects;
+		// Stat would mistake them for a same-file collision and skip -l.
+		sourceInfo, sourceErr := os.Lstat(source)
+		targetInfo, targetErr := os.Lstat(target)
 		if sourceErr == nil && targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
 			return fmt.Errorf("source and destination are the same file")
 		}

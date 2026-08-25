@@ -17,9 +17,13 @@ func sourceAccessTime(fi os.FileInfo) (time.Time, bool) {
 	return time.Unix(0, st.LastAccessTime.Nanoseconds()), true
 }
 
-func restoreSourceTimes(path string, atime, mtime time.Time, symlink bool) error {
+func restoreSourceTimes(path string, atime time.Time, symlink bool) error {
 	if symlink {
 		return errors.New("restoring a symbolic link access time is not supported on windows")
 	}
-	return os.Chtimes(path, atime, mtime)
+	current, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return os.Chtimes(path, atime, current.ModTime())
 }

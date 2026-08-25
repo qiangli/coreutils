@@ -18,10 +18,14 @@ func sourceAccessTime(fi os.FileInfo) (time.Time, bool) {
 	return time.Unix(st.Atim.Sec, st.Atim.Nsec), true
 }
 
-func restoreSourceTimes(path string, atime, mtime time.Time, symlink bool) error {
-	if symlink {
-		times := []unix.Timespec{unix.NsecToTimespec(atime.UnixNano()), unix.NsecToTimespec(mtime.UnixNano())}
-		return unix.UtimesNanoAt(unix.AT_FDCWD, path, times, unix.AT_SYMLINK_NOFOLLOW)
+func restoreSourceTimes(path string, atime time.Time, symlink bool) error {
+	times := []unix.Timespec{
+		unix.NsecToTimespec(atime.UnixNano()),
+		{Nsec: unix.UTIME_OMIT},
 	}
-	return os.Chtimes(path, atime, mtime)
+	flags := 0
+	if symlink {
+		flags = unix.AT_SYMLINK_NOFOLLOW
+	}
+	return unix.UtimesNanoAt(unix.AT_FDCWD, path, times, flags)
 }
