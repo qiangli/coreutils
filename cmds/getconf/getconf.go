@@ -74,7 +74,10 @@ func run(rc *tool.RunContext, args []string) int {
 			if !ok {
 				continue
 			}
-			fmt.Fprintf(rc.Out, "%-32s %s\n", n, v)
+			if _, err := fmt.Fprintf(rc.Out, "%-32s %s\n", n, v); err != nil {
+				fmt.Fprintf(rc.Err, "getconf: write error: %v\n", err)
+				return 1
+			}
 		}
 		return 0
 	}
@@ -86,15 +89,25 @@ func run(rc *tool.RunContext, args []string) int {
 		if !ok {
 			return tool.UsageError(rc, cmd, "unknown variable %q", name)
 		}
-		fmt.Fprintln(rc.Out, v)
+		if _, err := fmt.Fprintln(rc.Out, v); err != nil {
+			fmt.Fprintf(rc.Err, "getconf: write error: %v\n", err)
+			return 1
+		}
 		return 0
 	case 2:
 		name, path := operands[0], operands[1]
-		v, ok := pathValue(rc, name, path)
+		v, ok, err := pathValue(rc, name, path)
 		if !ok {
 			return tool.UsageError(rc, cmd, "unknown variable %q", name)
 		}
-		fmt.Fprintln(rc.Out, v)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "getconf: %s %s: %v\n", name, path, err)
+			return 1
+		}
+		if _, err := fmt.Fprintln(rc.Out, v); err != nil {
+			fmt.Fprintf(rc.Err, "getconf: write error: %v\n", err)
+			return 1
+		}
 		return 0
 	case 0:
 		return tool.UsageError(rc, cmd, "missing operand")

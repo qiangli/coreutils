@@ -2,9 +2,12 @@ package getconfcmd
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -121,9 +124,41 @@ func TestUnknownVariableIsAnErrorNotUndefined(t *testing.T) {
 func TestCompileTimeMinimumsComeFromTheStandard(t *testing.T) {
 	// These are constants in the specification, not host measurements, so they
 	// must be identical on every platform including Windows.
-	for name, want := range map[string]string{
-		"_POSIX_PATH_MAX": "256", "_POSIX_OPEN_MAX": "20",
-	} {
+	wantValues := map[string]int64{
+		"_POSIX_AIO_LISTIO_MAX": 2, "_POSIX_AIO_MAX": 1,
+		"_POSIX_ARG_MAX": 4096, "_POSIX_CHILD_MAX": 25,
+		"_POSIX_CLOCKRES_MIN": 20000000, "_POSIX_DELAYTIMER_MAX": 32,
+		"_POSIX_HOST_NAME_MAX": 255, "_POSIX_LINK_MAX": 8,
+		"_POSIX_LOGIN_NAME_MAX": 9, "_POSIX_MAX_CANON": 255,
+		"_POSIX_MAX_INPUT": 255, "_POSIX_MQ_OPEN_MAX": 8,
+		"_POSIX_MQ_PRIO_MAX": 32, "_POSIX_NAME_MAX": 14,
+		"_POSIX_NGROUPS_MAX": 8, "_POSIX_OPEN_MAX": 20,
+		"_POSIX_PATH_MAX": 256, "_POSIX_PIPE_BUF": 512,
+		"_POSIX_RE_DUP_MAX": 255, "_POSIX_RTSIG_MAX": 8,
+		"_POSIX_SEM_NSEMS_MAX": 256, "_POSIX_SEM_VALUE_MAX": 32767,
+		"_POSIX_SIGQUEUE_MAX": 32, "_POSIX_SSIZE_MAX": 32767,
+		"_POSIX_SS_REPL_MAX": 4, "_POSIX_STREAM_MAX": 8,
+		"_POSIX_SYMLINK_MAX": 255, "_POSIX_SYMLOOP_MAX": 8,
+		"_POSIX_THREAD_DESTRUCTOR_ITERATIONS": 4, "_POSIX_THREAD_KEYS_MAX": 128,
+		"_POSIX_THREAD_THREADS_MAX": 64, "_POSIX_TIMER_MAX": 32,
+		"_POSIX_TRACE_EVENT_NAME_MAX": 30, "_POSIX_TRACE_NAME_MAX": 8,
+		"_POSIX_TRACE_SYS_MAX": 8, "_POSIX_TRACE_USER_EVENT_MAX": 32,
+		"_POSIX_TTY_NAME_MAX": 9, "_POSIX_TZNAME_MAX": 6,
+		"_POSIX2_BC_BASE_MAX": 99, "_POSIX2_BC_DIM_MAX": 2048,
+		"_POSIX2_BC_SCALE_MAX": 99, "_POSIX2_BC_STRING_MAX": 1000,
+		"_POSIX2_CHARCLASS_NAME_MAX": 14, "_POSIX2_COLL_WEIGHTS_MAX": 2,
+		"_POSIX2_EXPR_NEST_MAX": 32, "_POSIX2_LINE_MAX": 2048,
+		"_POSIX2_RE_DUP_MAX": 255, "_XOPEN_IOV_MAX": 16,
+		"_XOPEN_NAME_MAX": 255, "_XOPEN_PATH_MAX": 1024,
+	}
+	if len(standardMinimumValues) != len(wantValues) {
+		t.Fatalf("POSIX Maximum/Minimum Values inventory has %d names, want %d", len(standardMinimumValues), len(wantValues))
+	}
+	for name, value := range wantValues {
+		if got, ok := standardMinimumValues[name]; !ok || got != value {
+			t.Errorf("table[%s] = (%d, %t), want %d", name, got, ok, value)
+		}
+		want := strconv.FormatInt(value, 10)
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != want {
 			t.Errorf("%s = %q (exit %d), want %q", name, got, code, want)
@@ -169,9 +204,9 @@ func TestEveryInventoryNameHasAValueClass(t *testing.T) {
 		}
 	}
 	for name := range pathVars {
-		got, _, code := runCmd(t, name, ".")
-		if code != 0 || got == "" {
-			t.Errorf("path inventory %s: output %q, exit %d", name, got, code)
+		_, known, _ := pathValue(&tool.RunContext{Dir: t.TempDir()}, name, ".")
+		if !known {
+			t.Errorf("path inventory %s is not routed", name)
 		}
 	}
 	for _, name := range confstrVars {
@@ -213,15 +248,96 @@ func TestWindowsFailsClosed(t *testing.T) {
 	}
 }
 
-func TestLinuxDoesNotInventLibcValues(t *testing.T) {
+func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux only")
 	}
-	for _, name := range []string{"ARG_MAX", "CLK_TCK", "PATH", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "RE_DUP_MAX", "SYMLOOP_MAX"} {
+	for _, name := range []string{"PATH", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "RE_DUP_MAX", "SYMLOOP_MAX"} {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != undefined {
 			t.Errorf("%s = %q (exit %d), want undefined without a libc adapter", name, got, code)
 		}
+	}
+}
+
+func TestMandatoryTableInventoryAndCompatibilityAliases(t *testing.T) {
+	if len(pathVars) != 21 {
+		t.Fatalf("fpathconf Variable inventory has %d names, want 21", len(pathVars))
+	}
+	if len(confstrVars) != 31 {
+		t.Fatalf("confstr name inventory has %d names, want 31", len(confstrVars))
+	}
+	seen := map[string]bool{}
+	for _, name := range systemInventoryNames {
+		seen[name] = true
+		if _, ok := sysVars[name]; !ok {
+			t.Errorf("audited system name %s is not registered", name)
+		}
+	}
+	if len(seen) != 165 {
+		t.Fatalf("audited system superset has %d unique names, want 165", len(seen))
+	}
+	// Exact Variable column of sysconf(), excluding the three entries that the
+	// getconf utility specification explicitly excludes. The two explanatory
+	// getgr/getpw table rows are not variables.
+	mandatorySysconf := strings.Fields(`
+AIO_LISTIO_MAX AIO_MAX AIO_PRIO_DELTA_MAX ARG_MAX ATEXIT_MAX BC_BASE_MAX BC_DIM_MAX BC_SCALE_MAX
+BC_STRING_MAX CHILD_MAX COLL_WEIGHTS_MAX DELAYTIMER_MAX EXPR_NEST_MAX HOST_NAME_MAX IOV_MAX LINE_MAX
+LOGIN_NAME_MAX NGROUPS_MAX MQ_OPEN_MAX MQ_PRIO_MAX OPEN_MAX PAGE_SIZE PAGESIZE PTHREAD_DESTRUCTOR_ITERATIONS
+PTHREAD_KEYS_MAX PTHREAD_STACK_MIN PTHREAD_THREADS_MAX RE_DUP_MAX RTSIG_MAX SEM_NSEMS_MAX SEM_VALUE_MAX SIGQUEUE_MAX
+STREAM_MAX SYMLOOP_MAX TIMER_MAX TTY_NAME_MAX TZNAME_MAX _POSIX_ADVISORY_INFO _POSIX_BARRIERS _POSIX_ASYNCHRONOUS_IO
+_POSIX_CLOCK_SELECTION _POSIX_CPUTIME _POSIX_FSYNC _POSIX_IPV6 _POSIX_JOB_CONTROL _POSIX_MAPPED_FILES _POSIX_MEMLOCK _POSIX_MEMLOCK_RANGE
+_POSIX_MEMORY_PROTECTION _POSIX_MESSAGE_PASSING _POSIX_MONOTONIC_CLOCK _POSIX_PRIORITIZED_IO _POSIX_PRIORITY_SCHEDULING _POSIX_RAW_SOCKETS _POSIX_READER_WRITER_LOCKS _POSIX_REALTIME_SIGNALS
+_POSIX_REGEXP _POSIX_SAVED_IDS _POSIX_SEMAPHORES _POSIX_SHARED_MEMORY_OBJECTS _POSIX_SHELL _POSIX_SPAWN _POSIX_SPIN_LOCKS _POSIX_SPORADIC_SERVER
+_POSIX_SS_REPL_MAX _POSIX_SYNCHRONIZED_IO _POSIX_THREAD_ATTR_STACKADDR _POSIX_THREAD_ATTR_STACKSIZE _POSIX_THREAD_CPUTIME _POSIX_THREAD_PRIO_INHERIT _POSIX_THREAD_PRIO_PROTECT _POSIX_THREAD_PRIORITY_SCHEDULING
+_POSIX_THREAD_PROCESS_SHARED _POSIX_THREAD_ROBUST_PRIO_INHERIT _POSIX_THREAD_ROBUST_PRIO_PROTECT _POSIX_THREAD_SAFE_FUNCTIONS _POSIX_THREAD_SPORADIC_SERVER _POSIX_THREADS _POSIX_TIMEOUTS _POSIX_TIMERS
+_POSIX_TRACE _POSIX_TRACE_EVENT_FILTER _POSIX_TRACE_EVENT_NAME_MAX _POSIX_TRACE_INHERIT _POSIX_TRACE_LOG _POSIX_TRACE_NAME_MAX _POSIX_TRACE_SYS_MAX _POSIX_TRACE_USER_EVENT_MAX
+_POSIX_TYPED_MEMORY_OBJECTS _POSIX_VERSION _POSIX_V7_ILP32_OFF32 _POSIX_V7_ILP32_OFFBIG _POSIX_V7_LP64_OFF64 _POSIX_V7_LPBIG_OFFBIG _POSIX_V6_ILP32_OFF32 _POSIX_V6_ILP32_OFFBIG
+_POSIX_V6_LP64_OFF64 _POSIX_V6_LPBIG_OFFBIG _POSIX2_C_BIND _POSIX2_C_DEV _POSIX2_CHAR_TERM _POSIX2_FORT_DEV _POSIX2_FORT_RUN _POSIX2_LOCALEDEF
+_POSIX2_PBS _POSIX2_PBS_ACCOUNTING _POSIX2_PBS_CHECKPOINT _POSIX2_PBS_LOCATE _POSIX2_PBS_MESSAGE _POSIX2_PBS_TRACK _POSIX2_SW_DEV _POSIX2_UPE
+_POSIX2_VERSION _XOPEN_CRYPT _XOPEN_ENH_I18N _XOPEN_REALTIME _XOPEN_REALTIME_THREADS _XOPEN_SHM _XOPEN_STREAMS _XOPEN_UNIX
+_XOPEN_UUCP _XOPEN_VERSION`)
+	if len(mandatorySysconf) != 122 {
+		t.Fatalf("mandatory sysconf Variable inventory has %d names, want 122", len(mandatorySysconf))
+	}
+	for _, name := range mandatorySysconf {
+		if _, ok := sysVars[name]; !ok {
+			t.Errorf("mandatory sysconf name %s is not registered", name)
+		}
+	}
+	for alias, target := range compatibilityAliases {
+		got, _, code := runCmd(t, alias)
+		want, _, wantCode := runCmd(t, target)
+		if code != wantCode || got != want {
+			t.Errorf("alias %s=%q (exit %d), %s=%q (exit %d)", alias, got, code, target, want, wantCode)
+		}
+	}
+	for _, name := range []string{"_POSIX_THREAD_ROBUST_PRIO_INHERIT", "_POSIX_THREAD_ROBUST_PRIO_PROTECT"} {
+		if _, _, code := runCmd(t, name); code != 0 {
+			t.Errorf("missing Issue 7 sysconf spelling %s", name)
+		}
+	}
+}
+
+func TestPathErrorsWriteNoStdoutAndFail(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no pathconf ABI and deliberately reports undefined")
+	}
+	out, errs, code := runCmd(t, "NAME_MAX", filepath.Join(t.TempDir(), "missing"))
+	if code == 0 || out != "" || errs == "" {
+		t.Fatalf("missing path = (%q, %q, %d), want empty stdout, diagnostic, non-zero", out, errs, code)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("sink failed") }
+
+func TestStandardOutputFailureIsAnError(t *testing.T) {
+	var errs bytes.Buffer
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{Out: failingWriter{}, Err: &errs}}
+	if code := run(rc, []string{"_POSIX_PATH_MAX"}); code != 1 || !strings.Contains(errs.String(), "write error") {
+		t.Fatalf("code=%d stderr=%q", code, errs.String())
 	}
 }
 

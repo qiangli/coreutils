@@ -27,17 +27,18 @@ const (
 	pcChownRestricted
 	pcNoTrunc
 	pcVdisable
-	pc2Symlinks       = pcUndefined
-	pcAllocSizeMin    = pcUndefined
-	pcAsyncIO         = pcUndefined
-	pcFilesizeBits    = pcUndefined
-	pcPrioIO          = pcUndefined
-	pcRecIncrXferSize = pcUndefined
-	pcRecMaxXferSize  = pcUndefined
-	pcRecMinXferSize  = pcUndefined
-	pcRecXferAlign    = pcUndefined
-	pcSymlinkMax      = pcUndefined
-	pcSyncIO          = pcUndefined
+	pc2Symlinks           = pcUndefined
+	pcAllocSizeMin        = pcUndefined
+	pcAsyncIO             = pcUndefined
+	pcFilesizeBits        = pcUndefined
+	pcPrioIO              = pcUndefined
+	pcRecIncrXferSize     = pcUndefined
+	pcRecMaxXferSize      = pcUndefined
+	pcRecMinXferSize      = pcUndefined
+	pcRecXferAlign        = pcUndefined
+	pcSymlinkMax          = pcUndefined
+	pcSyncIO              = pcUndefined
+	pcTimestampResolution = pcUndefined
 )
 
 func sysconfStr(int) (string, bool) { return undefined, true }
@@ -46,7 +47,9 @@ func reDupMaxStr() (string, bool)   { return "255", true }
 func symloopMaxStr() (string, bool) { return undefined, true }
 func clockTicksStr() (string, bool) { return undefined, true }
 
-func pathconfStr(*tool.RunContext, int, string) (string, bool) { return undefined, true }
+func pathconfStr(*tool.RunContext, int, string) (string, bool, error) {
+	return undefined, true, nil
+}
 
 // Kept only so the shared inventory compiles; platformValue intercepts these
 // names before a value can be emitted on Windows.
