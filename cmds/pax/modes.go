@@ -46,9 +46,24 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		return 1
 	}
 	raw = archive.tarData
+	// A pax archive whose members need no extended records is physically
+	// indistinguishable from ustar.  Accept tar input here and reject only the
+	// unambiguously non-pax cpio form; otherwise every minimal pax archive
+	// would spuriously reject -o.
+	if o.paxOptions.needsPAX && archive.kind == archiveCPIO {
+		fmt.Fprintln(rc.Err, "pax: -o option is applicable only to a pax archive")
+		return 1
+	}
+	raw, err = filterDeletedPAXRecords(raw, o.paxOptions)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
+	status := 0
 	sel := newSelector(o, patterns)
 	var catalog []selectorMember
-	scan := tar.NewReader(bytes.NewReader(raw))
+	var invalidMembers []bool
+	scan := newOptionTarReader(bytes.NewReader(raw), o.paxOptions)
 	for {
 		h, err := scan.Next()
 		if err == io.EOF {
@@ -62,6 +77,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 			name:  h.Name,
 			isDir: h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/"),
 		})
+		invalidMembers = append(invalidMembers, invalidPAXDestination(rc, h.Name) || invalidPAXDestination(rc, h.Linkname) && h.Linkname != "")
 	}
 	sel.prime(catalog)
 
@@ -80,7 +96,17 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		if subName == "" {
 			continue
 		}
+		if invalidMembers[index] && o.paxOptions.invalid != "binary" && o.paxOptions.invalid != "UTF-8" && o.paxOptions.invalid != "write" {
+			fmt.Fprintf(rc.Err, "pax: %s: invalid destination name\n", m.name)
+			status = 1
+			if o.paxOptions.invalid != "rename" {
+				continue
+			}
+		}
 		newName, keep, err := renameInteractively(o, subName)
+		if err == nil && invalidMembers[index] && o.paxOptions.invalid == "rename" && !o.interactive {
+			newName, keep, err = o.renamer.rename(subName)
+		}
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
 			return 1
@@ -93,7 +119,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	}
 
 	var rewritten bytes.Buffer
-	tr := tar.NewReader(bytes.NewReader(raw))
+	tr := newOptionTarReader(bytes.NewReader(raw), o.paxOptions)
 	tw := tar.NewWriter(&rewritten)
 
 	for index := 0; ; index++ {
@@ -136,7 +162,6 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	}
 
 	unmatched := sel.unmatched()
-	status := 0
 	if len(unmatched) > 0 {
 		for _, p := range unmatched {
 			fmt.Fprintf(rc.Err, "pax: pattern %q not matched\n", p)
@@ -176,7 +201,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		allow[m.Index] = m.Target
 	}
 
-	tr2 := tar.NewReader(bytes.NewReader(data))
+	tr2 := newOptionTarReader(bytes.NewReader(data), paxOptions{})
 	var pendingDirs []pendingDirectoryAttributes
 	for index := 0; ; index++ {
 		h, err := tr2.Next()
@@ -470,7 +495,12 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			status = 1
 		}
 	} else {
-		tw := tar.NewWriter(out)
+		var logical bytes.Buffer
+		tw := tar.NewWriter(&logical)
+		if err := writeGlobalPAXHeader(rc, o, tw); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			status = 1
+		}
 		for _, name := range files {
 			diagnosed, err := addPath(rc, o, tw, name)
 			if err != nil && !errors.Is(err, errTraversalCycle) {
@@ -487,6 +517,20 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			}
 		}
 		if err := tw.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			status = 1
+		}
+		logicalData, err := patchLinkdataHeaders(logical.Bytes())
+		if err == nil {
+			logicalData, err = filterDeletedPAXRecords(logicalData, o.paxOptions)
+		}
+		if err == nil && o.format == "pax" {
+			logicalData, err = patchExtendedHeaderNames(logicalData, o.paxOptions.exthdrName)
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			status = 1
+		} else if _, err := out.Write(logicalData); err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			status = 1
 		}
@@ -790,7 +834,8 @@ func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, nam
 }
 
 func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool, error) {
-	return walkOperand(rc, o, name, func(e walkEntry) error {
+	invalidDiagnosed := false
+	diagnosed, err := walkOperand(rc, o, name, func(e walkEntry) error {
 		fi := e.fi
 		link := ""
 		if fi.Mode()&os.ModeSymlink != 0 {
@@ -802,6 +847,24 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		out := applySubstitutions(o.subst, e.member, rc.Err)
 		if out == "" {
 			return nil
+		}
+		invalidValue := invalidPAXDestinationName(out) || link != "" && invalidPAXDestinationName(link)
+		if invalidValue {
+			if o.paxOptions.invalid == "rename" && !o.interactive && o.renamer != nil {
+				var keep bool
+				var renameErr error
+				out, keep, renameErr = o.renamer.rename(out)
+				if renameErr != nil {
+					return renameErr
+				}
+				if !keep {
+					return nil
+				}
+			} else if o.paxOptions.invalid != "binary" && o.paxOptions.invalid != "rename" {
+				fmt.Fprintf(rc.Err, "pax: %s: value cannot be encoded as UTF-8; bypassed\n", out)
+				invalidDiagnosed = true
+				return nil
+			}
 		}
 		out, keep, err := renameInteractively(o, out)
 		if err != nil {
@@ -818,8 +881,10 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			return sourceTraversalErr(err)
 		}
 		h.Format = tarFormat(o.format)
-		if atime, ok := sourceAccessTimeFn(fi); ok {
-			h.AccessTime = atime
+		if o.paxOptions.times || o.read && o.write {
+			if atime, ok := sourceAccessTimeFn(fi); ok {
+				h.AccessTime = atime
+			}
 		}
 		id := identityOf(fi)
 		// A second name for an already-archived inode becomes a hardlink
@@ -857,6 +922,16 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				h.PAXRecords["SCHILY.ino"] = strconv.FormatUint(id.ino, 10)
 				h.PAXRecords["SCHILY.nlink"] = strconv.FormatUint(id.nlink, 10)
 			}
+			if err := applyWritePAXOptions(h, o.paxOptions); err != nil {
+				return err
+			}
+			if hardlink && o.paxOptions.linkdata {
+				h.PAXRecords["COREUTILS.linkdata"] = h.Linkname
+				h.Typeflag = tar.TypeReg
+				h.Linkname = ""
+				h.Size = fi.Size()
+				hardlink = false
+			}
 		}
 		if h.Format == tar.FormatUSTAR {
 			// USTAR carries mtime but has no fields for atime, ctime, xattrs,
@@ -887,6 +962,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		}
 		return nil
 	})
+	return diagnosed || invalidDiagnosed, err
 }
 
 // copySourceFile keeps archive sink failures precise. A mid-file source read
@@ -940,7 +1016,7 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		fmt.Fprintf(rc.Err, "pax: %s: not a directory\n", dest)
 		return 1
 	}
-	if o.link {
+	if o.link && !linkOptionsRequireMaterialCopy(o.paxOptions) {
 		return linkCopyMode(rc, o, files, full)
 	}
 
@@ -953,7 +1029,13 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		tw := tar.NewWriter(pw)
 		var werr error
 		diagnosed := false
+		if err := writeGlobalPAXHeader(rc, o, tw); err != nil {
+			werr = err
+		}
 		for _, name := range files {
+			if werr != nil {
+				break
+			}
 			d, e := addPath(rc, o, tw, name)
 			diagnosed = diagnosed || d
 			if errors.Is(e, errTraversalCycle) {
@@ -993,6 +1075,26 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	return status
 }
 
+// A hard link cannot have ownership, timestamps, size, or symlink contents
+// that differ from its source.  When an extended-header override requests one
+// of those member attributes, -l's "where possible" condition is false: use
+// the archive copy lane rather than silently ignoring the option or mutating
+// the source inode through the new name.
+func linkOptionsRequireMaterialCopy(options paxOptions) bool {
+	for _, values := range []map[string]string{options.global, options.local} {
+		for key, value := range values {
+			if value == "" {
+				continue
+			}
+			switch key {
+			case "atime", "gid", "gname", "linkpath", "mtime", "size", "uid", "uname":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 var linkSourceFn = defaultLinkSource
 
 // linkCopyMode implements copy-mode -l directly against the filesystem. The
@@ -1017,6 +1119,12 @@ func linkCopyMode(rc *tool.RunContext, o *options, files []string, root string) 
 			}
 			if !keep {
 				return nil
+			}
+			if value, ok := o.paxOptions.global["path"]; ok && value != "" {
+				out = value
+			}
+			if value, ok := o.paxOptions.local["path"]; ok && value != "" {
+				out = value
 			}
 			target, err := safeCopyTarget(root, out)
 			if err != nil {

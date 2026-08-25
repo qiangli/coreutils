@@ -56,7 +56,7 @@ func (r *interactiveRenamer) rename(name string) (newName string, keep bool, err
 func (r *interactiveRenamer) Close() error { return r.tty.Close() }
 
 func renameInteractively(o *options, name string) (string, bool, error) {
-	if o.renamer == nil {
+	if !o.interactive || o.renamer == nil {
 		return name, true, nil
 	}
 	return o.renamer.rename(name)

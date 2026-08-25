@@ -37,7 +37,25 @@ func decodeArchive(data []byte) (*decodedArchive, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &decodedArchive{kind: archiveTar, tarData: data, pax: paxFormat}, nil
+	return &decodedArchive{kind: archiveTar, tarData: data, pax: paxFormat || hasRawPAXHeader(data)}, nil
+}
+
+func hasRawPAXHeader(data []byte) bool {
+	for off := 0; off+512 <= len(data); {
+		header := data[off : off+512]
+		if allZero(header) {
+			return false
+		}
+		if header[156] == tar.TypeXHeader || header[156] == tar.TypeXGlobalHeader {
+			return true
+		}
+		size, err := rawTarSize(header)
+		if err != nil || size < 0 {
+			return false
+		}
+		off += 512 + int((size+511)&^511)
+	}
+	return false
 }
 
 type countingReader struct {
@@ -164,11 +182,15 @@ func (id fileIdentity) key() devIno { return devIno{id.dev, id.ino} }
 
 type cpioEntry struct {
 	name     string
+	magic    string
 	mode     uint64
 	uid, gid uint64
 	mtime    uint64
 	dev, ino uint64
+	rdev     uint64
 	nlink    uint64
+	namesize uint64
+	filesize uint64
 	data     []byte
 }
 
@@ -212,6 +234,20 @@ func cpioToTar(data []byte) ([]byte, error) {
 			Gid:     int(entry.gid),
 			ModTime: time.Unix(int64(entry.mtime), 0),
 			Format:  tar.FormatPAX,
+			PAXRecords: map[string]string{
+				"COREUTILS.cpio.c_magic":    entry.magic,
+				"COREUTILS.cpio.c_dev":      strconv.FormatUint(entry.dev, 10),
+				"COREUTILS.cpio.c_ino":      strconv.FormatUint(entry.ino, 10),
+				"COREUTILS.cpio.c_mode":     strconv.FormatUint(entry.mode, 10),
+				"COREUTILS.cpio.c_uid":      strconv.FormatUint(entry.uid, 10),
+				"COREUTILS.cpio.c_gid":      strconv.FormatUint(entry.gid, 10),
+				"COREUTILS.cpio.c_nlink":    strconv.FormatUint(entry.nlink, 10),
+				"COREUTILS.cpio.c_rdev":     strconv.FormatUint(entry.rdev, 10),
+				"COREUTILS.cpio.c_mtime":    strconv.FormatUint(entry.mtime, 10),
+				"COREUTILS.cpio.c_namesize": strconv.FormatUint(entry.namesize, 10),
+				"COREUTILS.cpio.c_filesize": strconv.FormatUint(entry.filesize, 10),
+				"COREUTILS.cpio.c_name":     entry.name,
+			},
 		}
 		body := entry.data
 		switch entry.mode & 0o170000 {
@@ -305,6 +341,7 @@ func readODCEntry(data []byte, offset int) (cpioEntry, int, error) {
 		to           *uint64
 	}{}
 	var e cpioEntry
+	e.magic = "070707"
 	var namesize, filesize uint64
 	fields = append(fields,
 		struct {
@@ -331,6 +368,10 @@ func readODCEntry(data []byte, offset int) (cpioEntry, int, error) {
 			start, width int
 			to           *uint64
 		}{36, 6, &e.nlink},
+		struct {
+			start, width int
+			to           *uint64
+		}{42, 6, &e.rdev},
 		struct {
 			start, width int
 			to           *uint64
@@ -368,7 +409,7 @@ func readNewcEntry(data []byte, offset int) (cpioEntry, int, error) {
 		}
 		values[i] = v
 	}
-	e := cpioEntry{ino: values[0], mode: values[1], uid: values[2], gid: values[3], nlink: values[4], mtime: values[5], dev: values[7]<<32 | values[8]}
+	e := cpioEntry{magic: string(h[:6]), ino: values[0], mode: values[1], uid: values[2], gid: values[3], nlink: values[4], mtime: values[5], dev: values[7]<<32 | values[8], rdev: values[9]<<32 | values[10]}
 	entry, next, err := finishCPIOEntry(data, offset+headerSize, values[11], values[6], e, 4)
 	if err != nil {
 		return cpioEntry{}, 0, err
@@ -405,6 +446,8 @@ func finishCPIOEntry(data []byte, pos int, namesize, filesize uint64, e cpioEntr
 		return cpioEntry{}, 0, fmt.Errorf("cpio: pathname is not NUL-terminated")
 	}
 	e.name = string(name[:len(name)-1])
+	e.namesize = namesize
+	e.filesize = filesize
 	pos = align(nameEnd, alignment)
 	if pos > len(data) || filesize > uint64(len(data)-pos) {
 		return cpioEntry{}, 0, io.ErrUnexpectedEOF

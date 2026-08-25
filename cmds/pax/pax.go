@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qiangli/coreutils/pkg/pax"
+	"github.com/qiangli/coreutils/cmds/internal/tzenv"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -49,7 +49,7 @@ type options struct {
 	// links maps a source (device, inode) to the first name archived for it,
 	// so later names for the same inode become hardlink members.
 	links      map[devIno]string
-	optionsStr string // -o
+	paxOptions paxOptions
 	t, X       bool
 	follow     followMode // -H/-L; the last one given wins
 	renamer    *interactiveRenamer
@@ -98,7 +98,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolVarP(&o.selectNoPattern, "first", "n", false, "select only the first match per pattern")
 
 	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "physical block size: decimal factors joined by 'x', each optionally suffixed b (512), k (1024), or m (1048576); must be a positive multiple of 512 up to 32256 (default 10240, or 5120 for -x cpio)")
-	fs.StringVarP(&o.optionsStr, "options", "o", "", "format-specific options")
+	optionArgs := fs.StringArrayP("options", "o", nil, "POSIX pax extended-header and algorithm options (repeatable)")
 	fs.BoolVarP(&o.t, "t", "t", false, "reset access times")
 	fs.BoolVarP(&o.X, "X", "X", false, "do not descend into directories on a different device")
 	fs.VarPF(&followFlag{o: &o, mode: followCmdline}, "H", "H", "follow symlinks named as command-line operands").NoOptDefVal = "true"
@@ -137,9 +137,20 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		o.blockBytes = blockBytes
 	}
-	if fs.Changed("options") {
-		return tool.NotSupported(rc, cmd, "-o")
+	mode := paxList
+	switch {
+	case o.read && o.write:
+		mode = paxCopy
+	case o.read:
+		mode = paxRead
+	case o.write:
+		mode = paxWrite
 	}
+	parsedOptions, err := parsePAXOptions(*optionArgs, mode, o.format)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "%v", err)
+	}
+	o.paxOptions = parsedOptions
 	if fs.Changed("t") {
 		if isList || isRead {
 			return tool.UsageError(rc, cmd, "-t is valid only in write or copy mode")
@@ -174,7 +185,7 @@ func run(rc *tool.RunContext, args []string) int {
 		o.blockBytes = defaultBlockSize(o.format)
 	}
 
-	if o.interactive {
+	if o.interactive || o.paxOptions.invalid == "rename" && o.read {
 		r, err := openInteractiveRenamer()
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
@@ -341,28 +352,55 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
-	members, err := pax.ReadManifest(bytes.NewReader(archive.tarData))
+	// A pax stream with no extended records is byte-for-byte ustar.  It is not
+	// possible to distinguish those cases, so only cpio is a provably
+	// inapplicable input format.
+	if o.paxOptions.needsPAX && archive.kind == archiveCPIO {
+		fmt.Fprintln(rc.Err, "pax: -o option is applicable only to a pax archive")
+		return 1
+	}
+	tarData, err := filterDeletedPAXRecords(archive.tarData, o.paxOptions)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
+	tr := newOptionTarReader(bytes.NewReader(tarData), o.paxOptions)
+	var members []*tar.Header
+	for {
+		h, nextErr := tr.Next()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", nextErr)
+			return 1
+		}
+		copyHeader := *h
+		members = append(members, &copyHeader)
+	}
 
 	sel := newSelector(o, patterns)
 	catalog := make([]selectorMember, 0, len(members))
-	for _, m := range members {
+	for _, h := range members {
 		catalog = append(catalog, selectorMember{
-			name:  m.Path,
-			isDir: m.Kind == pax.KindDir || strings.HasSuffix(m.Path, "/"),
+			name:  h.Name,
+			isDir: h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/"),
 		})
 	}
 	sel.prime(catalog)
 
-	for _, m := range members {
-		isDir := m.Kind == pax.KindDir || strings.HasSuffix(m.Path, "/")
-		if !sel.keep(m.Path, isDir) {
+	status := 0
+	for _, h := range members {
+		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
+		if !sel.keep(h.Name, isDir) {
 			continue
 		}
-		name := applySubstitutions(o.subst, m.Path, rc.Err)
+		if (invalidPAXDestination(rc, h.Name) || invalidPAXDestination(rc, h.Linkname) && h.Linkname != "" || invalidPAXListHeader(rc, h)) &&
+			o.paxOptions.invalid != "UTF-8" && o.paxOptions.invalid != "write" {
+			fmt.Fprintf(rc.Err, "pax: %s: invalid value bypassed\n", h.Name)
+			status = 1
+		}
+		name := applySubstitutions(o.subst, h.Name, rc.Err)
 		if name == "" {
 			continue
 		}
@@ -374,9 +412,20 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		if !keep {
 			continue
 		}
-		if o.verbose {
+		if o.paxOptions.listFormat != "" {
+			h.Name = name
+			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env))
+			if err != nil {
+				fmt.Fprintf(rc.Err, "pax: listopt: %v\n", err)
+				return 1
+			}
+			if _, err := fmt.Fprintln(rc.Out, line); err != nil {
+				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
+				return 1
+			}
+		} else if o.verbose {
 			if _, err := fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
-				modeString(m), 1, "", "", m.Size, m.ModTime.Format("Jan _2 15:04"), name); err != nil {
+				headerModeString(h), 1, h.Uname, h.Gname, h.Size, h.ModTime.Format("Jan _2 15:04"), name); err != nil {
 				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
 				return 1
 			}
@@ -396,22 +445,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		return 1
 	}
 
-	return 0
-}
-
-func modeString(m pax.Member) string {
-	s := m.Mode.String()
-	switch m.Kind {
-	case pax.KindDir:
-		if !strings.HasPrefix(s, "d") {
-			s = "d" + s
-		}
-	case pax.KindSymlink:
-		if !strings.HasPrefix(s, "L") && !strings.HasPrefix(s, "l") {
-			s = "l" + s
-		}
-	}
-	return s
+	return status
 }
 
 func headerFor(path string, fi os.FileInfo, link string) (*tar.Header, error) {

@@ -371,8 +371,8 @@ func TestSubstitutionWithExtraDelimiterIsRejected(t *testing.T) {
 	}
 }
 
-// -b/-o/-t/-X/-l are recognized so their mode legality is enforced. -t and -l
-// are implemented in their legal modes; -o remains a tracked loud refusal.
+// -b/-o/-t/-X/-l are recognized so their mode legality is enforced. -o, -t,
+// and -l are covered in their own focused implementation tests.
 // (-H and -L are implemented; their behavior is covered in follow_test.go.)
 func TestModeOptionLegality(t *testing.T) {
 	d := makeTree(t)
@@ -386,7 +386,6 @@ func TestModeOptionLegality(t *testing.T) {
 		{"b-in-list-illegal", []string{"-f", arc, "-b", "10k"}, "-b is valid only in write mode"},
 		{"b-in-write-invalid", []string{"-w", "-b", "513", "-f", arc, "src"}, "multiple of 512"},
 		{"b-in-copy-illegal", []string{"-r", "-w", "-b", "10k", "src", d}, "-b is valid only in write mode"},
-		{"o-in-list-unimpl", []string{"-f", arc, "-o", "listopt=x"}, "-o is not supported"},
 		{"t-in-list-illegal", []string{"-t", "-f", arc}, "-t is valid only in write or copy mode"},
 		{"t-in-read-illegal", []string{"-r", "-t", "-f", arc}, "-t is valid only in write or copy mode"},
 		{"X-in-list-illegal", []string{"-f", arc, "-X"}, "-X is valid only in write or copy mode"},
