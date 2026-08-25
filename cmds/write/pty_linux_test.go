@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osexec "os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -43,6 +46,130 @@ func openPTYLinux() (*os.File, *os.File, string, error) {
 	return master, slave, slavePath, nil
 }
 
+func TestDefaultSenderTerminalNameAndAlertSinkAreSamePTYLinux(t *testing.T) {
+	master, slave, slavePath, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("PTY creation skipped: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	oldDev := devDir
+	devDir = "/dev"
+	defer func() { devDir = oldDev }()
+	rc := &tool.RunContext{Stdio: tool.Stdio{In: slave, Out: io.Discard, Err: io.Discard}}
+	name := defaultSenderTTY(rc)
+	if name != strings.TrimPrefix(slavePath, "/dev/") {
+		t.Fatalf("sender tty=%q want=%q", name, strings.TrimPrefix(slavePath, "/dev/"))
+	}
+	control, err := defaultOpenSenderControlTTY(rc, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeString(control, "\a\a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = master.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 16)
+	n, err := master.Read(buf)
+	if err != nil || !bytes.Contains(buf[:n], []byte("\a\a")) {
+		t.Fatalf("authenticated PTY read n=%d err=%v data=%q", n, err, buf[:n])
+	}
+}
+
+func TestDefaultSenderAlertSinkRejectsDifferentPTYLinux(t *testing.T) {
+	firstMaster, firstSlave, _, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("PTY creation skipped: %v", err)
+	}
+	defer firstMaster.Close()
+	defer firstSlave.Close()
+	secondMaster, secondSlave, secondPath, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("second PTY creation skipped: %v", err)
+	}
+	defer secondMaster.Close()
+	defer secondSlave.Close()
+
+	oldDev := devDir
+	devDir = "/dev"
+	defer func() { devDir = oldDev }()
+	rc := &tool.RunContext{Stdio: tool.Stdio{In: firstSlave}}
+	if control, err := defaultOpenSenderControlTTY(rc, strings.TrimPrefix(secondPath, "/dev/")); err == nil {
+		_ = control.Close()
+		t.Fatal("unrelated PTY accepted as sender alert sink")
+	}
+}
+
+func TestDefaultSenderTTYRejectsCharacterDeviceThatIsNotTerminalLinux(t *testing.T) {
+	f, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	rc := &tool.RunContext{Stdio: tool.Stdio{In: f, Out: f, Err: f}}
+	if got := defaultSenderTTY(rc); got != "" {
+		t.Fatalf("/dev/null identified as sender terminal %q", got)
+	}
+}
+
+func TestDefaultRecipientOpenAuthenticatesTerminalLinux(t *testing.T) {
+	master, slave, slavePath, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("PTY creation skipped: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	f, err := defaultOpenTTY(slavePath)
+	if err != nil {
+		t.Fatalf("real PTY rejected: %v", err)
+	}
+	_ = f.Close()
+	regular := filepath.Join(t.TempDir(), "not-a-tty")
+	if err := os.WriteFile(regular, nil, 0o620); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := defaultOpenTTY(regular); err == nil {
+		t.Fatal("regular file accepted as recipient terminal")
+	}
+}
+
+func TestRecipientPIDMustOwnTheRecordedPTYLinux(t *testing.T) {
+	master, slave, slavePath, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("PTY creation skipped: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	child := osexec.Command("sleep", "10")
+	child.Stdin, child.Stdout, child.Stderr = slave, slave, slave
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := child.Start(); err != nil {
+		t.Skipf("cannot create PTY-backed session: %v", err)
+	}
+	defer func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	}()
+	if !defaultSessionOwnsTerminal(child.Process.Pid, slavePath) {
+		t.Fatalf("PID %d was not associated with its controlling PTY %s", child.Process.Pid, slavePath)
+	}
+
+	otherMaster, otherSlave, otherPath, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("second PTY creation skipped: %v", err)
+	}
+	defer otherMaster.Close()
+	defer otherSlave.Close()
+	if defaultSessionOwnsTerminal(child.Process.Pid, otherPath) {
+		t.Fatalf("PID %d falsely associated with unrelated PTY %s", child.Process.Pid, otherPath)
+	}
+}
+
 func TestPTYBackedWriteLinux(t *testing.T) {
 	master, slave, slavePath, err := openPTYLinux()
 	if err != nil {
@@ -75,8 +202,8 @@ func TestPTYBackedWriteLinux(t *testing.T) {
 	_ = master.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	n, _ := master.Read(buf)
 	got := string(buf[:n])
-	if !strings.Contains(got, "Message from alice (pts/999)") || !strings.Contains(got, "to bob .") {
-		t.Errorf("master PTY received: %q, want the POSIX banner naming the recipient", got)
+	if !strings.Contains(got, "Message from alice (pts/999) [") || strings.Contains(got, "to bob") {
+		t.Errorf("master PTY received: %q, want the exact POSIX banner", got)
 	}
 	if !strings.Contains(got, "pty test\r\n") || !strings.Contains(got, "EOT\r\n") {
 		t.Errorf("master PTY received: %q, want the body and the EOT marker", got)
@@ -163,10 +290,9 @@ func TestPTYBELAndUTF8ReachTheRecipientUnchangedLinux(t *testing.T) {
 	}
 }
 
-// The informational message and the two alerts are addressed to a terminal
-// DEVICE, not to a buffer: on a real tty a blocking O_WRONLY write is what
-// actually has to succeed.
-func TestPTYSenderNoticeAndAlertsReachTheControllingTerminalLinux(t *testing.T) {
+// POSIX routes the informational message to stdout and only the two alerts to
+// the authenticated sender terminal.
+func TestPTYSenderAlertsReachTheControllingTerminalLinux(t *testing.T) {
 	master, slave, _, err := openPTYLinux()
 	if err != nil {
 		t.Skipf("PTY creation skipped: %v", err)
@@ -181,7 +307,7 @@ func TestPTYSenderNoticeAndAlertsReachTheControllingTerminalLinux(t *testing.T) 
 			{user: "bob", line: "pts/4", mode: 0o620, when: epoch.Add(time.Hour)},
 		},
 	})
-	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) {
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) {
 		return nopWriteCloser{slave}, nil
 	}
 
@@ -189,8 +315,8 @@ func TestPTYSenderNoticeAndAlertsReachTheControllingTerminalLinux(t *testing.T) 
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	if out != "" {
-		t.Errorf("standard output must stay empty, got %q", out)
+	if want := "write: bob is logged in on more than one line; using pts/4\n"; out != want {
+		t.Errorf("standard output = %q, want %q", out, want)
 	}
 
 	var sender strings.Builder
@@ -202,8 +328,8 @@ func TestPTYSenderNoticeAndAlertsReachTheControllingTerminalLinux(t *testing.T) 
 		sender.Write(buf[:n])
 	}
 	got := sender.String()
-	if !strings.Contains(got, "bob is logged in on more than one line; using pts/4") {
-		t.Errorf("sender terminal received %q, want the informational message", got)
+	if strings.Contains(got, "bob is logged in on more than one line") {
+		t.Errorf("sender terminal received stdout informational message: %q", got)
 	}
 	if !strings.Contains(got, "\a\a") {
 		t.Errorf("sender terminal received %q, want two alerts", got)

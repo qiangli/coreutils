@@ -29,18 +29,10 @@
 //
 //   - The RECIPIENT'S TERMINAL carries the banner, the message body and the
 //     closing "EOT\n". POSIX OUTPUT FILES.
-//   - The SENDER'S CONTROLLING TERMINAL carries the two alerts POSIX requires
-//     once the connection is made, and the informational message naming the
-//     terminal chosen when the recipient is logged in more than once. The
-//     alert and the "which terminal did it go to" answer are useless to the
-//     sender if a shell redirection swallowed them, so they are addressed to
-//     the terminal, not to the standard output stream. POSIX's STDOUT clause
-//     ("An informational message shall be written to standard output if a
-//     recipient is logged in more than once") is honoured verbatim in the one
-//     case where there is no controlling terminal to prefer — see
-//     senderNotice. This is a deliberate, documented deviation: in the
-//     ordinary interactive case standard output IS the controlling terminal
-//     and the two readings coincide.
+//   - The SENDER'S CONTROLLING TERMINAL carries only the two alerts POSIX
+//     requires once the recipient banner has been written successfully.
+//   - STANDARD OUTPUT carries the informational message naming the selected
+//     terminal when the recipient is logged in more than once.
 //   - STANDARD ERROR carries diagnostics and nothing else, per POSIX STDERR.
 //
 // Standard output is never used for anything else, in any code path.
@@ -92,6 +84,9 @@ var (
 	nowFn                  = time.Now
 	statFn                 = os.Stat
 	openTTYFn              = defaultOpenTTY
+	sessionActiveFn        = defaultSessionActive
+	sessionOwnsTerminalFn  = defaultSessionOwnsTerminal
+	terminalDeviceFn       = defaultTerminalDevice
 )
 
 type nopWriteCloser struct{ io.Writer }
@@ -143,6 +138,9 @@ func (c *charClasses) cPass() {
 // Refusing to deliver the message because the locale is exotic would trade a
 // cosmetic rendering question for total loss of the utility's function, and
 // POSIX reserves a non-zero exit for "not logged on or permission denied".
+// UTF-8 classification uses Go's Unicode tables because pkg/ctype's provider
+// is byte-oriented; unsupported non-UTF-8 locales retain the documented C
+// fallback. Diagnostics are not yet localized through LC_MESSAGES/NLSPATH.
 func loadCharClasses(env []string) *charClasses {
 	name := locale.Resolve(env, locale.CType)
 	c := new(charClasses)
@@ -187,7 +185,8 @@ func loadCharClasses(env []string) *charClasses {
 func isUTF8Locale(name string) bool {
 	dot := strings.IndexByte(name, '.')
 	if dot < 0 {
-		return false
+		codeset := strings.ToLower(strings.ReplaceAll(name, "-", ""))
+		return codeset == "utf8"
 	}
 	codeset := name[dot+1:]
 	if at := strings.IndexByte(codeset, '@'); at >= 0 {
@@ -201,7 +200,15 @@ func isUTF8Locale(name string) bool {
 // write never reads the device, and asking for read access on a terminal
 // owned by someone else would fail where a write-only open succeeds.
 func defaultOpenTTY(path string) (io.WriteCloser, error) {
-	return os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if !terminalFile(f) {
+		_ = f.Close()
+		return nil, fmt.Errorf("not a terminal")
+	}
+	return f, nil
 }
 
 // defaultSenderInfo reports the sending account and its numeric uid. The uid
@@ -279,6 +286,31 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	myTTY := senderTTY(rc)
+	var senderControl io.WriteCloser
+	if myTTY != "" {
+		senderControl, err = openSenderControlTTYFn(rc, myTTY)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "write: sender terminal %s: %v\n", myTTY, err)
+			return 1
+		}
+	}
+	if senderControl != nil {
+		defer func() {
+			if senderControl != nil {
+				_ = senderControl.Close()
+			}
+		}()
+	}
+	// Prefer the login identity attached to the authenticated sending terminal.
+	// user.Current remains the fallback for non-interactive callers and systems
+	// whose accounting database has no sender record.
+	for _, record := range records {
+		if normalizeTTY(record.Line) == myTTY && sessionActiveFn(record.PID) &&
+			sessionOwnsTerminalFn(record.PID, ttyDevice(record.Line)) {
+			sender = record.User
+			break
+		}
+	}
 	line, failure, isMulti := selectTerminal(records, target, wantTTY, myTTY, uid == 0)
 	if failure != "" {
 		fmt.Fprintf(rc.Err, "write: %s\n", failure)
@@ -290,55 +322,41 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
-	defer term.Close()
-
-	notice := ""
-	if isMulti {
-		notice = fmt.Sprintf("write: %s is logged in on more than one line; using %s\n", target, line)
+	if err := writeBanner(term, sender, myTTY); err != nil {
+		err = errors.Join(err, term.Close())
+		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
+		return 1
 	}
-	senderNotice(rc, notice)
+	if isMulti {
+		notice := fmt.Sprintf("write: %s is logged in on more than one line; using %s\n", target, line)
+		if err := writeString(rc.Out, notice); err != nil {
+			err = errors.Join(err, term.Close())
+			fmt.Fprintf(rc.Err, "write: standard output: %v\n", err)
+			return 1
+		}
+	}
+	if senderControl != nil {
+		if err := writeString(senderControl, "\a\a"); err != nil {
+			err = errors.Join(err, term.Close())
+			fmt.Fprintf(rc.Err, "write: sender terminal %s: %v\n", myTTY, err)
+			return 1
+		}
+		control := senderControl
+		senderControl = nil
+		if err := control.Close(); err != nil {
+			err = errors.Join(err, term.Close())
+			fmt.Fprintf(rc.Err, "write: sender terminal %s: %v\n", myTTY, err)
+			return 1
+		}
+	}
 
-	if err := deliver(term, rc.In, sender, myTTY, target, classes); err != nil {
+	deliveryErr := deliverBody(term, rc.In, classes)
+	closeErr := term.Close()
+	if err := errors.Join(deliveryErr, closeErr); err != nil {
 		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
 	return 0
-}
-
-// senderNotice delivers everything the SENDER is owed once the connection is
-// made: the optional informational message naming the chosen terminal, then
-// the two alerts POSIX requires ("the sender's terminal shall be alerted
-// twice to indicate that what the sender is typing is being written to the
-// recipient's terminal").
-//
-// Both go to the sender's CONTROLLING TERMINAL. An alert that a redirection
-// captured into a file has alerted nobody, and an informational message the
-// sender never sees leaves them unable to answer "which terminal did that go
-// to?" — the one question the message exists to answer. Only when there is no
-// controlling terminal at all (a cron job, a pipeline, an agent harness) does
-// the informational message fall back to standard output, which is POSIX's
-// STDOUT clause and the only sink left; there is no terminal to alert in that
-// case, and inventing one is not an option.
-//
-// Failure here is DIAGNOSED BUT NOT FATAL. The recipient's message is the
-// point of the utility, and POSIX reserves a non-zero exit for "the addressed
-// user is not logged on or the addressed user denies permission".
-func senderNotice(rc *tool.RunContext, notice string) {
-	control, err := openSenderControlTTYFn(rc)
-	if err != nil {
-		if notice != "" {
-			fmt.Fprint(rc.Out, notice)
-		}
-		return
-	}
-	_, werr := io.WriteString(control, notice+"\a\a")
-	cerr := control.Close()
-	if werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		fmt.Fprintf(rc.Err, "write: sender terminal: %v\n", werr)
-	}
 }
 
 // selectTerminal resolves the recipient's terminal, or returns the diagnostic
@@ -415,6 +433,11 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 			missing++
 			continue
 		}
+		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(ttyDevice(r.Line)) ||
+			!sessionOwnsTerminalFn(r.PID, ttyDevice(r.Line)) {
+			missing++
+			continue
+		}
 		// The same bit mesg(1) reads and writes. See cmds/mesg: the terminal's
 		// group-write permission IS the message-permission state, so this is a
 		// stat and a mask, not a lookup in some separate registry.
@@ -461,8 +484,22 @@ func readLine(br *bufio.Reader, veol byte) (string, error) {
 	}
 }
 
-// deliver writes the prescribed banner, message body, and EOT marker.
-func deliver(w io.Writer, in io.Reader, sender, senderTTY, target string, classes *charClasses) error {
+// writeString rejects a writer that reports success after consuming only a
+// prefix. Silently accepting that contract violation can lose a BEL, banner,
+// message byte, or EOT marker while reporting successful delivery.
+func writeString(w io.Writer, s string) error {
+	n, err := io.WriteString(w, s)
+	if err != nil {
+		return err
+	}
+	if n != len(s) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+// writeBanner writes the exact POSIX Issue 7 prescribed initial message.
+func writeBanner(w io.Writer, sender, senderTTY string) error {
 	from := senderTTY
 	if from == "" {
 		// No controlling terminal (a script, a pipe, an agent harness). The
@@ -471,22 +508,17 @@ func deliver(w io.Writer, in io.Reader, sender, senderTTY, target string, classe
 		from = "?"
 	}
 
-	// POSIX DESCRIPTION: "it shall write the message: Message from
-	// sender-login-id (sending-terminal) [date]... to user_name." The
-	// recipient is named in the banner so a terminal that is receiving from
-	// several senders, or a session logged in under more than one account,
-	// shows who the message was addressed to.
-	banner := fmt.Sprintf("Message from %s (%s) [%s]... to %s .\n",
-		sender, from, nowFn().Format(time.ANSIC), target)
-	if _, err := io.WriteString(w, banner); err != nil {
-		return err
-	}
+	banner := fmt.Sprintf("Message from %s (%s) [%s]...\n",
+		sender, from, nowFn().Format(time.ANSIC))
+	return writeString(w, banner)
+}
 
-	// An *os.File input can be waited on with poll(2), so an interrupt is
-	// honoured even while the sender is mid-line. Any other reader is drained
-	// synchronously: it cannot be unblocked, and handing it to a goroutine
-	// would only move the block somewhere it can never be reclaimed. See
-	// deliverStream.
+// deliverBody writes message records and the closing EOT marker. The caller
+// writes and verifies the banner before alerting the sender.
+func deliverBody(w io.Writer, in io.Reader, classes *charClasses) error {
+	// An *os.File input can be waited on with poll(2). Other readers either
+	// provide deadlines, identify themselves as finite in-memory input, or are
+	// rejected explicitly; no path abandons a blocked reader goroutine.
 	var owned *os.File
 	if f, ok := in.(*os.File); ok {
 		if dup, err := duplicateInputFile(f); err == nil {
@@ -505,6 +537,15 @@ func deliver(w io.Writer, in io.Reader, sender, senderTTY, target string, classe
 	return deliverStream(w, in, getVEOL(in), classes, sigCh)
 }
 
+// deliver is retained as a focused test seam. Production uses writeBanner and
+// deliverBody separately so alerts can occur strictly between them.
+func deliver(w io.Writer, in io.Reader, sender, senderTTY, _ string, classes *charClasses) error {
+	if err := writeBanner(w, sender, senderTTY); err != nil {
+		return err
+	}
+	return deliverBody(w, in, classes)
+}
+
 // finish closes the message. POSIX: the interrupt and end-of-file characters
 // "cause write to write an appropriate message ("EOT\n" in the POSIX locale)
 // to the recipient's terminal and exit".
@@ -515,23 +556,36 @@ func deliver(w io.Writer, in io.Reader, sender, senderTTY, target string, classe
 // line of its own on the recipient's terminal.
 func finish(w io.Writer, pending []byte, classes *charClasses) error {
 	if len(pending) > 0 {
-		if _, err := io.WriteString(w, sanitize(string(append(pending, '\n')), classes)); err != nil {
+		if err := writeString(w, sanitize(string(append(pending, '\n')), classes)); err != nil {
 			return err
 		}
 	}
-	_, err := io.WriteString(w, "EOT\n")
-	return err
+	return writeString(w, "EOT\n")
 }
 
-// deliverStream copies a reader that cannot be polled. The interrupt is
-// checked between lines: a reader that is not a file offers no way to abandon
-// a blocked Read, and the alternative — a goroutine parked in that Read
-// forever — is a leak in every host that embeds this package in-process.
-// Checking at line boundaries costs interrupt latency, never correctness, and
-// never a stuck sender.
+type readDeadliner interface {
+	SetReadDeadline(time.Time) error
+}
+
+type finiteReader interface {
+	Len() int
+}
+
+// deliverStream handles non-file readers without adopting or closing them.
+// Deadline-capable streams are polled with read deadlines. In-memory readers
+// advertise a finite remaining length and cannot remain blocked. An opaque
+// reader with neither property cannot be made interruptible through io.Reader
+// without abandoning a blocked goroutine or closing a caller-owned object, so
+// it is rejected explicitly rather than hanging the embedding process.
 func deliverStream(w io.Writer, in io.Reader, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
 	if in == nil {
 		return finish(w, nil, classes)
+	}
+	if deadline, ok := in.(readDeadliner); ok {
+		return deliverDeadline(w, in, deadline, veol, classes, sigCh)
+	}
+	if _, ok := in.(finiteReader); !ok {
+		return errors.New("input reader cannot be interrupted safely")
 	}
 	br := bufio.NewReader(in)
 	for {
@@ -545,11 +599,45 @@ func deliverStream(w io.Writer, in io.Reader, veol byte, classes *charClasses, s
 			return finish(w, []byte(line), classes)
 		}
 		if line != "" {
-			if _, werr := io.WriteString(w, sanitize(line, classes)); werr != nil {
+			if werr := writeString(w, sanitize(line, classes)); werr != nil {
 				return werr
 			}
 		}
 		if err != nil {
+			return err
+		}
+	}
+}
+
+func deliverDeadline(w io.Writer, in io.Reader, deadline readDeadliner, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
+	defer deadline.SetReadDeadline(time.Time{})
+	var line []byte
+	for {
+		select {
+		case <-sigCh:
+			return finish(w, line, classes)
+		default:
+		}
+		if err := deadline.SetReadDeadline(time.Now().Add(pollInterval)); err != nil {
+			return err
+		}
+		var one [1]byte
+		n, err := in.Read(one[:])
+		if n == 1 {
+			if one[0] == '\n' || (veol != 0 && one[0] == veol) {
+				line = append(line, '\n')
+				if werr := writeString(w, sanitize(string(line), classes)); werr != nil {
+					return werr
+				}
+				line = line[:0]
+			} else {
+				line = append(line, one[0])
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return finish(w, line, classes)
+		}
+		if err != nil && !os.IsTimeout(err) {
 			return err
 		}
 	}
@@ -579,7 +667,7 @@ func deliverPolled(w io.Writer, in *os.File, veol byte, classes *charClasses, si
 		if n == 1 {
 			if one[0] == '\n' || (veol != 0 && one[0] == veol) {
 				line = append(line, '\n')
-				if _, err := io.WriteString(w, sanitize(string(line), classes)); err != nil {
+				if err := writeString(w, sanitize(string(line), classes)); err != nil {
 					return err
 				}
 				line = line[:0]

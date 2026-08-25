@@ -16,12 +16,17 @@ import (
 // (platform_other.go); this keeps the package building.
 func defaultSenderTTY(*tool.RunContext) string { return "" }
 
-func defaultOpenSenderControlTTY(rc *tool.RunContext) (io.WriteCloser, error) {
+func defaultOpenSenderControlTTY(rc *tool.RunContext, _ string) (io.WriteCloser, error) {
 	if rc != nil && rc.Err != nil {
 		return nopWriteCloser{rc.Err}, nil
 	}
 	return nopWriteCloser{os.Stderr}, nil
 }
+
+func terminalFile(*os.File) bool                  { return false }
+func defaultTerminalDevice(string) bool           { return false }
+func defaultSessionActive(int) bool               { return false }
+func defaultSessionOwnsTerminal(int, string) bool { return false }
 
 func defaultGetVEOL(io.Reader) byte { return 0 }
 

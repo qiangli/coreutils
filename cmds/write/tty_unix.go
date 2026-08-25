@@ -4,14 +4,19 @@ package writecmd
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -42,7 +47,7 @@ func defaultSenderTTY(rc *tool.RunContext) string {
 			continue
 		}
 		fi, err := f.Stat()
-		if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		if err != nil || fi.Mode()&os.ModeCharDevice == 0 || !term.IsTerminal(int(f.Fd())) {
 			continue
 		}
 		if name := deviceNameOf(fi); name != "" {
@@ -88,8 +93,106 @@ func rdevOf(fi fs.FileInfo) (uint64, bool) {
 	return uint64(st.Rdev), true
 }
 
-func defaultOpenSenderControlTTY(*tool.RunContext) (io.WriteCloser, error) {
-	return os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+func defaultOpenSenderControlTTY(rc *tool.RunContext, expected string) (io.WriteCloser, error) {
+	path := ttyDevice(expected)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if !terminalFile(f) {
+		_ = f.Close()
+		return nil, errors.New("not a terminal")
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if name := deviceNameOf(fi); normalizeTTY(name) != normalizeTTY(expected) || !senderStreamMatches(rc, expected, fi) {
+		_ = f.Close()
+		return nil, errors.New("terminal is not the sender's authenticated stream")
+	}
+	return f, nil
+}
+
+func senderStreamMatches(rc *tool.RunContext, expected string, opened fs.FileInfo) bool {
+	wantRdev, ok := rdevOf(opened)
+	if !ok {
+		return false
+	}
+	var candidates []*os.File
+	if rc != nil {
+		for _, stream := range []any{rc.In, rc.Out, rc.Err} {
+			if f, ok := stream.(*os.File); ok {
+				candidates = append(candidates, f)
+			}
+		}
+	}
+	candidates = append(candidates, os.Stdin, os.Stdout, os.Stderr)
+	for _, candidate := range candidates {
+		if candidate == nil || !term.IsTerminal(int(candidate.Fd())) {
+			continue
+		}
+		fi, err := candidate.Stat()
+		if err != nil {
+			continue
+		}
+		rdev, ok := rdevOf(fi)
+		if ok && rdev == wantRdev && normalizeTTY(deviceNameOf(fi)) == normalizeTTY(expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminalFile(f *os.File) bool { return f != nil && term.IsTerminal(int(f.Fd())) }
+
+func defaultTerminalDevice(path string) bool {
+	f, err := os.OpenFile(path, os.O_WRONLY|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	return terminalFile(f)
+}
+
+func defaultSessionActive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := unix.Kill(pid, 0)
+	return err == nil || errors.Is(err, unix.EPERM)
+}
+
+func defaultSessionOwnsTerminal(pid int, path string) bool {
+	if !defaultSessionActive(pid) {
+		return false
+	}
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	end := strings.LastIndexByte(string(data), ')')
+	if end < 0 {
+		return false
+	}
+	fields := strings.Fields(string(data[end+1:]))
+	if len(fields) < 5 {
+		return false
+	}
+	ttyNR, err := strconv.ParseInt(fields[4], 10, 64)
+	if err != nil || ttyNR <= 0 {
+		return false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	rdev, ok := rdevOf(fi)
+	return ok && uint64(ttyNR) == rdev
 }
 
 func defaultGetVEOL(in io.Reader) byte {

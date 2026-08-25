@@ -106,6 +106,7 @@ func install(t *testing.T, f fixture) *world {
 	oldTTY, oldNow := senderTTY, nowFn
 	oldStat, oldOpen := statFn, openTTYFn
 	oldControlTTY, oldGetVEOL, oldCType := openSenderControlTTYFn, getVEOL, openCTypeFn
+	oldSessionActive, oldSessionOwns, oldTerminalDevice := sessionActiveFn, sessionOwnsTerminalFn, terminalDeviceFn
 
 	dbPath, dbLayout, devDir = db, f.layout, dev
 	supported = !f.noPlat
@@ -120,9 +121,13 @@ func install(t *testing.T, f fixture) *world {
 	myTTY := f.myTTY
 	senderTTY = func(*tool.RunContext) string { return myTTY }
 	nowFn = func() time.Time { return epoch.Add(90 * time.Minute) }
-	statFn, openTTYFn = os.Stat, defaultOpenTTY
+	statFn = os.Stat
+	openTTYFn = func(path string) (io.WriteCloser, error) { return os.OpenFile(path, os.O_WRONLY, 0) }
+	sessionActiveFn = func(int) bool { return true }
+	sessionOwnsTerminalFn = func(int, string) bool { return true }
+	terminalDeviceFn = func(string) bool { return true }
 
-	openSenderControlTTYFn = func(rc *tool.RunContext) (io.WriteCloser, error) {
+	openSenderControlTTYFn = func(rc *tool.RunContext, _ string) (io.WriteCloser, error) {
 		if f.controlW != nil {
 			return nopWriteCloser{f.controlW}, nil
 		}
@@ -138,6 +143,7 @@ func install(t *testing.T, f fixture) *world {
 		supported, lookupUser, senderInfo = oldSup, oldLookup, oldSender
 		senderTTY, nowFn = oldTTY, oldNow
 		statFn, openTTYFn = oldStat, oldOpen
+		sessionActiveFn, sessionOwnsTerminalFn, terminalDeviceFn = oldSessionActive, oldSessionOwns, oldTerminalDevice
 		openSenderControlTTYFn, getVEOL, openCTypeFn = oldControlTTY, oldGetVEOL, oldCType
 	})
 	return w
@@ -189,9 +195,25 @@ func TestDeliversBannerBodyAndEOF(t *testing.T) {
 		t.Errorf("write must say nothing on its own streams; got out=%q err=%q", out, errOut)
 	}
 	got := w.read(t, "pts/9")
-	want := "Message from alice (pts/1) [Sat Aug 22 10:30:00 2026]... to bob .\nhello\nthere\nEOT\n"
+	want := "Message from alice (pts/1) [Sat Aug 22 10:30:00 2026]...\nhello\nthere\nEOT\n"
 	if got != want {
 		t.Errorf("terminal received\n %q\nwant\n %q", got, want)
+	}
+}
+
+func TestBannerUsesLoginIDAssociatedWithSenderTerminal(t *testing.T) {
+	w := install(t, fixture{
+		sender: "effective-account", uid: 1000, myTTY: "pts/1",
+		logins: []login{
+			{user: "alice-login", line: "pts/1", mode: writable, when: epoch},
+			{user: "bob", line: "pts/9", mode: writable, when: epoch},
+		},
+	})
+	if _, errOut, code := exec(t, "", "bob"); code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+	if got := w.read(t, "pts/9"); !strings.HasPrefix(got, "Message from alice-login (pts/1) [") {
+		t.Fatalf("banner did not use tty-associated login ID: %q", got)
 	}
 }
 
@@ -672,6 +694,29 @@ func (f *failingWriter) Write(p []byte) (int, error) {
 }
 func (f *failingWriter) Close() error { return nil }
 
+type shortWriter struct {
+	writes int
+	short  int
+	closed bool
+}
+
+func (w *shortWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.short && len(p) > 0 {
+		return len(p) - 1, nil
+	}
+	return len(p), nil
+}
+func (w *shortWriter) Close() error { w.closed = true; return nil }
+
+type closeErrorWriter struct{ bytes.Buffer }
+
+func (*closeErrorWriter) Close() error { return errors.New("terminal close failed") }
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
 func TestWriteErrorToTerminalIsReported(t *testing.T) {
 	install(t, fixture{
 		uid: 1000, myTTY: "pts/1",
@@ -699,6 +744,126 @@ func TestOpenErrorIsReported(t *testing.T) {
 	}
 }
 
+func TestShortBannerWriteIsReportedAndDoesNotAlert(t *testing.T) {
+	var control bytes.Buffer
+	install(t, fixture{uid: 1000, myTTY: "pts/1", controlW: &control,
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	recipient := &shortWriter{short: 1}
+	openTTYFn = func(string) (io.WriteCloser, error) { return recipient, nil }
+	_, errOut, code := exec(t, "body\n", "bob")
+	if code != 1 || !strings.Contains(errOut, io.ErrShortWrite.Error()) {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+	if control.Len() != 0 {
+		t.Fatalf("sender alerted before complete banner: %q", control.String())
+	}
+}
+
+func TestShortAlertWriteIsReported(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	alert := &shortWriter{short: 1}
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) { return alert, nil }
+	_, errOut, code := exec(t, "body\n", "bob")
+	if code != 1 || !strings.Contains(errOut, io.ErrShortWrite.Error()) {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestShortBodyAndEOTWritesAreReported(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		short       int
+	}{{"body", "body\n", 2}, {"EOT", "", 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			install(t, fixture{uid: 1000, myTTY: "",
+				logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+			recipient := &shortWriter{short: tc.short}
+			openTTYFn = func(string) (io.WriteCloser, error) { return recipient, nil }
+			_, errOut, code := exec(t, tc.input, "bob")
+			if code != 1 || !strings.Contains(errOut, io.ErrShortWrite.Error()) {
+				t.Fatalf("exit=%d stderr=%q", code, errOut)
+			}
+		})
+	}
+}
+
+func TestBannerCompletesBeforeSenderAlerts(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	var events []string
+	recipient := nopWriteCloser{writerFunc(func(p []byte) (int, error) {
+		if len(events) == 0 {
+			events = append(events, "banner")
+		}
+		return len(p), nil
+	})}
+	openTTYFn = func(string) (io.WriteCloser, error) { return recipient, nil }
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) {
+		return nopWriteCloser{writerFunc(func(p []byte) (int, error) {
+			events = append(events, "alerts")
+			return len(p), nil
+		})}, nil
+	}
+	if _, errOut, code := exec(t, "", "bob"); code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+	if len(events) < 2 || events[0] != "banner" || events[1] != "alerts" {
+		t.Fatalf("cross-sink order = %v", events)
+	}
+}
+
+func TestMultiLoginStdoutFailureIsReportedBeforeAlerts(t *testing.T) {
+	var alerts bytes.Buffer
+	install(t, fixture{uid: 1000, myTTY: "pts/1", controlW: &alerts,
+		logins: []login{
+			{user: "bob", line: "pts/2", mode: writable, when: epoch},
+			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
+		}})
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{
+		In: strings.NewReader("body\n"), Out: &shortWriter{short: 1}, Err: &errOut,
+	}}
+	if code := run(rc, []string{"bob"}); code != 1 || !strings.Contains(errOut.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("exit=%d stderr=%q", code, errOut.String())
+	}
+	if alerts.Len() != 0 {
+		t.Fatalf("alerts emitted after failed stdout notice: %q", alerts.String())
+	}
+}
+
+func TestRecipientCloseErrorIsReported(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	recipient := new(closeErrorWriter)
+	openTTYFn = func(string) (io.WriteCloser, error) { return recipient, nil }
+	_, errOut, code := exec(t, "body\n", "bob")
+	if code != 1 || !strings.Contains(errOut, "terminal close failed") {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestSenderTerminalCloseErrorIsReported(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	control := new(closeErrorWriter)
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) { return control, nil }
+	_, errOut, code := exec(t, "body\n", "bob")
+	if code != 1 || !strings.Contains(errOut, "sender terminal") || !strings.Contains(errOut, "terminal close failed") {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestInactiveRecipientSessionIsRejected(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	sessionActiveFn = func(int) bool { return false }
+	_, errOut, code := exec(t, "", "bob")
+	if code != 1 || !strings.Contains(errOut, "no accessible terminal") {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+}
+
 // An unreadable accounting database is not "nobody is logged in": the two
 // facts want different fixes, so they must not share a diagnostic.
 func TestMissingDatabaseIsDistinctFromNotLoggedIn(t *testing.T) {
@@ -722,7 +887,7 @@ func TestMissingDatabaseIsDistinctFromNotLoggedIn(t *testing.T) {
 // CONTROLLING TERMINAL, together with the two required alerts: a redirection
 // of standard output must not be able to swallow the one answer to "which of
 // bob's terminals did that go to?".
-func TestMultiLoginNoticeAndAlertsGoToTheControllingTerminal(t *testing.T) {
+func TestMultiLoginNoticeGoesToStdoutAndAlertsGoToControllingTerminal(t *testing.T) {
 	var controlBuf bytes.Buffer
 	w := install(t, fixture{
 		sender: "alice", uid: 1000, myTTY: "pts/1",
@@ -736,11 +901,12 @@ func TestMultiLoginNoticeAndAlertsGoToTheControllingTerminal(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	if out != "" {
-		t.Errorf("standard output must stay empty, got %q", out)
+	wantNotice := "write: bob is logged in on more than one line; using pts/4\n"
+	if out != wantNotice {
+		t.Errorf("standard output = %q, want %q", out, wantNotice)
 	}
-	if got := controlBuf.String(); got != "write: bob is logged in on more than one line; using pts/4\n\a\a" {
-		t.Errorf("controlling terminal = %q, want the notice followed by two alerts", got)
+	if got := controlBuf.String(); got != "\a\a" {
+		t.Errorf("controlling terminal = %q, want two alerts", got)
 	}
 	if got := w.read(t, "pts/4"); !strings.Contains(got, "hi") {
 		t.Errorf("recipient terminal pts/4 did not receive message: %q", got)
@@ -790,10 +956,9 @@ func TestExplicitTerminalOperandSuppressesTheInformationalMessage(t *testing.T) 
 	}
 }
 
-// With no controlling terminal there is nothing to alert and nothing to be
-// swallowed: POSIX's STDOUT clause is then the only sink left, and write must
-// still deliver rather than fail.
-func TestNoControllingTerminalFallsBackToStandardOutput(t *testing.T) {
+// The informational message still goes to stdout when the sender has no
+// controlling terminal; only the two terminal alerts are omitted.
+func TestNoControllingTerminalStillUsesStandardOutput(t *testing.T) {
 	w := install(t, fixture{
 		uid: 1000, myTTY: "",
 		logins: []login{
@@ -801,9 +966,6 @@ func TestNoControllingTerminalFallsBackToStandardOutput(t *testing.T) {
 			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
 		},
 	})
-	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) {
-		return nil, errors.New("no controlling terminal")
-	}
 	out, errOut, code := exec(t, "hi\n", "bob")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
@@ -816,21 +978,18 @@ func TestNoControllingTerminalFallsBackToStandardOutput(t *testing.T) {
 	}
 }
 
-// The sender's terminal is a courtesy channel. Losing it (it was hung up, the
-// session is gone) is diagnosed, but it must not cost the recipient the
-// message, which is the whole point of the utility, nor turn a delivered
-// message into a non-zero exit.
-func TestControllingTerminalWriteFailureIsNotFatal(t *testing.T) {
+// A failed sender alert cannot be reported as a successful connection.
+func TestControllingTerminalWriteFailureIsFatal(t *testing.T) {
 	w := install(t, fixture{
 		uid: 1000, myTTY: "pts/1",
 		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}},
 	})
-	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) {
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) {
 		return &failingWriter{}, nil
 	}
 	out, errOut, code := exec(t, "hi\n", "bob")
-	if code != 0 {
-		t.Fatalf("exit %d, want 0: %s", code, errOut)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1: %s", code, errOut)
 	}
 	if out != "" {
 		t.Errorf("standard output must stay empty, got %q", out)
@@ -838,8 +997,8 @@ func TestControllingTerminalWriteFailureIsNotFatal(t *testing.T) {
 	if !strings.Contains(errOut, "sender terminal") {
 		t.Errorf("stderr = %q, want a diagnostic naming the sender terminal", errOut)
 	}
-	if got := w.read(t, "pts/9"); !strings.Contains(got, "hi\nEOT\n") {
-		t.Errorf("recipient did not receive the message: %q", got)
+	if got := w.read(t, "pts/9"); strings.Contains(got, "hi\n") {
+		t.Errorf("body must not follow a failed connection alert: %q", got)
 	}
 }
 
@@ -907,7 +1066,7 @@ func TestSenderControlTerminalIsClosed(t *testing.T) {
 	install(t, fixture{uid: 1000, myTTY: "pts/1",
 		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
 	control := new(trackingCloser)
-	openSenderControlTTYFn = func(*tool.RunContext) (io.WriteCloser, error) { return control, nil }
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) { return control, nil }
 	if _, e, code := exec(t, "", "bob"); code != 0 {
 		t.Fatalf("exit %d: %s", code, e)
 	}
@@ -923,6 +1082,14 @@ func TestSenderControlTerminalIsClosed(t *testing.T) {
 type slowReader struct {
 	chunks []string
 	n      int
+}
+
+func (r *slowReader) Len() int {
+	total := 0
+	for _, chunk := range r.chunks[r.n:] {
+		total += len(chunk)
+	}
+	return total
 }
 
 func (r *slowReader) Read(p []byte) (int, error) {
@@ -947,6 +1114,71 @@ func TestGenericReaderIsDeliveredNotRefused(t *testing.T) {
 	}
 	if got := w.read(t, "pts/9"); !strings.Contains(got, "one\ntwo\ntail\nEOT\n") {
 		t.Errorf("recipient terminal = %q", got)
+	}
+}
+
+type opaqueBlockingReader struct{ called bool }
+
+func (r *opaqueBlockingReader) Read([]byte) (int, error) {
+	r.called = true
+	select {}
+}
+
+func TestOpaqueBlockingReaderIsRejectedWithoutReadOrLeak(t *testing.T) {
+	r := new(opaqueBlockingReader)
+	before := goroutineCount()
+	err := deliverStream(io.Discard, r, 0, loadCharClasses([]string{"LC_ALL=C"}), make(chan os.Signal))
+	if err == nil || !strings.Contains(err.Error(), "cannot be interrupted safely") {
+		t.Fatalf("error = %v", err)
+	}
+	if r.called {
+		t.Fatal("opaque reader was entered and could block forever")
+	}
+	if after := settledGoroutineCount(before); after > before {
+		t.Fatalf("goroutines before=%d after=%d", before, after)
+	}
+}
+
+type deadlineBlockingReader struct {
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (r *deadlineBlockingReader) SetReadDeadline(deadline time.Time) error {
+	r.mu.Lock()
+	r.deadline = deadline
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *deadlineBlockingReader) Read([]byte) (int, error) {
+	r.mu.Lock()
+	deadline := r.deadline
+	r.mu.Unlock()
+	if wait := time.Until(deadline); wait > 0 {
+		time.Sleep(wait)
+	}
+	return 0, os.ErrDeadlineExceeded
+}
+
+func TestDeadlineGenericReaderInterruptsWithoutCloseOrGoroutine(t *testing.T) {
+	r := new(deadlineBlockingReader)
+	sigCh := make(chan os.Signal, 1)
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- deliverStream(&out, r, 0, loadCharClasses([]string{"LC_ALL=C"}), sigCh) }()
+	time.Sleep(20 * time.Millisecond)
+	sigCh <- os.Interrupt
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deadline-capable generic reader did not interrupt")
+	}
+	if out.String() != "EOT\n" {
+		t.Fatalf("output=%q", out.String())
 	}
 }
 
@@ -1090,8 +1322,8 @@ func TestUnsupportedLocaleFallsBackToTheCLocaleAndStillDelivers(t *testing.T) {
 }
 
 func TestUTF8LocaleNameSpellings(t *testing.T) {
-	yes := []string{"en_US.UTF-8", "en_US.utf8", "C.UTF-8", "de_DE.UTF-8@euro", "zh_CN.Utf-8"}
-	no := []string{"C", "POSIX", "de_DE", "de_DE.ISO-8859-1", "en_US.iso885915", "utf8"}
+	yes := []string{"en_US.UTF-8", "en_US.utf8", "C.UTF-8", "de_DE.UTF-8@euro", "zh_CN.Utf-8", "UTF-8", "utf8"}
+	no := []string{"C", "POSIX", "de_DE", "de_DE.ISO-8859-1", "en_US.iso885915"}
 	for _, n := range yes {
 		if !isUTF8Locale(n) {
 			t.Errorf("isUTF8Locale(%q) = false, want true", n)
