@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/user"
 	"sort"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 	portableps "github.com/tklauser/ps"
+	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/cmds/internal/tzenv"
 	"github.com/qiangli/coreutils/pkg/locale"
@@ -28,7 +30,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "ps",
 	Synopsis: "Report process status.",
-	Usage:    "ps [-Aadefl] [-g grouplist] [-G grouplist] [-n namelist] [-o format] [-p proclist] [-t termlist] [-u userlist] [-U userlist]",
+	Usage:    "ps [-aA] [-defl] [-g grouplist] [-G grouplist] [-n namelist] [-o format]... [-p proclist] [-t termlist] [-u userlist] [-U userlist]",
 }
 
 type options struct {
@@ -51,6 +53,7 @@ type process struct {
 	priority                                           int
 	flagsKnown, addrKnown, priorityKnown               bool
 	pgidKnown, niceKnown, cpuKnown, vszKnown, szKnown  bool
+	wchanKnown                                         bool
 	argvKnown                                          bool
 }
 
@@ -64,23 +67,20 @@ type liveProcessSource struct{}
 func (liveProcessSource) identity() (int, string) { return currentUID(), currentTTY() }
 
 func (liveProcessSource) processes() ([]process, error) {
+	enrichProcess, err := prepareProcessSource()
+	if err != nil {
+		return nil, err
+	}
 	base, err := portableps.Processes()
 	if err != nil {
 		return nil, err
 	}
 	procs := make([]process, 0, len(base))
 	for _, p := range base {
-		argv := p.ExecutableArgs()
-		q := process{pid: p.PID(), ppid: p.PPID(), ruid: p.UID(), euid: p.UID(), rgid: p.GID(), egid: p.GID(), command: p.Command(), start: p.CreationTime()}
-		if len(argv) != 0 {
-			q.command = argv[0] // POSIX comm is argv[0], not the executable basename.
-			q.args = strings.Join(argv, " ")
-			q.argvKnown = true
+		q := process{pid: p.PID(), ppid: p.PPID(), ruid: -1, euid: -1, rgid: -1, egid: -1, command: p.Command()}
+		if !enrichProcess(&q) {
+			continue
 		}
-		if q.args == "" {
-			q.args = q.command
-		}
-		enrich(&q)
 		procs = append(procs, q)
 	}
 	return procs, nil
@@ -123,7 +123,7 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	long := fs.BoolP("long", "l", false, "show a long listing")
 	sids := fs.StringSliceP("group", "g", nil, "select processes by session-leader ID LIST")
 	gids := fs.StringSliceP("Group", "G", nil, "select by real group LIST")
-	fs.StringSliceP("name-list", "n", nil, "alternate name list (not supported)")
+	namelist := fs.StringP("name-list", "n", "", "alternate system name list")
 	formats := fs.StringSliceP("format", "o", nil, "select output FORMAT")
 	pids := fs.StringSliceP("pid", "p", nil, "select processes by PID LIST")
 	ttys := fs.StringSliceP("tty", "t", nil, "select processes by terminal LIST")
@@ -135,6 +135,20 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	}
 	if len(operands) != 0 {
 		return usage(rc, "unexpected operand "+strconv.Quote(operands[0]))
+	}
+	if fs.Changed("name-list") && *namelist == "" {
+		return usage(rc, "empty name list")
+	}
+	for _, list := range []struct {
+		name   string
+		values []string
+	}{
+		{"group", *sids}, {"Group", *gids}, {"format", *formats},
+		{"pid", *pids}, {"tty", *ttys}, {"user", *eusers}, {"User", *rusers},
+	} {
+		if fs.Changed(list.name) && len(list.values) == 0 {
+			return usage(rc, "empty "+list.name+" list")
+		}
 	}
 	// -n supplies an alternate kernel name list. The proc-backed enumerator
 	// needs no namelist, so accepting it as a no-op has the required observable
@@ -163,7 +177,9 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	if o.rusers, err = numberSet(*rusers, lookupUser); err != nil {
 		return usage(rc, err.Error())
 	}
-	o.ttys = stringSet(*ttys)
+	if o.ttys, err = stringSet(*ttys); err != nil {
+		return usage(rc, err.Error())
+	}
 	o.format, err = parseFormat(*formats, o)
 	if err != nil {
 		return usage(rc, err.Error())
@@ -183,7 +199,7 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	procs = selectedProcs
 	sort.Slice(procs, func(i, j int) bool { return procs[i].pid < procs[j].pid })
 	render := renderContext{now: now(), tf: tf, loc: tzenv.Location(rc.Env), multibyte: utf8Locale(locale.Resolve(rc.Env, locale.CType))}
-	if err := printTableWithContext(rc, procs, o.format, render, displayColumns(rc.Env)); err != nil {
+	if err := printTableWithContext(rc, procs, o.format, render, displayColumns(rc)); err != nil {
 		fmt.Fprintf(rc.Err, "ps: write error: %v\n", err)
 		return 1
 	}
@@ -203,7 +219,7 @@ func selected(p process, o options) bool {
 		return true
 	}
 	if o.pids[p.pid] || o.sids[p.sid] || o.gids[p.rgid] || o.eusers[p.euid] ||
-		o.rusers[p.ruid] || o.ttys[cleanTTY(p.tty)] {
+		o.rusers[p.ruid] || o.ttys[terminalKey(p.tty)] {
 		return true
 	}
 	if explicit {
@@ -213,7 +229,7 @@ func selected(p process, o options) bool {
 	// user and terminal as the invoker. A missing controlling terminal is a
 	// terminal identity too, so two "?" processes compare equal here.
 	return (o.invokerUID < 0 || p.euid == o.invokerUID) &&
-		cleanTTY(p.tty) == cleanTTY(o.invokerTTY)
+		terminalKey(p.tty) == terminalKey(o.invokerTTY)
 }
 
 func parseFormat(specs []string, o options) ([]column, error) {
@@ -400,22 +416,43 @@ func valueAt(p process, name string, render renderContext) string {
 		}
 		return "-"
 	case "wchan":
-		if p.wchan != "" && p.wchan != "0" {
+		if !p.wchanKnown && p.wchan == "" {
+			return "-"
+		}
+		if p.wchan != "0" {
 			return p.wchan
 		}
-		return "-"
+		return ""
 	case "uid":
+		if p.euid < 0 {
+			return "-"
+		}
 		return strconv.Itoa(p.euid)
 	case "gid":
+		if p.egid < 0 {
+			return "-"
+		}
 		return strconv.Itoa(p.egid)
 	case "user", "ruser":
 		if name == "ruser" {
+			if p.ruid < 0 {
+				return "-"
+			}
 			return userName(p.ruid)
+		}
+		if p.euid < 0 {
+			return "-"
 		}
 		return userName(p.euid)
 	case "group", "rgroup":
 		if name == "rgroup" {
+			if p.rgid < 0 {
+				return "-"
+			}
 			return groupName(p.rgid)
+		}
+		if p.egid < 0 {
+			return "-"
 		}
 		return groupName(p.egid)
 	case "pid":
@@ -479,7 +516,7 @@ func valueAt(p process, name string, render renderContext) string {
 		if p.tty == "" {
 			return "?"
 		}
-		return cleanTTY(p.tty)
+		return terminalDisplay(p.tty)
 	case "comm":
 		return p.command
 	case "args":
@@ -506,43 +543,58 @@ func numberSet(values []string, lookup func(string) (int, error)) (map[int]bool,
 			out[n] = true
 		}
 	}
+	if len(values) != 0 && len(out) == 0 {
+		return nil, fmt.Errorf("empty list")
+	}
 	return out, nil
 }
 
-func stringSet(values []string) map[string]bool {
+func stringSet(values []string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, raw := range values {
 		for _, s := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-			if s = cleanTTY(strings.TrimSpace(s)); s != "" {
+			if s = terminalKey(strings.TrimSpace(s)); s != "" {
 				out[s] = true
 			}
 		}
 	}
-	return out
+	if len(values) != 0 && len(out) == 0 {
+		return nil, fmt.Errorf("empty list")
+	}
+	return out, nil
 }
-func cleanTTY(s string) string { return strings.TrimPrefix(strings.TrimPrefix(s, "/dev/"), "tty") }
+func terminalDisplay(s string) string { return strings.TrimPrefix(s, "/dev/") }
+func terminalKey(s string) string     { return strings.TrimPrefix(terminalDisplay(s), "tty") }
+
+var (
+	lookupUserName  = user.Lookup
+	lookupGroupName = user.LookupGroup
+	lookupUserID    = user.LookupId
+	lookupGroupID   = user.LookupGroupId
+)
+
 func lookupUser(s string) (int, error) {
-	u, err := user.Lookup(s)
+	u, err := lookupUserName(s)
 	if err != nil {
 		return 0, err
 	}
 	return strconv.Atoi(u.Uid)
 }
 func lookupGroup(s string) (int, error) {
-	g, err := user.LookupGroup(s)
+	g, err := lookupGroupName(s)
 	if err != nil {
 		return 0, err
 	}
 	return strconv.Atoi(g.Gid)
 }
 func userName(id int) string {
-	if u, err := user.LookupId(strconv.Itoa(id)); err == nil {
+	if u, err := lookupUserID(strconv.Itoa(id)); err == nil && u.Username != "" {
 		return u.Username
 	}
 	return strconv.Itoa(id)
 }
 func groupName(id int) string {
-	if g, err := user.LookupGroupId(strconv.Itoa(id)); err == nil {
+	if g, err := lookupGroupID(strconv.Itoa(id)); err == nil && g.Name != "" {
 		return g.Name
 	}
 	return strconv.Itoa(id)
@@ -585,14 +637,19 @@ func startTime(start, now time.Time, tf locale.TimeFormatter) string {
 	return formatted
 }
 
-func displayColumns(env []string) int {
-	for i := len(env) - 1; i >= 0; i-- {
-		if v, ok := strings.CutPrefix(env[i], "COLUMNS="); ok {
+func displayColumns(rc *tool.RunContext) int {
+	for i := len(rc.Env) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(rc.Env[i], "COLUMNS="); ok {
 			n, err := strconv.Atoi(v)
 			if err == nil && n > 0 {
 				return n
 			}
-			return 0
+			break
+		}
+	}
+	if f, ok := rc.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
+			return width
 		}
 	}
 	return 0

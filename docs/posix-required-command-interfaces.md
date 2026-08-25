@@ -3813,21 +3813,21 @@ printf format [argument...]
 
 **Issue 7 option-argument candidate:** `-g=<grouplist>; -G=<grouplist>; -n=<namelist>; -o=<format>; -p=<proclist>; -t=<termlist>; -u=<userlist>; -U=<userlist>`.
 
-**Operands:** `none`. No operands are accepted; selection options are additive and format options control the selected process attributes.
+**Operands:** `none`. No operands are accepted. Selection options are combined by inclusive OR and suppress the default same-effective-user/same-terminal selection; -f, -l, -n, and -o do not alter selection. Empty mandatory option-arguments are diagnosed.
 
-**Special tokens:** NONE
+**Special tokens:** The XSI terminal selector accepts both a tty device filename and the identifier after its tty prefix. -n is accepted as an alternate namelist designation, but the Linux procfs provider does not consult a kernel namelist. -x is not an Issue 7 option and is rejected.
 
 **Standard input:** Not used.
 
 **Environment:** `COLUMNS; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; xsi:NLSPATH; TZ`.
 
-**Standard output:** Write information about selected processes. Without -o the base format is unspecified; XSI default, full, and long layouts and -o fields use the required headings, ordering, values, and user-supplied header overrides.
+**Standard output:** Write information about selected processes. COLUMNS overrides a live output-terminal width. Without -o the base format is unspecified; XSI default, full, and long layouts and -o fields use the required headings, ordering, values, user-supplied header overrides, textual identity lookup with decimal fallback, and hyphens for unavailable optional data.
 
-**Standard error:** Used only for diagnostic messages.
+**Standard error:** Used only for usage, locale, process-provider, and output-error diagnostic messages.
 
-**Effects:** `Inspects the current process population and writes a snapshot; it does not modify processes.`.
+**Effects:** `On Linux, reads a live procfs snapshot including stat field 22 start time, AT_CLKTCK, boot time, status identities, terminal number, CPU, memory, and wait-channel data; disappearing or unavailable data remains absent rather than fabricated. Other platforms fail explicitly because exact selection data is unavailable. No process is modified.`.
 
-**Exit status:** 0 on successful completion; greater than 0 if an error occurs.
+**Exit status:** 0 on successful completion; greater than 0 for syntax, locale, process-provider, or output errors (usage errors use 2).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3839,7 +3839,7 @@ printf format [argument...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ps`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/ps/ps_test.go#TestPSPOSIXSelectionUnionAndDefaults;cmds/ps/ps_test.go#TestPSPOSIXListSeparatorsAndFormatHeaders;cmds/ps/ps_test.go#TestPSHermeticEnumeratorSelectionOrderingAndFields;cmds/ps/ps_test.go#TestPSXSIStandardDefaultLayouts;cmds/ps/ps_test.go#TestPSPOSIXRequiredFormatNamesAndHeaders;cmds/ps/ps_test.go#TestPSEnvironmentIsInvocationLocal;cmds/ps/ps_test.go#TestPSEnrichLinuxProcFixture;cmds/ps/ps_sigttin_unix_test.go#TestPSRetainsDefaultSIGTTINDisposition`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ps:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/ps/ps_test.go#TestPSAllPOSIXSelectionOptionsEndToEnd;cmds/ps/ps_test.go#TestPSXIsNotAnIssue7Option;cmds/ps/ps_test.go#TestPSPOSIXListSeparatorsAndFormatHeaders;cmds/ps/ps_test.go#TestPSRejectsEmptyMandatoryOptionArgumentsAndOperands;cmds/ps/ps_test.go#TestPSIdentityLookupAndNumericFallback;cmds/ps/ps_test.go#TestPSHermeticEnumeratorSelectionOrderingAndFields;cmds/ps/ps_test.go#TestPSXSIStandardDefaultLayouts;cmds/ps/ps_test.go#TestPSPOSIXRequiredFormatNamesAndHeaders;cmds/ps/ps_test.go#TestPSTerminalFormatMatchesWhoAndWchanDistinguishesRunning;cmds/ps/ps_test.go#TestPSEnvironmentIsInvocationLocal;cmds/ps/ps_test.go#TestPSEnrichLinuxProcFixture;cmds/ps/ps_test.go#TestPSLinuxTimingUnavailableDoesNotInventValues;cmds/ps/process_linux_test.go#TestPSTTYNameDecodesLinuxDevptsMajorRange;cmds/ps/process_linux_test.go#TestPSEnrichLinuxCmdlinePreservesArgvZeroAndEmptyArguments;cmds/ps/process_linux_test.go#TestPSLinuxTimingRejectsOverflowAndEmptyWchan;cmds/ps/ps_test.go#TestPSLiveLinuxEnumeratorOwnProcess;cmds/ps/ps_sigttin_unix_test.go#TestPSUsesLiveOutputTerminalWidthWhenColumnsUnset;cmds/ps/ps_sigttin_unix_test.go#TestPSRetainsDefaultSIGTTINDisposition;cmds/ps/ps_nonlinux_test.go#TestPSNonLinuxLiveSourceFailsExplicitly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ps:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [ps](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ps.html).
 
