@@ -81,7 +81,7 @@ func ParseAtTimespec(s string, now time.Time) (time.Time, error) {
 // explicit trailing "utc" overrides loc. The accepted grammar covers numeric
 // and meridian times, named dates/weekdays, today/tomorrow, and increments.
 func ParseAtTimespecInLocation(s string, now time.Time, loc *time.Location) (time.Time, error) {
-	orig := strings.TrimSpace(s)
+	orig := normalizeAtTimespec(s)
 	if orig == "" {
 		return time.Time{}, fmt.Errorf("invalid timespec %q", orig)
 	}
@@ -119,6 +119,11 @@ func ParseAtTimespecInLocation(s string, now time.Time, loc *time.Location) (tim
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid timespec %q: %w", orig, err)
 	}
+	if consumed < len(fields) && strings.EqualFold(fields[consumed], "utc") {
+		loc = time.UTC
+		now = now.In(loc)
+		fields = append(fields[:consumed], fields[consumed+1:]...)
+	}
 	dateFields := fields[consumed:]
 	when, explicitDate, err := parseAtDate(dateFields, hour, minute, now, loc)
 	if err != nil {
@@ -135,9 +140,30 @@ type atIncrement struct {
 	unit string
 }
 
-var incrementRe = regexp.MustCompile(`(?i)^(.*)\+\s*([0-9]+)\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*$`)
+var (
+	incrementRe     = regexp.MustCompile(`(?i)^(.*)\+\s*([0-9]+)\s*(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*$`)
+	nextIncrementRe = regexp.MustCompile(`(?i)^(.*)\bnext\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*$`)
+	adjacentAMPMRe  = regexp.MustCompile(`(?i)^([0-9]{1,2}(?::[0-9]{1,2})?)(am|pm)([[:alpha:]].*)$`)
+	adjacentMonthRe = regexp.MustCompile(`(?i)\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)([0-9]{1,2})(,?)\b`)
+)
+
+func normalizeAtTimespec(s string) string {
+	s = strings.TrimSpace(s)
+	if m := adjacentAMPMRe.FindStringSubmatch(s); m != nil {
+		s = m[1] + " " + m[2] + " " + m[3]
+	}
+	s = adjacentMonthRe.ReplaceAllString(s, "$1 $2$3")
+	return s
+}
 
 func splitIncrement(s string) (string, *atIncrement, error) {
+	if m := nextIncrementRe.FindStringSubmatch(s); m != nil {
+		base := strings.TrimSpace(m[1])
+		if base == "" {
+			base = "now"
+		}
+		return base, &atIncrement{n: 1, unit: strings.ToLower(m[2])}, nil
+	}
 	if !strings.Contains(s, "+") {
 		return strings.TrimSpace(s), nil, nil
 	}
@@ -188,6 +214,15 @@ func parseClock(fields []string) (hour, minute, consumed int, err error) {
 		candidate := strings.ToLower(fields[1])
 		if candidate == "am" || candidate == "pm" {
 			meridian, consumed = candidate, 2
+		}
+	}
+	if meridian == "" {
+		for _, suffix := range []string{"am", "pm"} {
+			if strings.HasSuffix(word, suffix) && len(word) > len(suffix) {
+				meridian = suffix
+				word = strings.TrimSuffix(word, suffix)
+				break
+			}
 		}
 	}
 

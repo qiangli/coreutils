@@ -49,18 +49,27 @@ type Job struct {
 	// corresponding Set bits distinguish an intentionally empty value from a
 	// legacy/general scheduler job, which continues to inherit daemon state.
 	// The state file is private (0600), and list output must never expose Env.
-	Env        []string  `json:"env,omitempty"`
-	EnvSet     bool      `json:"env_set,omitempty"`
-	Umask      uint32    `json:"umask,omitempty"`
-	UmaskSet   bool      `json:"umask_set,omitempty"`
-	MailOutput bool      `json:"mail_output,omitempty"`
-	MailTo     string    `json:"mail_to,omitempty"`
-	Prompt     string    `json:"prompt,omitempty"`
-	Context    string    `json:"context,omitempty"`
-	Enabled    bool      `json:"enabled"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastRun    time.Time `json:"last_run,omitempty"`
-	NextRun    time.Time `json:"next_run,omitempty"`
+	Env        []string `json:"env,omitempty"`
+	EnvSet     bool     `json:"env_set,omitempty"`
+	Umask      uint32   `json:"umask,omitempty"`
+	UmaskSet   bool     `json:"umask_set,omitempty"`
+	MailOutput bool     `json:"mail_output,omitempty"`
+	// MailCompletion records POSIX at -m / batch behavior: completion mail is
+	// required even when the job produced no output. It fails closed unless the
+	// runner supplies an explicit MailDelivery; output-only mail fails only when
+	// output was produced and no provider exists.
+	MailCompletion bool   `json:"mail_completion,omitempty"`
+	MailTo         string `json:"mail_to,omitempty"`
+	// BatchLoad marks jobs submitted through batch(1). The scheduler currently
+	// records the required load-governed semantics but does not claim a precise
+	// host load implementation.
+	BatchLoad bool      `json:"batch_load,omitempty"`
+	Prompt    string    `json:"prompt,omitempty"`
+	Context   string    `json:"context,omitempty"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	LastRun   time.Time `json:"last_run,omitempty"`
+	NextRun   time.Time `json:"next_run,omitempty"`
 }
 
 var ErrMailDeliveryUnsupported = errors.New("scheduled output mail delivery is not supported by this host")
@@ -207,7 +216,7 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 	if err := validateJobPlatform(j); err != nil {
 		return fmt.Errorf("job %s: %w", j.ID, err)
 	}
-	if j.MailOutput && deliver == nil {
+	if j.MailCompletion && deliver == nil {
 		return fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
 	}
 	c := commandWithUmask(j.Command, j.Umask, j.UmaskSet)
@@ -237,8 +246,20 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 	c.Stdout, c.Stderr = &output, &output
 	runErr := c.Run()
 	if output.Len() > 0 {
+		if deliver == nil {
+			return errors.Join(runErr, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))
+		}
 		if err := deliver(j.MailTo, append([]byte(nil), output.Bytes()...)); err != nil {
 			return fmt.Errorf("job %s: cannot deliver output mail: %w", j.ID, err)
+		}
+	} else if j.MailCompletion {
+		status := "completed successfully"
+		if runErr != nil {
+			status = "completed with error: " + runErr.Error()
+		}
+		msg := []byte(fmt.Sprintf("at job %s %s\n", j.ID, status))
+		if err := deliver(j.MailTo, msg); err != nil {
+			return fmt.Errorf("job %s: cannot deliver completion mail: %w", j.ID, err)
 		}
 	}
 	return runErr
@@ -468,7 +489,7 @@ func tickOnceWithMail(now time.Time, w io.Writer, deliver MailDelivery) ([]strin
 			if err := validateJobPlatform(j); err != nil {
 				return nil, fmt.Errorf("job %s: %w", j.ID, err)
 			}
-			if j.MailOutput && deliver == nil {
+			if j.MailCompletion && deliver == nil {
 				return nil, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
 			}
 			j.LastRun = now

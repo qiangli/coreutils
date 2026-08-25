@@ -152,19 +152,31 @@ func TestAtTouchTimeAndInvalidQueue(t *testing.T) {
 func TestAtRemoveNonexistent(t *testing.T) {
 	setupATState(t)
 	_, errb, code := runATNoStdin(t, context.Background(), "-r", "nonexistent123")
-	if code != 0 {
-		t.Errorf("at -r nonexistent: code=%d want 0", code)
+	if code == 0 {
+		t.Errorf("at -r nonexistent: code=%d want nonzero", code)
 	}
 	if !strings.Contains(errb, "no job") {
 		t.Errorf("expected 'no job' error: %q", errb)
 	}
 }
 
-func TestAtEmptyStdin(t *testing.T) {
+func TestAtAcceptsEmptyAndBlankStdin(t *testing.T) {
 	setupATState(t)
-	_, errb, code := runAT(t, context.Background(), "", "now", "+", "1", "hour")
-	if code != 2 || !strings.Contains(errb, "no command given") {
-		t.Errorf("empty stdin: code=%d err=%q", code, errb)
+	for _, stdin := range []string{"", "   \n\t"} {
+		_, errb, code := runAT(t, context.Background(), stdin, "now", "+", "1", "hour")
+		if code != 0 {
+			t.Fatalf("stdin %q: code=%d err=%q", stdin, code, errb)
+		}
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if got := jobs[0].Command; len(got) != 3 || got[2] != "" {
+		t.Fatalf("empty command=%q", got)
+	}
+	if got := jobs[1].Command; len(got) != 3 || got[2] != "   \n\t" {
+		t.Fatalf("blank command=%q", got)
 	}
 }
 
@@ -250,7 +262,7 @@ func TestAtJobRetainsShellProgramAndWorkingDirectory(t *testing.T) {
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("jobs=%v err=%v", jobs, err)
 	}
-	wantCommand := []string{"sh", "-c", strings.TrimSpace(program)}
+	wantCommand := []string{"sh", "-c", program}
 	if !reflect.DeepEqual(jobs[0].Command, wantCommand) {
 		t.Fatalf("stored command=%q, want %q", jobs[0].Command, wantCommand)
 	}
@@ -287,6 +299,68 @@ func TestAtUnknownFlag(t *testing.T) {
 	_, errb, code := runATNoStdin(t, context.Background(), "--bogus")
 	if code != 2 || !strings.Contains(errb, "bogus") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+func TestAtRejectsCrossFamilySynopsisCombinations(t *testing.T) {
+	setupATState(t)
+	cases := [][]string{
+		{"-l", "-m"},
+		{"-l", "-q", "b", "some-job"},
+		{"-r", "-q", "a", "some-job"},
+		{"-r", "-t", "202901051015", "some-job"},
+		{"-l", "-r", "some-job"},
+	}
+	for _, args := range cases {
+		_, stderr, code := runATNoStdin(t, context.Background(), args...)
+		if code != 2 {
+			t.Fatalf("at %v: code=%d stderr=%q", args, code, stderr)
+		}
+	}
+	if jobs, err := schedule.LoadJobs(); err != nil || len(jobs) != 0 {
+		t.Fatalf("invalid synopsis scheduled jobs=%v err=%v", jobs, err)
+	}
+}
+
+func TestAtMailCompletionState(t *testing.T) {
+	setupATState(t)
+	_, stderr, code := runAT(t, context.Background(), "true\n", "-m", "now", "+", "1", "hour")
+	if code != 0 {
+		t.Fatalf("at -m: code=%d stderr=%q", code, stderr)
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if !jobs[0].MailOutput || !jobs[0].MailCompletion {
+		t.Fatalf("mail state: output=%v completion=%v", jobs[0].MailOutput, jobs[0].MailCompletion)
+	}
+}
+
+func TestAtListUsesInvocationTZAndLCTIME(t *testing.T) {
+	setupATState(t)
+	when := time.Date(2029, time.March, 1, 2, 3, 4, 0, time.UTC)
+	if err := schedule.SaveJobs([]*schedule.Job{{
+		ID: "tz1", Kind: "at", Queue: "a", Enabled: true, NextRun: when,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Env: []string{
+			"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE"),
+			"TZ=Europe/Berlin",
+			"LC_TIME=de_DE.UTF-8",
+		},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"-l"}); code != 0 {
+		t.Fatalf("at -l: code=%d stderr=%q", code, errb.String())
+	}
+	if got := out.String(); !strings.Contains(got, "tz1\tDo Mär  1 03:03:04 2029") {
+		t.Fatalf("localized listing=%q", got)
 	}
 }
 
@@ -348,6 +422,10 @@ func TestParseLicensedAtGrammar(t *testing.T) {
 		{"9 pm", time.Date(2026, 6, 1, 21, 0, 0, 0, time.UTC)},
 		{"12 am", time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)},
 		{"9 utc", time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)},
+		{"17 utc+ 30minutes", time.Date(2026, 6, 1, 17, 30, 0, 0, time.UTC)},
+		{"17 utc Jan 24", time.Date(2027, 1, 24, 17, 0, 0, 0, time.UTC)},
+		{"8:15amjan24", time.Date(2027, 1, 24, 8, 15, 0, 0, time.UTC)},
+		{"now next hour", time.Date(2026, 6, 1, 13, 30, 45, 0, time.UTC)},
 		{"1:00 Tuesday", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},
 		{"23:59 today", time.Date(2026, 6, 1, 23, 59, 0, 0, time.UTC)},
 		{"1:00 tomorrow", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},

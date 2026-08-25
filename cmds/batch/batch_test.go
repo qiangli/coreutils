@@ -31,6 +31,7 @@ func setupBatchState(t *testing.T) string {
 	t.Helper()
 	p := t.TempDir() + "/schedule.json"
 	t.Setenv("BASHY_SCHEDULE_STATE", p)
+	allowBatchForTest(t)
 	return p
 }
 
@@ -51,10 +52,10 @@ func TestBatchRelativeFileFailsBeforeProcessCWDLookup(t *testing.T) {
 		},
 	}
 	code := cmd.Run(rc, []string{"-f", "relative-job"})
-	if code != 2 || !strings.Contains(errb.String(), "invocation working directory") {
+	if code != 2 || !strings.Contains(errb.String(), "unknown shorthand") {
 		t.Fatalf("code=%d stderr=%q", code, errb.String())
 	}
-	if strings.Contains(errb.String(), "cannot read") {
+	if strings.Contains(errb.String(), "cannot read") || strings.Contains(errb.String(), "invocation working directory") {
 		t.Fatalf("relative operand consulted process cwd: %q", errb.String())
 	}
 }
@@ -110,8 +111,15 @@ func TestBatchDiagnosticOnStderr(t *testing.T) {
 func TestBatchEmptyStdin(t *testing.T) {
 	setupBatchState(t)
 	_, errb, code := runBatch(t, context.Background(), "")
-	if code != 2 || !strings.Contains(errb, "no command given") {
+	if code != 0 {
 		t.Errorf("empty stdin: code=%d err=%q", code, errb)
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if got := jobs[0].Command; len(got) != 3 || got[2] != "" {
+		t.Fatalf("empty job command=%q", got)
 	}
 }
 
@@ -136,8 +144,12 @@ func TestBatchPersistsJob(t *testing.T) {
 	if !jobs[0].Enabled {
 		t.Errorf("job should be enabled")
 	}
-	if got, want := jobs[0].Command, []string{"sh", "-c", "echo persisted > result &"}; !slices.Equal(got, want) {
+	if got, want := jobs[0].Command, []string{"sh", "-c", "echo persisted > result &\n"}; !slices.Equal(got, want) {
 		t.Errorf("job command=%q, want shell program %q", got, want)
+	}
+	if jobs[0].Queue != "b" || !jobs[0].MailOutput || !jobs[0].MailCompletion || !jobs[0].BatchLoad {
+		t.Errorf("batch semantics not captured: queue=%q mail_output=%v mail_completion=%v batch_load=%v",
+			jobs[0].Queue, jobs[0].MailOutput, jobs[0].MailCompletion, jobs[0].BatchLoad)
 	}
 	if !jobs[0].EnvSet || !jobs[0].UmaskSet {
 		t.Errorf("submission context not captured: env_set=%v umask_set=%v", jobs[0].EnvSet, jobs[0].UmaskSet)
@@ -149,5 +161,41 @@ func TestBatchUnknownFlag(t *testing.T) {
 	_, errb, code := runBatch(t, context.Background(), "", "--bogus")
 	if code != 2 || !strings.Contains(errb, "bogus") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+func TestBatchRejectsOperands(t *testing.T) {
+	setupBatchState(t)
+	_, errb, code := runBatch(t, context.Background(), "", "extra")
+	if code != 2 || !strings.Contains(errb, "does not accept operands") {
+		t.Errorf("operand: code=%d err=%q", code, errb)
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("operand scheduled jobs=%v err=%v", jobs, err)
+	}
+}
+
+func TestBatchDiagnosticUsesInvocationTZAndLCTIME(t *testing.T) {
+	setupBatchState(t)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Env: []string{
+			"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE"),
+			"TZ=Europe/Berlin",
+			"LC_TIME=de_DE.UTF-8",
+		},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, nil); code != 0 {
+		t.Fatalf("batch: code=%d stderr=%q", code, errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout=%q", out.String())
+	}
+	if !strings.Contains(errb.String(), " at Di ") {
+		t.Fatalf("localized diagnostic=%q", errb.String())
 	}
 }

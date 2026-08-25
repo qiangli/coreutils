@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	posixlocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/schedule"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -23,7 +24,11 @@ import (
 var cmd = &tool.Tool{
 	Name:     "at",
 	Synopsis: "Schedule a command to run at a specified time.",
-	Usage:    "at [-f FILE] TIMESPEC\n   or: at -l\n   or: at -r JOBID",
+	Usage: "at [-m] [-f FILE] [-q QUEUE] -t TIME\n" +
+		"   or: at [-m] [-f FILE] [-q QUEUE] TIMESPEC...\n" +
+		"   or: at -r JOBID...\n" +
+		"   or: at -l -q QUEUE\n" +
+		"   or: at -l [JOBID...]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -32,6 +37,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	filename := fs.StringP("file", "f", "", "read the job from FILE rather than standard input")
 	listFlag := fs.BoolP("list", "l", false, "list pending jobs (same as atq)")
+	mailCompletion := fs.BoolP("mail", "m", false, "mail completion even when the job produces no output")
 	removeFlag := fs.BoolP("remove", "r", false, "remove job(s)")
 	queue := fs.StringP("queue", "q", "", "use the named single-letter queue")
 	touchTime := fs.StringP("time", "t", "", "schedule using [[CC]YY]MMDDhhmm[.SS]")
@@ -44,13 +50,32 @@ func run(rc *tool.RunContext, args []string) int {
 	if *queue != "" && !validQueue(*queue) {
 		return tool.UsageError(rc, cmd, "invalid queue %q", *queue)
 	}
+	modes := 0
 	if *listFlag {
+		modes++
+	}
+	if *removeFlag {
+		modes++
+	}
+	if modes > 1 {
+		return tool.UsageError(rc, cmd, "-l and -r are mutually exclusive")
+	}
+	if *listFlag {
+		if *filename != "" || *touchTime != "" || *mailCompletion {
+			return tool.UsageError(rc, cmd, "-l cannot be combined with -f, -m, or -t")
+		}
+		if *queue != "" && len(operands) != 0 {
+			return tool.UsageError(rc, cmd, "-l -q does not accept job IDs")
+		}
 		if code := checkAtAccess(rc); code != 0 {
 			return code
 		}
 		return listJobs(rc, operands, *queue)
 	}
 	if *removeFlag {
+		if *filename != "" || *queue != "" || *touchTime != "" || *mailCompletion {
+			return tool.UsageError(rc, cmd, "-r cannot be combined with -f, -m, -q, or -t")
+		}
 		if code := checkAtAccess(rc); code != 0 {
 			return code
 		}
@@ -107,11 +132,6 @@ func run(rc *tool.RunContext, args []string) int {
 		cmdText = buf.String()
 	}
 
-	cmdText = strings.TrimSpace(cmdText)
-	if cmdText == "" {
-		return tool.UsageError(rc, cmd, "no command given")
-	}
-
 	id := strconv.FormatInt(now.UnixNano(), 36)
 	shell := rc.Getenv("SHELL")
 	if shell == "" {
@@ -126,14 +146,17 @@ func run(rc *tool.RunContext, args []string) int {
 		// split on whitespace. Preserve the complete program for a separate
 		// non-interactive shell invocation so redirections, pipelines,
 		// expansions, and multi-line constructs retain their meaning.
-		Command:   []string{shell, "-c", cmdText},
-		Dir:       cwd,
-		Queue:     queueOrDefault(*queue),
-		Env:       append([]string(nil), rc.Env...),
-		EnvSet:    true,
-		Enabled:   true,
-		CreatedAt: now,
-		NextRun:   when,
+		Command:        []string{shell, "-c", cmdText},
+		Dir:            cwd,
+		Queue:          queueOrDefault(*queue),
+		Env:            append([]string(nil), rc.Env...),
+		EnvSet:         true,
+		Enabled:        true,
+		MailOutput:     true,
+		MailCompletion: *mailCompletion,
+		MailTo:         mailRecipient(rc),
+		CreatedAt:      now,
+		NextRun:        when,
 	}
 	if rc.UmaskSet {
 		j.Umask, j.UmaskSet = uint32(rc.Umask.Perm()), true
@@ -141,13 +164,17 @@ func run(rc *tool.RunContext, args []string) int {
 		j.Umask, j.UmaskSet = mask, true
 	}
 
+	formatted, err := formatJobTime(rc, when)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "%v", err)
+	}
 	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		return append(jobs, j), nil
 	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatJobTime(when))
+	fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted)
 	return 0
 }
 
@@ -167,7 +194,12 @@ func listJobs(rc *tool.RunContext, ids []string, queue string) int {
 		if len(ids) > 0 && !containsID(ids, j.ID, j.Name) {
 			continue
 		}
-		fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatJobTime(j.NextRun))
+		formatted, err := formatJobTime(rc, j.NextRun)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
+			return 1
+		}
+		fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatted)
 	}
 	return 0
 }
@@ -183,8 +215,25 @@ func queueOrDefault(queue string) string {
 	return queue
 }
 
-func formatJobTime(t time.Time) string {
-	return t.Format("Mon Jan _2 15:04:05 2006")
+func formatJobTime(rc *tool.RunContext, t time.Time) (string, error) {
+	loc, err := atLocation(rc.Getenv("TZ"))
+	if err != nil {
+		return "", err
+	}
+	formatter, err := posixlocale.ResolveTime(rc.Env)
+	if err != nil {
+		return "", err
+	}
+	return formatter.FormatAtJobTime(t.In(loc)), nil
+}
+
+func mailRecipient(rc *tool.RunContext) string {
+	for _, name := range []string{"LOGNAME", "USER"} {
+		if v := rc.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func containsID(ids []string, id, name string) bool {
@@ -200,6 +249,7 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 	if len(ids) == 0 {
 		return tool.UsageError(rc, cmd, "missing job ID for -r")
 	}
+	missing := false
 	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		for _, id := range ids {
 			found := false
@@ -211,11 +261,15 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 			}
 			if !found {
 				fmt.Fprintf(rc.Err, "%s: no job %q\n", cmd.Name, id)
+				missing = true
 			}
 		}
 		return jobs, nil
 	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
+		return 1
+	}
+	if missing {
 		return 1
 	}
 	return 0

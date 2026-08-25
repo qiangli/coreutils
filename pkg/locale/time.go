@@ -12,13 +12,16 @@ import (
 // locale and the de_DE data used by the certification fixture. Callers must
 // fail closed when ResolveTime cannot provide the requested locale.
 type TimeFormatter struct {
-	months [12]string
-	latin1 bool
+	months   [12]string
+	weekdays [7]string
+	latin1   bool
 }
 
 var (
-	posixMonths  = [12]string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
-	germanMonths = [12]string{"Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"}
+	posixMonths   = [12]string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+	posixWeekdays = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+	germanMonths  = [12]string{"Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"}
+	germanDays    = [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}
 )
 
 // ResolveTime applies POSIX LC_TIME precedence and returns an embedded time
@@ -30,9 +33,9 @@ func ResolveTime(env []string) (TimeFormatter, error) {
 	base, codeset := splitName(name)
 	switch base {
 	case "C", "POSIX":
-		return TimeFormatter{months: posixMonths}, nil
+		return TimeFormatter{months: posixMonths, weekdays: posixWeekdays}, nil
 	case "de_DE":
-		f := TimeFormatter{months: germanMonths}
+		f := TimeFormatter{months: germanMonths, weekdays: germanDays}
 		switch {
 		case isUTF8Name(codeset):
 			return f, nil
@@ -59,6 +62,22 @@ func (f TimeFormatter) FormatMonthDayTime(t time.Time) string {
 		month = toLatin1(month)
 	}
 	return fmt.Sprintf("%s %2d %02d:%02d", month, t.Day(), t.Hour(), t.Minute())
+}
+
+// FormatAtJobTime renders the POSIX at/batch confirmation and listing date
+// shape: date +"%a %b %e %T %Y".
+func (f TimeFormatter) FormatAtJobTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	weekday := f.weekdays[int(t.Weekday())]
+	month := f.months[int(t.Month())-1]
+	if f.latin1 {
+		weekday = toLatin1(weekday)
+		month = toLatin1(month)
+	}
+	return fmt.Sprintf("%s %s %2d %02d:%02d:%02d %04d",
+		weekday, month, t.Day(), t.Hour(), t.Minute(), t.Second(), t.Year())
 }
 
 func splitName(name string) (base, codeset string) {

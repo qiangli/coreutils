@@ -230,9 +230,39 @@ func TestCronFireDeliversOutputAndExplicitStdin(t *testing.T) {
 	}
 }
 
-func TestCronFireWithoutMailProviderFailsClosedBeforeExecution(t *testing.T) {
+func TestAtFireDeliversCompletionMailWithoutOutput(t *testing.T) {
+	j := &Job{ID: "at-complete", Kind: "at",
+		Command: []string{"/bin/sh", "-c", "true"}, Env: []string{"PATH=/usr/bin:/bin"}, EnvSet: true,
+		MailOutput: true, MailCompletion: true, MailTo: "recipient"}
+	var recipient string
+	var delivered []byte
+	err := FireJob(j, io.Discard, func(to string, body []byte) error {
+		recipient, delivered = to, append([]byte(nil), body...)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recipient != "recipient" || !strings.Contains(string(delivered), "at job at-complete completed successfully") {
+		t.Fatalf("completion mail=(%q,%q)", recipient, delivered)
+	}
+}
+
+func TestCronFireWithoutMailProviderReportsUndeliverableOutput(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "must-not-exist")
-	j := &Job{ID: "cron-no-mail", Kind: "cron", POSIXCron: true, Command: []string{"/bin/sh", "-c", "touch " + marker}, MailOutput: true, MailTo: "recipient"}
+	j := &Job{ID: "cron-no-mail", Kind: "cron", POSIXCron: true, Command: []string{"/bin/sh", "-c", "echo output; touch " + marker}, MailOutput: true, MailTo: "recipient"}
+	err := j.fire(io.Discard)
+	if !errors.Is(err, ErrMailDeliveryUnsupported) {
+		t.Fatalf("error=%v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("job did not execute before output mail failure: %v", statErr)
+	}
+}
+
+func TestAtCompletionMailWithoutProviderFailsClosedBeforeExecution(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "must-not-exist")
+	j := &Job{ID: "at-no-mail", Kind: "at", Command: []string{"/bin/sh", "-c", "touch " + marker}, MailOutput: true, MailCompletion: true, MailTo: "recipient"}
 	err := j.fire(io.Discard)
 	if !errors.Is(err, ErrMailDeliveryUnsupported) {
 		t.Fatalf("error=%v", err)
@@ -245,7 +275,7 @@ func TestCronFireWithoutMailProviderFailsClosedBeforeExecution(t *testing.T) {
 func TestTickWithoutMailProviderDoesNotClaimCronJob(t *testing.T) {
 	withState(t)
 	now := time.Now()
-	j := &Job{ID: "due-cron", Kind: "cron", POSIXCron: true, Spec: "* * * * *", Command: []string{"/bin/sh", "-c", "true"}, Enabled: true, NextRun: now.Add(-time.Minute), MailOutput: true, MailTo: "recipient"}
+	j := &Job{ID: "due-cron", Kind: "cron", POSIXCron: true, Spec: "* * * * *", Command: []string{"/bin/sh", "-c", "true"}, Enabled: true, NextRun: now.Add(-time.Minute), MailCompletion: true, MailTo: "recipient"}
 	if err := SaveJobs([]*Job{j}); err != nil {
 		t.Fatal(err)
 	}
