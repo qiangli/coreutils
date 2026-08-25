@@ -36,6 +36,13 @@ command's certification surface. `-a` is retained as a documented extension.
   filesystems (btrfs, ext4, overlayfs, tmpfs, and XFS), otherwise `undefined`.
   Focused Linux tests compare every other claimed runtime/path value with an
   independent host `getconf` oracle.
+- On Linux LP64 Go targets, `_POSIX_V6_LP64_OFF64` and
+  `_POSIX_V7_LP64_OFF64` report `1`, matching the Ubuntu 24.04 certification
+  image, and `-v` accepts exactly those V6/V7 environments. Issue 7 makes the
+  corresponding non-`undefined` `_POSIX_V7_*` query the condition for the V7
+  `-v` form. ILP32 and LPBIG environments remain unclaimed and are rejected;
+  their query values remain `undefined`. V6 acceptance preserves the
+  obsolescent environment advertised by Ubuntu without changing the V7 claim.
 - Darwin continues to use the native `sysconf`, `pathconf`, and `confstr`
   adapters and differential tests. Windows reports fixed standard minima but
   otherwise fails closed as `undefined`.

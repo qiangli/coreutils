@@ -4,6 +4,7 @@ package getconfcmd
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,11 @@ func platformValue(name string) (string, bool) {
 		return linuxCPUSetCount("/sys/devices/system/cpu/possible"), true
 	case "_NPROCESSORS_ONLN":
 		return linuxCPUSetCount("/sys/devices/system/cpu/online"), true
+	case "_POSIX_V6_LP64_OFF64", "_POSIX_V7_LP64_OFF64":
+		if linuxLP64Build() {
+			return "1", true
+		}
+		return undefined, true
 	}
 	return "", false
 }
@@ -56,7 +62,23 @@ func linuxCPUSetCount(path string) string {
 	return strconv.FormatUint(count, 10)
 }
 
-func platformSpecification(string) bool { return false }
+// The Issue 7 -v contract applies when the corresponding _POSIX_V* query is
+// neither -1 nor undefined. Linux uses LP64 with 64-bit off_t on these Go
+// targets. We intentionally do not infer an ILP32 or LPBIG C environment.
+func platformSpecification(specification string) bool {
+	if !linuxLP64Build() {
+		return false
+	}
+	return specification == "POSIX_V6_LP64_OFF64" || specification == "POSIX_V7_LP64_OFF64"
+}
+
+func linuxLP64Build() bool {
+	switch runtime.GOARCH {
+	case "amd64", "arm64", "loong64", "mips64", "mips64le", "ppc64", "ppc64le", "riscv64", "s390x":
+		return true
+	}
+	return false
+}
 
 func platformConfstrValue(name string) (string, bool) {
 	return undefined, isConfstrName(name)

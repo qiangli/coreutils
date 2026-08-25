@@ -68,3 +68,52 @@ func TestLinuxTimestampResolutionIsExactOrUndefined(t *testing.T) {
 		t.Fatalf("timestamp resolution = (%q, %q, %d), want %q", got, stderr, code, want)
 	}
 }
+
+func TestLinuxProgrammingEnvironmentMatchesUbuntuOracle(t *testing.T) {
+	if !linuxLP64Build() {
+		t.Skip("this Linux target does not claim an LP64/OFF64 C environment")
+	}
+	system, err := exec.LookPath("getconf")
+	if err != nil {
+		t.Skip("no independent host getconf oracle")
+	}
+	for _, version := range []string{"V6", "V7"} {
+		specification := "POSIX_" + version + "_LP64_OFF64"
+		query := "_" + specification
+		wantBytes, err := exec.Command(system, query).Output()
+		if err != nil {
+			t.Fatalf("host getconf %s: %v", query, err)
+		}
+		if want := strings.TrimSpace(string(wantBytes)); want != "1" {
+			t.Fatalf("host %s=%q, certification image does not advertise expected environment", query, want)
+		}
+		if got, stderr, code := runCmd(t, query); code != 0 || stderr != "" || got != "1" {
+			t.Errorf("%s = (%q, %q, %d), want (1, empty, 0)", query, got, stderr, code)
+		}
+		plain, plainErr, plainCode := runCmd(t, "ARG_MAX")
+		got, stderr, code := runCmd(t, "-v", specification, "ARG_MAX")
+		if code != plainCode || stderr != plainErr || got != plain {
+			t.Errorf("-v %s ARG_MAX = (%q, %q, %d), default (%q, %q, %d)", specification, got, stderr, code, plain, plainErr, plainCode)
+		}
+		dir := t.TempDir()
+		plain, plainErr, plainCode = runCmd(t, "NAME_MAX", dir)
+		got, stderr, code = runCmd(t, "-v", specification, "NAME_MAX", dir)
+		if code != plainCode || stderr != plainErr || got != plain {
+			t.Errorf("-v %s NAME_MAX = (%q, %q, %d), default (%q, %q, %d)", specification, got, stderr, code, plain, plainErr, plainCode)
+		}
+	}
+}
+
+func TestLinuxDoesNotClaimOtherProgrammingEnvironments(t *testing.T) {
+	for _, shape := range []string{"ILP32_OFF32", "ILP32_OFFBIG", "LPBIG_OFFBIG"} {
+		for _, version := range []string{"V6", "V7"} {
+			specification := "POSIX_" + version + "_" + shape
+			if got, stderr, code := runCmd(t, "_"+specification); code != 0 || stderr != "" || got != undefined {
+				t.Errorf("_%s = (%q, %q, %d), want undefined", specification, got, stderr, code)
+			}
+			if out, stderr, code := runCmd(t, "-v", specification, "ARG_MAX"); code == 0 || out != "" || !strings.Contains(stderr, "unsupported specification") {
+				t.Errorf("-v %s = (%q, %q, %d), want rejection", specification, out, stderr, code)
+			}
+		}
+	}
+}
