@@ -27,7 +27,7 @@ var cmd = &tool.Tool{
 
 type options struct {
 	all, withTerminals, descendants, full, long bool
-	pids, pgids, gids, eusers, rusers           map[int]bool
+	pids, sids, gids, eusers, rusers            map[int]bool
 	ttys                                        map[string]bool
 	format                                      []column
 	invokerUID                                  int
@@ -44,6 +44,7 @@ type process struct {
 
 type column struct {
 	name, header string
+	minWidth     int
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -51,12 +52,12 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	allA := fs.BoolP("all", "A", false, "select all processes")
-	alla := fs.BoolP("terminal-processes", "a", false, "include processes associated with terminals")
+	alla := fs.BoolP("terminal-processes", "a", false, "include terminal processes (session leaders may be omitted)")
 	desc := fs.BoolP("no-leaders", "d", false, "select all processes except session leaders")
 	alle := fs.BoolP("every", "e", false, "select all processes")
 	full := fs.BoolP("full", "f", false, "show a full listing")
 	long := fs.BoolP("long", "l", false, "show a long listing")
-	pgids := fs.StringSliceP("group", "g", nil, "select process-group leaders in LIST")
+	sids := fs.StringSliceP("group", "g", nil, "select processes by session-leader ID LIST")
 	gids := fs.StringSliceP("Group", "G", nil, "select by real group LIST")
 	fs.StringSliceP("name-list", "n", nil, "alternate name list (not supported)")
 	formats := fs.StringSliceP("format", "o", nil, "select output FORMAT")
@@ -80,7 +81,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if o.pids, err = numberSet(*pids, nil); err != nil {
 		return usage(rc, err.Error())
 	}
-	if o.pgids, err = numberSet(*pgids, nil); err != nil {
+	if o.sids, err = numberSet(*sids, nil); err != nil {
 		return usage(rc, err.Error())
 	}
 	if o.gids, err = numberSet(*gids, lookupGroup); err != nil {
@@ -125,7 +126,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 func selected(p process, o options) bool {
 	explicit := o.all || o.withTerminals || o.descendants ||
-		len(o.pids)+len(o.pgids)+len(o.gids)+len(o.eusers)+len(o.rusers)+len(o.ttys) > 0
+		len(o.pids)+len(o.sids)+len(o.gids)+len(o.eusers)+len(o.rusers)+len(o.ttys) > 0
 	if o.all {
 		return true
 	}
@@ -135,7 +136,7 @@ func selected(p process, o options) bool {
 	if o.descendants && p.pid != p.sid {
 		return true
 	}
-	if o.pids[p.pid] || o.pgids[p.pgid] || o.gids[p.rgid] || o.eusers[p.euid] ||
+	if o.pids[p.pid] || o.sids[p.sid] || o.gids[p.rgid] || o.eusers[p.euid] ||
 		o.rusers[p.ruid] || o.ttys[cleanTTY(p.tty)] {
 		return true
 	}
@@ -161,16 +162,38 @@ func parseFormat(specs []string, o options) ([]column, error) {
 	}
 	var out []column
 	for _, spec := range specs {
-		for _, item := range strings.FieldsFunc(spec, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-			name, header, ok := strings.Cut(item, "=")
-			name = strings.ToLower(name)
-			if !knownColumn(name) {
-				return nil, fmt.Errorf("unknown output format %q", name)
+		for _, commaPart := range strings.Split(spec, ",") {
+			rest := strings.TrimLeft(commaPart, " \t")
+			for rest != "" {
+				blank := strings.IndexAny(rest, " \t")
+				eq := strings.IndexByte(rest, '=')
+				var item string
+				if eq >= 0 && (blank < 0 || eq < blank) {
+					// Once '=' starts a header override, every remaining byte in
+					// this comma-delimited component is header text. In particular,
+					// blanks in "pid=Process ID" are not field separators.
+					item, rest = rest, ""
+				} else if blank >= 0 {
+					item, rest = rest[:blank], strings.TrimLeft(rest[blank:], " \t")
+				} else {
+					item, rest = rest, ""
+				}
+				name, header, override := strings.Cut(item, "=")
+				name = strings.ToLower(name)
+				if !knownColumn(name) {
+					return nil, fmt.Errorf("unknown output format %q", name)
+				}
+				col := column{name: name}
+				if override {
+					col.header = header
+					if header == "" {
+						col.minWidth = len(defaultHeader(name))
+					}
+				} else {
+					col.header = defaultHeader(name)
+				}
+				out = append(out, col)
 			}
-			if !ok {
-				header = defaultHeader(name)
-			}
-			out = append(out, column{name: name, header: header})
 		}
 	}
 	if len(out) == 0 {
@@ -188,7 +211,7 @@ func knownColumn(s string) bool {
 }
 
 func defaultHeader(s string) string {
-	m := map[string]string{"f": "F", "s": "S", "uid": "UID", "user": "USER", "ruser": "RUSER", "gid": "GID", "group": "GROUP", "rgroup": "RGROUP", "pid": "PID", "ppid": "PPID", "pgid": "PGID", "pcpu": "%CPU", "pri": "PRI", "nice": "NI", "addr": "ADDR", "vsz": "VSZ", "sz": "SZ", "wchan": "WCHAN", "etime": "ELAPSED", "start": "STIME", "time": "TIME", "tty": "TTY", "comm": "COMMAND", "args": "CMD"}
+	m := map[string]string{"f": "F", "s": "S", "uid": "UID", "user": "USER", "ruser": "RUSER", "gid": "GID", "group": "GROUP", "rgroup": "RGROUP", "pid": "PID", "ppid": "PPID", "pgid": "PGID", "pcpu": "%CPU", "pri": "PRI", "nice": "NI", "addr": "ADDR", "vsz": "VSZ", "sz": "SZ", "wchan": "WCHAN", "etime": "ELAPSED", "start": "STIME", "time": "TIME", "tty": "TTY", "comm": "COMMAND", "args": "COMMAND"}
 	return m[s]
 }
 
@@ -219,7 +242,11 @@ func printTable(rc *tool.RunContext, ps []process, cols []column) error {
 					fmt.Fprint(w, " ")
 				}
 			}
-			fmt.Fprint(w, value(p, c.name))
+			v := value(p, c.name)
+			if c.minWidth > len(v) {
+				v = strings.Repeat(" ", c.minWidth-len(v)) + v
+			}
+			fmt.Fprint(w, v)
 		}
 		fmt.Fprintln(w)
 	}
@@ -284,7 +311,7 @@ func value(p process, name string) string {
 func numberSet(values []string, lookup func(string) (int, error)) (map[int]bool, error) {
 	out := map[int]bool{}
 	for _, raw := range values {
-		for _, s := range strings.Split(raw, ",") {
+		for _, s := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
 			s = strings.TrimSpace(s)
 			if s == "" {
 				continue
@@ -305,7 +332,7 @@ func numberSet(values []string, lookup func(string) (int, error)) (map[int]bool,
 func stringSet(values []string) map[string]bool {
 	out := map[string]bool{}
 	for _, raw := range values {
-		for _, s := range strings.Split(raw, ",") {
+		for _, s := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
 			if s = cleanTTY(strings.TrimSpace(s)); s != "" {
 				out[s] = true
 			}

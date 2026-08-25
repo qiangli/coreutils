@@ -291,15 +291,26 @@ func openArchive(rc *tool.RunContext, o *options) (io.ReadCloser, error) {
 
 // listMode is pax with neither -r nor -w: report the archive's contents.
 func listMode(rc *tool.RunContext, o *options, patterns []string) int {
-	r, err := openArchive(rc, o)
+	return listModeWithOpener(rc, o, patterns, openArchive)
+}
+
+type archiveOpener func(*tool.RunContext, *options) (io.ReadCloser, error)
+
+func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open archiveOpener) int {
+	r, err := open(rc, o)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
-	defer r.Close()
-	raw, err := io.ReadAll(r)
-	if err != nil {
-		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+	raw, readErr := io.ReadAll(r)
+	closeErr := r.Close()
+	if readErr != nil || closeErr != nil {
+		if readErr != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", readErr)
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "pax: close archive: %v\n", closeErr)
+		}
 		return 1
 	}
 	archive, err := decodeArchive(raw)
@@ -333,10 +344,16 @@ func listMode(rc *tool.RunContext, o *options, patterns []string) int {
 			continue
 		}
 		if o.verbose {
-			fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
-				modeString(m), 1, "", "", m.Size, m.ModTime.Format("Jan _2 15:04"), name)
+			if _, err := fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
+				modeString(m), 1, "", "", m.Size, m.ModTime.Format("Jan _2 15:04"), name); err != nil {
+				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
+				return 1
+			}
 		} else {
-			fmt.Fprintln(rc.Out, name)
+			if _, err := fmt.Fprintln(rc.Out, name); err != nil {
+				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
+				return 1
+			}
 		}
 	}
 
