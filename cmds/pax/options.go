@@ -3,9 +3,11 @@ package paxcmd
 import (
 	"archive/tar"
 	"fmt"
+	"maps"
 	"os/user"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,7 +73,8 @@ func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions
 func localPAXValuesToArchive(rc *tool.RunContext, values map[string]string, action string) (map[string]string, bool, error) {
 	out := make(map[string]string, len(values))
 	binary := false
-	for key, value := range values {
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		value := values[key]
 		translated, err := localTextToArchive(rc, value)
 		if err != nil {
 			if action != "binary" {
@@ -90,15 +93,21 @@ func localPAXValuesToArchive(rc *tool.RunContext, values map[string]string, acti
 // addPath after substitution and interactive rename, so converting them here
 // would corrupt single-byte locale data a second time.
 func translatePAXIdentityToArchive(rc *tool.RunContext, h *tar.Header, action string) error {
-	for label, value := range map[string]*string{"uname": &h.Uname, "gname": &h.Gname} {
-		translated, err := localTextToArchive(rc, *value)
+	for _, field := range []struct {
+		label string
+		value *string
+	}{
+		{label: "uname", value: &h.Uname},
+		{label: "gname", value: &h.Gname},
+	} {
+		translated, err := localTextToArchive(rc, *field.value)
 		if err != nil {
 			if action == "binary" {
 				continue
 			}
-			return fmt.Errorf("%s cannot be translated to UTF-8", label)
+			return fmt.Errorf("%s cannot be translated to UTF-8", field.label)
 		}
-		*value = translated
+		*field.value = translated
 	}
 	return nil
 }
@@ -567,7 +576,8 @@ func deletedPAXKeyword(o paxOptions, key string) bool {
 }
 
 func applyPAXValues(h *tar.Header, values map[string]string) error {
-	for key, value := range values {
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		value := values[key]
 		if value == "" {
 			continue
 		}

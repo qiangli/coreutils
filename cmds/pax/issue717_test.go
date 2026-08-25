@@ -565,6 +565,46 @@ func TestPAXCarriedCodesetByteTranscoding(t *testing.T) {
 	}
 }
 
+func TestPAXMultipleInvalidFieldsChooseDeterministicFirstError(t *testing.T) {
+	rc := &tool.RunContext{Env: []string{"LC_CTYPE=C.UTF-8"}}
+	for i := 0; i < 200; i++ {
+		_, _, err := localPAXValuesToArchive(rc, map[string]string{
+			"vendor.zeta":  "\xff",
+			"vendor.alpha": "\xfe",
+		}, "bypass")
+		if err == nil || err.Error() != "-o vendor.alpha value cannot be translated to UTF-8" {
+			t.Fatalf("iteration %d local option error=%v", i, err)
+		}
+
+		h := &tar.Header{Uname: "\xff", Gname: "\xfe"}
+		if err := translatePAXIdentityToArchive(rc, h, "bypass"); err == nil || err.Error() != "uname cannot be translated to UTF-8" {
+			t.Fatalf("iteration %d identity error=%v", i, err)
+		}
+
+		err = applyPAXValues(&tar.Header{}, map[string]string{
+			"uid":   "bad-uid",
+			"gid":   "bad-gid",
+			"atime": "bad-time",
+		})
+		if err == nil || err.Error() != `invalid atime extended-header value "bad-time"` {
+			t.Fatalf("iteration %d typed value error=%v", i, err)
+		}
+	}
+
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantDiagnostic := "pax: file: -o vendor.alpha value cannot be translated to UTF-8\n"
+	for i := 0; i < 50; i++ {
+		_, errOut, code := execPaxEnv(t, d, []string{"LC_CTYPE=C.UTF-8"},
+			"-w", "-x", "pax", "-o", "vendor.zeta:=\xff,vendor.alpha:=\xfe", "file")
+		if code != 1 || errOut != wantDiagnostic {
+			t.Fatalf("iteration %d code=%d stderr=%q", i, code, errOut)
+		}
+	}
+}
+
 func TestPAXListAndReadTranslateUTF8ArchiveToLatin1Bytes(t *testing.T) {
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)
