@@ -195,8 +195,8 @@ func TestWhoBootTime(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("-b: code=%d err=%q", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "reboot") {
-		t.Fatalf("expected reboot record in output, got %q", out.String())
+	if !strings.Contains(out.String(), "system boot") {
+		t.Fatalf("expected system boot record in output, got %q", out.String())
 	}
 	if strings.Contains(out.String(), "bob") {
 		t.Fatalf("did not expect bob in output for -b, got %q", out.String())
@@ -266,7 +266,7 @@ func TestWhoQuietIgnoresOtherOptions(t *testing.T) {
 // values rendered for a dead process.
 func TestWhoDeadProcess(t *testing.T) {
 	dir := t.TempDir()
-	content := "bob pts/1 1720000000 host\nghost pts/9 1720000000 host DEAD_PROCESS\n"
+	content := "bob pts/1 1720000000 host\nghost pts/9 1720000000 host DEAD_PROCESS id=ts/9 term=9 exit=3\n"
 	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestWhoDeadProcess(t *testing.T) {
 	if strings.Contains(out.String(), "bob") {
 		t.Fatalf("-d must not list live users, got %q", out.String())
 	}
-	if !strings.Contains(out.String(), "term=0 exit=0") {
+	if !strings.Contains(out.String(), "id=ts/9 term=9 exit=3") {
 		t.Fatalf("expected term/exit values for dead process, got %q", out.String())
 	}
 }
@@ -304,11 +304,11 @@ func TestExitStatus(t *testing.T) {
 // records with no live terminal report '?', while a normal record consults
 // the tty writable bit.
 func TestTerminalState(t *testing.T) {
-	if got := terminalState(session.Record{Type: "DEAD_PROCESS", TTY: "pts/1"}); got != '?' {
-		t.Fatalf("dead terminalState=%q, want '?'", got)
+	if got := terminalState(session.Record{Type: "DEAD_PROCESS", TTY: "pts/1"}); got != ' ' {
+		t.Fatalf("dead terminalState=%q, want space", got)
 	}
-	if got := terminalState(session.Record{Type: "BOOT_TIME"}); got != '?' {
-		t.Fatalf("boot terminalState=%q, want '?'", got)
+	if got := terminalState(session.Record{Type: "BOOT_TIME"}); got != ' ' {
+		t.Fatalf("boot terminalState=%q, want space", got)
 	}
 	if got := terminalState(session.Record{Type: "USER_PROCESS", TTY: ""}); got != '?' {
 		t.Fatalf("no-tty terminalState=%q, want '?'", got)
@@ -324,8 +324,8 @@ func TestWhoLoginProcessName(t *testing.T) {
 	if got := displayName(session.Record{Type: "LOGIN_PROCESS"}); got != "LOGIN" {
 		t.Fatalf("login displayName=%q, want LOGIN", got)
 	}
-	if got := displayName(session.Record{Type: "BOOT_TIME"}); got != "reboot" {
-		t.Fatalf("boot displayName=%q, want reboot", got)
+	if got := displayName(session.Record{Type: "BOOT_TIME"}); got != "system boot" {
+		t.Fatalf("boot displayName=%q, want system boot", got)
 	}
 	_ = dir
 }
@@ -373,12 +373,12 @@ func TestPosixTZ(t *testing.T) {
 		offset int // seconds east of UTC
 		ok     bool
 	}{
-		{"EST5EDT", "EST", -5 * 3600, true},
-		{"PST8PDT", "PST", -8 * 3600, true},
+		{"EST5EDT", "", 0, false},
+		{"PST8PDT", "", 0, false},
 		{"GMT0", "GMT", 0, true},
 		{"<+08>-8", "+08", 8 * 3600, true},
 		{"IST-5:30", "IST", 5*3600 + 30*60, true},
-		{"CET-1CEST", "CET", 1 * 3600, true},
+		{"CET-1CEST", "", 0, false},
 		{"", "", 0, false},
 		{":/etc/localtime", "", 0, false},
 	}
@@ -409,29 +409,6 @@ func mustLoad(t *testing.T, name string) *time.Location {
 	return loc
 }
 
-// TestEffectiveLocale pins the POSIX LC precedence: LC_ALL > LC_TIME > LANG,
-// with the codeset suffix stripped.
-func TestEffectiveLocale(t *testing.T) {
-	mk := func(env ...string) *tool.RunContext {
-		return &tool.RunContext{Env: env}
-	}
-	cases := []struct {
-		env  []string
-		want string
-	}{
-		{[]string{"LC_ALL=C", "LC_TIME=fr_FR", "LANG=de_DE"}, "C"},
-		{[]string{"LC_TIME=fr_FR.UTF-8", "LANG=de_DE"}, "fr_FR"},
-		{[]string{"LANG=de_DE.UTF-8"}, "de_DE"},
-		{[]string{"LC_ALL=C.UTF-8"}, "C"},
-		{nil, ""},
-	}
-	for _, tc := range cases {
-		if got := effectiveLocale(mk(tc.env...)); got != tc.want {
-			t.Fatalf("effectiveLocale(%v)=%q, want %q", tc.env, got, tc.want)
-		}
-	}
-}
-
 // TestWhoNamedFileError preserves named-file error handling: a read error on
 // an explicit operand (here, a directory) is reported and exits non-zero,
 // rather than being silently treated as an empty database.
@@ -445,5 +422,91 @@ func TestWhoNamedFileError(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "who:") {
 		t.Fatalf("expected 'who:' error, got %q", errb.String())
+	}
+}
+
+func TestWhoMissingNamedFileFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"missing-utmp"}); code == 0 || !strings.Contains(errb.String(), "no such file") {
+		t.Fatalf("missing explicit database: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
+func TestWhoDeadWithTIncludesExit(t *testing.T) {
+	dir := t.TempDir()
+	content := "ghost pts/9 1720000000 host DEAD_PROCESS id=ts/9 term=9 exit=3\n"
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"-T", "-d", "utmp"}); code != 0 || !strings.Contains(out.String(), "id=ts/9 term=9 exit=3") {
+		t.Fatalf("-T -d: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
+func TestWhoUnsupportedDSTRulesFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("bob pts/1 1720000000 host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=XXX3YYY,M1.1.0,M12.1.0"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"utmp"}); code == 0 || !strings.Contains(errb.String(), "unsupported TZ") {
+		t.Fatalf("DST rule must fail closed: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
+func TestRunLevelDecode(t *testing.T) {
+	current, previous := runLevel(int('S') + int('5')*256)
+	if current != 'S' || previous != '5' {
+		t.Fatalf("runLevel=(%q,%q), want S,5", current, previous)
+	}
+}
+
+func TestWhoAllIsExactAndTruthful(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Join([]string{
+		"reboot ~ 1700000000 ~ BOOT_TIME",
+		"runlevel ~ 1700000001 ~ RUN_LVL pid=13651",
+		"old | 1699996400 ~ OLD_TIME",
+		"new { 1700000003 ~ NEW_TIME",
+		"alice pts/missing 1700000004 host USER_PROCESS pid=333",
+		"ghost pts/9 1700000005 host DEAD_PROCESS id=p/9 term=9 exit=3",
+		"acct ~ 1700000006 ~ ACCOUNTING",
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"-a", "utmp"}); code != 0 {
+		t.Fatalf("-a: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"system boot", "run-level S", "last=5", "clock change", "alice", "id=p/9 term=9 exit=3"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("-a missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "NAME") || strings.Contains(got, "acct") || strings.Contains(got, "Nov 14 21:13") {
+		t.Fatalf("-a included heading, ACCOUNTING, or OLD_TIME: %q", got)
+	}
+	if !strings.Contains(got, "alice    ?") || !strings.Contains(got, " ?       333") {
+		t.Fatalf("-a must report unknown terminal state/idle truthfully: %q", got)
+	}
+}
+
+func TestWhoUnknownDeadExitFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("ghost pts/9 1700000000 host DEAD_PROCESS\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"-d", "utmp"}); code == 0 || out.Len() != 0 || !strings.Contains(errb.String(), "exit status is unavailable") {
+		t.Fatalf("unknown exit must fail before output: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
 }

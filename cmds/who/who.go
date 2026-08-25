@@ -66,9 +66,7 @@ func run(rc *tool.RunContext, args []string) int {
 				names = append(names, r.User)
 			}
 		}
-		if len(names) > 0 {
-			fmt.Fprintln(rc.Out, strings.Join(names, " "))
-		}
+		fmt.Fprintln(rc.Out, strings.Join(names, " "))
 		fmt.Fprintf(rc.Out, "# users=%d\n", len(names))
 		return 0
 	}
@@ -111,20 +109,30 @@ func run(rc *tool.RunContext, args []string) int {
 			if needRunlevel {
 				live = append(live, r)
 			}
-		case "NEW_TIME", "time", "3", "OLD_TIME", "4":
+		case "NEW_TIME", "time", "3":
 			if needTime {
 				live = append(live, r)
 			}
-		default:
-			if *all {
-				live = append(live, r)
-			}
+		case "OLD_TIME", "4":
+			// -t reports the completed clock change (NEW_TIME), not both
+			// halves of the old/new transition pair.
 		}
 	}
 	showMesg := *mesg || *writable || *all || *message
 	showIdle := *usersOnly || *all
-	loc := timeLocation(rc)
-	timeFmt := timeFormat(rc)
+	loc, err := timeLocation(rc)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "who: %v\n", err)
+		return 1
+	}
+	timeFmt := posixTimeLayout
+
+	for _, r := range live {
+		if isDead(r) && !r.ExitKnown {
+			fmt.Fprintln(rc.Err, "who: dead-process exit status is unavailable in this platform's session database")
+			return 1
+		}
+	}
 
 	if *onlyMe {
 		tty, ok := stdinTTY(rc)
@@ -143,7 +151,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	if *heading || *all {
+	if *heading {
 		if showMesg && !showIdle {
 			// The -T short form has no idle/pid columns.
 			fmt.Fprintln(rc.Out, "NAME     S LINE         TIME")
@@ -157,26 +165,35 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	for _, r := range live {
+		if isRunLevel(r) {
+			writeRunLevel(rc, r, loc, timeFmt)
+			continue
+		}
 		name := displayName(r)
+		tty := displayTTY(r)
 
 		// POSIX -T short form: exactly "%s %c %s %s\n"
 		// (name, terminal-state, line, time). Applies when the message
 		// status is requested without the -u idle/pid columns.
 		if showMesg && !showIdle {
-			fmt.Fprintf(rc.Out, "%s %c %s %s\n", name, terminalState(r), r.TTY, formatTime(r.Time, loc, timeFmt))
+			fmt.Fprintf(rc.Out, "%s %c %s %s", name, terminalState(r), tty, formatTime(r.Time, loc, timeFmt))
+			if comment := lineComment(r, *onlyMe); comment != "" {
+				fmt.Fprintf(rc.Out, " %s", comment)
+			}
+			fmt.Fprintln(rc.Out)
 			continue
 		}
 
 		idle := ""
-		if showIdle {
-			idle = formatIdle(r.TTY, r.Time)
+		if showIdle && session.IsUser(r) {
+			idle = formatIdle(tty, r.Time)
 		}
 		comment := lineComment(r, *onlyMe)
 
 		if showMesg {
-			fmt.Fprintf(rc.Out, "%-8s %c   %-12s %-16s", name, terminalState(r), r.TTY, formatTime(r.Time, loc, timeFmt))
+			fmt.Fprintf(rc.Out, "%-8s %c   %-12s %-16s", name, terminalState(r), tty, formatTime(r.Time, loc, timeFmt))
 		} else {
-			fmt.Fprintf(rc.Out, "%-8s %-12s %-16s", name, r.TTY, formatTime(r.Time, loc, timeFmt))
+			fmt.Fprintf(rc.Out, "%-8s %-12s %-16s", name, tty, formatTime(r.Time, loc, timeFmt))
 		}
 		if showIdle {
 			fmt.Fprintf(rc.Out, " %-5s", idle)
@@ -185,6 +202,9 @@ func run(rc *tool.RunContext, args []string) int {
 			} else {
 				fmt.Fprintf(rc.Out, "      ")
 			}
+		}
+		if !showIdle && processRecord(r) && r.PID > 0 {
+			fmt.Fprintf(rc.Out, " %5d", r.PID)
 		}
 		if comment != "" {
 			fmt.Fprintf(rc.Out, " %s", comment)
@@ -216,30 +236,39 @@ func parseOperands(operands []string) (file string, sameHost bool, errMsg string
 // displayName is the NAME column. For records with no user string (system
 // records) it substitutes the conventional POSIX name.
 func displayName(r session.Record) string {
-	if r.User != "" {
-		return r.User
-	}
 	switch r.Type {
 	case "LOGIN_PROCESS", "login", "6":
 		return "LOGIN"
 	case "BOOT_TIME", "boot", "2":
-		return "reboot"
+		return "system boot"
 	case "RUN_LVL", "runlevel", "1":
 		return "run-level"
+	case "NEW_TIME", "time", "3":
+		return "clock change"
 	}
 	return r.User
 }
 
+func displayTTY(r session.Record) string {
+	switch r.Type {
+	case "BOOT_TIME", "boot", "2", "RUN_LVL", "runlevel", "1",
+		"NEW_TIME", "time", "3", "OLD_TIME", "4":
+		return ""
+	}
+	return r.TTY
+}
+
 // terminalState is the '%c' of the -T format. A live user or login line
 // reports the tty's message/writable status ('+', '-', or '?'); a record
-// with no live terminal (dead, boot, run-level, clock change) reports '?'.
+// with no live terminal (dead, boot, run-level, clock change) reports the
+// POSIX space state.
 func terminalState(r session.Record) byte {
 	switch r.Type {
 	case "DEAD_PROCESS", "dead", "8",
 		"BOOT_TIME", "boot", "2",
 		"RUN_LVL", "runlevel", "1",
 		"NEW_TIME", "time", "3", "OLD_TIME", "4":
-		return '?'
+		return ' '
 	}
 	if r.TTY == "" {
 		return '?'
@@ -253,6 +282,12 @@ func lineComment(r session.Record, onlyMe bool) string {
 	if isDead(r) {
 		return exitStatus(r)
 	}
+	if processRecord(r) && r.ID != "" {
+		return "id=" + r.ID
+	}
+	if r.Type == "BOOT_TIME" || r.Type == "boot" || r.Type == "2" {
+		return ""
+	}
 	host := r.Host
 	if onlyMe && host == "" {
 		if h, err := os.Hostname(); err == nil {
@@ -263,6 +298,42 @@ func lineComment(r session.Record, onlyMe bool) string {
 		return ""
 	}
 	return "(" + host + ")"
+}
+
+func processRecord(r session.Record) bool {
+	switch r.Type {
+	case "LOGIN_PROCESS", "login", "6", "INIT_PROCESS", "init", "5":
+		return true
+	}
+	return false
+}
+
+func isRunLevel(r session.Record) bool {
+	switch r.Type {
+	case "RUN_LVL", "runlevel", "1":
+		return true
+	}
+	return false
+}
+
+func runLevel(pid int) (current, previous byte) {
+	current, previous = byte(pid&0xff), byte((pid>>8)&0xff)
+	if current < 0x20 || current > 0x7e {
+		current = '?'
+	}
+	if previous < 0x20 || previous > 0x7e {
+		previous = '?'
+	}
+	return current, previous
+}
+
+func writeRunLevel(rc *tool.RunContext, r session.Record, loc *time.Location, layout string) {
+	current, previous := runLevel(r.PID)
+	fmt.Fprintf(rc.Out, "run-level %c  %s", current, formatTime(r.Time, loc, layout))
+	if previous != '?' {
+		fmt.Fprintf(rc.Out, " last=%c", previous)
+	}
+	fmt.Fprintln(rc.Out)
 }
 
 func isDead(r session.Record) bool {
@@ -290,27 +361,27 @@ func ttyMatch(recordTTY, stdinTTY string) bool {
 
 // timeLocation resolves the zone from the invocation's TZ (rc.Env — never
 // the host process's zone). It accepts both IANA names ("America/New_York")
-// and POSIX TZ strings ("EST5EDT", "PST8PDT", "UTC0"); when TZ is unset the
-// caller's local zone applies, and an unparseable TZ falls back to UTC as
-// POSIX specifies.
-func timeLocation(rc *tool.RunContext) *time.Location {
+// and supported fixed-offset POSIX TZ strings ("UTC0", "<+08>-8"). Named
+// zones, including EST5EDT where installed, obtain DST transitions from
+// zoneinfo. Unsupported explicit rule strings fail closed rather than
+// silently rendering standard time during DST.
+func timeLocation(rc *tool.RunContext) (*time.Location, error) {
 	tz := rc.Getenv("TZ")
 	if tz == "" {
-		return time.Local
+		return time.Local, nil
 	}
 	if loc, err := time.LoadLocation(tz); err == nil {
-		return loc
+		return loc, nil
 	}
 	if loc := posixTZ(tz); loc != nil {
-		return loc
+		return loc, nil
 	}
-	return time.UTC
+	return nil, fmt.Errorf("unsupported TZ value %q", tz)
 }
 
-// posixTZ parses the standard-time portion of a POSIX TZ string
-// (stdoffset[dst…]) into a fixed zone. DST transition rules are not applied —
-// standard time is used — which is deterministic and correct for the
-// certification cases (UTC and fixed offsets).
+// posixTZ parses a fixed-offset POSIX TZ string into a fixed zone. Any
+// trailing DST name/rule is rejected; timeLocation first gives installed
+// zoneinfo names the opportunity to supply correct transition rules.
 func posixTZ(tz string) *time.Location {
 	if strings.HasPrefix(tz, ":") {
 		return nil // ":<path>" implementation-defined form: unsupported
@@ -321,8 +392,7 @@ func posixTZ(tz string) *time.Location {
 	}
 	secs, ok := parseTZOffset(rest)
 	if !ok {
-		// A bare name with no offset (e.g. "UTC") denotes UTC.
-		return time.FixedZone(name, 0)
+		return nil
 	}
 	// POSIX offset is the value ADDED to local time to reach UTC, so a zone
 	// east of UTC is the negation.
@@ -368,20 +438,21 @@ func parseTZOffset(s string) (secs int, ok bool) {
 	total := hh * 3600
 	if strings.HasPrefix(s, ":") {
 		mm, r, ok := scanInt(s[1:])
-		if !ok {
+		if !ok || mm > 59 {
 			return 0, false
 		}
 		total += mm * 60
 		s = r
 		if strings.HasPrefix(s, ":") {
-			ss, _, ok := scanInt(s[1:])
-			if !ok {
+			ss, r, ok := scanInt(s[1:])
+			if !ok || ss > 59 {
 				return 0, false
 			}
 			total += ss
+			s = r
 		}
 	}
-	return sign * total, true
+	return sign * total, s == "" && hh <= 24
 }
 
 func scanInt(s string) (n int, rest string, ok bool) {
@@ -415,45 +486,14 @@ func formatTime(t time.Time, loc *time.Location, layout string) string {
 // posixTimeLayout is who's C/POSIX-locale time field: strftime "%b %e %H:%M".
 const posixTimeLayout = "Jan _2 15:04"
 
-// timeFormat selects the time-field layout from the effective LC_TIME
-// locale. Only the C/POSIX locale is supported (its "%b %e %H:%M" form);
-// any other locale would require locale month-name data this pure-Go tool
-// deliberately does not carry, so it falls back to the same deterministic
-// C layout rather than silently approximating a localized one.
-func timeFormat(rc *tool.RunContext) string {
-	switch effectiveLocale(rc) {
-	case "", "C", "POSIX":
-		return posixTimeLayout
-	default:
-		return posixTimeLayout
-	}
-}
-
-// effectiveLocale resolves the LC_TIME category with POSIX precedence:
-// LC_ALL overrides LC_TIME, which overrides LANG. A common ".UTF-8"/".utf8"
-// codeset suffix is stripped so "C.UTF-8" is treated as the C locale.
-func effectiveLocale(rc *tool.RunContext) string {
-	v := rc.Getenv("LC_ALL")
-	if v == "" {
-		v = rc.Getenv("LC_TIME")
-	}
-	if v == "" {
-		v = rc.Getenv("LANG")
-	}
-	if i := strings.IndexByte(v, '.'); i >= 0 {
-		v = v[:i]
-	}
-	return v
-}
-
 func formatIdle(tty string, loginTime time.Time) string {
 	path := session.TTYPath(tty)
 	if path == "" {
-		return "old"
+		return "?"
 	}
 	at, ok := accessTime(path)
 	if !ok {
-		return "old"
+		return "?"
 	}
 	if at.Before(loginTime) {
 		at = loginTime
