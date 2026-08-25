@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 50 |
-| Evidence | Unverified | 64 |
+| Evidence | Partial | 56 |
+| Evidence | Unverified | 58 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -150,7 +150,7 @@ ar -r -i [-cuv] posname archive file...
 
 ## `at`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -170,21 +170,21 @@ at -l [at_job_id...]
 
 **Issue 7 option-argument candidate:** `-f=<file>; -q=<queuename>; -t=<time_arg>`.
 
-**Operands:** `at_job_id; timespec; time; midnight; noon; now; date; today; tomorrow; increment`. UNVERIFIED
+**Operands:** `at_job_id; timespec; time; midnight; noon; now; date; today; tomorrow; increment`. -t excludes timespec; -l -q has no IDs; -r requires one or more owned job IDs; timespec operands join with spaces; queue defaults a and b is batch-reserved.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** - is a pathname for -f; empty stdin is a valid empty shell program.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read text commands from stdin unless -f names the source.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; LC_TIME; SHELL; TZ`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** -l writes id<TAB>date lines; submission writes nothing to stdout.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Successful submission writes job id/date confirmation and diagnostics to stderr.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Persist an owned shell job with invocation environment, cwd, umask, queue, mail state, and scheduled time; list/remove affect only invoking-owner jobs.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on successful submit/list/remove; greater than 0 on an error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -196,7 +196,7 @@ at -l [at_job_id...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/at`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/at/at_test.go#TestAtCreateAndListAndRemove;cmds/at/at_test.go#TestAtQueueSubmissionAndListFiltering;cmds/at/at_test.go#TestAtAcceptsEmptyAndBlankStdin;cmds/at/at_test.go#TestAtMailCompletionState;cmds/at/at_test.go#TestAtLCTimeParsingAndUnsupportedLocale;cmds/at/at_test.go#TestAtOutputWriteErrorsFail`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [at](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/at.html).
 
@@ -299,7 +299,7 @@ basename string [suffix]
 
 ## `batch`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -315,21 +315,21 @@ batch
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `none`. UNVERIFIED
+**Operands:** `none`. No options or operands are accepted.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** NONE
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read a text shell program from stdin; empty input is valid.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; SHELL; TZ`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** No stdout on successful submission.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Successful submission writes job id/date confirmation and diagnostics to stderr.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Persist a queue-b, completion-mail-enabled, load-governed at job with invocation environment, cwd, and umask.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on successful submission; greater than 0 on an error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -341,7 +341,7 @@ batch
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/batch`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/batch/batch_test.go#TestBatchSubmissionStdoutEmpty;cmds/batch/batch_test.go#TestBatchPersistsJob;cmds/batch/batch_test.go#TestBatchIsAtQueueBWithCompletionMailAndLoadMarker;cmds/batch/batch_test.go#TestBatchRejectsOperands;cmds/batch/batch_test.go#TestBatchAuthenticatedRecipientAndWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [batch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/batch.html).
 
@@ -929,7 +929,7 @@ cp -R [-H|-L|-P] [-fip] source_file... target
 
 ## `crontab`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base; optional`.
 
@@ -946,21 +946,21 @@ crontab [file]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. At most one file; no file reads stdin; -e, -l, and -r are mutually exclusive and take no file.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** - is a literal pathname, not stdin.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read replacement table from stdin only when file is omitted.
 
 **Environment:** `EDITOR; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** -l writes the installed source; successful install/remove are silent.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Diagnostics and editor failures use stderr.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Replace, remove, or edit the invoking user's table atomically; installation parses jobs with cron execution environment.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on success; greater than 0 on error without replacing an invalid table.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -972,7 +972,7 @@ crontab [file]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/crontab`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/crontab/crontab_test.go#TestCrontabInstallListRemove;cmds/crontab/crontab_test.go#TestCrontabInvalidScheduleIsAtomic;cmds/crontab/crontab_test.go#TestCrontabPreservesWholeSourceAndEditorInputByteForByte;cmds/crontab/crontab_test.go#TestCrontabInstallSilent;cmds/crontab/crontab_test.go#TestCrontabRejectsConflictingModesAndExtraOperands`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [crontab](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/crontab.html).
 
@@ -1174,7 +1174,7 @@ date [-u] [+format]
 
 ## `dd`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1190,21 +1190,21 @@ dd [operand...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `if=file; of=file; ibs=expr; obs=expr; bs=expr; cbs=expr; skip=n; seek=n; count=n; conv=value[,value ...]; ascii; ebcdic; ibm; block; unblock; lcase; ucase; swab; noerror; notrunc; sync`. UNVERIFIED
+**Operands:** `if=file; of=file; ibs=expr; obs=expr; bs=expr; cbs=expr; skip=n; seek=n; count=n; conv=value[,value ...]; ascii; ebcdic; ibm; block; unblock; lcase; ucase; swab; noerror; notrunc; sync`. KEY=VALUE operands select files, blocks, limits, offsets, and conversions; invalid numbers/conversion conflicts fail before copying; bs overrides ibs/obs.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** if=- and of=- select standard streams.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read stdin when if is absent.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write converted records to stdout when of is absent.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write record counts and diagnostics to stderr; POSIX mode omits the GNU byte-count extension.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Copy/convert bytes, applying seek/truncation, noerror/sync, XSI codeset conversion, and signal status effects.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on complete copy; greater than 0 on operand, I/O, signal, or status-write error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1216,13 +1216,13 @@ dd [operand...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/dd`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/dd/dd_test.go#TestDdPOSIXStatusOmitsGNUByteCountExtension;cmds/dd/dd_test.go#TestDdOperandSizeSyntax;cmds/dd/dd_test.go#TestDdSeekOnRedirectedStandardOutput;cmds/dd/conv_test.go#TestDdConvAsciiEbcdicRoundTrip;cmds/dd/dd_signal_unix_test.go#TestDdEmbeddedSIGINTReturnsStatusAndDoesNotSignalHost`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [dd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dd.html).
 
 ## `df`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `xsi`.
 
@@ -1238,21 +1238,21 @@ dd [operand...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Each file selects its containing filesystem; no operands lists accessible filesystems; -P and -t conflict.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** - is a pathname.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write filesystem rows; default/-k include free slots; -P writes six portable fields; -t includes allocated space without a synthetic total.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Per-operand and mount-discovery diagnostics use stderr.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read filesystem metadata only; no output files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 if all requested information is written; greater than 0 for an error, while successful operands remain reported.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1264,13 +1264,13 @@ dd [operand...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/df`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/df/df_test.go#TestPortableExactOutput;cmds/df/df_test.go#TestXSITotalAllocatedSpaceOption;cmds/df/df_test.go#TestXSIDefaultIncludesFreeFileSlots;cmds/df/df_test.go#TestPOSIXPortableAndTotalAreMutuallyExclusive;cmds/df/df_test.go#TestMixedOperandsPreserveSuccessfulOutput`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [df](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/df.html).
 
 ## `diff`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1286,19 +1286,19 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 
 **Issue 7 option-argument candidate:** `-C=<n>; -U=<n>`.
 
-**Operands:** `file1, file2`. UNVERIFIED
+**Operands:** `file1, file2`. Exactly two operands; file/directory combinations use basename matching; -r recurses directory pairs.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** One - operand selects stdin; two - operands are rejected.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read stdin only for one - operand.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write normal, ed, forward-ed, context, or unified difference output to stdout.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write access, traversal, and output diagnostics to stderr.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read operands only; directory traversal does not modify inputs or create output files.`.
 
 **Exit status:** 0 no differences; 1 differences found; greater than 1 on error.
 
@@ -1312,7 +1312,7 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 
 **Conservative source-token audit:** token gaps: options=none; argument-form gaps=-C=<n>, -U=<n>; source `cmds/diff`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/diff/diff_test.go#TestNormalFormat;cmds/diff/diff_test.go#TestUnifiedGolden;cmds/diff/diff_test.go#TestContextGolden;cmds/diff/diff_test.go#TestRunReportsBufferedFlushError;cmds/diff/diff_fifo_unix_test.go#TestDirectoryFIFOComparedByType`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [diff](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/diff.html).
 

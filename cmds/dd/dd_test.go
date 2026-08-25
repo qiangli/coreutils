@@ -15,15 +15,42 @@ import (
 )
 
 func runTool(t *testing.T, dir string, stdin string, args ...string) (stdout, stderr string, code int) {
+	return runToolEnv(t, dir, stdin, nil, args...)
+}
+
+func runToolEnv(t *testing.T, dir string, stdin string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+// POSIX Issue 7 specifies the completion status lines exactly. The
+// deterministic GNU-style byte-count extension remains available outside
+// POSIX mode, but POSIXLY_CORRECT (even empty) must suppress it.
+func TestDdPOSIXStatusOmitsGNUByteCountExtension(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     []string
+		wantErr string
+	}{
+		{"default extension", nil, "1+0 records in\n1+0 records out\n2 bytes copied\n"},
+		{"POSIX nonempty", []string{"POSIXLY_CORRECT=1"}, "1+0 records in\n1+0 records out\n"},
+		{"POSIX empty", []string{"POSIXLY_CORRECT="}, "1+0 records in\n1+0 records out\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runToolEnv(t, t.TempDir(), "ab", tc.env, "ibs=2", "obs=2", "count=1")
+			if code != 0 || out != "ab" || errb != tc.wantErr {
+				t.Fatalf("dd = (stdout %q, stderr %q, code %d), want (%q, %q, 0)", out, errb, code, "ab", tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestDdCopiesFileWithStatusNone(t *testing.T) {

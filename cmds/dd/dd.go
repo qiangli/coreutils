@@ -16,9 +16,9 @@
 // with trailing <space> characters. See conv_tables.go for the byte
 // tables and their FreeBSD prior-art provenance.
 //
-// Documented deviation: the default status trailer is a plain
-// "N bytes copied" line — GNU appends wall-clock time and throughput,
-// which this repo omits for deterministic output.
+// Outside POSIX mode, the default status trailer also includes a deterministic
+// "N bytes copied" extension. POSIX mode emits only its specified record
+// count (and, when applicable, truncated-record) lines.
 package ddcmd
 
 import (
@@ -59,7 +59,20 @@ type config struct {
 	ebcdic       bool
 	ibm          bool
 	status       string
+	posix        bool
 	reblock      bool
+}
+
+// envPresent deliberately distinguishes a variable set to an empty value from
+// one that is absent: POSIXLY_CORRECT is selected by presence.
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -69,7 +82,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	cfg := config{ibs: 512, obs: 512, count: -1, reblock: true}
+	cfg := config{ibs: 512, obs: 512, count: -1, reblock: true, posix: envPresent(rc.Env, "POSIXLY_CORRECT")}
 	var bs int64
 	for _, op := range operands {
 		k, v, ok := strings.Cut(op, "=")
@@ -634,7 +647,7 @@ func emitStatus(w io.Writer, status *ddStatus) error {
 			return err
 		}
 	}
-	if status.cfg.status != "noxfer" {
+	if !status.cfg.posix && status.cfg.status != "noxfer" {
 		var n int64
 		if status.counter != nil {
 			n = status.counter.n
