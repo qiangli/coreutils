@@ -9,6 +9,8 @@
 package cpcmd
 
 import (
+	"github.com/qiangli/coreutils/pkg/locale"
+
 	"bufio"
 	"errors"
 	"fmt"
@@ -569,16 +571,10 @@ func (c *copier) confirm(dst string) bool {
 	fmt.Fprintf(c.rc.Err, "cp: overwrite '%s'? ", dst)
 	line, err := c.in.ReadString('\n')
 	if err != nil && line == "" {
-		return false // EOF: not affirmative
-	}
-	line = strings.TrimRight(line, "\r\n")
-	if line == "" {
 		return false
 	}
-	if c.messagesGerman {
-		return line[0] == 'j' || line[0] == 'J' || line[0] == 'y' || line[0] == 'Y'
-	}
-	return line[0] == 'y' || line[0] == 'Y'
+	line = strings.TrimSpace(line)
+	return locale.MatchAffirmative(c.rc.Env, line)
 }
 
 func inputReader(r io.Reader) *bufio.Reader {

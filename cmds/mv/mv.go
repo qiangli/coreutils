@@ -48,6 +48,7 @@ type mover struct {
 	verbose     bool
 	failed      bool
 	in          *bufio.Reader
+	rawIn       io.Reader
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -95,6 +96,7 @@ func run(rc *tool.RunContext, args []string) int {
 		backup: backupMode != "" && backupMode != "nil", backupMode: backupMode, suffix: *suffix,
 		debug: *debug, verbose: *verbose,
 		in: inputReader(rc.In),
+		rawIn: rc.In,
 	}
 	// GNU rule: of -f and -n, the one given last takes effect.
 	switch lastOverride(args) {
@@ -201,7 +203,7 @@ func (m *mover) move(src, dst string) {
 				if !m.confirm(dst, false) {
 					return
 				}
-			} else if isTerminal(m.in) {
+			} else if isTerminal(m.rawIn) {
 				if !writableForPrompt(dp) {
 					if !m.confirm(dst, true) {
 						return
@@ -243,11 +245,7 @@ func (m *mover) confirm(dst string, unwritable bool) bool {
 	if line == "" {
 		return false
 	}
-	messages := strings.ToLower(locale.Resolve(m.rc.Env, locale.Messages))
-	if strings.HasPrefix(messages, "de_de") {
-		return line[0] == 'j' || line[0] == 'J' || line[0] == 'y' || line[0] == 'Y'
-	}
-	return line[0] == 'y' || line[0] == 'Y'
+	return locale.MatchAffirmative(m.rc.Env, line)
 }
 
 // Indirection keeps permission-sensitive prompt tests hermetic when the test
@@ -256,6 +254,8 @@ func (m *mover) confirm(dst string, unwritable bool) bool {
 var writableForPrompt = isWritable
 
 var osRename = os.Rename
+var osRemoveAll = os.RemoveAll
+var osRemove = os.Remove
 
 var isTerminal = func(r io.Reader) bool {
 	if f, ok := r.(interface{ Fd() uintptr }); ok {
@@ -296,7 +296,7 @@ func (m *mover) backupDest(dst string) bool {
 		}
 		bp = fmt.Sprintf("%s.~%d~", dp, n)
 	} else {
-		if err := os.Remove(bp); err != nil && !os.IsNotExist(err) {
+		if err := osRemove(bp); err != nil && !os.IsNotExist(err) {
 			m.errf("cannot backup '%s': %s", dst, reason(err))
 			return false
 		}
@@ -350,7 +350,7 @@ func (m *mover) copyMove(src, dst string) bool {
 	if !m.copyNode(src, dst) {
 		return false
 	}
-	if err := os.RemoveAll(m.rc.Path(src)); err != nil {
+	if err := osRemoveAll(m.rc.Path(src)); err != nil {
 		m.errf("cannot remove '%s': %s", src, reason(err))
 		return false
 	}
@@ -395,7 +395,7 @@ func (m *mover) copyNode(src, dst string) bool {
 			return false
 		}
 		if _, err := os.Lstat(dp); err == nil {
-			if err := os.Remove(dp); err != nil {
+			if err := osRemove(dp); err != nil {
 				m.errf("cannot remove '%s': %s", dst, reason(err))
 				return false
 			}
@@ -407,7 +407,7 @@ func (m *mover) copyNode(src, dst string) bool {
 		return true
 	case fi.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0:
 		if _, err := os.Lstat(dp); err == nil {
-			if err := os.Remove(dp); err != nil {
+			if err := osRemove(dp); err != nil {
 				m.errf("cannot remove '%s': %s", dst, reason(err))
 				return false
 			}
@@ -512,29 +512,37 @@ func maybeStripTrailingSlashes(args []string, enabled bool) []string {
 // final one takes effect"). Returns 'f', 'n', 'i', or 0.
 func lastOverride(args []string) byte {
 	var last byte
+	skipNext := false
 	for _, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if a == "--" {
 			break
 		}
-		switch {
-		case a == "--force":
+		if a == "--force" {
 			last = 'f'
-		case a == "--no-clobber":
+		} else if a == "--no-clobber" {
 			last = 'n'
-		case a == "--interactive" || strings.HasPrefix(a, "--interactive="):
+		} else if a == "--interactive" || strings.HasPrefix(a, "--interactive=") {
 			last = 'i'
-		case len(a) > 1 && a[0] == '-' && a[1] != '-':
-			for _, ch := range a[1:] {
+		} else if strings.HasPrefix(a, "--target-directory=") || strings.HasPrefix(a, "--context=") || strings.HasPrefix(a, "--suffix=") || strings.HasPrefix(a, "--backup=") {
+			continue
+		} else if a == "--target-directory" || a == "--context" || a == "--suffix" {
+			skipNext = true
+		} else if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			for i, ch := range a[1:] {
 				if ch == 'f' {
 					last = 'f'
-				}
-				if ch == 'n' {
+				} else if ch == 'n' {
 					last = 'n'
-				}
-				if ch == 'i' {
+				} else if ch == 'i' {
 					last = 'i'
-				}
-				if ch == 't' || ch == 'S' || ch == 'b' || ch == 'Z' {
+				} else if ch == 't' || ch == 'S' || ch == 'Z' {
+					if i == len(a[1:])-1 {
+						skipNext = true
+					}
 					break
 				}
 			}

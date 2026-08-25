@@ -136,3 +136,16 @@ func getEnv(env []string, key string) (string, bool) {
 	}
 	return "", false
 }
+
+// MatchAffirmative reports whether the response matches the LC_MESSAGES
+// yesexpr for the given environment.
+func MatchAffirmative(env []string, response string) bool {
+	if response == "" {
+		return false
+	}
+	messages := strings.ToLower(Resolve(env, Messages))
+	if strings.HasPrefix(messages, "de_de") {
+		return response[0] == 'j' || response[0] == 'J' || response[0] == 'y' || response[0] == 'Y'
+	}
+	return response[0] == 'y' || response[0] == 'Y'
+}

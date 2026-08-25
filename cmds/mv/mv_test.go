@@ -1,6 +1,8 @@
 package mvcmd
 
 import (
+	"io"
+
 	"bytes"
 	"context"
 	"os"
@@ -500,5 +502,88 @@ func TestMvHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, dir, "--version")
 	if code != 0 || !strings.Contains(out, "mv") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+func TestMvCopyFallbackFailures(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src_fail_copy"), "one")
+	write(t, filepath.Join(dir, "src_fail_remove"), "two")
+
+	oldOsRename := osRename
+	defer func() { osRename = oldOsRename }()
+	osRename = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+
+	oldOsRemoveAll := osRemoveAll
+	defer func() { osRemoveAll = oldOsRemoveAll }()
+	osRemoveAll = func(path string) error {
+		if filepath.Base(path) == "src_fail_remove" {
+			return os.ErrPermission
+		}
+		return oldOsRemoveAll(path)
+	}
+
+	// 1. Fail during copy (source is unreadable)
+	os.Chmod(filepath.Join(dir, "src_fail_copy"), 0o000)
+	_, _, code := runTool(t, dir, "src_fail_copy", "dst1")
+	if code == 0 {
+		t.Errorf("expected failure when copy fails")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "src_fail_copy")); os.IsNotExist(err) {
+		t.Errorf("source should not be removed if copy fails")
+	}
+	os.Chmod(filepath.Join(dir, "src_fail_copy"), 0o644) // restore for cleanup
+
+	// 2. Fail during remove
+	_, _, code2 := runTool(t, dir, "src_fail_remove", "dst2")
+	if code2 == 0 {
+		t.Errorf("expected failure when remove fails")
+	}
+	if read(t, filepath.Join(dir, "dst2")) != "two" {
+		t.Errorf("copy should have completed before remove failed")
+	}
+}
+
+func TestMvInteractiveRefusal(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "one")
+	write(t, filepath.Join(dir, "dst"), "two")
+
+	// Provide an explicit negative response
+	out, errb, code := runToolInput(t, dir, "n\n", "-i", "src", "dst")
+	
+	if code != 0 {
+		t.Errorf("expected 0 exit code on refusal, got %d. stderr=%q", code, errb)
+	}
+	if out != "" {
+		t.Errorf("unexpected output: %q", out)
+	}
+	if read(t, filepath.Join(dir, "src")) != "one" {
+		t.Errorf("source should still exist")
+	}
+	if read(t, filepath.Join(dir, "dst")) != "two" {
+		t.Errorf("destination should still be 'two'")
+	}
+}
+
+func TestMvPromptUnwritable(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "one")
+	write(t, filepath.Join(dir, "dst"), "two")
+	os.Chmod(filepath.Join(dir, "dst"), 0o444)
+
+	oldIsTerminal := isTerminal
+	defer func() { isTerminal = oldIsTerminal }()
+	isTerminal = func(r io.Reader) bool { return true }
+
+	_, errb, code := runToolInput(t, dir, "y\n", "src", "dst")
+	
+	if code != 0 {
+		t.Errorf("expected 0, got %d. err=%q", code, errb)
+	}
+	if !strings.Contains(errb, "override mode?") && !strings.Contains(errb, "replace") {
+		t.Errorf("expected prompt for unwritable destination, got %q", errb)
 	}
 }

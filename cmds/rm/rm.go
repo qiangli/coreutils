@@ -9,6 +9,8 @@
 package rmcmd
 
 import (
+	"github.com/qiangli/coreutils/pkg/locale"
+
 	"bufio"
 	"errors"
 	"fmt"
@@ -238,12 +240,8 @@ func (r *remover) confirm(op string) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	// This is the C/POSIX locale's affirmative expression.  The repository
-	// does not yet provide a reusable LC_MESSAGES yesexpr matcher (the find
-	// implementation has command-local locale handling), so locale-specific
-	// affirmative responses remain a separately tracked POSIX gap.
 	line = strings.TrimSpace(line)
-	return line == "y" || line == "Y" || strings.EqualFold(line, "yes")
+	return locale.MatchAffirmative(r.rc.Env, line)
 }
 
 func inputReader(r io.Reader) *bufio.Reader {
