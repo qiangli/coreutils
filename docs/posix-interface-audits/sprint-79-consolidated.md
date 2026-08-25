@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `07e9f17`
+This report reconciles the Sprint 79 interface ledger through coreutils `e288c58`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -106,7 +106,7 @@ lower-ranked edges.
 | 2 | `id` | `STDOUT` | Add named-user default/group output, lookup-failure fallbacks, a real set-ID process fixture, and executable non-Unix behavior or an explicit platform conformance disposition. |
 | 2 | `logname` | `STDOUT`, `EXIT_STATUS` | Current tests prove no effective/environment-user fallback, required no-login failure, RunContext isolation, and output/short-write errors. A real login-session fixture is still required on each supported non-Linux platform; Linux also needs a session where getlogin succeeds without audit loginuid. |
 | 2 | `od` | `ENVIRONMENT_VARIABLES`, `STDOUT` | Add a non-C `LC_CTYPE` `-c` rendering fixture and non-C `LC_NUMERIC` floating-format fixture across all required type strings and ABI sizes. |
-| 2 | `paste` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `STDOUT` | Add locale-aware delimiter decoding, repeated `-` under `-s`, twelve-operand coverage, serial `\\0`, input read errors, and stdout failure. |
+| 2 | `paste` | locale-provider integration | Accepted source now splits `-d LIST` into delimiter characters per invocation `LC_CTYPE` (carried C/POSIX, their UTF-8 aliases, and `de_DE.ISO-8859-1`, original bytes preserved, unsupported locales failing before any operand opens), and has focused tests for repeated `-` under `-s`, the twelve-operand minimum, the `\\` escape, serial `\0`, mid-file read errors, and stdout write/short-write failures. Remaining: locale codeset discovery is a bounded carried corpus rather than `nl_langinfo(CODESET)`; unqualified installed locales outside that corpus fail closed. |
 | 2 | `pathchk` | `OPERANDS`, `EXIT_STATUS` | Current source queries containing-filesystem limits and preserves symlink-before-`..` resolution, with focused tests for both. Still implement and test the required default invalid-byte-sequence check, pathconf failure/indeterminate results, differing mounted limits, and required diagnostics/statuses. |
 | 2 | `pr` | `OPTIONS`, `ENVIRONMENT_VARIABLES`, `STDOUT` | Add exact Issue 7 optional-argument grammar, every column/merge/page interaction, locale date/header width, terminal pause/interruption, input/output failure, and status matrix. |
 | 2 | `tty` | `STDOUT`, `EXIT_STATUS` | Linux and Darwin now have real terminal-name tests; Windows console behavior, silent mode, invalid descriptors, output errors, and short writes are covered. Add truthful terminal pathname lookup on the remaining POSIX targets and the specified POSIX-locale nonterminal output before verification. |
@@ -154,7 +154,7 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `07e9f17`. It credits the accepted command
+This report is reconciled through canonical `e288c58`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -162,15 +162,17 @@ waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `b614e20`, `27c4c30`, `8b7c051`, `6cd55bc`, `af1fd00`, `ddbe753`,
 `7fff4b6`, `4741bf9`, `dd63476`, `3aefbac`, `9ef3a43`, and matrix refresh
 `dc79ecd`; `iconv` through `70bc09b` and matrix refresh `056e48a`; `fold`
-through `e461654` and matrix refresh `c354351`; and `getconf` through
-`ceae89d`, `2fbc91c`, and matrix refresh `07e9f17`.
+through `e461654` and matrix refresh `c354351`; `getconf` through
+`ceae89d`, `2fbc91c`, and matrix refresh `07e9f17`; and `paste` through
+`7c519b3` and matrix refresh `e288c58`.
 
 The machine-readable evidence lanes name the exact current test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
 pax interactive/preservation/extended-header families, iconv
-charmap/stream/status matrix, fold locale/byte/error matrix, and getconf
-inventory/platform/error matrix. Both accepted waves remain partial because
-their platform and locale-provider residuals are stated explicitly above.
+charmap/stream/status matrix, fold locale/byte/error matrix, getconf
+inventory/platform/error matrix, and paste locale-delimiter/error matrix.
+These recently accepted locale/platform waves remain partial because their
+locale-provider and platform residuals are stated explicitly above.
 
 ## Reproduction
 

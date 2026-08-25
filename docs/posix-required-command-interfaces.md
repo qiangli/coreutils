@@ -3527,7 +3527,7 @@ paste [-s] [-d list] file...
 
 **Standard input:** Used only when a file operand is - (or, as an extension, when no operands are given).
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. -d LIST is split into delimiter characters per LC_CTYPE (LC_ALL > LC_CTYPE > LANG > POSIX default): C/POSIX and the carried de_DE.ISO-8859-1 alias use one byte per character, the carried C/POSIX UTF-8 aliases decode one rune per character, original bytes are preserved exactly, and an unsupported LC_CTYPE fails before any operand is opened.`.
 
 **Standard output:** The concatenated lines separated by tabs or the -d delimiter elements, each output line newline-terminated.
 
@@ -3547,7 +3547,7 @@ paste [-s] [-d list] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/paste`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/paste/paste_test.go#TestPasteParallel;cmds/paste/paste_test.go#TestPasteSerial;cmds/paste/paste_test.go#TestPasteStdin;cmds/paste/paste_test.go#TestPasteErrors;cmds/paste/paste_test.go#TestPasteUnknownFlag;cmds/paste/paste_test.go#TestPasteHelpAndVersion`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:paste:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/paste/paste_test.go#TestPasteParallel;cmds/paste/paste_test.go#TestPasteSerial;cmds/paste/paste_test.go#TestPasteStdin;cmds/paste/paste_test.go#TestPasteErrors;cmds/paste/paste_test.go#TestPasteUnknownFlag;cmds/paste/paste_test.go#TestPasteHelpAndVersion;cmds/paste/issue738_posix_test.go#TestIssue738LocaleAwareDelimiterDecoding;cmds/paste/issue738_posix_test.go#TestIssue738LCCTypePrecedence;cmds/paste/issue738_posix_test.go#TestIssue738UnsupportedLocaleFailsBeforeOpeningOperand;cmds/paste/issue738_posix_test.go#TestIssue738RepeatedDashUnderSerial;cmds/paste/issue738_posix_test.go#TestIssue738TwelveOperands;cmds/paste/issue738_posix_test.go#TestIssue738BackslashEscapedDelimiter;cmds/paste/issue738_posix_test.go#TestIssue738SerialZeroDelimiter;cmds/paste/issue738_posix_test.go#TestIssue738InjectedReadErrorParallel;cmds/paste/issue738_posix_test.go#TestIssue738InjectedReadErrorSerial;cmds/paste/issue738_posix_test.go#TestIssue738OutputWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:paste:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [paste](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/paste.html).
 
