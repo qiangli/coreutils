@@ -12,10 +12,11 @@ import (
 // locale and the de_DE data used by the certification fixture. Callers must
 // fail closed when ResolveTime cannot provide the requested locale.
 type TimeFormatter struct {
-	months   [12]string
-	weekdays [7]string
-	latin1   bool
-	locale   string
+	months                                 [12]string
+	weekdays                               [7]string
+	dateTime, date, clock, clock12, am, pm string
+	latin1                                 bool
+	locale                                 string
 }
 
 var (
@@ -34,9 +35,17 @@ func ResolveTime(env []string) (TimeFormatter, error) {
 	base, codeset := splitName(name)
 	switch base {
 	case "C", "POSIX":
-		return TimeFormatter{months: posixMonths, weekdays: posixWeekdays, locale: "POSIX"}, nil
+		return TimeFormatter{
+			months: posixMonths, weekdays: posixWeekdays, locale: "POSIX",
+			dateTime: "%a %b %e %H:%M:%S %Y", date: "%m/%d/%y",
+			clock: "%H:%M:%S", clock12: "%I:%M:%S %p", am: "AM", pm: "PM",
+		}, nil
 	case "de_DE":
-		f := TimeFormatter{months: germanMonths, weekdays: germanDays, locale: "de_DE"}
+		f := TimeFormatter{
+			months: germanMonths, weekdays: germanDays, locale: "de_DE",
+			dateTime: "%a %d %b %Y %T %Z", date: "%d.%m.%Y",
+			clock: "%T", clock12: "",
+		}
 		switch {
 		case isUTF8Name(codeset):
 			return f, nil
@@ -190,13 +199,11 @@ func (f TimeFormatter) Format(t time.Time, format string) (string, error) {
 		case 'B':
 			out.WriteString(f.monthName(t.Month(), true))
 		case 'c':
-			if f.locale == "de_DE" {
-				text, _ := f.Format(t, "%a %d %b %Y %T %Z")
-				out.WriteString(text)
-			} else {
-				text, _ := f.Format(t, "%a %b %e %H:%M:%S %Y")
-				out.WriteString(text)
+			text, err := f.Format(t, f.dateTime)
+			if err != nil {
+				return "", err
 			}
+			out.WriteString(text)
 		case 'D':
 			fmt.Fprintf(&out, "%02d/%02d/%02d", t.Month(), t.Day(), t.Year()%100)
 		case 'F':
@@ -208,30 +215,27 @@ func (f TimeFormatter) Format(t time.Time, format string) (string, error) {
 			year, _ := t.ISOWeek()
 			fmt.Fprintf(&out, "%04d", year)
 		case 'p':
-			if f.locale != "de_DE" {
-				if t.Hour() < 12 {
-					out.WriteString("AM")
-				} else {
-					out.WriteString("PM")
-				}
+			if t.Hour() < 12 {
+				out.WriteString(f.am)
+			} else {
+				out.WriteString(f.pm)
 			}
 		case 'r':
-			hour := t.Hour() % 12
-			if hour == 0 {
-				hour = 12
+			text, err := f.Format(t, f.clock12)
+			if err != nil {
+				return "", err
 			}
-			fmt.Fprintf(&out, "%02d:%02d:%02d ", hour, t.Minute(), t.Second())
-			if f.locale != "de_DE" {
-				if t.Hour() < 12 {
-					out.WriteString("AM")
-				} else {
-					out.WriteString("PM")
-				}
-			}
+			out.WriteString(text)
 		case 'R':
 			fmt.Fprintf(&out, "%02d:%02d", t.Hour(), t.Minute())
-		case 'T', 'X':
+		case 'T':
 			fmt.Fprintf(&out, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Second())
+		case 'X':
+			text, err := f.Format(t, f.clock)
+			if err != nil {
+				return "", err
+			}
+			out.WriteString(text)
 		case 'u':
 			weekday := int(t.Weekday())
 			if weekday == 0 {
@@ -248,11 +252,11 @@ func (f TimeFormatter) Format(t time.Time, format string) (string, error) {
 		case 'W':
 			fmt.Fprintf(&out, "%02d", timeWeekNumber(t, time.Monday))
 		case 'x':
-			if f.locale == "de_DE" {
-				fmt.Fprintf(&out, "%02d.%02d.%04d", t.Day(), t.Month(), t.Year())
-			} else {
-				fmt.Fprintf(&out, "%02d/%02d/%02d", t.Month(), t.Day(), t.Year()%100)
+			text, err := f.Format(t, f.date)
+			if err != nil {
+				return "", err
 			}
+			out.WriteString(text)
 		case 'z':
 			out.WriteString(t.Format("-0700"))
 		case 'Z':

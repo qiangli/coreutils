@@ -530,8 +530,8 @@ func strftime(t time.Time, f string, loc dateLocale) string {
 			fmt.Fprintf(&b, "%04d", y)
 		case 'r':
 			if loc.german {
-				// de_DE has an empty am_pm value; glibc retains its separator.
-				b.WriteString(t.Format("03:04:05 "))
+				// The carried de_DE t_fmt_ampm value is empty.
+				break
 			} else {
 				b.WriteString(t.Format("03:04:05 PM"))
 			}

@@ -3,6 +3,7 @@ package paxcmd
 import (
 	"archive/tar"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,16 @@ func TestPAXOptionGrammarWhitespaceEscapedCommaAndTrailingComma(t *testing.T) {
 		if _, err := parsePAXOptions([]string{arg}, paxWrite, "pax"); err == nil {
 			t.Fatalf("parsePAXOptions(%q) succeeded", arg)
 		}
+	}
+}
+
+func TestPAXEscapedCommaCursorRetainsSuffixAndNextKeyword(t *testing.T) {
+	o, err := parsePAXOptions([]string{`comment=a\,bc,uid=7`}, paxRead, "pax")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.global["comment"] != "a,bc" || o.global["uid"] != "7" {
+		t.Fatalf("parsed=%+v", o.global)
 	}
 }
 
@@ -168,12 +179,12 @@ func TestPAXReadAndListHeaderPrecedence(t *testing.T) {
 	}
 	out, errOut, code := exec(t, d, "", "-f", arc,
 		"-o", "comment=command-global", "-o", "comment:=command-local",
-		"-o", `listopt=%(comment)s:%(path)s:%(uid)u`)
+		"-v", "-o", `listopt=%(comment)s:%(path)s:%(uid)u`)
 	if code != 0 || errOut != "" || out != "command-local:archive-local:44\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	out, errOut, code = exec(t, d, "", "-f", arc,
-		"-o", "comment=command-global", "-o", `listopt=%(comment)s:%(uid)u`)
+		"-o", "comment=command-global", "-v", "-o", `listopt=%(comment)s:%(uid)u`)
 	if code != 0 || errOut != "" || out != "archive-local:44\n" {
 		t.Fatalf("local-over-global code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
@@ -253,13 +264,13 @@ func TestPAXArchiveGlobalPersistsAndEmptyRecordDeletes(t *testing.T) {
 	if err := os.WriteFile(arc, raw.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, errOut, code := exec(t, d, "", "-f", arc, "-o", `listopt=%(comment)s:%(path)s`)
+	out, errOut, code := exec(t, d, "", "-v", "-f", arc, "-o", `listopt=%(comment)s:%(path)s`)
 	// The zero-length global removes comment, so asking for it on the third
 	// member fails closed rather than leaking the prior global value.
 	if code != 1 || out != "global:one\nglobal:two\n" || !strings.Contains(errOut, `unknown listopt keyword "comment"`) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
-	out, errOut, code = exec(t, d, "", "-f", arc, "-o", "comment=command", "-o", `listopt=%(comment)s:%(path)s`)
+	out, errOut, code = exec(t, d, "", "-v", "-f", arc, "-o", "comment=command", "-o", `listopt=%(comment)s:%(path)s`)
 	if code != 0 || errOut != "" || out != "command:one\ncommand:two\ncommand:three\n" {
 		t.Fatalf("command global precedence: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
@@ -350,9 +361,55 @@ func TestPAXInvalidActionsBypassAndUTF8(t *testing.T) {
 	if code != 1 || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) || !strings.Contains(errOut, "invalid value bypassed") {
 		t.Fatalf("default code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
+	for _, action := range []string{"binary", "rename", "write"} {
+		gotOut, gotErr, gotCode := exec(t, d, "", "-f", arc, "-o", "invalid="+action)
+		if gotCode != code || gotOut != out || gotErr != errOut {
+			t.Errorf("invalid=%s got (%d,%q,%q), bypass was (%d,%q,%q)", action, gotCode, gotOut, gotErr, code, out, errOut)
+		}
+	}
 	out, errOut, code = exec(t, d, "", "-f", arc, "-o", "invalid=UTF-8")
 	if code != 0 || errOut != "" || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) {
 		t.Fatalf("UTF-8 code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestPAXInvalidBinaryCoversNamesOwnersAndExtendedStrings(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local := "comment:=" + string([]byte{0xff}) + ",uname:=" + string([]byte{0xfe}) + ",gname:=" + string([]byte{0xfd})
+	out, errOut, code := exec(t, d, "", "-w", "-x", "pax", "-o", "invalid=binary", "-o", local, "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("local code=%d stderr=%q", code, errOut)
+	}
+	h, err := tar.NewReader(strings.NewReader(out)).Next()
+	if err != nil || h.PAXRecords["hdrcharset"] != "BINARY" {
+		t.Fatalf("local header=%+v records=%v err=%v", h, h.PAXRecords, err)
+	}
+	out, errOut, code = exec(t, d, "", "-w", "-x", "pax", "-o", "invalid=binary", "-o", "comment="+string([]byte{0xfc}), "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("global code=%d stderr=%q", code, errOut)
+	}
+	g, err := tar.NewReader(strings.NewReader(out)).Next()
+	if err != nil || g.Typeflag != tar.TypeXGlobalHeader || g.PAXRecords["hdrcharset"] != "BINARY" {
+		t.Fatalf("global header=%+v records=%v err=%v", g, g.PAXRecords, err)
+	}
+	out, errOut, code = execPaxEnv(t, d, []string{"LC_CTYPE=C"}, "-w", "-x", "pax", "-o", "invalid=binary", "-o", "comment=ä", "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("C locale code=%d stderr=%q", code, errOut)
+	}
+	g, err = tar.NewReader(strings.NewReader(out)).Next()
+	if err != nil || g.PAXRecords["hdrcharset"] != "BINARY" {
+		t.Fatalf("C locale header=%+v records=%v err=%v", g, g.PAXRecords, err)
+	}
+	out, errOut, code = execPaxEnv(t, d, []string{"LC_CTYPE=C.UTF-8"}, "-w", "-x", "pax", "-o", "invalid=binary", "-o", "comment=ä", "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("UTF-8 locale code=%d stderr=%q", code, errOut)
+	}
+	g, err = tar.NewReader(strings.NewReader(out)).Next()
+	if err != nil || g.PAXRecords["hdrcharset"] != "" {
+		t.Fatalf("UTF-8 locale header=%+v records=%v err=%v", g, g.PAXRecords, err)
 	}
 }
 
@@ -367,7 +424,7 @@ func TestPAXListFormatConversionsAndConcatenation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, errOut, code := exec(t, d, "", "-f", arc,
-		"-o", `listopt=%(path)s:%(uid)04u:%.4M:`, "-o", `listopt=%(mtime=%Y-%m-%d)T:%F`)
+		"-v", "-o", `listopt=%(path)s:%(uid)04u:%.4M:`, "-o", `listopt=%(mtime=%Y-%m-%d)T:%F`)
 	if code != 0 || errOut != "" || out != "file:0012:-rwx:2020-02-03:file\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
@@ -439,6 +496,47 @@ func TestPAXListFormatCPIOFieldNames(t *testing.T) {
 	}
 }
 
+func TestPAXListFormatPreservesActualRawUSTARFields(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "x", Typeflag: tar.TypeReg, Mode: 0o600, Format: tar.FormatUSTAR}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := archive.Bytes()
+	header := raw[:512]
+	for i := range header[:100] {
+		header[i] = 0
+	}
+	for i := range header[345:500] {
+		header[345+i] = 0
+	}
+	copy(header[:100], "leaf")
+	copy(header[345:500], "short-prefix")
+	setRawTarChecksum(header)
+	checksumText := strings.Trim(string(bytes.Trim(header[148:156], " \x00")), " ")
+	checksum, err := strconv.ParseInt(checksumText, 8, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := t.TempDir()
+	arc := filepath.Join(d, "raw.ustar")
+	if err := os.WriteFile(arc, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := exec(t, d, "", "-v", "-f", arc, "-o", `listopt=%(name)s|%(prefix)s|%(magic)s|%(version)s|%(chksum)u`)
+	want := fmt.Sprintf("leaf|short-prefix|ustar|00|%d\n", checksum)
+	if code != 0 || errOut != "" || out != want {
+		t.Fatalf("code=%d stdout=%q stderr=%q want=%q", code, out, errOut, want)
+	}
+	_, errOut, code = exec(t, d, "", "-v", "-f", arc, "-o", `listopt=%(COREUTILS.internal.ustar.name)s`)
+	if code != 1 || !strings.Contains(errOut, "unknown listopt keyword") {
+		t.Fatalf("private transport exposed: code=%d stderr=%q", code, errOut)
+	}
+}
+
 func TestPAXListFormatCPIOFiledataBinaryEmptyAndSymlink(t *testing.T) {
 	d := t.TempDir()
 	payload := []byte{'a', 0, 0xff, 'z'}
@@ -456,7 +554,7 @@ func TestPAXListFormatCPIOFiledataBinaryEmptyAndSymlink(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Fatalf("write code=%d stderr=%q", code, errOut)
 	}
-	out, errOut, code := exec(t, d, "", "-f", arc, "-o", `listopt=%(c_filedata)s`)
+	out, errOut, code := exec(t, d, "", "-v", "-f", arc, "-o", `listopt=%(c_filedata)s`)
 	want := string(payload) + "\n\nfile\n"
 	if code != 0 || errOut != "" || out != want {
 		t.Fatalf("list code=%d stdout=%q stderr=%q", code, out, errOut)
@@ -473,28 +571,28 @@ func TestPAXListTimeLocaleNamesEncodingsAndPrecedence(t *testing.T) {
 	if err := os.WriteFile(arc, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	format := `listopt=%(mtime=%a|%A|%b|%B)T`
+	format := `listopt=%(mtime=%a|%A|%b|%B|%r|%p|%x|%X)T`
 	for _, tc := range []struct {
 		name string
 		env  []string
 		want string
 	}{
-		{"German UTF-8", []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "Fr|Freitag|Mär|März\n"},
-		{"German Latin-1", []string{"TZ=UTC", "LC_TIME=de_DE.ISO-8859-1"}, "Fr|Freitag|M\xe4r|M\xe4rz\n"},
-		{"LC_ALL precedence", []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8", "LC_ALL=C"}, "Fri|Friday|Mar|March\n"},
+		{"German UTF-8", []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "Fr|Freitag|Mär|März|||01.03.2024|02:03:04\n"},
+		{"German Latin-1", []string{"TZ=UTC", "LC_TIME=de_DE.ISO-8859-1"}, "Fr|Freitag|M\xe4r|M\xe4rz|||01.03.2024|02:03:04\n"},
+		{"LC_ALL precedence", []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8", "LC_ALL=C"}, "Fri|Friday|Mar|March|02:03:04 AM|AM|03/01/24|02:03:04\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, errOut, code := execPaxEnv(t, d, tc.env, "-f", arc, "-o", format)
+			out, errOut, code := execPaxEnv(t, d, tc.env, "-v", "-f", arc, "-o", format)
 			if code != 0 || errOut != "" || out != tc.want {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 			}
 		})
 	}
-	out, errOut, code := execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "-f", arc, "-o", `listopt=%(mtime)T`)
+	out, errOut, code := execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "-v", "-f", arc, "-o", `listopt=%(mtime)T`)
 	if code != 0 || errOut != "" || out != "Mär  1 02:03 2024\n" {
 		t.Fatalf("default %%T code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
-	out, errOut, code = execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=fr_FR.UTF-8"}, "-f", arc, "-o", `listopt=%(mtime)T`)
+	out, errOut, code = execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=fr_FR.UTF-8"}, "-v", "-f", arc, "-o", `listopt=%(mtime)T`)
 	if code != 1 || out != "" || !strings.Contains(errOut, "LC_TIME") {
 		t.Fatalf("unsupported code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
@@ -530,7 +628,7 @@ func TestPAXMalformedListFormatFailsClosed(t *testing.T) {
 	if err := os.WriteFile(arc, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, errOut, code := exec(t, d, "", "-f", arc, "-o", "listopt=%(unknown)s")
+	_, errOut, code := exec(t, d, "", "-v", "-f", arc, "-o", "listopt=%(unknown)s")
 	if code != 1 || !strings.Contains(errOut, "unknown listopt keyword") {
 		t.Fatalf("code=%d stderr=%q", code, errOut)
 	}
@@ -543,9 +641,13 @@ func TestPAXEmptyListFormatStillOverridesDefaultListing(t *testing.T) {
 	if err := os.WriteFile(arc, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, errOut, code := exec(t, d, "", "-f", arc, "-o", "listopt=")
+	out, errOut, code := exec(t, d, "", "-v", "-f", arc, "-o", "listopt=")
 	if code != 0 || errOut != "" || out != "\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = exec(t, d, "", "-f", arc, "-o", "listopt=%(unknown)s")
+	if code != 0 || errOut != "" || out != "file\n" {
+		t.Fatalf("non-verbose code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
 

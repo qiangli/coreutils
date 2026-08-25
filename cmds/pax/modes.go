@@ -63,7 +63,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	sel := newSelector(o, patterns)
 	var catalog []selectorMember
 	var invalidMembers []bool
-	scan := newOptionTarReader(bytes.NewReader(raw), o.paxOptions)
+	scan := newOptionTarReader(raw, o.paxOptions, false)
 	for {
 		h, err := scan.Next()
 		if err == io.EOF {
@@ -119,7 +119,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	}
 
 	var rewritten bytes.Buffer
-	tr := newOptionTarReader(bytes.NewReader(raw), o.paxOptions)
+	tr := newOptionTarReader(raw, o.paxOptions, false)
 	tw := tar.NewWriter(&rewritten)
 
 	for index := 0; ; index++ {
@@ -201,7 +201,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		allow[m.Index] = m.Target
 	}
 
-	tr2 := newOptionTarReader(bytes.NewReader(data), paxOptions{})
+	tr2 := newOptionTarReader(data, paxOptions{}, false)
 	var pendingDirs []pendingDirectoryAttributes
 	for index := 0; ; index++ {
 		h, err := tr2.Next()
@@ -922,7 +922,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				h.PAXRecords["SCHILY.ino"] = strconv.FormatUint(id.ino, 10)
 				h.PAXRecords["SCHILY.nlink"] = strconv.FormatUint(id.nlink, 10)
 			}
-			if err := applyWritePAXOptions(h, o.paxOptions); err != nil {
+			if err := applyWritePAXOptions(rc, h, o.paxOptions); err != nil {
 				return err
 			}
 			if hardlink && o.paxOptions.linkdata {

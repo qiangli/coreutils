@@ -19,8 +19,10 @@ page:
   and defaults. Inapplicable write formats and modes fail closed.
 - `invalid=binary|bypass|rename|UTF-8|write`, `linkdata`, and `times` have
   mode-specific paths. Locale decisions use only `RunContext.Env`; no process
-  environment is mutated. Interactive rename uses the existing `/dev/tty`
-  lane.
+  environment is mutated. In list mode binary/rename/write follow bypass;
+  write-mode binary marks untranslatable names, owners, groups, and extended
+  strings with `hdrcharset=BINARY`. Interactive rename uses the existing
+  `/dev/tty` lane.
 - Global `keyword=value`, per-file `keyword:=value`, archive global records,
   archive per-file records, empty per-file deletion, and `delete=` follow the
   required precedence. Ordered name/ID application is deterministic.
@@ -34,8 +36,11 @@ page:
   keywords (including binary `c_filedata`), repeated-format concatenation,
   `TZ`, and malformed conversions are covered. `%T` supports the complete
   Issue 7 `date` operand conversion set and uses the carried invocation-local
-  `LC_TIME` names/encoding. `listopt` supplies the table format in list mode,
-  with or without `-v`, as required by the normative STDOUT section.
+  `LC_TIME` names/encoding. `listopt` supplies the verbose table format when
+  `-v` is present; without `-v`, list mode retains the pathname listing.
+  Raw USTAR `name`, `prefix`, `magic`, `version`, and `chksum` values are
+  retained exactly through list decoding rather than reconstructed from the
+  normalized header; their private transport metadata is not a user keyword.
 - Input format enforcement distinguishes cpio from tar. A minimal pax stream
   is physically indistinguishable from ustar when no extended record is
   needed, so compatible tar input is accepted rather than falsely rejected.

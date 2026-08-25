@@ -282,6 +282,9 @@ func listKeyword(h *tar.Header, key string) (any, bool) {
 			return v, true
 		}
 	}
+	if strings.HasPrefix(key, "COREUTILS.internal.") {
+		return nil, false
+	}
 	if v, ok := h.PAXRecords[key]; ok {
 		return v, true
 	}
@@ -289,6 +292,9 @@ func listKeyword(h *tar.Header, key string) (any, bool) {
 	case "path":
 		return h.Name, true
 	case "name":
+		if name, ok := h.PAXRecords["COREUTILS.internal.ustar.name"]; ok {
+			return name, true
+		}
 		_, name := splitUSTARPath(h.Name)
 		return name, true
 	case "linkpath", "linkname":
@@ -316,13 +322,28 @@ func listKeyword(h *tar.Header, key string) (any, bool) {
 	case "typeflag":
 		return string([]byte{h.Typeflag}), true
 	case "prefix":
+		if prefix, ok := h.PAXRecords["COREUTILS.internal.ustar.prefix"]; ok {
+			return prefix, true
+		}
 		prefix, _ := splitUSTARPath(h.Name)
 		return prefix, true
 	case "magic":
+		if magic, ok := h.PAXRecords["COREUTILS.internal.ustar.magic"]; ok {
+			return magic, true
+		}
 		return "ustar", true
 	case "version":
+		if version, ok := h.PAXRecords["COREUTILS.internal.ustar.version"]; ok {
+			return version, true
+		}
 		return "00", true
 	case "chksum":
+		if checksum, ok := h.PAXRecords["COREUTILS.internal.ustar.chksum"]; ok {
+			n, err := strconv.ParseInt(checksum, 8, 64)
+			if err == nil {
+				return n, true
+			}
+		}
 		return reconstructedTarChecksum(h), true
 	}
 	return nil, false

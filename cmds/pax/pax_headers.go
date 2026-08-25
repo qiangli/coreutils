@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path"
@@ -40,6 +39,12 @@ func writeGlobalPAXHeader(rc *tool.RunContext, o *options, tw *tar.Writer) error
 	}
 	if len(records) == 0 {
 		return nil
+	}
+	if o.paxOptions.invalid == "binary" {
+		probe := &tar.Header{Name: name, PAXRecords: records}
+		if paxHeaderNeedsBinary(rc, probe) {
+			records["hdrcharset"] = "BINARY"
+		}
 	}
 	return tw.WriteHeader(&tar.Header{
 		Name: name, Typeflag: tar.TypeXGlobalHeader,
@@ -87,10 +92,45 @@ type optionTarReader struct {
 	tr      *tar.Reader
 	options paxOptions
 	global  map[string]string
+	raw     []rawUSTARFields
+	index   int
 }
 
-func newOptionTarReader(r io.Reader, options paxOptions) *optionTarReader {
-	return &optionTarReader{tr: tar.NewReader(r), options: options, global: map[string]string{}}
+type rawUSTARFields struct {
+	name, prefix, magic, version, checksum string
+}
+
+func newOptionTarReader(data []byte, options paxOptions, preserveRaw bool) *optionTarReader {
+	r := &optionTarReader{tr: tar.NewReader(bytes.NewReader(data)), options: options, global: map[string]string{}}
+	if preserveRaw {
+		r.raw = scanRawUSTARFields(data)
+	}
+	return r
+}
+
+func scanRawUSTARFields(data []byte) []rawUSTARFields {
+	var fields []rawUSTARFields
+	for off := 0; off+512 <= len(data); {
+		header := data[off : off+512]
+		if allZero(header) {
+			break
+		}
+		size, err := rawTarSize(header)
+		if err != nil || size < 0 {
+			break
+		}
+		if header[156] != tar.TypeXHeader && header[156] != tar.TypeXGlobalHeader {
+			fields = append(fields, rawUSTARFields{
+				name:     string(bytes.TrimRight(header[:100], "\x00")),
+				prefix:   string(bytes.TrimRight(header[345:500], "\x00")),
+				magic:    string(bytes.TrimRight(header[257:263], "\x00")),
+				version:  string(bytes.TrimRight(header[263:265], "\x00")),
+				checksum: strings.Trim(string(bytes.Trim(header[148:156], " \x00")), " "),
+			})
+		}
+		off += 512 + int((size+511)&^511)
+	}
+	return fields
 }
 
 func (r *optionTarReader) Next() (*tar.Header, error) {
@@ -108,6 +148,18 @@ func (r *optionTarReader) Next() (*tar.Header, error) {
 				}
 			}
 			continue
+		}
+		if r.index < len(r.raw) {
+			if h.PAXRecords == nil {
+				h.PAXRecords = map[string]string{}
+			}
+			fields := r.raw[r.index]
+			h.PAXRecords["COREUTILS.internal.ustar.name"] = fields.name
+			h.PAXRecords["COREUTILS.internal.ustar.prefix"] = fields.prefix
+			h.PAXRecords["COREUTILS.internal.ustar.magic"] = fields.magic
+			h.PAXRecords["COREUTILS.internal.ustar.version"] = fields.version
+			h.PAXRecords["COREUTILS.internal.ustar.chksum"] = fields.checksum
+			r.index++
 		}
 		values := maps.Clone(r.global)
 		for key, value := range r.options.global {

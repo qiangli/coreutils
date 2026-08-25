@@ -36,7 +36,7 @@ type paxOptions struct {
 	needsPAX               bool
 }
 
-func applyWritePAXOptions(h *tar.Header, options paxOptions) error {
+func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions) error {
 	if value, ok := options.global["size"]; ok && value != strconv.FormatInt(h.Size, 10) {
 		return fmt.Errorf("-o size=%s conflicts with member %q size %d", value, h.Name, h.Size)
 	}
@@ -52,7 +52,7 @@ func applyWritePAXOptions(h *tar.Header, options paxOptions) error {
 	if err := applyPAXValues(h, options.local); err != nil {
 		return err
 	}
-	if options.invalid == "binary" && (!utf8.ValidString(h.Name) || !utf8.ValidString(h.Linkname)) {
+	if options.invalid == "binary" && paxHeaderNeedsBinary(rc, h) {
 		h.PAXRecords["hdrcharset"] = "BINARY"
 	}
 	for key := range h.PAXRecords {
@@ -61,6 +61,20 @@ func applyWritePAXOptions(h *tar.Header, options paxOptions) error {
 		}
 	}
 	return nil
+}
+
+func paxHeaderNeedsBinary(rc *tool.RunContext, h *tar.Header) bool {
+	for _, value := range []string{h.Name, h.Linkname, h.Uname, h.Gname} {
+		if invalidPAXText(rc, value) {
+			return true
+		}
+	}
+	for _, value := range h.PAXRecords {
+		if invalidPAXText(rc, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func invalidPAXDestinationName(name string) bool {

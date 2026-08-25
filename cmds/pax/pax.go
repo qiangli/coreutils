@@ -2,7 +2,6 @@ package paxcmd
 
 import (
 	"archive/tar"
-	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -155,13 +154,13 @@ func run(rc *tool.RunContext, args []string) int {
 	o.paxOptions = parsedOptions
 	if mode == paxList {
 		usesTime := false
-		if o.paxOptions.listSet {
+		if o.verbose && o.paxOptions.listSet {
 			usesTime, err = listFormatUsesTime(o.paxOptions.listFormat)
 			if err != nil {
 				return tool.UsageError(rc, cmd, "listopt: %v", err)
 			}
 		}
-		if usesTime || o.verbose && !o.paxOptions.listSet {
+		if o.verbose && (usesTime || !o.paxOptions.listSet) {
 			formatter, resolveErr := locale.ResolveTime(rc.Env)
 			if resolveErr != nil {
 				fmt.Fprintf(rc.Err, "pax: %v\n", resolveErr)
@@ -352,7 +351,7 @@ type archiveOpener func(*tool.RunContext, *options) (io.ReadCloser, error)
 func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open archiveOpener) int {
 	if o.timeFormat == nil {
 		usesTime := false
-		if o.paxOptions.listSet {
+		if o.verbose && o.paxOptions.listSet {
 			var formatErr error
 			usesTime, formatErr = listFormatUsesTime(o.paxOptions.listFormat)
 			if formatErr != nil {
@@ -360,7 +359,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 				return 1
 			}
 		}
-		if usesTime || o.verbose && !o.paxOptions.listSet {
+		if o.verbose && (usesTime || !o.paxOptions.listSet) {
 			formatter, resolveErr := locale.ResolveTime(rc.Env)
 			if resolveErr != nil {
 				fmt.Fprintf(rc.Err, "pax: %v\n", resolveErr)
@@ -402,7 +401,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
-	tr := newOptionTarReader(bytes.NewReader(tarData), o.paxOptions)
+	tr := newOptionTarReader(tarData, o.paxOptions, true)
 	var members []*tar.Header
 	for {
 		h, nextErr := tr.Next()
@@ -434,7 +433,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 			continue
 		}
 		if (invalidPAXDestination(rc, h.Name) || invalidPAXDestination(rc, h.Linkname) && h.Linkname != "" || invalidPAXListHeader(rc, h)) &&
-			o.paxOptions.invalid != "UTF-8" && o.paxOptions.invalid != "write" {
+			o.paxOptions.invalid != "UTF-8" {
 			fmt.Fprintf(rc.Err, "pax: %s: invalid value bypassed\n", h.Name)
 			status = 1
 		}
@@ -450,7 +449,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		if !keep {
 			continue
 		}
-		if o.paxOptions.listSet {
+		if o.verbose && o.paxOptions.listSet {
 			h.Name = name
 			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env), o.timeFormat)
 			if err != nil {

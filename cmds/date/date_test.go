@@ -223,8 +223,8 @@ func TestDateLCTimeCompleteFormatsAndUnsupported(t *testing.T) {
 		want string
 	}{
 		{"C", []string{"LC_TIME=C"}, "Fri Mar  6 13:45:09 2026|03/06/26|13:45:09|01:45:09 PM|PM|Mar\n"},
-		{"German UTF-8", []string{"LC_TIME=de_DE.UTF-8"}, "Fr 06 Mär 2026 13:45:09 UTC|06.03.2026|13:45:09|01:45:09 ||Mär\n"},
-		{"German Latin-1", []string{"LC_TIME=de_DE.iso88591"}, "Fr 06 M\xe4r 2026 13:45:09 UTC|06.03.2026|13:45:09|01:45:09 ||M\xe4r\n"},
+		{"German UTF-8", []string{"LC_TIME=de_DE.UTF-8"}, "Fr 06 Mär 2026 13:45:09 UTC|06.03.2026|13:45:09|||Mär\n"},
+		{"German Latin-1", []string{"LC_TIME=de_DE.iso88591"}, "Fr 06 M\xe4r 2026 13:45:09 UTC|06.03.2026|13:45:09|||M\xe4r\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, errOut, code := runToolEnv(t, tc.env, args...)
