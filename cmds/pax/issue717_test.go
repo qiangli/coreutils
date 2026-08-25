@@ -3,7 +3,9 @@ package paxcmd
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -370,6 +372,64 @@ func TestPAXInvalidActionsBypassAndUTF8(t *testing.T) {
 	out, errOut, code = exec(t, d, "", "-f", arc, "-o", "invalid=UTF-8")
 	if code != 0 || errOut != "" || out != string([]byte{'b', 'a', 'd', 0xff, '\n'}) {
 		t.Fatalf("UTF-8 code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestPAXInvalidRenameOpensTTYOnlyForInvalidSelectedValues(t *testing.T) {
+	originalOpen := openInteractiveTTY
+	openCalls := 0
+	openInteractiveTTY = func() (io.ReadWriteCloser, error) {
+		openCalls++
+		return nil, errors.New("no controlling tty")
+	}
+	t.Cleanup(func() { openInteractiveTTY = originalOpen })
+
+	raw := makeAttributeArchive(t, archiveFixture{name: "valid", body: "x", mode: 0o600})
+	validDest := t.TempDir()
+	_, errOut, code := execPaxContext(t, validDest, raw, 0o022, "-r", "-o", "invalid=rename")
+	if code != 0 || errOut != "" || openCalls != 0 || string(mustRead(t, filepath.Join(validDest, "valid"))) != "x" {
+		t.Fatalf("valid read code=%d stderr=%q opens=%d", code, errOut, openCalls)
+	}
+
+	invalidDest := t.TempDir()
+	longName := strings.Repeat("x", 256)
+	_, errOut, code = execPaxContext(t, invalidDest, raw, 0o022, "-r", "-o", "invalid=rename", "-o", "path:="+longName)
+	if code != 1 || openCalls != 1 || !strings.Contains(errOut, "no controlling tty") {
+		t.Fatalf("invalid read code=%d stderr=%q opens=%d", code, errOut, openCalls)
+	}
+	entries, err := os.ReadDir(invalidDest)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid read mutated destination: entries=%v err=%v", entries, err)
+	}
+
+	copyRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(copyRoot, "source"), []byte("copy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(copyRoot, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code = exec(t, copyRoot, "", "-r", "-w", "-l", "-o", "invalid=rename", "source", "dest")
+	if code != 0 || errOut != "" || openCalls != 1 {
+		t.Fatalf("valid copy code=%d stderr=%q opens=%d", code, errOut, openCalls)
+	}
+	src, _ := os.Stat(filepath.Join(copyRoot, "source"))
+	dst, err := os.Stat(filepath.Join(copyRoot, "dest", "source"))
+	if err != nil || !os.SameFile(src, dst) {
+		t.Fatalf("valid -l copy did not retain hard link: err=%v", err)
+	}
+
+	invalidCopyDest := filepath.Join(copyRoot, "invalid-dest")
+	if err := os.Mkdir(invalidCopyDest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code = exec(t, copyRoot, "", "-r", "-w", "-l", "-o", "invalid=rename", "-o", "path:="+longName, "source", "invalid-dest")
+	if code != 1 || openCalls != 2 || !strings.Contains(errOut, "no controlling tty") {
+		t.Fatalf("invalid copy code=%d stderr=%q opens=%d", code, errOut, openCalls)
+	}
+	entries, err = os.ReadDir(invalidCopyDest)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid copy mutated destination: entries=%v err=%v", entries, err)
 	}
 }
 

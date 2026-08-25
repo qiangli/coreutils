@@ -22,7 +22,17 @@ import (
 // pkg/pax.PlanExtraction, which validates EVERY member before anything is
 // written: a hostile archive must not be able to escape the root part-way
 // through, which is exactly what a member-by-member loop would allow.
-func readMode(rc *tool.RunContext, o *options, patterns []string) int {
+func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
+	ownedRenamer := false
+	defer func() {
+		if ownedRenamer {
+			if err := o.renamer.Close(); err != nil {
+				fmt.Fprintf(rc.Err, "pax: interactive rename: close /dev/tty: %v\n", err)
+				status = 1
+			}
+			o.renamer = nil
+		}
+	}()
 	r, err := openArchive(rc, o)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
@@ -59,7 +69,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
-	status := 0
+	status = 0
 	sel := newSelector(o, patterns)
 	var catalog []selectorMember
 	var invalidMembers []bool
@@ -101,6 +111,15 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 			status = 1
 			if o.paxOptions.invalid != "rename" {
 				continue
+			}
+			if o.renamer == nil {
+				r, openErr := openInteractiveRenamer()
+				if openErr != nil {
+					fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", openErr)
+					return 1
+				}
+				o.renamer = r
+				ownedRenamer = true
 			}
 		}
 		newName, keep, err := renameInteractively(o, subName)
@@ -1017,10 +1036,19 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		return 1
 	}
 	if o.link && !linkOptionsRequireMaterialCopy(o.paxOptions) {
-		return linkCopyMode(rc, o, files, full)
+		needsRename, preflightErr := linkCopyNeedsInvalidRename(rc, o, files)
+		if preflightErr != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", preflightErr)
+			return 1
+		}
+		if !needsRename {
+			return linkCopyMode(rc, o, files, full)
+		}
 	}
 
 	pr, pw := io.Pipe()
+	writerOptions := *o
+	writerOptions.links = nil
 	// diagCh carries the write side's already-printed traversal diagnostics to
 	// the exit status; the channel receive after readMode is the synchronization
 	// point.
@@ -1029,14 +1057,14 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		tw := tar.NewWriter(pw)
 		var werr error
 		diagnosed := false
-		if err := writeGlobalPAXHeader(rc, o, tw); err != nil {
+		if err := writeGlobalPAXHeader(rc, &writerOptions, tw); err != nil {
 			werr = err
 		}
 		for _, name := range files {
 			if werr != nil {
 				break
 			}
-			d, e := addPath(rc, o, tw, name)
+			d, e := addPath(rc, &writerOptions, tw, name)
 			diagnosed = diagnosed || d
 			if errors.Is(e, errTraversalCycle) {
 				break
@@ -1073,6 +1101,51 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 		status = 1
 	}
 	return status
+}
+
+var errLinkCopyNeedsInvalidRename = errors.New("invalid copy name requires rename")
+
+func linkCopyNeedsInvalidRename(rc *tool.RunContext, o *options, files []string) (bool, error) {
+	if o.paxOptions.invalid != "rename" {
+		return false, nil
+	}
+	for _, name := range files {
+		_, err := walkOperand(rc, o, name, func(e walkEntry) error {
+			out := applySubstitutions(o.subst, e.member, nil)
+			if value := o.paxOptions.global["path"]; value != "" {
+				out = value
+			}
+			if value := o.paxOptions.local["path"]; value != "" {
+				out = value
+			}
+			if invalidPAXDestination(rc, out) {
+				return errLinkCopyNeedsInvalidRename
+			}
+			if e.fi.Mode()&os.ModeSymlink != 0 && !e.followed {
+				link, readErr := os.Readlink(e.abs)
+				if readErr != nil {
+					return readErr
+				}
+				if value := o.paxOptions.global["linkpath"]; value != "" {
+					link = value
+				}
+				if value := o.paxOptions.local["linkpath"]; value != "" {
+					link = value
+				}
+				if invalidPAXDestination(rc, link) {
+					return errLinkCopyNeedsInvalidRename
+				}
+			}
+			return nil
+		})
+		if errors.Is(err, errLinkCopyNeedsInvalidRename) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // A hard link cannot have ownership, timestamps, size, or symlink contents

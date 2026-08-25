@@ -17,8 +17,9 @@ page:
   per-file records before Go's tar decoder can fold them into header fields.
 - `exthdr.name=` and `globexthdr.name=` implement the specified substitutions
   and defaults. Inapplicable write formats and modes fail closed.
-- `invalid=binary|bypass|rename|UTF-8|write`, `linkdata`, and `times` have
-  mode-specific paths. Locale decisions use only `RunContext.Env`; no process
+- `invalid=binary|bypass|rename|UTF-8|write` control flow, `linkdata`, and
+  `times` have mode-specific paths. Locale decisions use only
+  `RunContext.Env`; no process
   environment is mutated. In list mode binary/rename/write follow bypass;
   write-mode binary marks untranslatable names, owners, groups, and extended
   strings with `hdrcharset=BINARY`. Interactive rename uses the existing
@@ -55,6 +56,14 @@ the same bounded provider and fails before list output for unsupported
 host charmaps. Raw cpio file data is losslessly base64-carried only through the
 private normalization lane and decoded for the normative `c_filedata` field;
 it is not advertised as a pax extended-header interface.
+
+The remaining invalid-value blocker is byte transcoding, not encodability
+detection: archive UTF-8 text is not yet converted to the selected carried
+ISO-8859-1/15 destination bytes, and local ISO bytes are not yet converted to
+UTF-8 on write. `invalid=rename` also still needs field-specific replacement
+for an invalid link-name value rather than only the member pathname. Until
+those are implemented and byte-exactly tested, this audit does not classify
+the full `invalid=` interface as closed.
 
 All production archive parsing, rewriting, formatting, and copying is pure Go
 and performs no shell-outs.

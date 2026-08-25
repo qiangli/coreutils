@@ -203,7 +203,7 @@ func run(rc *tool.RunContext, args []string) int {
 		o.blockBytes = defaultBlockSize(o.format)
 	}
 
-	if o.interactive || o.paxOptions.invalid == "rename" && o.read {
+	if o.interactive {
 		r, err := openInteractiveRenamer()
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
