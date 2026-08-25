@@ -1,6 +1,7 @@
 package nicecmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,6 +27,14 @@ const (
 
 // longOptions are matched by unambiguous prefix, GNU long-option style.
 var longOptions = []string{"--adjustment", "--help", "--version"}
+
+// niceStartError identifies failure of nice's own Unix priority trampoline,
+// before the requested utility was attempted. POSIX assigns this class 1-125,
+// distinct from a found utility's exec failure (126) or lookup failure (127).
+type niceStartError struct{ err error }
+
+func (e *niceStartError) Error() string { return e.err.Error() }
+func (e *niceStartError) Unwrap() error { return e.err }
 
 func run(rc *tool.RunContext, args []string) int {
 	// Embedders may reuse a RunContext; never retain a prior child's signal.
@@ -181,9 +190,9 @@ func isObsoleteAdjustment(s string) bool {
 	return i < len(s) && s[i] >= '0' && s[i] <= '9'
 }
 
-// runCommand runs argv as a child process, adjusting its scheduling priority
-// to niceness after it starts. The adjustment is applied to the child's pid,
-// never to nice's own process: nice runs in-process inside embedding hosts
+// runCommand runs argv as a child process. A helper blocks before exec while
+// the parent attempts to set that child's priority. The adjustment is never
+// applied to nice's own process: nice runs in-process inside embedding hosts
 // (see shell/Handler), so changing the caller's own niceness would leak past
 // this single invocation and alter unrelated commands run later in the same
 // host process.
@@ -193,17 +202,19 @@ func runCommand(rc *tool.RunContext, name string, argv []string, niceness int) i
 		fmt.Fprintf(rc.Err, "%s: %s: command not found\n", name, argv[0])
 		return 127
 	}
-	c, err := rc.StartCommand(path, argv[1:], rc.In, rc.Out, rc.Err)
+	c, err := startPriorityCommand(rc, name, path, argv[1:], niceness)
 	if err != nil {
+		var startErr *niceStartError
+		if errors.As(err, &startErr) {
+			fmt.Fprintf(rc.Err, "%s: failed to start priority helper: %v\n", name, startErr)
+			return 125
+		}
 		if os.IsNotExist(err) || strings.Contains(err.Error(), "executable file not found") {
 			fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
 			return 127
 		}
 		fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
 		return 126
-	}
-	if err := setPriority(c.Process.Pid, niceness); err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot set niceness: %v\n", name, err)
 	}
 	err = c.Wait()
 	if err == nil {
