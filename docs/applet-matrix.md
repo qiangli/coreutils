@@ -167,15 +167,15 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `sleep` | `cmds/sleep` | — | GNU Coreutils | yes | yes | 1 | 6 |
 | `sntp` | `cmds/ntp` | ntp | Bashy/other extension | no | no | 1 | 4 |
 | `sort` | `cmds/sort` | — | GNU Coreutils | yes | yes | 4 | 24 |
-| `split` | `cmds/split` | — | GNU Coreutils | yes | yes | 1 | 13 |
+| `split` | `cmds/split` | — | GNU Coreutils | yes | yes | 1 | 15 |
 | `stat` | `cmds/stat` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `stdbuf` | `cmds/stdbuf` | — | GNU Coreutils | yes | no | 1 | 5 |
-| `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 1 | 7 |
+| `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `strip` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
-| `stty` | `cmds/stty` | — | GNU Coreutils | yes | yes | 3 | 12 |
+| `stty` | `cmds/stty` | — | GNU Coreutils | yes | yes | 3 | 13 |
 | `sum` | `cmds/sum` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
-| `tabs` | `cmds/tabs` | — | POSIX/Unix utility | no | yes | 2 | 20 |
+| `tabs` | `cmds/tabs` | — | POSIX/Unix utility | no | yes | 2 | 21 |
 | `tac` | `cmds/tac` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 2 | 23 |
 | `talk` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
@@ -187,7 +187,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 4 | 28 |
 | `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 1 | 18 |
-| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 16 |
+| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |
@@ -200,7 +200,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `uptime` | `cmds/uptime` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `users` | `cmds/users` | — | GNU Coreutils | yes | no | 1 | 1 |
-| `uudecode` | `cmds/uudecode` | — | POSIX/Unix utility | no | yes | 2 | 20 |
+| `uudecode` | `cmds/uudecode` | — | POSIX/Unix utility | no | yes | 2 | 21 |
 | `uuencode` | `cmds/uuencode` | — | POSIX/Unix utility | no | yes | 1 | 7 |
 | `vdir` | `cmds/vdir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `vi` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
