@@ -3,6 +3,7 @@ package cutcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,25 @@ func TestCutUnknownFlag(t *testing.T) {
 	_, errb, code := runTool(t, "", "--frobnicate", "-f1")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+// failingWriter fails every Write; buffered output surfaces the error at
+// the final Flush, exercising the POSIX exit >0 output-failure path.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write(p []byte) (int, error) { return 0, w.err }
+
+func TestCutStandardOutputWriteError(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a:b:c\n"), Out: failingWriter{err: errors.New("device full")}, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"-f", "1", "-d", ":"})
+	if code != 1 || !strings.Contains(errb.String(), "cut: write error:") || !strings.Contains(errb.String(), "device full") {
+		t.Fatalf("write error = (%q, %d), want exit 1 with write-error diagnostic", errb.String(), code)
 	}
 }
 

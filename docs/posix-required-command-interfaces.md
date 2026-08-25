@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 40 |
-| Evidence | Unverified | 74 |
+| Evidence | Partial | 45 |
+| Evidence | Unverified | 69 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -782,7 +782,7 @@ cmp [-l|-s] file1 file2
 
 ## `comm`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -798,21 +798,21 @@ comm [-123] file1 file2
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file1; file2`. UNVERIFIED
+**Operands:** `file1; file2`. Exactly two operands, each a text file assumed sorted in the collating sequence; one operand (not both) may be - for standard input, and both being - is a usage error. A missing, single, or third operand is a usage error. Whole lines are compared: bytewise under C/POSIX, otherwise through the invocation LC_COLLATE provider. Following GNU default order checking, an out-of-order input is diagnosed only after an unpairable line has been seen.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing so a following operand spelled -1/-2/-3 names a file; a single - operand selects standard input for at most one of the two files.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read for whichever single operand is -; not read when both operands name files.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Three columns (lines only in file1, lines only in file2, lines common to both), each non-suppressed column indented by one <tab> per non-suppressed column printed before it; -1/-2/-3 suppress their columns and suppressing all three writes nothing.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages: operand access failure, a read failure naming the operand, a detected out-of-order input, a comparison-provider failure, and a standard-output write failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads the two inputs without modifying them; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the inputs were read and written as specified; greater than 0 on error (2 for usage and locale-provider errors per the documented repo deviation, 1 for input/output failure and detected disorder).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -824,7 +824,7 @@ comm [-123] file1 file2
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/comm`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:comm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/comm/comm_test.go#TestComm;cmds/comm/comm_test.go#TestCommStdin;cmds/comm/comm_test.go#TestCommDuplicateAndEmptyLines;cmds/comm/comm_test.go#TestCommStreamsBeforeEOF;cmds/comm/comm_test.go#TestCommFinalRecordWithoutDelimiter;cmds/comm/comm_test.go#TestCommOrderCheck;cmds/comm/comm_test.go#TestCommErrors;cmds/comm/comm_test.go#TestCommStandardOutputWriteFailure;cmds/comm/comm_test.go#TestCommInputReadErrorIsDiagnosed;cmds/comm/comm_test.go#TestCommUsesInvocationCollatorForMergeAndOrderChecks;cmds/comm/comm_test.go#TestCommLocaleInitFailsBeforeInputOpen;cmds/comm/comm_test.go#TestCommCAndPOSIXBypassCollator`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:comm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [comm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/comm.html).
 
@@ -978,7 +978,7 @@ crontab [file]
 
 ## `csplit`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -994,21 +994,21 @@ csplit [-ks] [-f prefix] [-n number] file arg...
 
 **Issue 7 option-argument candidate:** `-f=<prefix>; -n=<number>`.
 
-**Operands:** `file; /rexp/[offset]; %rexp%[offset]; line_no; {num}`. UNVERIFIED
+**Operands:** `file; /rexp/[offset]; %rexp%[offset]; line_no; {num}`. The first operand is the input file (- for standard input); each following POSIX operand is a line number, a /rexp/[offset] context split, a %rexp%[offset] skip split, or a {num} repetition of the immediately preceding pattern. rexp is a basic regular expression and an offset (+N, -N, or N) shifts the split line. A line number or match resolving past the last line, or a repetition exhausting the input, is an error. The GNU {*} extension repeats the preceding pattern as many times as possible.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** {num} repeats the preceding pattern num additional times; a - file operand selects standard input; a delimiter escaped inside a regexp (\/ or \%) is a literal pattern character, not the closing delimiter. GNU's {*} repeat-to-end token is accepted as an extension.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when the file operand is -.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Unless POSIX -s or the GNU -q/--quiet extension is selected, write the decimal byte count of each written piece on its own line, in order.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages: an unopenable input, an out-of-range line number, an unmatched pattern, an invalid repeat count or suffix format, and a write failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Writes each section between split points to a separate file named PREFIX plus a formatted numeric suffix (default prefix xx, default two-digit suffix); on any error the files already created are removed unless -k is given. GNU extensions -z/--elide-empty-files and --suppress-matched respectively elide empty pieces and omit a matched line.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every section was written successfully; greater than 0 on error (usage errors exit 2 per the documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1020,7 +1020,7 @@ csplit [-ks] [-f prefix] [-n number] file arg...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/csplit`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:csplit:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/csplit/csplit_test.go#TestCsplitLineNumber;cmds/csplit/csplit_test.go#TestCsplitRegexAndPrefix;cmds/csplit/csplit_test.go#TestCsplitRepeatedRegexAdvances;cmds/csplit/csplit_test.go#TestCsplitRepeatToEOF;cmds/csplit/csplit_test.go#TestCsplitRegexOffsets;cmds/csplit/csplit_test.go#TestCsplitPatternsAreBRE;cmds/csplit/csplit_test.go#TestCsplitEscapedDelimiterInRegex;cmds/csplit/csplit_test.go#TestCsplitSuffixSuppressRepeatAndElideEmpty;cmds/csplit/csplit_test.go#TestCsplitLineNumberRepeatAdvances;cmds/csplit/csplit_test.go#TestCsplitLineNumberRepeatToEOFCleansUp;cmds/csplit/csplit_test.go#TestCsplitLineNumberRepeatOutOfRange;cmds/csplit/csplit_test.go#TestCsplitKeepFilesRetainsOutputOnError;cmds/csplit/csplit_test.go#TestCsplitErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:csplit:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [csplit](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/csplit.html).
 
@@ -1075,7 +1075,7 @@ ctags -x pathname...
 
 ## `cut`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1093,21 +1093,21 @@ cut -f list [-d delim] [-s] [file...]
 
 **Issue 7 option-argument candidate:** `-b=<list>; -c=<list>; -d=<delim>; -f=<list>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Zero or more file operands are processed in order; no operand or - selects standard input. Exactly one of -b, -c, -f selects the mode and its list is comma- or blank-separated ranges (N, N-, N-M, -M) numbered from 1 with no 0 and no decreasing range. -d sets the single-character field delimiter (field mode only), -s suppresses lines that contain no delimiter (field mode only), and -n (byte mode) keeps multi-byte characters unsplit.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a - file operand selects standard input and may be mixed with named files.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when no file operand is given or for each - operand.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** For each input line, the selected bytes, characters, or fields in input order with overlapping and adjacent ranges merged; in field mode a line containing no delimiter is written unchanged unless -s.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages: an invalid list, a conflicting mode or option combination, operand access failure, and a standard-output write failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads inputs without modifying them; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all input files were processed successfully; greater than 0 on error (usage errors exit 2 per the documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1119,7 +1119,7 @@ cut -f list [-d delim] [-s] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cut`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cut/cut_test.go#TestCutFields;cmds/cut/cut_test.go#TestCutBytesAndChars;cmds/cut/cut_test.go#TestCutBytesNoSplit;cmds/cut/cut_test.go#TestCutFiles;cmds/cut/cut_test.go#TestCutUsageErrors;cmds/cut/cut_test.go#TestCutUnknownFlag;cmds/cut/cut_test.go#TestCutStandardOutputWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cut](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cut.html).
 
@@ -1318,7 +1318,7 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 
 ## `dirname`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1334,21 +1334,21 @@ dirname string
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `string`. UNVERIFIED
+**Operands:** `string`. POSIX takes a single string operand; this implementation also accepts multiple operands (a GNU extension), writing one result per operand. For each string: remove trailing / characters; if nothing remains the result is /; otherwise remove the last /-separated component and any / that remain, yielding / when the prefix is all slashes and . when the string contains no /. No path canonicalization is performed, so a/./b yields a/.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing so a string beginning with - is treated as an operand; / is the only separator and, being a byte that cannot occur inside a multi-byte character in a POSIX encoding, is located bytewise.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** The resulting directory-name string followed by a newline, one per operand (a NUL terminator under the -z GNU extension).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages: a missing operand and a standard-output write failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Pure string manipulation with no filesystem access; no files are modified.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on success; greater than 0 on error (a missing operand exits 2 per the documented repo deviation, a write failure exits 1).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1360,7 +1360,7 @@ dirname string
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/dirname`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/dirname/dirname_test.go#TestDirname;cmds/dirname/dirname_test.go#TestDirnamePOSIXSingleOperandByteSafety;cmds/dirname/dirname_test.go#TestDirnameErrors;cmds/dirname/dirname_test.go#TestDirnameWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [dirname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dirname.html).
 
@@ -1606,7 +1606,7 @@ env [-i] [name=value]... [utility [argument...]]
 
 ## `expand`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1622,21 +1622,21 @@ expand [-t tablist] [file...]
 
 **Issue 7 option-argument candidate:** `-t=<tablist>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Zero or more file operands are processed in order; no operand or - selects standard input. -t tablist sets tab stops: a single positive decimal repeats that interval, and a comma- or blank-separated strictly ascending list sets explicit stops with a <tab> at or beyond the last stop replaced by a single <space>. In POSIX mode, difficulty accessing or reading an operand terminates processing before later operands; GNU-compatible default mode diagnoses the error and continues.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a - file operand selects standard input. A <backspace> decrements the column counter (never below zero) and a <newline> resets it.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when no file operand is given or for each - operand.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Each input line with every <tab> replaced by the number of <space> characters needed to reach the next tab stop; all other bytes are copied unchanged.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages: an invalid tablist, operand access failure, and a standard-output write failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Reads inputs without modifying them; output is standard output only.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all input files were processed successfully; greater than 0 on error (an invalid tablist exits 2 per the documented repo deviation, operand and output failures exit 1).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1648,7 +1648,7 @@ expand [-t tablist] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/expand`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/expand/expand_test.go#TestExpandDefaultTabsFromStdin;cmds/expand/expand_test.go#TestExpandCustomTabsAndFile;cmds/expand/expand_test.go#TestExpandTabListIncrement;cmds/expand/expand_test.go#TestExpandTabListExtend;cmds/expand/expand_test.go#TestExpandBlankSeparatedTabList;cmds/expand/expand_test.go#TestExpandTabsBeyondLastStopBecomeSingleSpaces;cmds/expand/expand_test.go#TestExpandBackspaceDecrementsColumn;cmds/expand/expand_test.go#TestExpandRejectsBadTabs;cmds/expand/expand_test.go#TestExpandOperandAccessFailureModes;cmds/expand/expand_test.go#TestExpandStandardOutputWriteError;cmds/expand/expand_test.go#TestExpandParseTabStops`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [expand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expand.html).
 

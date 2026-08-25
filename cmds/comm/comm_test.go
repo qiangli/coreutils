@@ -254,6 +254,54 @@ func TestCommNewOptions(t *testing.T) {
 	}
 }
 
+// failingWriter fails every Write, so a buffered emit surfaces the error
+// only at the final Flush — the path POSIX pins as exit >0 on output failure.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write(p []byte) (int, error) { return 0, w.err }
+
+func TestCommStandardOutputWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"f1", "f2"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("a\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: failingWriter{err: errors.New("device full")}, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"f1", "f2"})
+	if code != 1 || !strings.Contains(errb.String(), "comm: write failed") || !strings.Contains(errb.String(), "device full") {
+		t.Fatalf("write failure = (%q, %d), want exit 1 with write-failed diagnostic", errb.String(), code)
+	}
+}
+
+// errReader yields a non-EOF error immediately, exercising the record
+// reader's error path (distinct from a clean EOF, which ends input).
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestCommInputReadErrorIsDiagnosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: errReader{err: errors.New("input error")}, Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"-", "f2"})
+	if code != 1 || !strings.Contains(errb.String(), "comm: -:") || !strings.Contains(strings.ToLower(errb.String()), "input error") {
+		t.Fatalf("read error = (%q, %q, %d), want exit 1 naming operand '-'", out.String(), errb.String(), code)
+	}
+}
+
 func TestCommHelpAndVersion(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := runRaw(t, dir, "", "--help")

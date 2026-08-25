@@ -12,9 +12,9 @@ closures.  Its inputs are the six accepted inventory audits
 generated [interface ledger](../posix-required-command-interfaces.tsv).
 
 The canonical ledger remains the authority: its 116 rows are 78 Go-owned, 22
-shell-owned, and 16 external-provider-owned.  After the first three Go closure
+shell-owned, and 16 external-provider-owned. After five accepted Go closure
 batches and the five-command shell semantic batch, its evidence states are
-**2 verified, 35 partial, and 79 unverified**.  An audit's “supportable pass”
+**2 verified, 45 partial, and 69 unverified**. An audit's “supportable pass”
 finding does not become certification evidence until a stable command-specific
 test reference and a separate ledger promotion are accepted.
 

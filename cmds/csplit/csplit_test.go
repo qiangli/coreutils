@@ -168,6 +168,75 @@ func TestCsplitErrors(t *testing.T) {
 	}
 }
 
+// A delimiter escaped inside either regexp form is a literal pattern
+// character, not the closing delimiter.
+func TestCsplitEscapedDelimiterInRegex(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		input   string
+		files   map[string]string
+	}{
+		{name: "slash form", pattern: `/a\/b/`, input: "foo\na/b\nbar\n", files: map[string]string{"xx00": "foo\n", "xx01": "a/b\nbar\n"}},
+		{name: "percent form", pattern: `%a\%b%`, input: "foo\na%b\nbar\n", files: map[string]string{"xx00": "a%b\nbar\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "in"), []byte(tc.input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, errb, code := runTool(t, dir, "", "-s", "in", tc.pattern)
+			if code != 0 || errb != "" {
+				t.Fatalf("code=%d err=%q", code, errb)
+			}
+			for name, want := range tc.files {
+				assertFile(t, dir, name, want)
+			}
+		})
+	}
+}
+
+// Spec CONSEQUENCES OF ERRORS: files created before an error are removed
+// unless -k (--keep-files) is given. A pre-existing directory at the second
+// piece's name makes its write fail after xx00 was already written.
+func TestCsplitKeepFilesRetainsOutputOnError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		keep   bool
+		exists bool
+	}{
+		{"default removes created files", false, false},
+		{"keep-files retains created files", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "in"), []byte("a\nb\nc\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// A directory named xx01 forces the second WriteFile to fail
+			// after xx00 has been created.
+			if err := os.Mkdir(filepath.Join(dir, "xx01"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"-s", "in", "2"}
+			if tc.keep {
+				args = append([]string{"-k"}, args...)
+			}
+			_, errb, code := runTool(t, dir, "", args...)
+			if code != 1 || !strings.Contains(errb, "csplit:") {
+				t.Fatalf("code=%d err=%q, want exit 1 with diagnostic", code, errb)
+			}
+			_, err := os.Stat(filepath.Join(dir, "xx00"))
+			if tc.exists && err != nil {
+				t.Fatalf("xx00 should be retained under -k: %v", err)
+			}
+			if !tc.exists && !os.IsNotExist(err) {
+				t.Fatalf("xx00 should be removed on error: stat err=%v", err)
+			}
+		})
+	}
+}
+
 func assertFile(t *testing.T, dir, name, want string) {
 	t.Helper()
 	got, err := os.ReadFile(filepath.Join(dir, name))

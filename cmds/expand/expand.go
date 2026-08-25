@@ -39,19 +39,27 @@ func run(rc *tool.RunContext, args []string) int {
 
 	out := bufio.NewWriter(rc.Out)
 	status := 0
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	for _, name := range operands {
 		r, closer, err := openInput(rc, name)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "expand: %s: %v\n", name, err)
 			status = 1
+			if posix {
+				break
+			}
 			continue
 		}
-		if err := expandStream(r, out, tabs, *initial, *noUTF8); err != nil {
-			fmt.Fprintf(rc.Err, "expand: %s: %v\n", name, err)
-			status = 1
-		}
+		err = expandStream(r, out, tabs, *initial, *noUTF8)
 		if closer != nil {
 			closer.Close()
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "expand: %s: %v\n", name, err)
+			status = 1
+			if posix {
+				break
+			}
 		}
 	}
 	if err := out.Flush(); err != nil {
@@ -59,6 +67,18 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return status
+}
+
+// envPresent reports whether key is assigned in the invocation environment,
+// even to an empty value. POSIXLY_CORRECT takes effect on presence alone.
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool, noUTF8 bool) error {

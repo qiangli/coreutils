@@ -3,6 +3,7 @@ package expandcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,6 +199,52 @@ func TestExpandRejectsBadTabs(t *testing.T) {
 	_, stderr, code = runExpand(t, "", "-t", "999999999999999999999999999999")
 	if code != 2 || !strings.Contains(stderr, "tab stop is too large") {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+}
+
+// POSIX requires immediate termination on difficulty accessing an operand;
+// GNU's default extension diagnoses it and continues with later operands.
+func TestExpandOperandAccessFailureModes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{name: "GNU default continues", want: "a   b\n"},
+		{name: "POSIX terminates", env: []string{"POSIXLY_CORRECT="}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "good.txt"), []byte("a\tb\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: tc.env, Stdio: tool.Stdio{Out: &out, Err: &stderr}}
+			code := run(rc, []string{"-t", "4", "nosuch.txt", "good.txt"})
+			if code != 1 || !strings.Contains(stderr.String(), "expand: nosuch.txt:") {
+				t.Fatalf("missing operand = (%q, %d), want exit 1 naming the operand", stderr.String(), code)
+			}
+			if out.String() != tc.want {
+				t.Fatalf("output after inaccessible operand = %q, want %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write(p []byte) (int, error) { return 0, w.err }
+
+func TestExpandStandardOutputWriteError(t *testing.T) {
+	var stderr bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("a\tb\n"), Out: failingWriter{err: errors.New("device full")}, Err: &stderr},
+	}
+	code := run(rc, []string{"-t", "4"})
+	if code != 1 || !strings.Contains(stderr.String(), "expand: write error:") || !strings.Contains(stderr.String(), "device full") {
+		t.Fatalf("write error = (%q, %d), want exit 1 with write-error diagnostic", stderr.String(), code)
 	}
 }
 

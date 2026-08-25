@@ -58,6 +58,29 @@ func TestDirname(t *testing.T) {
 	}
 }
 
+// POSIX dirname takes a single string operand and scans for '/'. Because
+// '/' (0x2F) can never be a byte of any multi-byte character in a
+// POSIX-conformant encoding, byte-based scanning yields the correct
+// component split regardless of LC_CTYPE. This pins that the non-ASCII
+// bytes of a directory component are preserved verbatim.
+func TestDirnamePOSIXSingleOperandByteSafety(t *testing.T) {
+	cases := []struct {
+		arg  string
+		want string
+	}{
+		{"/日本/語", "/日本\n"},
+		{"café/x", "café\n"},
+		{"日本語", ".\n"},
+		{"a/日本/", "a\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.arg)
+		if out != c.want || code != 0 || errb != "" {
+			t.Errorf("dirname %q = (%q, %q, %d), want (%q, 0)", c.arg, out, errb, code, c.want)
+		}
+	}
+}
+
 func TestDirnameErrors(t *testing.T) {
 	_, errb, code := runTool(t)
 	if code != 2 || !strings.Contains(errb, "missing operand") {
