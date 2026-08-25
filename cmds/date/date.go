@@ -166,6 +166,15 @@ func selectFormat(rc *tool.RunContext, operands []string, iso string, isoSet boo
 			return "", tool.UsageError(rc, cmd, "extra operand %q", operands[1])
 		}
 		if !strings.HasPrefix(operands[0], "+") {
+			// The XSI synopsis `date [-u] mmddhhmm[[cc]yy]` sets the system
+			// clock. Recognize that operand grammar so the refusal names the
+			// specific interface; any other non-format operand is refused with
+			// the generic set-date message. Setting the system clock is a
+			// privileged, host-mutating operation outside the agent userland's
+			// scope, so it is a documented loud refusal, never a silent no-op.
+			if isSetDateOperand(operands[0]) {
+				return "", tool.NotSupported(rc, cmd, "the XSI set-date operand mmddhhmm[[cc]yy] (setting the system clock)")
+			}
 			return "", tool.NotSupported(rc, cmd, "setting the system date")
 		}
 		format = operands[0][1:]
@@ -195,6 +204,24 @@ func selectFormat(rc *tool.RunContext, operands []string, iso string, isoSet boo
 		return "", tool.UsageError(rc, cmd, "multiple output formats specified")
 	}
 	return format, -1
+}
+
+// isSetDateOperand reports whether s has the XSI set-date operand grammar
+// mmddhhmm[[cc]yy]: the eight mandatory digits mmddhhmm, optionally followed
+// by a two-digit yy or a four-digit ccyy. It is a shape check for diagnostics,
+// not a validity check on the individual fields.
+func isSetDateOperand(s string) bool {
+	switch len(s) {
+	case 8, 10, 12: // mmddhhmm, mmddhhmm+yy, mmddhhmm+ccyy
+	default:
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isoFormat(rc *tool.RunContext, spec string) (string, int) {

@@ -1,13 +1,16 @@
 // Package iconvcmd implements a portable, pure-Go subset of POSIX iconv(1).
 //
-// Supported options are -f/--from-code, -t/--to-code, -s/--silent, and -l/--list.
+// Supported options are -c/--discard-invalid, -f/--from-code, -t/--to-code,
+// -s/--silent, and -l/--list.
 // Charset names are resolved through golang.org/x/text's IANA registry; this
 // includes UTF-8/16, the ISO-8859 families, Windows code pages, Shift_JIS,
 // EUC-JP, Big5, GBK, and GB18030. A registered charset for which x/text has no
-// implementation is rejected rather than approximated. POSIX -c is recognized
-// but rejected explicitly until invalid-sequence omission can be implemented
-// without hiding conversion errors. Suffixes such as //IGNORE or //TRANSLIT
-// are explicitly rejected.
+// implementation is rejected rather than approximated. POSIX -c omits input
+// characters that cannot be converted (invalid in the input codeset or with no
+// representation in the output codeset) instead of failing. When -f or -t is
+// omitted the codeset of the current locale (LC_CTYPE, defaulting to the
+// POSIX-locale US-ASCII) is used, per the Issue 7 synopsis. Suffixes such as
+// //IGNORE or //TRANSLIT are explicitly rejected.
 package iconvcmd
 
 import (
@@ -15,7 +18,9 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/ianaindex"
@@ -101,23 +106,23 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 0
 	}
-	if *discardInvalid {
-		fmt.Fprintln(rc.Err, "iconv: option '-c' is not supported")
-		return 2
+	// POSIX synopsis: -f and -t may each be omitted, in which case the codeset
+	// of the current locale (LC_CTYPE) is used. This is not a usage error.
+	fromCode := *fromName
+	if fromCode == "" {
+		fromCode = localeCodeset(rc.Env)
 	}
-	if *fromName == "" {
-		return tool.UsageError(rc, cmd, "missing source encoding; use -f FROMCODE")
-	}
-	if *toName == "" {
-		return tool.UsageError(rc, cmd, "missing destination encoding; use -t TOCODE")
+	toCode := *toName
+	if toCode == "" {
+		toCode = localeCodeset(rc.Env)
 	}
 
-	from, err := lookupEncoding(*fromName)
+	from, err := lookupEncoding(fromCode)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "iconv: %v\n", err)
 		return 1
 	}
-	to, err := lookupEncoding(*toName)
+	to, err := lookupEncoding(toCode)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "iconv: %v\n", err)
 		return 1
@@ -126,10 +131,30 @@ func run(rc *tool.RunContext, args []string) int {
 		files = []string{"-"}
 	}
 
+	// -c omits input characters that cannot be converted. The x/text decoders
+	// are lenient — a byte invalid in the input codeset becomes U+FFFD rather
+	// than an error — so the two conversion-loss paths are handled separately:
+	// on the decode side dropReplacement omits those U+FFFD substitutions
+	// (bytes invalid in the input codeset), and on the encode side dropInvalid
+	// omits runes with no representation in the output codeset, which is the
+	// path that actually errors.
+	newEncoder := func() transform.Transformer {
+		if *discardInvalid {
+			return dropInvalid{to.NewEncoder()}
+		}
+		return to.NewEncoder()
+	}
+	newDecoder := func() transform.Transformer {
+		if *discardInvalid {
+			return transform.Chain(from.NewDecoder(), dropReplacement{})
+		}
+		return from.NewDecoder()
+	}
+
 	// Keep one encoder across all operands: iconv concatenates FILE inputs into
 	// one output stream, so a BOM/state prefix must not be emitted per file.
 	trackedOut := &errorTrackingWriter{w: rc.Out}
-	out := transform.NewWriter(trackedOut, to.NewEncoder())
+	out := transform.NewWriter(trackedOut, newEncoder())
 	status := 0
 	for _, name := range files {
 		if err := rc.Ctx.Err(); err != nil {
@@ -143,7 +168,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		_, copyErr := io.Copy(out, transform.NewReader(in, from.NewDecoder()))
+		_, copyErr := io.Copy(out, transform.NewReader(in, newDecoder()))
 		if closeErr := closeInput(); copyErr == nil {
 			copyErr = closeErr
 		}
@@ -165,6 +190,90 @@ func run(rc *tool.RunContext, args []string) int {
 		status = 1
 	}
 	return status
+}
+
+// localeCodeset returns the codeset iconv uses for an omitted -f/-t, per the
+// POSIX synopsis: the codeset of the current locale's LC_CTYPE category. A
+// name of the form "lang_TERR.CODESET[@mod]" yields CODESET; the C/POSIX
+// locale (or a name with no codeset) yields US-ASCII, the codeset of the
+// portable character set, matching the deterministic LC_ALL=C contract.
+func localeCodeset(env []string) string {
+	name := locale.Resolve(env, locale.CType)
+	name, _, _ = strings.Cut(name, "@")
+	if _, cs, ok := strings.Cut(name, "."); ok && cs != "" {
+		return cs
+	}
+	return "US-ASCII"
+}
+
+// dropInvalid wraps a transform.Transformer so that a malformed-input or
+// unrepresentable-rune error skips the offending input and continues, instead
+// of aborting the stream. It implements POSIX iconv -c: on the decoder it omits
+// bytes that are invalid in the input codeset; on the encoder it omits runes
+// with no representation in the output codeset. The skip advances by one UTF-8
+// rune when the input parses as one (the encode side, whose input is the
+// decoder's UTF-8 output) and by one byte otherwise (the decode side, whose
+// input is arbitrary bytes), so progress is always guaranteed.
+type dropInvalid struct {
+	t transform.Transformer
+}
+
+func (d dropInvalid) Reset() { d.t.Reset() }
+
+func (d dropInvalid) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+	for {
+		n, s, e := d.t.Transform(dst[nDst:], src[nSrc:], atEOF)
+		nDst += n
+		nSrc += s
+		switch e {
+		case nil:
+			return nDst, nSrc, nil
+		case transform.ErrShortDst, transform.ErrShortSrc:
+			return nDst, nSrc, e
+		default:
+			// Malformed input or an unrepresentable rune at src[nSrc:]; omit it.
+			if nSrc >= len(src) {
+				if atEOF {
+					return nDst, len(src), nil // drop a trailing invalid remnant
+				}
+				return nDst, nSrc, transform.ErrShortSrc // may complete with more input
+			}
+			_, size := utf8.DecodeRune(src[nSrc:])
+			if size < 1 {
+				size = 1
+			}
+			nSrc += size
+			d.t.Reset()
+		}
+	}
+}
+
+// dropReplacement removes U+FFFD runes from a UTF-8 stream. Under iconv -c it
+// omits the replacement characters the (lenient) decoder emitted for bytes that
+// were invalid in the input codeset, so those bytes are omitted from the output
+// rather than surviving as U+FFFD when the output codeset can represent it.
+type dropReplacement struct{}
+
+func (dropReplacement) Reset() {}
+
+func (dropReplacement) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+	for nSrc < len(src) {
+		if !atEOF && !utf8.FullRune(src[nSrc:]) {
+			return nDst, nSrc, transform.ErrShortSrc
+		}
+		r, size := utf8.DecodeRune(src[nSrc:])
+		if r == utf8.RuneError { // both real U+FFFD and stray invalid bytes
+			nSrc += size
+			continue
+		}
+		if nDst+size > len(dst) {
+			return nDst, nSrc, transform.ErrShortDst
+		}
+		copy(dst[nDst:], src[nSrc:nSrc+size])
+		nDst += size
+		nSrc += size
+	}
+	return nDst, nSrc, nil
 }
 
 type errorTrackingWriter struct {

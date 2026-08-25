@@ -58,7 +58,7 @@ var openSink = dialSystemLog
 // pid is a seam too, so an asserted -i record is deterministic.
 var pid = os.Getpid
 
-func run(rc *tool.RunContext, args []string) int {
+func run(rc *tool.RunContext, args []string) (status int) {
 	// NOT tool.AliasHelpVersion: that helper rewrites any clustered short
 	// option containing an 'h' into --help, and logger's shorthands TAKE
 	// VALUES — `logger -tmyhost msg` and `-p daemon.nosuch` both carry an h
@@ -96,7 +96,17 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "logger: %v\n", err)
 		return 1
 	}
-	defer s.Close()
+	// Close() finalizes the transport (e.g. flushes and releases the syslog
+	// connection). A finalization failure means the log may not hold what
+	// logger reported it sent, so it must surface in the exit status rather
+	// than be dropped by a bare `defer s.Close()`. The named return lets this
+	// run after every exit path while never masking an earlier failure.
+	defer func() {
+		if cerr := s.Close(); cerr != nil && status == 0 {
+			fmt.Fprintf(rc.Err, "logger: %v\n", cerr)
+			status = 1
+		}
+	}()
 
 	emit := func(msg string) error {
 		if *toStderr {
@@ -117,14 +127,17 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 
-	// No operands: standard input, one message per line. A read error is
-	// reported and is a failure, but the records already sent stay sent —
-	// there is no way to retract a syslog write and pretending otherwise
+	// No operands: standard input, one message per line. THIS IS A NON-POSIX
+	// EXTENSION — Issue 7 logger takes message string operands only and does
+	// not read standard input, so the certified POSIX surface is the operand
+	// form above; this branch is the historical util-linux/BSD convenience and
+	// is documented as such, never presented as the POSIX behavior. A read
+	// error is reported and is a failure, but the records already sent stay
+	// sent — there is no way to retract a syslog write and pretending otherwise
 	// would be a lie about what the log now contains.
 	if rc.In == nil {
 		return 0
 	}
-	status := 0
 	sc := bufio.NewScanner(rc.In)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {

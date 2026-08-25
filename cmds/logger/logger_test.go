@@ -15,6 +15,7 @@ import (
 type fakeSink struct {
 	got      []record
 	sendErr  error
+	closeErr error
 	closed   bool
 	openPrio priority
 	openTag  string
@@ -28,7 +29,7 @@ func (f *fakeSink) Send(r record) error {
 	return nil
 }
 
-func (f *fakeSink) Close() error { f.closed = true; return nil }
+func (f *fakeSink) Close() error { f.closed = true; return f.closeErr }
 
 // install replaces the transport seam and the pid source for one test.
 func install(t *testing.T, openErr error) *fakeSink {
@@ -312,6 +313,42 @@ func TestSendFailureIsReported(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "write failed") {
 		t.Errorf("stderr = %q, want the submission error", errOut)
+	}
+}
+
+// A transport whose Close() fails must not report success: the finalization
+// failure means the log may not hold what logger claimed to send, so it has to
+// surface in the exit status rather than be dropped by a bare defer.
+func TestCloseFailureIsReported(t *testing.T) {
+	f := install(t, nil)
+	f.closeErr = errors.New("flush failed")
+	_, errOut, code := exec(t, testEnv, "", "msg")
+	if code == 0 {
+		t.Fatal("a failed Close must not exit 0")
+	}
+	if len(f.got) != 1 {
+		t.Errorf("the record was still submitted before Close, got %+v", f.got)
+	}
+	if !strings.Contains(errOut, "flush failed") {
+		t.Errorf("stderr = %q, want the close error", errOut)
+	}
+}
+
+// A Close() failure must not overwrite an earlier, more specific diagnostic:
+// a send failure already set exit 1, and its message is the one that matters.
+func TestSendFailureIsNotMaskedByClose(t *testing.T) {
+	f := install(t, nil)
+	f.sendErr = errors.New("write failed")
+	f.closeErr = errors.New("flush failed")
+	_, errOut, code := exec(t, testEnv, "", "msg")
+	if code != 1 {
+		t.Fatalf("code=%d, want 1", code)
+	}
+	if !strings.Contains(errOut, "write failed") {
+		t.Errorf("stderr = %q, want the send error preserved", errOut)
+	}
+	if strings.Contains(errOut, "flush failed") {
+		t.Errorf("stderr = %q, close error must not mask the send error", errOut)
 	}
 }
 

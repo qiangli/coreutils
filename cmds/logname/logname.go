@@ -47,19 +47,18 @@ func runWith(rc *tool.RunContext, args []string, resolve func() string) int {
 // matching the POSIX getlogin() contract. It deliberately ignores the
 // LOGNAME, USER, LNAME and USERNAME environment variables, which POSIX
 // requires logname not to consult.
+//
+// POSIX requires logname to fail — writing a diagnostic and exiting non-zero
+// — when no login name can be determined (the getlogin() call returns a null
+// pointer). There is deliberately NO fallback to the effective account:
+// os/user.Current() reports whoever the process is running as, which after
+// su/sudo is exactly the wrong answer, and reporting it would defeat the
+// failure contract. On Linux the kernel audit login uid is a faithful,
+// cgo-free getlogin() equivalent; off Linux, libc getlogin() cannot be called
+// without cgo, so no login name is available and logname reports the required
+// failure. That is a platform limitation, not a silent approximation.
 func loginName() string {
-	if name := loginNameFromLoginUID(); name != "" {
-		return name
-	}
-	// Pure-Go fallback for platforms without /proc/self/loginuid (macOS,
-	// Windows) or for Linux sessions with no recorded audit login uid:
-	// use the effective account. POSIX getlogin() may differ after
-	// su/sudo, but libc getlogin() cannot be called from pure Go without
-	// cgo, so this is the best available approximation off Linux.
-	if u, err := user.Current(); err == nil {
-		return bareUser(strings.TrimSpace(u.Username))
-	}
-	return ""
+	return loginNameFromLoginUID()
 }
 
 // loginNameFromLoginUID resolves the session login user on Linux from

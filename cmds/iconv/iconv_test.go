@@ -88,21 +88,72 @@ func TestUnrepresentableOutputFails(t *testing.T) {
 	}
 }
 
-func TestUnsupportedEncodingAndDiscardOptionFailLoudly(t *testing.T) {
+func TestUnsupportedEncodingFailsLoudly(t *testing.T) {
 	code, _, errout := invoke(t, "", "-f", "not-a-charset", "-t", "UTF-8")
 	if code != 1 || !strings.Contains(errout, "unsupported encoding") {
 		t.Fatalf("encoding: code=%d err=%q", code, errout)
 	}
-	code, _, errout = invoke(t, "", "-c", "-f", "UTF-8", "-t", "UTF-8")
-	if code != 2 || !strings.Contains(errout, "option '-c' is not supported") {
-		t.Fatalf("-c: code=%d err=%q", code, errout)
+}
+
+// POSIX -c: omit input characters that cannot be converted instead of failing.
+func TestDiscardInvalidOmitsUntranslatableCharacters(t *testing.T) {
+	// A byte invalid in the input codeset (0xff is not valid UTF-8) is dropped;
+	// the surrounding valid text still converts and the exit status is success.
+	code, out, errout := invoke(t, "a"+string([]byte{0xff})+"b", "-c", "-f", "UTF-8", "-t", "UTF-8")
+	if code != 0 || errout != "" || string(out) != "ab" {
+		t.Fatalf("invalid input: code=%d out=%q err=%q", code, string(out), errout)
+	}
+	// A character with no representation in the output codeset (€ is not in
+	// ISO-8859-1) is likewise omitted, not an error.
+	code, out, errout = invoke(t, "a€b", "-c", "-f", "UTF-8", "-t", "ISO-8859-1")
+	if code != 0 || errout != "" || string(out) != "ab" {
+		t.Fatalf("unrepresentable output: code=%d out=%q err=%q", code, string(out), errout)
+	}
+	// Without -c the same unrepresentable input is a loud failure.
+	code, _, errout = invoke(t, "a€b", "-f", "UTF-8", "-t", "ISO-8859-1")
+	if code != 1 || !strings.Contains(errout, "standard input") {
+		t.Fatalf("no -c must still fail: code=%d err=%q", code, errout)
 	}
 }
 
-func TestMissingEncodingIsUsageError(t *testing.T) {
-	code, _, errout := invoke(t, "", "-t", "UTF-8")
-	if code != 2 || !strings.Contains(errout, "missing source encoding") {
-		t.Fatalf("code=%d err=%q", code, errout)
+// POSIX synopsis: -f and/or -t may be omitted, in which case the codeset of the
+// current locale (LC_CTYPE) is used — this is NOT a usage error. The
+// deterministic default locale is POSIX, whose codeset is US-ASCII.
+func TestOmittedEncodingUsesLocaleCodeset(t *testing.T) {
+	// Omitted -f: default input codeset (US-ASCII) converts to UTF-8.
+	code, out, errout := invoke(t, "abc", "-t", "UTF-8")
+	if code != 0 || errout != "" || string(out) != "abc" {
+		t.Fatalf("omitted -f: code=%d out=%q err=%q", code, string(out), errout)
+	}
+	// Omitted -t: default output codeset (US-ASCII) accepts ASCII input.
+	code, out, errout = invoke(t, "abc", "-f", "UTF-8")
+	if code != 0 || errout != "" || string(out) != "abc" {
+		t.Fatalf("omitted -t: code=%d out=%q err=%q", code, string(out), errout)
+	}
+	// Both omitted: US-ASCII round-trip.
+	code, out, errout = invoke(t, "abc")
+	if code != 0 || errout != "" || string(out) != "abc" {
+		t.Fatalf("both omitted: code=%d out=%q err=%q", code, string(out), errout)
+	}
+	// The default OUTPUT codeset is genuinely US-ASCII, not a silent UTF-8: a
+	// non-ASCII character has no ASCII representation and fails to encode.
+	code, _, errout = invoke(t, "é", "-f", "UTF-8")
+	if code != 1 || !strings.Contains(errout, "standard input") {
+		t.Fatalf("non-ASCII to default US-ASCII output must fail: code=%d err=%q", code, errout)
+	}
+}
+
+// An LC_CTYPE codeset selects the omitted-encoding default.
+func TestOmittedEncodingHonorsLocaleCodeset(t *testing.T) {
+	var out, errout bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"LC_CTYPE=de_DE.ISO-8859-1"},
+		Stdio: tool.Stdio{In: strings.NewReader(string([]byte{0xe9})), Out: &out, Err: &errout},
+	}
+	// Omitted -f resolves to ISO-8859-1, so 0xe9 decodes to é and encodes as UTF-8.
+	if code := run(rc, []string{"-t", "UTF-8"}); code != 0 || out.String() != "é" {
+		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errout.String())
 	}
 }
 

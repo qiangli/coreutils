@@ -70,7 +70,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 2 | 10 |
-| `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 12 |
+| `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 13 |
 | `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 6 | 78 |
 | `df` | `cmds/df` | — | GNU Coreutils | yes | yes | 2 | 30 |
 | `diff` | `cmds/diff` | — | POSIX/Unix utility | no | yes | 4 | 42 |
@@ -101,8 +101,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `hexdump` | `cmds/hexdump` | — | Bashy/other extension | no | no | 1 | 6 |
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |
-| `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 1 | 12 |
-| `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 18 |
+| `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 1 | 14 |
+| `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 20 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |
@@ -111,8 +111,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 21 |
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 21 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
-| `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 20 |
-| `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 7 |
+| `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 22 |
+| `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 46 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |

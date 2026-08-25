@@ -280,6 +280,37 @@ func TestDateReference(t *testing.T) {
 	}
 }
 
+// The XSI synopsis `date [-u] mmddhhmm[[cc]yy]` sets the system clock. That is
+// a privileged, host-mutating operation outside the agent userland's scope, so
+// it is refused loudly (exit 2) with a diagnostic naming the specific XSI
+// operand — never silently ignored and never a silent wrong answer.
+func TestDateXSISetDateOperandRefusedLoudly(t *testing.T) {
+	// Every accepted length of the grammar: mmddhhmm, +yy, +ccyy.
+	for _, op := range []string{"12011030", "1201103099", "120110302099"} {
+		out, errb, code := runTool(t, op)
+		if code != 2 {
+			t.Errorf("date %q: code=%d, want 2", op, code)
+		}
+		if out != "" {
+			t.Errorf("date %q: stdout=%q, want empty", op, out)
+		}
+		if !strings.Contains(errb, "mmddhhmm[[cc]yy]") || !strings.Contains(errb, "not supported") {
+			t.Errorf("date %q: stderr=%q, want the XSI set-date operand named as unsupported", op, errb)
+		}
+	}
+	// -u may precede the operand, exactly as the XSI synopsis allows.
+	_, errb, code := runTool(t, "-u", "12011030")
+	if code != 2 || !strings.Contains(errb, "mmddhhmm[[cc]yy]") {
+		t.Errorf("date -u <setdate>: code=%d err=%q", code, errb)
+	}
+	// A non-format operand that is NOT the set-date grammar still fails loudly,
+	// but with the generic set-date diagnostic rather than the XSI-operand one.
+	_, errb, code = runTool(t, "not-a-format")
+	if code != 2 || !strings.Contains(errb, "not supported") || strings.Contains(errb, "mmddhhmm") {
+		t.Errorf("date <garbage>: code=%d err=%q", code, errb)
+	}
+}
+
 func TestDateErrors(t *testing.T) {
 	_, errb, code := runTool(t, "-d", "next fortnight")
 	if code != 1 || !strings.Contains(errb, "invalid date") {

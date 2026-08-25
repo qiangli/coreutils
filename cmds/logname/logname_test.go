@@ -95,6 +95,34 @@ func TestResolveLoginUID(t *testing.T) {
 	}
 }
 
+// POSIX getlogin() contract: logname reports the login name of the session,
+// never the process's effective account. The prior implementation fell back
+// to os/user.Current() when no login uid was recorded, which reports whoever
+// the process runs as (wrong after su/sudo) and defeated the required failure.
+func TestLoginNameHasNoEffectiveUserFallback(t *testing.T) {
+	// loginName must be exactly the getlogin()-equivalent — the audit login
+	// uid on Linux, empty elsewhere — with no substitute drawn from the
+	// effective account.
+	if got, want := loginName(), loginNameFromLoginUID(); got != want {
+		t.Fatalf("loginName()=%q, want %q (no effective-user fallback)", got, want)
+	}
+	// Where the getlogin()-equivalent yields nothing, logname must fail with an
+	// empty stdout rather than leak the effective user's name.
+	if loginNameFromLoginUID() != "" {
+		return
+	}
+	var out, err bytes.Buffer
+	code := run(newRC(&out, &err), nil)
+	if code != 1 || out.Len() != 0 {
+		t.Fatalf("no login name: code=%d out=%q, want exit 1 with empty stdout", code, out.String())
+	}
+	if u, e := user.Current(); e == nil {
+		if eff := bareUser(strings.TrimSpace(u.Username)); eff != "" && strings.Contains(out.String(), eff) {
+			t.Fatalf("logname leaked the effective account %q", eff)
+		}
+	}
+}
+
 func TestLoginNameFromLoginUIDEmptyOffLinux(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("only asserts the non-Linux short-circuit")

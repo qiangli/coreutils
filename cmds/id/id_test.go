@@ -276,6 +276,61 @@ func TestIDDefaultIncludesNames(t *testing.T) {
 	}
 }
 
+// POSIX default format: the real IDs are reported as uid=/gid=, and the
+// effective IDs are inserted as euid=/egid= only when they differ. The seam
+// simulates a setuid invocation without the test itself being setuid.
+func TestIDDefaultReportsRealAndEffectiveWhenDifferent(t *testing.T) {
+	old := processIDsFn
+	t.Cleanup(func() { processIDsFn = old })
+	processIDsFn = func(real bool) (uid, gid string) {
+		if real {
+			return "1000", "1000"
+		}
+		return "0", "0"
+	}
+	out, errb, code := runTool(t)
+	if code != 0 || errb != "" {
+		t.Fatalf("id: code=%d err=%q", code, errb)
+	}
+	if !strings.HasPrefix(out, "uid=1000") {
+		t.Errorf("default output %q must lead with the real uid", out)
+	}
+	if !strings.Contains(out, " euid=0") {
+		t.Errorf("default output %q must report the effective uid when it differs", out)
+	}
+	if !strings.Contains(out, " egid=0") {
+		t.Errorf("default output %q must report the effective gid when it differs", out)
+	}
+	// euid=/egid= belong before the groups= list and after gid=.
+	if gi, ei := strings.Index(out, "gid="), strings.Index(out, "euid="); ei < gi {
+		t.Errorf("euid= must follow gid= in %q", out)
+	}
+	if ei, grp := strings.Index(out, "euid="), strings.Index(out, "groups="); ei > grp {
+		t.Errorf("euid= must precede groups= in %q", out)
+	}
+	if strings.Count(out, "\n") != 1 {
+		t.Errorf("default output is not a single line: %q", out)
+	}
+}
+
+// When the effective IDs equal the real IDs (the ordinary, non-setuid case),
+// no euid=/egid= fields appear.
+func TestIDDefaultOmitsEffectiveWhenEqual(t *testing.T) {
+	old := processIDsFn
+	t.Cleanup(func() { processIDsFn = old })
+	processIDsFn = func(real bool) (uid, gid string) { return "1000", "1000" }
+	out, _, code := runTool(t)
+	if code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	if strings.Contains(out, "euid=") || strings.Contains(out, "egid=") {
+		t.Errorf("no euid=/egid= expected when effective equals real: %q", out)
+	}
+	if !strings.HasPrefix(out, "uid=1000 gid=1000 groups=") {
+		t.Errorf("default output %q malformed", out)
+	}
+}
+
 func TestIDRealFlagWithOptions(t *testing.T) {
 	u := current(t)
 	out, _, code := runTool(t, "-r", "-u")

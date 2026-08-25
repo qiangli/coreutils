@@ -25,6 +25,12 @@ var cmd = &tool.Tool{
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+// processIDsFn resolves the process's real (real==true) or effective
+// (real==false) user and group IDs. It is a package var so tests can inject a
+// process whose real and effective IDs differ — the setuid case that exercises
+// the default format's euid=/egid= reporting — without actually being setuid.
+var processIDsFn = processIDs
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	uFlag := fs.BoolP("user", "u", false, "print only the effective user ID")
@@ -111,7 +117,7 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 	var results []string
 	uid, gid := u.Uid, u.Gid
 	if current {
-		uid, gid = processIDs(rFlag)
+		uid, gid = processIDsFn(rFlag)
 	}
 
 	switch {
@@ -148,9 +154,30 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 		return results, nil
 	}
 
+	// POSIX default format: uid=/gid= report the REAL IDs, and the effective
+	// IDs are inserted (euid=/egid=) only when they differ from the real ones.
+	// For the current process the real/effective pair comes straight from the
+	// process so a setuid invocation reports both; for a named USER operand
+	// there is no real/effective distinction and only uid=/gid= are shown.
+	// This is the real/effective reporting POSIX's default report requires.
 	var b strings.Builder
-	gidName := lookupGroupName(u.Gid)
-	fmt.Fprintf(&b, "uid=%s gid=%s groups=", decorate(u.Uid, u.Username), decorate(u.Gid, gidName))
+	realUID, realGID := u.Uid, u.Gid
+	uidName, gidName := u.Username, lookupGroupName(u.Gid)
+	if current {
+		realUID, realGID = processIDsFn(true)
+		uidName, gidName = idUserName(realUID), lookupGroupName(realGID)
+	}
+	fmt.Fprintf(&b, "uid=%s gid=%s", decorate(realUID, uidName), decorate(realGID, gidName))
+	if current {
+		euid, egid := processIDsFn(false)
+		if euid != realUID {
+			fmt.Fprintf(&b, " euid=%s", decorate(euid, idUserName(euid)))
+		}
+		if egid != realGID {
+			fmt.Fprintf(&b, " egid=%s", decorate(egid, lookupGroupName(egid)))
+		}
+	}
+	b.WriteString(" groups=")
 	gids, err := groupIDs(u)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
@@ -177,6 +204,16 @@ func groupIDs(u *user.User) ([]string, error) {
 		}
 	}
 	return ordered, nil
+}
+
+// idUserName resolves the user name for a numeric uid, used for the effective
+// user's name in the default format. An unresolvable uid yields "" so decorate
+// prints the bare number, matching how id renders IDs with no database entry.
+func idUserName(uid string) string {
+	if u, err := user.LookupId(uid); err == nil {
+		return u.Username
+	}
+	return ""
 }
 
 func lookupGroupName(gid string) string {
