@@ -56,6 +56,7 @@ const (
 	floatIEEE64
 	floatX87
 	floatIEEE128
+	floatIBMDoubleDouble
 )
 
 type cABI struct {
@@ -88,6 +89,8 @@ func abiFor(goos, goarch string) cABI {
 		abi.longSize = 8
 	}
 	switch {
+	case goos == "aix" && goarch == "ppc64":
+		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
 	case goos == "windows" && (goarch == "386" || goarch == "amd64" || goarch == "arm64"):
 		abi.longDoubleSize, abi.longDoubleEncoding = 8, floatIEEE64
 	case (goos == "darwin" || goos == "ios") && goarch == "arm64":
@@ -106,10 +109,10 @@ func abiFor(goos, goarch string) cABI {
 		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
 	case goos == "openbsd" && goarch == "riscv64":
 		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
+	case goos == "linux" && (goarch == "ppc64" || goarch == "ppc64le"):
+		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIBMDoubleDouble
 	case (goos == "js" || goos == "wasip1") && goarch == "wasm":
 		abi.longDoubleSize, abi.longDoubleEncoding = 16, floatIEEE128
-	// ppc64 ABIs commonly use IBM double-double. Leave it unsupported
-	// until that representation has a real decoder rather than guessing.
 	default:
 		abi.longDoubleSize, abi.longDoubleEncoding = 0, floatNone
 	}
@@ -587,6 +590,8 @@ func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.Byt
 			value = decodeX87(item, order)
 		case floatIEEE128:
 			value = decodeIEEE128(item, order)
+		case floatIBMDoubleDouble:
+			value = decodeIBMDoubleDouble(item, order)
 		default:
 			return fmt.Errorf("unsupported %d-byte long double representation", format.size)
 		}
@@ -597,14 +602,18 @@ func writeLongDoubles(w io.Writer, b []byte, format dumpFormat, order binary.Byt
 	return nil
 }
 
-// GNU od renders x87 and IEEE binary128 with enough significant decimal
-// digits to expose their extra precision: 20 and 34 respectively. These are
-// pinned against Ubuntu 24.04's native od in TestODLongDoublePrecisionOracles.
+// GNU od renders each long-double representation with enough significant
+// decimal digits to expose its extra precision. These are pinned against
+// Ubuntu 24.04's native od in the long-double oracle tests.
 func longDoubleDigits(enc floatEncoding) int {
-	if enc == floatIEEE128 {
+	switch enc {
+	case floatIEEE128:
 		return 34
+	case floatIBMDoubleDouble:
+		return 33
+	default:
+		return 20
 	}
-	return 20
 }
 
 // decodeX87 converts the 80 significant bits of an x87 extended value.
@@ -625,6 +634,7 @@ const (
 type exactFloat struct {
 	class    floatClass
 	negative bool
+	shortest bool
 	value    *big.Float
 }
 
@@ -632,17 +642,20 @@ func (f exactFloat) text(digits int) string {
 	switch f.class {
 	case floatInfinity:
 		if f.negative {
-			return "-Inf"
+			return "-inf"
 		}
-		return "+Inf"
+		return "inf"
 	case floatNaN:
-		return "NaN"
+		return "nan"
 	}
 	if f.value == nil || f.value.Sign() == 0 {
 		if f.negative {
 			return "-0"
 		}
 		return "0"
+	}
+	if f.shortest {
+		return f.value.Text('g', -1)
 	}
 	return f.value.Text('g', digits)
 }
@@ -708,6 +721,79 @@ func decodeIEEE128(item []byte, order binary.ByteOrder) exactFloat {
 		significand.SetBit(significand, 112, 1)
 		return finiteBinaryFloat(significand, exponent-16383-112, 113, negative)
 	}
+}
+
+type binaryTerm struct {
+	class       floatClass
+	negative    bool
+	significand *big.Int
+	exponent    int
+}
+
+func decodeBinary64Term(bits uint64) binaryTerm {
+	negative := bits>>63 != 0
+	exponent := int((bits >> 52) & 0x7ff)
+	fraction := bits & (uint64(1)<<52 - 1)
+	switch exponent {
+	case 0:
+		return binaryTerm{negative: negative, significand: new(big.Int).SetUint64(fraction), exponent: 1 - 1023 - 52}
+	case 0x7ff:
+		if fraction == 0 {
+			return binaryTerm{class: floatInfinity, negative: negative}
+		}
+		return binaryTerm{class: floatNaN, negative: negative}
+	default:
+		return binaryTerm{negative: negative, significand: new(big.Int).SetUint64(fraction | uint64(1)<<52), exponent: exponent - 1023 - 52}
+	}
+}
+
+// decodeIBMDoubleDouble decodes the Linux powerpc64 long-double ABI: two
+// binary64 components whose exact sum is the represented value. Both ABIs
+// store the high component first; byte order applies within each component.
+func decodeIBMDoubleDouble(item []byte, order binary.ByteOrder) exactFloat {
+	if len(item) < 16 {
+		return exactFloat{class: floatNaN}
+	}
+	hiBits := order.Uint64(item[:8])
+	loBits := order.Uint64(item[8:16])
+	hi := decodeBinary64Term(hiBits)
+	lo := decodeBinary64Term(loBits)
+	if hi.class == floatNaN || lo.class == floatNaN {
+		return exactFloat{class: floatNaN}
+	}
+	if hi.class == floatInfinity || lo.class == floatInfinity {
+		if hi.class == floatInfinity && lo.class == floatInfinity && hi.negative != lo.negative {
+			return exactFloat{class: floatNaN}
+		}
+		if hi.class == floatInfinity {
+			return exactFloat{class: floatInfinity, negative: hi.negative}
+		}
+		return exactFloat{class: floatInfinity, negative: lo.negative}
+	}
+	commonExponent := min(hi.exponent, lo.exponent)
+	hiInt := new(big.Int).Lsh(new(big.Int).Set(hi.significand), uint(hi.exponent-commonExponent))
+	loInt := new(big.Int).Lsh(new(big.Int).Set(lo.significand), uint(lo.exponent-commonExponent))
+	if hi.negative {
+		hiInt.Neg(hiInt)
+	}
+	if lo.negative {
+		loInt.Neg(loInt)
+	}
+	sum := new(big.Int).Add(hiInt, loInt)
+	negative := sum.Sign() < 0
+	if sum.Sign() == 0 {
+		return exactFloat{negative: hi.negative}
+	}
+	if negative {
+		sum.Neg(sum)
+	}
+	result := finiteBinaryFloat(sum, commonExponent, uint(sum.BitLen()), negative)
+	// IBM double-double has the exponent range of binary64. When both
+	// components are denormal, GNU od uses the shortest exact decimal (for
+	// example, the minimum value is "5e-324") rather than padding it to the
+	// normal format's 33 significant digits.
+	result.shortest = hiBits>>52&0x7ff == 0 && loBits>>52&0x7ff == 0
+	return result
 }
 
 func reverseBytes(b []byte) {

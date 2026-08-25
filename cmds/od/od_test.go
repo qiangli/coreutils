@@ -735,6 +735,9 @@ func TestODCTypeSizesFollowTargetABI(t *testing.T) {
 		{goos: "ios", goarch: "arm64", size: 8, encoding: floatIEEE64},
 		{goos: "linux", goarch: "mips", size: 8, encoding: floatIEEE64},
 		{goos: "linux", goarch: "mipsle", size: 8, encoding: floatIEEE64},
+		{goos: "aix", goarch: "ppc64", size: 8, encoding: floatIEEE64},
+		{goos: "linux", goarch: "ppc64", size: 16, encoding: floatIBMDoubleDouble},
+		{goos: "linux", goarch: "ppc64le", size: 16, encoding: floatIBMDoubleDouble},
 		{goos: "plan9", goarch: "arm", size: 0, encoding: floatNone},
 	} {
 		abi := abiFor(tc.goos, tc.goarch)
@@ -742,6 +745,69 @@ func TestODCTypeSizesFollowTargetABI(t *testing.T) {
 			t.Errorf("%s/%s long double = (%d, %d), want (%d, %d)", tc.goos, tc.goarch,
 				abi.longDoubleSize, abi.longDoubleEncoding, tc.size, tc.encoding)
 		}
+	}
+}
+
+func TestODAIXPPC64LongDoubleIsIEEE64(t *testing.T) {
+	profile := runtimeProfile()
+	profile.abi, profile.endian = abiFor("aix", "ppc64"), binary.BigEndian
+	one := string([]byte{0x3f, 0xf0, 0, 0, 0, 0, 0, 0})
+	for _, format := range []string{"fL", "f8"} {
+		out, errb, code := runODProfile(t, profile, t.TempDir(), one, "-A", "n", "-t", format)
+		if want := " 1\n"; out != want || errb != "" || code != 0 {
+			t.Errorf("AIX ppc64 %s = (%q, %q, %d), want (%q, empty, 0)", format, out, errb, code, want)
+		}
+	}
+}
+
+// GCC 15.2's powerpc64 target assembly supplies the component bytes for 1/3,
+// maximum, and minimum subnormal below, for both -mbig-endian and
+// -mlittle-endian. The expected fields are GNU od 9.4 outputs from Ubuntu
+// 24.04 ppc64le; the big-endian cases encode the same exact component values.
+func TestODLinuxPPC64IBMDoubleDoubleOracles(t *testing.T) {
+	profiles := []struct {
+		name    string
+		profile platformProfile
+		encode  func(uint64) []byte
+	}{
+		{name: "ppc64", profile: platformProfile{abi: abiFor("linux", "ppc64"), endian: binary.BigEndian}, encode: func(v uint64) []byte {
+			b := make([]byte, 8)
+			binary.BigEndian.PutUint64(b, v)
+			return b
+		}},
+		{name: "ppc64le", profile: platformProfile{abi: abiFor("linux", "ppc64le"), endian: binary.LittleEndian}, encode: func(v uint64) []byte {
+			b := make([]byte, 8)
+			binary.LittleEndian.PutUint64(b, v)
+			return b
+		}},
+	}
+	for _, target := range profiles {
+		t.Run(target.name, func(t *testing.T) {
+			target.profile.openInput = runtimeProfile().openInput
+			for _, tc := range []struct {
+				name      string
+				hi, lo    uint64
+				want      string
+				wantClass floatClass
+				wantNeg   bool
+			}{
+				{name: "third", hi: 0x3fd5555555555555, lo: 0x3c75555555555556, want: " 0.333333333333333333333333333333335\n"},
+				{name: "maximum", hi: 0x7fefffffffffffff, lo: 0x7c8ffffffffffffe, want: " 1.79769313486231580793728971405301e+308\n"},
+				{name: "infinity", hi: 0x7ff0000000000000, want: " inf\n", wantClass: floatInfinity},
+				{name: "nan", hi: 0x7ff8000000000000, want: " nan\n", wantClass: floatNaN},
+				{name: "minimum subnormal", hi: 1, want: " 5e-324\n"},
+			} {
+				data := append(target.encode(tc.hi), target.encode(tc.lo)...)
+				decoded := decodeIBMDoubleDouble(append([]byte(nil), data...), target.profile.endian)
+				if decoded.class != tc.wantClass || decoded.negative != tc.wantNeg {
+					t.Errorf("%s decode class/sign = (%d, %v), want (%d, %v)", tc.name, decoded.class, decoded.negative, tc.wantClass, tc.wantNeg)
+				}
+				out, errb, code := runODProfile(t, target.profile, t.TempDir(), string(data), "-A", "n", "-t", "fL")
+				if out != tc.want || errb != "" || code != 0 {
+					t.Errorf("%s = (%q, %q, %d), want (%q, empty, 0)", tc.name, out, errb, code, tc.want)
+				}
+			}
+		})
 	}
 }
 
@@ -776,9 +842,10 @@ func TestODUbuntuAMD64LongDoubleGNUOracleAndPortableTargets(t *testing.T) {
 	}
 
 	profile.abi, profile.endian = abiFor("linux", "ppc64"), binary.BigEndian
-	_, errb, code = runODProfile(t, profile, t.TempDir(), string(make([]byte, 16)), "-t", "fL")
-	if code != 2 || !strings.Contains(errb, "unsupported output format") {
-		t.Fatalf("unsupported long-double ABI = (stderr %q, code %d), want loud usage error", errb, code)
+	ppcOne := []byte{0x3f, 0xf0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	out, errb, code = runODProfile(t, profile, t.TempDir(), string(ppcOne), "-A", "n", "-t", "fL")
+	if want := " 1\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("linux/ppc64 fL = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
 	}
 }
 
