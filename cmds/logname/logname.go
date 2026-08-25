@@ -67,7 +67,7 @@ func runWith(rc *tool.RunContext, args []string, resolve func() string) int {
 // without cgo, so no login name is available and logname reports the required
 // failure. That is a platform limitation, not a silent approximation.
 func loginName() string {
-	return loginNameFromLoginUID()
+	return platformLoginName()
 }
 
 // loginNameFromLoginUID resolves the session login user on Linux from
