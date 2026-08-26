@@ -60,6 +60,86 @@ class ManifestValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, message):
             manifest.validate(rows, self.providers, self.packages, self.flagsets)
 
+    def attestation_values(
+        self, name: str, profile: str, revision: str = "a" * 40,
+    ) -> dict[str, str]:
+        row = self.row(name)
+        values = dict(manifest.ATTESTATION_FIXED)
+        values.update({
+            "profile": profile,
+            "command": name,
+            "subject_commit": revision,
+            "coreutils_commit": revision if row["effective_owner"] != "shell" else "b" * 40,
+            "bashy_commit": "c" * 40,
+            "sh_commit": revision if row["effective_owner"] == "shell" else "d" * 40,
+            "readline_commit": "9" * 40,
+            "harness_commit": "e" * 40,
+            "arm": f"s79-{profile}-{name}",
+            "expected_tps": "2",
+            "observed_tps": "2",
+            "pass_group_tps": "2",
+        })
+        return values
+
+    def write_attestation(
+        self, root: Path, name: str, profile: str,
+        *, revision: str = "a" * 40, changes: dict[str, str] | None = None,
+    ) -> tuple[Path, str]:
+        values = self.attestation_values(name, profile, revision)
+        evidence_root = root / "docs/posix-certification-evidence"
+        bundle = evidence_root / f"bundle-{profile}-{name}"
+        bundle.mkdir(parents=True, exist_ok=True)
+        row = self.row(name)
+        profile_contract = {
+            "profile-b": ("B", "bashy-system", "bashy", "gnu-system"),
+            "profile-c": ("C", "bashy", "gnu-bash-5.3", "bashy-go"),
+            "profile-d": ("D", "bashy", "bashy", "bashy-go"),
+        }[profile]
+        letter, mode, shell, utilities = profile_contract
+        shell_bytes = b"pinned shell binary\x00"
+        subject_bytes = shell_bytes if row["effective_owner"] == "shell" else b"pinned subject binary\x00"
+        shell_digest = hashlib.sha256(shell_bytes).hexdigest()
+        subject_digest = hashlib.sha256(subject_bytes).hexdigest()
+        run_inputs = "\n".join((
+            f"run.profile\t{letter}",
+            f"run.mode\t{mode}",
+            "environment.POSIXLY_CORRECT\t1",
+            "harness.dirty\tfalse",
+            f"harness.revision\t{values['harness_commit']}",
+            f"build.bashy\t{values['bashy_commit']}",
+            f"build.sh\t{values['sh_commit']}",
+            f"build.coreutils\t{values['coreutils_commit']}",
+            f"build.readline\t{values['readline_commit']}",
+            f"sut.shell.sha256\t{shell_digest}",
+            f"command.{name}.sha256\t{subject_digest}",
+        )) + "\n"
+        artifacts = {
+            "run_inputs_start": run_inputs.encode(),
+            "run_inputs_end": run_inputs.encode(),
+            "profile_manifest": (
+                f"profile={letter}\nmode={mode}\nshell={shell}\nutilities={utilities}\n"
+            ).encode(),
+            "selection": f"{name}\n".encode(),
+            "result_vector": f"{name}:1\t0\n{name}:2\t3\n".encode(),
+            "shell_binary": shell_bytes,
+            "subject_binary": subject_bytes,
+            "applet_inventory": f"{name}\n".encode(),
+            "ledger": (
+                f"ARM_DONE {values['arm']} tsets=117 scope=full caps=0 failures=0\n"
+            ).encode(),
+            "tp_summary": b"journals\t117\ntest_purposes\t9337\n",
+        }
+        for stem, payload in artifacts.items():
+            path = bundle / stem
+            path.write_bytes(payload)
+            values[f"{stem}_path"] = str(path.relative_to(evidence_root))
+            values[f"{stem}_sha256"] = hashlib.sha256(payload).hexdigest()
+        if changes:
+            values.update(changes)
+        artifact = evidence_root / f"{profile}-{name}.tsv"
+        artifact.write_text("".join(f"{key}\t{values[key]}\n" for key in sorted(values)))
+        return artifact, hashlib.sha256(artifact.read_bytes()).hexdigest()
+
     def test_canonical_manifest_and_generated_document(self) -> None:
         manifest.validate(self.rows, self.providers, self.packages, self.flagsets)
         rendered = manifest.render(self.rows)
@@ -102,6 +182,32 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertIn("| Evidence | Partial | 97 |", rendered)
         self.assertIn("| Evidence | Missing | 16 |", rendered)
         self.assertEqual(self.row("nice")["evidence_state"], "implemented")
+
+    def test_exact_four_state_vocabulary_is_enforced(self) -> None:
+        self.assertEqual(
+            manifest.EVIDENCE_STATES,
+            {"missing", "partial", "implemented", "verified"},
+        )
+        for state in ("missing", "partial", "implemented"):
+            with self.subTest(state=state):
+                manifest.validate(
+                    self.changed("nice", evidence_state=state),
+                    self.providers, self.packages, self.flagsets,
+                )
+        with mock.patch.object(
+            manifest, "_integration_profiles", return_value={"profile-c", "profile-d"},
+        ):
+            manifest.validate(
+                self.changed(
+                    "nice", evidence_state="verified", integration_evidence="synthetic",
+                ),
+                self.providers, self.packages, self.flagsets,
+            )
+        for state in ("unverified", "complete", "typo"):
+            with self.subTest(state=state):
+                self.assertRejected(
+                    self.changed("nice", evidence_state=state), "invalid evidence state",
+                )
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)
@@ -148,6 +254,15 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertGreater(len(full_errors), len(owned_errors))
         self.assertIn("ar: state=missing", full_errors)
         self.assertNotIn("ar: state=missing", owned_errors)
+
+    def test_final_gates_explicitly_reject_implemented(self) -> None:
+        self.assertIn("nice: state=implemented", manifest.completion_errors(self.rows))
+        self.assertIn(
+            "nice: state=implemented",
+            manifest.completion_errors(
+                self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
+            ),
+        )
 
     def test_every_interface_field_is_required(self) -> None:
         for field in manifest.FIELDS:
@@ -510,7 +625,7 @@ class ManifestValidationTest(unittest.TestCase):
     def test_verified_requires_applicable_exact_revision_integration_evidence(self) -> None:
         self.assertRejected(
             self.changed("nice", evidence_state="verified"),
-            "verified state lacks applicable exact-revision",
+            "verified state requires the exact applicable",
         )
         self.assertRejected(
             self.changed(
@@ -523,22 +638,20 @@ class ManifestValidationTest(unittest.TestCase):
     def test_integration_artifacts_are_pinned_available_and_repository_safe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            evidence_root = root / "docs/posix-certification-evidence"
-            evidence_root.mkdir(parents=True)
-            artifact = evidence_root / "c.json"
-            artifact.write_text("certification ledger\n")
-            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
             revision = "a" * 40
+            artifact, digest = self.write_attestation(
+                root, "nice", "profile-c", revision=revision,
+            )
             row = copy.deepcopy(self.row("nice"))
             row["integration_evidence"] = (
-                f"profile-c@{revision}#nice/c.json@sha256={digest}"
+                f"profile-c@{revision}#nice/{artifact.name}@sha256={digest}"
             )
             self.assertEqual(manifest._integration_profiles(row, root), {"profile-c"})
             for value, message in (
-                (f"profile-c@{revision}#nice/absent.json@sha256={digest}", "unavailable"),
+                (f"profile-c@{revision}#nice/absent.tsv@sha256={digest}", "unavailable"),
                 (f"profile-c@{revision}#nice/../escape@sha256={digest}", "escapes"),
-                (f"profile-c@{revision}#nice/c.json@sha256={'0' * 64}", "digest mismatch"),
-                (f"profile-c#nice/c.json@sha256={digest}", "malformed"),
+                (f"profile-c@{revision}#nice/{artifact.name}@sha256={'0' * 64}", "digest mismatch"),
+                (f"profile-c#nice/{artifact.name}@sha256={digest}", "malformed"),
             ):
                 row["integration_evidence"] = value
                 with self.subTest(message=message), self.assertRaisesRegex(
@@ -546,13 +659,140 @@ class ManifestValidationTest(unittest.TestCase):
                 ):
                     manifest._integration_profiles(row, root)
 
+    def test_integration_attestation_is_strict_pass_only_and_revision_bound(self) -> None:
+        revision = "a" * 40
+        cases = (
+            ({"disposition": "FAIL"}, "disposition must be PASS"),
+            ({"run_scope": "targeted"}, "run_scope must be full-profile"),
+            ({"profile": "profile-d"}, "profile mismatch"),
+            ({"command": "cat"}, "command mismatch"),
+            ({"subject_commit": "b" * 40}, "revision mismatch"),
+            ({"coreutils_commit": "b" * 40}, "not bound to coreutils_commit"),
+            ({"run_inputs_start_sha256": "0" * 63}, "is not a SHA-256"),
+            ({"skipped_sets": "1"}, "skipped_sets must be 0"),
+            ({"capped_sets": "1"}, "capped_sets must be 0"),
+            ({"runner_failures": "1"}, "runner_failures must be 0"),
+            ({"input_drift": "1"}, "input_drift must be 0"),
+        )
+        for changes, message in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact, digest = self.write_attestation(
+                    root, "nice", "profile-c", revision=revision, changes=changes,
+                )
+                row = copy.deepcopy(self.row("nice"))
+                row["integration_evidence"] = (
+                    f"profile-c@{revision}#nice/{artifact.name}@sha256={digest}"
+                )
+                with self.assertRaisesRegex(manifest.ManifestError, message):
+                    manifest._integration_profiles(row, root)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_root = root / "docs/posix-certification-evidence"
+            evidence_root.mkdir(parents=True)
+            artifact = evidence_root / "arbitrary.tsv"
+            artifact.write_text("certification ledger\n")
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            row = copy.deepcopy(self.row("nice"))
+            row["integration_evidence"] = (
+                f"profile-c@{revision}#nice/{artifact.name}@sha256={digest}"
+            )
+            with self.assertRaisesRegex(manifest.ManifestError, "key<TAB>value"):
+                manifest._integration_profiles(row, root)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            values = self.attestation_values("nice", "profile-c", revision)
+            values.pop("run_inputs_start_sha256", None)
+            artifact = root / "docs/posix-certification-evidence/missing.tsv"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("".join(f"{key}\t{values[key]}\n" for key in sorted(values)))
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            row = copy.deepcopy(self.row("nice"))
+            row["integration_evidence"] = (
+                f"profile-c@{revision}#nice/{artifact.name}@sha256={digest}"
+            )
+            with self.assertRaisesRegex(manifest.ManifestError, "keys differ.*run_inputs_start_sha256"):
+                manifest._integration_profiles(row, root)
+
+    def test_duplicate_integration_profiles_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "a" * 40
+            artifact, digest = self.write_attestation(root, "nice", "profile-c")
+            ref = f"profile-c@{revision}#nice/{artifact.name}@sha256={digest}"
+            row = copy.deepcopy(self.row("nice"))
+            row["integration_evidence"] = f"{ref};{ref}"
+            with self.assertRaisesRegex(manifest.ManifestError, "duplicate integration"):
+                manifest._integration_profiles(row, root)
+
+    def test_attestation_recomputes_bound_inputs_binaries_and_results(self) -> None:
+        def rewrite_bound(
+            root: Path, artifact: Path, key: str, payload: bytes,
+        ) -> tuple[dict[str, str], str]:
+            values = dict(line.split("\t", 1) for line in artifact.read_text().splitlines())
+            evidence_root = root / "docs/posix-certification-evidence"
+            bound = evidence_root / values[f"{key}_path"]
+            bound.write_bytes(payload)
+            values[f"{key}_sha256"] = hashlib.sha256(payload).hexdigest()
+            artifact.write_text("".join(f"{name}\t{values[name]}\n" for name in sorted(values)))
+            return values, hashlib.sha256(artifact.read_bytes()).hexdigest()
+
+        cases = (
+            (
+                "run_inputs_end",
+                b"run.profile\tC\n",
+                "run inputs drifted",
+            ),
+            (
+                "result_vector",
+                b"nice:1\t1\nnice:2\t0\n",
+                "non-PASS-group code 1",
+            ),
+            (
+                "profile_manifest",
+                b"profile=C\nmode=bashy\nshell=bashy\nutilities=bashy-go\n",
+                "profile manifest shell mismatch",
+            ),
+            (
+                "ledger",
+                b"ARM_DIAGNOSTIC_DONE s79-profile-c-nice tsets=117 scope=full caps=0 failures=0\n",
+                "full ARM_DONE evidence is absent",
+            ),
+        )
+        for key, payload, message in cases:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact, _ = self.write_attestation(root, "nice", "profile-c")
+                values, digest = rewrite_bound(root, artifact, key, payload)
+                row = copy.deepcopy(self.row("nice"))
+                row["integration_evidence"] = (
+                    f"profile-c@{'a' * 40}#nice/{artifact.name}@sha256={digest}"
+                )
+                with self.assertRaisesRegex(manifest.ManifestError, message):
+                    manifest._integration_profiles(row, root)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact, digest = self.write_attestation(root, "nice", "profile-c")
+            values = dict(line.split("\t", 1) for line in artifact.read_text().splitlines())
+            subject = root / "docs/posix-certification-evidence" / values["subject_binary_path"]
+            subject.write_bytes(b"tampered binary")
+            row = copy.deepcopy(self.row("nice"))
+            row["integration_evidence"] = (
+                f"profile-c@{'a' * 40}#nice/{artifact.name}@sha256={digest}"
+            )
+            with self.assertRaisesRegex(manifest.ManifestError, "does not bind the supplied artifact"):
+                manifest._integration_profiles(row, root)
+
     def test_verified_rejects_wrong_applicable_profiles(self) -> None:
         with mock.patch.object(
             manifest, "_integration_profiles", return_value={"profile-b", "profile-d"},
         ):
             self.assertRejected(
                 self.changed("nice", evidence_state="verified", integration_evidence="synthetic"),
-                "exact-revision.*profile-c",
+                "exact applicable.*profile-c",
             )
 
     def test_owned_source_gate_has_exact_scope_and_accepts_only_ready_states(self) -> None:
@@ -564,6 +804,91 @@ class ManifestValidationTest(unittest.TestCase):
             self.assertRaisesRegex(SystemExit, "owned POSIX source completion blocked"),
         ):
             manifest.main()
+
+    def test_owned_source_gate_accepts_ready_rows_and_rejects_missing(self) -> None:
+        rows = copy.deepcopy(self.rows)
+        for row in rows:
+            if row["effective_owner"] in manifest.OWNED_IMPLEMENTATION_OWNERS:
+                row["evidence_state"] = "implemented"
+        self.assertEqual(manifest.owned_source_errors(rows), [])
+        next(row for row in rows if row["command"] == "nice")["evidence_state"] = "missing"
+        self.assertIn("nice: state=missing", manifest.owned_source_errors(rows))
+
+    def test_implemented_state_rejects_every_incomplete_source_lane(self) -> None:
+        self.assertRejected(
+            self.changed("nice", effects=manifest.UNVERIFIED),
+            "implemented state launders.*effects",
+        )
+        self.assertRejected(
+            self.changed("nice", go_evidence="cmds/nice/absent_test.go#TestNiceAbsent"),
+            "evidence path absent",
+        )
+        self.assertRejected(
+            self.changed("false", shell_routing_evidence="-"),
+            "implemented state launders.*shell routing evidence",
+        )
+        with mock.patch.object(manifest, "parser_gaps", return_value={"-Z"}):
+            self.assertRejected(self.changed("nice"), "implemented state launders")
+        with mock.patch.object(
+            manifest, "option_argument_gaps", return_value={"-n=<adjustment>"},
+        ):
+            self.assertRejected(self.changed("nice"), "implemented state launders")
+
+    def test_provider_registration_alone_cannot_establish_implemented(self) -> None:
+        changes = self.completed_semantics("ar")
+        changes.update({
+            "evidence_state": "implemented",
+            "provider_evidence": (
+                "cmds/posixproviders/posixproviders_test.go#"
+                "TestProviderNamesAreRegistered"
+            ),
+        })
+        self.assertRejected(
+            self.changed("ar", **changes), "provider evidence is not command-specific",
+        )
+
+    def test_shell_and_provider_verified_profiles_are_exact(self) -> None:
+        with mock.patch.object(
+            manifest, "_integration_profiles", return_value={"profile-b", "profile-d"},
+        ):
+            manifest.validate(
+                self.changed(
+                    "false", evidence_state="verified", integration_evidence="synthetic",
+                ),
+                self.providers, self.packages, self.flagsets,
+            )
+        with mock.patch.object(
+            manifest, "_integration_profiles",
+            return_value={"profile-b", "profile-c", "profile-d"},
+        ):
+            self.assertRejected(
+                self.changed(
+                    "false", evidence_state="verified", integration_evidence="synthetic",
+                ),
+                "exact applicable.*extra=profile-c",
+            )
+
+        changes = self.completed_semantics("ar")
+        changes.update({"evidence_state": "verified", "provider_evidence": "synthetic"})
+        rows = self.changed("ar", **changes)
+        with (
+            mock.patch.object(manifest, "_validate_evidence", return_value=(1, True, True)),
+            mock.patch.object(
+                manifest, "_integration_profiles",
+                side_effect=lambda row, root: (
+                    {"profile-c", "profile-d"} if row["command"] == "ar" else set()
+                ),
+            ),
+        ):
+            manifest.validate(rows, self.providers, self.packages, self.flagsets)
+        with (
+            mock.patch.object(manifest, "_validate_evidence", return_value=(1, True, True)),
+            mock.patch.object(
+                manifest, "_integration_profiles",
+                side_effect=lambda row, root: ({"profile-c"} if row["command"] == "ar" else set()),
+            ),
+        ):
+            self.assertRejected(rows, "exact applicable.*missing=profile-d")
 
     def test_partial_go_evidence_requires_explicit_test_ids(self) -> None:
         self.assertRejected(
@@ -627,6 +952,17 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertIn("conservative source-token audit", rendered.lower())
         self.assertIn("never proof of runtime behavior", rendered)
         self.assertNotIn("PASS: all declared options", rendered)
+
+    def test_render_defines_states_attestations_and_final_gates(self) -> None:
+        rendered = manifest.render(self.rows)
+        for state in ("missing", "partial", "implemented", "verified"):
+            self.assertRegex(rendered, rf"- `{state}`:")
+        self.assertIn(manifest.ATTESTATION_SCHEMA, rendered)
+        self.assertIn("Both final gates accept", rendered)
+        self.assertIn("only `verified`", rendered)
+        self.assertRegex(
+            rendered, r"zero skips, caps,\s+runner failures, or input drift",
+        )
 
     def test_fabricated_parser_option_is_reported_as_gap(self) -> None:
         row = copy.deepcopy(self.row("basename"))

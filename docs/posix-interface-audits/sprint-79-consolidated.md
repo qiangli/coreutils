@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `1ae7adc`
+This report reconciles the Sprint 79 interface ledger through coreutils `67e7e32`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -163,7 +163,7 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `1ae7adc`. It credits the accepted command
+This report is reconciled through canonical `67e7e32`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;

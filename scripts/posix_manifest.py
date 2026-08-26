@@ -60,7 +60,7 @@ RENDER_LABELS = (
     "Standard output", "Standard error", "Effects", "Exit status",
     "Compatibility scope", "Availability", "Effective owner",
     "Implementation", "Conservative source-token audit", "Evidence lanes",
-    "Integration/certification evidence",
+    "Integration/full-profile evidence",
     "Issue 7 source",
 )
 
@@ -113,6 +113,43 @@ INTEGRATION_EVIDENCE_REF = re.compile(
     r"^(?P<profile>profile-[b-d])@(?P<revision>[0-9a-f]{40})#"
     r"(?P<command>[a-z0-9]+)/(?P<path>[^@]+)@sha256=(?P<digest>[0-9a-f]{64})$"
 )
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ATTESTATION_SCHEMA = "s79-posix-command-attestation-v1"
+ATTESTATION_FIXED = {
+    "schema": ATTESTATION_SCHEMA,
+    "architecture": "cloud-x86_64",
+    "evidence_class": "full-profile-pass",
+    "disposition": "PASS_GROUP",
+    "run_scope": "full-profile",
+    "command_complete": "1",
+    "arm_done": "1",
+    "skipped_sets": "0",
+    "capped_sets": "0",
+    "runner_failures": "0",
+    "input_drift": "0",
+    "provider_contract_match": "1",
+}
+ATTESTATION_COMMIT_KEYS = {
+    "subject_commit", "coreutils_commit", "bashy_commit", "sh_commit",
+    "readline_commit", "harness_commit",
+}
+ATTESTATION_HASH_KEYS = {
+    "run_inputs_start_sha256", "run_inputs_end_sha256",
+    "profile_manifest_sha256", "selection_sha256", "result_vector_sha256",
+    "shell_binary_sha256", "subject_binary_sha256", "applet_inventory_sha256",
+    "ledger_sha256", "tp_summary_sha256",
+}
+ATTESTATION_PATH_KEYS = {
+    key.removesuffix("_sha256") + "_path" for key in ATTESTATION_HASH_KEYS
+}
+ATTESTATION_INT_KEYS = {"expected_tps", "observed_tps", "pass_group_tps"}
+ATTESTATION_KEYS = (
+    set(ATTESTATION_FIXED) | ATTESTATION_COMMIT_KEYS | ATTESTATION_HASH_KEYS
+    | ATTESTATION_PATH_KEYS | ATTESTATION_INT_KEYS | {"profile", "command", "arm"}
+)
+PASS_GROUP_CODES = frozenset({"0", "3", "4", "5", "101"})
+SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:+-]+$")
 REQUIRED_INTEGRATION_PROFILES = {
     "go": frozenset({"profile-c", "profile-d"}),
     "shell": frozenset({"profile-b", "profile-d"}),
@@ -541,8 +578,217 @@ def _integration_profiles(row: dict[str, str], root: Path) -> set[str]:
             raise ManifestError(f"{row['command']}: integration evidence path escapes its root")
         if not artifact.is_file():
             raise ManifestError(f"{row['command']}: integration evidence artifact is unavailable")
-        if hashlib.sha256(artifact.read_bytes()).hexdigest() != match.group("digest"):
+        artifact_bytes = artifact.read_bytes()
+        if hashlib.sha256(artifact_bytes).hexdigest() != match.group("digest"):
             raise ManifestError(f"{row['command']}: integration evidence artifact digest mismatch")
+        values: dict[str, str] = {}
+        try:
+            lines = artifact_bytes.decode("utf-8").splitlines()
+        except UnicodeDecodeError as exc:
+            raise ManifestError(
+                f"{row['command']}: integration attestation is not UTF-8"
+            ) from exc
+        if not lines or any(not line for line in lines):
+            raise ManifestError(f"{row['command']}: integration attestation has blank/no rows")
+        for line_number, line in enumerate(lines, 1):
+            fields = line.split("\t")
+            if len(fields) != 2 or not all(fields):
+                raise ManifestError(
+                    f"{row['command']}: integration attestation row {line_number} "
+                    "must be key<TAB>value"
+                )
+            key, value = fields
+            if key in values:
+                raise ManifestError(
+                    f"{row['command']}: duplicate integration attestation key {key}"
+                )
+            values[key] = value
+        if set(values) != ATTESTATION_KEYS:
+            missing = sorted(ATTESTATION_KEYS - set(values))
+            extra = sorted(set(values) - ATTESTATION_KEYS)
+            raise ManifestError(
+                f"{row['command']}: integration attestation keys differ: "
+                f"missing={missing} extra={extra}"
+            )
+        for key, expected in ATTESTATION_FIXED.items():
+            if values[key] != expected:
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {key} must be {expected}"
+                )
+        if values["profile"] != match.group("profile"):
+            raise ManifestError(f"{row['command']}: integration attestation profile mismatch")
+        if values["command"] != row["command"]:
+            raise ManifestError(f"{row['command']}: integration attestation command mismatch")
+        if values["subject_commit"] != match.group("revision"):
+            raise ManifestError(f"{row['command']}: integration attestation revision mismatch")
+        for key in ATTESTATION_COMMIT_KEYS:
+            if not COMMIT_RE.fullmatch(values[key]):
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {key} is not a full commit"
+                )
+        subject_key = "sh_commit" if row["effective_owner"] == "shell" else "coreutils_commit"
+        if values["subject_commit"] != values[subject_key]:
+            raise ManifestError(
+                f"{row['command']}: integration attestation subject revision is not "
+                f"bound to {subject_key}"
+            )
+        for key in ATTESTATION_HASH_KEYS:
+            if not SHA256_RE.fullmatch(values[key]):
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {key} is not a SHA-256"
+                )
+        for key in ATTESTATION_INT_KEYS:
+            if not values[key].isdigit():
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {key} is not an integer"
+                )
+        if not SAFE_TOKEN_RE.fullmatch(values["arm"]):
+            raise ManifestError(f"{row['command']}: integration attestation arm is malformed")
+
+        bound: dict[str, bytes] = {}
+        for hash_key in sorted(ATTESTATION_HASH_KEYS):
+            path_key = hash_key.removesuffix("_sha256") + "_path"
+            bound_relative = Path(values[path_key])
+            if bound_relative.is_absolute() or ".." in bound_relative.parts:
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {path_key} escapes its root"
+                )
+            bound_path = (evidence_root / bound_relative).resolve()
+            if not bound_path.is_relative_to(evidence_root):
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {path_key} escapes its root"
+                )
+            if not bound_path.is_file():
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {path_key} is unavailable"
+                )
+            payload = bound_path.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != values[hash_key]:
+                raise ManifestError(
+                    f"{row['command']}: integration attestation {hash_key} "
+                    "does not bind the supplied artifact"
+                )
+            bound[hash_key.removesuffix("_sha256")] = payload
+
+        if bound["run_inputs_start"] != bound["run_inputs_end"]:
+            raise ManifestError(f"{row['command']}: integration run inputs drifted")
+
+        def pairs(payload: bytes, separator: str, label: str) -> dict[str, str]:
+            try:
+                decoded = payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ManifestError(
+                    f"{row['command']}: {label} is not UTF-8"
+                ) from exc
+            result: dict[str, str] = {}
+            for line_number, line in enumerate(decoded.splitlines(), 1):
+                fields = line.split(separator, 1)
+                if len(fields) != 2 or not all(fields):
+                    raise ManifestError(
+                        f"{row['command']}: malformed {label} row {line_number}"
+                    )
+                key, value = fields
+                if key in result and result[key] != value:
+                    raise ManifestError(
+                        f"{row['command']}: conflicting duplicate {label} key {key}"
+                    )
+                result[key] = value
+            return result
+
+        inputs = pairs(bound["run_inputs_start"], "\t", "run-input inventory")
+        profile_manifest = pairs(bound["profile_manifest"], "=", "profile manifest")
+        profile_letter = match.group("profile")[-1].upper()
+        expected_profile = {
+            "profile-b": {"mode": "bashy-system", "shell": "bashy", "utilities": "gnu-system"},
+            "profile-c": {"mode": "bashy", "shell": "gnu-bash-5.3", "utilities": "bashy-go"},
+            "profile-d": {"mode": "bashy", "shell": "bashy", "utilities": "bashy-go"},
+        }[match.group("profile")]
+        if inputs.get("run.profile") != profile_letter:
+            raise ManifestError(f"{row['command']}: run-input profile mismatch")
+        if inputs.get("run.mode") != expected_profile["mode"]:
+            raise ManifestError(f"{row['command']}: run-input mode mismatch")
+        if inputs.get("environment.POSIXLY_CORRECT") != "1":
+            raise ManifestError(f"{row['command']}: POSIXLY_CORRECT evidence is absent")
+        if inputs.get("harness.dirty") != "false":
+            raise ManifestError(f"{row['command']}: harness checkout was dirty")
+        for key, expected in (
+            ("profile", profile_letter),
+            ("mode", expected_profile["mode"]),
+            ("shell", expected_profile["shell"]),
+            ("utilities", expected_profile["utilities"]),
+        ):
+            if profile_manifest.get(key) != expected:
+                raise ManifestError(
+                    f"{row['command']}: profile manifest {key} mismatch"
+                )
+        for attestation_key, inventory_key in (
+            ("bashy_commit", "build.bashy"),
+            ("sh_commit", "build.sh"),
+            ("coreutils_commit", "build.coreutils"),
+            ("readline_commit", "build.readline"),
+            ("harness_commit", "harness.revision"),
+        ):
+            if inputs.get(inventory_key) != values[attestation_key]:
+                raise ManifestError(
+                    f"{row['command']}: {attestation_key} does not match run inputs"
+                )
+        shell_digest = hashlib.sha256(bound["shell_binary"]).hexdigest()
+        if inputs.get("sut.shell.sha256") != shell_digest:
+            raise ManifestError(f"{row['command']}: shell binary does not match run inputs")
+        subject_digest = hashlib.sha256(bound["subject_binary"]).hexdigest()
+        subject_input = (
+            "sut.shell.sha256" if row["effective_owner"] == "shell"
+            else f"command.{row['command']}.sha256"
+        )
+        if inputs.get(subject_input) != subject_digest:
+            raise ManifestError(f"{row['command']}: subject binary does not match run inputs")
+
+        try:
+            selection = bound["selection"].decode("utf-8")
+            applets = bound["applet_inventory"].decode("utf-8").splitlines()
+            vector_lines = bound["result_vector"].decode("utf-8").splitlines()
+            ledger = bound["ledger"].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ManifestError(f"{row['command']}: bound text artifact is not UTF-8") from exc
+        if selection != f"{row['command']}\n":
+            raise ManifestError(f"{row['command']}: selection is not the exact command")
+        if row["effective_owner"] != "shell" and row["command"] not in applets:
+            raise ManifestError(f"{row['command']}: command is absent from applet inventory")
+        if len(applets) != len(set(applets)) or applets != sorted(applets):
+            raise ManifestError(f"{row['command']}: applet inventory is not sorted and unique")
+        if not vector_lines:
+            raise ManifestError(f"{row['command']}: result vector is empty")
+        identities: set[str] = set()
+        for line_number, line in enumerate(vector_lines, 1):
+            fields = line.split("\t")
+            if len(fields) != 2 or not re.fullmatch(
+                rf"{re.escape(row['command'])}:[0-9]+", fields[0]
+            ):
+                raise ManifestError(
+                    f"{row['command']}: malformed result vector row {line_number}"
+                )
+            if fields[0] in identities:
+                raise ManifestError(f"{row['command']}: duplicate result identity")
+            identities.add(fields[0])
+            if fields[1] not in PASS_GROUP_CODES:
+                raise ManifestError(
+                    f"{row['command']}: result vector contains non-PASS-group code {fields[1]}"
+                )
+        expected_tps = int(values["expected_tps"])
+        observed_tps = int(values["observed_tps"])
+        pass_group_tps = int(values["pass_group_tps"])
+        if not expected_tps or not (
+            expected_tps == observed_tps == pass_group_tps == len(vector_lines)
+        ):
+            raise ManifestError(f"{row['command']}: result-vector denominator mismatch")
+        terminal = (
+            f"ARM_DONE {values['arm']} tsets=117 scope=full caps=0 failures=0"
+        )
+        if ledger.splitlines().count(terminal) != 1 or "ARM_DIAGNOSTIC_DONE" in ledger:
+            raise ManifestError(f"{row['command']}: full ARM_DONE evidence is absent")
+        summary = pairs(bound["tp_summary"], "\t", "TP summary")
+        if summary.get("journals") != "117" or summary.get("test_purposes") != "9337":
+            raise ManifestError(f"{row['command']}: full-profile TP denominator is absent")
         profiles.add(match.group("profile"))
     return profiles
 
@@ -734,11 +980,13 @@ def validate(
                 )
         if row["evidence_state"] == "verified":
             required = REQUIRED_INTEGRATION_PROFILES[expected_owner]
-            if not required <= integration_profiles:
-                absent = ",".join(sorted(required - integration_profiles))
+            if required != integration_profiles:
+                absent = ",".join(sorted(required - integration_profiles)) or "none"
+                extra = ",".join(sorted(integration_profiles - required)) or "none"
                 raise ManifestError(
-                    f"{command}: verified state lacks applicable exact-revision "
-                    f"integration/certification evidence: {absent}"
+                    f"{command}: verified state requires the exact applicable "
+                    "integration/certification profile set; "
+                    f"missing={absent} extra={extra}"
                 )
         if row["evidence_state"] == "partial" and (
             not evidence_count or not evidence_available or not explicit_tests
@@ -821,8 +1069,11 @@ def render(rows: list[dict[str, str]]) -> str:
         "Generated from `docs/posix-required-command-interfaces.tsv` by",
         "`scripts/posix_manifest.py`. This ledger is an audit aid, not a normative",
         "specification or a claim of complete POSIX conformance. States are `missing`,",
-        "`partial`, `implemented`, and `verified`. Only `verified` includes applicable",
-        "integration/certification evidence tied to exact revisions.", "",
+        "`partial`, `implemented`, and `verified`:", "",
+        "- `missing`: no behavioral implementation evidence is available.",
+        "- `partial`: focused behavioral evidence exists, but a source-interface residual remains.",
+        "- `implemented`: normative semantics, parser coverage, and focused authored tests are complete.",
+        "- `verified`: `implemented` plus applicable passing full-profile attestations tied to exact inputs, binaries, results, and component revisions.", "",
         "GNU compatibility is explicitly out of scope and deferred.", "",
         "| Axis | Value | Count |", "| --- | --- | ---: |",
         f"| Availability | Go | {availability['go']} |",
@@ -840,8 +1091,9 @@ def render(rows: list[dict[str, str]]) -> str:
         "Final completion is deliberately fail-closed: `scripts/posix_manifest.py",
         "--require-complete` covers all 116 rows, while `--require-owned-complete`",
         "covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the",
-        "16 external-provider rows as owned implementation evidence. Both require focused",
-        "behavioral evidence and complete normative semantics for every row in scope.",
+        "16 external-provider rows as owned implementation evidence. Both final gates accept",
+        "only `verified`: focused behavioral evidence, complete normative semantics, and the",
+        "exact applicable full-profile PASS attestations are required for every row in scope.",
         "The parser scan below is only a conservative",
         "source-token audit; finding a token is never proof of runtime behavior.", "",
         "Evidence is lane-specific. Go references stay in `cmds/<command>`; provider",
@@ -854,6 +1106,16 @@ def render(rows: list[dict[str, str]]) -> str:
         "sibling bashy repository and are legal only for shell-selected rows. Verified",
         "shell rows require both lanes: routing evidence can never substitute for semantic",
         "evidence, and a missing cross-repository reference fails closed.", "",
+        "Integration references use `profile-<b|c|d>@<subject-commit>#<command>/<artifact>@sha256=<digest>`.",
+        "Each artifact is strict `key<TAB>value` data under schema",
+        f"`{ATTESTATION_SCHEMA}`. It must record a full-profile PASS-group run, the matching",
+        "profile/command/owner revision, exact coreutils/bashy/sh/readline/harness commits, exact",
+        "run-input/profile-manifest/selection/result-vector/binary/applet/ledger/summary",
+        "paths and hashes. The validator rereads those bytes and proves the exact component",
+        "pins, byte-identical start/end inputs, exact command selection, PASS-group-only",
+        "command vector, full ARM_DONE/117-set/9,337-TP evidence, and zero skips, caps,",
+        "runner failures, or input drift. Hash-shaped caller assertions alone earn no credit.",
+        "Go and provider rows require exactly Profiles C+D; shell rows require exactly B+D.", "",
         "For verified rows, `NONE` explicitly records an empty option-argument or",
         "operand set; `-` in those normative slots means missing data. Likewise, paired",
         "`-` synopsis or option fields are incomplete, and normative prose cannot be `-`.", "",
@@ -894,7 +1156,7 @@ def render(rows: list[dict[str, str]]) -> str:
             f"Go=`{row['go_evidence']}`; shell semantic=`{row['shell_evidence']}`; "
             f"shell routing=`{row['shell_routing_evidence']}`; "
             f"provider=`{row['provider_evidence']}`; clauses=`{row['clause_ids']}`.", "",
-            f"**Integration/certification evidence:** `{row['integration_evidence']}`.", "",
+            f"**Integration/full-profile evidence:** `{row['integration_evidence']}`.", "",
             f"**Issue 7 source:** [{row['command']}]({standard_url}).", "",
         ])
     return "\n".join(lines)
@@ -918,7 +1180,10 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="validate and fail if output is stale")
     parser.add_argument(
         "--require-complete", action="store_true",
-        help="also fail unless all interfaces have complete semantics and behavioral evidence",
+        help=(
+            "final gate: require all interfaces to be verified with complete semantics, "
+            "focused behavioral evidence, and exact full-profile PASS attestations"
+        ),
     )
     parser.add_argument(
         "--require-owned-source-complete", action="store_true",
@@ -930,8 +1195,9 @@ def main() -> None:
     parser.add_argument(
         "--require-owned-complete", action="store_true",
         help=(
-            "also fail unless all 78 Go-owned and 22 shell-owned interfaces "
-            "have complete semantics and behavioral evidence"
+            "final gate: require all 78 Go-owned and 22 shell-owned interfaces to be "
+            "verified with complete semantics, focused behavioral evidence, and exact "
+            "full-profile PASS attestations"
         ),
     )
     args = parser.parse_args()
