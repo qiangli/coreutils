@@ -167,17 +167,26 @@ func run(rc *tool.RunContext, args []string) int {
 		c.umask = invocationUmask(rc)
 	}
 	defer c.paths.close()
-	// GNU rule: of -f and -n, the one given last takes effect.
+	// GNU rule: of -i, -f, and -n, the one given last takes effect. Issue 7
+	// defines -i and -f as independent steps, however: -i prompts before the
+	// destination is opened, while -f is consulted only if that open fails.
+	// POSIXLY_CORRECT therefore retains both when they are combined. The GNU
+	// -n extension remains ordered against either option in both modes.
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	switch lastOverride(args) {
 	case 'f':
 		c.noClobber = false
-		c.interactive = false
+		if !posix {
+			c.interactive = false
+		}
 	case 'n':
 		c.force = false
 		c.interactive = false
 	case 'i':
-		c.force = false
 		c.noClobber = false
+		if !posix {
+			c.force = false
+		}
 	}
 
 	dest := ""
@@ -957,6 +966,16 @@ func lastOverride(args []string) byte {
 		}
 	}
 	return last
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // reason unwraps err to its root cause and capitalizes the first

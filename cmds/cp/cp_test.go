@@ -740,6 +740,39 @@ func TestCpInteractiveDecline(t *testing.T) {
 	if !strings.Contains(errb, "cp: overwrite 'b'? ") {
 		t.Errorf("prompt missing from stderr: %q", errb)
 	}
+
+	t.Run("posix_force_and_interactive_are_independent", func(t *testing.T) {
+		for _, env := range [][]string{{"POSIXLY_CORRECT=1"}, {"POSIXLY_CORRECT="}} {
+			for _, args := range [][]string{
+				{"-if", "a", "b"},
+				{"-fi", "a", "b"},
+				{"--interactive", "--force", "a", "b"},
+				{"--force", "--interactive", "a", "b"},
+			} {
+				write(t, filepath.Join(dir, "b"), "b content")
+				out, errb, code := runToolWithInputEnv(t, dir, "n\n", env, args...)
+				if code != 0 || out != "" || !strings.Contains(errb, "overwrite 'b'?") {
+					t.Errorf("env=%v args=%v: code=%d out=%q err=%q", env, args, code, out, errb)
+				}
+				if got := read(t, filepath.Join(dir, "b")); got != "b content" {
+					t.Errorf("env=%v args=%v overwrote after decline: %q", env, args, got)
+				}
+			}
+		}
+	})
+
+	t.Run("gnu_last_option_wins_outside_posix_mode", func(t *testing.T) {
+		write(t, filepath.Join(dir, "b"), "b content")
+		_, errb, code := runToolWithInput(t, dir, "n\n", "-if", "a", "b")
+		if code != 0 || strings.Contains(errb, "overwrite") || read(t, filepath.Join(dir, "b")) != "a content" {
+			t.Fatalf("cp -if: code=%d err=%q destination=%q", code, errb, read(t, filepath.Join(dir, "b")))
+		}
+		write(t, filepath.Join(dir, "b"), "b content")
+		_, errb, code = runToolWithInput(t, dir, "n\n", "-fi", "a", "b")
+		if code != 0 || !strings.Contains(errb, "overwrite") || read(t, filepath.Join(dir, "b")) != "b content" {
+			t.Fatalf("cp -fi: code=%d err=%q destination=%q", code, errb, read(t, filepath.Join(dir, "b")))
+		}
+	})
 }
 
 // TestCpInteractiveEOFDeclines: end-of-file on the response stream is

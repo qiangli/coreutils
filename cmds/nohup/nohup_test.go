@@ -56,6 +56,47 @@ func TestNohupRunsCommand(t *testing.T) {
 	if code != 0 || out.String() != "ok" {
 		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
+
+	t.Run("posix_help_and_version_are_utility_operands", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"--", "--help", "--version"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nprintf 'utility:"+name+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range []string{"1", ""} {
+				var out, errb bytes.Buffer
+				rc := &tool.RunContext{
+					Ctx: context.Background(), Dir: dir,
+					Env:   []string{"PATH=.", "POSIXLY_CORRECT=" + value},
+					Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+				}
+				if code := run(rc, []string{name}); code != 0 || out.String() != "utility:"+name || errb.Len() != 0 {
+					t.Errorf("utility=%q POSIXLY_CORRECT=%q: code=%d out=%q err=%q", name, value, code, out.String(), errb.String())
+				}
+			}
+		}
+	})
+
+	t.Run("gnu_help_extension_has_explicit_operand_disambiguation", func(t *testing.T) {
+		dir := t.TempDir()
+		name := "--help"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nprintf utility-help\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: dir, Env: []string{"PATH=."},
+			Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+		}
+		if code := run(rc, []string{"--help"}); code != 0 || !strings.Contains(out.String(), "Usage: nohup") {
+			t.Fatalf("extension help: code=%d out=%q err=%q", code, out.String(), errb.String())
+		}
+		out.Reset()
+		errb.Reset()
+		if code := run(rc, []string{"--", "--help"}); code != 0 || out.String() != "utility-help" || errb.Len() != 0 {
+			t.Fatalf("disambiguated utility: code=%d out=%q err=%q", code, out.String(), errb.String())
+		}
+	})
 }
 
 func TestNohupSearchesPATHRelativeToRunContextDir(t *testing.T) {

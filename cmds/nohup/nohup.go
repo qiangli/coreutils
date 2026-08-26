@@ -18,7 +18,16 @@ var cmd = &tool.Tool{Name: "nohup", Synopsis: "Run a command immune to hangups."
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "--version") {
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	// Issue 7 defines no nohup options: the first operand is the utility even
+	// when its name begins with '-'. Retain GNU's standalone help/version
+	// extension outside POSIX mode, with `--` as the explicit disambiguation
+	// for invoking a utility named --help or --version there.
+	disambiguated := !posix && len(args) > 0 && args[0] == "--"
+	if disambiguated {
+		args = args[1:]
+	}
+	if !posix && !disambiguated && len(args) == 1 && (args[0] == "--help" || args[0] == "--version") {
 		fs := tool.NewFlags(cmd.Name)
 		tool.Parse(rc, cmd, fs, args)
 		return 0
@@ -29,6 +38,16 @@ func run(rc *tool.RunContext, args []string) int {
 		return internalFailureCode
 	}
 	return runNohup(rc, args)
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // internalFailureCode is the status nohup returns when it cannot even
