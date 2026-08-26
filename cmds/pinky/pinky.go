@@ -1,8 +1,13 @@
 package pinkycmd
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"os/user"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/cmds/internal/session"
@@ -19,9 +24,9 @@ func run(rc *tool.RunContext, args []string) int {
 	long := fs.BoolP("long", "l", false, "long format")
 	heading := fs.BoolP("heading", "f", false, "omit short-format headings")
 	fs.BoolP("no-name", "w", false, "omit full name in short format")
-	fs.BoolP("no-home", "b", false, "omit home directory in long format")
-	fs.BoolP("no-plan", "h", false, "omit project/plan in long format")
-	fs.BoolP("no-project", "p", false, "omit project in long format")
+	noHome := fs.BoolP("no-home", "b", false, "omit home directory in long format")
+	noPlan := fs.BoolP("no-plan", "h", false, "omit project/plan in long format")
+	noProject := fs.BoolP("no-project", "p", false, "omit project in long format")
 	doLookup := fs.BoolP("lookup", "i", false, "do a full name, shell, and home lookup for each user")
 	quick := fs.BoolP("quick", "q", false, "quick format: only login name and full name")
 
@@ -30,9 +35,8 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	_ = long
 	if len(operands) == 0 {
-		recs, err := session.Read("")
+		recs, err := session.ReadEnv("", rc.Env)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pinky: %v\n", err)
 			return 1
@@ -57,25 +61,91 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 0
 	}
+	status := 0
 	for _, name := range operands {
-		u, err := user.Lookup(name)
-		if err != nil {
+		a, ok := lookupAccount(rc.Env, name)
+		if !ok {
 			fmt.Fprintf(rc.Err, "pinky: %s: no such user\n", name)
+			status = 1
 			continue
 		}
 		if *quick {
-			fmt.Fprintf(rc.Out, "%-8s %s\n", name, u.Name)
-		} else if *short {
+			fmt.Fprintf(rc.Out, "%-8s %s\n", name, a.realName)
+		} else if *short || !*long {
 			if *doLookup {
-				fmt.Fprintf(rc.Out, "%-8s %-20s %s\n", name, u.Name, u.HomeDir)
+				fmt.Fprintf(rc.Out, "%-8s %-20s %s\n", name, a.realName, a.home)
 			} else {
-				fmt.Fprintf(rc.Out, "%-8s %-20s\n", name, u.Name)
+				fmt.Fprintf(rc.Out, "%-8s %-20s\n", name, a.realName)
 			}
 		} else {
-			fmt.Fprintf(rc.Out, "Login name: %s\nDirectory: %s\nShell: \n", name, u.HomeDir)
+			writeLong(rc, a, *noHome, *noProject, *noPlan)
 		}
 	}
-	return 0
+	return status
+}
+
+type account struct {
+	login, realName, home, shell string
+}
+
+func lookupAccount(env []string, name string) (account, bool) {
+	if u, err := user.Lookup(name); err == nil {
+		realName := u.Name
+		if realName == "" {
+			realName = u.Username
+		}
+		return account{login: name, realName: realName, home: u.HomeDir, shell: passwdShell(u.Username)}, true
+	}
+	if dir, ok := session.AgentUserDir(env, name); ok {
+		return account{login: name, realName: name, home: dir, shell: "bashy"}, true
+	}
+	return account{}, false
+}
+
+func writeLong(rc *tool.RunContext, a account, noHome, noProject, noPlan bool) {
+	fmt.Fprintf(rc.Out, "Login name: %-28s In real life: %s\n", a.login, a.realName)
+	if !noHome {
+		fmt.Fprintf(rc.Out, "Directory: %-29s Shell: %s\n", a.home, a.shell)
+	}
+	if !noProject {
+		if project, err := os.ReadFile(filepath.Join(a.home, ".project")); err == nil {
+			project = firstLine(project)
+			fmt.Fprintf(rc.Out, "Project: %s\n", project)
+		}
+	}
+	if !noPlan {
+		if plan, err := os.ReadFile(filepath.Join(a.home, ".plan")); err == nil {
+			fmt.Fprintln(rc.Out, "Plan:")
+			_, _ = rc.Out.Write(plan)
+			if len(plan) == 0 || plan[len(plan)-1] != '\n' {
+				fmt.Fprintln(rc.Out)
+			}
+		}
+	}
+}
+
+func firstLine(data []byte) []byte {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		data = data[:i]
+	}
+	return bytes.TrimSuffix(data, []byte{'\r'})
+}
+
+func passwdShell(name string) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	b, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) >= 7 && fields[0] == name {
+			return fields[6]
+		}
+	}
+	return ""
 }
 
 func aliasV(args []string) []string {
