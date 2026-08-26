@@ -354,6 +354,7 @@ func newOpenCmd() *cobra.Command {
 	var sf sessionFlags
 	var rounds int
 	var dry, nonInteractive, yes bool
+	var fromMB string
 	cmd := &cobra.Command{
 		Use:   "open [<room>|<id>] [--topic TEXT --participant AGENT ...]",
 		Short: "open a meeting (enters the REPL unless --non-interactive)",
@@ -372,6 +373,13 @@ func newOpenCmd() *cobra.Command {
 			}
 			if err := guardDepth(); err != nil {
 				return err
+			}
+			seqs, err := parseSeqList(fromMB)
+			if err != nil {
+				return err
+			}
+			if len(seqs) > 0 && !sf.board {
+				return fmt.Errorf("meet: --from-mb seeds a board; pass --board")
 			}
 			if strings.TrimSpace(sf.initiator) == "" {
 				sf.initiator = humanName() // `start` always names its initiator
@@ -393,6 +401,12 @@ func newOpenCmd() *cobra.Command {
 			markDepth()
 			for _, a := range st.Agenda {
 				_, _ = record(st, "agenda", procedural(st), string(RoleChair), a)
+			}
+			if len(seqs) > 0 {
+				if err := SeedBoardFromMB(st, seqs); err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "seeded board %s from mb %s — posted a pointer back\n", st.ID, joinSeqs(seqs))
 			}
 			if !nonInteractive {
 				return repl(cmd, st)
@@ -423,7 +437,36 @@ func newOpenCmd() *cobra.Command {
 	f.BoolVar(&sf.board, "board", false,
 		"open a BOARD: participants read and post on their own turns. No chair runs the "+
 			"floor and no secretary is spawned — post with `bashy meet tell <room> --as <you> \"...\"`")
+	f.StringVar(&fromMB, "from-mb", "",
+		"seed the board from these message-board posts (comma-separated seqs, e.g. 3,7,12), "+
+			"attributed to their original authors, and post a pointer back to mb. Requires --board")
 	return cmd
+}
+
+// parseSeqList parses the comma-separated message-board sequence list of
+// --from-mb into positive int64s. Empty is no seeding; a non-numeric or
+// non-positive entry is a usage error rather than a silently dropped post.
+func parseSeqList(s string) ([]int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var out []int64
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "#"))
+		if part == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("meet: --from-mb: %q is not a message-board sequence", part)
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("meet: --from-mb: no sequences given")
+	}
+	return out, nil
 }
 
 // Consult outcomes. Disagreement is a FIRST-CLASS result, not an error: the one
@@ -1088,20 +1131,35 @@ func newAskCmd() *cobra.Command {
 // `bashy meet list` and will type the room number.
 func newInviteCmd() *cobra.Command {
 	var as, notify string
+	var inv OpenInvite
 	cmd := &cobra.Command{
-		Use:   "invite <ref> <agent>",
-		Short: "seat an agent in a running room (organizer only)",
+		Use:   "invite <ref> [<agent>]",
+		Short: "seat an agent in a running room, or open seating to an audience (organizer only)",
 		Long: "Add an agent to a room that is already open. It speaks from the next round on.\n\n" +
 			"Only the organizer — whoever convened the room — may change its roster.\n" +
-			"Inviting somebody already seated is a no-op, not a second seat.",
-		Args: cobra.ExactArgs(2),
+			"Inviting somebody already seated is a no-op, not a second seat.\n\n" +
+			"On a BOARD, give a selector instead of an agent to open seating to an audience:\n" +
+			"  bashy meet invite <ref> --any            # anyone may self-seat on first post\n" +
+			"  bashy meet invite <ref> --band 4         # any L4 may self-seat\n" +
+			"  bashy meet invite <ref> --tool codex     # any codex agent may self-seat\n" +
+			"A matching agent self-seats on its first post; nobody is pushed in. The selector\n" +
+			"vocabulary is `mb send`'s own (--band/--tool/--provider/--family/--version/--any).",
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if notify != "mb" && notify != "none" {
-				return fmt.Errorf("meet: --notify must be mb or none, got %q", notify)
-			}
 			actor := strings.TrimSpace(as)
 			if actor == "" {
 				actor = humanName()
+			}
+			// One ref, no agent, and a declared audience is the OPEN-INVITE path:
+			// the organizer delegates seating rather than pushing one agent in.
+			if len(args) == 1 || !inv.empty() {
+				if len(args) == 2 {
+					return fmt.Errorf("meet: give an agent to push in, OR a selector to open seating — not both")
+				}
+				return runOpenInvite(cmd, args[0], actor, inv)
+			}
+			if notify != "mb" && notify != "none" {
+				return fmt.Errorf("meet: --notify must be mb or none, got %q", notify)
 			}
 			if err := Invite(args[0], actor, args[1]); err != nil {
 				return err
@@ -1146,7 +1204,41 @@ func newInviteCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&as, "as", "", "act as this member (default: the human); must be the room's organizer")
 	cmd.Flags().StringVar(&notify, "notify", "mb", "notification transport: mb | none")
+	f := cmd.Flags()
+	f.BoolVar(&inv.Any, "any", false, "open seating to ANYONE (a board): any registered agent may self-seat")
+	f.IntVar(&inv.Band, "band", 0, "open seating to agents at this capability band (a board)")
+	f.StringVar(&inv.Tool, "tool", "", "open seating to agents on this tool (a board)")
+	f.StringVar(&inv.Provider, "provider", "", "open seating to agents on this provider (a board)")
+	f.StringVar(&inv.Family, "family", "", "open seating to agents in this model family (a board)")
+	f.StringVar(&inv.Version, "version", "", "open seating to agents at this model version (a board)")
 	return cmd
+}
+
+// runOpenInvite records the open invite on the board and posts a group invite to
+// mb. Recording and announcing are two acts: SetOpenTo is authoritative (an
+// agent may self-seat even if the announcement never lands), and the mb post is
+// how agents that are not watching the room learn the door is open. The receipt
+// never claims the announcement was delivered when no seam is wired.
+func runOpenInvite(cmd *cobra.Command, ref, actor string, inv OpenInvite) error {
+	st, err := SetOpenTo(ref, actor, inv)
+	if err != nil {
+		return err
+	}
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "%s is open to %s — a matching agent self-seats on its first post\n", st.ID, inv.describe())
+	fmt.Fprintf(w, "join: bashy meet tell %s --as <you> \"...\"\n", st.roomRef())
+	if PostMB == nil {
+		fmt.Fprintln(w, "notification unavailable: no message-board seam is wired")
+		return nil
+	}
+	body := fmt.Sprintf("open board %s — %q. %s may join by posting: bashy meet tell %s --as <you> \"...\"",
+		st.roomRef(), st.Topic, inv.describe(), st.roomRef())
+	audience := inv
+	if _, err := PostMB(MBPost{From: actor, Topic: st.Topic, Body: body}, &audience); err != nil {
+		return fmt.Errorf("meet: post mb group invite: %w", err)
+	}
+	fmt.Fprintf(w, "posted a group invite to %s on mb\n", inv.describe())
+	return nil
 }
 
 func newKickCmd() *cobra.Command {

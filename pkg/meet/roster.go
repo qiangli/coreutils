@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/capability"
@@ -507,4 +508,152 @@ func toolOf(seat string) string {
 		return a.Tool
 	}
 	return seat
+}
+
+// --- open invites: seating delegated to a declared audience -------------------
+
+// OpenInvite is the audience an organizer has delegated SEATING to. It reuses
+// mb's own selector vocabulary — the same catalog fields `mb send` selects on —
+// rather than inventing a second one: Band, Tool, Provider, Family, Version, or
+// Any (the "anyone" audience, no selector). A matching agent may self-seat on its
+// first board post; a non-matching one is refused exactly as before.
+//
+// Any is mutually exclusive with the field selectors: "invite anyone" and
+// "invite the L4s" are different intents and stacking them reads as neither.
+type OpenInvite struct {
+	Any      bool   `json:"any,omitempty"`
+	Band     int    `json:"band,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Family   string `json:"family,omitempty"`
+	Version  string `json:"version,omitempty"`
+}
+
+// empty reports an invite that names no audience at all — neither a selector nor
+// Any. Recording one would silently widen a board to everyone or to nobody
+// depending on how you read it, so the CLI refuses it rather than storing it.
+func (inv *OpenInvite) empty() bool {
+	if inv == nil {
+		return true
+	}
+	return !inv.Any && inv.Band == 0 && inv.Tool == "" &&
+		inv.Provider == "" && inv.Family == "" && inv.Version == ""
+}
+
+// describe renders the audience the way `mb` describes it, for the invite body
+// and the CLI receipt. It is deliberately the same phrasing an operator already
+// reads on the board so the two never drift.
+func (inv *OpenInvite) describe() string {
+	if inv == nil || inv.empty() {
+		return ""
+	}
+	if inv.Any {
+		return "anyone"
+	}
+	var parts []string
+	if inv.Band != 0 {
+		parts = append(parts, "band "+strconv.Itoa(inv.Band))
+	}
+	for _, kv := range [][2]string{
+		{"tool", inv.Tool}, {"provider", inv.Provider},
+		{"family", inv.Family}, {"version", inv.Version},
+	} {
+		if kv[1] != "" {
+			parts = append(parts, kv[0]+" "+kv[1])
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// matchesOpenInvite reports whether agent is in the audience inv names. The
+// decision rides the AudienceMatch seam bashy wires to mb's own fleet selection,
+// so meet reuses that predicate rather than keeping a second copy of the
+// selector semantics that could drift from `mb send`. With no seam wired (a bare
+// embedding, no fleet) an open invite matches nobody and seating stays
+// organizer-push-only.
+func matchesOpenInvite(agent string, inv *OpenInvite) bool {
+	if inv == nil || inv.empty() || AudienceMatch == nil {
+		return false
+	}
+	return AudienceMatch(strings.TrimSpace(agent), *inv)
+}
+
+// SetOpenTo records an open invite on a board and returns the resolved audience.
+// Organizer-only, exactly like Invite/Kick: this is the organizer delegating
+// seating, so it is a roster act, not a post any member may make.
+//
+// It is refused on a non-board room: a chaired or round-robin meeting spawns
+// every seat's turn, so admitting one it did not choose would have it try to
+// drive an agent nobody vetted. The mutation is recorded as an `open` event so
+// the transcript shows when the door was opened and by whom — the same
+// audit-every-roster-change rule Invite and Kick follow.
+func SetOpenTo(ref, actor string, inv OpenInvite) (*State, error) {
+	st, err := loadMeeting(ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireOrganizer(st, actor); err != nil {
+		return nil, err
+	}
+	if !st.board() {
+		return nil, fmt.Errorf("meet: %s is not a board — an open invite delegates SEATING, "+
+			"and only a board admits a seat on its own post. Open one with `bashy meet open --board`", st.ID)
+	}
+	if inv.empty() {
+		return nil, fmt.Errorf("meet: an open invite must name an audience: --any, or a selector " +
+			"(--band/--tool/--provider/--family/--version)")
+	}
+	if inv.Any && !(inv.Band == 0 && inv.Tool == "" && inv.Provider == "" && inv.Family == "" && inv.Version == "") {
+		return nil, fmt.Errorf("meet: --any is the whole audience; drop the selectors, or drop --any and keep them")
+	}
+	stored := inv
+	st.OpenTo = &stored
+	if err := st.save(); err != nil {
+		return nil, err
+	}
+	if _, err := record(st, "open", actorLabel(st, actor), "",
+		fmt.Sprintf("opened seating to %s", inv.describe())); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// selfSeat admits an agent that matches the board's open invite, recording a
+// `join` event so the roster shows who came. It returns whether it seated the
+// agent; false with a nil error means the agent did not match and the caller
+// keeps its ordinary not-seated refusal.
+//
+// Unlike Invite it does NOT seed the read cursor to the transcript head. Invite
+// starts a fresh seat at head because "a meeting is not a public board"; a board
+// IS one, and an agent that answered an open invite came for the context the
+// board already holds — including the mb posts it was seeded from — so it reads
+// from the start.
+func selfSeat(st *State, agent string) (bool, error) {
+	if st.OpenTo == nil || !st.board() {
+		return false, nil
+	}
+	name := canonAgent(strings.TrimSpace(strings.TrimPrefix(agent, "@")))
+	if participantSeat(st, name) {
+		return false, nil // already seated — nothing to self-seat
+	}
+	if !matchesOpenInvite(name, st.OpenTo) {
+		return false, nil
+	}
+	prev := st.Participants
+	st.Participants = append(append([]string(nil), prev...), name)
+	if err := st.Validate(); err != nil {
+		st.Participants = prev
+		return false, err
+	}
+	if err := st.save(); err != nil {
+		st.Participants = prev
+		return false, err
+	}
+	if _, err := record(st, "join", name, string(RoleParticipant),
+		fmt.Sprintf("%s self-seated on the open invite to %s", seatLabel(name), st.OpenTo.describe())); err != nil {
+		st.Participants = prev
+		_ = st.save()
+		return false, err
+	}
+	return true, nil
 }
