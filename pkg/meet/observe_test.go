@@ -70,6 +70,32 @@ func TestObserveReplaysFullHistory(t *testing.T) {
 	}
 }
 
+func TestObserveNIsDeprecatedTailAlias(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	turn(t, st.ID, Event{Round: 1, Speaker: "claude-fable5", Kind: "turn", Text: "old", TS: time.Now()})
+	turn(t, st.ID, Event{Round: 1, Speaker: "codex-gpt-5.5", Kind: "turn", Text: "new", TS: time.Now()})
+
+	cmd := newObserveCmd()
+	var out, errW bytes.Buffer
+	flag := cmd.Flags().Lookup("n")
+	if flag == nil || !flag.Hidden {
+		t.Fatalf("-n alias must exist and be hidden, got %#v", flag)
+	}
+	cmd.SetOut(&out)
+	cmd.SetErr(&errW)
+	cmd.SetArgs([]string{st.ID, "--follow=false", "-n", "1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "old") || !strings.Contains(out.String(), "new") {
+		t.Fatalf("-n did not behave as the hidden --tail alias:\n%s", out.String())
+	}
+	if !strings.Contains(errW.String(), "-n is deprecated; use --tail") {
+		t.Fatalf("-n did not print replacement notice: %q", errW.String())
+	}
+}
+
 // Following streams turns as they land. Granularity is one COMPLETED turn: the
 // engine writes an event when an agent finishes, so this is what "live" means.
 func TestObserveStreamsNewTurnsAndStopsWhenClosed(t *testing.T) {

@@ -55,7 +55,7 @@ import (
 // Bare `bashy mb` READS, because reading is what an agent does at the start of
 // every turn and the common case should cost the fewest words.
 func NewMessageBoardCmd() *cobra.Command {
-	var jsonOut, peek, all, seenBy bool
+	var jsonOut, peek, history, allAlias, seenBy bool
 	var as string
 	var limit int
 	var wait time.Duration
@@ -69,13 +69,13 @@ and human on this machine posts to and reads from.
   bashy mb                      what is new for you (marks it read)
   bashy mb post "..."           post to EVERYONE
   bashy mb send <agent> "..."   post to one agent
-  bashy mb --all                the WHOLE board, everyone's posts
+  bashy mb --history            the WHOLE board, everyone's posts
   bashy mb --peek               read without marking anything
   bashy mb --wait 15m           wait up to 15 minutes for something new
 
 PUBLIC BY CONSTRUCTION. Every post is visible to every reader; addressing is a
 hint about who should act, never a permission. Nothing is deleted — reading only
-advances your own cursor — so --all always answers "what was said, and when".
+advances your own cursor — so --history always answers "what was said, and when".
 
 No setup: there is nothing to subscribe to. A post to an agent that is not
 running waits on the board and is there when it next looks.
@@ -93,8 +93,12 @@ shared-baseline, posix-cert, harness, announce.`,
 			if wait < 0 {
 				return fmt.Errorf("mb: --wait must not be negative")
 			}
-			if wait > 0 && all {
-				return fmt.Errorf("mb: --wait cannot be combined with --all")
+			if allAlias {
+				deprecatedFlagNotice(cmd, "--all", "--history")
+				history = true
+			}
+			if wait > 0 && history {
+				return fmt.Errorf("mb: --wait cannot be combined with --history")
 			}
 			if wait > 0 {
 				who, err := BoardIdentity(as)
@@ -105,14 +109,16 @@ shared-baseline, posix-cert, harness, announce.`,
 					return err
 				}
 			}
-			return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, all: all, jsonOut: jsonOut, seenBy: seenBy})
+			return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, history: history, jsonOut: jsonOut, seenBy: seenBy})
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&as, "as", "", "read as this identity (default: resolved from your principal)")
+	f.StringVar(&as, "as", "", "reader identity (default: resolved from your principal)")
 	f.BoolVar(&jsonOut, "json", false, "one JSON object per line")
 	f.BoolVar(&peek, "peek", false, "read without marking anything read")
-	f.BoolVar(&all, "all", false, "the whole board — every post by everyone, read or not")
+	f.BoolVar(&history, "history", false, "the whole board — every post by everyone, read or not")
+	f.BoolVar(&allAlias, "all", false, "hidden deprecated alias for --history")
+	_ = f.MarkHidden("all")
 	f.BoolVar(&seenBy, "seen-by", false, "name the agents that have read each post — the receipt record, not just a count")
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
@@ -157,7 +163,7 @@ type boardRead struct {
 	as      string
 	limit   int
 	peek    bool
-	all     bool
+	history bool
 	jsonOut bool
 	seenBy  bool
 }
@@ -169,14 +175,14 @@ type boardRead struct {
 // reimplements what it fronts is how two views of one store start disagreeing.
 func readBoard(cmd *cobra.Command, o boardRead) error {
 	{
-		as, limit, peek, all, jsonOut, seenBy := o.as, o.limit, o.peek, o.all, o.jsonOut, o.seenBy
+		as, limit, peek, history, jsonOut, seenBy := o.as, o.limit, o.peek, o.history, o.jsonOut, o.seenBy
 		who, err := BoardIdentity(as)
 		if err != nil {
 			return err
 		}
 		var posts []Post
 		var older int
-		if all {
+		if history {
 			posts, err = Posts()
 		} else {
 			var directed, other []Post
@@ -198,7 +204,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		// state change that depends on a pipe staying open is not one.
 		concerns := DeclaredConcerns(who)
 		labels := make(map[int64]string, len(posts))
-		if !all && !peek {
+		if !history && !peek {
 			for _, p := range posts {
 				labels[p.Seq] = resolveLabel(p, who, concerns)
 			}
@@ -232,13 +238,13 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 				// Say what was hidden. A cap that stays quiet is a silent
 				// drop, and a reader cannot tell "nothing else" from
 				// "twelve more" unless it is told.
-				fmt.Fprintf(w, "_+%d older, not addressed to you — `bashy mb --all` for the whole board._\n", older)
+				fmt.Fprintf(w, "_+%d older, not addressed to you — `bashy mb --history` for the whole board._\n", older)
 			}
 		}
 		// Advance the cursor only AFTER the posts have been written out,
-		// and never on --peek or --all: a read that fails halfway must not
+		// and never on --peek or --history: a read that fails halfway must not
 		// consume what it did not show.
-		if peek || all || len(posts) == 0 {
+		if peek || history || len(posts) == 0 {
 			return nil
 		}
 		return MarkSeen(who, posts[len(posts)-1].Seq)
@@ -247,7 +253,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 
 // runBoardRead is the front door's read: the same board, same cursor.
 func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) error {
-	return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, all: all})
+	return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, history: all})
 }
 
 // newMBSendCmd posts to one agent, or to everyone a selector matches.
@@ -259,7 +265,7 @@ func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) erro
 // read could destroy history it would need a permission model, and a permission
 // model is how a messaging feature stops being one.
 func newMBSendCmd() *cobra.Command {
-	var topic, as, tool, provider, family, version string
+	var topic, as, to, tool, provider, family, version string
 	var band int
 	var any bool
 	cmd := &cobra.Command{
@@ -268,6 +274,7 @@ func newMBSendCmd() *cobra.Command {
 		Long: `send posts to a named agent, or to every agent a selector matches.
 
   bashy mb send codex-gpt5.6-sol "gate is red on main"
+  bashy mb send --to codex-gpt5.6-sol "gate is red on main"
   bashy mb send --band 4 "need an L4 to review the converge gate"
   bashy mb send --tool ycode "ycode rebuilt — re-probe your bindings"
   bashy mb send --provider anthropic "anthropic keys rotated"
@@ -320,8 +327,28 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				reportDelivery(cmd, ds)
 				return nil
 			}
+			if to != "" {
+				target := strings.TrimSpace(to)
+				if target == "" {
+					return fmt.Errorf("mb send: --to requires a target")
+				}
+				addr, kind, ok := ResolveSendTarget(target)
+				if !ok {
+					return unresolvedTargetError(target)
+				}
+				body = strings.Join(args, " ")
+				seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: topic, Body: body})
+				if err != nil {
+					return err
+				}
+				d := SteerLive(addr, steerNotice(from, body))
+				d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
+				d.To = RoleLabelFor(d.To)
+				reportDelivery(cmd, []Delivery{d})
+				return nil
+			}
 			if len(args) < 2 {
-				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider/--family/--version)")
+				return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--band/--tool/--provider/--family/--version)")
 			}
 			// Resolve the target AT SEND TIME. A ROLE resolves to its seat's
 			// stable address, so the mail survives a handover; an AGENT to its
@@ -356,6 +383,7 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 	f.StringVar(&topic, "topic", "mb",
 		"what the post is about; readers who declared this concern see it uncapped (convention: shared-baseline, posix-cert, harness, announce)")
 	f.StringVar(&as, "as", "", "sender identity (default: resolved from your principal)")
+	f.StringVar(&to, "to", "", "addressee agent, role, reader, or resolvable principal")
 	f.IntVar(&band, "band", 0, "post to every agent at this band (1-4)")
 	f.StringVar(&tool, "tool", "", "post to every agent on this harness (claude, ycode, agy, codex, opencode)")
 	f.StringVar(&provider, "provider", "", "post to every agent whose model has this provider")
@@ -364,6 +392,10 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 	f.BoolVar(&any, "any", false,
 		"offer to ANY ONE of the group: the first to read it claims it and the rest never see it (default: all of them see it, and views are counted)")
 	return cmd
+}
+
+func deprecatedFlagNotice(cmd *cobra.Command, old, replacement string) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s is deprecated; use %s\n", old, replacement)
 }
 
 // newMBPostCmd is the BROADCAST half — a public forum post.
@@ -489,7 +521,7 @@ func resolveLabel(p Post, who string, concerns []string) string {
 	return p.Audiences()
 }
 
-// describeFor labels a post WITHOUT side effects, for --all and --peek.
+// describeFor labels a post WITHOUT side effects, for --history and --peek.
 func describeFor(p Post, who string, concerns []string) string {
 	if p.Directed(who) {
 		return "you"

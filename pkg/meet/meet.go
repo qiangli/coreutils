@@ -911,7 +911,7 @@ func newReadCmd() *cobra.Command {
 	var peek, jsonOut bool
 	var limit int
 	cmd := &cobra.Command{
-		Use:   "read <room>|<id> --as NAME [--wait DUR] [--peek] [-n N] [--json]",
+		Use:   "read <room>|<id> --as NAME [--wait DUR] [--peek] [--limit N] [--json]",
 		Short: "read unread board messages for a participant",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -923,7 +923,7 @@ func newReadCmd() *cobra.Command {
 				return fmt.Errorf("meet: --wait cannot be negative")
 			}
 			if limit < 0 {
-				return fmt.Errorf("meet: -n cannot be negative")
+				return fmt.Errorf("meet: --limit cannot be negative")
 			}
 			st, err := roomOf(args[0])
 			if err != nil {
@@ -956,7 +956,7 @@ func newReadCmd() *cobra.Command {
 				writeEvent(w, e, jsonOut)
 			}
 			if older > 0 && !jsonOut {
-				fmt.Fprintf(cmd.ErrOrStderr(), "%d older broadcast event(s) hidden by -n\n", older)
+				fmt.Fprintf(cmd.ErrOrStderr(), "%d older broadcast event(s) hidden by --limit\n", older)
 			}
 			if !peek {
 				if err := MarkSeen(st.ID, reader); err != nil {

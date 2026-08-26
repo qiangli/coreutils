@@ -22,7 +22,7 @@ type PublishEnvelope struct {
 }
 
 func newPublishCmd() *cobra.Command {
-	var topic, to, roomID, principal, priority string
+	var topic, to, roomID, as, principalAlias, priority string
 	var jsonOut bool
 
 	cmd := &cobra.Command{
@@ -38,18 +38,24 @@ addressed by cannot be delivered to anyone:
   --to <id>      1:1 delivery to a session or role
   --room <id>    room-scoped publish
 
-Every publish must carry a principal (who sent it). Supply --principal, set
-$BASHY_PRINCIPAL, or $USER is used as the default. A publish with no principal is
+Every publish must carry an identity (who sent it). Supply --as, set
+$BASHY_PRINCIPAL, or $USER is used as the default. A publish with no identity is
 rejected — this is the REPORT/AUTHOR invariant: a notification nobody can be
 attributed to is not a notification.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			msg := strings.Join(args, " ")
 
-			who := resolvePrincipal(principal)
+			if cmd.Flags().Changed("principal") {
+				deprecatedFlagNotice(cmd, "--principal", "--as")
+				if as == "" {
+					as = principalAlias
+				}
+			}
+			who := resolvePrincipal(as)
 			if who == "" {
 				return publishErr(cmd, jsonOut,
-					"principal is required (REPORT/AUTHOR invariant): set --principal or $BASHY_PRINCIPAL",
+					"identity is required (REPORT/AUTHOR invariant): set --as or $BASHY_PRINCIPAL",
 					topic, roomID, to, msg)
 			}
 			// Addressing is enforced, not merely documented. An unaddressed
@@ -98,7 +104,9 @@ attributed to is not a notification.`,
 	f.StringVar(&topic, "topic", "", "topic to broadcast to")
 	f.StringVar(&to, "to", "", "recipient session or role (1:1)")
 	f.StringVar(&roomID, "room", "", "room ID for room-scoped publish")
-	f.StringVar(&principal, "principal", "", "sender principal (who is publishing)")
+	f.StringVar(&as, "as", "", "sender identity (who is publishing)")
+	f.StringVar(&principalAlias, "principal", "", "hidden deprecated alias for --as")
+	_ = f.MarkHidden("principal")
 	f.StringVar(&priority, "priority", DeliveryQueued,
 		"delivery tier to REQUEST: queued (read at a turn boundary) | interrupt (break into a running turn). "+
 			"A subscriber decides whose interrupts it honours, so this is a request, not a guarantee")

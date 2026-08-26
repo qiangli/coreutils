@@ -62,8 +62,8 @@ watch shows every notification (--all makes that explicit, and is required in
 drain mode so a cursor is never advanced over messages you did not mean to
 claim).
 
-Drain position is per-subscriber, named by --as (default: your principal), so two
-agents draining the same topic each get their own copy.`,
+Drain position is per-reader identity, named by --as (default: your principal),
+so two agents draining the same topic each get their own copy.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			filter := eventFilter{topic: topic, to: to, room: roomID}
@@ -73,6 +73,9 @@ agents draining the same topic each get their own copy.`,
 			}
 			if wait > 0 && all {
 				return fmt.Errorf("watch: --wait cannot be combined with --all")
+			}
+			if cmd.Flags().Changed("poll") {
+				deprecatedFlagNotice(cmd, "--poll", "--interval")
 			}
 
 			if drain {
@@ -95,7 +98,7 @@ agents draining the same topic each get their own copy.`,
 	f.StringVar(&roomID, "room", "", "only notifications in this room")
 	f.BoolVar(&all, "all", false, "watch every notification (required when no filter is given)")
 	f.BoolVar(&drain, "drain", false, "print what you have not seen since your last drain, then exit")
-	f.StringVar(&as, "as", "", "subscriber name for the drain cursor (default: your principal)")
+	f.StringVar(&as, "as", "", "reader identity for the drain cursor (default: your principal)")
 	f.Int64Var(&since, "since", 0, "start after this sequence number (overrides the saved cursor)")
 	f.DurationVar(&interval, "interval", defaultPoll, "how often follow mode re-reads the timeline")
 	f.DurationVar(&interval, "poll", defaultPoll, "hidden alias for --interval")

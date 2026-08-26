@@ -57,7 +57,7 @@ func TestWatchWaitReturnsOnRelevantNotification(t *testing.T) {
 
 func TestWatchWaitReturnsBacklogImmediately(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "already waiting")
+	publish(t, "--topic", "build", "--as", "alice", "already waiting")
 	start := time.Now()
 
 	out, _, err := runBusWithContext(t, context.Background(), "watch", "--topic", "build", "--drain", "--as", "profile-b", "--wait", "2s")
@@ -120,6 +120,16 @@ func TestWatchIntervalFlagKeepsPollAsHiddenAlias(t *testing.T) {
 	}
 	if !poll.Hidden {
 		t.Fatal("--poll alias must be hidden")
+	}
+
+	isolate(t)
+	publish(t, "--topic", "build", "--as", "alice", "already waiting")
+	_, errOut, err := runBusWithContext(t, context.Background(), "watch", "--topic", "build", "--drain", "--as", "profile-b", "--poll", "10ms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "--poll is deprecated; use --interval") {
+		t.Fatalf("--poll alias did not print replacement notice: %q", errOut)
 	}
 }
 

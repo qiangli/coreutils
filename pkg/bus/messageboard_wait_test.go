@@ -92,8 +92,31 @@ func TestMessageBoardWaitHonorsCancellation(t *testing.T) {
 
 func TestMessageBoardWaitRejectsWholeHistory(t *testing.T) {
 	boardInTempHome(t)
-	_, _, err := runMessageBoard(t, context.Background(), "--as", "profile-b", "--all", "--wait", "1s")
-	if err == nil || !strings.Contains(err.Error(), "cannot be combined with --all") {
-		t.Fatalf("--all --wait returned %v", err)
+	_, _, err := runMessageBoard(t, context.Background(), "--as", "profile-b", "--history", "--wait", "1s")
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined with --history") {
+		t.Fatalf("--history --wait returned %v", err)
+	}
+}
+
+func TestMessageBoardAllIsHiddenDeprecatedHistoryAlias(t *testing.T) {
+	cmd := NewMessageBoardCmd()
+	flag := cmd.Flags().Lookup("all")
+	if flag == nil || !flag.Hidden {
+		t.Fatalf("--all alias must exist and be hidden, got %#v", flag)
+	}
+
+	boardInTempHome(t)
+	if err := PostMessage(Post{From: "sender", Body: "old post"}); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, err := runMessageBoard(t, context.Background(), "--as", "reader", "--all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "old post") {
+		t.Fatalf("--all alias did not show history:\n%s", out)
+	}
+	if !strings.Contains(errOut, "--all is deprecated; use --history") {
+		t.Fatalf("--all alias did not print replacement notice: %q", errOut)
 	}
 }
