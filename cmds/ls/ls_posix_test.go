@@ -600,6 +600,61 @@ func TestLsDoubleDashTerminatesOptions(t *testing.T) {
 	}
 }
 
+func TestLsDereferenceCommandLineSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(subdir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. With -ldH, it should show directory details ('d' type) and no target.
+	out, errb, code := runToolAt(t, dir, "-ldH", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ldH link = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "d") || strings.Contains(out, "->") {
+		t.Errorf("ls -ldH link expected directory type and no target arrow: %q", out)
+	}
+
+	// 2. With -ldL, same thing.
+	out, errb, code = runToolAt(t, dir, "-ldL", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ldL link = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "d") || strings.Contains(out, "->") {
+		t.Errorf("ls -ldL link expected directory type and no target arrow: %q", out)
+	}
+
+	// 3. With -ld, it should show symlink details ('l' type) and show the target.
+	out, errb, code = runToolAt(t, dir, "-ld", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ld link = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "l") || !strings.Contains(out, "->") {
+		t.Errorf("ls -ld link expected symlink type and target arrow: %q", out)
+	}
+
+	// 4. Test dangling symlink under -H. It should show 'l' type and show target.
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink("nonexistent", dangling); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runToolAt(t, dir, "-ldH", "dangling")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ldH dangling = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "l") || !strings.Contains(out, "->") {
+		t.Errorf("ls -ldH dangling expected symlink type and target arrow: %q", out)
+	}
+}
+
 func containsLine(lines []string, target string) bool {
 	for _, l := range lines {
 		if l == target {

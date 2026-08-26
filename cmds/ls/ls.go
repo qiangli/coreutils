@@ -479,9 +479,22 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		e := entry{name: op, path: full, info: fi}
 		isDir := fi.IsDir()
-		// GNU dereferences command-line symlinks to directories unless
-		// -d or -l asks about the link itself.
-		if !isDir && fi.Mode()&os.ModeSymlink != 0 && !opt.dirOnly && (!opt.long || deref || derefCL || derefCLDir) {
+		// Determine if we should dereference this command-line symlink.
+		shouldDeref := false
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if deref || derefCL {
+				shouldDeref = true
+			} else if !opt.dirOnly {
+				// By default, follow command-line symlinks that point to directories,
+				// unless -d (dirOnly) or -l (long) asks about the link itself.
+				if !opt.long || derefCLDir {
+					if ti, terr := os.Stat(full); terr == nil && ti.IsDir() {
+						shouldDeref = true
+					}
+				}
+			}
+		}
+		if shouldDeref {
 			if ti, terr := os.Stat(full); terr == nil {
 				isDir = ti.IsDir()
 				e.info = ti
@@ -492,7 +505,7 @@ func run(rc *tool.RunContext, args []string) int {
 			dirs = append(dirs, e)
 			continue
 		}
-		if opt.long && fi.Mode()&os.ModeSymlink != 0 && !deref && !derefCL {
+		if opt.long && e.info.Mode()&os.ModeSymlink != 0 {
 			e.target, _ = os.Readlink(full)
 		}
 		files = append(files, e)
