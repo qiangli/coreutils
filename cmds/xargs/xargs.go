@@ -50,11 +50,12 @@ type options struct {
 	maxProcs    int
 	eof         string
 	delim       string // raw -d value (pre-unescape); "" = unset
-	posix       bool
+	strictSize  bool   // POSIX -s requires generated length to be strictly less
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	o := options{maxArgs: -1, maxProcs: 1, posix: envPresent(rc.Env, "POSIXLY_CORRECT")}
+	posixMode := envPresent(rc.Env, "POSIXLY_CORRECT")
+	o := options{maxArgs: -1, maxProcs: 1}
 	args = expandShortOptionClusters(args)
 
 	// Hand-parse xargs options up to the first non-flag (the command), so the
@@ -78,42 +79,24 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		switch {
 		case a == "-0" || a == "--null":
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.null = true
 		case a == "-r" || a == "--no-run-if-empty":
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.noRunEmpty = true
 		case a == "-t" || a == "--verbose":
-			if o.posix && strings.HasPrefix(a, "--") {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.trace = true
 		case a == "-p" || a == "--interactive":
-			if o.posix && strings.HasPrefix(a, "--") {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.interactive = true
 			o.trace = true
 		case a == "-n" || a == "--max-args":
-			if o.posix && strings.HasPrefix(a, "--") {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			v, ok := val()
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
-			o.maxArgs, o.maxLines, o.replace = atoiOr(v), 0, ""
+			o.maxArgs, o.maxLines, o.replace, o.replaceSet = atoiOr(v), 0, "", false
 		case strings.HasPrefix(a, "--max-args="):
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
-			o.maxArgs, o.maxLines, o.replace = atoiOr(a[len("--max-args="):]), 0, ""
+			o.maxArgs, o.maxLines, o.replace, o.replaceSet = atoiOr(a[len("--max-args="):]), 0, "", false
 		case strings.HasPrefix(a, "-n") && len(a) > 2:
-			o.maxArgs, o.maxLines, o.replace = atoiOr(a[2:]), 0, ""
+			o.maxArgs, o.maxLines, o.replace, o.replaceSet = atoiOr(a[2:]), 0, "", false
 		case a == "-L":
 			v, ok := val()
 			if !ok {
@@ -123,34 +106,35 @@ func run(rc *tool.RunContext, args []string) int {
 			if n < 1 {
 				return tool.UsageError(rc, cmd, "-L requires a positive number")
 			}
-			o.maxLines, o.maxArgs, o.replace = n, -1, ""
+			o.maxLines, o.maxArgs, o.replace, o.replaceSet = n, -1, "", false
 		case strings.HasPrefix(a, "-L") && len(a) > 2:
 			n := atoiOr(a[2:])
 			if n < 1 {
 				return tool.UsageError(rc, cmd, "-L requires a positive number")
 			}
-			o.maxLines, o.maxArgs, o.replace = n, -1, ""
+			o.maxLines, o.maxArgs, o.replace, o.replaceSet = n, -1, "", false
 		case a == "-s":
 			v, ok := val()
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
 			o.maxChars = atoiOr(v)
+			o.strictSize = posixMode
 		case strings.HasPrefix(a, "-s") && len(a) > 2:
 			o.maxChars = atoiOr(a[2:])
+			o.strictSize = posixMode
 		case a == "-x":
 			o.exactSize = true
-		case a == "-I" || a == "--replace" || a == "-i":
-			if o.posix && a == "-i" {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
-			if o.posix && a == "--replace" {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
+		case a == "-I":
 			if v, ok := val(); ok {
 				o.replace, o.replaceSet, o.maxArgs, o.maxLines = v, true, -1, 1
-			} else if o.posix {
+			} else {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
+			}
+			o.exactSize = true
+		case a == "--replace" || a == "-i":
+			if v, ok := val(); ok {
+				o.replace, o.replaceSet, o.maxArgs, o.maxLines = v, true, -1, 1
 			} else {
 				o.replace, o.replaceSet, o.maxArgs, o.maxLines = "{}", true, -1, 1
 			}
@@ -159,64 +143,41 @@ func run(rc *tool.RunContext, args []string) int {
 			o.replace, o.replaceSet, o.maxArgs, o.maxLines = a[2:], true, -1, 1
 			o.exactSize = true
 		case strings.HasPrefix(a, "--replace="):
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.replace, o.replaceSet, o.maxArgs, o.maxLines = a[len("--replace="):], true, -1, 1
 			o.exactSize = true
 		case a == "-P" || a == "--max-procs":
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			v, ok := val()
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
 			o.maxProcs = atoiOr(v)
 		case strings.HasPrefix(a, "-P") && len(a) > 2:
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.maxProcs = atoiOr(a[2:])
-		case a == "-E" || a == "--eof":
-			if o.posix && a == "--eof" {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
+		case a == "-E":
+			v, ok := val()
+			if !ok {
+				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
+			o.eof = v
+		case a == "--eof":
 			if v, ok := val(); ok {
 				o.eof = v
-			} else if o.posix {
-				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
 		case strings.HasPrefix(a, "-E") && len(a) > 2:
 			o.eof = a[2:]
 		case strings.HasPrefix(a, "--eof="):
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.eof = a[len("--eof="):]
 		case strings.HasPrefix(a, "-e"): // GNU deprecated alias for -E[str]
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.eof = a[2:]
 		case a == "-d" || a == "--delimiter":
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			v, ok := val()
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
 			o.delim = v
 		case strings.HasPrefix(a, "-d") && len(a) > 2:
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.delim = a[2:]
 		case strings.HasPrefix(a, "--delimiter="):
-			if o.posix {
-				return tool.UsageError(rc, cmd, "option %s is not supported in POSIX mode", a)
-			}
 			o.delim = a[len("--delimiter="):]
 		default:
 			return tool.UsageError(rc, cmd, "unknown option %q", a)
@@ -234,7 +195,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if o.maxProcs == -2 {
 		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
 	}
-	if o.maxProcs < 0 && o.maxProcs != 1 {
+	if o.maxProcs < 0 {
 		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
 	}
 
@@ -253,6 +214,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	} else if o.maxChars > maxSupported {
 		o.maxChars = maxSupported
+		// The automatic ARG_MAX-2048 ceiling permits equality. If that
+		// ceiling, rather than the explicit -s operand, is the binding
+		// constraint, do not apply -s's strict-less-than comparison to it.
+		o.strictSize = false
 	}
 
 	command := args[i:]
@@ -632,7 +597,7 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 	if o.replaceSet || o.replace != "" {
 		replacementArgs := 0
 		for _, a := range command[1:] {
-			if strings.Contains(a, o.replace) {
+			if o.replace != "" && strings.Contains(a, o.replace) {
 				replacementArgs++
 			}
 		}
@@ -647,7 +612,7 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 				if o.replace != "" {
 					argv[k] = strings.ReplaceAll(a, o.replace, it.value)
 				}
-				if strings.Contains(a, o.replace) && len(argv[k]) > 255 {
+				if o.replace != "" && strings.Contains(a, o.replace) && len(argv[k]) > 255 {
 					return nil, fmt.Errorf("constructed argument exceeds 255 bytes")
 				}
 			}
@@ -689,7 +654,7 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 			}
 			itemSize := len(it.value) + 1
 			tooLarge := size+itemSize > o.maxChars
-			if o.posix {
+			if o.strictSize {
 				tooLarge = size+itemSize >= o.maxChars
 			}
 			if tooLarge {
@@ -727,7 +692,7 @@ func sizeLimitExceeded(size int, o options) bool {
 	if o.maxChars <= 0 {
 		return false
 	}
-	if o.posix {
+	if o.strictSize {
 		return size >= o.maxChars
 	}
 	return size > o.maxChars
