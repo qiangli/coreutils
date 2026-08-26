@@ -222,7 +222,25 @@ func GetFlagSet(name string) *pflag.FlagSet {
 	return fs
 }
 
-func run(rc *tool.RunContext, args []string) int {
+func run(rc *tool.RunContext, args []string) (code int) {
+	// Every output path, including framework-owned --help/--version output,
+	// goes through one sticky writer. Most formatting below deliberately uses
+	// small streaming writes; centralizing the check preserves that order while
+	// ensuring an ignored fmt result can never turn a failed stdout into status
+	// zero.
+	out := &checkedOutputWriter{dst: rc.Out}
+	invocation := *rc
+	invocation.Out = out
+	rc = &invocation
+	defer func() {
+		if err := out.Err(); err != nil {
+			fmt.Fprintf(rc.Err, "ls: write error: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}()
+
 	// -l, -t, -S, -1 have no GNU long form: pre-parse them out of the
 	// short-flag clusters before pflag sees the args.
 	fs := GetFlagSet(cmd.Name)
@@ -530,6 +548,32 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	return l.exit
 }
+
+// checkedOutputWriter retains the first stdout failure and suppresses later
+// writes. Suppression matters for recursive listings: after a broken pipe or
+// full destination, traversal may still discover independent input errors,
+// but it must neither keep hammering the failed sink nor diagnose it once per
+// directory. A nil-error short write is normalized to io.ErrShortWrite.
+type checkedOutputWriter struct {
+	dst io.Writer
+	err error
+}
+
+func (w *checkedOutputWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return len(p), nil
+	}
+	n, err := w.dst.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func (w *checkedOutputWriter) Err() error { return w.err }
 
 type lister struct {
 	rc    *tool.RunContext
