@@ -3,6 +3,7 @@ package sleepcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,48 @@ func TestSleepCancel(t *testing.T) {
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Error("cancelled sleep did not return promptly")
+	}
+}
+
+// TestSleepEndOfOptions pins the "--" Utility Syntax Guideline 10 special
+// token. POSIX sleep defines no options, so "--" merely ends option
+// parsing: a "--" before a valid time still sleeps, and a "--" before an
+// option-like operand routes it to time-operand parsing (where a negative
+// value is an invalid interval), never to flag parsing.
+func TestSleepEndOfOptions(t *testing.T) {
+	// "--" then a valid zero time: clean, immediate success.
+	out, errb, code := runTool(t, context.Background(), "--", "0")
+	if code != 0 || out != "" || errb != "" {
+		t.Errorf(`sleep -- 0 = (%q, %q, %d), want clean 0`, out, errb, code)
+	}
+	// "--" then an option-like operand: parsed as a (negative) time interval.
+	_, errb, code = runTool(t, context.Background(), "--", "-1")
+	if code != 2 || !strings.Contains(errb, "invalid time interval") {
+		t.Errorf(`sleep -- -1 = (%q, %d), want invalid-interval usage error`, errb, code)
+	}
+}
+
+// panicReader fails the test if standard input is ever read: POSIX sleep
+// does not use stdin.
+type panicReader struct{ t *testing.T }
+
+func (r panicReader) Read([]byte) (int, error) {
+	r.t.Helper()
+	r.t.Fatal("sleep must not read standard input")
+	return 0, io.EOF
+}
+
+// TestSleepDoesNotConsumeStdin pins the STDIN clause ("Not used.") across
+// a successful suspension and a usage-error run.
+func TestSleepDoesNotConsumeStdin(t *testing.T) {
+	for _, args := range [][]string{{"0"}, {"abc"}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   t.TempDir(),
+			Stdio: tool.Stdio{In: panicReader{t}, Out: &out, Err: &errb},
+		}
+		cmd.Run(rc, args)
 	}
 }
 

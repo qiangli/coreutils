@@ -296,7 +296,7 @@ basename string [suffix]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/basename`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/basename/basename_test.go#TestBasename;cmds/basename/basename_test.go#TestBasenameErrors;cmds/basename/basename_test.go#TestBasenameWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/basename/basename_test.go#TestBasename;cmds/basename/basename_test.go#TestBasenameErrors;cmds/basename/basename_test.go#TestBasenameWriteErrors;cmds/basename/basename_test.go#TestBasenameEndOfOptions;cmds/basename/basename_test.go#TestBasenameByteSafety;cmds/basename/basename_test.go#TestBasenameDoesNotConsumeStdin`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [basename](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/basename.html).
 
@@ -1363,7 +1363,7 @@ dirname string
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/dirname`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/dirname/dirname_test.go#TestDirname;cmds/dirname/dirname_test.go#TestDirnamePOSIXSingleOperandByteSafety;cmds/dirname/dirname_test.go#TestDirnameErrors;cmds/dirname/dirname_test.go#TestDirnameWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/dirname/dirname_test.go#TestDirname;cmds/dirname/dirname_test.go#TestDirnamePOSIXSingleOperandByteSafety;cmds/dirname/dirname_test.go#TestDirnameErrors;cmds/dirname/dirname_test.go#TestDirnameWriteErrors;cmds/dirname/dirname_test.go#TestDirnameDoesNotConsumeStdin`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [dirname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dirname.html).
 
@@ -4228,7 +4228,7 @@ sleep time
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sleep`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/sleep/sleep_test.go#TestSleepZeroish;cmds/sleep/sleep_test.go#TestSleepIssue7IntegralDuration;cmds/sleep/sleep_test.go#TestSleepErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/sleep/sleep_test.go#TestSleepZeroish;cmds/sleep/sleep_test.go#TestSleepIssue7IntegralDuration;cmds/sleep/sleep_test.go#TestSleepErrors;cmds/sleep/sleep_test.go#TestSleepEndOfOptions;cmds/sleep/sleep_test.go#TestSleepDoesNotConsumeStdin;cmds/sleep/sleep_test.go#TestSleepCancel;cmds/sleep/sleep_test.go#TestSleepSuffixMath;cmds/sleep/sleep_signal_unix_test.go#TestSleepSIGALRMPermittedDisposition;cmds/sleep/sleep_signal_unix_test.go#TestSleepSIGTERMStandardAction`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [sleep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sleep.html).
 
