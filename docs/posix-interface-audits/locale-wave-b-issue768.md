@@ -92,7 +92,21 @@ locale fails closed with exit 2 before consuming operands). The same comparator
 backs both join equality and the sorted-order check, so they stay consistent.
 As GNU join does (keycmp uses `memcasecmp`, not `xmemcoll`, when `ignore_case`
 is set), `-i` selects a case-insensitive comparison rather than a collating one
-and stays on the byte path.
+and stays off the collator; its case folding follows `LC_CTYPE` (see the second
+fix below).
+
+Second confirmed Bashy-owned defect fixed (`cmds/join/join.go`,
+`cmds/join/ctype.go` new): `-i` folded ASCII case only, so under a non-C
+`LC_CTYPE` the locale's high-byte letter pairs (`Ä`/`ä`) did not fold equal and
+join failed to pair lines that GNU's `memcasecmp` pairs. Fix: when `-i` is set
+and `LC_CTYPE` names a supported non-C locale, a 256-entry uppercase fold table
+is snapshotted from the invocation-owned `pkg/ctype` provider (via a
+`ctypeOpener` seam resolved before any input is opened, failing closed with
+exit 2 on an unopenable/unsupported provider) and the provider is closed
+immediately; `compareKeys` folds through that table instead of ASCII
+`upperByte`. Folding to uppercase (not GNU's lowercase) keeps the fold
+direction identical to the C-locale ASCII path; the load-bearing requirement —
+case variants fold equal — holds either way.
 
 Test IDs (`cmds/join/collate_test.go`, new):
 
@@ -110,17 +124,27 @@ Test IDs (`cmds/join/collate_test.go`, new):
   exits 1 with a diagnostic and closes the provider rather than emitting a
   silently misordered result.
 
-Residuals (recorded, not fixed): (a) `-i` folds ASCII case only; GNU's
-`memcasecmp` folds per `LC_CTYPE`, so `Ä/ä` do not fold under `-i` in a de_DE
-locale — closing this needs an `LC_CTYPE` `ToLower` seam (`pkg/ctype`,
-snapshot-table shape) inside `cmds/join`, no shared-provider change. (b) The
-blank class for default field splitting is `LC_CTYPE`-defined; in the bounded
-`C`/de_DE.ISO-8859-1 corpus the blank class is exactly space+tab, so no
-observable behavior is missing there.
+`-i` `LC_CTYPE` fold test IDs (`cmds/join/ctype_test.go`, new):
+
+- `TestJoinLCCTypeFoldsHighByteForIgnoreCase` — `Ä`(0xC4) and `ä`(0xE4) pair
+  under `-i` in a de_DE `LC_CTYPE`; the provider is opened once and closed after
+  snapshot.
+- `TestJoinLCCTypeCKeepsASCIIFold` — under `LC_CTYPE=C`, `-i` folds ASCII only
+  (`A`/`a` pair, `Ä`/`ä` do not) and opens no provider.
+- `TestJoinLCCTypeOpenFailureFailsClosed` — an unopenable provider under `-i`
+  exits 2 before any operand is read.
+- `TestJoinLCCTypeSnapshotFailure` — a `ToUpper` failure during snapshot exits 2
+  and still closes the provider.
+- `TestJoinWithoutIgnoreCaseNeverOpensCtype` — a plain byte-order run under a
+  non-C `LC_CTYPE` never opens the provider.
+
+Residual (recorded, not fixed): the blank class for default field splitting is
+`LC_CTYPE`-defined; in the bounded `C`/de_DE.ISO-8859-1 corpus the blank class
+is exactly space+tab, so no observable behavior is missing there.
 
 Source-complete eligibility: **eligible (implemented)** for the bounded non-C
-`LC_COLLATE` field-comparison product; `-i` locale case-folding is an explicit
-residual above. Integration verification is manager/harness-owned.
+`LC_COLLATE` field-comparison and `-i` `LC_CTYPE` case-folding products.
+Integration verification is manager/harness-owned.
 
 ---
 
@@ -159,10 +183,11 @@ manager/harness-owned.
 
 Clause/source: POSIX Issue 7 `sort` ENVIRONMENT VARIABLES (`LC_COLLATE`
 collating order; `LC_NUMERIC` radix/thousands for `-n`; `LC_CTYPE` case for
-`-f` and character classes for `-d`/`-i`). No code change: the two mandatory
-non-C products are already implemented and discriminatingly tested.
+`-f` and character classes for `-d`/`-i`). `LC_COLLATE` and `LC_NUMERIC` were
+already implemented and discriminatingly tested; this sprint closes the
+`LC_CTYPE` half.
 
-Existing test IDs verified adequate:
+`LC_COLLATE`/`LC_NUMERIC` test IDs verified adequate (unchanged):
 
 - `LC_COLLATE` ordering — `cmds/sort/collator_test.go`:
   `TestRunWithCollatorOrdersTextualComparisons`, `TestRunWithCollatorMerge`,
@@ -174,20 +199,40 @@ Existing test IDs verified adequate:
   (de_DE comma decimal and dot thousands under `-n`, plus LC_ALL/LC_NUMERIC/LANG
   precedence).
 
-Residual (recorded, not fixed): `-f`/`-d`/`-i` normalize keys with ASCII-only
-byte tables (`normalizeTextKey` in `cmds/sort/compare.go`), so under a non-C
-`LC_CTYPE` `-f` does not fold `Ä/ä` to equal and `-d`/`-i` classify only ASCII.
-Closing this needs an `LC_CTYPE` provider seam inside `cmds/sort` that snapshots
-256-entry fold/`IsAlnum`/`IsBlank`/`IsPrint` tables at init (the `cmds/sed`
-shape) so the hot comparison path stays table-driven; it is a `cmds/sort`-local
-change, not a shared-provider change. No limitation-locking test is added, per
-the sprint's prohibition. The observable effect is confined to `-f`-equality and
-`-d`/`-i` filtering of high-byte letters; `LC_COLLATE` ordering already places
-case/umlaut variants adjacently.
+Confirmed Bashy-owned defect fixed (`cmds/sort/sort.go`, `cmds/sort/ctype.go`
+new): `-f`/`-d`/`-i` normalized keys with ASCII-only byte tables
+(`normalizeTextKey` in `cmds/sort/compare.go`), so under a non-C `LC_CTYPE`
+`-f` did not fold `Ä/ä` to equal and `-d`/`-i` classified only ASCII. Fix: when
+an active key uses `-f`/`-d`/`-i` and `LC_CTYPE` names a supported non-C locale,
+sort snapshots 256-entry `fold`/`IsAlnum`/`IsBlank`/`IsPrint` tables from the
+invocation-owned `pkg/ctype` provider (via a `ctypeOpener` seam resolved after
+key validation, failing closed with exit 2 on an unopenable/unsupported
+provider) and closes the provider immediately; `normalizeTextKey` then routes
+through the immutable snapshot so the hot comparison path stays table-driven
+(the `cmds/sed` shape). C/POSIX and any key that uses none of `-f`/`-d`/`-i`
+never open the provider. Folding to uppercase matches the prior ASCII direction.
+
+Test IDs (`cmds/sort/ctype_test.go`, new):
+
+- `TestSortLCCTypeFoldsHighByteLetters` — `-f -u` folds `Ä/ä` equal and collapses
+  the pair.
+- `TestSortLCCTypeFoldOrdersAcrossCase` — the folded key drives order, not just
+  equality.
+- `TestSortLCCTypeDictKeepsHighByteAlnum` — `-d` keeps the locale's high-byte
+  alphanumerics while dropping punctuation.
+- `TestSortLCCTypeIgnoreNPDropsNonPrint` — `-i` drops a locale-non-printing C1
+  byte and treats the remaining keys as equal.
+- `TestSortLCCTypeUnsupportedFailsClosed` / `TestSortLCCTypeSnapshotFailurePrecedesOutput`
+  — open and snapshot failures exit 2 with no output, closing the provider.
+- `TestSortCPOSIXNeverOpensCtype` / `TestSortNoTextKeyNeverOpensCtype` — C/POSIX
+  and non-classifying runs never open the provider (ASCII fold retained).
+
+Residual (recorded, not fixed): none for the bounded `C`/de_DE.ISO-8859-1
+corpus.
 
 Source-complete eligibility: **eligible (implemented)** for the mandatory non-C
-`LC_COLLATE` and `LC_NUMERIC` products; the `-f`/`-d`/`-i` `LC_CTYPE` refinement
-is an explicit residual above. Integration verification is manager/harness-owned.
+`LC_COLLATE`, `LC_NUMERIC`, and `-f`/`-d`/`-i` `LC_CTYPE` products. Integration
+verification is manager/harness-owned.
 
 ---
 

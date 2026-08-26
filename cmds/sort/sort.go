@@ -24,6 +24,7 @@ import (
 	"unsafe"
 
 	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -53,20 +54,34 @@ type sorter struct {
 	zeroTerm    bool
 	merge       bool
 	collator    *collatorAdapter
+	ctype       *ctypeTables
 	decPt       byte
 	thousSep    byte
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithCollator(rc, args, func(name string) (stringCollator, error) {
+	return runWithProviders(rc, args, func(name string) (stringCollator, error) {
 		return collate.Open(name)
-	})
+	}, openCType)
 }
 
-// runWithCollator keeps collation setup invocation-local. Tests supply a fake
-// opener; production supplies collate.Open above. No provider state is shared
-// between sort invocations.
+// openCType is the production LC_CTYPE opener wired in run. It reaches the
+// shared invocation-owned pkg/ctype provider, which is fail-closed on the
+// unsupported platforms exactly as collate.Open is.
+func openCType(name string) (ctypeProvider, error) { return ctype.Open(name) }
+
+// runWithCollator keeps collation setup invocation-local. Tests that exercise
+// only the LC_COLLATE seam supply a fake collator opener; the LC_CTYPE seam
+// stays on the production opener (never reached unless a non-C LC_CTYPE and a
+// -f/-d/-i key coincide).
 func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOpener) int {
+	return runWithProviders(rc, args, openCollator, openCType)
+}
+
+// runWithProviders keeps both the LC_COLLATE and LC_CTYPE provider setups
+// invocation-local. Tests supply fake openers; production supplies collate.Open
+// and ctype.Open. No provider state is shared between sort invocations.
+func runWithProviders(rc *tool.RunContext, args []string, openCollator collatorOpener, openCtype ctypeOpener) int {
 	fs := tool.NewFlags(cmd.Name)
 	blanks := fs.BoolP("ignore-leading-blanks", "b", false, "ignore leading blanks")
 	check := fs.BoolP("check", "c", false, "check for sorted input; do not sort")
@@ -208,6 +223,30 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 				fmt.Fprintf(rc.Err, "sort: LC_NUMERIC=%s: not supported\n", name)
 				return 2
 			}
+		}
+	}
+	usesTextClass := false
+	for _, k := range s.keys {
+		usesTextClass = usesTextClass || k.opts.fold || k.opts.dict || k.opts.ignoreNP
+	}
+	if usesTextClass {
+		if name := locale.Resolve(rc.Env, locale.CType); name != "C" && name != "POSIX" {
+			provider, err := openCtype(name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "sort: LC_CTYPE=%s: %v\n", name, err)
+				return 2
+			}
+			tables, snapErr := snapshotCtypeTables(provider)
+			closeErr := provider.Close()
+			if snapErr != nil {
+				fmt.Fprintf(rc.Err, "sort: LC_CTYPE=%s: %v\n", name, snapErr)
+				return 2
+			}
+			if closeErr != nil {
+				fmt.Fprintf(rc.Err, "sort: LC_CTYPE=%s: %v\n", name, closeErr)
+				return 2
+			}
+			s.ctype = tables
 		}
 	}
 
@@ -484,9 +523,19 @@ func (s *sorter) textCompare(a, b string) int {
 
 func (s *sorter) textKeyCompare(a, b string, o keyOpts) int {
 	if o.dict || o.ignoreNP || o.fold {
-		a, b = normalizeTextKey(a, o), normalizeTextKey(b, o)
+		a, b = s.normalizeTextKey(a, o), s.normalizeTextKey(b, o)
 	}
 	return s.textCompare(a, b)
+}
+
+// normalizeTextKey applies the -d/-i/-f transforms using the invocation's
+// LC_CTYPE snapshot when one is active, and the ASCII byte tables otherwise
+// (the correct classes for the C/POSIX locale).
+func (s *sorter) normalizeTextKey(str string, o keyOpts) string {
+	if s.ctype != nil {
+		return s.ctype.normalize(str, o)
+	}
+	return normalizeTextKey(str, o)
 }
 
 func (s *sorter) collationErr() error {
