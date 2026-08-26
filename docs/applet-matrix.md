@@ -56,7 +56,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `bc` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `browser` | `cmds/browser` | — | Bashy/other extension | no | no | 1 | 9 |
 | `cal` | `cmds/cal` | — | Bashy/other extension | no | no | 1 | 6 |
-| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 3 | 11 |
+| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 3 | 12 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 4 | 38 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 5 | 36 |
@@ -211,7 +211,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
 | `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 5 | 83 |
-| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 42 |
+| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 45 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 

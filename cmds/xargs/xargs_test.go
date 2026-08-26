@@ -273,6 +273,52 @@ func TestXargsReplaceIssue7Limits(t *testing.T) {
 	}
 }
 
+func TestXargsPOSIXModeIsInvocationLocal(t *testing.T) {
+	for _, extension := range []string{"-0", "-r", "-P", "-d"} {
+		args := []string{extension}
+		if extension == "-P" || extension == "-d" {
+			args = append(args, "2")
+		}
+		args = append(args, "echo")
+		_, errOut, code := runXargsEnv(t, t.TempDir(), []string{"POSIXLY_CORRECT=", "PATH=/bin:/usr/bin"}, "x\n", args...)
+		if code == 0 || !strings.Contains(errOut, "not supported in POSIX mode") {
+			t.Fatalf("POSIX extension %v: code=%d stderr=%q", extension, code, errOut)
+		}
+	}
+	// The same extensions remain available when POSIXLY_CORRECT is absent.
+	if out, _, code := runXargsEnv(t, t.TempDir(), []string{"PATH=/bin:/usr/bin"}, "a\x00b\x00", "-0", "echo"); code != 0 || out != "a b\n" {
+		t.Fatalf("non-POSIX -0: code=%d output=%q", code, out)
+	}
+}
+
+func TestXargsPOSIXEmptyReplacementAndStrictSize(t *testing.T) {
+	out, errOut, code := runXargsEnv(t, t.TempDir(), []string{"POSIXLY_CORRECT=", "PATH=/bin:/usr/bin"}, "x\n", "-I", "", "echo", "pre{}post")
+	if code != 0 || errOut != "" || out != "pre{}post\n" {
+		t.Fatalf("empty POSIX replacement: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	_, errOut, code = runXargsEnv(t, t.TempDir(), []string{"POSIXLY_CORRECT=", "PATH=/bin:/usr/bin"}, "a\n", "-s", "7", "echo")
+	if code == 0 || !strings.Contains(errOut, "size") {
+		t.Fatalf("POSIX strict -s boundary: code=%d stderr=%q", code, errOut)
+	}
+	if out, _, code := runXargsEnv(t, t.TempDir(), []string{"PATH=/bin:/usr/bin"}, "a\n", "-s", "7", "echo"); code != 0 || out != "a\n" {
+		t.Fatalf("non-POSIX inclusive -s boundary: code=%d output=%q", code, out)
+	}
+}
+
+func TestXargsChildEnvironmentAndTerminalStatuses(t *testing.T) {
+	env := []string{"PATH=/bin:/usr/bin", "LC_ALL=C", "POSIXLY_CORRECT="}
+	out, _, code := runXargsEnv(t, t.TempDir(), env, "x\n", "sh", "-c", "printf '%s\\n' \"$LC_ALL\"", "sh")
+	if code != 0 || out != "C\n" {
+		t.Fatalf("child environment: code=%d output=%q", code, out)
+	}
+	if _, errOut, code := runXargsEnv(t, t.TempDir(), env, "x y\n", "-n1", "sh", "-c", "exit 255"); code < 1 || code > 125 || !strings.Contains(errOut, "255") {
+		t.Fatalf("child 255: code=%d stderr=%q", code, errOut)
+	}
+	if _, _, code := runXargsEnv(t, t.TempDir(), env, "x\n", "sh", "-c", "kill -TERM $$"); code < 1 || code > 125 {
+		t.Fatalf("child signal: code=%d, want 1..125", code)
+	}
+}
+
 func TestXargsReplaceAppliesOnlyToArgumentOperands(t *testing.T) {
 	command := []string{"utility{}", "{}", "pre{}", "{}post", "x{}y", "{}"}
 	batches, err := plan(command, []inputItem{{value: "item", line: 1}}, options{replace: "{}", maxChars: 1024})
