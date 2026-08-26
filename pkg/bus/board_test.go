@@ -12,6 +12,16 @@ func boardInTempHome(t *testing.T) {
 	t.Setenv("BASHY_MB_DIR", t.TempDir())
 	t.Setenv("BASHY_PRINCIPAL", "")
 	t.Setenv("USER", "tester")
+	// ResolveSendTarget's resolver fallback reads the fleet catalog and the
+	// observation stores; point all of them at empty temp dirs so no test
+	// resolves (or fails to resolve) against the operator's real host state.
+	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_AGENTS_DIR", "")
+	t.Setenv("BASHY_PEOPLE_DIR", "")
+	t.Setenv("BASHY_AGENTS_PATH", "")
+	t.Setenv("BASHY_PEOPLE_PATH", "")
 }
 
 // THE BUG THIS STORE FIXES. Posts are addressed to the FLEET NAME, but a

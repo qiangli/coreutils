@@ -91,6 +91,11 @@ func (r *Resolver) Resolve(query string) Answer {
 			ans.Matches = append(ans.Matches, res)
 		}
 	}
+	// Roles first: the addresser resolves a role before anything else, and
+	// whois answering "the same question the same way" includes precedence.
+	// A name that is both a role and something else still surfaces as
+	// ambiguity — try collects, it never short-circuits.
+	try(KindRole, r.resolveRole)
 	try(KindAgent, r.resolveAgent)
 	try(KindTool, r.resolveTool)
 	try(KindModel, r.resolveModel)
@@ -249,7 +254,11 @@ func (r *Resolver) resolveModel(name string) (Resolution, bool) {
 func (r *Resolver) resolvePerson(name string) (Resolution, bool) {
 	p, ok := r.cat.Person(name)
 	if !ok {
-		return Resolution{}, false
+		// The catalog does not know the person at the keyboard on most
+		// hosts, but the OS does: the login name resolves as a person with
+		// a real reach ladder (see operator.go). Without this, the resolver
+		// has no fallback relay at all.
+		return r.resolveOSUser(name)
 	}
 	res := Resolution{
 		URN: URN(KindPerson, p.Handle, p.Email), Kind: KindPerson, Name: p.Handle,
@@ -276,9 +285,29 @@ func (r *Resolver) resolvePerson(name string) (Resolution, bool) {
 		Method: "mention", Address: "@" + p.Handle,
 		Source: "fleet", Confidence: Declared, Live: true, Cost: 1,
 	})
+	// A cataloged person who is the operator of THIS host gets the local
+	// reach ladder too: an attended `bashy ask` prompt, and `write` to a
+	// logged-in tty when the login db shows one.
+	if account, ok := personLocalAccount(r.env, p); ok {
+		cs = append(cs, operatorContacts(r.env, account)...)
+	}
 	rankContacts(cs)
 	res.Contacts = cs
 	return res, true
+}
+
+// personLocalAccount reports the account name a cataloged person holds on
+// this machine, if the catalog or the environment ties them to it.
+func personLocalAccount(env Env, p fleet.Person) (string, bool) {
+	if u, known := p.OSUserFor(env.Hostname); known && env.LocalUser != "" && strings.EqualFold(u, env.LocalUser) {
+		return u, true
+	}
+	for _, n := range p.Names() {
+		if isLocalOperator(env, n) {
+			return env.LocalUser, true
+		}
+	}
+	return "", false
 }
 
 func (r *Resolver) resolveHost(name string) (Resolution, bool) {

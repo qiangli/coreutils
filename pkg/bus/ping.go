@@ -124,11 +124,14 @@ func pingBareTarget(cmd *cobra.Command, target string) error {
 	return icmp(cmd, target)
 }
 
-// pingSend posts to the board. The target is resolved AT SEND TIME: a role to
-// its seat's stable address, an agent to its roster name, an existing reader to
-// itself — and a target matching none of the three fails with choices, writing
-// nothing. A confirmation that named a recipient the board has never heard of
-// was indistinguishable from a real delivery, which is the defect this closes.
+// pingSend posts to the board. The target is resolved AT SEND TIME through
+// the one resolution ladder ResolveSendTarget owns: a role to its seat's
+// stable address, an agent to its roster name, an existing reader to itself,
+// and past those the host resolver — the same authority `whois` answers from
+// — so a person or observed seat whois knows is sendable here too. A target
+// matching nothing anywhere fails with choices, writing nothing: a
+// confirmation that named a recipient the board has never heard of was
+// indistinguishable from a real delivery, which is the defect this closes.
 func pingSend(cmd *cobra.Command, as, target, body string) error {
 	from, err := BoardIdentity(as)
 	if err != nil {

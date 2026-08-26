@@ -16,6 +16,15 @@ func isolate(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("BASHY_ROOM_DIR", dir)
 	t.Setenv("BASHY_PRINCIPAL", "tester")
+	// The send path's resolver fallback (resolveprincipal.go) reads the
+	// fleet catalog and the observation stores; keep them hermetic.
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	t.Setenv("BASHY_AGENTS_DIR", "")
+	t.Setenv("BASHY_PEOPLE_DIR", "")
+	t.Setenv("BASHY_AGENTS_PATH", "")
+	t.Setenv("BASHY_PEOPLE_PATH", "")
 	return dir
 }
 

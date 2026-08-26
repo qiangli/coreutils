@@ -32,6 +32,15 @@ func board(t *testing.T) string {
 	t.Setenv("BASHY_MB_DIR", dir)
 	t.Setenv("BASHY_PRINCIPAL", "")
 	t.Setenv("USER", "tester")
+	// The send path's resolver fallback reads the fleet catalog and the
+	// observation stores; keep those hermetic too.
+	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_AGENTS_DIR", "")
+	t.Setenv("BASHY_PEOPLE_DIR", "")
+	t.Setenv("BASHY_AGENTS_PATH", "")
+	t.Setenv("BASHY_PEOPLE_PATH", "")
 	return dir
 }
 

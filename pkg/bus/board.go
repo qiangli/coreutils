@@ -739,6 +739,11 @@ const (
 	TargetRole   = "role"
 	TargetAgent  = "agent"
 	TargetReader = "reader"
+	// TargetPerson is a human the resolver vouches for — a people-catalog
+	// entry or the OS login — reached through the resolver fallback. A
+	// person is a per-reader recipient exactly like an agent: their cursor,
+	// if any, is what the receipt judges.
+	TargetPerson = "person"
 )
 
 // ResolveSendTarget resolves a target a sender typed to a routable address, AT
@@ -752,10 +757,17 @@ const (
 //	READER  a name with a cursor — it has read the board at least once, so it is
 //	        demonstrably a participant even if the roster does not know it
 //
-// A target matching none of these resolves to nothing, and the caller reports
-// failed with near misses rather than posting into the void. This is the Yoke
-// rule that an unresolvable identity must "fail with choices instead of
-// guessing".
+// When all three miss, the HOST RESOLVER gets the last word — the same
+// authority `whois` answers from, consulted through its cheap, probe-free
+// lookup (see resolveprincipal.go). That is what keeps the addresser and the
+// resolver agreeing about every name on the host: a person the people
+// catalog knows, the OS login, or a seat observed in a meet roster is
+// sendable here precisely because whois resolves it.
+//
+// A target matching nothing anywhere resolves to nothing, and the caller
+// reports failed with near misses rather than posting into the void. This is
+// the Yoke rule that an unresolvable identity must "fail with choices
+// instead of guessing".
 func ResolveSendTarget(target string) (addr, kind string, ok bool) {
 	t := strings.TrimSpace(target)
 	if t == "" {
@@ -770,7 +782,7 @@ func ResolveSendTarget(target string) (addr, kind string, ok bool) {
 	if _, has := CursorSeq(t); has {
 		return t, TargetReader, true
 	}
-	return "", "", false
+	return resolvePrincipalTarget(t)
 }
 
 // resolveAgentName reports whether target names an agent in the roster, and the
@@ -881,7 +893,7 @@ func NearMisses(target string, max int) []string {
 // the word `failed`, what was tried, the near misses, and the broadcast escape
 // hatch. Nothing is written before this is returned.
 func unresolvedTargetError(target string) error {
-	msg := fmt.Sprintf("failed: %q matches no role, agent, or board reader on this host — nothing was posted",
+	msg := fmt.Sprintf("failed: %q matches no role, agent, board reader, or resolvable principal on this host — nothing was posted",
 		strings.TrimSpace(target))
 	if nm := NearMisses(target, 5); len(nm) > 0 {
 		msg += "\n  did you mean: " + strings.Join(nm, ", ")
