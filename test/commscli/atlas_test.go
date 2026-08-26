@@ -16,7 +16,7 @@ import (
 // atlas. A verb that behaves but is not in the manifest is exactly one host
 // refactor away from becoming unreachable without any test noticing.
 func TestS80VerbsAreDeclaredInTheAtlas(t *testing.T) {
-	for _, v := range []string{"whois", "agent", "mb", "bus", "weave"} {
+	for _, v := range []string{"whois", "agent", "mb", "bus", "weave", "inbox", "notify"} {
 		if _, ok := atlas.Lookup(v); !ok {
 			t.Errorf("verb %q is audited as CLI-reachable but has no atlas entry — the manifest and the surface have drifted", v)
 		}
@@ -30,18 +30,3 @@ func TestS80VerbsAreDeclaredInTheAtlas(t *testing.T) {
 // on). They are reachable-in-principle, unreachable-in-fact: the precise
 // state this audit exists to detect.
 //
-// This test pins the gap so it cannot be silently forgotten OR silently
-// half-fixed: the day `inbox`/`notify` gain atlas entries (i.e. someone
-// mounts them), it fails — telling the fixer to (1) add both verbs to the
-// REQUIRED list in scripts/comms-cli-audit.sh, (2) run that script against
-// the freshly built bashy, and (3) delete this test and move the two verbs
-// into TestS80VerbsAreDeclaredInTheAtlas above.
-func TestInboxAndNotifyReachabilityGapIsStillOpen(t *testing.T) {
-	for _, v := range []string{"inbox", "notify"} {
-		if _, ok := atlas.Lookup(v); ok {
-			t.Errorf("%q now has an atlas entry — the pinned reachability gap has been (at least partly) closed. "+
-				"Promote %q into TestS80VerbsAreDeclaredInTheAtlas, add it to the REQUIRED verbs in "+
-				"scripts/comms-cli-audit.sh, verify against a freshly built bashy, and delete this test.", v, v)
-		}
-	}
-}

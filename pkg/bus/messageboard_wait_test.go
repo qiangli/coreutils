@@ -98,25 +98,17 @@ func TestMessageBoardWaitRejectsWholeHistory(t *testing.T) {
 	}
 }
 
-func TestMessageBoardAllIsHiddenDeprecatedHistoryAlias(t *testing.T) {
-	cmd := NewMessageBoardCmd()
-	flag := cmd.Flags().Lookup("all")
-	if flag == nil || !flag.Hidden {
-		t.Fatalf("--all alias must exist and be hidden, got %#v", flag)
+// See TestPublishPrincipalIsRemoved: retired flags are removed, not aliased.
+func TestMessageBoardAllIsRemoved(t *testing.T) {
+	if flag := NewMessageBoardCmd().Flags().Lookup("all"); flag != nil {
+		t.Fatalf("--all must not be registered at all, got %#v", flag)
 	}
 
 	boardInTempHome(t)
 	if err := PostMessage(Post{From: "sender", Body: "old post"}); err != nil {
 		t.Fatal(err)
 	}
-	out, errOut, err := runMessageBoard(t, context.Background(), "--as", "reader", "--all")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "old post") {
-		t.Fatalf("--all alias did not show history:\n%s", out)
-	}
-	if !strings.Contains(errOut, "--all is deprecated; use --history") {
-		t.Fatalf("--all alias did not print replacement notice: %q", errOut)
+	if _, _, err := runMessageBoard(t, context.Background(), "--as", "reader", "--all"); err == nil {
+		t.Fatal("--all must be rejected; history is --history")
 	}
 }

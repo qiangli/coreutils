@@ -47,8 +47,8 @@ fail() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
 # --- 1. REACHABILITY: every S80 verb must be mounted ------------------------
 # The exact failure mode this script exists for: a verb whose --help does not
 # exit 0 is not on the binary, whatever the package tests say. inbox and
-# notify are REQUIRED here on purpose — they are the verbs that were found
-# missing; keep them listed so the gap stays visible until it is closed.
+# notify were the verbs found missing; the gap is closed and they are pinned
+# here so it cannot silently reopen.
 REQUIRED_VERBS=(
   "whois --help"
   "agent whoami --help"

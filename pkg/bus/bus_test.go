@@ -71,33 +71,21 @@ func TestPublishLandsOnTheTimeline(t *testing.T) {
 	}
 }
 
-func TestPublishPrincipalIsHiddenDeprecatedAsAlias(t *testing.T) {
+// bashy is pre-1.0 and unreleased until POSIX certification, so a retired flag
+// is REMOVED rather than carried as a hidden alias. This pins the removal: a
+// compatibility shim nobody pinned is one that quietly grows back.
+func TestPublishPrincipalIsRemoved(t *testing.T) {
 	isolate(t)
-	out, errOut, err := run(t, "publish", "--topic", "build", "--principal", "alice", "rebase")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "" {
-		t.Fatalf("publish wrote stdout: %q", out)
-	}
-	if !strings.Contains(errOut, "--principal is deprecated; use --as") {
-		t.Fatalf("--principal alias did not print replacement notice: %q", errOut)
+	if _, _, err := run(t, "publish", "--topic", "build", "--principal", "alice", "rebase"); err == nil {
+		t.Fatal("--principal must be rejected; identity is --as")
 	}
 	cmd := NewBusCmd()
 	pub, _, err := cmd.Find([]string{"publish"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	flag := pub.Flags().Lookup("principal")
-	if flag == nil || !flag.Hidden {
-		t.Fatalf("--principal alias must exist and be hidden, got %#v", flag)
-	}
-	events, err := room.Timeline(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 || events[0].Principal != "alice" {
-		t.Fatalf("--principal alias did not publish as alice: %+v", events)
+	if flag := pub.Flags().Lookup("principal"); flag != nil {
+		t.Fatalf("--principal must not be registered at all, got %#v", flag)
 	}
 }
 

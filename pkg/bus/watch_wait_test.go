@@ -108,28 +108,20 @@ func TestWatchWaitRejectsAll(t *testing.T) {
 	}
 }
 
-func TestWatchIntervalFlagKeepsPollAsHiddenAlias(t *testing.T) {
+// See TestPublishPrincipalIsRemoved: retired flags are removed, not aliased.
+func TestWatchIntervalFlagAndPollIsRemoved(t *testing.T) {
 	cmd := newWatchCmd()
-	interval := cmd.Flags().Lookup("interval")
-	if interval == nil {
+	if cmd.Flags().Lookup("interval") == nil {
 		t.Fatal("--interval flag is missing")
 	}
-	poll := cmd.Flags().Lookup("poll")
-	if poll == nil {
-		t.Fatal("--poll alias is missing")
-	}
-	if !poll.Hidden {
-		t.Fatal("--poll alias must be hidden")
+	if poll := cmd.Flags().Lookup("poll"); poll != nil {
+		t.Fatalf("--poll must not be registered at all, got %#v", poll)
 	}
 
 	isolate(t)
 	publish(t, "--topic", "build", "--as", "alice", "already waiting")
-	_, errOut, err := runBusWithContext(t, context.Background(), "watch", "--topic", "build", "--drain", "--as", "profile-b", "--poll", "10ms")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(errOut, "--poll is deprecated; use --interval") {
-		t.Fatalf("--poll alias did not print replacement notice: %q", errOut)
+	if _, _, err := runBusWithContext(t, context.Background(), "watch", "--topic", "build", "--drain", "--as", "profile-b", "--poll", "10ms"); err == nil {
+		t.Fatal("--poll must be rejected; the canonical spelling is --interval")
 	}
 }
 

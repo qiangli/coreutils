@@ -46,7 +46,6 @@ func newObserveCmd() *cobra.Command {
 		follow      bool
 		fromNow     bool
 		tailN       int
-		tailAlias   int
 		jsonOut     bool
 		participant []string
 		kinds       []string
@@ -91,10 +90,6 @@ func newObserveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if cmd.Flags().Changed("n") {
-				fmt.Fprintln(cmd.ErrOrStderr(), "-n is deprecated; use --tail")
-				tailN = tailAlias
-			}
 
 			// ^C detaches the observer; it must never take the meeting down with
 			// it. The meeting is another process — this only stops watching.
@@ -111,8 +106,6 @@ func newObserveCmd() *cobra.Command {
 	f.BoolVarP(&follow, "follow", "f", true, "keep watching (--follow=false prints the history and exits)")
 	f.BoolVar(&fromNow, "from-now", false, "skip the history and show only what is said from here on")
 	f.IntVar(&tailN, "tail", 0, "replay only the last N events of the history (0 = the whole history)")
-	f.IntVarP(&tailAlias, "n", "n", 0, "hidden deprecated alias for --tail")
-	_ = f.MarkHidden("n")
 	f.BoolVar(&jsonOut, "json", false, "emit the canonical transcript Events, one per line, for piping")
 	f.StringArrayVar(&participant, "participant", nil, "only this seat — accepts a nickname or alias (repeatable)")
 	f.StringArrayVar(&kinds, "kind", nil, "only these event kinds, e.g. turn, decision, action (repeatable)")

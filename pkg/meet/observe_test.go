@@ -70,29 +70,23 @@ func TestObserveReplaysFullHistory(t *testing.T) {
 	}
 }
 
-func TestObserveNIsDeprecatedTailAlias(t *testing.T) {
+// See pkg/bus TestPublishPrincipalIsRemoved: retired flags are removed, not
+// aliased. -n is gone; the canonical spelling is --tail.
+func TestObserveNShorthandIsRemoved(t *testing.T) {
 	st := testState()
 	pinStore(t, st)
 	turn(t, st.ID, Event{Round: 1, Speaker: "claude-fable5", Kind: "turn", Text: "old", TS: time.Now()})
-	turn(t, st.ID, Event{Round: 1, Speaker: "codex-gpt-5.5", Kind: "turn", Text: "new", TS: time.Now()})
 
 	cmd := newObserveCmd()
-	var out, errW bytes.Buffer
-	flag := cmd.Flags().Lookup("n")
-	if flag == nil || !flag.Hidden {
-		t.Fatalf("-n alias must exist and be hidden, got %#v", flag)
+	if flag := cmd.Flags().Lookup("n"); flag != nil {
+		t.Fatalf("-n must not be registered at all, got %#v", flag)
 	}
+	var out, errW bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errW)
 	cmd.SetArgs([]string{st.ID, "--follow=false", "-n", "1"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out.String(), "old") || !strings.Contains(out.String(), "new") {
-		t.Fatalf("-n did not behave as the hidden --tail alias:\n%s", out.String())
-	}
-	if !strings.Contains(errW.String(), "-n is deprecated; use --tail") {
-		t.Fatalf("-n did not print replacement notice: %q", errW.String())
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("-n must be rejected; the canonical spelling is --tail")
 	}
 }
 

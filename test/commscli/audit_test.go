@@ -232,7 +232,7 @@ func TestBusWatchDrainWaitIsWokenByAPublish(t *testing.T) {
 	w := newWorld(t)
 	watcher := w.start(t, nil, "bus", "watch", "--drain", "--wait", "30s", "--to", "audit-waiter", "--as", "audit-waiter")
 	time.Sleep(400 * time.Millisecond)
-	if res := w.run(t, nil, "bus", "publish", "--principal", "sender", "--to", "audit-waiter", "BUS-ARRIVED-DURING-WAIT"); res.code != 0 {
+	if res := w.run(t, nil, "bus", "publish", "--as", "sender", "--to", "audit-waiter", "BUS-ARRIVED-DURING-WAIT"); res.code != 0 {
 		t.Fatalf("publish failed: %s", res.err)
 	}
 

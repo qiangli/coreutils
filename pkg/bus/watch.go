@@ -74,9 +74,6 @@ so two agents draining the same topic each get their own copy.`,
 			if wait > 0 && all {
 				return fmt.Errorf("watch: --wait cannot be combined with --all")
 			}
-			if cmd.Flags().Changed("poll") {
-				deprecatedFlagNotice(cmd, "--poll", "--interval")
-			}
 
 			if drain {
 				return runDrain(cmd, filter, drainOptions{
@@ -101,8 +98,6 @@ so two agents draining the same topic each get their own copy.`,
 	f.StringVar(&as, "as", "", "reader identity for the drain cursor (default: your principal)")
 	f.Int64Var(&since, "since", 0, "start after this sequence number (overrides the saved cursor)")
 	f.DurationVar(&interval, "interval", defaultPoll, "how often follow mode re-reads the timeline")
-	f.DurationVar(&interval, "poll", defaultPoll, "hidden alias for --interval")
-	_ = f.MarkHidden("poll")
 	f.DurationVar(&wait, "wait", 0, "with --drain, wait up to this duration for a new relevant notification")
 	f.BoolVar(&jsonOut, "json", false, "emit one "+SchemaVersion+" JSON object per line (NDJSON)")
 	return cmd

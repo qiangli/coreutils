@@ -55,7 +55,7 @@ import (
 // Bare `bashy mb` READS, because reading is what an agent does at the start of
 // every turn and the common case should cost the fewest words.
 func NewMessageBoardCmd() *cobra.Command {
-	var jsonOut, peek, history, allAlias, seenBy bool
+	var jsonOut, peek, history, seenBy bool
 	var as string
 	var limit int
 	var wait time.Duration
@@ -93,10 +93,6 @@ shared-baseline, posix-cert, harness, announce.`,
 			if wait < 0 {
 				return fmt.Errorf("mb: --wait must not be negative")
 			}
-			if allAlias {
-				deprecatedFlagNotice(cmd, "--all", "--history")
-				history = true
-			}
 			if wait > 0 && history {
 				return fmt.Errorf("mb: --wait cannot be combined with --history")
 			}
@@ -117,8 +113,6 @@ shared-baseline, posix-cert, harness, announce.`,
 	f.BoolVar(&jsonOut, "json", false, "one JSON object per line")
 	f.BoolVar(&peek, "peek", false, "read without marking anything read")
 	f.BoolVar(&history, "history", false, "the whole board — every post by everyone, read or not")
-	f.BoolVar(&allAlias, "all", false, "hidden deprecated alias for --history")
-	_ = f.MarkHidden("all")
 	f.BoolVar(&seenBy, "seen-by", false, "name the agents that have read each post — the receipt record, not just a count")
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
@@ -392,10 +386,6 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 	f.BoolVar(&any, "any", false,
 		"offer to ANY ONE of the group: the first to read it claims it and the rest never see it (default: all of them see it, and views are counted)")
 	return cmd
-}
-
-func deprecatedFlagNotice(cmd *cobra.Command, old, replacement string) {
-	fmt.Fprintf(cmd.ErrOrStderr(), "%s is deprecated; use %s\n", old, replacement)
 }
 
 // newMBPostCmd is the BROADCAST half — a public forum post.

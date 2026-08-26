@@ -22,7 +22,7 @@ type PublishEnvelope struct {
 }
 
 func newPublishCmd() *cobra.Command {
-	var topic, to, roomID, as, principalAlias, priority string
+	var topic, to, roomID, as, priority string
 	var jsonOut bool
 
 	cmd := &cobra.Command{
@@ -46,12 +46,6 @@ attributed to is not a notification.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			msg := strings.Join(args, " ")
 
-			if cmd.Flags().Changed("principal") {
-				deprecatedFlagNotice(cmd, "--principal", "--as")
-				if as == "" {
-					as = principalAlias
-				}
-			}
 			who := resolvePrincipal(as)
 			if who == "" {
 				return publishErr(cmd, jsonOut,
@@ -105,8 +99,6 @@ attributed to is not a notification.`,
 	f.StringVar(&to, "to", "", "recipient session or role (1:1)")
 	f.StringVar(&roomID, "room", "", "room ID for room-scoped publish")
 	f.StringVar(&as, "as", "", "sender identity (who is publishing)")
-	f.StringVar(&principalAlias, "principal", "", "hidden deprecated alias for --as")
-	_ = f.MarkHidden("principal")
 	f.StringVar(&priority, "priority", DeliveryQueued,
 		"delivery tier to REQUEST: queued (read at a turn boundary) | interrupt (break into a running turn). "+
 			"A subscriber decides whose interrupts it honours, so this is a request, not a guarantee")
