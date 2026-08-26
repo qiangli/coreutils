@@ -77,10 +77,10 @@ func roomOf(ref string) (*State, error) {
 // RoomSummary is a room as a list shows it — enough to render a channel list
 // without loading every transcript.
 type RoomSummary struct {
-	ID        string    `json:"id"`
-	Room      int       `json:"room,omitempty"`
-	Name      string    `json:"name,omitempty"`
-	Permanent bool      `json:"permanent,omitempty"`
+	ID        string `json:"id"`
+	Room      int    `json:"room,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Permanent bool   `json:"permanent,omitempty"`
 	// Board mirrors State.Board so a channel list can tell a board from a
 	// meeting without loading every room — a browser uses it to not offer
 	// chair-driven actions the server would refuse with ErrWrongMode.
