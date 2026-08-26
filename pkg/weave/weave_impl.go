@@ -6733,6 +6733,12 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	// workspaces were gone while two of them were quietly still there holding
 	// unmerged work. A summary that overstates a destructive action is worse than
 	// no summary: it is the number people check instead of the list.
+	if home, err := os.UserHomeDir(); err == nil {
+		if stray := weaveSweepEmptyStateRoots(home, dir, time.Now()); len(stray) > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "weave prune: removed %d empty state root(s) holding no queue: %s\n",
+				len(stray), strings.Join(stray, ", "))
+		}
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "weave prune: cleaned up %d item(s)", removed)
 	if cachesRemoved > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "; removed %d managed GOCACHE director%s",
@@ -6883,6 +6889,65 @@ func weaveNotPullableDetail(it *weaveItem, base string, ahead int) string {
 //
 // "skipped" with no reason is how a safety check becomes a mystery, and a
 // mystery is how people learn to pass --force by reflex.
+// weaveEmptyRootGrace is how long a childless state root is left alone before
+// prune will sweep it. weaveQueueDir MkdirAll's the root before the first queue
+// write, so a root created moments ago may belong to a weave STARTING in
+// another repo — and other agents run weaves on this machine concurrently.
+const weaveEmptyRootGrace = time.Hour
+
+// weaveSweepEmptyStateRoots removes weave state roots that contain no files at
+// any depth, and reports what it removed.
+//
+// Before weaveWorkspaceOwner landed, a weave command run INSIDE a workspace
+// minted a fresh root keyed on that clone's path. Those forks never held a
+// queue — the real one stayed in the root that dispatched the run — so they are
+// precisely the roots with no files in them. One dev box had accumulated 237.
+//
+// Emptiness IS the test, and it is a strong one: a root with a queue, a log,
+// or a single memory line has a file and is never touched. Two things are
+// exempt regardless: `keep` (the root prune is operating on, which must survive
+// even while momentarily empty) and any root younger than the grace window.
+func weaveSweepEmptyStateRoots(home, keep string, now time.Time) []string {
+	root := weaveStateRoot(home)
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	keep = filepath.Clean(keep)
+	var swept []string
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if filepath.Clean(dir) == keep {
+			continue
+		}
+		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) < weaveEmptyRootGrace {
+			continue
+		}
+		hasFile := false
+		err := filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() {
+				hasFile = true
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		// An unreadable root is not a provably empty one. Leave it.
+		if err != nil || hasFile {
+			continue
+		}
+		if os.RemoveAll(dir) == nil {
+			swept = append(swept, e.Name())
+		}
+	}
+	return swept
+}
+
 func weavePruneHoldReason(ahead, dirtyFiles, untracked int) string {
 	var parts []string
 	if ahead > 0 {

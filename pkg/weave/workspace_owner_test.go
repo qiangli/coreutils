@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // A weave command run from INSIDE a workspace must resolve to the queue that
@@ -60,5 +61,71 @@ func TestWeaveQueueDirResolvesUpwardFromAWorkspace(t *testing.T) {
 	}
 	if got, _ := weaveQueueDir(stray); got == owner {
 		t.Fatal("a non-workspace path under the state root must not resolve to the owner")
+	}
+}
+
+// prune sweeps state roots that hold no queue at all — the forks the old
+// path-keyed weaveQueueDir minted — but only those.
+func TestWeaveSweepEmptyStateRoots(t *testing.T) {
+	home := t.TempDir()
+	root := weaveStateRoot(home)
+	now := time.Now()
+	old := now.Add(-24 * time.Hour)
+
+	mk := func(name string, files map[string]string, mod time.Time) string {
+		d := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Join(d, "workspaces"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for rel, body := range files {
+			p := filepath.Join(d, rel)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chtimes(d, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	fork := mk("issue-29-0517bf6c", nil, old)      // swept
+	deepFork := mk("coreutils-deadbeef", nil, old) // swept
+	withQueue := mk("coreutils-909dd8b2", map[string]string{"queue.json": "{}"}, old)
+	onlyMemory := mk("sh-7e2e7b65", map[string]string{"memory.jsonl": "{}\n"}, old)
+	onlyLog := mk("bashy-6497d06f", map[string]string{"logs/issue-1.log": "x"}, old)
+	young := mk("outpost-00000000", nil, now) // inside the grace window
+	keep := mk("dhnt-31437fad", nil, old)     // the caller's own root
+
+	swept := weaveSweepEmptyStateRoots(home, keep, now)
+
+	got := map[string]bool{}
+	for _, s := range swept {
+		got[s] = true
+	}
+	for _, want := range []string{"issue-29-0517bf6c", "coreutils-deadbeef"} {
+		if !got[want] {
+			t.Errorf("%s holds no queue and should have been swept; swept=%v", want, swept)
+		}
+	}
+	for name, d := range map[string]string{
+		"a root with a queue":            withQueue,
+		"a root with only memory":        onlyMemory,
+		"a root with only a log":         onlyLog,
+		"a root inside the grace window": young,
+		"the caller's own root":          keep,
+	} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s must survive prune, but it is gone (%s)", name, filepath.Base(d))
+		}
+	}
+	if _, err := os.Stat(fork); err == nil {
+		t.Error("the swept fork is still on disk")
+	}
+	if _, err := os.Stat(deepFork); err == nil {
+		t.Error("the swept clone-root is still on disk")
 	}
 }
