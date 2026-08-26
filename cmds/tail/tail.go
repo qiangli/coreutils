@@ -554,12 +554,18 @@ func scanOrder(args []string) (mode, hdr byte) {
 		if len(a) > 1 && a[0] == '-' {
 			for i := 1; i < len(a); i++ {
 				c := a[i]
-				if c == 'n' || c == 'c' || c == 'f' {
-					if c != 'f' {
-						mode = c
-						skip = i == len(a)-1
-					}
+				// -n/-c consume the rest of the cluster as their value, so they
+				// end the scan of this arg. -f is a boolean flag that carries no
+				// value; it must NOT terminate the scan, or a mode letter
+				// clustered after it (for example -fn2) is missed and the
+				// extension "last of -c/-n wins" resolves to the wrong mode.
+				if c == 'n' || c == 'c' {
+					mode = c
+					skip = i == len(a)-1
 					break
+				}
+				if c == 'f' {
+					continue
 				}
 				if c == 'q' {
 					hdr = 'q'
