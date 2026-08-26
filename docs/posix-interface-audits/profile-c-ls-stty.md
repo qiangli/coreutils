@@ -23,11 +23,18 @@ POSIX `-H` and `-L` control symbolic link dereferencing:
 - `-L` evaluates all symbolic links named as operands or encountered during traversal.
 - `-H` evaluates symbolic links specified on the command line.
 
+They form a mutually exclusive option set: the last `-H` or `-L` specified
+determines behavior. The implementation resolves one ordered mode across
+short-option clusters and long spellings. Both modes dereference command-line
+operands, while only a final `-L` dereferences links encountered within a
+listed directory or follows them during `-R` traversal.
+
 A confirmed Bashy-owned gap has been fixed: command-line symbolic links pointing to directories were not being dereferenced under `-H` / `-L` when `-d` (directory only) was specified, incorrectly displaying the symlink metadata instead of the referent directory information. This is now resolved: the referent directory metadata (such as permissions, size, and type `d`) is correctly retrieved and displayed.
 
 When `-H` or `-L` explicitly requires dereferencing a command-line symbolic link, failure to resolve its referent is diagnosed and produces a non-zero status. Without explicit dereferencing, `-F` reports the command-line link itself rather than following a link to a directory.
 
-Evidence: `TestLsDereferenceCommandLineSymlinks`, `TestDereferenceDirectoryEntries`.
+Evidence: `TestLsDereferenceCommandLineSymlinks`,
+`TestLsDereferenceModeLastOptionWins`, `TestDereferenceDirectoryEntries`.
 
 ## 3. `ls` — Sizing, Radix, and Columns
 

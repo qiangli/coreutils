@@ -669,6 +669,62 @@ func TestLsDereferenceCommandLineSymlinks(t *testing.T) {
 	}
 }
 
+func TestLsDereferenceModeLastOptionWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, subdir, "inside", "")
+	if err := os.Symlink("subdir", filepath.Join(dir, "operand-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both modes dereference symbolic links named as command-line operands,
+	// regardless of which mutually exclusive selector appears last.
+	for _, args := range [][]string{
+		{"-ldLH", "operand-link"},
+		{"-ldHL", "operand-link"},
+		{"-ld", "--dereference", "--dereference-command-line", "operand-link"},
+		{"-ld", "--dereference-command-line", "--dereference", "operand-link"},
+	} {
+		out, errb, code := runToolAt(t, dir, args...)
+		if code != 0 || errb != "" || !strings.HasPrefix(out, "d") || strings.Contains(out, "->") {
+			t.Errorf("ls %v = (%q, %q, %d), want dereferenced directory operand", args, out, errb, code)
+		}
+	}
+
+	container := filepath.Join(dir, "container")
+	if err := os.Mkdir(container, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../subdir", filepath.Join(container, "nested")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		args       []string
+		wantFollow bool
+	}{
+		{[]string{"-RLH", "container"}, false},
+		{[]string{"-RHL", "container"}, true},
+		{[]string{"-R", "--dereference", "--dereference-command-line", "container"}, false},
+		{[]string{"-R", "--dereference-command-line", "--dereference", "container"}, true},
+	} {
+		out, errb, code := runToolAt(t, dir, tc.args...)
+		if code != 0 || errb != "" {
+			t.Fatalf("ls %v = (%q, %q, %d)", tc.args, out, errb, code)
+		}
+		followed := strings.Contains(out, "container/nested:\n")
+		if followed != tc.wantFollow {
+			t.Errorf("ls %v followed encountered link = %v, want %v; out=%q", tc.args, followed, tc.wantFollow, out)
+		}
+	}
+}
+
 func containsLine(lines []string, target string) bool {
 	for _, l := range lines {
 		if l == target {

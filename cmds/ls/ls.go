@@ -55,7 +55,7 @@ type options struct {
 	groupDirsFirst                           bool
 	literal, quoteName, escape               bool
 	hideControl                              bool
-	deref                                    bool
+	deref                                    dereferenceMode
 	si                                       bool
 	format                                   fmtKind
 	width                                    int
@@ -65,6 +65,18 @@ type options struct {
 	timeSel                                  timeSel
 	hide, ignore                             []string
 }
+
+// dereferenceMode is the effective member of POSIX's mutually exclusive
+// -H|-L option set. Keeping one mode prevents an earlier -L from leaking into
+// directory-entry handling after a later -H restricts dereferencing to
+// command-line operands.
+type dereferenceMode int
+
+const (
+	dereferenceDefault dereferenceMode = iota
+	dereferenceCommandLine
+	dereferenceAll
+)
 
 // fmtKind is the output format selected by -l/-1/-C/-x/-m/-g/-o/-n or
 // --format. Format options ordinarily replace the preceding format; GNU's
@@ -232,8 +244,6 @@ func run(rc *tool.RunContext, args []string) int {
 	escape, _ := fs.GetBool("escape")
 	quoting, _ := fs.GetString("quoting-style")
 	groupDirsFirst, _ := fs.GetBool("group-directories-first")
-	deref, _ := fs.GetBool("dereference")
-	derefCL, _ := fs.GetBool("dereference-command-line")
 	derefCLDir, _ := fs.GetBool("dereference-command-line-symlink-to-dir")
 	timeField, _ := fs.GetString("time")
 	fullTime, _ := fs.GetBool("full-time")
@@ -367,15 +377,10 @@ func run(rc *tool.RunContext, args []string) int {
 	default:
 		return tool.UsageError(rc, cmd, "unsupported --quoting-style=%s", quoting)
 	}
-	if short['L'] > 0 {
-		deref = true
-	}
-	if short['H'] > 0 {
-		derefCL = true
-	}
-	// -L applies to every entry; -H and its long spelling only to the
-	// command-line operands, handled in the operand loop below.
-	opt.deref = deref
+	// POSIX places -H and -L in a mutually exclusive set, so the last one
+	// specified wins. The original argv is required here because ExtractShort
+	// intentionally reduces short options to occurrence counts.
+	opt.deref = lastDereferenceMode(args, fs)
 	opt.width = lineWidth(rc, fs)
 
 	si, _ := fs.GetBool("si")
@@ -480,7 +485,7 @@ func run(rc *tool.RunContext, args []string) int {
 		e := entry{name: op, path: full, info: fi}
 		isDir := fi.IsDir()
 		if fi.Mode()&os.ModeSymlink != 0 {
-			if deref || derefCL {
+			if opt.deref != dereferenceDefault {
 				ti, terr := os.Stat(full)
 				if terr != nil {
 					l.fail(2, "cannot access '%s': %s", op, errMsg(terr))
@@ -623,7 +628,7 @@ func (l *lister) listDir(display, full string, header bool) {
 			continue
 		}
 		// -L reports the referenced file rather than the link itself.
-		if l.opt.deref && fi.Mode()&os.ModeSymlink != 0 {
+		if l.opt.deref == dereferenceAll && fi.Mode()&os.ModeSymlink != 0 {
 			ti, terr := os.Stat(p)
 			if terr != nil {
 				l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(terr))
@@ -632,7 +637,7 @@ func (l *lister) listDir(display, full string, header bool) {
 			}
 		}
 		e := entry{name: name, path: p, info: fi}
-		if l.opt.long && !l.opt.deref && fi.Mode()&os.ModeSymlink != 0 {
+		if l.opt.long && l.opt.deref != dereferenceAll && fi.Mode()&os.ModeSymlink != 0 {
 			e.target, _ = os.Readlink(p)
 		}
 		e.tm = l.entryTime(e)
@@ -1371,6 +1376,56 @@ func lastFormat(args []string, fs *pflag.FlagSet) (fmtKind, bool) {
 		}
 	}
 	return kind, found
+}
+
+// lastDereferenceMode resolves POSIX's mutually exclusive -H|-L set in
+// command-line order. Long spellings and their unambiguous abbreviations take
+// part in the same ordering, and scanning stops at the "--" terminator.
+func lastDereferenceMode(args []string, fs *pflag.FlagSet) dereferenceMode {
+	mode := dereferenceDefault
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "--") {
+			name := a[2:]
+			value := ""
+			hasValue := false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				value, name, hasValue = name[eq+1:], name[:eq], true
+			}
+			name = canonicalLongName(fs, name)
+			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++ // this option's value is data, never an H/L transition
+				continue
+			}
+			if !boolOptionEnabled(value, hasValue) {
+				continue
+			}
+			switch name {
+			case "dereference-command-line":
+				mode = dereferenceCommandLine
+			case "dereference":
+				mode = dereferenceAll
+			}
+			continue
+		}
+		if len(a) > 1 && a[0] == '-' {
+			for j := 1; j < len(a); j++ {
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					break
+				}
+				switch a[j] {
+				case 'H':
+					mode = dereferenceCommandLine
+				case 'L':
+					mode = dereferenceAll
+				}
+			}
+		}
+	}
+	return mode
 }
 
 // indicatorStyle is the indicator style selected by the last of
