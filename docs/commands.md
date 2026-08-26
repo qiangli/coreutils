@@ -220,8 +220,8 @@ shell-only names, and 16 pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
 Profile C/D ownership of 78 Go-selected, 22 shell-selected, and 16 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
-verified, partial, and unverified states rather than treating placeholders as
-conformance evidence.
+missing, partial, implemented, and verified states rather than treating
+placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,

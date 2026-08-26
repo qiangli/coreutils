@@ -2,9 +2,9 @@
 
 Generated from `docs/posix-required-command-interfaces.tsv` by
 `scripts/posix_manifest.py`. This ledger is an audit aid, not a normative
-specification or a claim of complete POSIX conformance. `UNVERIFIED` means
-the command-specific Issue 7 semantics have not yet been transcribed and
-backed by focused repository evidence.
+specification or a claim of complete POSIX conformance. States are `missing`,
+`partial`, `implemented`, and `verified`. Only `verified` includes applicable
+integration/certification evidence tied to exact revisions.
 
 GNU compatibility is explicitly out of scope and deferred.
 
@@ -16,11 +16,14 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Go | 78 |
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
-| Evidence | Verified | 3 |
+| Evidence | Verified | 0 |
+| Evidence | Implemented | 3 |
 | Evidence | Partial | 97 |
-| Evidence | Unverified | 16 |
+| Evidence | Missing | 16 |
 
-Completion is deliberately fail-closed: `scripts/posix_manifest.py
+The pre-integration `--require-owned-source-complete` gate accepts only
+`implemented` or `verified` for the exact 78 Go plus 22 shell owners.
+Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
 covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the
 16 external-provider rows as owned implementation evidence. Both require focused
@@ -89,11 +92,13 @@ alias [alias-name[=string]...]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestAliasIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteAlias`; provider=`-`; clauses=`XCU:alias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [alias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/alias.html).
 
 ## `ar`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base; xsi; development`.
 
@@ -149,6 +154,8 @@ ar -r -i [-cuv] posname archive file...
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ar:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [ar](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ar.html).
 
 ## `at`
@@ -201,6 +208,8 @@ at -l [at_job_id...]
 
 **Evidence lanes:** Go=`cmds/at/at_test.go#TestAtCreateAndListAndRemove;cmds/at/at_test.go#TestAtQueueSubmissionAndListFiltering;cmds/at/at_test.go#TestAtAcceptsEmptyAndBlankStdin;cmds/at/at_test.go#TestAtMailCompletionState;cmds/at/at_test.go#TestAtLCTimeParsingAndUnsupportedLocale;cmds/at/at_test.go#TestAtOutputWriteErrorsFail;cmds/at/issue743_test.go#TestIssue743TouchTimePastDiagnosticNamesArgument;cmds/at/issue743_test.go#TestIssue743ListUnknownJobIDFails;cmds/at/issue743_access_unix_test.go#TestIssue743AtAccessMalformedPolicyFailsClosed;cmds/at/issue743_access_unix_test.go#TestIssue743AtAccessStatErrorFailsClosed;cmds/at/issue743_access_unix_test.go#TestIssue743AtAccessEmptyDenyPermits`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [at](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/at.html).
 
 ## `awk`
@@ -250,6 +259,8 @@ awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 
 **Evidence lanes:** Go=`cmds/awk/awk_test.go#TestAwk;cmds/awk/awk_test.go#TestAwkPOSIXFloatFormats;cmds/awk/awk_test.go#TestAwkPOSIXOctalAlternateFormZeroPrecision;cmds/awk/awk_test.go#TestAwkPOSIXEREBackendExpressions;cmds/awk/awk_test.go#TestAwkPOSIXEREDotNewlineAndLeftmostLongest;cmds/awk/awk_test.go#TestAwkProgramFile;cmds/awk/awk_test.go#TestAwkPOSIXInterfaceProgramFileAndAssignments;cmds/awk/awk_test.go#TestAwkPOSIXProgramFromStdinAndEmptyProgram;cmds/awk/awk_test.go#TestAwkInvalidAssignmentAndPOSIXMissingInput;cmds/awk/awk_locale_test.go#TestAwkLocaleRegexEveryEndpoint;cmds/awk/awk_locale_test.go#TestAwkResolvesCTypeAndCollateIndependently;cmds/awk/awk_locale_test.go#TestAwkLocaleLifecycle;cmds/awk/awk_locale_test.go#TestAwkLocaleEquivalenceClassMatches;cmds/awk/awk_routing_test.go#TestAwkRoutingIntervalCeiling;cmds/awk/awk_routing_test.go#TestAwkRoutingLeadingZerosBothPaths;cmds/awk/awk_routing_test.go#TestAwkRoutingMalformedQuantifiers`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:awk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [awk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/awk.html).
 
 ## `basename`
@@ -297,6 +308,8 @@ basename string [suffix]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/basename`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/basename/basename_test.go#TestBasename;cmds/basename/basename_test.go#TestBasenameErrors;cmds/basename/basename_test.go#TestBasenameWriteErrors;cmds/basename/basename_test.go#TestBasenameEndOfOptions;cmds/basename/basename_test.go#TestBasenameByteSafety;cmds/basename/basename_test.go#TestBasenameDoesNotConsumeStdin`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:basename:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [basename](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/basename.html).
 
@@ -346,11 +359,13 @@ batch
 
 **Evidence lanes:** Go=`cmds/batch/batch_test.go#TestBatchSubmissionStdoutEmpty;cmds/batch/batch_test.go#TestBatchPersistsJob;cmds/batch/batch_test.go#TestBatchIsAtQueueBWithCompletionMailAndLoadMarker;cmds/batch/batch_test.go#TestBatchRejectsOperands;cmds/batch/batch_test.go#TestBatchAuthenticatedRecipientAndWriteError;cmds/batch/issue743_access_unix_test.go#TestIssue743BatchAccessMalformedDenyFailsClosed;cmds/batch/issue743_access_unix_test.go#TestIssue743BatchAccessEmptyDenyPermits`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [batch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/batch.html).
 
 ## `bc`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -393,6 +408,8 @@ bc [-l] [file...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:bc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [bc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/bc.html).
 
@@ -442,6 +459,8 @@ bc [-l] [file...]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_jobcontrol_interface_test.go#TestBgIssue7SyntheticState;sh:interp/jobcontrol_issue7_unix_test.go#TestBgIssue7SendsContinueToRealProcessGroup`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteBg`; provider=`-`; clauses=`XCU:bg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [bg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/bg.html).
 
 ## `cat`
@@ -489,6 +508,8 @@ cat [-u] [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cat`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/cat/cat_test.go#TestCat;cmds/cat/cat_test.go#TestCatFiles;cmds/cat/cat_test.go#TestCatUnbufferedFlushesBeforeEOF;cmds/cat/cat_test.go#TestCatErrors;cmds/cat/cat_test.go#TestCatSameFile;cmds/cat/cat_test.go#TestCatWriteError;cmds/cat/cat_test.go#TestCatBrokenPipeHonorsInheritedSIGPIPE;cmds/cat/cat_signal_unix_test.go#TestCatProcessSIGPIPEBehavior;cmds/cat/cat_fifo_test.go#TestCatFIFOSymlink;cmds/cat/cat_io_test.go#TestCatInjectedReadErrorContinues;cmds/cat/cat_io_test.go#TestCatSpecialFileOperands`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cat:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [cat](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cat.html).
 
@@ -539,6 +560,8 @@ cd -
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestCdIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteCd`; provider=`-`; clauses=`XCU:cd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [cd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cd.html).
 
 ## `chgrp`
@@ -588,6 +611,8 @@ chgrp -R [-H|-L|-P] group file...
 
 **Evidence lanes:** Go=`cmds/chgrp/chgrp_test.go#TestChgrpSelf;cmds/chgrp/chgrp_test.go#TestChgrpErrors;cmds/chgrp/chgrp_test.go#TestChgrpNoDereference;cmds/chgrp/chgrp_test.go#TestChgrpWindows;cmds/chgrp/hierarchy_unix_test.go#TestChgrpTraversalModes;cmds/chgrp/hierarchy_unix_test.go#TestChgrpSymbolicLinkTargetOfTheChange;cmds/chgrp/hierarchy_unix_test.go#TestChgrpTraversalAndDereferenceAreOrthogonal;cmds/chgrp/hierarchy_unix_test.go#TestChgrpCommandLineLinkChainIsFollowed;cmds/chgrp/hierarchy_unix_test.go#TestChgrpNameIsPreferredOverNumber;cmds/chgrp/hierarchy_unix_test.go#TestChgrpUnchangedGroupStillCallsChown;cmds/chgrp/hierarchy_unix_test.go#TestChgrpContinuesPastFailures;cmds/chgrp/hierarchy_unix_test.go#TestChgrpDanglingSymbolicLink;cmds/chgrp/hierarchy_unix_test.go#TestChgrpSymbolicLinkCycleTerminates;cmds/chgrp/hierarchy_unix_test.go#TestChgrpDoubleDashEndsOptions;cmds/chgrp/hierarchy_unix_test.go#TestChgrpDashOperandIsAFileName;cmds/chgrp/hierarchy_unix_test.go#TestChgrpCycleDiagnostic;cmds/chgrp/hierarchy_unix_test.go#TestChgrpOutputFailureSetsStatusAndContinues;cmds/chgrp/s79_unix_test.go#TestChgrpObservedOwnerProvider;cmds/chgrp/s79_unix_test.go#TestChgrpTransitionFailuresContinue;cmds/chgrp/s79_unix_test.go#TestChgrpNumericGrammarAndLookupFailures;cmds/chgrp/s79_unix_test.go#TestChgrpFromNumericGrammarAndLookupFailures;cmds/chgrp/s79_unix_test.go#TestChgrpFromRuntimeRejectsInvalidOrUnavailableOwner;cmds/chgrp/s79_unix_test.go#TestChgrpNativeCtimeSymlinkAndHardLinkIdentity`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [chgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chgrp.html).
 
 ## `chmod`
@@ -635,6 +660,8 @@ chmod [-R] mode file...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/chmod`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/chmod/chmod_test.go#TestModeApply;cmds/chmod/chmod_test.go#TestParseModeInvalid;cmds/chmod/chmod_test.go#TestExtractDashMode;cmds/chmod/chmod_test.go#TestChmodFiles;cmds/chmod/chmod_test.go#TestChmodRecursive;cmds/chmod/chmod_test.go#TestChmodErrors;cmds/chmod/chmod_test.go#TestChmodWindows;cmds/chmod/chmod_test.go#TestChmodDefaultDereferencesSymlinkOperand;cmds/chmod/chmod_posix_test.go#TestModeApplyXUsesOriginalUnmodifiedMode;cmds/chmod/chmod_posix_test.go#TestModeApplyXPreservesGNUBehaviorOutsidePOSIXMode;cmds/chmod/chmod_posix_test.go#TestModeApplyBareOpAndOWithS;cmds/chmod/chmod_posix_test.go#TestModeApplyPOSIXOctalAbsolute;cmds/chmod/chmod_posix_test.go#TestChmodPOSIXModeOctalClearsDirectorySetID;cmds/chmod/chmod_posix_test.go#TestChmodReferenceCopiesExactModeToDirectory;cmds/chmod/chmod_posix_test.go#TestChmodContinuesAfterOperandError;cmds/chmod/chmod_test.go#TestChmodNoDereferenceAbbreviationSkipsSymlinkOperand;cmds/chmod/chmod_test.go#TestChmodReferenceValueThatLooksLikeMode;cmds/chmod/recursion_unix_test.go#TestChmodRecursiveRemovingPermissionsReachesWholeHierarchy;cmds/chmod/recursion_unix_test.go#TestChmodRecursiveVisitsChildrenBeforeDirectory;cmds/chmod/recursion_unix_test.go#TestChmodRecursiveUnreadableDirectoryIsDiagnosedAndStillChanged;cmds/chmod/recursion_unix_test.go#TestChmodRecursiveSymlinkLoopTerminates;cmds/chmod/s79_unix_test.go#TestChmodSymbolicModeUsesInvocationUmask;cmds/chmod/s79_unix_test.go#TestChmodSameModeFailuresContinue;cmds/chmod/s79_unix_test.go#TestChmodNativeCtimeSetIDAndHardLinkIdentity`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chmod:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [chmod](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chmod.html).
 
@@ -685,6 +712,8 @@ chown -R [-H|-L|-P] owner[:group] file...
 
 **Evidence lanes:** Go=`cmds/chown/chown_test.go#TestChownSelf;cmds/chown/chown_test.go#TestChownErrors;cmds/chown/chown_test.go#TestChownNoDereference;cmds/chown/chown_test.go#TestChownWindows;cmds/chown/hierarchy_unix_test.go#TestChownTraversalModes;cmds/chown/hierarchy_unix_test.go#TestChownSymbolicLinkTargetOfTheChange;cmds/chown/hierarchy_unix_test.go#TestChownTraversalAndDereferenceAreOrthogonal;cmds/chown/hierarchy_unix_test.go#TestChownCommandLineLinkChainIsFollowed;cmds/chown/hierarchy_unix_test.go#TestChownNameIsPreferredOverNumber;cmds/chown/hierarchy_unix_test.go#TestChownUnchangedOwnershipStillCallsChown;cmds/chown/hierarchy_unix_test.go#TestChownContinuesPastFailures;cmds/chown/hierarchy_unix_test.go#TestChownDanglingSymbolicLink;cmds/chown/hierarchy_unix_test.go#TestChownSymbolicLinkCycleTerminates;cmds/chown/hierarchy_unix_test.go#TestChownMutualSymbolicLinkLoopTerminates;cmds/chown/hierarchy_unix_test.go#TestChownDoubleDashEndsOptions;cmds/chown/hierarchy_unix_test.go#TestChownDashOperandIsAFileName;cmds/chown/hierarchy_unix_test.go#TestChownCycleDiagnostic;cmds/chown/hierarchy_unix_test.go#TestChownOutputFailureSetsStatusAndContinues;cmds/chown/s79_unix_test.go#TestChownTransitionFailuresContinue;cmds/chown/s79_unix_test.go#TestChownNumericGrammarAndLookupFailures;cmds/chown/s79_unix_test.go#TestChownNativeCtimeSymlinkAndHardLinkIdentity`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:chown:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [chown](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/chown.html).
 
 ## `cksum`
@@ -732,6 +761,8 @@ cksum [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cksum`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/cksum/cksum_test.go#TestCKSumStdinAndFiles;cmds/cksum/cksum_test.go#TestCKSumErrors;cmds/cksum/cksum_test.go#TestCKSumReportsStandardOutputWriteError;cmds/cksum/cksum_test.go#TestCKSumStandardInputOperandAndReadError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [cksum](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cksum.html).
 
@@ -781,6 +812,8 @@ cmp [-l|-s] file1 file2
 
 **Evidence lanes:** Go=`cmds/cmp/cmp_test.go#TestCmpIdentical;cmds/cmp/cmp_test.go#TestCmpDiffer;cmds/cmp/cmp_test.go#TestCmpVerbose;cmds/cmp/cmp_test.go#TestCmpSilent;cmds/cmp/cmp_test.go#TestCmpEOF;cmds/cmp/cmp_test.go#TestCmpRejectsRepeatedStandardInput;cmds/cmp/cmp_test.go#TestCmpErrors;cmds/cmp/cmp_posix_test.go#TestCmpVerbosePOSIXModeFormat;cmds/cmp/cmp_posix_test.go#TestCmpVerboseEOFDiagnostic;cmds/cmp/cmp_posix_test.go#TestCmpPOSIXOperandGrammarAndOutputErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cmp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [cmp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cmp.html).
 
 ## `comm`
@@ -828,6 +861,8 @@ comm [-123] file1 file2
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/comm`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/comm/comm_test.go#TestComm;cmds/comm/comm_test.go#TestCommStdin;cmds/comm/comm_test.go#TestCommDuplicateAndEmptyLines;cmds/comm/comm_test.go#TestCommStreamsBeforeEOF;cmds/comm/comm_test.go#TestCommFinalRecordWithoutDelimiter;cmds/comm/comm_test.go#TestCommOrderCheck;cmds/comm/comm_test.go#TestCommErrors;cmds/comm/comm_test.go#TestCommStandardOutputWriteFailure;cmds/comm/comm_test.go#TestCommInputReadErrorIsDiagnosed;cmds/comm/comm_test.go#TestCommUsesInvocationCollatorForMergeAndOrderChecks;cmds/comm/comm_test.go#TestCommLocaleInitFailsBeforeInputOpen;cmds/comm/comm_test.go#TestCommCAndPOSIXBypassCollator`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:comm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [comm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/comm.html).
 
@@ -877,6 +912,8 @@ command [-p][-v|-V] command_name
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestCommandIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteCommand`; provider=`-`; clauses=`XCU:command:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [command](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/command.html).
 
@@ -928,6 +965,8 @@ cp -R [-H|-L|-P] [-fip] source_file... target
 
 **Evidence lanes:** Go=`cmds/cp/cp_test.go#TestCpFile;cmds/cp/cp_test.go#TestCpIntoDir;cmds/cp/cp_test.go#TestCpMultipleToNonDir;cmds/cp/cp_test.go#TestCpOmitsDirWithoutR;cmds/cp/cp_test.go#TestCpRecursive;cmds/cp/cp_test.go#TestCpSameFile;cmds/cp/cp_test.go#TestCpIntoItself;cmds/cp/cp_test.go#TestCpSymlinkInTree;cmds/cp/cp_test.go#TestCpRecursiveDereferenceAllSymlinks;cmds/cp/cp_test.go#TestCpDereferenceOptionOrdering;cmds/cp/cp_test.go#TestCpForceUnwritableDest;cmds/cp/cp_test.go#TestCpPreserve;cmds/cp/cp_test.go#TestCpInteractiveDecline;cmds/cp/cp_test.go#TestCpInteractiveEOFDeclines;cmds/cp/cp_test.go#TestCpInteractiveDeclineContinues;cmds/cp/cp_test.go#TestCpInteractiveDeclineThenError;cmds/cp/cp_test.go#TestCpInteractiveAffirmativeMatching;cmds/cp/cp_test.go#TestCpInteractiveAccept;cmds/cp/cp_test.go#TestCpMissingSource;cmds/cp/cp_posix_test.go#TestCpInteractiveSameFileDiagnosesWithoutPrompt;cmds/cp/cp_posix_test.go#TestCpUpdateDoesNotBypassSameFileDiagnostic;cmds/cp/cp_posix_test.go#TestCpInteractiveDirDestDiagnosesWithoutPrompt;cmds/cp/cp_posix_test.go#TestCpRecursiveDirOverExistingNonDirContinues;cmds/cp/cp_posix_test.go#TestCpDashOperandsAreOrdinaryPathnames;cmds/cp/cp_posix_unix_test.go#TestCpPreserveModeAppliedAfterOwnership;cmds/cp/cp_posix_unix_test.go#TestCpPreserveClearsSetuidWhenOwnershipFails;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveNewDirUmaskFinalMode;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveNewDirPreserveModeIgnoresUmask;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveReadOnlySourceDirPopulates;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveExistingDirKeepsMode;cmds/cp/cp_fifo_unix_test.go#TestCpFIFORecursiveRecreatesNode;cmds/cp/cp_fifo_unix_test.go#TestCpRecursiveRecreatesUnixSocket;cmds/cp/cp_posix_test.go#TestCpDoesNotCreateMissingDestinationParents;cmds/cp/cp_posix_test.go#TestCpPreserveFailsLoudlyWhenAccessTimeIsUnavailable;cmds/cp/cp_posix_test.go#TestCpNoClobberDoesNotHideSameFile;cmds/cp/cp_posix_test.go#TestCpPhysicalSymlinkSameFileIsNotReplaced;cmds/cp/cp_posix_test.go#TestCpPhysicalSymlinkDoesNotReplaceDestinationDirectory;cmds/cp/cp_posix_test.go#TestCpRecursiveRejectsSymlinkAliasedDestinationInsideSource;cmds/cp/cp_posix_test.go#TestCpRecursiveRejectsDestinationAliasedToSourceSubdirectory;cmds/cp/cp_symlink_preserve_linux_darwin_test.go#TestCpPreservePhysicalSymlinkMetadataWithoutMutatingReferent;cmds/cp/cp_umask_unix_test.go#TestCpRecursiveHonorsVirtualUmaskForAllCreatedTypes;cmds/cp/path_resolver_linux_test.go#TestCpNearPathMaxWithVirtualWorkingDirectory`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [cp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cp.html).
 
 ## `crontab`
@@ -977,6 +1016,8 @@ crontab [file]
 
 **Evidence lanes:** Go=`cmds/crontab/crontab_test.go#TestCrontabInstallListRemove;cmds/crontab/crontab_test.go#TestCrontabInvalidScheduleIsAtomic;cmds/crontab/crontab_test.go#TestCrontabPreservesWholeSourceAndEditorInputByteForByte;cmds/crontab/crontab_test.go#TestCrontabInstallSilent;cmds/crontab/crontab_test.go#TestCrontabRejectsConflictingModesAndExtraOperands;cmds/crontab/issue743_test.go#TestIssue743BackslashOnlyEscapesPercent;cmds/crontab/issue743_test.go#TestIssue743TrailingBackslashIsLiteral`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [crontab](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/crontab.html).
 
 ## `csplit`
@@ -1025,11 +1066,13 @@ csplit [-ks] [-f prefix] [-n number] file arg...
 
 **Evidence lanes:** Go=`cmds/csplit/csplit_test.go#TestCsplitLineNumber;cmds/csplit/csplit_test.go#TestCsplitRegexAndPrefix;cmds/csplit/csplit_test.go#TestCsplitRepeatedRegexAdvances;cmds/csplit/csplit_test.go#TestCsplitRepeatToEOF;cmds/csplit/csplit_test.go#TestCsplitRegexOffsets;cmds/csplit/csplit_test.go#TestCsplitPatternsAreBRE;cmds/csplit/csplit_test.go#TestCsplitEscapedDelimiterInRegex;cmds/csplit/csplit_test.go#TestCsplitSuffixSuppressRepeatAndElideEmpty;cmds/csplit/csplit_test.go#TestCsplitLineNumberRepeatAdvances;cmds/csplit/csplit_test.go#TestCsplitLineNumberRepeatToEOFCleansUp;cmds/csplit/csplit_test.go#TestCsplitLineNumberRepeatOutOfRange;cmds/csplit/csplit_test.go#TestCsplitKeepFilesRetainsOutputOnError;cmds/csplit/csplit_test.go#TestCsplitErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:csplit:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [csplit](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/csplit.html).
 
 ## `ctags`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base; development`.
 
@@ -1073,6 +1116,8 @@ ctags -x pathname...
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ctags:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [ctags](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ctags.html).
 
@@ -1124,6 +1169,8 @@ cut -f list [-d delim] [-s] [file...]
 
 **Evidence lanes:** Go=`cmds/cut/cut_test.go#TestCutFields;cmds/cut/cut_test.go#TestCutBytesAndChars;cmds/cut/cut_test.go#TestCutBytesNoSplit;cmds/cut/cut_test.go#TestCutFiles;cmds/cut/cut_test.go#TestCutUsageErrors;cmds/cut/cut_test.go#TestCutUnknownFlag;cmds/cut/cut_test.go#TestCutStandardOutputWriteError;cmds/cut/issue736_posix_test.go#TestIssue736CharacterSpansFollowLCCType;cmds/cut/issue736_posix_test.go#TestIssue736MalformedBytesAreNeverReencoded;cmds/cut/issue736_posix_test.go#TestIssue736ByteNoSplitFollowsLCCType;cmds/cut/issue736_posix_test.go#TestIssue736MultibyteDelimiter;cmds/cut/issue736_posix_test.go#TestIssue736DelimiterMustBeOneCharacterInLocale;cmds/cut/issue736_posix_test.go#TestIssue736LCCTypePrecedence;cmds/cut/issue736_posix_test.go#TestIssue736UnsupportedLocaleFailsBeforeInput;cmds/cut/issue736_posix_test.go#TestIssue736UnsupportedLocaleFailsBeforeOpeningOperand;cmds/cut/issue736_posix_test.go#TestIssue736TextFileBoundaries`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [cut](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cut.html).
 
 ## `date`
@@ -1173,6 +1220,8 @@ date [-u] [+format]
 
 **Evidence lanes:** Go=`cmds/date/date_test.go#TestDateFormats;cmds/date/date_test.go#TestDateAlternativeModifiers;cmds/date/date_test.go#TestDateTZ;cmds/date/date_test.go#TestDateLCTimePrecedence;cmds/date/date_test.go#TestDateLCTimeCompleteFormatsAndUnsupported;cmds/date/date_test.go#TestDateDefaultShape;cmds/date/date_test.go#TestDateXSISetDateOperand;cmds/date/date_test.go#TestDateXSISetDateRejectsBeforeMutationAndPropagatesFailure;cmds/date/date_test.go#TestDateXSIYearDefaultUsesSelectedTimezone;cmds/date/date_test.go#TestDateErrors;cmds/date/date_test.go#TestDateInvalidUsageDiagnostics;cmds/date/date_test.go#TestDateWriteErrorDiagnostic`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:date:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [date](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/date.html).
 
 ## `dd`
@@ -1220,6 +1269,8 @@ dd [operand...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/dd`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/dd/dd_test.go#TestDdPOSIXStatusOmitsGNUByteCountExtension;cmds/dd/dd_test.go#TestDdOperandSizeSyntax;cmds/dd/dd_test.go#TestDdSeekOnRedirectedStandardOutput;cmds/dd/conv_test.go#TestDdConvAsciiEbcdicRoundTrip;cmds/dd/dd_signal_unix_test.go#TestDdEmbeddedSIGINTReturnsStatusAndDoesNotSignalHost`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [dd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dd.html).
 
@@ -1269,6 +1320,8 @@ dd [operand...]
 
 **Evidence lanes:** Go=`cmds/df/df_test.go#TestPortableExactOutput;cmds/df/df_test.go#TestXSITotalAllocatedSpaceOption;cmds/df/df_test.go#TestXSIDefaultIncludesFreeFileSlots;cmds/df/df_test.go#TestPOSIXPortableAndTotalAreMutuallyExclusive;cmds/df/df_test.go#TestMixedOperandsPreserveSuccessfulOutput`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:df:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [df](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/df.html).
 
 ## `diff`
@@ -1316,6 +1369,8 @@ diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/diff`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/diff/diff_test.go#TestNormalFormat;cmds/diff/diff_test.go#TestUnifiedGolden;cmds/diff/diff_test.go#TestContextGolden;cmds/diff/diff_test.go#TestRunReportsBufferedFlushError;cmds/diff/diff_fifo_unix_test.go#TestDirectoryFIFOComparedByType`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:diff:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [diff](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/diff.html).
 
@@ -1365,6 +1420,8 @@ dirname string
 
 **Evidence lanes:** Go=`cmds/dirname/dirname_test.go#TestDirname;cmds/dirname/dirname_test.go#TestDirnamePOSIXSingleOperandByteSafety;cmds/dirname/dirname_test.go#TestDirnameErrors;cmds/dirname/dirname_test.go#TestDirnameWriteErrors;cmds/dirname/dirname_test.go#TestDirnameDoesNotConsumeStdin`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:dirname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [dirname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/dirname.html).
 
 ## `du`
@@ -1412,6 +1469,8 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/du`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/du/issue7_test.go#TestDuIssue7DefaultOperandIsWorkingDirectory;cmds/du/issue7_test.go#TestDuIssue7StdoutFormatRoundsUpToBlocks;cmds/du/issue7_test.go#TestDuIssue7SummarizeFileOperand;cmds/du/issue7_test.go#TestDuIssue7OneFileSystemKeepsSameDeviceEntries;cmds/du/issue7_test.go#TestDuIssue7SymlinkNotFollowedByDefault`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:du:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [du](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/du.html).
 
@@ -1461,11 +1520,13 @@ echo [string...]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestEchoIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteEcho`; provider=`-`; clauses=`XCU:echo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [echo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html).
 
 ## `ed`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -1508,6 +1569,8 @@ ed [-p string] [-s] [file]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [ed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ed.html).
 
@@ -1557,11 +1620,13 @@ env [-i] [name=value]... [utility [argument...]]
 
 **Evidence lanes:** Go=`cmds/env/env_test.go#TestEnv;cmds/env/env_test.go#TestEnvRunsCommandWithModifiedEnvironment;cmds/env/env_test.go#TestEnvCommandStdioAndExitStatus;cmds/env/env_test.go#TestEnvCommandNotFoundAndNotExecutable;cmds/env/env_test.go#TestEnvWriteErrorDiagnostic;cmds/env/env_exec_test.go#TestEnvExecPassesArgvVerbatimWithoutShell;cmds/env/env_exec_test.go#TestEnvExecChildEnvironmentOrdering;cmds/env/env_exec_test.go#TestEnvExecStdioPassthroughAndSilence;cmds/env/env_exec_test.go#TestEnvExecEmptyPathSearchesWorkingDirectoryOnly;cmds/env/env_exec_test.go#TestEnvDoubleDashEndsOptions;cmds/env/env_posix_test.go#TestEnvNoUtilityDoesNotReadStdin;cmds/env/env_posix_test.go#TestEnvValueContainsEquals`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:env:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [env](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/env.html).
 
 ## `ex`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `optional`.
 
@@ -1604,6 +1669,8 @@ env [-i] [name=value]... [utility [argument...]]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ex:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [ex](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ex.html).
 
@@ -1653,6 +1720,8 @@ expand [-t tablist] [file...]
 
 **Evidence lanes:** Go=`cmds/expand/expand_test.go#TestExpandDefaultTabsFromStdin;cmds/expand/expand_test.go#TestExpandCustomTabsAndFile;cmds/expand/expand_test.go#TestExpandTabListIncrement;cmds/expand/expand_test.go#TestExpandTabListExtend;cmds/expand/expand_test.go#TestExpandBlankSeparatedTabList;cmds/expand/expand_test.go#TestExpandTabsBeyondLastStopBecomeSingleSpaces;cmds/expand/expand_test.go#TestExpandBackspaceDecrementsColumn;cmds/expand/expand_test.go#TestExpandRejectsBadTabs;cmds/expand/expand_test.go#TestExpandOperandAccessFailureModes;cmds/expand/expand_test.go#TestExpandStandardOutputWriteError;cmds/expand/expand_test.go#TestExpandParseTabStops;cmds/expand/issue737_posix_test.go#TestIssue737LocaleCharacterBoundariesPreserveOriginalBytes;cmds/expand/issue737_posix_test.go#TestIssue737MalformedAndCLocaleBytesAreNeverReencoded;cmds/expand/issue737_posix_test.go#TestIssue737InitialRegionAndBackspaceAcrossLocales;cmds/expand/issue737_posix_test.go#TestIssue737LCCTypePrecedence;cmds/expand/issue737_posix_test.go#TestIssue737UnsupportedLocaleFailsBeforeInput;cmds/expand/issue737_posix_test.go#TestIssue737UnsupportedLocaleFailsBeforeOpeningOperand;cmds/expand/issue737_posix_test.go#TestIssue737UsageErrorPrecedesLocaleValidation;cmds/expand/issue737_posix_test.go#TestIssue737ExitStatusMatrix;cmds/expand/issue737_posix_test.go#TestIssue737ReadAndShortWriteErrors;cmds/expand/issue737_posix_test.go#TestIssue737RunReportsReadAndShortWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [expand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expand.html).
 
 ## `expr`
@@ -1701,11 +1770,13 @@ expr operand...
 
 **Evidence lanes:** Go=`cmds/expr/expr_test.go#TestExprPOSIXArithmeticAndComparison;cmds/expr/expr_test.go#TestExprPOSIXBooleanAndExitStatus;cmds/expr/expr_test.go#TestExprPOSIXMatchAndStringFunctions;cmds/expr/expr_test.go#TestExprPOSIXOperandsStdinAndDiagnostics`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [expr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expr.html).
 
 ## `false`
 
-**Evidence state:** `verified`.
+**Evidence state:** `implemented`.
 
 **Applicability:** `base`.
 
@@ -1748,6 +1819,8 @@ false
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestFalseIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteFalse`; provider=`-`; clauses=`XCU:false:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [false](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html).
 
@@ -1799,6 +1872,8 @@ fc -s [old=new] [first]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/history_test.go#TestFcIssue7FormValidation;sh:interp/history_test.go#TestFcIssue7FirstSubstitutionAndMultilineListing`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteFc`; provider=`-`; clauses=`XCU:fc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [fc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fc.html).
 
 ## `fg`
@@ -1846,6 +1921,8 @@ fc -s [old=new] [first]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_jobcontrol_interface_test.go#TestFgIssue7ParserAndCompletedStatus;sh:interp/jobcontrol_issue7_unix_test.go#TestFgIssue7OwnsTerminalReadsWaitsAndRestores`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteFg`; provider=`-`; clauses=`XCU:fg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [fg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fg.html).
 
@@ -1896,6 +1973,8 @@ file -i [-h] file...
 
 **Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError;cmds/file/issue7_test.go#TestFileIssue7MagicOptionArgumentsAndPermutation;cmds/file/issue7_test.go#TestFileIssue7DoubleDashParsing`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [file](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/file.html).
 
 ## `find`
@@ -1944,6 +2023,8 @@ find [-H|-L] path... [operand_expression...]
 
 **Evidence lanes:** Go=`cmds/find/issue7_test.go#TestFindIssue7OperatorPrecedence;cmds/find/issue7_test.go#TestFindIssue7NameLeadingPeriodNotSpecial;cmds/find/issue7_test.go#TestFindIssue7NumericArgumentTrichotomy;cmds/find/issue7_test.go#TestFindIssue7FollowOptionsOnlyLeading;cmds/find/issue7_test.go#TestFindIssue7DoubleDashEndsLeadingOptions;cmds/find/issue7_unix_test.go#TestFindIssue7NouserUnownedPositivePath;cmds/find/issue742_test.go#TestFindIssue7POSIXModeRequiresPathOperand;cmds/find/issue742_test.go#TestFindIssue7StatusAggregation;cmds/find/issue742_test.go#TestFindIssue7ExecSideEffectsAndBatching;cmds/find/issue742_test.go#TestFindIssue7LCAllPrecedenceForOKAffirmative;cmds/find/issue742_unix_test.go#TestFindIssue7OwnershipSeamUnassignedOwnerAndGroup;cmds/find/issue742_unix_test.go#TestFindIssue7NewerMissingReference;cmds/find/issue742_unix_test.go#TestFindIssue7UnreadableDirectoryTraversal`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [find](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/find.html).
 
 ## `fold`
@@ -1991,6 +2072,8 @@ fold [-bs] [-w width] [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/fold`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/fold/fold_test.go#TestFoldDefaultUsesDisplayColumns;cmds/fold/fold_test.go#TestFoldCharactersKeepsUTF8RunesWhole;cmds/fold/fold_test.go#TestFoldBytesPreservesUtf8UnitsAtSmallWidth;cmds/fold/fold_test.go#TestFoldPOSIXOperandsAndErrors;cmds/fold/issue735_posix_test.go#TestIssue735LocaleCharacterBoundariesPreserveOriginalBytes;cmds/fold/issue735_posix_test.go#TestIssue735MalformedAndCLocaleBytesAreNeverReencoded;cmds/fold/issue735_posix_test.go#TestIssue735SpacesAndControlCharactersAcrossLocales;cmds/fold/issue735_posix_test.go#TestIssue735LCCTypePrecedence;cmds/fold/issue735_posix_test.go#TestIssue735UnsupportedLocaleFailsBeforeInput;cmds/fold/issue735_posix_test.go#TestIssue735UnsupportedLocaleFailsBeforeOpeningOperand;cmds/fold/issue735_posix_test.go#TestIssue735ReadAndShortWriteErrors;cmds/fold/issue735_posix_test.go#TestIssue735RunReportsReadAndShortWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:fold:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [fold](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fold.html).
 
@@ -2041,6 +2124,8 @@ getconf [-v specification] path_var pathname
 
 **Evidence lanes:** Go=`cmds/getconf/getconf_test.go#TestAgreesWithSystemGetconf;cmds/getconf/getconf_test.go#TestPathconfAgreesWithSystem;cmds/getconf/getconf_test.go#TestDarwinConfstrAdapterMatchesEveryQueryableValue;cmds/getconf/getconf_test.go#TestUnknownVariableIsAnErrorNotUndefined;cmds/getconf/getconf_test.go#TestCompileTimeMinimumsComeFromTheStandard;cmds/getconf/getconf_test.go#TestEveryInventoryNameHasAValueClass;cmds/getconf/getconf_test.go#TestDarwinRegressionValues;cmds/getconf/getconf_test.go#TestWindowsFailsClosed;cmds/getconf/getconf_test.go#TestLinuxReportsOnlyDerivedRuntimeValues;cmds/getconf/getconf_test.go#TestMandatoryTableInventoryAndCompatibilityAliases;cmds/getconf/getconf_test.go#TestPathErrorsWriteNoStdoutAndFail;cmds/getconf/getconf_test.go#TestStandardOutputFailureIsAnError;cmds/getconf/linux_posix_test.go#TestLinuxDerivedValuesMatchHostGetconf;cmds/getconf/linux_posix_test.go#TestLinuxDerivedPathValuesMatchHostGetconf;cmds/getconf/linux_posix_test.go#TestLinuxTimestampResolutionIsExactOrUndefined;cmds/getconf/linux_posix_test.go#TestLinuxProgrammingEnvironmentMatchesUbuntuOracle;cmds/getconf/linux_posix_test.go#TestLinuxDoesNotClaimOtherProgrammingEnvironments;cmds/getconf/getconf_test.go#TestAllListsAndDoesNotTakeOperands;cmds/getconf/getconf_test.go#TestUnsupportedSpecificationIsRefused;cmds/getconf/getconf_test.go#TestPOSIXArityAndOptionForms;cmds/getconf/getconf_test.go#TestMissingOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:getconf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [getconf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getconf.html).
 
 ## `getopts`
@@ -2088,6 +2173,8 @@ getopts optstring name [arg...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestGetoptsIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteGetopts`; provider=`-`; clauses=`XCU:getopts:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [getopts](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getopts.html).
 
@@ -2139,6 +2226,8 @@ grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 
 **Evidence lanes:** Go=`cmds/grep/grep_test.go#TestGrepStdin;cmds/grep/grep_test.go#TestGrepFlagsOnFile;cmds/grep/grep_test.go#TestGrepQuiet;cmds/grep/grep_test.go#TestGrepBRE;cmds/grep/grep_test.go#TestGrepEREAndFixed;cmds/grep/grep_test.go#TestGrepMultiplePatterns;cmds/grep/grep_test.go#TestGrepPOSIXPatternListAndOptionArgument;cmds/grep/grep_test.go#TestGrepPatternFileNamedDashAndCombinedLists;cmds/grep/grep_test.go#TestGrepPOSIXOperandsStopOptionParsing;cmds/grep/grep_test.go#TestGrepVSCLocalePrecedence;cmds/grep/grep_test.go#TestGrepPOSIXDiagnosticsAndPatternFiles;cmds/grep/grep_test.go#TestGrepPOSIXRegexConformance;cmds/grep/grep_test.go#TestGrepOnlyMatchingUsesLeftmostLongest;cmds/grep/grep_test.go#TestGrepREDUPMAX2047Intervals;cmds/grep/literal_test.go#TestLiteralFastPathDifferential`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:grep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [grep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/grep.html).
 
 ## `hash`
@@ -2188,6 +2277,8 @@ hash -r
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestHashIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteHash`; provider=`-`; clauses=`XCU:hash:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [hash](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/hash.html).
 
 ## `head`
@@ -2235,6 +2326,8 @@ head [-n number] [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/head`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/head/head_test.go#TestHead;cmds/head/head_test.go#TestHeadHeaders;cmds/head/head_test.go#TestHeadErrors;cmds/head/head_test.go#TestHeadWriteError;cmds/head/head_test.go#TestHeadStandardInputOperandAndReadError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [head](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/head.html).
 
@@ -2287,6 +2380,8 @@ iconv -l
 
 **Evidence lanes:** Go=`cmds/iconv/iconv_test.go#TestUTF8ToISO88591;cmds/iconv/iconv_test.go#TestFilesResolveAgainstRunContextDir;cmds/iconv/iconv_test.go#TestMalformedInputFailsAndSilentOnlySuppressesConversionMessage;cmds/iconv/iconv_test.go#TestUnrepresentableOutputFails;cmds/iconv/iconv_test.go#TestUnsupportedEncodingFailsLoudly;cmds/iconv/iconv_test.go#TestDiscardInvalidOmitsUntranslatableCharacters;cmds/iconv/iconv_test.go#TestOmittedEncodingUsesLocaleCodeset;cmds/iconv/iconv_test.go#TestOmittedEncodingHonorsLocaleCodeset;cmds/iconv/iconv_test.go#TestListEncodings;cmds/iconv/iconv_test.go#TestSuffixRejectionPreIO;cmds/iconv/iconv_discard_state_test.go#TestDiscardStatusSurvivesLaterEmptyOperand;cmds/iconv/iconv_discard_state_test.go#TestDiscardTruncatedGB18030FourByteTailFails;cmds/iconv/issue723_posix_test.go#TestIssue723MalformedStatusDoesNotDependOnDiscard;cmds/iconv/issue723_posix_test.go#TestIssue723CharmapPathnamesUseSymbolicJoin;cmds/iconv/issue723_posix_test.go#TestIssue723SilentDoesNotSuppressInputIOErrors;cmds/iconv/issue723_posix_test.go#TestIssue723ShortWritesFailForCharmapAndList;cmds/iconv/issue732_audit_test.go#TestIssue732DiscardMalformedAndTruncatedSequences;cmds/iconv/issue732_audit_test.go#TestIssue732SilentDoesNotSuppressShortOutputWrite;cmds/iconv/issue732_audit_test.go#TestIssue732LocalePrecedenceForOmittedEncoding;cmds/iconv/issue732_audit_test.go#TestIssue732FileAndStandardInputOperandsAreOrderedStreams;cmds/iconv/issue732_audit_test.go#TestIssue732ValidMultibyteCharactersCrossEveryReadBoundary;cmds/iconv/issue732_audit_test.go#TestIssue732OpenFailureContinuesAndSilentDoesNotHideIt;cmds/iconv/issue732_audit_test.go#TestIssue732HelpShowsAllPOSIXSynopses;cmds/iconv/issue732_audit_test.go#TestIssue732CharmapDropsWholeUnrepresentableMultibyteCharacter`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:iconv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [iconv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/iconv.html).
 
 ## `id`
@@ -2338,6 +2433,8 @@ id -u [-nr] [user]
 
 **Evidence lanes:** Go=`cmds/id/id_test.go#TestIDDefault;cmds/id/id_test.go#TestIDDefaultIncludesNames;cmds/id/id_test.go#TestIDDefaultReportsRealAndEffectiveWhenDifferent;cmds/id/id_test.go#TestIDDefaultOmitsEffectiveWhenEqual;cmds/id/id_test.go#TestIDCurrentGroupsUseLiveProcessVector;cmds/id/id_test.go#TestIDOnlyFlags;cmds/id/id_unix_test.go#TestIDRealAndEffectiveSelectors;cmds/id/id_test.go#TestIDRealFlagWithOptions;cmds/id/id_test.go#TestIDRealFlag;cmds/id/id_test.go#TestIDNamedUser;cmds/id/id_test.go#TestIDNamedUserOperand;cmds/id/id_test.go#TestIDNamedUserOperandCombinations;cmds/id/id_test.go#TestIDOutputErrors;cmds/id/id_test.go#TestIDErrors;cmds/id/id_test.go#TestIDRejectsExtraUserOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:id:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [id](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/id.html).
 
 ## `jobs`
@@ -2386,6 +2483,8 @@ id -u [-nr] [user]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_jobcontrol_interface_test.go#TestJobsIssue7ParserAndFormatting`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteJobs`; provider=`-`; clauses=`XCU:jobs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [jobs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/jobs.html).
 
 ## `join`
@@ -2433,6 +2532,8 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/join`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/join/join_test.go#TestJoin;cmds/join/join_test.go#TestJoinStdin;cmds/join/join_test.go#TestJoinOrderCheck;cmds/join/join_test.go#TestJoinPOSIXOutputListAndUnpairableAggregation;cmds/join/join_test.go#TestJoinPOSIXFieldSeparators;cmds/join/join_test.go#TestJoinPOSIXOperandArityAndStderr`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [join](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/join.html).
 
@@ -2485,6 +2586,8 @@ kill [-signal_number] pid...
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestKillIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteKill`; provider=`-`; clauses=`XCU:kill:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [kill](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/kill.html).
 
 ## `ln`
@@ -2533,6 +2636,8 @@ ln [-fs] [-L|-P] source_file... target_dir
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ln`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/ln/ln_test.go#TestLnHard;cmds/ln/ln_test.go#TestLnSymbolic;cmds/ln/ln_test.go#TestLnIntoDirectory;cmds/ln/ln_test.go#TestLnForce;cmds/ln/ln_test.go#TestLnForceDoesNotRemoveDestinationDirectory;cmds/ln/ln_test.go#TestLnForceRemovalPrecedesLinkErrorAndProcessingContinues;cmds/ln/ln_test.go#TestLnLogicalAndPhysicalSourceSymlink;cmds/ln/ln_test.go#TestLnDefaultHardLinkToSymlinkIsPhysical;cmds/ln/ln_test.go#TestLnLastOfLogicalPhysicalWins;cmds/ln/ln_test.go#TestLnSymbolicIgnoresLogicalPhysical;cmds/ln/ln_test.go#TestLnSymbolicDanglingSource;cmds/ln/ln_test.go#TestLnExistingDestinationDiagnosesAndContinues;cmds/ln/ln_test.go#TestLnSameFile;cmds/ln/ln_test.go#TestLnSameFileThroughHardLinkAlias;cmds/ln/ln_test.go#TestLnSymbolicSameFile;cmds/ln/ln_test.go#TestLnSameFileDirectoryForm;cmds/ln/ln_test.go#TestLnErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [ln](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ln.html).
 
@@ -2583,11 +2688,13 @@ locale [-ck] name...
 
 **Evidence lanes:** Go=`cmds/locale/locale_test.go#TestEnvironmentListing;cmds/locale/locale_test.go#TestEnvironmentListingOrder;cmds/locale/locale_test.go#TestKeywordValues;cmds/locale/locale_test.go#TestCharmapOperand;cmds/locale/locale_test.go#TestCategoryOperandWritesEveryKeyword;cmds/locale/locale_test.go#TestCategoryHeaderFlag;cmds/locale/locale_test.go#TestCollateHasNoKeywordsButIsNotAnError;cmds/locale/locale_test.go#TestMultipleOperands;cmds/locale/locale_test.go#TestUnknownNameIsAnErrorButLaterOperandsStillRun;cmds/locale/locale_test.go#TestUnavailableLocaleIsRefusedByName;cmds/locale/locale_test.go#TestAllLocales;cmds/locale/locale_test.go#TestCharmaps;cmds/locale/locale_test.go#TestMutuallyExclusiveOptions;cmds/locale/locale_test.go#TestLocaleDoubleDashTerminatesOptions;cmds/locale/locale_test.go#TestLocaleOutputWriteErrorsFail`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:locale:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [locale](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/locale.html).
 
 ## `localedef`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -2630,6 +2737,8 @@ localedef [-c] [-f charmap] [-i sourcefile] [-u code_set_name] name
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:localedef:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [localedef](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/localedef.html).
 
@@ -2679,6 +2788,8 @@ logger string...
 
 **Evidence lanes:** Go=`cmds/logger/logger_test.go#TestOperandsJoinWithSingleSpaces;cmds/logger/logger_test.go#TestNoOperandsReadsStdinOneRecordPerLine;cmds/logger/logger_test.go#TestDefaultPriorityAndTag;cmds/logger/logger_test.go#TestDashDashEndsOptions;cmds/logger/logger_test.go#TestSinkOpenFailureIsReported;cmds/logger/logger_test.go#TestSendFailureIsReported;cmds/logger/logger_test.go#TestCloseFailureIsReported;cmds/logger/logger_test.go#TestSendFailureIsNotMaskedByClose;cmds/logger/logger_test.go#TestUnsupportedFlagFailsLoudly;cmds/logger/logger_test.go#TestEmptyStdinLogsNothingAndSucceeds;cmds/logger/logger_test.go#TestSingleEmptyStringOperandLogsAnEmptyMessage;cmds/logger/logger_test.go#TestAllEmptyStringOperandsStillJoinWithSpaces;cmds/logger/logger_test.go#TestLeadingAndTrailingEmptyOperandsJoinWithSpaces;cmds/logger/sink_unix_test.go#TestLoggerCommandDeliversOverARealLocalSyslogSocket;cmds/logger/sink_unix_test.go#TestRealSyslogSinkAlwaysStampsPIDRegardlessOfDashI;cmds/logger/sink_unix_test.go#TestRealSyslogSinkOpenSendCloseLifecycle;cmds/logger/sink_unix_test.go#TestRealSyslogSinkOpenFailureIsReported;cmds/logger/sink_windows_test.go#TestLoggerCommandRefusesToClaimDeliveryOnWindows`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:logger:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [logger](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/logger.html).
 
 ## `logname`
@@ -2727,11 +2838,13 @@ logname
 
 **Evidence lanes:** Go=`cmds/logname/logname_test.go#TestLogname;cmds/logname/logname_test.go#TestLognameIgnoresEnvironmentAccountNames;cmds/logname/logname_test.go#TestLognameNoLoginName;cmds/logname/logname_test.go#TestLognameRejectsOperandsAndUnknownOptions;cmds/logname/logname_test.go#TestResolveLoginUID;cmds/logname/logname_test.go#TestLoginNameHasNoEffectiveUserFallback;cmds/logname/logname_test.go#TestLognameOutputErrorsAndRunContextIsolation;cmds/logname/logname_test.go#TestLoginNameFromLoginUIDEmptyOffLinux`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:logname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [logname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/logname.html).
 
 ## `lp`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -2774,6 +2887,8 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [lp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/lp.html).
 
@@ -2823,11 +2938,13 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Evidence lanes:** Go=`cmds/ls/ls_test.go#TestDefaultSortAndOnePerLine;cmds/ls/ls_test.go#TestMixedOperandsHeaders;cmds/ls/ls_test.go#TestLongFormat;cmds/ls/ls_test.go#TestAllAndAlmostAll;cmds/ls/ls_test.go#TestDirectoryFlag;cmds/ls/ls_test.go#TestRecursive;cmds/ls/ls_test.go#TestReverse;cmds/ls/ls_test.go#TestSortTime;cmds/ls/ls_test.go#TestSortSize;cmds/ls/ls_test.go#TestInode;cmds/ls/ls_test.go#TestNonexistentOperand;cmds/ls/ls_posix_test.go#TestCommaFormatNoTrailingSeparator;cmds/ls/ls_posix_test.go#TestCommaFormatWrapsAtWidth;cmds/ls/ls_posix_test.go#TestColumnsDown;cmds/ls/ls_posix_test.go#TestColumnsAcross;cmds/ls/ls_posix_test.go#TestColumnsHonorsColumnsEnv;cmds/ls/ls_posix_test.go#TestHideControlChars;cmds/ls/ls_posix_test.go#TestSizeBlocksShortFormat;cmds/ls/ls_posix_test.go#TestDereferenceDirectoryEntries;cmds/ls/ls_posix_test.go#TestOrderIndicatorClassifyAndSlash;cmds/ls/ls_posix_test.go#TestSizeBlocksPOSIX512ByteDefault;cmds/ls/ls_posix_test.go#TestLsDoubleDashTerminatesOptions`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ls:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [ls](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ls.html).
 
 ## `m4`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -2871,11 +2988,13 @@ m4 [-s] [-D name[=val]]... [-U name]... file...
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [m4](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/m4.html).
 
 ## `mailx`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base; optional`.
 
@@ -2922,11 +3041,13 @@ mailx -f [-HiNn] [-F] [file]
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mailx:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [mailx](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mailx.html).
 
 ## `make`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `development`.
 
@@ -2970,11 +3091,13 @@ mailx -f [-HiNn] [-F] [file]
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:make:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [make](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/make.html).
 
 ## `man`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -3017,6 +3140,8 @@ man [-k] name...
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:man:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [man](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/man.html).
 
@@ -3066,6 +3191,8 @@ mesg [y|n]
 
 **Evidence lanes:** Go=`cmds/mesg/mesg_test.go#TestQueryReportsStateThroughExitStatus;cmds/mesg/mesg_test.go#TestSetTogglesOnlyTheGroupWriteBit;cmds/mesg/mesg_test.go#TestBadOperandAndExtraOperand;cmds/mesg/mesg_test.go#TestMesgDoubleDashTerminatesOptions;cmds/mesg/mesg_test.go#TestMesgOutputWriteError;cmds/mesg/mesg_test.go#TestMesgTerminalMetadataErrors;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameUsesRunContextStreamsInOrder;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameRejectsCharacterDeviceThatIsNotTerminal;cmds/mesg/tty_unix_test.go#TestMesgChangesRealPTYPermissionAndStatus`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [mesg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mesg.html).
 
 ## `mkdir`
@@ -3113,6 +3240,8 @@ mkdir [-p] [-m mode] dir...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mkdir`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/mkdir/mkdir_test.go#TestMkdirSimple;cmds/mkdir/mkdir_test.go#TestMkdirExisting;cmds/mkdir/mkdir_test.go#TestMkdirParents;cmds/mkdir/mkdir_test.go#TestMkdirParentsTrailingSlash;cmds/mkdir/mkdir_test.go#TestMkdirContinuesAfterOperandError;cmds/mkdir/mkdir_test.go#TestMkdirMissingParentWithoutP;cmds/mkdir/mkdir_test.go#TestMkdirMode;cmds/mkdir/mkdir_test.go#TestMkdirModeErrors;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicMode;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicModeStartsAtDefault;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicModeSubtractsFromDefault;cmds/mkdir/mkdir_test.go#TestMkdirSymbolicModeApply;cmds/mkdir/mkdir_test.go#TestMkdirUsageErrors;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsRetainOwnerWriteAndSearch;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsTrailingSlashFinalMode;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsRejectsDanglingSymlink;cmds/mkdir/mkdir_test.go#TestMkdirDashOperandIsPathname;cmds/mkdir/mkdir_test.go#TestMkdirEmptyOperandFailsAndContinues;cmds/mkdir/mkdir_test.go#TestMkdirVirtualUmaskDefaultAndParents;cmds/mkdir/mkdir_test.go#TestMkdirVirtualUmaskSymbolicImplicitWho;cmds/mkdir/mkdir_test.go#TestMkdirVirtualUmaskRestrictsInitialMkdirModes;cmds/mkdir/mkdir_test.go#TestMkdirVirtualUmaskCorrectionPreservesInheritedSpecialBits;cmds/mkdir/mkdir_test.go#TestMkdirInjectedFilesystemErrors;cmds/mkdir/mkdir_test.go#TestMkdirInjectedChmodErrorLeavesCreatedDirectoryAndFails;cmds/mkdir/mkdir_unix_test.go#TestMkdirParentsAcceptsSymlinkToDirectory;cmds/mkdir/mkdir_unix_test.go#TestMkdirPermissionDeniedContinuesAfterOperand;cmds/mkdir/mkdir_unix_test.go#TestMkdirVirtualUmaskPreservesInheritedSetgid;cmds/mkdir/mkdir_windows_test.go#TestMkdirVirtualUmaskDoesNotApproximatePOSIXModesOnWindows`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [mkdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkdir.html).
 
@@ -3162,6 +3291,8 @@ mkfifo [-m mode] file...
 
 **Evidence lanes:** Go=`cmds/mkfifo/mkfifo_test.go#TestMkfifoCreatesFIFO;cmds/mkfifo/mkfifo_test.go#TestMkfifoDefaultModeHonorsVirtualUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoDefaultModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicModeHonorsOmittedWhoUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoSymbolicModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoOctalSpecialBits;cmds/mkfifo/mkfifo_test.go#TestMkfifoMultipleOperands;cmds/mkfifo/mkfifo_test.go#TestMkfifoPartialFailureContinues;cmds/mkfifo/mkfifo_test.go#TestMkfifoDashOperandIsPathname;cmds/mkfifo/mkfifo_test.go#TestMkfifoDoubleDashEndsOptions;cmds/mkfifo/mkfifo_test.go#TestMkfifoDoesNotConsumeStdin;cmds/mkfifo/mkfifo_test.go#TestMkfifoErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [mkfifo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkfifo.html).
 
 ## `more`
@@ -3209,6 +3340,8 @@ mkfifo [-m mode] file...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/more`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/more/more_test.go#TestMoreReadsStdin;cmds/more/more_test.go#TestMoreConcatenatesFiles;cmds/more/more_test.go#TestMoreSqueezeAndFromLine;cmds/more/more_test.go#TestMoreNonTerminalIgnoresFAndP;cmds/more/more_test.go#TestMorePOSIXNonTerminalOnlySqueezeTakesEffect;cmds/more/more_test.go#TestMorePOSIXLineCountMustBePositive;cmds/more/pager_test.go#TestPagerSeparatesContentAndTerminalUI;cmds/more/pager_test.go#TestPagerStreamsFirstScreenBeforeSourceEOF;cmds/more/pager_test.go#TestPagerPromptVisibleBeforeRead;cmds/more/pager_test.go#TestPagerOpenTTYFailureIsNotCopyFallback;cmds/more/tty_windows_test.go#TestWindowsControllingTerminalIsExplicitlyUnsupported;cmds/more/more_test.go#TestMoreAcceptsSupportedDisplayFlags;cmds/more/more_test.go#TestMoreEnvironmentMORE;cmds/more/more_test.go#TestMoreReadWriteErrors;cmds/more/more_test.go#TestNormalizeTerminalLinePOSIXOverstrikesAndPlainMode;cmds/more/posix_interactive_test.go#TestPOSIXCommandGrammarParsesCountsArgumentsAndControls;cmds/more/posix_interactive_test.go#TestPOSIXMovementMarksAndPositionCommands;cmds/more/posix_interactive_test.go#TestPOSIXSearchIgnoreCaseInvertRepeatAndReverse;cmds/more/posix_interactive_test.go#TestPOSIXTagLineAndPatternStart;cmds/more/posix_interactive_test.go#TestPOSIXEditorSelectionAndResumePosition;cmds/more/posix_interactive_test.go#TestPOSIXMoreLinesColumnsPrecedence;cmds/more/posix_interactive_test.go#TestPOSIXInitialCommandRunsForEveryNewFile`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:more:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [more](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/more.html).
 
@@ -3259,6 +3392,8 @@ mv [-if] source_file... target_dir
 
 **Evidence lanes:** Go=`cmds/mv/mv_test.go#TestMvRenameFile;cmds/mv/mv_test.go#TestMvIntoDir;cmds/mv/mv_test.go#TestMvDirRename;cmds/mv/mv_test.go#TestMvDirectoryOntoExistingDirectoryInTarget;cmds/mv/mv_test.go#TestMvMultipleToNonDir;cmds/mv/mv_test.go#TestMvMissingSource;cmds/mv/mv_test.go#TestMvSameFile;cmds/mv/mv_test.go#TestMvPromptsBeforeSameFileResolution;cmds/mv/mv_test.go#TestMvLastOverwriteOptionWins;cmds/mv/mv_test.go#TestMvPromptUnwritable;cmds/mv/mv_test.go#TestMvInteractiveRefusal;cmds/mv/mv_test.go#TestMvInteractiveRefusalContinuesAndFails;cmds/mv/mv_test.go#TestMvInteractiveLeadingWhitespaceIsNotAffirmative;cmds/mv/mv_test.go#TestMvUnsupportedLCMessagesFailsClosed;cmds/mv/mv_test.go#TestMvCopyFallback;cmds/mv/mv_test.go#TestMvCopyFallbackFailures;cmds/mv/mv_test.go#TestMvEXDEVCharacteristicFailuresDiagnoseButStillMove;cmds/mv/mv_test.go#TestMvEXDEVDirectoryCharacteristicFailureDiagnosesButStillMoves;cmds/mv/mv_test.go#TestMvEXDEVSymlinkCharacteristicFailuresDiagnoseButStillMove;cmds/mv/mv_test.go#TestMvEXDEVReplacesEmptyDestinationDirectoryBeforeDuplication;cmds/mv/mv_test.go#TestMvEXDEVDoesNotRecursivelyRemoveNonemptyDestination;cmds/mv/mv_test.go#TestMvContinuesPastOperandErrors;cmds/mv/mv_test.go#TestMvSymlinkOperandMovesLinkItself;cmds/mv/mv_test.go#TestMvDistinctSymlinksToSameReferentAreNotSameFile;cmds/mv/mv_test.go#TestMvUpdateDoesNotBypassSameFileDiagnostic;cmds/mv/mv_test.go#TestMvUsageErrors;cmds/mv/mv_symlink_attrs_unix_test.go#TestMvEXDEVPreservesSymlinkAttributes`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mv:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [mv](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mv.html).
 
 ## `newgrp`
@@ -3307,11 +3442,13 @@ newgrp [-l] [group]
 
 **Evidence lanes:** Go=`cmds/newgrp/newgrp_test.go#TestNoOperandRevertsToThePrimaryGroup;cmds/newgrp/newgrp_test.go#TestNoOperandDatabaseGroupFailureStillLaunchesUnchanged;cmds/newgrp/newgrp_test.go#TestNumericOperandPrefersTheGroupName;cmds/newgrp/newgrp_test.go#TestNumericOperandUsesTheNonNegativeGIDValue;cmds/newgrp/newgrp_test.go#TestSupplementaryGroupChangeRules;cmds/newgrp/newgrp_test.go#TestRefusedChangeStillStartsTheShellWithTheGroupUnchanged;cmds/newgrp/newgrp_test.go#TestKernelRefusalRetriesWithoutTheCredential;cmds/newgrp/newgrp_test.go#TestSuccessfulGroupChangePropagatesShellStatusThroughSpawnSeam;cmds/newgrp/newgrp_test.go#TestLoginShellArgv0AndDirectory;cmds/newgrp/newgrp_test.go#TestLoginEnvironment;cmds/newgrp/newgrp_test.go#TestLoginEnvironmentAndStatusSurviveKernelAssignmentFailure;cmds/newgrp/newgrp_test.go#TestUsageErrorsStartNoShell;cmds/newgrp/newgrp_test.go#TestAuthorize;cmds/newgrp/newgrp_test.go#TestPromptFailureIsDeniedNotAssumed;cmds/newgrp/spawn_unix_test.go#TestSyscallCredentialImplementsThePlan;cmds/newgrp/spawn_unix_test.go#TestSupplementaryCapacityFallbackRetainsMandatoryGIDPlan;cmds/newgrp/spawn_unix_test.go#TestSupplementaryCapacityFallbackIsNarrow;cmds/newgrp/spawn_unix_test.go#TestPasswordPromptUsesStderrAndReadsControllingTTY;cmds/newgrp/spawn_unix_test.go#TestDefaultSpawnShellPreservesArgumentsDirectoryEnvironmentAndIO;cmds/newgrp/spawn_unix_test.go#TestDefaultSpawnShellAppliesRunContextVirtualUmask;cmds/newgrp/spawn_unix_test.go#TestRunUmaskHelperRequiresCompleteControlAndPreservesExecInputs;cmds/newgrp/spawn_unix_test.go#TestRunUmaskHelperRejectsInvalidControlOrMaskWithoutExec;cmds/newgrp/spawn_unix_test.go#TestDefaultSpawnShellPropagatesSignalStatus;cmds/newgrp/spawn_windows_test.go#TestWindowsSpawnFailsLoudly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [newgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/newgrp.html).
 
 ## `nice`
 
-**Evidence state:** `verified`.
+**Evidence state:** `implemented`.
 
 **Applicability:** `base`.
 
@@ -3355,11 +3492,13 @@ nice [-n increment] utility [argument...]
 
 **Evidence lanes:** Go=`cmds/nice/nice_posix_test.go#TestParseNiceOptions;cmds/nice/nice_posix_test.go#TestNicePOSIXModeRequiresUtilityOperand;cmds/nice/nice_posix_test.go#TestNiceCommandExitStatuses;cmds/nice/nice_posix_test.go#TestResolveCommandResolvesPathEntriesFromRunContext;cmds/nice/nice_resolve_test.go#TestNicePathUnsetFindsCommand;cmds/nice/nice_resolve_test.go#TestNiceChildExitPropagates;cmds/nice/nice_resolve_test.go#TestNiceDoubleDashStopsOptionParsing;cmds/nice/nice_priority_test.go#TestNiceDoesNotAlterOwnPriority;cmds/nice/nice_priority_test.go#TestNiceReportsSignalExitCode;cmds/nice/nice_exec_unix_test.go#TestNiceRunsExecutableTextWithoutShebang;cmds/nice/nice_barrier_unix_test.go#TestPriorityHelperWaitsForBarrierBeforeExec;cmds/nice/nice_barrier_unix_test.go#TestNicePreservesEnvironmentThatCollidesWithFormerHelperMarker;cmds/nice/nice_barrier_unix_test.go#TestPriorityHelperPreservesENOEXECScriptFallback;cmds/nice/nice_barrier_unix_test.go#TestNiceUtilityStartsAtAdjustedPriority;cmds/nice/nice_barrier_unix_test.go#TestNicePassesUtilityArgumentsAndStandardStreamsUnchanged;cmds/nice/nice_barrier_unix_test.go#TestNiceAdjustmentFailureStillInvokesUtilityAndUtilityStatusWins;cmds/nice/nice_barrier_unix_test.go#TestPriorityHelperExecFailuresUsePOSIXStatuses`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [nice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nice.html).
 
 ## `nm`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `xsi; development`.
 
@@ -3403,6 +3542,8 @@ nice [-n increment] utility [argument...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [nm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nm.html).
 
@@ -3451,6 +3592,8 @@ nohup utility [argument...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/nohup`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/nohup/nohup_test.go#TestNohupMissing;cmds/nohup/nohup_test.go#TestNohupInternalErrorStatusIsUnconditional;cmds/nohup/nohup_test.go#TestNohupRunsCommand;cmds/nohup/nohup_test.go#TestNohupFoundButNotExecutableReturns126;cmds/nohup/nohup_test.go#TestNohupNotFoundReturns127;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalEquivalentOutput;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalOutput;cmds/nohup/nohup_test.go#TestNohupFallsBackToHomeNohupOut;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalInput;cmds/nohup/nohup_test.go#TestNohupTerminalRedirectionDiagnostics;cmds/nohup/nohup_test.go#TestNohupDevNullOpenFailure;cmds/nohup/nohup_signal_unix_test.go#TestNohupIgnoresHangupForChild;cmds/nohup/nohup_signal_unix_test.go#TestNohupInvocationSurvivesHangup;cmds/nohup/nohup_signal_unix_test.go#TestNohupPreservesInvocationEnvironment`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nohup:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [nohup](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nohup.html).
 
@@ -3501,6 +3644,8 @@ od [-v] [-A address_base] [-j skip] [-N count] [-t type_string]... [file...]
 
 **Evidence lanes:** Go=`cmds/od/od_test.go#TestODConcatenatedFormatStrings;cmds/od/od_test.go#TestODMultipleFileConcatenation;cmds/od/od_test.go#TestODXSIOffsetGating;cmds/od/od_test.go#TestODSkipAndCountAcrossFiles;cmds/od/od_test.go#TestODCTypeSizesFollowTargetABI;cmds/od/od_test.go#TestODPartialItemAppendsNullBytes;cmds/od/od_test.go#TestODOutputAndCloseErrorsSetStatus;cmds/od/od_test.go#TestODMissingFileContinues;cmds/od/od_test.go#TestODCTypeLocaleRenderingAndPrecedence;cmds/od/od_test.go#TestODCTypeUTF8ContinuationAcrossOutputGroups;cmds/od/od_test.go#TestODUTF8FullASCIIGroupDoesNotWaitForLookahead;cmds/od/od_test.go#TestODLocaleCategoriesFailClosedOnlyWhenUsed;cmds/od/od_test.go#TestODNumericLocaleAllFloatingTypesAndABIs;cmds/od/od_test.go#TestODNumericLocalePrecedenceAndScientificRadix`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:od:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [od](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/od.html).
 
 ## `paste`
@@ -3549,11 +3694,13 @@ paste [-s] [-d list] file...
 
 **Evidence lanes:** Go=`cmds/paste/paste_test.go#TestPasteParallel;cmds/paste/paste_test.go#TestPasteSerial;cmds/paste/paste_test.go#TestPasteStdin;cmds/paste/paste_test.go#TestPasteErrors;cmds/paste/paste_test.go#TestPasteUnknownFlag;cmds/paste/paste_test.go#TestPasteHelpAndVersion;cmds/paste/issue738_posix_test.go#TestIssue738LocaleAwareDelimiterDecoding;cmds/paste/issue738_posix_test.go#TestIssue738LCCTypePrecedence;cmds/paste/issue738_posix_test.go#TestIssue738UnsupportedLocaleFailsBeforeOpeningOperand;cmds/paste/issue738_posix_test.go#TestIssue738RepeatedDashUnderSerial;cmds/paste/issue738_posix_test.go#TestIssue738TwelveOperands;cmds/paste/issue738_posix_test.go#TestIssue738BackslashEscapedDelimiter;cmds/paste/issue738_posix_test.go#TestIssue738SerialZeroDelimiter;cmds/paste/issue738_posix_test.go#TestIssue738InjectedReadErrorParallel;cmds/paste/issue738_posix_test.go#TestIssue738InjectedReadErrorSerial;cmds/paste/issue738_posix_test.go#TestIssue738OutputWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:paste:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [paste](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/paste.html).
 
 ## `patch`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `base`.
 
@@ -3596,6 +3743,8 @@ patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:patch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [patch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/patch.html).
 
@@ -3644,6 +3793,8 @@ pathchk [-p] [-P] pathname...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pathchk`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/pathchk/pathchk_test.go#TestPathchkPosixPathLimitIncludesTerminator;cmds/pathchk/pathchk_test.go#TestPathchkPosixNameLimitAndPortableCharacters;cmds/pathchk/pathchk_test.go#TestPathchkPosixDoesNotRejectLeadingHyphen;cmds/pathchk/pathchk_test.go#TestPathchkMultipleOperandsAggregateStatus;cmds/pathchk/pathchk_test.go#TestPathchkMissingOperandUsage;cmds/pathchk/pathchk_test.go#TestPathchkAllowsMissingDirectoryPrefix;cmds/pathchk/pathchk_test.go#TestPathchkRejectsNonDirectoryPrefix;cmds/pathchk/pathchk_unix_test.go#TestPathchkRejectsUnsearchableDirectoryPrefix;cmds/pathchk/pathchk_unix_test.go#TestPathchkRejectsDanglingSymlinkPrefix;cmds/pathchk/pathchk_test.go#TestPathchkDefaultPathLimitIncludesTerminator;cmds/pathchk/pathchk_test.go#TestPathchkDefaultUsesContainingDirectoryNameLimit;cmds/pathchk/pathchk_test.go#TestPathchkDefaultPreservesResolutionSyntax;cmds/pathchk/pathchk_unix_test.go#TestPathchkPreservesSymlinkBeforeDotDotResolution;cmds/pathchk/issue741_posix_test.go#TestIssue741LimitsQueryErrorIsDiagnosed;cmds/pathchk/issue741_posix_test.go#TestIssue741IndeterminateLimitsSkipLengthChecks;cmds/pathchk/issue741_posix_test.go#TestIssue741DeepContainingDirectoryQueryError;cmds/pathchk/issue741_posix_test.go#TestIssue741DeepContainingDirectoryIndeterminateNameLimit;cmds/pathchk/issue741_posix_test.go#TestIssue741LimitsFailuresAggregateAcrossOperands;cmds/pathchk/issue741_linux_test.go#TestIssue741LinuxAcceptsFilesystemValidNonUTF8Name`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pathchk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [pathchk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pathchk.html).
 
@@ -3696,6 +3847,8 @@ pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [f
 
 **Evidence lanes:** Go=`cmds/pax/pax_test.go#TestWriteThenListThenExtractRoundTrips;cmds/pax/archive_lane_test.go#TestBlockSizeGrammar;cmds/pax/archive_lane_test.go#TestWriteWithoutOperandsReadsStdinAndContinuesAfterPathFailure;cmds/pax/follow_test.go#TestDashHFollowsCommandLineSymlinksOnly;cmds/pax/wave_test.go#TestModeOptionLegality;cmds/pax/list_io_test.go#TestPaxListModePropagatesOutputErrors;cmds/pax/issue715_test.go#TestInteractiveReadPreflightsAndRenamesHardlinks;cmds/pax/issue715_test.go#TestInteractiveFailuresAreImmediateAndNonzero;cmds/pax/issue715_test.go#TestCopyLinkRegularAndSymlinkFollowModes;cmds/pax/issue715_test.go#TestResetAccessTimesWriteAndCopyAndFailureStatus;cmds/pax/issue716_test.go#TestPreservationGrammarOrderedAndRepeated;cmds/pax/issue716_test.go#TestExtractDefaultCreationAndPreservedMode;cmds/pax/issue716_test.go#TestPreservationFailuresKeepFilesClearSetIDAndContinue;cmds/pax/issue716_test.go#TestSymlinkPreservationUsesNoFollowOwnerAndTimes;cmds/pax/issue717_test.go#TestPAXOptionGrammarWhitespaceEscapedCommaAndTrailingComma;cmds/pax/issue717_test.go#TestPAXOptionRepeatedPrecedenceDeleteAdditiveAndListConcatenation;cmds/pax/issue717_test.go#TestPAXOptionModeAndFormatApplicabilityFailClosed;cmds/pax/issue717_test.go#TestPAXReadAndListHeaderPrecedence;cmds/pax/issue717_test.go#TestPAXInvalidActionsBypassAndUTF8;cmds/pax/issue717_test.go#TestPAXListFormatConversionsAndConcatenation;cmds/pax/issue717_test.go#TestPAXCarriedCodesetByteTranscoding;cmds/pax/issue717_test.go#TestPAXListTimeCompleteIssue7DateConversions;cmds/pax/issue717_test.go#TestPAXMalformedListFormatFailsClosed`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [pax](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html).
 
 ## `pr`
@@ -3745,6 +3898,8 @@ pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l l
 
 **Evidence lanes:** Go=`cmds/pr/pr_test.go#TestPRDefaultPageStructure;cmds/pr/pr_test.go#TestPRHeaderHonorsInvocationTZAndLCTime;cmds/pr/pr_test.go#TestPRNumberIndentAndDoubleSpace;cmds/pr/pr_test.go#TestPRPagesRangeAndDateFormat;cmds/pr/pr_test.go#TestPRPausePerPageWritesAlertAndReadsDevTTY;cmds/pr/pr_test.go#TestPRPauseInterrupted;cmds/pr/pr_test.go#TestPRVerticalColumns;cmds/pr/pr_test.go#TestPRMerge;cmds/pr/pr_test.go#TestPRMergeAssumesPOSIXTabExpansionAndReplacement;cmds/pr/pr_test.go#TestPROptionalExpandArgument;cmds/pr/pr_test.go#TestPRTerminalDefersFileDiagnosticsUntilOutputCompletes;cmds/pr/pr_test.go#TestPRStreamReadAndShortWriteFailuresAreNonzero;cmds/pr/pr_test.go#TestPRPOSIXLYCorrectDifferentials`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [pr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pr.html).
 
 ## `printf`
@@ -3792,6 +3947,8 @@ printf format [argument...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestPrintfIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRoutePrintf`; provider=`-`; clauses=`XCU:printf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [printf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/printf.html).
 
@@ -3841,6 +3998,8 @@ printf format [argument...]
 
 **Evidence lanes:** Go=`cmds/ps/ps_test.go#TestPSAllPOSIXSelectionOptionsEndToEnd;cmds/ps/ps_test.go#TestPSXIsNotAnIssue7Option;cmds/ps/ps_test.go#TestPSPOSIXListSeparatorsAndFormatHeaders;cmds/ps/ps_test.go#TestPSRejectsEmptyMandatoryOptionArgumentsAndOperands;cmds/ps/ps_test.go#TestPSIdentityLookupAndNumericFallback;cmds/ps/ps_test.go#TestPSHermeticEnumeratorSelectionOrderingAndFields;cmds/ps/ps_test.go#TestPSXSIStandardDefaultLayouts;cmds/ps/ps_test.go#TestPSPOSIXRequiredFormatNamesAndHeaders;cmds/ps/ps_test.go#TestPSTerminalFormatMatchesWhoAndWchanDistinguishesRunning;cmds/ps/ps_test.go#TestPSEnvironmentIsInvocationLocal;cmds/ps/ps_test.go#TestPSEnrichLinuxProcFixture;cmds/ps/ps_test.go#TestPSLinuxTimingUnavailableDoesNotInventValues;cmds/ps/process_linux_test.go#TestPSTTYNameDecodesLinuxDevptsMajorRange;cmds/ps/process_linux_test.go#TestPSEnrichLinuxCmdlinePreservesArgvZeroAndEmptyArguments;cmds/ps/process_linux_test.go#TestPSLinuxTimingRejectsOverflowAndEmptyWchan;cmds/ps/ps_test.go#TestPSLiveLinuxEnumeratorOwnProcess;cmds/ps/ps_sigttin_unix_test.go#TestPSUsesLiveOutputTerminalWidthWhenColumnsUnset;cmds/ps/ps_sigttin_unix_test.go#TestPSRetainsDefaultSIGTTINDisposition;cmds/ps/ps_nonlinux_test.go#TestPSNonLinuxLiveSourceFailsExplicitly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ps:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [ps](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ps.html).
 
 ## `pwd`
@@ -3888,6 +4047,8 @@ pwd [-L|-P]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestPwdIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRoutePwd`; provider=`-`; clauses=`XCU:pwd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [pwd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pwd.html).
 
@@ -3937,6 +4098,8 @@ read [-r] var...
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestReadIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteRead`; provider=`-`; clauses=`XCU:read:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [read](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/read.html).
 
 ## `renice`
@@ -3984,6 +4147,8 @@ renice [-g|-p|-u] -n increment ID...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/renice`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/renice/renice_test.go#TestMissingIncrementOptionIsUsageError;cmds/renice/renice_test.go#TestObsolescentFirstOperandFormIsRefusedLoudly;cmds/renice/renice_test.go#TestIncrementForms;cmds/renice/renice_test.go#TestDuplicateIncrementIsRefusedAndLateIncrementIsAccepted;cmds/renice/renice_test.go#TestPositionalSelectorSwitchingDispatchesExactWhich;cmds/renice/renice_test.go#TestRetainedLongOptionsAndHelpVersionAliases;cmds/renice/renice_test.go#TestOrderedMixedSuccessAndFailureContinues;cmds/renice/renice_test.go#TestSuccessIsSilentOnStdout;cmds/renice/renice_test.go#TestIncrementIsRelativeAndBoundsAreSchedulerClamped;cmds/renice/renice_test.go#TestUserOperandResolution;cmds/renice/renice_test.go#TestZeroProcessIDFailsClosedInEmbeddingAndPassesInDedicatedProcess;cmds/renice/renice_test.go#TestCollectiveIncrementIsPerProcessAndContinuesWithinSelector;cmds/renice/renice_test.go#TestFullWidthNumericUIDWhereHostIntPermits;cmds/renice/prio_linux_test.go#TestLinuxMembersUsesPGroupAndSavedUID;cmds/renice/prio_unix_test.go#TestRealPositiveIncrementOnOwnedChildAndGroup`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:renice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [renice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/renice.html).
 
@@ -4034,6 +4199,8 @@ rm -f [-iRr] [file...]
 
 **Evidence lanes:** Go=`cmds/rm/rm_test.go#TestRmFile;cmds/rm/rm_test.go#TestRmMissing;cmds/rm/rm_test.go#TestRmOperandErrors;cmds/rm/rm_test.go#TestRmDirWithoutR;cmds/rm/rm_test.go#TestRmRecursive;cmds/rm/rm_test.go#TestRmCapitalRAlias;cmds/rm/rm_test.go#TestRmInteractivePrompt;cmds/rm/rm_test.go#TestRmRecursiveInteractivePrompts;cmds/rm/rm_test.go#TestRmRecursiveInteractiveDeclinedBranch;cmds/rm/rm_test.go#TestRmImplicitPromptForUnwritable;cmds/rm/rm_test.go#TestRmImplicitDirectoryPromptPrecedesDescent;cmds/rm/rm_test.go#TestRmImplicitPromptSkipsSymlinkOperands;cmds/rm/rm_test.go#TestRmLastPromptOptionWins;cmds/rm/rm_test.go#TestRmRejectsDotAndDotDotOperands;cmds/rm/rm_test.go#TestRmRejectsDotComponentsBeforeTraversal;cmds/rm/rm_test.go#TestRmAllowsDotComponentsBeforeFinalName;cmds/rm/rm_test.go#TestRmRootRefused;cmds/rm/rm_test.go#TestRmPreserveRootFinalSymlinkPolicy;cmds/rm/rm_test.go#TestRmPreserveRootGuardsDashDRemoval;cmds/rm/rm_test.go#TestRmContinuesPastErrors;cmds/rm/rm_test.go#TestRmInteractiveLeadingWhitespaceIsNotAffirmative;cmds/rm/rm_test.go#TestRmInteractiveUsesGermanYesexpr;cmds/rm/rm_test.go#TestRmInteractiveRejectsUnsupportedLCMessages`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:rm:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [rm](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rm.html).
 
 ## `rmdir`
@@ -4081,6 +4248,8 @@ rmdir [-p] dir...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/rmdir`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/rmdir/rmdir_test.go#TestRmdirEmpty;cmds/rmdir/rmdir_test.go#TestRmdirNonEmpty;cmds/rmdir/rmdir_test.go#TestRmdirIgnoreFailOnNonEmpty;cmds/rmdir/rmdir_test.go#TestRmdirParents;cmds/rmdir/rmdir_test.go#TestRmdirParentsStopsOnNonEmpty;cmds/rmdir/rmdir_test.go#TestRmdirParentsWithTrailingSlash;cmds/rmdir/rmdir_test.go#TestRmdirOperandOrderMatters;cmds/rmdir/rmdir_test.go#TestRmdirContinuesPastErrors;cmds/rmdir/rmdir_test.go#TestRmdirDotBare;cmds/rmdir/rmdir_test.go#TestRmdirDotDotBareFailsNaturally;cmds/rmdir/rmdir_test.go#TestRmdirRealDirectoryDotDotMayBeIgnored;cmds/rmdir/rmdir_test.go#TestRmdirMissingPrefixDotDotIsNotCleaned;cmds/rmdir/rmdir_test.go#TestRmdirNonDirectoryPrefixDotDotIsNotIgnored;cmds/rmdir/rmdir_test.go#TestRmdirTrailingDotComponent;cmds/rmdir/rmdir_test.go#TestRmdirTrailingDotDotComponent;cmds/rmdir/rmdir_test.go#TestRmdirTrailingSlash;cmds/rmdir/rmdir_test.go#TestRmdirIgnoreNonEmptyWithParents;cmds/rmdir/rmdir_test.go#TestRmdirIgnoreNonEmptyDoesNotIgnoreOtherErrors;cmds/rmdir/rmdir_test.go#TestRmdirDoubleDashOperand;cmds/rmdir/rmdir_test.go#TestRmdirDashOperand;cmds/rmdir/rmdir_test.go#TestRmdirDoesNotConsumeStdin;cmds/rmdir/rmdir_test.go#TestRmdirDiagnosticWriteFailureStillFails;cmds/rmdir/rmdir_unix_test.go#TestRmdirPermissionDeniedContinuesAfterOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:rmdir:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [rmdir](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/rmdir.html).
 
@@ -4132,6 +4301,8 @@ sed [-n] [-e script]... -f script_file [-f script_file]... [file...]
 
 **Evidence lanes:** Go=`cmds/sed/sed_test.go#TestSedPreservesMixedExpressionFileOrder;cmds/sed/sed_test.go#TestSedPreservesMissingFinalNewline;cmds/sed/sed_test.go#TestSedBREGroupsAndBackrefs;cmds/sed/sed_test.go#TestSedBREInterval;cmds/sed/sed_test.go#TestSedDeleteAndRange;cmds/sed/sed_test.go#TestSedPreparesWriteFilesBeforeProcessing;cmds/sed/sed_test.go#TestSedPOSIXRegexConformance;cmds/sed/sed_test.go#TestSedExitCodeSeverityTiers`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [sed](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sed.html).
 
 ## `sh`
@@ -4182,6 +4353,8 @@ sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...
 
 **Evidence lanes:** Go=`-`; shell semantic=`bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go#TestProfileBShUtilityEntrypointContract`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteSh;bashy:internal/cli/main_test.go#TestStrictPosixEngagedByArgv0Sh;bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go#TestProfileBShUtilityEntrypointContract`; provider=`-`; clauses=`XCU:sh:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [sh](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html).
 
 ## `sleep`
@@ -4229,6 +4402,8 @@ sleep time
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sleep`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/sleep/sleep_test.go#TestSleepZeroish;cmds/sleep/sleep_test.go#TestSleepIssue7IntegralDuration;cmds/sleep/sleep_test.go#TestSleepErrors;cmds/sleep/sleep_test.go#TestSleepEndOfOptions;cmds/sleep/sleep_test.go#TestSleepDoesNotConsumeStdin;cmds/sleep/sleep_test.go#TestSleepCancel;cmds/sleep/sleep_test.go#TestSleepSuffixMath;cmds/sleep/sleep_signal_unix_test.go#TestSleepSIGALRMPermittedDisposition;cmds/sleep/sleep_signal_unix_test.go#TestSleepSIGTERMStandardAction`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [sleep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sleep.html).
 
@@ -4279,6 +4454,8 @@ sort [-c|-C] [-bdfinru] [-t char] [-k keydef] [file]
 
 **Evidence lanes:** Go=`cmds/sort/sort_test.go#TestOpenOperandsValidatesAllBeforeReading;cmds/sort/sort_test.go#TestSortBasic;cmds/sort/sort_test.go#TestSortKeys;cmds/sort/sort_test.go#TestSortCheck;cmds/sort/sort_test.go#TestSortFilesAndOutput;cmds/sort/sort_test.go#TestSortMerge;cmds/sort/sort_test.go#TestSortLCNumeric;cmds/sort/collator_test.go#TestRunWithCollatorOrdersTextualComparisons`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [sort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sort.html).
 
 ## `split`
@@ -4328,6 +4505,8 @@ split -b n[k|m] [-a suffix_length] [file [name]]
 
 **Evidence lanes:** Go=`cmds/split/split_test.go#TestSplitLines;cmds/split/split_test.go#TestSplitBytes;cmds/split/split_test.go#TestSplitNumericAndSuffixLen;cmds/split/split_test.go#TestSplitPOSIXDefaultSuffixExhaustion;cmds/split/split_test.go#TestSplitOperandsAndPrefix;cmds/split/split_test.go#TestSplitErrors;cmds/split/split_posix_test.go#TestSplitEmptyInputCreatesNoFiles;cmds/split/split_posix_test.go#TestSplitPartialFinalLine;cmds/split/split_posix_test.go#TestSplitDashStdinOperand;cmds/split/split_posix_test.go#TestSplitInputReadErrorIsFailure;cmds/split/split_error_unix_test.go#TestSplitOutputCreateErrorIsFailure`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:split:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [split](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/split.html).
 
 ## `strings`
@@ -4376,11 +4555,13 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Evidence lanes:** Go=`cmds/strings/strings_test.go#TestStrings;cmds/strings/strings_test.go#TestStringsFiles;cmds/strings/strings_test.go#TestStringsPOSIXOffsetFormatIsUnpadded;cmds/strings/strings_test.go#TestStringsFileOrderContinuesAfterOpenError;cmds/strings/strings_test.go#TestStringsDashPathname;cmds/strings/strings_test.go#TestStringsUTF8;cmds/strings/strings_test.go#TestStringsUTF8ReplacementCharacterPreservesBytesAndOffset;cmds/strings/strings_test.go#TestStringsLocalePrecedenceControlsPrintability;cmds/strings/strings_test.go#TestStringsIOErrorsAreFailures;cmds/strings/strings_test.go#TestStringsErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:strings:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [strings](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strings.html).
 
 ## `strip`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `development`.
 
@@ -4423,6 +4604,8 @@ strings [-a] [-t format] [-n number] [file...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:strip:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [strip](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strip.html).
 
@@ -4473,6 +4656,8 @@ stty operand...
 
 **Evidence lanes:** Go=`cmds/stty/stty_test.go#TestSttyRejectsNonTTY;cmds/stty/stty_test.go#TestParseArgsKeepsHyphenSettings;cmds/stty/stty_posix_test.go#TestSttyRowsColsRejectsOverflow;cmds/stty/stty_posix_test.go#TestSttyRequiredReportsPropagateWriteErrors;cmds/stty/stty_termios_test.go#TestApplyTermiosModeRaw;cmds/stty/stty_termios_test.go#TestApplyTermiosValueMinTime`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:stty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [stty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/stty.html).
 
 ## `tabs`
@@ -4522,6 +4707,8 @@ tabs [-T type] n[[sep[+]n]...]
 
 **Evidence lanes:** Go=`cmds/tabs/tabs_test.go#TestPresetColumnsMatchPOSIX;cmds/tabs/tabs_test.go#TestRepetitiveSpec;cmds/tabs/tabs_test.go#TestExplicitList;cmds/tabs/tabs_test.go#TestIncrementForm;cmds/tabs/tabs_test.go#TestTerminalTypeResolution;cmds/tabs/tabs_test.go#TestTabsOutputWriteErrorIsReported`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tabs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [tabs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tabs.html).
 
 ## `tail`
@@ -4570,11 +4757,13 @@ tail [-f] [-c number|-n number] [file]
 
 **Evidence lanes:** Go=`cmds/tail/tail_test.go#TestTail;cmds/tail/tail_test.go#TestTailSingleFileExactStdout;cmds/tail/tail_test.go#TestTailHeaders;cmds/tail/tail_test.go#TestTailErrors;cmds/tail/tail_test.go#TestTailWriteFailure;cmds/tail/tail_test.go#TestTailFollowDescriptor;cmds/tail/tail_test.go#TestTailFollowStdinPipeIgnoresFollow;cmds/tail/tail_test.go#TestTailFollowStdinRegularFile;cmds/tail/tail_test.go#TestTailFollowByName;cmds/tail/tail_test.go#TestTailFollowNotSupported;cmds/tail/tail_test.go#TestTailFollowSleepIntervalInvalid;cmds/tail/tail_fifo_unix_test.go#TestTailFollowFIFOAcrossWriters;cmds/tail/tail_posix_test.go#TestTailInputReadErrorIsFailure;cmds/tail/tail_posix_test.go#TestTailBytesFromStartNonSeekable`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tail:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [tail](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tail.html).
 
 ## `talk`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `optional`.
 
@@ -4617,6 +4806,8 @@ tail [-f] [-c number|-n number] [file]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [talk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/talk.html).
 
@@ -4665,6 +4856,8 @@ tee [-ai] [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tee`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/tee/tee_test.go#TestTeeStdoutOnly;cmds/tee/tee_test.go#TestTeeWritesFiles;cmds/tee/tee_test.go#TestTeeIssue7AtLeastThirteenFileOperands;cmds/tee/tee_test.go#TestTeeTruncatesByDefault;cmds/tee/tee_test.go#TestTeeAppend;cmds/tee/tee_test.go#TestTeeIssue7VirtualUmaskAndExistingMode;cmds/tee/tee_test.go#TestTeeOpenErrorContinues;cmds/tee/tee_test.go#TestTeeDashIsLiteralFileName;cmds/tee/tee_test.go#TestTeeStdoutWriteErrorPOSIX;cmds/tee/tee_test.go#TestTeeIssue7ShortWriteFails;cmds/tee/tee_test.go#TestTeeIssue7InputReadFailurePreservesReadBytes;cmds/tee/tee_test.go#TestTeeIssue7StreamsBeforeEOF;cmds/tee/tee_test.go#TestTeeIssue7OutputFailuresContinue;cmds/tee/tee_test.go#TestTeeIssue7OpenFailureContinuesPortably;cmds/tee/tee_test.go#TestTeeExtensionsRemainAvailableWithPOSIXEnvironment;cmds/tee/run_signal_test.go#TestTeeDefaultInterruptDisposition;cmds/tee/run_signal_test.go#TestTeeDefaultSIGPIPEDisposition;cmds/tee/run_signal_test.go#TestTeeIgnoreInterruptsActual;cmds/tee/tee_posix_linux_test.go#TestTeeIssue7FileWriteFailureContinues`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [tee](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tee.html).
 
@@ -4715,6 +4908,8 @@ test [expression]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestTestIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTest`; provider=`-`; clauses=`XCU:test:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [test](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/test.html).
 
 ## `time`
@@ -4762,6 +4957,8 @@ time [-p] utility [argument...]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/time_issue7_test.go#TestTimeIssue7CommandInterface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTime`; provider=`-`; clauses=`XCU:time:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [time](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/time.html).
 
@@ -4811,6 +5008,8 @@ touch [-acm] [-r ref_file|-t time|-d date_time] file...
 
 **Evidence lanes:** Go=`cmds/touch/touch_test.go#TestTouchCreates;cmds/touch/touch_test.go#TestTouchStamp;cmds/touch/touch_test.go#TestTouchStampUsesInvocationTZAndCurrentYear;cmds/touch/touch_test.go#TestTouchStopsOptionParsingAtFirstOperand;cmds/touch/touch_test.go#TestTouchDate;cmds/touch/touch_test.go#TestTouchDateISOSeconds60AndFractions;cmds/touch/touch_test.go#TestTouchNoCreate;cmds/touch/touch_test.go#TestTouchReference;cmds/touch/touch_test.go#TestTouchAccessOnly;cmds/touch/touch_test.go#TestTouchCurrentTimeExisting;cmds/touch/touch_test.go#TestTouchCurrentTimePartial;cmds/touch/touch_test.go#TestTouchErrors;cmds/touch/touch_test.go#TestTouchDashIsAnOrdinaryPathname;cmds/touch/touch_stamp_boundary_test.go#TestTouchStampSecond60RollsForward;cmds/touch/touch_test.go#TestTouchReferenceAtimeUnavailableFailsOnlyWhenNeeded;cmds/touch/touch_pathmax_unix_test.go#TestTouchNearPathMaxRelativeOperands`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:touch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [touch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/touch.html).
 
 ## `tput`
@@ -4858,6 +5057,8 @@ tput [-T type] operand...
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tput`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/tput/tput_test.go#TestExitStatuses;cmds/tput/tput_test.go#TestTerminalTypeResolution;cmds/tput/tput_test.go#TestInitAndReset;cmds/tput/tput_test.go#TestPOSIXOperationSequence;cmds/tput/tput_test.go#TestPOSIXOperationSequenceAvailabilityAndErrors;cmds/tput/tput_test.go#TestWriteErrorIsReported`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tput:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [tput](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tput.html).
 
@@ -4910,11 +5111,13 @@ tr -ds [-c|-C] string1 string2
 
 **Evidence lanes:** Go=`cmds/tr/tr_test.go#TestTrTranslate;cmds/tr/tr_test.go#TestTrDeleteSqueeze;cmds/tr/tr_test.go#TestTrOperandErrors;cmds/tr/tr_test.go#TestTrClasses;cmds/tr/tr_test.go#TestTrInputReadErrorIsReported;cmds/tr/tr_test.go#TestTrEPIPE;cmds/tr/ctype_test.go#TestCTypeProviderBacked;cmds/tr/ctype_test.go#TestCTypeCaseTranslation`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [tr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tr.html).
 
 ## `true`
 
-**Evidence state:** `verified`.
+**Evidence state:** `implemented`.
 
 **Applicability:** `base`.
 
@@ -4957,6 +5160,8 @@ true
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestTrueIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTrue`; provider=`-`; clauses=`XCU:true:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [true](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html).
 
@@ -5006,6 +5211,8 @@ tsort [file]
 
 **Evidence lanes:** Go=`cmds/tsort/tsort_test.go#TestTsort;cmds/tsort/tsort_test.go#TestTsortLoop;cmds/tsort/tsort_test.go#TestTsortFileOperand;cmds/tsort/tsort_test.go#TestTsortErrors;cmds/tsort/tsort_test.go#TestTsortPOSIXExample;cmds/tsort/tsort_test.go#TestTsortIssue7BlankSeparatorsAreExact;cmds/tsort/tsort_test.go#TestTsortIssue7StreamFailures;cmds/tsort/tsort_test.go#TestTsortIssue7InputCloseFailure;cmds/tsort/tsort_test.go#TestTsortExtensionsRemainAvailableWithPOSIXEnvironment`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [tsort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tsort.html).
 
 ## `tty`
@@ -5054,6 +5261,8 @@ tty
 
 **Evidence lanes:** Go=`cmds/tty/tty_posix_test.go#TestTTYTerminalName;cmds/tty/tty_console_darwin_test.go#TestTTYDevConsole;cmds/tty/tty_test.go#TestTTYNotAFile;cmds/tty/tty_test.go#TestTTYWriteError;cmds/tty/tty_test.go#TestTTYErrors;cmds/tty/tty_posix_test.go#TestTTYTerminalSilent;cmds/tty/tty_posix_test.go#TestTTYTerminalWriteError;cmds/tty/tty_test.go#TestTTYShortWriteAndInvalidDescriptorAreErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tty:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [tty](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tty.html).
 
 ## `umask`
@@ -5101,6 +5310,8 @@ umask [-S] [mask]
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestUmaskIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteUmask`; provider=`-`; clauses=`XCU:umask:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [umask](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/umask.html).
 
@@ -5151,6 +5362,8 @@ unalias -a
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestUnaliasIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteUnalias`; provider=`-`; clauses=`XCU:unalias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [unalias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unalias.html).
 
 ## `uname`
@@ -5198,6 +5411,8 @@ uname [-amnrsv]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uname`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/uname/uname_test.go#TestUnameDefaultIsKernelName;cmds/uname/uname_test.go#TestUnameFields;cmds/uname/uname_test.go#TestUnameCombinedAndAll;cmds/uname/uname_test.go#TestUnameAllIsExactlyMNRSV;cmds/uname/uname_test.go#TestUnameErrors;cmds/uname/uname_test.go#TestUnameIssue7SelectorCompositionAndOrder;cmds/uname/uname_test.go#TestUnameIssue7ProviderAndOutputFailures;cmds/uname/uname_test.go#TestUnameExtensionsRemainAvailableWithPOSIXEnvironment;cmds/uname/uname_assemble_test.go#TestAssembleSkipsSyntheticEmptyVersion;cmds/uname/uname_assemble_test.go#TestAssembleFixedOrderWithVersion;cmds/uname/uname_windows_test.go#TestWindowsProbeHasPOSIXVersion`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html).
 
@@ -5247,6 +5462,8 @@ unexpand [-a|-t tablist] [file...]
 
 **Evidence lanes:** Go=`cmds/unexpand/unexpand_test.go#TestUnexpandLeadingBlanks;cmds/unexpand/unexpand_test.go#TestUnexpandAllAndFile;cmds/unexpand/unexpand_test.go#TestUnexpandTabsImpliesAll;cmds/unexpand/unexpand_test.go#TestUnexpandBlanksBeyondLastStopUnchanged;cmds/unexpand/unexpand_test.go#TestUnexpandBackspaceDecrementsColumn;cmds/unexpand/unexpand_test.go#TestUnexpandRejectsBadTabs;cmds/unexpand/locale_test.go#TestPOSIXUTF8UsesDisplayColumnsAndLocaleBlanks;cmds/unexpand/locale_test.go#TestPOSIXSingleByteLocaleUsesProviderAndPrecedence`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:unexpand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [unexpand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unexpand.html).
 
 ## `uniq`
@@ -5294,6 +5511,8 @@ uniq [-c|-d|-u] [-f fields] [-s char] [input_file [output_file]]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uniq`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/uniq/uniq_test.go#TestUniq;cmds/uniq/uniq_test.go#TestUniqPOSIXCCharacterUnits;cmds/uniq/uniq_test.go#TestUniqPOSIXRequiresPositiveSkipArguments;cmds/uniq/uniq_test.go#TestUniqOperands;cmds/uniq/uniq_test.go#TestUniqErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uniq:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [uniq](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uniq.html).
 
@@ -5343,6 +5562,8 @@ uudecode [-o outfile] [file]
 
 **Evidence lanes:** Go=`cmds/uudecode/uudecode_test.go#TestDecodeHeaderOutputAndMode;cmds/uudecode/uudecode_test.go#TestDecodeBase64AndHeaderScanning;cmds/uudecode/uudecode_test.go#TestPOSIXRejectsMultipleInputFiles;cmds/uudecode/uudecode_test.go#TestHeaderPathnamesAndSymbolicModes;cmds/uudecode/uudecode_test.go#TestHeaderAndOutputOverrideStdoutDistinctions;cmds/uudecode/uudecode_test.go#TestChmodFailureIsWarningAndNonfatal;cmds/uudecode/uudecode_unix_test.go#TestHeaderModeIgnoresUmask;cmds/uudecode/uudecode_unix_test.go#TestDecodeRefusesResolvedTargetWithoutEffectiveWriteAccess`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uudecode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [uudecode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uudecode.html).
 
 ## `uuencode`
@@ -5391,11 +5612,13 @@ uuencode [-m] [file] decode_pathname
 
 **Evidence lanes:** Go=`cmds/uuencode/uuencode_test.go#TestEncodeKnownVectorFromStdin;cmds/uuencode/uuencode_test.go#TestClassicUsesSpacesForZeroSextets;cmds/uuencode/uuencode_test.go#TestEncodeFileAndMode;cmds/uuencode/uuencode_test.go#TestEncodeBase64AndModes;cmds/uuencode/uuencode_test.go#TestStandardInputFileModeComesFromFstat;cmds/uuencode/uuencode_test.go#TestExplicitInputFileDoesNotInspectStandardInput;cmds/uuencode/uuencode_test.go#TestErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uuencode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [uuencode](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uuencode.html).
 
 ## `vi`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `missing`.
 
 **Applicability:** `optional`.
 
@@ -5438,6 +5661,8 @@ uuencode [-m] [file] decode_pathname
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:vi:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [vi](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/vi.html).
 
@@ -5487,6 +5712,8 @@ wait [pid...]
 
 **Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestWaitIssue7Interface;sh:interp/issue7_command_interface_test.go#TestWaitIssue7CompletedStatusIsRetainedUntilRequested;sh:interp/issue7_command_interface_test.go#TestWaitIssue7ZeroOperandsBlocksUntilAllJobsComplete`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteWait`; provider=`-`; clauses=`XCU:wait:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [wait](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wait.html).
 
 ## `wc`
@@ -5534,6 +5761,8 @@ wc [-c|-m] [-lw] [file...]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/wc`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/wc/wc_test.go#TestWcStdin;cmds/wc/wc_test.go#TestWcFile;cmds/wc/wc_test.go#TestWcMultipleAndTotal;cmds/wc/wc_test.go#TestWcCharsAndMaxLine;cmds/wc/wc_test.go#TestWcWordRules;cmds/wc/wc_test.go#TestWcErrors;cmds/wc/locale_test.go#TestPOSIXUTF8CountsCharactersAndLocaleWords;cmds/wc/locale_test.go#TestPOSIXSingleByteLocaleUsesProviderAndPrecedence`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:wc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [wc](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wc.html).
 
@@ -5588,6 +5817,8 @@ who [-mTu] [file]
 
 **Evidence lanes:** Go=`cmds/who/who_test.go#TestWhoOperands;cmds/who/who_test.go#TestWhoQuietIgnoresOtherOptions;cmds/who/who_test.go#TestWhoTExactNoOptionalComment;cmds/who/who_test.go#TestWhoAllIsExactAndTruthful;cmds/who/who_test.go#TestWhoLCtimeProviderAndFailClosedResidual;cmds/who/who_binary_posix_test.go#TestWhoBinaryABIBehavior;cmds/who/who_native_linux_test.go#TestWhoNativeLinuxDifferential`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:who:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [who](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/who.html).
 
 ## `write`
@@ -5636,6 +5867,8 @@ write user_name [terminal]
 
 **Evidence lanes:** Go=`cmds/write/write_test.go#TestDeliversBannerBodyAndEOF;cmds/write/write_test.go#TestMultiLoginNoticeGoesToStdoutAndAlertsGoToControllingTerminal;cmds/write/write_test.go#TestTypedBELReachesTheRecipientAsAByte;cmds/write/write_test.go#TestCanonicalEOLAndNewlineBothDelimit;cmds/write/write_test.go#TestSIGINTWritesEOTReturnsSuccessAndLeaksNothing;cmds/write/write_test.go#TestWriteErrorToTerminalIsReported;cmds/write/locale_test.go#TestPOSIXSingleByteLocaleUsesAllClassesAndPrecedence;cmds/write/pty_linux_test.go#TestPTYBackedWriteLinux`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:write:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
+**Integration/certification evidence:** `-`.
+
 **Issue 7 source:** [write](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/write.html).
 
 ## `xargs`
@@ -5683,5 +5916,7 @@ write user_name [terminal]
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/xargs`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`cmds/xargs/xargs_test.go#TestXargsQuotesAndBackslash;cmds/xargs/xargs_test.go#TestXargsLogicalLines;cmds/xargs/xargs_test.go#TestXargsReplaceIssue7Limits;cmds/xargs/xargs_test.go#TestXargsSizeLimitAndExactMode;cmds/xargs/xargs_test.go#TestXargsInteractiveReadsControllingTerminal;cmds/xargs/xargs_test.go#TestXargsInteractiveUsesLCMessagesYesexpr;cmds/xargs/xargs_test.go#TestXargsPOSIXLYCorrectDoesNotDisableExtensions;cmds/xargs/xargs_test.go#TestXargsEmptyReplacementState;cmds/xargs/xargs_test.go#TestXargsPOSIXStrictSize;cmds/xargs/xargs_test.go#TestXargsPOSIXArgMaxCeilingAllowsEquality;cmds/xargs/xargs_test.go#TestXargsLastReplacementOrInputLimitOptionWins;cmds/xargs/xargs_test.go#TestXargsChildEnvironmentAndTerminalStatuses;cmds/xargs/xargs_test.go#TestXargsReadErrorStopsBeforeExecution;cmds/xargs/xargs_resolve_test.go#TestXargsFoundNotExecutableIs126;cmds/xargs/xargs_resolve_test.go#TestXargsNotFoundIs127;cmds/xargs/xargs_resolve_test.go#TestXargsChildExitMapsTo123`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:xargs:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+
+**Integration/certification evidence:** `-`.
 
 **Issue 7 source:** [xargs](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/xargs.html).

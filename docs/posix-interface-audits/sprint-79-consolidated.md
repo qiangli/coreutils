@@ -10,17 +10,19 @@ GNU extension behavior is not certification evidence.
 
 The ledger contains exactly 116 required names: 78 effective Go-owned, 22
 effective shell-owned, and 16 external-provider-owned. The current evidence
-states are **3 verified, 97 partial, and 16 unverified**.
+states are **0 verified, 3 implemented, 97 partial, and 16 missing**.
 
-| Effective owner | Verified | Partial | Unverified | Total |
-| --- | ---: | ---: | ---: | ---: |
-| Go | 1 | 77 | 0 | 78 |
-| Shell | 2 | 20 | 0 | 22 |
-| External provider | 0 | 0 | 16 | 16 |
-| Total | 3 | 97 | 16 | 116 |
+| Effective owner | Verified | Implemented | Partial | Missing | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Go | 0 | 1 | 77 | 0 | 78 |
+| Shell | 0 | 2 | 20 | 0 | 22 |
+| External provider | 0 | 0 | 0 | 16 | 16 |
+| Total | 0 | 3 | 97 | 16 | 116 |
 
-The verified owned interfaces are shell-selected `false` and `true`, plus
-Go-selected `nice`. The two status-only shell interfaces have both
+The implemented owned interfaces are shell-selected `false` and `true`, plus
+Go-selected `nice`. They are not verified because no fresh applicable,
+revision-pinned certification artifacts are recorded. The two status-only
+shell interfaces have both
 command-specific semantic evidence in `sh` and command-specific Profile B
 routing evidence in `bashy`. `nice` is promoted on the accepted process-level
 barrier evidence at canonical `afee303`: user code cannot begin before the
@@ -45,7 +47,7 @@ are:
 The 22 shell-owned names are `alias bg cd command echo false fc fg getopts
 hash jobs kill printf pwd read sh test time true umask unalias wait`. The 16
 provider rows are outside `--require-owned-complete` and remain separately
-unverified.
+missing.
 
 ## Fail-closed evidence decision
 
@@ -146,8 +148,9 @@ direct shell owner for `echo`, `false`, `kill`, `printf`, `pwd`, `test`,
 `time`, and `true`.
 
 All 22 shell names have currently resolvable, command-specific semantic and
-routing references. `false` and `true` are verified. The other twenty remain
-partial because their closure audits identify concrete locale, interactive,
+routing references. `false` and `true` are implemented, not verified without
+fresh revision-pinned Profile B/D certification artifacts. The other twenty
+remain partial because their closure audits identify concrete locale, interactive,
 process, filesystem, or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs`
 references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
@@ -201,12 +204,13 @@ locale-provider and platform residuals are stated explicitly above.
 
 ```sh
 python3 scripts/posix_manifest.py --check
+python3 scripts/posix_manifest.py --require-owned-source-complete
 python3 scripts/posix_manifest.py --require-owned-complete
 python3 -m unittest scripts/posix_manifest_test.py
 scripts/applet-matrix.py --check
 ```
 
-The owned-completion command is expected to fail at this snapshot with 97
-items: 77 of 78 Go rows and 20 shell rows are partial. Equivalently, `nice` is
-the sole verified Go row and 20 of 22 shell rows remain incomplete.
-That failure is the truthful Sprint 79 residual, not a waived gate.
+The owned-source-completion command is expected to fail at this snapshot with
+97 partial rows. The final owned-completion command fails all 100 owned rows:
+three are implemented but lack certification artifacts and 97 remain partial.
+Those failures are the truthful Sprint 79 residual, not waived gates.

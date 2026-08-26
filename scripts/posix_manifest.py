@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 from collections import Counter
@@ -44,7 +45,8 @@ FIELDS = (
     "operands", "operand_rules", "special_tokens", "stdin", "environment",
     "stdout", "stderr", "effects", "exit_status", "clause_ids",
     "standard_source", "parser_source", "go_evidence", "shell_evidence",
-    "shell_routing_evidence", "provider_evidence", "evidence_state",
+    "shell_routing_evidence", "provider_evidence", "integration_evidence",
+    "evidence_state",
 )
 LEGACY_FIELDS = (
     "command", "coreutils_go_applet", "go_package", "shell_provided",
@@ -58,6 +60,7 @@ RENDER_LABELS = (
     "Standard output", "Standard error", "Effects", "Exit status",
     "Compatibility scope", "Availability", "Effective owner",
     "Implementation", "Conservative source-token audit", "Evidence lanes",
+    "Integration/certification evidence",
     "Issue 7 source",
 )
 
@@ -75,7 +78,7 @@ PARSER_MODELS = {
     "shell_entrypoint", "shell_keyword", "external",
 }
 APPLICABILITY = {"base", "xsi", "development", "optional"}
-EVIDENCE_STATES = {"verified", "partial", "unverified"}
+EVIDENCE_STATES = {"missing", "partial", "implemented", "verified"}
 REQUIRED_CLAUSES = {
     "SYNOPSIS", "OPTIONS", "OPERANDS", "ENVIRONMENT_VARIABLES", "STDIN",
     "INPUT_FILES", "STDOUT", "STDERR", "OUTPUT_FILES", "EXIT_STATUS",
@@ -106,6 +109,15 @@ SHELL_ROUTING_EVIDENCE_REF = re.compile(
 BASHY_SEMANTIC_EVIDENCE_REF = re.compile(
     r"^bashy:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
 )
+INTEGRATION_EVIDENCE_REF = re.compile(
+    r"^(?P<profile>profile-[b-d])@(?P<revision>[0-9a-f]{40})#"
+    r"(?P<command>[a-z0-9]+)/(?P<path>[^@]+)@sha256=(?P<digest>[0-9a-f]{64})$"
+)
+REQUIRED_INTEGRATION_PROFILES = {
+    "go": frozenset({"profile-c", "profile-d"}),
+    "shell": frozenset({"profile-b", "profile-d"}),
+    "external_provider": frozenset({"profile-c", "profile-d"}),
+}
 BASHY_ROUTING_TEST_ROOTS = (
     Path("internal/cli"),
 )
@@ -501,6 +513,40 @@ def _validate_evidence(
     return len(refs), available, explicit
 
 
+def _integration_profiles(row: dict[str, str], root: Path) -> set[str]:
+    if row["integration_evidence"] == "-":
+        return set()
+    profiles = set()
+    for ref in row["integration_evidence"].split(";"):
+        match = INTEGRATION_EVIDENCE_REF.fullmatch(ref)
+        if not match:
+            raise ManifestError(
+                f"{row['command']}: malformed integration evidence; expected "
+                "profile-<b|c|d>@<40-hex-revision>#<command>/<artifact>"
+                "@sha256=<64-hex-digest>"
+            )
+        if match.group("command") != row["command"]:
+            raise ManifestError(f"{row['command']}: integration evidence names another command")
+        if match.group("profile") in profiles:
+            raise ManifestError(f"{row['command']}: duplicate integration evidence profile")
+        relative = Path(match.group("path"))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ManifestError(f"{row['command']}: integration evidence path escapes its root")
+        evidence_root = root / "docs/posix-certification-evidence"
+        if root == ROOT:
+            evidence_root = Path(os.environ.get("POSIX_CERT_EVIDENCE_ROOT", evidence_root))
+        evidence_root = evidence_root.resolve()
+        artifact = (evidence_root / relative).resolve()
+        if not artifact.is_relative_to(evidence_root):
+            raise ManifestError(f"{row['command']}: integration evidence path escapes its root")
+        if not artifact.is_file():
+            raise ManifestError(f"{row['command']}: integration evidence artifact is unavailable")
+        if hashlib.sha256(artifact.read_bytes()).hexdigest() != match.group("digest"):
+            raise ManifestError(f"{row['command']}: integration evidence artifact digest mismatch")
+        profiles.add(match.group("profile"))
+    return profiles
+
+
 def validate(
     rows: list[dict[str, str]], providers: set[str], go_packages: set[str],
     flagset_packages: set[str], root: Path = ROOT,
@@ -630,6 +676,7 @@ def validate(
         evidence_count, evidence_available, explicit_tests = _validate_evidence(
             row, lane, root
         )
+        integration_profiles = _integration_profiles(row, root)
         routing_count = 0
         routing_available = True
         routing_explicit = False
@@ -655,14 +702,14 @@ def validate(
         missing_semantics = list(dict.fromkeys(missing_semantics))
         if (
             expected_owner in OWNED_IMPLEMENTATION_OWNERS
-            and row["evidence_state"] != "verified"
+            and row["evidence_state"] == "partial"
             and missing_semantics
         ):
             raise ManifestError(
                 f"{command}: owned row has incomplete normative semantics: "
                 + ",".join(missing_semantics)
             )
-        if row["evidence_state"] == "verified":
+        if row["evidence_state"] in {"implemented", "verified"}:
             if (
                 missing_semantics or not evidence_count or not evidence_available
                 or not explicit_tests
@@ -682,7 +729,16 @@ def validate(
                 else:
                     detail = "focused shell routing evidence"
                 raise ManifestError(
-                    f"{command}: verified state launders missing semantics/evidence: {detail}"
+                    f"{command}: {row['evidence_state']} state launders "
+                    f"missing semantics/evidence: {detail}"
+                )
+        if row["evidence_state"] == "verified":
+            required = REQUIRED_INTEGRATION_PROFILES[expected_owner]
+            if not required <= integration_profiles:
+                absent = ",".join(sorted(required - integration_profiles))
+                raise ManifestError(
+                    f"{command}: verified state lacks applicable exact-revision "
+                    f"integration/certification evidence: {absent}"
                 )
         if row["evidence_state"] == "partial" and (
             not evidence_count or not evidence_available or not explicit_tests
@@ -726,6 +782,26 @@ def completion_errors(
     return errors
 
 
+def owned_source_errors(rows: list[dict[str, str]], root: Path = ROOT) -> list[str]:
+    owned = [row for row in rows if row["effective_owner"] in OWNED_IMPLEMENTATION_OWNERS]
+    counts = Counter(row["effective_owner"] for row in owned)
+    if counts != Counter({"go": 78, "shell": 22}):
+        return [f"owned selection drift: {dict(counts)}"]
+    errors = []
+    for row in owned:
+        if row["evidence_state"] not in {"implemented", "verified"}:
+            errors.append(f"{row['command']}: state={row['evidence_state']}")
+        gaps = sorted(parser_gaps(row, root))
+        if gaps:
+            errors.append(f"{row['command']}: parser gaps={','.join(gaps)}")
+        argument_gaps = sorted(option_argument_gaps(row, root))
+        if argument_gaps:
+            errors.append(
+                f"{row['command']}: parser argument gaps={','.join(argument_gaps)}"
+            )
+    return errors
+
+
 def _display(raw: str) -> str:
     return "none" if raw in {"-", EXPLICIT_NONE} else raw.replace(";", "; ")
 
@@ -744,9 +820,9 @@ def render(rows: list[dict[str, str]]) -> str:
         "# POSIX-required command interface evidence ledger", "",
         "Generated from `docs/posix-required-command-interfaces.tsv` by",
         "`scripts/posix_manifest.py`. This ledger is an audit aid, not a normative",
-        "specification or a claim of complete POSIX conformance. `UNVERIFIED` means",
-        "the command-specific Issue 7 semantics have not yet been transcribed and",
-        "backed by focused repository evidence.", "",
+        "specification or a claim of complete POSIX conformance. States are `missing`,",
+        "`partial`, `implemented`, and `verified`. Only `verified` includes applicable",
+        "integration/certification evidence tied to exact revisions.", "",
         "GNU compatibility is explicitly out of scope and deferred.", "",
         "| Axis | Value | Count |", "| --- | --- | ---: |",
         f"| Availability | Go | {availability['go']} |",
@@ -756,9 +832,12 @@ def render(rows: list[dict[str, str]]) -> str:
         f"| Effective owner | Shell | {owners['shell']} |",
         f"| Effective owner | Provider | {owners['external_provider']} |",
         f"| Evidence | Verified | {states['verified']} |",
+        f"| Evidence | Implemented | {states['implemented']} |",
         f"| Evidence | Partial | {states['partial']} |",
-        f"| Evidence | Unverified | {states['unverified']} |", "",
-        "Completion is deliberately fail-closed: `scripts/posix_manifest.py",
+        f"| Evidence | Missing | {states['missing']} |", "",
+        "The pre-integration `--require-owned-source-complete` gate accepts only",
+        "`implemented` or `verified` for the exact 78 Go plus 22 shell owners.",
+        "Final completion is deliberately fail-closed: `scripts/posix_manifest.py",
         "--require-complete` covers all 116 rows, while `--require-owned-complete`",
         "covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the",
         "16 external-provider rows as owned implementation evidence. Both require focused",
@@ -815,6 +894,7 @@ def render(rows: list[dict[str, str]]) -> str:
             f"Go=`{row['go_evidence']}`; shell semantic=`{row['shell_evidence']}`; "
             f"shell routing=`{row['shell_routing_evidence']}`; "
             f"provider=`{row['provider_evidence']}`; clauses=`{row['clause_ids']}`.", "",
+            f"**Integration/certification evidence:** `{row['integration_evidence']}`.", "",
             f"**Issue 7 source:** [{row['command']}]({standard_url}).", "",
         ])
     return "\n".join(lines)
@@ -841,6 +921,13 @@ def main() -> None:
         help="also fail unless all interfaces have complete semantics and behavioral evidence",
     )
     parser.add_argument(
+        "--require-owned-source-complete", action="store_true",
+        help=(
+            "pre-integration gate: require the exact 78 Go-owned and 22 shell-owned "
+            "interfaces to be implemented or verified"
+        ),
+    )
+    parser.add_argument(
         "--require-owned-complete", action="store_true",
         help=(
             "also fail unless all 78 Go-owned and 22 shell-owned interfaces "
@@ -852,6 +939,13 @@ def main() -> None:
     validate(rows, _provider_names(), _go_packages(), _flagset_packages())
     rendered = render(rows)
     validate_rendered(rendered, rows)
+    if args.require_owned_source_complete:
+        errors = owned_source_errors(rows)
+        if errors:
+            raise SystemExit(
+                f"owned POSIX source completion blocked by {len(errors)} item(s):\n"
+                + "\n".join(errors)
+            )
     if args.require_complete or args.require_owned_complete:
         owners = None if args.require_complete else OWNED_IMPLEMENTATION_OWNERS
         errors = completion_errors(rows, owners=owners)
@@ -870,8 +964,8 @@ def main() -> None:
         print(
             "posix-manifest: PASS (116 headings; availability 86/14/16; "
             "selection 78/22/16; evidence "
-            f"{states['verified']} verified/{states['partial']} partial/"
-            f"{states['unverified']} unverified)"
+            f"{states['verified']} verified/{states['implemented']} implemented/"
+            f"{states['partial']} partial/{states['missing']} missing)"
         )
         return
     GUIDE.write_text(rendered)

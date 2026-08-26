@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import re
 import sys
@@ -96,10 +97,11 @@ class ManifestValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "heading count/order"):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
-        self.assertIn("| Evidence | Verified | 3 |", rendered)
+        self.assertIn("| Evidence | Verified | 0 |", rendered)
+        self.assertIn("| Evidence | Implemented | 3 |", rendered)
         self.assertIn("| Evidence | Partial | 97 |", rendered)
-        self.assertIn("| Evidence | Unverified | 16 |", rendered)
-        self.assertEqual(self.row("nice")["evidence_state"], "verified")
+        self.assertIn("| Evidence | Missing | 16 |", rendered)
+        self.assertEqual(self.row("nice")["evidence_state"], "implemented")
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)
@@ -144,8 +146,8 @@ class ManifestValidationTest(unittest.TestCase):
             self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
         )
         self.assertGreater(len(full_errors), len(owned_errors))
-        self.assertIn("ar: state=unverified", full_errors)
-        self.assertNotIn("ar: state=unverified", owned_errors)
+        self.assertIn("ar: state=missing", full_errors)
+        self.assertNotIn("ar: state=missing", owned_errors)
 
     def test_every_interface_field_is_required(self) -> None:
         for field in manifest.FIELDS:
@@ -347,10 +349,14 @@ class ManifestValidationTest(unittest.TestCase):
             )
 
         changes["shell_evidence"] = semantic
+        changes["integration_evidence"] = "synthetic"
         with (
             mock.patch.object(manifest, "_shell_evidence_ref", return_value=True),
             mock.patch.object(
                 manifest, "_shell_routing_evidence_ref", return_value=True,
+            ),
+            mock.patch.object(
+                manifest, "_integration_profiles", return_value={"profile-b", "profile-d"},
             ),
         ):
             manifest.validate(
@@ -500,6 +506,64 @@ class ManifestValidationTest(unittest.TestCase):
             ),
             "verified state launders.*focused behavioral evidence",
         )
+
+    def test_verified_requires_applicable_exact_revision_integration_evidence(self) -> None:
+        self.assertRejected(
+            self.changed("nice", evidence_state="verified"),
+            "verified state lacks applicable exact-revision",
+        )
+        self.assertRejected(
+            self.changed(
+                "nice", evidence_state="verified",
+                integration_evidence="profile-c@abc#nice/run",
+            ),
+            "malformed integration evidence",
+        )
+
+    def test_integration_artifacts_are_pinned_available_and_repository_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_root = root / "docs/posix-certification-evidence"
+            evidence_root.mkdir(parents=True)
+            artifact = evidence_root / "c.json"
+            artifact.write_text("certification ledger\n")
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            revision = "a" * 40
+            row = copy.deepcopy(self.row("nice"))
+            row["integration_evidence"] = (
+                f"profile-c@{revision}#nice/c.json@sha256={digest}"
+            )
+            self.assertEqual(manifest._integration_profiles(row, root), {"profile-c"})
+            for value, message in (
+                (f"profile-c@{revision}#nice/absent.json@sha256={digest}", "unavailable"),
+                (f"profile-c@{revision}#nice/../escape@sha256={digest}", "escapes"),
+                (f"profile-c@{revision}#nice/c.json@sha256={'0' * 64}", "digest mismatch"),
+                (f"profile-c#nice/c.json@sha256={digest}", "malformed"),
+            ):
+                row["integration_evidence"] = value
+                with self.subTest(message=message), self.assertRaisesRegex(
+                    manifest.ManifestError, message,
+                ):
+                    manifest._integration_profiles(row, root)
+
+    def test_verified_rejects_wrong_applicable_profiles(self) -> None:
+        with mock.patch.object(
+            manifest, "_integration_profiles", return_value={"profile-b", "profile-d"},
+        ):
+            self.assertRejected(
+                self.changed("nice", evidence_state="verified", integration_evidence="synthetic"),
+                "exact-revision.*profile-c",
+            )
+
+    def test_owned_source_gate_has_exact_scope_and_accepts_only_ready_states(self) -> None:
+        errors = manifest.owned_source_errors(self.rows)
+        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 97)
+        self.assertFalse(any(error.startswith("ar:") for error in errors))
+        with (
+            mock.patch.object(sys, "argv", [str(SCRIPT), "--require-owned-source-complete"]),
+            self.assertRaisesRegex(SystemExit, "owned POSIX source completion blocked"),
+        ):
+            manifest.main()
 
     def test_partial_go_evidence_requires_explicit_test_ids(self) -> None:
         self.assertRejected(
