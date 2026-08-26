@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -293,6 +294,150 @@ func TestCobraTellGoesThroughPost(t *testing.T) {
 	}
 	if events[0].Text != "the cache should be write-through" {
 		t.Errorf("text = %q", events[0].Text)
+	}
+}
+
+func TestPostAsBoardRequiresSeatAndRecordsMessage(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"codex", "opencode"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := PostAs(st.ID, "", "", "missing author"); err == nil {
+		t.Fatal("board PostAs accepted an empty author")
+	}
+	if _, err := PostAs(st.ID, "ghost", "", "no seat"); err == nil || !strings.Contains(err.Error(), "bashy meet invite") {
+		t.Fatalf("unseated author error = %v", err)
+	}
+	if _, err := PostAs(st.ID, "codex", "ghost", "bad target"); err == nil || !strings.Contains(err.Error(), "failed:") {
+		t.Fatalf("unseated target error = %v", err)
+	}
+
+	ev, err := PostAs(st.ID, "codex", "opencode", "please read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "message" || ev.Role != string(RoleParticipant) || ev.Speaker != "codex" || ev.To != "opencode" {
+		t.Fatalf("event = %+v", ev)
+	}
+	events, _ := readTranscript(st.ID)
+	if len(events) != 1 || events[0].Kind != "message" || events[0].To != "opencode" {
+		t.Fatalf("transcript = %+v", events)
+	}
+}
+
+func TestCobraBoardTellAndRead(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"codex", "opencode"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	tell := NewMeetCmd()
+	var tellOut, tellErr bytes.Buffer
+	tell.SetOut(&tellOut)
+	tell.SetErr(&tellErr)
+	tell.SetArgs([]string{"tell", st.ID, "--as", "codex", "--to", "opencode", "check", "the", "gate"})
+	if err := tell.Execute(); err != nil {
+		t.Fatalf("meet tell: %v", err)
+	}
+	if got := tellErr.String(); !strings.Contains(got, "unverified: opencode") {
+		t.Fatalf("receipt = %q", got)
+	}
+
+	read := NewMeetCmd()
+	var readOut, readErr bytes.Buffer
+	read.SetOut(&readOut)
+	read.SetErr(&readErr)
+	read.SetArgs([]string{"read", st.ID, "--as", "opencode"})
+	if err := read.Execute(); err != nil {
+		t.Fatalf("meet read: %v", err)
+	}
+	if !strings.Contains(readOut.String(), "check the gate") {
+		t.Fatalf("read output = %q", readOut.String())
+	}
+	if got := SeenSeq(st.ID, "opencode"); got != 1 {
+		t.Fatalf("read did not advance cursor: %d", got)
+	}
+
+	again := NewMeetCmd()
+	var againOut, againErr bytes.Buffer
+	again.SetOut(&againOut)
+	again.SetErr(&againErr)
+	again.SetArgs([]string{"read", st.ID, "--as", "opencode"})
+	if err := again.Execute(); err != nil {
+		t.Fatalf("empty meet read: %v", err)
+	}
+	if againOut.Len() != 0 || !strings.Contains(againErr.String(), "EMPTY") {
+		t.Fatalf("empty read stdout=%q stderr=%q", againOut.String(), againErr.String())
+	}
+}
+
+func TestCobraReadPeekAndWaitErrors(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"codex"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PostAs(st.ID, "codex", "", "still unread"); err != nil {
+		t.Fatal(err)
+	}
+
+	peek := NewMeetCmd()
+	peek.SetOut(&bytes.Buffer{})
+	peek.SetErr(&bytes.Buffer{})
+	peek.SetArgs([]string{"read", st.ID, "--as", "codex", "--peek"})
+	if err := peek.Execute(); err != nil {
+		t.Fatalf("peek read: %v", err)
+	}
+	if got := SeenSeq(st.ID, "codex"); got != 0 {
+		t.Fatalf("peek advanced cursor to %d", got)
+	}
+
+	neg := NewMeetCmd()
+	neg.SetArgs([]string{"read", st.ID, "--as", "codex", "--wait", "-1s"})
+	if err := neg.Execute(); err == nil {
+		t.Fatal("negative wait accepted")
+	}
+
+	st.Status = "closed"
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	closed := NewMeetCmd()
+	closed.SetArgs([]string{"read", st.ID, "--as", "codex", "--wait", "1ms"})
+	if err := closed.Execute(); err == nil || !strings.Contains(err.Error(), "closed board") {
+		t.Fatalf("closed wait error = %v", err)
+	}
+}
+
+func TestBoardDeliveryStateNamesAreCanonical(t *testing.T) {
+	st := newRoom(t)
+	if got := boardDeliveryState(st.ID, "opencode", 1); got != "unverified" {
+		t.Fatalf("no cursor state = %q", got)
+	}
+	if err := markSeenSeq(st.ID, "opencode", 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := boardDeliveryState(st.ID, "opencode", 2); got != "queued" {
+		t.Fatalf("behind cursor state = %q", got)
+	}
+	if got := boardDeliveryState(st.ID, "opencode", 1); got != "read" {
+		t.Fatalf("caught-up cursor state = %q", got)
+	}
+	p, err := seenPath(st.ID, "opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("not-a-number\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := boardDeliveryState(st.ID, "opencode", 1); got != "failed" {
+		t.Fatalf("corrupt cursor state = %q", got)
 	}
 }
 
