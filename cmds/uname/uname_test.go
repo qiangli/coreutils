@@ -3,6 +3,8 @@ package unamecmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"runtime"
 	"slices"
@@ -318,5 +320,116 @@ func TestNewFlagsAndAliases(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type unameFailWriter struct {
+	err   error
+	short bool
+}
+
+func (w unameFailWriter) Write(p []byte) (int, error) {
+	if w.short {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
+
+func runUnameRaw(t *testing.T, env []string, out io.Writer, systemProbe probeFunc, args ...string) (string, int) {
+	t.Helper()
+	var errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: env, Stdio: tool.Stdio{In: strings.NewReader("unused"), Out: out, Err: &errb}}
+	code := runWithProbe(rc, args, systemProbe)
+	return errb.String(), code
+}
+
+func fixedProbe() (sysinfo, error) {
+	return sysinfo{
+		sysname: "S", nodename: "N", release: "R", version: "V", machine: "M",
+		processor: "P", hardwarePlatform: "I",
+	}, nil
+}
+
+func TestUnameIssue7SelectorCompositionAndOrder(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "S\n"},
+		{[]string{"-vmnsr"}, "S N R V M\n"},
+		{[]string{"-v", "-s", "-v", "-n"}, "S N V\n"},
+		{[]string{"-a"}, "S N R V M\n"},
+		{[]string{"-a", "-o", "-p", "-i"}, "S N R V M P I " + operatingSystem() + "\n"},
+	} {
+		var out bytes.Buffer
+		errText, code := runUnameRaw(t, nil, &out, fixedProbe, tc.args...)
+		if code != 0 || errText != "" || out.String() != tc.want {
+			t.Errorf("args=%v code=%d stdout=%q stderr=%q want=%q", tc.args, code, out.String(), errText, tc.want)
+		}
+	}
+}
+
+func TestUnameIssue7ProviderAndOutputFailures(t *testing.T) {
+	t.Run("probe", func(t *testing.T) {
+		var out bytes.Buffer
+		errText, code := runUnameRaw(t, nil, &out, func() (sysinfo, error) { return sysinfo{}, errors.New("probe failed") })
+		if code != 1 || out.String() != "" || errText != "uname: cannot get system name: probe failed\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errText)
+		}
+	})
+
+	t.Run("missing selected field", func(t *testing.T) {
+		var out bytes.Buffer
+		errText, code := runUnameRaw(t, nil, &out, func() (sysinfo, error) {
+			info, _ := fixedProbe()
+			info.version = ""
+			return info, nil
+		}, "-v")
+		if code != 1 || out.String() != "" || errText != "uname: requested version is unavailable\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errText)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+	}{
+		{"write error", unameFailWriter{err: errors.New("write failed")}},
+		{"short write", unameFailWriter{short: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errText, code := runUnameRaw(t, nil, tc.out, fixedProbe, "-s")
+			if code != 1 || !strings.HasPrefix(errText, "uname: write error: ") {
+				t.Fatalf("code=%d stderr=%q", code, errText)
+			}
+		})
+	}
+}
+
+func TestUnameExtensionsRemainAvailableWithPOSIXEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-p"}, "P\n"},
+		{[]string{"-o"}, operatingSystem() + "\n"},
+		{[]string{"--kernel-name"}, "S\n"},
+	} {
+		var out bytes.Buffer
+		errText, code := runUnameRaw(t, []string{"POSIXLY_CORRECT="}, &out, fixedProbe, tc.args...)
+		if code != 0 || errText != "" || out.String() != tc.want {
+			t.Errorf("args=%v code=%d stdout=%q stderr=%q", tc.args, code, out.String(), errText)
+		}
+	}
+
+	var out bytes.Buffer
+	errText, code := runUnameRaw(t, []string{"POSIXLY_CORRECT="}, &out, fixedProbe, "-vmnsr")
+	if code != 0 || errText != "" || out.String() != "S N R V M\n" {
+		t.Fatalf("POSIX required selectors: code=%d stdout=%q stderr=%q", code, out.String(), errText)
+	}
+	out.Reset()
+	errText, code = runUnameRaw(t, []string{"POSIXLY_CORRECT="}, &out, fixedProbe, "--help")
+	if code != 0 || errText != "" || out.Len() == 0 {
+		t.Fatalf("--help: code=%d stdout=%q stderr=%q", code, out.String(), errText)
 	}
 }

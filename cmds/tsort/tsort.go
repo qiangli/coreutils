@@ -7,7 +7,7 @@
 // error as "tsort: FILE: input contains a loop:" followed by one
 // "tsort: ITEM" line per member, an edge of the loop is deleted, and
 // the sort presses on — every item still appears in the output, and
-// the exit status is non-zero. The POSIX -w option makes cycle
+// the exit status is non-zero. The newer POSIX.1-2024 -w option makes cycle
 // diagnostics into errors and sets the exit status to the number of
 // cycles found (capped at an implementation-defined maximum). An odd
 // number of input tokens is the GNU "input contains an odd number of
@@ -40,6 +40,14 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithOpen(rc, args, func(path string) (io.ReadCloser, error) {
+		return os.Open(path)
+	})
+}
+
+type openInputFunc func(path string) (io.ReadCloser, error)
+
+func runWithOpen(rc *tool.RunContext, args []string, openInput openInputFunc) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
 	warn := fs.BoolP("warnings-are-errors", "w", false, "exit with the number of cycles found")
@@ -56,29 +64,42 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	var r io.Reader = rc.In
+	var input io.Closer
 	if name != "-" {
-		f, err := os.Open(rc.Path(name))
+		f, err := openInput(rc.Path(name))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "tsort: %s: %v\n", name, pathErr(err))
 			return 1
 		}
-		defer f.Close()
+		input = f
 		r = f
+	}
+	closeSource := func() error {
+		if input == nil {
+			return nil
+		}
+		err := input.Close()
+		input = nil
+		return err
 	}
 
 	g := newGraph()
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	sc.Split(bufio.ScanWords)
+	sc.Split(splitToken)
 	for sc.Scan() {
 		a := sc.Text()
 		if !sc.Scan() {
 			if err := sc.Err(); err != nil {
 				fmt.Fprintf(rc.Err, "tsort: %s: %v\n", name, err)
+				_ = closeSource()
 				return 1
 			}
 			g.addNode(a)
 			fmt.Fprintf(rc.Err, "tsort: %s: input contains an odd number of tokens\n", name)
+			if err := closeSource(); err != nil {
+				fmt.Fprintf(rc.Err, "tsort: %s: %v\n", name, err)
+			}
 			return 1
 		}
 		b := sc.Text()
@@ -89,6 +110,11 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if err := sc.Err(); err != nil {
+		fmt.Fprintf(rc.Err, "tsort: %s: %v\n", name, err)
+		_ = closeSource()
+		return 1
+	}
+	if err := closeSource(); err != nil {
 		fmt.Fprintf(rc.Err, "tsort: %s: %v\n", name, err)
 		return 1
 	}
@@ -109,6 +135,31 @@ func run(rc *tool.RunContext, args []string) int {
 		return cycles
 	}
 	return 1
+}
+
+// splitToken recognizes exactly the Issue 7 input separators: <blank>
+// characters (space and tab) and the newlines of the input text file. In
+// particular, form-feed, vertical-tab, carriage-return, and non-ASCII Unicode
+// whitespace remain part of an item rather than acquiring Go ScanWords
+// semantics.
+func splitToken(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	isSeparator := func(b byte) bool { return b == ' ' || b == '\t' || b == '\n' }
+	start := 0
+	for start < len(data) && isSeparator(data[start]) {
+		start++
+	}
+	for i := start; i < len(data); i++ {
+		if isSeparator(data[i]) {
+			return i + 1, data[start:i], nil
+		}
+	}
+	if atEOF {
+		if start == len(data) {
+			return len(data), nil, nil
+		}
+		return len(data), data[start:], nil
+	}
+	return start, nil, nil
 }
 
 // graph is a string digraph in insertion order. Duplicate edges are
