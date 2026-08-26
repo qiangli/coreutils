@@ -1026,7 +1026,7 @@ func TestPAXListTimeLocaleNamesEncodingsAndPrecedence(t *testing.T) {
 		t.Fatalf("unsupported code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	out, errOut, code = execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "-v", "-f", arc)
-	if code != 0 || errOut != "" || !strings.Contains(out, "Mär  1 02:03") {
+	if code != 0 || errOut != "" || !strings.Contains(out, "Mär  1  2024") {
 		t.Fatalf("verbose code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }

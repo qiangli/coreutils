@@ -37,9 +37,16 @@ When `-o listopt=format` is specified in verbose list mode (`-v`), output format
 4. **Write Error Handling**:
    - Output write failures in the ordinary, hard-link, and custom-listopt branches report `"pax: write error: ..."` to standard error and exit with status 1.
 
-## Explicit residual
+## Timestamp residual closure (issue 778)
 
-The default verbose timestamp remains the pre-existing fixed `%b %e %H:%M`
-rendering. It does not yet switch to the year form for sufficiently old or
-future timestamps as an `ls -l` implementation does. This issue does not claim
-closure of that separate long-list residual.
+The default verbose timestamp now follows the POSIX `ls -l` shape inherited by
+`pax -v`: `%b %e %H:%M` for a modification time strictly within the last six
+months, and `%b %e  %Y` at the exact six-month boundary, for older times, and
+for every future time. The duration is the same half of 365.2425 days used by
+this repository's GNU-compatible `ls`; black-box GNU `ls` 9.11 probes on both
+sides of that cutoff select the corresponding time and year forms. An
+invocation-local clock is sampled once per listing, so every member is
+classified against the same instant and boundary tests do not depend on
+wall-clock timing. `TestPAXVerboseTimestampAgeBoundaries` covers now, both sides
+of the cutoff, the exact cutoff, and the future case through the verbose list
+command surface.
