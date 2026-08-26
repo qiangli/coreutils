@@ -81,6 +81,30 @@ func TestDirnamePOSIXSingleOperandByteSafety(t *testing.T) {
 	}
 }
 
+// panicReader fails the test if standard input is ever read: POSIX
+// dirname does not use stdin.
+type panicReader struct{ t *testing.T }
+
+func (r panicReader) Read([]byte) (int, error) {
+	r.t.Helper()
+	r.t.Fatal("dirname must not read standard input")
+	return 0, io.EOF
+}
+
+// TestDirnameDoesNotConsumeStdin pins the STDIN clause ("Not used.")
+// across a successful run and a missing-operand error run.
+func TestDirnameDoesNotConsumeStdin(t *testing.T) {
+	for _, args := range [][]string{{"a/b"}, {"a/b", "c/d"}, {}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   t.TempDir(),
+			Stdio: tool.Stdio{In: panicReader{t}, Out: &out, Err: &errb},
+		}
+		cmd.Run(rc, args)
+	}
+}
+
 func TestDirnameErrors(t *testing.T) {
 	_, errb, code := runTool(t)
 	if code != 2 || !strings.Contains(errb, "missing operand") {

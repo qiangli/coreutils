@@ -59,6 +59,76 @@ func TestBasename(t *testing.T) {
 	}
 }
 
+// TestBasenameEndOfOptions pins the "--" Utility Syntax Guideline 10
+// special token: after "--", an option-like first operand is taken
+// literally as the string operand rather than parsed as a flag. POSIX
+// basename defines no options, so this is the sole documented special
+// token and is the only way to name a string beginning with '-'.
+func TestBasenameEndOfOptions(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--", "-a"}, "-a\n"},
+		{[]string{"--", "--zero"}, "--zero\n"},
+		{[]string{"--", "-s"}, "-s\n"},
+		// "--" then the classic two-operand form: option-like string with a suffix.
+		{[]string{"--", "/tmp/-x.h", ".h"}, "-x\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.args...)
+		if out != c.want || code != 0 || errb != "" {
+			t.Errorf("basename %v = (%q, %q, %d), want (%q, 0)", c.args, out, errb, code, c.want)
+		}
+	}
+}
+
+// TestBasenameByteSafety pins that component splitting is bytewise on '/'
+// (0x2F), which can never be a byte of a multi-byte character in a
+// POSIX-conformant encoding, so the result is independent of LC_CTYPE and
+// non-ASCII bytes are preserved verbatim.
+func TestBasenameByteSafety(t *testing.T) {
+	cases := []struct {
+		arg  string
+		want string
+	}{
+		{"/日本/語", "語\n"},
+		{"café/x", "x\n"},
+		{"日本語", "日本語\n"},
+		{"/日本/", "日本\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.arg)
+		if out != c.want || code != 0 || errb != "" {
+			t.Errorf("basename %q = (%q, %q, %d), want (%q, 0)", c.arg, out, errb, code, c.want)
+		}
+	}
+}
+
+// panicReader fails the test if standard input is ever read: POSIX
+// basename does not use stdin.
+type panicReader struct{ t *testing.T }
+
+func (r panicReader) Read([]byte) (int, error) {
+	r.t.Helper()
+	r.t.Fatal("basename must not read standard input")
+	return 0, io.EOF
+}
+
+// TestBasenameDoesNotConsumeStdin pins the STDIN clause ("Not used.")
+// across a successful run and an error run.
+func TestBasenameDoesNotConsumeStdin(t *testing.T) {
+	for _, args := range [][]string{{"a/b"}, {"-a", "a/b", "c/d"}, {"missing"}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   t.TempDir(),
+			Stdio: tool.Stdio{In: panicReader{t}, Out: &out, Err: &errb},
+		}
+		cmd.Run(rc, args)
+	}
+}
+
 func TestBasenameErrors(t *testing.T) {
 	_, errb, code := runTool(t)
 	if code != 2 || !strings.Contains(errb, "missing operand") {
