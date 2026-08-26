@@ -37,6 +37,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 
 	listAll := *verbose
 	sil := *silent || *quiet
@@ -46,6 +47,14 @@ func run(rc *tool.RunContext, args []string) int {
 
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
+	}
+	// Issue 7 has exactly two required operands.  GNU's omitted FILE2 and
+	// positional SKIP1/SKIP2 forms remain extensions outside POSIX mode.
+	if posix && len(operands) < 2 {
+		return tool.UsageError(rc, cmd, "missing operand after %q", operands[0])
+	}
+	if posix && len(operands) > 2 {
+		return tool.UsageError(rc, cmd, "extra operand %q", operands[2])
 	}
 	if len(operands) > 4 {
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[4])
@@ -104,7 +113,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case sil:
 		return cmpSilent(rc, s1, s2, limit)
 	case listAll:
-		return cmpVerbose(rc, name1, name2, s1, s2, size1, size2, limit, *printBytes, envPresent(rc.Env, "POSIXLY_CORRECT"))
+		return cmpVerbose(rc, name1, name2, s1, s2, size1, size2, limit, *printBytes, posix)
 	default:
 		return cmpFirstDiff(rc, name1, name2, s1, s2, limit, *printBytes)
 	}
@@ -112,8 +121,8 @@ func run(rc *tool.RunContext, args []string) int {
 
 // sameSpecialSource reports whether both operands designate the same input
 // stream. Comparing a stream with itself would consume alternating bytes
-// rather than compare the stream's contents, so POSIX requires an error for
-// standard input and for the same FIFO, block device, or character device.
+// rather than compare the stream's contents. Issue 7 leaves those cases
+// undefined, so reject them deterministically.
 func sameSpecialSource(rc *tool.RunContext, name1, name2 string) bool {
 	if name1 == "-" && name2 == "-" {
 		return true
@@ -230,10 +239,13 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 		if limit < 0 || matched < limit {
 			if b1 != b2 {
 				if printBytes {
-					fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
-						name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2))
+					if _, err := fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n", name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2)); err != nil {
+						return outputError(rc, err)
+					}
 				} else {
-					fmt.Fprintf(rc.Out, "%s %s differ: char %d, line %d\n", name1, name2, matched+1, newlines+1)
+					if _, err := fmt.Fprintf(rc.Out, "%s %s differ: char %d, line %d\n", name1, name2, matched+1, newlines+1); err != nil {
+						return outputError(rc, err)
+					}
 				}
 				return 1
 			}
@@ -297,15 +309,26 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 				differed = true
 				switch {
 				case printBytes:
-					fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2))
+					if _, err := fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2)); err != nil {
+						return outputError(rc, err)
+					}
 				case posix:
-					fmt.Fprintf(rc.Out, "%d %o %o\n", pos, b1, b2)
+					if _, err := fmt.Fprintf(rc.Out, "%d %o %o\n", pos, b1, b2); err != nil {
+						return outputError(rc, err)
+					}
 				default:
-					fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
+					if _, err := fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2); err != nil {
+						return outputError(rc, err)
+					}
 				}
 			}
 		}
 	}
+}
+
+func outputError(rc *tool.RunContext, err error) int {
+	fmt.Fprintf(rc.Err, "cmp: write error: %v\n", err)
+	return 2
 }
 
 func cmpSilent(rc *tool.RunContext, s1, s2 *src, limit int64) int {

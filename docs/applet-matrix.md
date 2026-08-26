@@ -61,9 +61,9 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 4 | 38 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 5 | 36 |
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 4 | 34 |
-| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 10 |
+| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 11 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
-| `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 14 |
+| `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 15 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 7 | 62 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 3 | 25 |
@@ -97,7 +97,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 | `gzip` | `cmds/gzip` | — | Bashy/other extension | no | no | 1 | 10 |
-| `head` | `cmds/head` | — | GNU Coreutils | yes | yes | 1 | 9 |
+| `head` | `cmds/head` | — | GNU Coreutils | yes | yes | 1 | 10 |
 | `hexdump` | `cmds/hexdump` | — | Bashy/other extension | no | no | 1 | 6 |
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |

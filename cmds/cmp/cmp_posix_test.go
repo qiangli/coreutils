@@ -3,6 +3,8 @@ package cmpcmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -23,6 +25,48 @@ func runToolEnv(t *testing.T, dir, stdin string, env []string, args ...string) (
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+type cmpFailWriter struct{ err error }
+
+func (w cmpFailWriter) Write([]byte) (int, error) { return 0, w.err }
+
+type cmpFailReader struct{ err error }
+
+func (r cmpFailReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestCmpPOSIXOperandGrammarAndOutputErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "a")
+	writeFile(t, dir, "b", "b")
+
+	for _, args := range [][]string{{"a"}, {"a", "b", "0"}} {
+		_, errb, code := runToolEnv(t, dir, "", []string{"POSIXLY_CORRECT="}, args...)
+		if code != 2 || !strings.Contains(errb, "operand") {
+			t.Fatalf("POSIX cmp %v = (%q, %d), want operand diagnostic and 2", args, errb, code)
+		}
+	}
+
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: cmpFailWriter{errors.New("broken pipe")}, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"a", "b"}); code != 2 {
+		t.Fatalf("write failure exit = %d, want 2", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "cmp: write error: broken pipe") {
+		t.Fatalf("write failure diagnostic = %q", got)
+	}
+
+	errb.Reset()
+	rc.Stdio = tool.Stdio{In: cmpFailReader{errors.New("input failure")}, Out: io.Discard, Err: &errb}
+	if code := cmd.Run(rc, []string{"-", "a"}); code != 2 {
+		t.Fatalf("read failure exit = %d, want 2", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "cmp: -: input failure") {
+		t.Fatalf("read failure diagnostic = %q", got)
+	}
 }
 
 // Issue 7 STDOUT fixes -l output as exactly "%d %o %o": no offset-column
