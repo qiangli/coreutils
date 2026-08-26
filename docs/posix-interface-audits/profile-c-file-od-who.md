@@ -119,9 +119,13 @@ implementation-defined; the `file` operand substitutes a utmp/utmpx-format
 database covered by `testdata` fixtures rather than a live host database
 (login-database integration boundary); `-m`/`am i` depend on a controlling
 terminal for stdin (terminal integration boundary); `LC_TIME` provider is the
-carried corpus; tty message-state lookup is implemented for Linux and Darwin
-with fail-closed `?` elsewhere (platform boundary, `who_tty_*.go`). None is
-reproduced as a defect.
+carried corpus. Tty message-state lookup uses `os.Stat` and the group-write
+permission bit on non-Windows targets (`who.go`, `who_writable_other.go`),
+while Windows reports the state as unknown (`who_writable_windows.go`). Stdin
+TTY discovery and access-time lookup have Linux, Darwin, and Windows providers;
+other targets return unavailable, yielding no `-m` match and an unknown idle
+status (`who_tty_*.go`). These are platform/integration boundaries, not a
+reproduced product defect.
 
 ## Changes made
 
