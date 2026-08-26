@@ -2,6 +2,7 @@ package whocmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,20 @@ var cmd = &tool.Tool{Name: "who", Synopsis: "Show who is logged on.", Usage: "wh
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-func run(rc *tool.RunContext, args []string) int {
+func run(rc *tool.RunContext, args []string) (code int) {
+	out := &whoOutputWriter{dst: rc.Out}
+	invocation := *rc
+	invocation.Out = out
+	rc = &invocation
+	defer func() {
+		if err := out.Err(); err != nil {
+			fmt.Fprintf(rc.Err, "who: write error: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}()
+
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "same as -b -d --login -p -r -t -T -u")
 	heading := fs.BoolP("heading", "H", false, "print line of column headings")
@@ -231,6 +245,31 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	return 0
 }
+
+// whoOutputWriter retains the first stdout failure and suppresses subsequent
+// writes. This turns both explicit errors and nil-error short writes into the
+// required non-zero utility status without repeating the diagnostic for every
+// remaining output field or record.
+type whoOutputWriter struct {
+	dst io.Writer
+	err error
+}
+
+func (w *whoOutputWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return len(p), nil
+	}
+	n, err := w.dst.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func (w *whoOutputWriter) Err() error { return w.err }
 
 // parseOperands enforces the POSIX operand grammar: `who [file]` or
 // `who am i`. Anything else — arbitrary two words, or a nonstandard

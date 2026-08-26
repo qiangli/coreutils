@@ -368,6 +368,41 @@ func TestMaterializedManifestMatchesTheEmbeddedOne(t *testing.T) {
 	}
 }
 
+// The provider cache installs one executable, not man-db's private libmandb
+// and libman shared objects. Keep the build recipe from silently returning to
+// a libtool artifact that works only while its build directory still exists.
+func TestManBuildRecipeProducesStandaloneCacheArtifact(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate test source")
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "tools", "posix-providers", "build.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(data)
+	start := strings.Index(script, "  man)\n")
+	if start < 0 {
+		t.Fatal("build recipe has no man branch")
+	}
+	end := strings.Index(script[start:], "\n  ex|vi)")
+	if end < 0 {
+		t.Fatal("cannot delimit man build branch")
+	}
+	manRecipe := script[start : start+end]
+	if got := strings.Count(manRecipe, "--disable-shared"); got != 2 {
+		t.Fatalf("man configure fallbacks contain --disable-shared %d times, want 2; cached man must not depend on uninstalled private DSOs", got)
+	}
+	for _, want := range []string{"linux) _man_config=/etc/manpath.config", "darwin) _man_config=/etc/man.conf"} {
+		if !strings.Contains(manRecipe, want) {
+			t.Errorf("man recipe does not select %q", want)
+		}
+	}
+	if got := strings.Count(manRecipe, `--with-config-file="$_man_config"`); got != 2 {
+		t.Fatalf("man configure fallbacks select the provisioned host configuration %d times, want 2", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // the opt-out
 // ---------------------------------------------------------------------------

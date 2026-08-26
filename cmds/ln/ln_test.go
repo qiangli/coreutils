@@ -441,12 +441,15 @@ func TestLnSymbolicIgnoresLogicalPhysical(t *testing.T) {
 func TestLnSymbolicDanglingSource(t *testing.T) {
 	requireSymlinks(t)
 	dir := t.TempDir()
-	_, errb, code := runTool(t, dir, "-s", "no-such-file", "l")
+	_, errb, code := runTool(t, dir, "-s", "no-such-file", "emptysymlink")
 	if code != 0 || errb != "" {
 		t.Fatalf("ln -s dangling: code=%d err=%q", code, errb)
 	}
-	if target, err := os.Readlink(filepath.Join(dir, "l")); err != nil || target != "no-such-file" {
+	if target, err := os.Readlink(filepath.Join(dir, "emptysymlink")); err != nil || target != "no-such-file" {
 		t.Errorf("dangling readlink=%q err=%v", target, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "emptysymlink")); !os.IsNotExist(err) {
+		t.Errorf("dangling link unexpectedly resolves: %v", err)
 	}
 	// Self-loop: the destination does not exist yet, so the same-entry
 	// diagnostic must not fire and the link is created.

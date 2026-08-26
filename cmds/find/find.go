@@ -62,6 +62,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -810,6 +811,7 @@ func lookupOwner(a string, group bool) (uint32, error) {
 type fctx struct {
 	path   string // display path (operand-rooted, forward slashes)
 	osPath string
+	rel    []string // components below the traversal root
 	// info is the effective FileInfo per the -H/-L/-P follow mode
 	// (for a dangling symlink under -L/-H it falls back to the link's
 	// own lstat data, per POSIX).
@@ -983,7 +985,7 @@ type emptyExpr struct{}
 
 func (emptyExpr) eval(c *fctx) bool {
 	if c.info.IsDir() {
-		ents, err := os.ReadDir(c.osPath)
+		ents, err := c.w.traversal.readDir(c.rel, c.osPath)
 		if err != nil {
 			c.w.reportErr(c.path, err)
 			return false
@@ -1382,6 +1384,7 @@ type walker struct {
 	matcher    *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
 	owners     *ownerCache     // per-invocation -nouser/-nogroup lookup cache
 	locale     findLocale      // POSIX category settings for matching and -ok
+	traversal  *traversalState // descriptor-relative state for the current root
 }
 
 func (w *walker) reportErr(display string, err error) {
@@ -1413,7 +1416,12 @@ func (w *walker) walkRoot(operand string) {
 	if w.xdev {
 		dev, _ = fileDev(info)
 	}
-	w.visit(operand, root, info, 0, nil, dev)
+	w.traversal = newTraversalState(root, w.follow, info)
+	defer func() {
+		w.traversal.close()
+		w.traversal = nil
+	}()
+	w.visit(operand, root, nil, info, 0, nil, dev)
 }
 
 // followLink stats through a symlink. A dangling link silently falls
@@ -1433,7 +1441,7 @@ func (w *walker) followLink(disp, osPath string, lst fs.FileInfo) fs.FileInfo {
 // visit evaluates one file and recurses into directories. ancestors
 // carries the FileInfo of every directory on the current path when
 // symlinks are followed, for loop detection.
-func (w *walker) visit(disp, osPath string, info fs.FileInfo, depth int, ancestors []fs.FileInfo, dev uint64) {
+func (w *walker) visit(disp, osPath string, rel []string, info fs.FileInfo, depth int, ancestors []fs.FileInfo, dev uint64) {
 	descend := info.IsDir() && (w.maxDepth < 0 || depth < w.maxDepth)
 	if descend && w.xdev {
 		if d, ok := fileDev(info); ok && d != dev {
@@ -1451,7 +1459,7 @@ func (w *walker) visit(disp, osPath string, info fs.FileInfo, depth int, ancesto
 	}
 
 	if !w.depthFirst && depth >= w.minDepth {
-		c := &fctx{path: disp, osPath: osPath, info: info, w: w}
+		c := &fctx{path: disp, osPath: osPath, rel: rel, info: info, w: w}
 		w.e.eval(c)
 		if c.pruned {
 			descend = false
@@ -1459,39 +1467,54 @@ func (w *walker) visit(disp, osPath string, info fs.FileInfo, depth int, ancesto
 	}
 
 	if descend {
-		ents, err := os.ReadDir(osPath) // sorted: deterministic lexical order
+		// Resolve each directory from a stable root descriptor. Linux keeps a
+		// constant number of descriptors open while doing so, and no internally
+		// assembled pathname is passed to the kernel, even beyond PATH_MAX.
+		ents, err := w.traversal.readDir(rel, osPath)
 		if err != nil {
 			w.reportErr(disp, err)
+			descend = false
 		}
+		// os.ReadDir(path) sorted implicitly; descriptor reads preserve host
+		// order, so restore the applet's documented deterministic order.
+		sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
 		var childAnc []fs.FileInfo
 		if w.follow == 'L' {
 			childAnc = append(ancestors, info)
 		}
 		for _, ent := range ents {
 			childOS := filepath.Join(osPath, ent.Name())
+			childRel := append(append([]string(nil), rel...), ent.Name())
 			childDisp := disp + "/" + ent.Name()
 			if strings.HasSuffix(disp, "/") {
 				childDisp = disp + ent.Name()
 			}
 			// --agentic: prune .gitignore'd / noise paths (never the start point).
-			if w.matcher.Skip(childOS, ent.IsDir()) {
+			// Filtering is defined over the user's logical tree, not the
+			// descriptor alias used only for kernel traversal.
+			if w.matcher.Skip(w.rc.Path(childDisp), ent.IsDir()) {
 				continue
 			}
-			clst, err := ent.Info()
+			clst, err := w.traversal.lstatChild(rel, osPath, ent.Name())
 			if err != nil {
 				w.reportErr(childDisp, err)
 				continue
 			}
 			cinfo := clst
 			if w.follow == 'L' && clst.Mode()&fs.ModeSymlink != 0 {
-				cinfo = w.followLink(childDisp, childOS, clst)
+				followed, followErr := w.traversal.statChild(rel, osPath, ent.Name())
+				if followErr == nil {
+					cinfo = followed
+				} else if !errors.Is(followErr, fs.ErrNotExist) {
+					w.reportErr(childDisp, followErr)
+				}
 			}
-			w.visit(childDisp, childOS, cinfo, depth+1, childAnc, dev)
+			w.visit(childDisp, childOS, childRel, cinfo, depth+1, childAnc, dev)
 		}
 	}
 
 	if w.depthFirst && depth >= w.minDepth {
-		c := &fctx{path: disp, osPath: osPath, info: info, w: w}
+		c := &fctx{path: disp, osPath: osPath, rel: rel, info: info, w: w}
 		w.e.eval(c)
 	}
 }

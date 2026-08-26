@@ -490,6 +490,11 @@ func verifyStagedProviders(rc *tool.RunContext, cfg runtimeConfig, approved stri
 		return []Finding{{Check: "provider-cache",
 			Detail: "BASHY_BIN_CACHE is not set in the staged environment, so provider provenance cannot be bound to the staged wrapper's dispatch target"}}
 	}
+	var err error
+	root, err = posixprovider.CacheRoot(root)
+	if err != nil {
+		return []Finding{{Check: "provider-cache", Detail: err.Error()}}
+	}
 	r := posixprovider.Resolver{CacheRoot: root, GOOS: gateGOOS}
 	out := VerifyProviders(r)
 	if approved == "" {

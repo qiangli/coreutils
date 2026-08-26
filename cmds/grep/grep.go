@@ -217,7 +217,17 @@ func run(rc *tool.RunContext, args []string) int {
 			split[i] = locale.rewritePattern(split[i])
 		}
 	}
-	re, err := compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word || *onlyMatching)
+	var re grepMatcher
+	if !locale.latin1Bytes() && patternsContainNonASCII(split) {
+		// C and POSIX are single-byte locales. Go's regexp package rejects an
+		// arbitrary byte such as 0xff in a pattern as invalid UTF-8, even though
+		// it is an ordinary (non-classified) byte in those locales. Keep the
+		// common ASCII lane on the existing engines, but route byte-bearing
+		// patterns through the shared POSIX byte-regexp implementation.
+		re, err = compileCBytePattern(split, *fixed, *extended, *lineRe, *ignoreCase)
+	} else {
+		re, err = compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word || *onlyMatching)
+	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
 		return 2
@@ -325,6 +335,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		g.grepPath(full, f)
 	}
+	if em, ok := g.re.(interface{ Err() error }); ok && em.Err() != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, em.Err())
+		return 2
+	}
 
 	// Transparency: announce what --agentic hid, so a short/empty result is never
 	// silently misleading. stderr only (stdout stays pure matches).
@@ -380,6 +394,100 @@ func (w grepOutput) Write(p []byte) (int, error) {
 type grepMatcher interface {
 	MatchString(string) bool
 	FindStringIndex(string) []int
+}
+
+// localeByteMatcher adapts pkg/bre's error-preserving raw-byte API to grep's
+// matcher surface. A successful compilation should make match-time codec
+// errors impossible, but retain and expose one rather than silently treating
+// an invariant failure as a non-match.
+type localeByteMatcher struct {
+	patterns []*bre.LocaleByteRegexp
+	line     bool
+	err      error
+}
+
+func (m *localeByteMatcher) MatchString(s string) bool {
+	return m.FindStringIndex(s) != nil
+}
+
+func (m *localeByteMatcher) FindStringIndex(s string) []int {
+	if m.err != nil {
+		return nil
+	}
+	var best []int
+	for _, re := range m.patterns {
+		loc, err := re.FindSubmatchIndex([]byte(s))
+		if err != nil {
+			m.err = err
+			return nil
+		}
+		if loc == nil {
+			continue
+		}
+		loc = loc[:2]
+		if best == nil || loc[0] < best[0] || (loc[0] == best[0] && loc[1] > best[1]) {
+			best = loc
+		}
+	}
+	if m.line && (best == nil || best[0] != 0 || best[1] != len(s)) {
+		return nil
+	}
+	return best
+}
+
+func (m *localeByteMatcher) Err() error { return m.err }
+
+func patternsContainNonASCII(patterns []string) bool {
+	for _, pattern := range patterns {
+		for i := 0; i < len(pattern); i++ {
+			if pattern[i] >= 0x80 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func compileCBytePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (grepMatcher, error) {
+	if len(pats) == 0 {
+		return noMatcher{}, nil
+	}
+	tables, err := bre.SnapshotLocaleByteCtypeTables(nil)
+	if err != nil {
+		return nil, err
+	}
+	options := bre.ByteRegexpOptions{FoldCase: ignoreCase}
+	if extended {
+		options.Syntax = bre.ByteRegexpERE
+	}
+	out := &localeByteMatcher{patterns: make([]*bre.LocaleByteRegexp, 0, len(pats)), line: lineRe}
+	for _, pattern := range pats {
+		if fixed {
+			pattern = quoteByteBRE(pattern)
+		}
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), tables, options)
+		if err != nil {
+			return nil, err
+		}
+		out.patterns = append(out.patterns, re)
+	}
+	return out, nil
+}
+
+// quoteByteBRE makes every byte literal without first interpreting it as
+// UTF-8. Outside a bracket expression these are the BRE metacharacters; the
+// remaining bytes, including ']', are ordinary when unescaped.
+func quoteByteBRE(pattern string) string {
+	var out strings.Builder
+	out.Grow(len(pattern) + 4)
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '.', '[', '\\', '*', '^', '$':
+			out.WriteByte('\\')
+		}
+		out.WriteByte(pattern[i])
+	}
+	return out.String()
 }
 
 type multiMatcher []*bre.Regexp
@@ -977,10 +1085,9 @@ func (g *grepper) matchLine(line string) bool {
 	if !g.word {
 		return g.re.MatchString(line)
 	}
-	// -w: a line is selected if some match has non-word-constituent
-	// context on both sides (GNU: word constituents are letters,
-	// digits, and underscore; a side also passes when the match's own
-	// edge character is a non-word constituent).
+	// -w: a line is selected if some complete match has non-word-constituent
+	// context immediately outside both sides (GNU word constituents are
+	// letters, digits, and underscore).
 	for i := 0; i <= len(line); {
 		loc := g.re.FindStringIndex(line[i:])
 		if loc == nil {
@@ -996,8 +1103,11 @@ func (g *grepper) matchLine(line string) bool {
 }
 
 func wordBoundaryOK(line string, s, e int) bool {
-	startOK := s == 0 || !isWordByte(line[s-1]) || (s < e && !isWordByte(line[s]))
-	endOK := e == len(line) || !isWordByte(line[e]) || (e > s && !isWordByte(line[e-1]))
+	// GNU -w constrains the input immediately outside the complete match.
+	// Non-word bytes inside the match do not waive either boundary: for
+	// example, `grep -w @` must reject "a@b" and accept "!@!".
+	startOK := s == 0 || !isWordByte(line[s-1])
+	endOK := e == len(line) || !isWordByte(line[e])
 	return startOK && endOK
 }
 

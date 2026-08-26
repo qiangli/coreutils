@@ -3,6 +3,7 @@ package whocmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,48 @@ import (
 	"github.com/qiangli/coreutils/cmds/internal/session"
 	"github.com/qiangli/coreutils/tool"
 )
+
+type whoFaultWriter struct {
+	err   error
+	short bool
+	calls int
+}
+
+func (w *whoFaultWriter) Write(p []byte) (int, error) {
+	w.calls++
+	if w.short && len(p) != 0 {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
+
+func TestWhoPropagatesStdoutFailures(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("alice pts/7 1700000000 host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		out  *whoFaultWriter
+	}{
+		{name: "explicit error", out: &whoFaultWriter{err: errors.New("injected stdout failure")}},
+		{name: "short write", out: &whoFaultWriter{short: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC", "LC_ALL=C"}, Stdio: tool.Stdio{Out: tc.out, Err: &errb}}
+			if code := run(rc, []string{"utmp"}); code == 0 {
+				t.Fatalf("stdout failure returned success: stderr=%q", errb.String())
+			}
+			if got := strings.Count(errb.String(), "who: write error:"); got != 1 {
+				t.Fatalf("write-error diagnostics=%d, want 1: %q", got, errb.String())
+			}
+			if tc.out.calls != 1 {
+				t.Fatalf("stdout writes=%d, want failure suppression after first call", tc.out.calls)
+			}
+		})
+	}
+}
 
 func TestWhoFileAndCount(t *testing.T) {
 	dir := t.TempDir()

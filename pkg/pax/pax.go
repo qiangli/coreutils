@@ -24,6 +24,7 @@ const (
 	KindDir      Kind = "dir"
 	KindSymlink  Kind = "symlink"
 	KindHardlink Kind = "hardlink"
+	KindFIFO     Kind = "fifo"
 	KindOther    Kind = "other"
 )
 
@@ -448,6 +449,8 @@ func kindFromHeader(hdr *tar.Header) Kind {
 		return KindSymlink
 	case tar.TypeLink:
 		return KindHardlink
+	case tar.TypeFifo:
+		return KindFIFO
 	default:
 		return KindOther
 	}

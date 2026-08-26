@@ -38,6 +38,16 @@ var processIDsFn = processIDs
 // model that distinction without mutating their own credentials.
 var processGroupIDsFn = processGroupIDs
 
+// accountGroupIDsFn returns the group-database affiliations for a named user.
+// Keep this separate from processGroupIDsFn: a live process group vector and
+// an account's configured memberships are different POSIX data sources.
+var accountGroupIDsFn = func(u *user.User) ([]string, error) { return u.GroupIds() }
+
+// groupNameByIDFn is the group-database lookup seam. Besides keeping formatter
+// tests independent of the host group database, it makes the unresolvable-ID
+// fallback explicit at the point where output is assembled.
+var groupNameByIDFn = lookupGroupName
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	uFlag := fs.BoolP("user", "u", false, "print only the effective user ID")
@@ -177,10 +187,10 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 	// This is the real/effective reporting POSIX's default report requires.
 	var b strings.Builder
 	realUID, realGID := u.Uid, u.Gid
-	uidName, gidName := u.Username, lookupGroupName(u.Gid)
+	uidName, gidName := u.Username, groupNameByIDFn(u.Gid)
 	if current {
 		realUID, realGID = processIDsFn(true)
-		uidName, gidName = idUserName(realUID), lookupGroupName(realGID)
+		uidName, gidName = idUserName(realUID), groupNameByIDFn(realGID)
 	}
 	fmt.Fprintf(&b, "uid=%s gid=%s", decorate(realUID, uidName), decorate(realGID, gidName))
 	if current {
@@ -189,7 +199,7 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 			fmt.Fprintf(&b, " euid=%s", decorate(euid, idUserName(euid)))
 		}
 		if egid != realGID {
-			fmt.Fprintf(&b, " egid=%s", decorate(egid, lookupGroupName(egid)))
+			fmt.Fprintf(&b, " egid=%s", decorate(egid, groupNameByIDFn(egid)))
 		}
 	}
 	gids, err := supplementaryGroupIDs(u, current)
@@ -203,7 +213,7 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) 
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(decorate(gid, lookupGroupName(gid)))
+		b.WriteString(decorate(gid, groupNameByIDFn(gid)))
 	}
 	results = append(results, b.String())
 	return results, nil
@@ -226,7 +236,7 @@ func allGroupIDs(u *user.User, current, realFirst bool) ([]string, error) {
 		}
 		return uniqueNonempty(append(ordered, gids...)), nil
 	}
-	gids, err := u.GroupIds()
+	gids, err := accountGroupIDsFn(u)
 	if err != nil {
 		return nil, err
 	}
@@ -234,8 +244,9 @@ func allGroupIDs(u *user.User, current, realFirst bool) ([]string, error) {
 }
 
 // supplementaryGroupIDs implements the groups= field of the default report.
-// Unlike -G, POSIX places only supplementary/multiple memberships here; the
-// real and effective primary group IDs already have gid=/egid= fields.
+// For the current process POSIX places its supplementary affiliations here.
+// For a named user the field is present only for multiple distinct group
+// memberships, and then contains every membership including the initial group.
 func supplementaryGroupIDs(u *user.User, current bool) ([]string, error) {
 	if current {
 		gids, err := processGroupIDsFn()
@@ -244,17 +255,15 @@ func supplementaryGroupIDs(u *user.User, current bool) ([]string, error) {
 		}
 		return uniqueNonempty(gids), nil
 	}
-	gids, err := u.GroupIds()
+	gids, err := accountGroupIDsFn(u)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]string, 0, len(gids))
-	for _, gid := range gids {
-		if gid != u.Gid {
-			result = append(result, gid)
-		}
+	groups := uniqueNonempty(append([]string{u.Gid}, gids...))
+	if len(groups) <= 1 {
+		return nil, nil
 	}
-	return uniqueNonempty(result), nil
+	return groups, nil
 }
 
 func uniqueNonempty(ids []string) []string {
@@ -291,7 +300,7 @@ func lookupGroupName(gid string) string {
 }
 
 func groupName(gid string) string {
-	if name := lookupGroupName(gid); name != "" {
+	if name := groupNameByIDFn(gid); name != "" {
 		return name
 	}
 	return gid

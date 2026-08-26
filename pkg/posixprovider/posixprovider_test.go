@@ -182,15 +182,96 @@ func TestResolveHonoursBashyBinCache(t *testing.T) {
 	e := mustLookup(t, "bc")
 	want := provision(t, root, e, []byte("#!/bin/sh\nexit 0\n"))
 
-	// The package-level Resolve goes through binmgr.CacheDir, which reads
-	// $BASHY_BIN_CACHE. Still hermetic: the root is a temp dir.
-	t.Setenv("BASHY_BIN_CACHE", root)
+	// The package-level Resolve preserves the explicit, validated cache
+	// override. Still hermetic: the root is a temp dir.
+	t.Setenv(CacheOverrideEnv, root)
 	got, err := Resolve("bc")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if got != want {
 		t.Errorf("Resolve = %q, want %q", got, want)
+	}
+}
+
+func TestResolveDefaultCacheIgnoresAmbientHome(t *testing.T) {
+	accountHome := t.TempDir()
+	ambientHome := t.TempDir()
+	realAccountHome := accountHomeFn
+	accountHomeFn = func() (string, error) { return accountHome, nil }
+	t.Cleanup(func() { accountHomeFn = realAccountHome })
+
+	t.Setenv(CacheOverrideEnv, "")
+	t.Setenv("HOME", ambientHome)
+	t.Setenv("USERPROFILE", ambientHome)
+
+	root, err := cacheRootForHome(runtime.GOOS, accountHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := mustLookup(t, "bc")
+	want := provision(t, root, e, []byte("#!/bin/sh\nexit 0\n"))
+
+	got, err := Resolve("bc")
+	if err != nil {
+		t.Fatalf("Resolve with false HOME: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Resolve with false HOME = %q, want authenticated-account cache %q", got, want)
+	}
+	if strings.HasPrefix(got, ambientHome+string(filepath.Separator)) {
+		t.Fatalf("provider cache followed mutable HOME/USERPROFILE: %q", got)
+	}
+}
+
+func TestProductionDefaultCacheIgnoresAmbientHome(t *testing.T) {
+	before, err := CacheRoot("")
+	if err != nil {
+		t.Skipf("authenticated OS account home is unavailable: %v", err)
+	}
+	lie := t.TempDir()
+	t.Setenv("HOME", lie)
+	t.Setenv("USERPROFILE", lie)
+	after, err := CacheRoot("")
+	if err != nil {
+		t.Fatalf("mutable home environment broke account lookup: %v", err)
+	}
+	if after != before {
+		t.Fatalf("default provider cache moved with HOME/USERPROFILE: %q -> %q", before, after)
+	}
+	if strings.HasPrefix(after, lie+string(filepath.Separator)) {
+		t.Fatalf("default provider cache landed below mutable home: %q", after)
+	}
+}
+
+func TestCacheOverrideValidation(t *testing.T) {
+	want := filepath.Clean(t.TempDir())
+	got, err := CacheRoot(want + string(filepath.Separator) + ".")
+	if err != nil || got != want {
+		t.Fatalf("absolute override = (%q, %v), want (%q, nil)", got, err, want)
+	}
+	for _, bad := range []string{"relative/cache", string(filepath.Separator)} {
+		if _, err := CacheRoot(bad); err == nil {
+			t.Errorf("CacheRoot(%q) accepted unsafe override", bad)
+		}
+	}
+}
+
+func TestAuthenticatedCacheLayoutByPlatform(t *testing.T) {
+	home := t.TempDir()
+	for _, tc := range []struct {
+		goos string
+		want string
+	}{
+		{"linux", filepath.Join(home, ".cache", "bashy", "bin")},
+		{"darwin", filepath.Join(home, "Library", "Caches", "bashy", "bin")},
+		{"windows", filepath.Join(home, "AppData", "Local", "bashy", "bin")},
+		{"aix", filepath.Join(home, ".cache", "bashy", "bin")},
+	} {
+		got, err := cacheRootForHome(tc.goos, home)
+		if err != nil || got != tc.want {
+			t.Errorf("cacheRootForHome(%q) = (%q, %v), want (%q, nil)", tc.goos, got, err, tc.want)
+		}
 	}
 }
 

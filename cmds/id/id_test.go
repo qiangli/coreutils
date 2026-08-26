@@ -39,7 +39,9 @@ func TestIDDefault(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("id: code=%d err=%q", code, errb)
 	}
-	for _, want := range []string{"uid=" + u.Uid, "gid=" + u.Gid, "groups="} {
+	// groups= is conditional: a process with no supplementary group
+	// affiliations has only the uid= and gid= fields.
+	for _, want := range []string{"uid=" + u.Uid, "gid=" + u.Gid} {
 		if !strings.Contains(out, want) {
 			t.Errorf("id output %q missing %q", out, want)
 		}
@@ -160,7 +162,9 @@ func TestIDPFlag(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("-p: code=%d", code)
 	}
-	for _, want := range []string{"uid=", "gid=", "groups="} {
+	// -p changes names/formatting, but does not manufacture a groups= field
+	// for a process with no supplementary group affiliations.
+	for _, want := range []string{"uid=", "gid="} {
 		if !strings.Contains(out, want) {
 			t.Errorf("-p output %q missing %q", out, want)
 		}
@@ -282,14 +286,15 @@ func TestIDDefaultIncludesNames(t *testing.T) {
 // effective IDs are inserted as euid=/egid= only when they differ. The seam
 // simulates a setuid invocation without the test itself being setuid.
 func TestIDDefaultReportsRealAndEffectiveWhenDifferent(t *testing.T) {
-	old := processIDsFn
-	t.Cleanup(func() { processIDsFn = old })
+	oldIDs, oldGroups := processIDsFn, processGroupIDsFn
+	t.Cleanup(func() { processIDsFn, processGroupIDsFn = oldIDs, oldGroups })
 	processIDsFn = func(real bool) (uid, gid string) {
 		if real {
 			return "1000", "1000"
 		}
 		return "0", "0"
 	}
+	processGroupIDsFn = func() ([]string, error) { return []string{"7000"}, nil }
 	out, errb, code := runTool(t)
 	if code != 0 || errb != "" {
 		t.Fatalf("id: code=%d err=%q", code, errb)
@@ -303,12 +308,18 @@ func TestIDDefaultReportsRealAndEffectiveWhenDifferent(t *testing.T) {
 	if !strings.Contains(out, " egid=0") {
 		t.Errorf("default output %q must report the effective gid when it differs", out)
 	}
-	// euid=/egid= belong before the groups= list and after gid=.
-	if gi, ei := strings.Index(out, "gid="), strings.Index(out, "euid="); ei < gi {
-		t.Errorf("euid= must follow gid= in %q", out)
+	// With a deterministic supplementary group, all optional fields are
+	// present and their POSIX order can be compared without treating a missing
+	// field's strings.Index result (-1) as a real position.
+	gi := strings.Index(out, " gid=")
+	ei := strings.Index(out, " euid=")
+	egi := strings.Index(out, " egid=")
+	grp := strings.Index(out, " groups=")
+	if gi < 0 || ei < 0 || egi < 0 || grp < 0 {
+		t.Fatalf("default output is missing an ordering field: %q", out)
 	}
-	if ei, grp := strings.Index(out, "euid="), strings.Index(out, "groups="); ei > grp {
-		t.Errorf("euid= must precede groups= in %q", out)
+	if !(gi < ei && ei < egi && egi < grp) {
+		t.Errorf("fields must be ordered gid=, euid=, egid=, groups= in %q", out)
 	}
 	if strings.Count(out, "\n") != 1 {
 		t.Errorf("default output is not a single line: %q", out)
@@ -488,6 +499,41 @@ func TestIDNamedUserOperand(t *testing.T) {
 	if strings.TrimSpace(out) != u.Uid {
 		t.Errorf("-u USER = %q, want %q", out, u.Uid)
 	}
+
+	// Public passwd/group-style fixture: the named account's initial group is
+	// part of its multiple-group report, followed by supplementary groups.
+	// This differs from the no-operand process form, whose groups= field comes
+	// from the live supplementary getgroups(2) vector.
+	oldAccountGroups := accountGroupIDsFn
+	oldGroupNameByID := groupNameByIDFn
+	t.Cleanup(func() {
+		accountGroupIDsFn = oldAccountGroups
+		groupNameByIDFn = oldGroupNameByID
+	})
+	groupNameByIDFn = func(string) string { return "" }
+	accountGroupIDsFn = func(*user.User) ([]string, error) {
+		return []string{"23001", "23002", "23003", "23002"}, nil
+	}
+	fixture := &user.User{Username: "primary", Uid: "22001", Gid: "23001"}
+	lines, err := formatOne(fixture, false, false, false, false, false, false)
+	if err != nil {
+		t.Fatalf("format named fixture: %v", err)
+	}
+	if got, want := strings.Join(lines, "\n"), "uid=22001(primary) gid=23001 groups=23001,23002,23003"; got != want {
+		t.Fatalf("named multiple-group report = %q, want %q", got, want)
+	}
+	accountGroupIDsFn = func(*user.User) ([]string, error) {
+		return []string{"23001", "23001"}, nil
+	}
+	lines, err = formatOne(fixture, false, false, false, false, false, false)
+	if err != nil {
+		t.Fatalf("format named single-group fixture: %v", err)
+	}
+	if got, want := strings.Join(lines, "\n"), "uid=22001(primary) gid=23001"; got != want {
+		t.Fatalf("named single-group report = %q, want no groups= field (%q)", got, want)
+	}
+	accountGroupIDsFn = oldAccountGroups
+	groupNameByIDFn = oldGroupNameByID
 
 	// -g USER
 	out, errb, code = runTool(t, "-g", u.Username)

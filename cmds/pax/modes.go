@@ -218,6 +218,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	}
 
 	fatal := false
+	unsupportedFIFO := ""
 	// allow is keyed by ARCHIVE POSITION, not by name: an updated archive can
 	// carry the same name more than once, and only the occurrence the planner
 	// kept may be written. Keying by name would resurrect the stale copies.
@@ -226,6 +227,9 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		if pax.IsDestinationExists(rej.Reason) {
 			if o.noOverwrite {
 				continue // -k: silently keep what is already there
+			}
+			if rej.Kind == pax.KindFIFO && !fifoSupportedForExtraction() {
+				unsupportedFIFO = rej.Path
 			}
 			allow[rej.Index] = filepath.Join(root, filepath.FromSlash(rej.Path))
 			continue
@@ -239,7 +243,15 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	}
 
 	for _, m := range plan.Members {
+		if m.Kind == pax.KindFIFO && !fifoSupportedForExtraction() {
+			unsupportedFIFO = m.Path
+		}
 		allow[m.Index] = m.Target
+	}
+	if unsupportedFIFO != "" {
+		fmt.Fprintf(rc.Err, "pax: refusing %s: FIFO extraction is not supported on this platform\n", unsupportedFIFO)
+		fmt.Fprintln(rc.Err, "pax: archive rejected; nothing was extracted")
+		return 1
 	}
 
 	tr2 := newOptionTarReader(data, paxOptions{}, false)
@@ -325,6 +337,11 @@ func attributesFromHeader(h *tar.Header) preservedAttributes {
 	}
 }
 
+// Kept as a seam so the fail-before-mutation guarantee can be exercised on a
+// Unix test host while the unsupported implementation itself remains selected
+// by build tags on platforms without mkfifo.
+var fifoSupportedForExtraction = fifoSupported
+
 func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, target string) (*pendingDirectoryAttributes, error) {
 	// -k: an existing destination is never replaced.
 	if o.noOverwrite {
@@ -337,6 +354,9 @@ func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, tar
 		if fi, err := os.Lstat(target); err == nil && !h.ModTime.After(fi.ModTime()) {
 			return nil, nil
 		}
+	}
+	if h.Typeflag == tar.TypeFifo && !fifoSupportedForExtraction() {
+		return nil, fmt.Errorf("FIFO extraction is not supported on this platform")
 	}
 	if err := mkdirAllNormal(filepath.Dir(target), intermediateDirMode(rc)); err != nil {
 		return nil, err
@@ -359,6 +379,17 @@ func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, tar
 	case tar.TypeLink:
 		_ = os.Remove(target)
 		if err := os.Link(filepath.Join(rootOf(target, h.Name), h.Linkname), target); err != nil {
+			return nil, err
+		}
+	case tar.TypeFifo:
+		_ = os.Remove(target)
+		// Create restrictively so an unrelated process umask cannot expose the
+		// FIFO before its invocation-relative creation mode is installed.
+		if err := makeFIFO(target, 0o600); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(target, normalCreationMode(rc, attrs.mode)); err != nil {
+			_ = os.Remove(target)
 			return nil, err
 		}
 	case tar.TypeReg:
@@ -717,6 +748,8 @@ func (w *cpioWriter) add(name string, fi os.FileInfo, id fileIdentity, emitted d
 		mode |= 0o040000
 	case fi.Mode()&os.ModeSymlink != 0:
 		mode |= 0o120000
+	case fi.Mode()&os.ModeNamedPipe != 0:
+		mode |= 0o010000
 	default:
 		return fmt.Errorf("unsupported cpio member type %s", fi.Mode())
 	}
@@ -1032,10 +1065,14 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				invalidDiagnosed = true
 			}
 			if hardlink && o.paxOptions.linkdata {
+				linkDataSize := fi.Size()
+				if effectiveWriteSizeOverride(o.paxOptions) {
+					linkDataSize = h.Size
+				}
 				h.PAXRecords["COREUTILS.linkdata"] = h.Linkname
 				h.Typeflag = tar.TypeReg
 				h.Linkname = ""
-				h.Size = fi.Size()
+				h.Size = linkDataSize
 				hardlink = false
 			}
 		}
@@ -1059,8 +1096,14 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				return sourceTraversalErr(err)
 			}
 			defer f.Close()
-			if err := copySourceFile(tw, f); err != nil {
-				return err
+			var copyErr error
+			if h.Size == fi.Size() {
+				copyErr = copySourceFile(tw, f)
+			} else {
+				copyErr = copyArchiveMember(tw, f, h.Size)
+			}
+			if copyErr != nil {
+				return copyErr
 			}
 		}
 		if o.verbose {
@@ -1069,6 +1112,35 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		return nil
 	})
 	return diagnosed || invalidDiagnosed, err
+}
+
+// copyArchiveMember writes exactly size bytes. A size extended-header
+// override can shorten the live source or extend it; extension bytes are zero,
+// matching the contents of the corresponding sparse tail after extraction.
+func copyArchiveMember(dst io.Writer, src io.Reader, size int64) error {
+	written, err := io.CopyN(dst, src, size)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return err
+	}
+	zeros := make([]byte, 32*1024)
+	for remaining := size - written; remaining > 0; {
+		chunk := int64(len(zeros))
+		if remaining < chunk {
+			chunk = remaining
+		}
+		n, writeErr := dst.Write(zeros[:int(chunk)])
+		if writeErr != nil {
+			return writeErr
+		}
+		if int64(n) != chunk {
+			return io.ErrShortWrite
+		}
+		remaining -= chunk
+	}
+	return nil
 }
 
 // copySourceFile keeps archive sink failures precise. A mid-file source read

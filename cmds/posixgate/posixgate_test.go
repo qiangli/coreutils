@@ -1296,6 +1296,12 @@ func TestGateProvidersSubcommand(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "not provisioned") {
 		t.Errorf("empty cache: exit = %d, stderr = %q", code, stderr)
 	}
+
+	rc = runtimeRC(t, "BASHY_BIN_CACHE=relative/cache")
+	code, _, stderr = runGateCmd(t, rc, "providers")
+	if code != 1 || !strings.Contains(stderr, "must be an absolute path") {
+		t.Errorf("relative cache: exit = %d, stderr = %q", code, stderr)
+	}
 }
 
 // writeManifest writes an approved build/run manifest with the given rows.

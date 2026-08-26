@@ -107,14 +107,36 @@ func TestGrepWordRegexp(t *testing.T) {
 	if out != "foo bar\n" || code != 0 {
 		t.Errorf("-w: out=%q code=%d", out, code)
 	}
-	// match edge itself non-word: GNU selects "a-x" for -w -x pattern "-x"
+	// A non-word byte inside the complete match does not waive the outside
+	// boundary: GNU rejects -x when it is immediately preceded by word byte a.
 	out, _, code = runGrep(t, "", "a-x\n", "-w", "-e", "-x")
-	if out != "a-x\n" || code != 0 {
+	if out != "" || code != 1 {
 		t.Errorf("-w nonword edge: out=%q code=%d", out, code)
 	}
 	out, _, code = runGrep(t, "", "xfoox\n", "-w", "foo")
 	if out != "" || code != 1 {
 		t.Errorf("-w embedded: out=%q code=%d", out, code)
+	}
+
+	// The C/POSIX byte-regexp lane still applies -w in grepper.matchLine.
+	// A raw high byte is non-word in C, while the ASCII a at either pattern
+	// edge remains a word byte whose adjacent input byte controls acceptance.
+	raw := string([]byte{0xff})
+	out, _, code = runGrep(t, "", "a"+raw+"b\n!"+raw+"!\n", "-w", raw)
+	if out != "!"+raw+"!\n" || code != 0 {
+		t.Errorf("-w raw nonword boundaries: out=%q code=%d", out, code)
+	}
+	out, _, code = runGrep(t, "", raw+"ab\n"+raw+"a!\n", "-w", raw+"a")
+	if out != raw+"a!\n" || code != 0 {
+		t.Errorf("-w raw pattern right word boundary: out=%q code=%d", out, code)
+	}
+	out, _, code = runGrep(t, "", "ba"+raw+"\n!a"+raw+"\n", "-F", "-w", "a"+raw)
+	if out != "!a"+raw+"\n" || code != 0 {
+		t.Errorf("-F -w raw pattern left word boundary: out=%q code=%d", out, code)
+	}
+	out, _, code = runGrep(t, "", "a"+raw+"b\n!"+raw+"a!\n", "-o", "-w", raw+"a")
+	if out != raw+"a\n" || code != 0 {
+		t.Errorf("-o -w raw extent: out=%q code=%d", out, code)
 	}
 }
 
@@ -605,6 +627,14 @@ func TestGrepPOSIXDiagnosticsAndPatternFiles(t *testing.T) {
 		t.Errorf("empty pattern line: out=%q code=%d", out, code)
 	}
 
+	raw := string([]byte{0xff})
+	writeFile(t, dir, "byte-pattern", raw+"\n")
+	writeFile(t, dir, "byte-input", "x"+raw+"y\n")
+	out, errb, code = runGrep(t, dir, "", "-f", "byte-pattern", "byte-input")
+	if out != "x"+raw+"y\n" || errb != "" || code != 0 {
+		t.Errorf("C-locale byte pattern file: out=%q err=%q code=%d", out, errb, code)
+	}
+
 	_, errb, code = runGrep(t, dir, "", "-f", "missing-patterns", "input")
 	if code != 2 || !strings.Contains(errb, "missing-patterns") {
 		t.Errorf("missing pattern file: err=%q code=%d", errb, code)
@@ -637,6 +667,7 @@ func TestGrepHelpAndVersion(t *testing.T) {
 
 // POSIX behaviors that grep's regex layer previously got wrong.
 func TestGrepPOSIXRegexConformance(t *testing.T) {
+	raw := string([]byte{0xff})
 	cases := []struct {
 		name  string
 		stdin string
@@ -667,6 +698,16 @@ func TestGrepPOSIXRegexConformance(t *testing.T) {
 		// which extent is reported: plain grep is unaffected.
 		{"plain match existence is unchanged", "zab\n", []string{`a\|ab`}, "zab\n", 0},
 		{"plain non-match is unchanged", "zzz\n", []string{`a\|ab`}, "", 1},
+
+		// In the C/POSIX locale every pattern and input character is one byte.
+		// Go's regexp parser rejects 0xff as malformed UTF-8, but POSIX grep must
+		// accept it as an ordinary byte in BRE, ERE, and fixed-string modes.
+		{"C byte BRE literal", "x" + raw + "y\n", []string{raw}, "x" + raw + "y\n", 0},
+		{"C byte ERE literal", "x" + raw + "y\n", []string{"-E", raw}, "x" + raw + "y\n", 0},
+		{"C byte bracket expression", raw + "\n", []string{"[" + raw + "]"}, raw + "\n", 0},
+		{"C byte fixed string quotes metacharacters", "x" + raw + "[y\n", []string{"-F", raw + "["}, "x" + raw + "[y\n", 0},
+		{"C byte fixed string case fold", "a" + raw + "\n", []string{"-F", "-i", "A" + raw}, "a" + raw + "\n", 0},
+		{"C byte whole line", raw + "x\n" + raw + "\n", []string{"-x", raw}, raw + "\n", 0},
 	}
 	for _, c := range cases {
 		out, errOut, code := runGrep(t, "", c.stdin, c.args...)

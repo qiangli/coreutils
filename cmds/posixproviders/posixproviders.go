@@ -56,7 +56,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/qiangli/coreutils/pkg/binmgr"
+	"github.com/qiangli/coreutils/cmds/posixproviders/internal/ctagsfifo"
 	"github.com/qiangli/coreutils/pkg/posixprovider"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -89,20 +89,20 @@ func providerTool(e posixprovider.Entry) *tool.Tool {
 			e.Command, e.Version, e.License),
 		Usage: fmt.Sprintf(`%s [arguments...]
 
-Every argument is passed through unchanged to the provisioned %s %s.
+Arguments are dispatched to the provisioned %s %s. For ctags only, an existing
+POSIX FIFO output is generated through a private regular file and then streamed
+to the unchanged FIFO; all other invocations retain direct argv passthrough.
 Provision it with:  bashy posix-providers build %s`, e.Command, e.Command, e.Version, e.Command),
 		Run: func(rc *tool.RunContext, args []string) int { return runProvider(e, rc, args) },
 	}
 }
 
-// resolverFor builds the cache resolver for this invocation. $BASHY_BIN_CACHE is
-// read from the RunContext, not the process: the embedding shell owns the
-// environment, and its value routinely differs from the process's.
+// resolverFor builds the cache resolver for this invocation. BASHY_BIN_CACHE
+// is read from the RunContext, not the process: the embedding shell owns the
+// environment, and its value routinely differs from the process's. Without an
+// override, posixprovider derives the cache from the authenticated OS account.
 func resolverFor(rc *tool.RunContext) (posixprovider.Resolver, error) {
-	if root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE")); root != "" {
-		return posixprovider.Resolver{CacheRoot: root, GOOS: runtime.GOOS}, nil
-	}
-	return posixprovider.Default()
+	return posixprovider.DefaultWithCacheOverride(rc.Getenv(posixprovider.CacheOverrideEnv))
 }
 
 func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int {
@@ -119,6 +119,9 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 		// owns but cannot supply. Never fall through to $PATH.
 		fmt.Fprintf(rc.Err, "%s: %v\n", e.Command, err)
 		return 127
+	}
+	if e.Command == "ctags" {
+		return ctagsfifo.Run(rc, e.Command, path, args, execProviderFn)
 	}
 	return execProviderFn(rc, e.Command, path, args)
 }
@@ -441,10 +444,7 @@ func materializeManifest() string {
 }
 
 func buildCacheRoot(rc *tool.RunContext) (string, error) {
-	if root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE")); root != "" {
-		return root, nil
-	}
-	return binmgr.CacheDir()
+	return posixprovider.CacheRoot(rc.Getenv(posixprovider.CacheOverrideEnv))
 }
 
 // selectNames resolves the "all | <cmd> …" operand form.

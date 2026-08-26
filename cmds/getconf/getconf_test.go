@@ -266,6 +266,15 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 			t.Errorf("%s = %q (exit %d), want undefined without a libc adapter", name, got, code)
 		}
 	}
+
+	// LINE_MAX is a POSIX utility input to more than getconf itself: the
+	// conformance tests for line-oriented utilities use it to size their test
+	// data. The portable Issue 7 value in sysVars must not be shadowed by the
+	// Linux platform adapter and reported as "undefined".
+	got, errs, code := runCmd(t, "LINE_MAX")
+	if code != 0 || errs != "" || got != "2048" {
+		t.Fatalf("getconf LINE_MAX = (%q, %q, %d), want (2048, empty, 0)", got, errs, code)
+	}
 }
 
 func TestMandatoryTableInventoryAndCompatibilityAliases(t *testing.T) {

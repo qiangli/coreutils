@@ -14,11 +14,10 @@ here=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 # and exactly one copy of the pins may exist. This script reads that same file so
 # the recipe and the resolver can never disagree about what is pinned.
 manifest=${POSIX_PROVIDER_MANIFEST:-$here/../../pkg/posixprovider/manifest.tsv}
-# The cache root MUST agree with pkg/binmgr.CacheDir(), which is what
-# pkg/posixprovider.Resolve reads. A provider built into a directory the
-# resolver does not look in is invisible, and the symptom is a "not
-# provisioned" error nobody can explain. binmgr uses Go's os.UserCacheDir(),
-# and that is ~/Library/Caches on darwin -- NOT the XDG path.
+# The posix-providers applet always passes BASHY_BIN_CACHE after deriving it
+# from the authenticated OS account. default_cache is only the direct-script
+# fallback; callers that need the resolver's authenticated default should use
+# the applet. A provider built elsewhere is intentionally invisible at runtime.
 default_cache() {
   case "$(uname -s)" in
     Darwin) printf '%s' "$HOME/Library/Caches/bashy/bin" ;;
@@ -351,16 +350,33 @@ PATCHES
     # down to every recursive invocation, so gl/lib then tries to enter
     # gl/lib/gl/lib and dies with "cd: gl/lib: No such file or directory".
     #
-    # found is src/.libs/man, the real ELF binary -- src/man is libtool's shell
-    # wrapper, which is useless once copied out of the build tree.
-    (cd "$build_dir" && "$src/configure" --disable-nls >/dev/null 2>&1 ||
-       "$src/configure" >/dev/null)
+    # With shared libraries disabled, src/man is the real ELF binary rather
+    # than libtool's build-tree wrapper. The cached artifact must be independent
+    # of that build tree: with shared libraries enabled the ELF records
+    # libmandb-<version>.so, but this recipe
+    # installs only man itself. Such an artifact passes the cache/provenance
+    # checks and then dies in the dynamic loader. Link man-db's private
+    # libraries statically while leaving ordinary system libraries dynamic.
+    # The certification host installs man-db as a declared prerequisite and
+    # therefore owns the native manpath file. Point the upstream build at that
+    # file instead of its /usr/local default, which is absent on the host image.
+    case "$host_os" in
+      linux) _man_config=/etc/manpath.config ;;
+      darwin) _man_config=/etc/man.conf ;;
+      *) fail "man has no configured manpath file for $host_os" ;;
+    esac
+    [ -r "$_man_config" ] ||
+      fail "man needs the host manpath configuration: $_man_config"
+    (cd "$build_dir" && "$src/configure" --disable-nls --disable-shared \
+       --with-config-file="$_man_config" >/dev/null 2>&1 ||
+       "$src/configure" --disable-shared \
+       --with-config-file="$_man_config" >/dev/null)
     for _d in gl/lib lib libdb src; do
       (cd "$build_dir/$_d" &&
          make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null) ||
         fail "man build failed in $_d"
     done
-    found=$build_dir/src/.libs/man
+    found=$build_dir/src/man
     ;;
   ex|vi)
     (cd "$src" && ./configure --with-features=normal --disable-gui --without-x \

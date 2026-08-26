@@ -86,6 +86,30 @@ func TestPlanExtractionSupersedesSameKindDuplicatesAndRejectsKindConflicts(t *te
 	if !plan.Unsafe {
 		t.Fatal("a kind conflict must still mark the plan unsafe")
 	}
+
+	for _, headers := range [][]*tar.Header{
+		{
+			{Name: "fifo-conflict", Typeflag: tar.TypeReg, Size: 1},
+			{Name: "fifo-conflict", Typeflag: tar.TypeFifo},
+		},
+		{
+			{Name: "fifo-conflict", Typeflag: tar.TypeFifo},
+			{Name: "fifo-conflict", Typeflag: tar.TypeReg, Size: 1},
+		},
+	} {
+		plan, err := PlanExtraction(bytes.NewReader(makeArchive(t, headers)), t.TempDir(), OSFS{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.Unsafe || len(plan.Members) != 0 || len(plan.Rejected) != 2 {
+			t.Fatalf("FIFO/regular kind conflict plan = %#v", plan)
+		}
+		for _, rejected := range plan.Rejected {
+			if !strings.Contains(rejected.Reason, "duplicate destination") {
+				t.Fatalf("FIFO/regular rejection = %#v", rejected)
+			}
+		}
+	}
 }
 
 func TestPlanExtractionTreatsRegularHardlinkTransitionsAsFileUpdates(t *testing.T) {

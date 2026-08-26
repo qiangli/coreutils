@@ -618,6 +618,24 @@ func timeSelName(sel timeSel) string {
 }
 
 func (l *lister) listDir(display, full string, header bool) {
+	l.listDirWithAncestors(display, full, header, nil)
+}
+
+func (l *lister) listDirWithAncestors(display, full string, header bool, ancestors []os.FileInfo) {
+	if l.opt.recursive && l.opt.deref == dereferenceAll {
+		info, err := os.Stat(full)
+		if err != nil {
+			l.fail(1, "cannot access '%s': %s", display, errMsg(err))
+			return
+		}
+		for _, ancestor := range ancestors {
+			if os.SameFile(info, ancestor) {
+				l.fail(1, "%s: directory causes a cycle", display)
+				return
+			}
+		}
+		ancestors = append(append([]os.FileInfo(nil), ancestors...), info)
+	}
 	if l.wrote {
 		fmt.Fprintln(l.rc.Out)
 	}
@@ -697,7 +715,7 @@ func (l *lister) listDir(display, full string, header bool) {
 				continue
 			}
 			if e.info.IsDir() {
-				l.listDir(joinDisplay(display, e.name), e.path, true)
+				l.listDirWithAncestors(joinDisplay(display, e.name), e.path, true, ancestors)
 			}
 		}
 	}

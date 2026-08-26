@@ -46,8 +46,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-
-	"github.com/qiangli/coreutils/pkg/binmgr"
 )
 
 // The manifest is embedded, and this directory is the ONE canonical home for
@@ -64,6 +62,12 @@ var manifestFS embed.FS
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"
+
+// CacheOverrideEnv names the one supported explicit provider-cache override.
+// An explicit value is validated by [CacheRoot]; without it, the cache is
+// rooted under the authenticated OS account's recorded home directory rather
+// than HOME, USERPROFILE, or another mutable environment string.
+const CacheOverrideEnv = "BASHY_BIN_CACHE"
 
 // Sentinel errors. Callers match these; the messages carry the detail.
 var (
@@ -272,10 +276,18 @@ type Resolver struct {
 	GOOS string
 }
 
-// Default builds the Resolver for this process: the binmgr cache root
-// ($BASHY_BIN_CACHE, else <UserCacheDir>/bashy/bin) and the running GOOS.
+// Default builds the Resolver for this process. BASHY_BIN_CACHE remains the
+// supported explicit override; without it, the default comes from the
+// authenticated OS account rather than mutable home-directory environment.
 func Default() (Resolver, error) {
-	root, err := binmgr.CacheDir()
+	return DefaultWithCacheOverride(os.Getenv(CacheOverrideEnv))
+}
+
+// DefaultWithCacheOverride builds a resolver from an invocation-owned cache
+// override. Embedded callers use this instead of letting the process
+// environment override the shell's RunContext.
+func DefaultWithCacheOverride(override string) (Resolver, error) {
+	root, err := CacheRoot(override)
 	if err != nil {
 		return Resolver{}, fmt.Errorf("posix provider cache root: %w", err)
 	}

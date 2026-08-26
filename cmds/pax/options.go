@@ -39,11 +39,15 @@ type paxOptions struct {
 }
 
 func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions) (bool, error) {
-	if value, ok := options.global["size"]; ok && value != strconv.FormatInt(h.Size, 10) {
-		return false, fmt.Errorf("-o size=%s conflicts with member %q size %d", value, h.Name, h.Size)
-	}
-	if value, ok := options.local["size"]; ok && value != "" && value != strconv.FormatInt(h.Size, 10) {
-		return false, fmt.Errorf("-o size:=%s conflicts with member %q size %d", value, h.Name, h.Size)
+	originalSize := h.Size
+	// A size record changes both the logical header and the amount of member
+	// data written. The caller uses the resulting h.Size to truncate the source
+	// or extend it with zero bytes. A per-file record has precedence over the
+	// global record, just as it will when the archive is read.
+	if value := options.global["size"]; value != "" {
+		if err := applyPAXValues(h, map[string]string{"size": value}); err != nil {
+			return false, err
+		}
 	}
 	if h.PAXRecords == nil {
 		h.PAXRecords = map[string]string{}
@@ -67,7 +71,27 @@ func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions
 			delete(h.PAXRecords, key)
 		}
 	}
+	// A local empty value or delete pattern removes an otherwise-effective
+	// global size record. Restore the member's source size as well as deleting
+	// the record; leaving only h.Size changed would emit truncated or padded data
+	// without an extended header that describes the override.
+	if !effectiveWriteSizeOverride(options) {
+		h.Size = originalSize
+	}
 	return binaryValue || headerBinary, nil
+}
+
+// effectiveWriteSizeOverride reports whether the final per-member header is
+// meant to use a command-line size value. Empty local values and -o delete
+// patterns remove that value, even when a global size was supplied earlier.
+func effectiveWriteSizeOverride(options paxOptions) bool {
+	if deletedPAXKeyword(options, "size") {
+		return false
+	}
+	if value, ok := options.local["size"]; ok {
+		return value != ""
+	}
+	return options.global["size"] != ""
 }
 
 func localPAXValuesToArchive(rc *tool.RunContext, values map[string]string, action string) (map[string]string, bool, error) {

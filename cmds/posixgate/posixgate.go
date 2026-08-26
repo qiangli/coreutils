@@ -243,15 +243,13 @@ func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) 
 // production is always the running GOOS.
 var gateGOOS = runtime.GOOS
 
-// resolverFor mirrors cmds/posixproviders: $BASHY_BIN_CACHE is read from the
+// resolverFor mirrors cmds/posixproviders: BASHY_BIN_CACHE is read from the
 // RunContext, never the process — the embedding shell owns the environment.
-// Only the standalone `providers` subcommand takes the per-host default cache;
-// the runtime gate demands an explicit staged cache (verifyStagedProviders).
+// Only the standalone `providers` subcommand takes the authenticated-account
+// default cache; the runtime gate demands an explicit staged cache
+// (verifyStagedProviders).
 func resolverFor(rc *tool.RunContext) (posixprovider.Resolver, error) {
-	if root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE")); root != "" {
-		return posixprovider.Resolver{CacheRoot: root, GOOS: gateGOOS}, nil
-	}
-	r, err := posixprovider.Default()
+	r, err := posixprovider.DefaultWithCacheOverride(rc.Getenv(posixprovider.CacheOverrideEnv))
 	if err != nil {
 		return r, err
 	}

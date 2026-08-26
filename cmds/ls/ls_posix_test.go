@@ -725,6 +725,39 @@ func TestLsDereferenceModeLastOptionWins(t *testing.T) {
 	}
 }
 
+func TestLsRecursiveLogicalWalkDetectsAncestorCycleAndRecovers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "root", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "root", "sibling"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "root", "sibling"), "file", "")
+	if err := os.Symlink("..", filepath.Join(dir, "root", "child", "up")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	out, errb, code := runToolAt(t, dir, "-RL", "root")
+	if code == 0 || !strings.Contains(errb, "root/child/up: directory causes a cycle") {
+		t.Fatalf("ls -RL cycle = code %d, stderr %q", code, errb)
+	}
+	if strings.Contains(out, "root/child/up/child:") {
+		t.Fatalf("logical recursion descended into an ancestor cycle: %q", out)
+	}
+	if !strings.Contains(out, "root/sibling:\n") || !containsLine(strings.Split(out, "\n"), "file") {
+		t.Fatalf("logical recursion did not recover after cycle: %q", out)
+	}
+
+	out, errb, code = runToolAt(t, dir, "-RH", "root")
+	if code != 0 || errb != "" || strings.Contains(out, "directory causes a cycle") {
+		t.Fatalf("ls -RH must not follow encountered symlink: (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func containsLine(lines []string, target string) bool {
 	for _, l := range lines {
 		if l == target {
