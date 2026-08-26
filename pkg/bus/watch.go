@@ -1,10 +1,12 @@
 package bus
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,10 +21,17 @@ import (
 // push-only subscription could not offer.
 const defaultPoll = time.Second
 
+const defaultWaitInterval = 100 * time.Millisecond
+
+var (
+	watchTimeline     = room.Timeline
+	watchTimelineStat = statTimeline
+)
+
 func newWatchCmd() *cobra.Command {
 	var topic, to, roomID, as string
 	var drain, jsonOut, all bool
-	var poll time.Duration
+	var interval, wait time.Duration
 	var since int64
 
 	cmd := &cobra.Command{
@@ -62,14 +71,20 @@ agents draining the same topic each get their own copy.`,
 			if !filter.any() && !all {
 				return fmt.Errorf("watch: no filter given — pass --topic/--to/--room, or --all to watch everything")
 			}
+			if wait > 0 && all {
+				return fmt.Errorf("watch: --wait cannot be combined with --all")
+			}
 
 			if drain {
 				return runDrain(cmd, filter, drainOptions{
-					as: resolveSubscriber(as), since: since, jsonOut: jsonOut,
+					as: resolveSubscriber(as), since: since, jsonOut: jsonOut, wait: wait,
 				})
 			}
+			if wait > 0 {
+				return fmt.Errorf("watch: --wait requires --drain")
+			}
 			return runFollow(cmd, filter, followOptions{
-				since: since, jsonOut: jsonOut, poll: poll,
+				since: since, jsonOut: jsonOut, poll: interval,
 			})
 		},
 	}
@@ -82,7 +97,10 @@ agents draining the same topic each get their own copy.`,
 	f.BoolVar(&drain, "drain", false, "print what you have not seen since your last drain, then exit")
 	f.StringVar(&as, "as", "", "subscriber name for the drain cursor (default: your principal)")
 	f.Int64Var(&since, "since", 0, "start after this sequence number (overrides the saved cursor)")
-	f.DurationVar(&poll, "poll", defaultPoll, "how often follow mode re-reads the timeline")
+	f.DurationVar(&interval, "interval", defaultPoll, "how often follow mode re-reads the timeline")
+	f.DurationVar(&interval, "poll", defaultPoll, "hidden alias for --interval")
+	_ = f.MarkHidden("poll")
+	f.DurationVar(&wait, "wait", 0, "with --drain, wait up to this duration for a new relevant notification")
 	f.BoolVar(&jsonOut, "json", false, "emit one "+SchemaVersion+" JSON object per line (NDJSON)")
 	return cmd
 }
@@ -117,6 +135,7 @@ type drainOptions struct {
 	as      string
 	since   int64
 	jsonOut bool
+	wait    time.Duration
 }
 
 // runDrain prints what this subscriber has not seen, then advances its cursor.
@@ -135,7 +154,20 @@ func runDrain(cmd *cobra.Command, f eventFilter, opt drainOptions) error {
 		from = c
 	}
 
-	events, err := room.Timeline(0)
+	if opt.wait < 0 {
+		return fmt.Errorf("watch: --wait must not be negative")
+	}
+	if opt.wait > 0 {
+		if err := waitForDrain(cmd.Context(), f, from, opt.wait); err != nil {
+			return err
+		}
+	}
+
+	return drainOnce(cmd, f, opt, from)
+}
+
+func drainOnce(cmd *cobra.Command, f eventFilter, opt drainOptions, from int64) error {
+	events, err := watchTimeline(0)
 	if err != nil {
 		return err
 	}
@@ -171,6 +203,72 @@ func runDrain(cmd *cobra.Command, f eventFilter, opt drainOptions) error {
 	return nil
 }
 
+// waitForDrain blocks until this drain has something relevant to read or the
+// bound expires. A timeout is an empty successful read: per-turn pollers must
+// not treat a quiet bus as a failed turn boundary.
+func waitForDrain(ctx context.Context, f eventFilter, from int64, bound time.Duration) error {
+	if bound <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	ticker := time.NewTicker(defaultWaitInterval)
+	defer ticker.Stop()
+	var last timelineStat
+	var haveLast bool
+	for {
+		st, changed, err := timelineChanged(last, haveLast)
+		if err != nil {
+			return err
+		}
+		if changed {
+			events, err := watchTimeline(0)
+			if err != nil {
+				return err
+			}
+			for _, e := range events {
+				if e.Seq > from && f.match(e) {
+					return nil
+				}
+			}
+			last = st
+			haveLast = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+type timelineStat struct {
+	size  int64
+	mtime time.Time
+}
+
+func timelineChanged(last timelineStat, haveLast bool) (timelineStat, bool, error) {
+	st, err := watchTimelineStat()
+	if err != nil {
+		return st, false, err
+	}
+	return st, !haveLast || st.size != last.size || !st.mtime.Equal(last.mtime), nil
+}
+
+func statTimeline() (timelineStat, error) {
+	path := filepath.Join(room.Dir(), "timeline.jsonl")
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return timelineStat{}, nil
+		}
+		return timelineStat{}, err
+	}
+	return timelineStat{size: info.Size(), mtime: info.ModTime()}, nil
+}
+
 type followOptions struct {
 	since   int64
 	jsonOut bool
@@ -185,7 +283,7 @@ type followOptions struct {
 func runFollow(cmd *cobra.Command, f eventFilter, opt followOptions) error {
 	last := opt.since
 	if last == 0 {
-		events, err := room.Timeline(0)
+		events, err := watchTimeline(0)
 		if err != nil {
 			return err
 		}
@@ -206,7 +304,7 @@ func runFollow(cmd *cobra.Command, f eventFilter, opt followOptions) error {
 	defer t.Stop()
 
 	for {
-		events, err := room.Timeline(0)
+		events, err := watchTimeline(0)
 		if err != nil {
 			return err
 		}
