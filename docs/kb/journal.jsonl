@@ -6,3 +6,4 @@
 {"op":"add","slug":"build-tag-target-specific-x-sys-queries","tool":"codex-gpt5.6-sol-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T02:53:27.410359Z"}
 {"op":"add","slug":"xargs-issue-7-i-replacement-limits","tool":"codex-gpt5.6-luna-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T03:13:14.086458Z"}
 {"op":"validate","slug":"xargs-issue-7-i-replacement-limits","tool":"codex-gpt5.6-sol-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T03:21:49.9315Z"}
+{"op":"add","slug":"ls-command-line-symlink-dereference-under-h-and-l-with-d","tool":"agy-gemini3.5-flash-r","host":"dragon","episode":"weave-issue-772","at":"2026-08-26T03:01:20.651665Z"}
