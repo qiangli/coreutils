@@ -2,6 +2,7 @@ package meet
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -156,6 +157,17 @@ func resolveMeeting(ref string) (string, error) {
 		return "", fmt.Errorf("meet: %q matches %d meetings (%s) — be more specific, or use its room number",
 			ref, len(hits), strings.Join(hits, ", "))
 	}
+}
+
+// directMessageRoomName returns the one stable permanent-room address for two
+// seats. Canonicalization happens before sorting, so aliases and reversed
+// callers converge; slugify supplies the existing portable room-name rules.
+// It deliberately does not call newID: that function is unique-per-instance,
+// while a DM is one durable address reused forever.
+func directMessageRoomName(a, b string) (string, error) {
+	seats := []string{slugify(canonAgent(a)), slugify(canonAgent(b))}
+	sort.Strings(seats)
+	return permanentRoomName(slugify("dm-" + strings.Join(seats, "-")))
 }
 
 // loadMeeting resolves whatever a caller typed — a room number, an id, or an

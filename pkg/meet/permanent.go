@@ -21,14 +21,22 @@ const permanentRoomsSchema = "bashy-meet-permanent-rooms-v1"
 // PermanentRoomConfig is one desired host-local room. The built-in steward
 // room is always present unless a config entry explicitly disables it.
 type PermanentRoomConfig struct {
-	Name          string   `json:"name"`
-	Topic         string   `json:"topic,omitempty"`
-	Agenda        []string `json:"agenda,omitempty"`
-	Agent         string   `json:"agent,omitempty"`
-	Band          int      `json:"band,omitempty"`
-	AutoStart     *bool    `json:"auto_start,omitempty"`
-	Secretary     string   `json:"secretary,omitempty"`
-	SecretaryBand int      `json:"secretary_band,omitempty"`
+	Name   string   `json:"name"`
+	Topic  string   `json:"topic,omitempty"`
+	Agenda []string `json:"agenda,omitempty"`
+	// Board makes a configured permanent room a standing channel: nobody is
+	// spawned and open/closed means exactly whether the channel accepts posts.
+	//
+	// Keep this in the v1 reader. rooms.json is decoded with
+	// DisallowUnknownFields, so changing the schema would make the compatibility
+	// rollout strictly worse: the reader must understand board before any host
+	// starts writing it.
+	Board         bool   `json:"board,omitempty"`
+	Agent         string `json:"agent,omitempty"`
+	Band          int    `json:"band,omitempty"`
+	AutoStart     *bool  `json:"auto_start,omitempty"`
+	Secretary     string `json:"secretary,omitempty"`
+	SecretaryBand int    `json:"secretary_band,omitempty"`
 }
 
 // PermanentRoleStartRequest is the host-neutral request Meet emits when a
@@ -248,7 +256,7 @@ func EnsureConfiguredPermanentRooms() ([]*State, error) {
 	for _, c := range configs {
 		st, err := EnsurePermanentRoom(c.Name, CreateOptions{
 			Topic: c.Topic, Agenda: c.Agenda, Out: OutStore,
-			Secretary: c.Secretary, SecretaryBand: c.SecretaryBand,
+			Secretary: c.Secretary, SecretaryBand: c.SecretaryBand, Board: c.Board,
 		})
 		if err != nil {
 			return nil, err
@@ -358,7 +366,13 @@ func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]strin
 		if opts.Agenda != nil {
 			found.Agenda = append([]string(nil), opts.Agenda...)
 		}
-		if secretary := strings.TrimSpace(opts.Secretary); secretary != "" {
+		if opts.Board {
+			found.Board = true
+			found.Chair = ""
+			found.Secretary = ""
+			found.SecretaryPending = false
+			found.SecretaryBand = 0
+		} else if secretary := strings.TrimSpace(opts.Secretary); secretary != "" {
 			if err := routableSeat(secretary); err != nil {
 				return nil, err
 			}
@@ -379,6 +393,12 @@ func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]strin
 			if participant != "" && !containsFold(found.Participants, participant) {
 				found.Participants = append(found.Participants, participant)
 			}
+		}
+		if found.Board && strings.HasPrefix(found.Name, "dm-") {
+			// A DM's two canonical agent participants are the entire room. Create
+			// normally supplies the terminal's human seat; retaining it here would
+			// silently turn every DM into a three-seat channel.
+			found.Human = ""
 		}
 		if found.RoleHolders == nil && len(roles) > 0 {
 			found.RoleHolders = map[string]string{}
@@ -406,6 +426,9 @@ func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]strin
 		return nil, err
 	}
 	st.Name, st.Permanent = name, true
+	if st.Board && strings.HasPrefix(st.Name, "dm-") {
+		st.Human = ""
+	}
 	if len(roles) > 0 {
 		st.RoleHolders = make(map[string]string, len(roles))
 		for roleName, holder := range roles {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/capability"
+	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +63,7 @@ func NewMeetCmd() *cobra.Command {
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(
-		newOpenCmd(), newConsultCmd(), newReadCmd(), newTellCmd(), newRoundCmd(),
+		newOpenCmd(), newConsultCmd(), newDMCmd(), newReadCmd(), newTellCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
@@ -1405,7 +1406,8 @@ func newContributionsCmd() *cobra.Command {
 }
 
 func newListCmd() *cobra.Command {
-	return &cobra.Command{
+	var as string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "list saved meetings",
 		Long: "List saved meetings.\n\n" +
@@ -1418,6 +1420,10 @@ func newListCmd() *cobra.Command {
 			sessions, err := openRooms()
 			if err != nil {
 				return err
+			}
+			reader := canonAgent(strings.TrimSpace(strings.TrimPrefix(as, "@")))
+			if reader != "" {
+				return writeGroupedRoomList(cmd, sessions, reader)
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "ROOM\tNAME\tID\tSTATUS\tPARTICIPANTS\tTOPIC")
@@ -1438,6 +1444,124 @@ func newListCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&as, "as", "", "show grouped rooms and unread counts for NAME (does not mark messages read)")
+	return cmd
+}
+
+type roomListGroup struct {
+	heading string
+	rooms   []*State
+}
+
+func writeGroupedRoomList(cmd *cobra.Command, sessions []*State, reader string) error {
+	groups := []roomListGroup{
+		{heading: "STANDING CHANNELS"},
+		{heading: "AD-HOC ROOMS"},
+		{heading: "DIRECT MESSAGES"},
+	}
+	for _, st := range sessions {
+		switch {
+		case st.Permanent && strings.HasPrefix(st.Name, "dm-"):
+			groups[2].rooms = append(groups[2].rooms, st)
+		case st.Permanent:
+			groups[0].rooms = append(groups[0].rooms, st)
+		default:
+			groups[1].rooms = append(groups[1].rooms, st)
+		}
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	for i, group := range groups {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintln(w, group.heading)
+		fmt.Fprintln(w, "ROOM\tNAME\tSTATUS\tUNREAD\tPARTICIPANTS\tTOPIC")
+		for _, st := range group.rooms {
+			name := st.Name
+			if name == "" {
+				name = "-"
+			}
+			unread := "-"
+			if st.board() && participantSeat(st, reader) {
+				directed, other, _, err := Unread(st.ID, reader, 0)
+				if err != nil {
+					return err
+				}
+				unread = strconv.Itoa(len(directed) + len(other))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				roomLabel(st), name, st.Status, unread, strings.Join(st.attendees(), ","), st.Topic)
+		}
+		if len(group.rooms) == 0 {
+			fmt.Fprintln(w, "-\t-\t-\t-\t-\t-")
+		}
+	}
+	return w.Flush()
+}
+
+var dmPeerLive = func(agent string) (bool, error) {
+	_, found, err := room.Find(agent)
+	return found, err
+}
+
+func newDMCmd() *cobra.Command {
+	var as string
+	cmd := &cobra.Command{
+		Use:   "dm <agent>",
+		Short: "open or reuse a direct conversation using derived peer presence",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			peer := canonAgent(strings.TrimSpace(strings.TrimPrefix(args[0], "@")))
+			if err := routableSeat(peer); err != nil {
+				return err
+			}
+			caller := canonAgent(strings.TrimSpace(strings.TrimPrefix(as, "@")))
+			if caller == "" {
+				caller = canonAgent(strings.TrimSpace(os.Getenv("BASHY_AGENT_ID")))
+			}
+			if caller == "" {
+				return fmt.Errorf("meet: dm needs the calling agent identity in --as NAME or BASHY_AGENT_ID")
+			}
+			if err := routableSeat(caller); err != nil {
+				return fmt.Errorf("meet: DM caller: %w", err)
+			}
+			if strings.EqualFold(caller, peer) {
+				return fmt.Errorf("meet: a direct message needs two distinct seats")
+			}
+
+			live, err := dmPeerLive(peer)
+			if err != nil {
+				return fmt.Errorf("meet: derive presence for %s: %w", peer, err)
+			}
+			if !live {
+				dm, err := ensureRelayDM(peer, caller)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Relay DM with %s · cold · Chat spawns the counterpart when you send a message\n", dm.Agent)
+				return nil
+			}
+
+			name, err := directMessageRoomName(caller, peer)
+			if err != nil {
+				return err
+			}
+			st, err := EnsurePermanentRoom(name, CreateOptions{
+				Topic:        "Direct message: " + caller + " ↔ " + peer,
+				Participants: []string{caller, peer}, Initiator: caller,
+				Board: true, NoSecretary: true, Out: OutStore,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "board DM @%s · room %s · %s is live; messages wait for its next `meet read`\n",
+				st.Name, roomLabel(st), peer)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&as, "as", "", "agent identity opening the DM (default: BASHY_AGENT_ID)")
+	return cmd
 }
 
 func newResumeCmd() *cobra.Command {
