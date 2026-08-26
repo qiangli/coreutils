@@ -438,6 +438,9 @@ func TestMinutesCarryFullTurnsCoverageAndPolls(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Cwd = repo
+	// The room is closed from where it was opened — the new fileMinutes contract
+	// refuses to file into a repo that is not the caller's.
+	t.Chdir(repo)
 	st.Initiator = "qiangli" // == st.Human, so a human must confirm
 	_ = st.save()
 
@@ -490,6 +493,7 @@ func TestAmendRewritesMinutesFromTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Cwd = repo
+	t.Chdir(repo) // close from the repo the room was opened in (fileMinutes contract)
 	_ = st.save()
 	runRound(context.Background(), st, "q", scriptRunner{replies: map[string]string{
 		"codex": "cert must bypass the atomizer", "opencode": "agreed",
@@ -602,6 +606,7 @@ func TestFailedSecretaryFilesUnknownNotNoDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Cwd = repo
+	t.Chdir(repo) // close from the repo the room was opened in (fileMinutes contract)
 	_ = st.save()
 	runRound(context.Background(), st, "q", scriptRunner{replies: map[string]string{
 		"codex": "ship the tap first", "opencode": "agreed, tap first",
@@ -633,6 +638,7 @@ func TestOverrideSecretaryRecoversSynthesis(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Cwd = repo
+	t.Chdir(repo) // close from the repo the room was opened in (fileMinutes contract)
 	_ = st.save()
 	runRound(context.Background(), st, "q", scriptRunner{replies: map[string]string{
 		"codex": "ship the tap first", "opencode": "agreed",

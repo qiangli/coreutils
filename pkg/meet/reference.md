@@ -50,6 +50,7 @@ bashy meet show          <id>                   # roster, per-participant covera
 bashy meet contributions <id> [participant]     # every contribution, in full
 bashy meet converge      <id>                   # secretary pass (rewrites synthesis.json)
 bashy meet close         <id>                   # converge + initiator confirms + file minutes
+bashy meet abandon       <id>                   # reap a dead room: mark abandoned, release the room, archive; spawns/synthesizes/files nothing
 bashy meet amend         <id> [--resynthesize]  # regenerate the minutes from the transcript
 bashy meet apply         <id> --to FILE --write # append the agreed action items to a doc
 
