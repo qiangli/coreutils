@@ -234,9 +234,9 @@ func TestTrPOSIXMultibyteComplement(t *testing.T) {
 		{"delete complement", []string{"-cd", "é\n"}, "héllo\n", "é\n"},
 		{"squeeze complement", []string{"-cs", "é"}, "haaébb\n", "haéb\n"},
 		{"translate complement to one character", []string{"-c", "é\n", "X"}, "héllo\n", "XéXXX\n"},
-		// The complemented domain is unbounded, so -t consumes only its
-		// first character: U+0080, the first character outside ASCII.
-		{"truncate complement", []string{"-ct", "\\000-\\177", "界"}, "a\u0080é\n", "a界é\n"},
+		// The large -C character domain stays symbolic, so -t consumes only
+		// its first character: U+0080, the first character outside ASCII.
+		{"truncate character complement", []string{"-Ct", "\\000-\\177", "界"}, "a\u0080é\n", "a界é\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, errOut, code := runTrEnv(t, env, tc.in, tc.args...)
@@ -246,16 +246,74 @@ func TestTrPOSIXMultibyteComplement(t *testing.T) {
 		})
 	}
 
-	// A [c*] fill has no computable repeat count against an unbounded
-	// complemented domain, so it is refused by name instead of guessed.
+	// A [c*] fill extends SET2 to the finite character complement without
+	// materializing that large domain.
 	out, errOut, code := runTrEnv(t, env, "abc\n", "-c", "abc", "[x*]")
-	if code != 2 || out != "" || !strings.Contains(errOut, "is not supported") {
+	if code != 0 || out != "abcx" || errOut != "" {
 		t.Fatalf("[c*] with -c: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runTrEnv(t, env, "\x00ab\U0010ffff", "-C", "a", "P[x*]S")
+	if code != 0 || out != "PaxS" || errOut != "" {
+		t.Fatalf("positioned [c*] with -C: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	// Complemented case classes stay refused with the existing diagnostic.
 	_, errOut, code = runTrEnv(t, env, "abc\n", "-c", "abc", "[:upper:]")
 	if code != 1 || !strings.Contains(errOut, "must map all characters in the domain to one") {
 		t.Fatalf("[:upper:] with -c: code=%d stderr=%q", code, errOut)
+	}
+}
+
+// TestTrPOSIXValueAndCharacterComplementsDiffer pins the Issue 7 distinction:
+// -c complements encoded values in binary order, while -C complements
+// LC_CTYPE characters in LC_COLLATE order. A UTF-8 character therefore has
+// two independently translated values under -c and one translation under -C.
+func TestTrPOSIXValueAndCharacterComplementsDiffer(t *testing.T) {
+	env := posixUTF8()
+	for _, tc := range []struct {
+		name string
+		args []string
+		in   string
+		want string
+	}{
+		{"value complement translates both UTF-8 bytes", []string{"-c", "a", "[x*]"}, "é", "xx"},
+		{"character complement translates one character", []string{"-C", "a", "[x*]"}, "é", "x"},
+		{"UTF-8 SET1 contributes its encoded values", []string{"-c", "é", "[x*]"}, "éa", "éx"},
+		{"binary prefix order", []string{"-c", "a", "12[x*]"}, "\x00\x01\x02", "12x"},
+		{"binary domain has 256 values", []string{"-c", "a", "P[x*]S"}, "\x00\xff", "PS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runTrEnv(t, env, tc.in, tc.args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tc.want)
+			}
+		})
+	}
+}
+
+// TestTrPOSIXValueComplementSqueezesPostTransformCharacters covers the
+// mandated operation order: -c selects encoded values for deletion or
+// translation, then -s collapses repeated characters from the resulting
+// stream according to the last operand.
+func TestTrPOSIXValueComplementSqueezesPostTransformCharacters(t *testing.T) {
+	env := posixUTF8()
+	for _, tc := range []struct {
+		name string
+		args []string
+		in   string
+		want string
+	}{
+		{"delete then squeeze surviving UTF-8", []string{"-c", "-d", "-s", "é", "é"}, "éé", "é"},
+		{"translate values then squeeze mapped UTF-8", []string{"-c", "-s", "a", "é"}, "éé", "é"},
+		{"mapped wide character is one squeeze unit", []string{"-c", "-s", "a", "界"}, "éé", "界"},
+		{"unmapped UTF-8 remains exact", []string{"-c", "-s", "é", "X"}, "ééaa", "ééX"},
+		{"invalid surviving values remain exact", []string{"-c", "-d", "-s", "\\377", "\\377"}, "\xff\xff", "\xff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runTrEnv(t, env, tc.in, tc.args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tc.want)
+			}
+		})
 	}
 }
 
@@ -341,33 +399,5 @@ func TestTrOutsidePOSIXModeKeepsByteCharacters(t *testing.T) {
 	}, "-d", "a")
 	if code != 2 || !strings.Contains(errOut, "failed to open LC_CTYPE") {
 		t.Fatalf("unsupported: code=%d stderr=%q", code, errOut)
-	}
-}
-
-// TestTrCollationResidualIsRecorded is the standing evidence for the one
-// clause this issue does not close. XCU:tr:ENVIRONMENT_VARIABLES gives
-// LC_COLLATE "the behavior of range expressions and equivalence classes",
-// and XCU:tr:OPERANDS scopes its definition of c-c to the POSIX locale.
-// This implementation answers both from character values only: a non-C
-// LC_COLLATE changes nothing, and [=c=] holds exactly its own character.
-// Closing that needs a multi-byte collation-sequence provider, which does
-// not exist in this repository — pkg/collate offers strcoll comparison for
-// two ISO-8859-1 aliases and enumerates no equivalence class.
-func TestTrCollationResidualIsRecorded(t *testing.T) {
-	base := []string{"POSIXLY_CORRECT=1", "LC_CTYPE=en_US.UTF-8"}
-	for _, collate := range []string{"C", "en_US.UTF-8", "de_DE.UTF-8"} {
-		env := append(append([]string{}, base...), "LC_COLLATE="+collate)
-		// An equivalence class expands to its own character only. Under a
-		// non-C LC_COLLATE glibc would also admit the accented forms.
-		out, errOut, code := runTrEnv(t, env, "hello héllo\n", "[=e=]", "X")
-		if code != 0 || errOut != "" || out != "hXllo héllo\n" {
-			t.Fatalf("LC_COLLATE=%s equivalence: code=%d stdout=%q stderr=%q", collate, code, out, errOut)
-		}
-		// A range covers the characters between the endpoints by value,
-		// independent of the collating sequence LC_COLLATE names.
-		out, errOut, code = runTrEnv(t, env, "aéz\n", "-d", "a-z")
-		if code != 0 || errOut != "" || out != "é\n" {
-			t.Fatalf("LC_COLLATE=%s range: code=%d stdout=%q stderr=%q", collate, code, out, errOut)
-		}
 	}
 }

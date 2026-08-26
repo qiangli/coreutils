@@ -56,7 +56,7 @@ func TestTrTranslate(t *testing.T) {
 		{"truncate with empty set2", []string{"-t", "abc", ""}, "abc\n", "abc\n"},
 		{"truncate with explicit zero repeat", []string{"-t", "abc", "[x*0]"}, "abc\n", "abc\n"},
 		{"truncate with fill", []string{"-t", "abcdef", "[x*]yz"}, "abcdef\n", "xxxxyz\n"},
-		{"fill counts literal set1 length under complement", []string{"-c", "a", "[x*]y"}, "abc\n", "ayyy"},
+		{"fill counts effective complemented set1", []string{"-c", "a", "[x*]y"}, "abc\n", "axxx"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.stdin, c.args...)

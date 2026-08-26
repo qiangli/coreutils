@@ -32,11 +32,10 @@ selected locale's `LC_CTYPE` data. The divergence is small but real and is
 not papered over: glibc's `blank` class excludes the non-breaking spaces
 U+00A0, U+2007 and U+202F that Unicode's `Zs` category includes, so
 `unexpand` and `uniq` treat those three characters as blanks where glibc
-would not. Closing that — and the `LC_COLLATE` items below — requires a
-shared multi-byte locale provider outside the paths this issue owns, so
-the gap is recorded with standing evidence rather than approximated
-further. `TestTrCollationResidualIsRecorded` is the executable form of
-that record.
+would not. Closing the remaining multi-byte `LC_CTYPE` and general installed-
+locale breadth requires a shared multi-byte locale provider outside the paths
+this issue owns, so the gap is recorded rather than approximated further. The
+carried single-byte `LC_COLLATE` surface is implemented below.
 
 Outside POSIX mode every command keeps its historical GNU-compatible byte
 model and opens no provider, which is what the four
@@ -74,12 +73,21 @@ expansion, translation and output rather than collapsing into U+FFFD. The
 single-byte universe keeps its 256-entry lookup tables, so the byte path
 is unchanged in both behavior and cost.
 
-Two deliberate refusals, both named rather than approximated: the
-complemented domain of a multi-byte `LC_CTYPE` is unbounded, so `-c` never
-enumerates it (`complementPrefix` produces only the prefix a translation
-can consume), and a `[c*]` fill in string2 combined with a complemented
-string1 has no computable repeat count and is refused through
-`tool.NotSupported`.
+The two complement options retain their Issue 7 distinction under a multi-byte
+`LC_CTYPE`. `-c` complements the 256 encoded byte values in ascending binary
+order, treats every byte of a multi-byte SET1 character as a specified value,
+and applies deletion/translation to input one encoded value at a time. A
+bounded post-transform decoder then applies `-s` to resulting LC_CTYPE
+characters, so surviving or mapped multi-byte characters are one squeeze unit;
+incomplete and uninterpretable bytes retain their exact identity. `-C`
+complements the characters supplied by LC_CTYPE and orders them by LC_COLLATE.
+For the carried C/POSIX and ISO-8859-1 single-byte models, every encoded value
+is a character even when it is not exposed as an LC_COLLATE collating element.
+The multi-byte character domain is large but finite and is not materialized: a
+`[c*]` fill in string2 is represented by a symbolic plan over the Unicode scalar
+count, excluded SET1 characters, and any explicit SET2 prefix/suffix. The
+single-byte paths likewise size `[c*]` from their effective complement rather
+than the literal pre-complement operand.
 
 Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteCharacterBoundaries`,
@@ -89,20 +97,31 @@ Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteCaseTranslation`,
 `#TestTrPOSIXMultibyteRanges`,
 `#TestTrPOSIXMultibyteComplement`,
+`#TestTrPOSIXValueAndCharacterComplementsDiffer`,
+`#TestTrPOSIXValueComplementSqueezesPostTransformCharacters`,
 `#TestTrPOSIXMultibyteRepeatAndTruncate`,
 `#TestTrPOSIXLocalePrecedenceSelectsCTypeCategory`,
 `#TestTrOutsidePOSIXModeKeepsByteCharacters`,
-`#TestTrCollationResidualIsRecorded`.
+plus the LC_COLLATE tests named below.
 
-**Residual — the row stays `partial`.** `XCU:tr:OPERANDS` scopes its
-definition of `c-c` to the POSIX locale and `XCU:tr:ENVIRONMENT_VARIABLES`
-gives `LC_COLLATE` the behavior of range expressions and equivalence
-classes. This implementation answers both from character values only: a
-non-C `LC_COLLATE` changes nothing, and `[=c=]` holds exactly its own
-character, where glibc's `en_US.UTF-8` would also admit the accented
-forms. Multi-byte class membership comes from Unicode rather than locale
-data, as described above. `source-complete` is **not** justified for the
-`LC_COLLATE` clause; `implemented` is not claimed.
+`LC_COLLATE` is now invocation-owned for the constructs that use it. C/POSIX
+keeps identity equivalence and value order. A supported non-C single-byte
+locale is snapshotted through `pkg/collate`: ranges expand in provider order,
+equivalence expressions expand to the provider's complete class, `-C`
+translation orders the character complement by the same weights, and the live
+provider is closed before operand processing. Unsupported names, incompatible
+multi-byte/non-C category combinations, incomplete snapshots, and close errors
+fail before input is read; literal-only deletion/squeezing does not open an
+irrelevant LC_COLLATE provider. `TestTrLCCollateRangesAndEquivalence`,
+`TestTrLCCollatePrecedence`, and `TestTrLCCollateFailsClosed` are the public
+focused evidence.
+
+**Residual — the row stays `partial`.** The carried non-C collation provider is
+deliberately bounded to the supported de_DE ISO-8859-1 aliases on its approved
+platforms. Multi-byte class membership remains Unicode-derived rather than
+locale-data-derived, as described above. Source-complete is justified only for
+C/POSIX and the carried single-byte provider surface, not for arbitrary
+installed locales or a general multi-byte collation provider.
 
 ## `unexpand`
 

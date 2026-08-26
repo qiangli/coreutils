@@ -18,6 +18,7 @@
 package trcmd
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -37,6 +38,26 @@ func escapeRune(b byte) rune { return escapeBase + rune(b) }
 
 func isEscapedByte(r rune) bool { return r >= escapeBase+0x80 && r <= escapeBase+0xFF }
 
+// encodedValues returns the individual encoded byte values represented by an
+// expanded character set. This is the SET1 domain for POSIX -c, as distinct
+// from -C's characters: a UTF-8 character contributes each byte of its
+// encoding, while an uninterpretable escaped byte contributes itself.
+func encodedValues(chars []rune) map[rune]bool {
+	values := make(map[rune]bool)
+	var encoded [utf8.UTFMax]byte
+	for _, r := range chars {
+		if isEscapedByte(r) {
+			values[rune(byte(r-escapeBase))] = true
+			continue
+		}
+		n := utf8.EncodeRune(encoded[:], r)
+		for _, b := range encoded[:n] {
+			values[rune(b)] = true
+		}
+	}
+	return values
+}
+
 // charTables is the selected character universe.
 type charTables struct {
 	// multibyte selects the UTF-8 character universe.
@@ -44,6 +65,10 @@ type charTables struct {
 	// bytes carries the single-byte classes and case maps; nil when
 	// multibyte is set.
 	bytes *ctypeTables
+	// collate is an invocation-owned snapshot. It is populated after the
+	// LC_CTYPE model is selected and never retains a live provider.
+	collate           *collationTables
+	discoverCollation bool
 }
 
 // classChars returns the members of a POSIX character class in ascending
@@ -80,6 +105,19 @@ func (ct *charTables) toUpper(r rune) rune {
 		return unicode.ToUpper(r)
 	}
 	return rune(ct.bytes.toUpper[byte(r)])
+}
+
+// characterComplement returns the complement in the selected single-byte
+// LC_CTYPE character domain. Every encoded value is a character in the carried
+// C/POSIX and ISO-8859-1 models; LC_COLLATE supplies ordering only.
+func (ct *charTables) characterComplement(member map[rune]bool) []rune {
+	chars := make([]byte, 0, 256-len(member))
+	for c := 0; c < 256; c++ {
+		if !member[rune(c)] {
+			chars = append(chars, byte(c))
+		}
+	}
+	return ct.collate.orderCharacters(chars)
 }
 
 // mbClassPred defines each POSIX character class over Unicode. The
@@ -184,6 +222,62 @@ func complementPrefix(member func(rune) bool, n int) []rune {
 		}
 	}
 	return out
+}
+
+const unicodeScalarCount = int(unicode.MaxRune) + 1 - (0xE000 - 0xD800)
+
+// complementFillPlan is the finite expansion of a complemented multi-byte
+// SET1 paired with a symbolic [c*] in SET2. It stores only SET1 exclusions and
+// the explicit SET2 edges; translate computes an input character's zero-based
+// rank in the complement without materializing the Unicode scalar universe.
+type complementFillPlan struct {
+	member    map[rune]bool
+	excluded  []rune
+	prefix    []rune
+	suffix    []rune
+	fill      rune
+	fillCount int
+}
+
+func newComplementFillPlan(member map[rune]bool, set2 *setSpec) *complementFillPlan {
+	p := &complementFillPlan{member: member, fill: set2.fillChar}
+	for r := range member {
+		if r >= 0 && r <= unicode.MaxRune && (r < 0xD800 || r > 0xDFFF) {
+			p.excluded = append(p.excluded, r)
+		}
+	}
+	sort.Slice(p.excluded, func(i, j int) bool { return p.excluded[i] < p.excluded[j] })
+	p.prefix = append([]rune(nil), set2.chars[:set2.fillPos]...)
+	p.suffix = append([]rune(nil), set2.chars[set2.fillPos:]...)
+	p.fillCount = unicodeScalarCount - len(p.excluded) - len(p.prefix) - len(p.suffix)
+	if p.fillCount < 0 {
+		p.fillCount = 0
+	}
+	return p
+}
+
+func (p *complementFillPlan) translate(r rune) (rune, bool) {
+	if r < 0 || r > unicode.MaxRune || (r >= 0xD800 && r <= 0xDFFF) || p.member[r] {
+		return 0, false
+	}
+	scalarIndex := int(r)
+	if r > 0xDFFF {
+		scalarIndex -= 0xE000 - 0xD800
+	}
+	excludedThrough := sort.Search(len(p.excluded), func(i int) bool { return p.excluded[i] > r })
+	rank := scalarIndex - excludedThrough
+	if rank < len(p.prefix) {
+		return p.prefix[rank], true
+	}
+	rank -= len(p.prefix)
+	if rank < p.fillCount {
+		return p.fill, true
+	}
+	rank -= p.fillCount
+	if rank < len(p.suffix) {
+		return p.suffix[rank], true
+	}
+	return 0, false
 }
 
 // decodeChar reads one character. An invalid byte is one character that

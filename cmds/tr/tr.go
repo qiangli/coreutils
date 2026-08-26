@@ -26,7 +26,7 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "tr",
-	Synopsis: "Translate, squeeze, and/or delete characters from standard input, writing to standard output. Supports -C as a complement alias.",
+	Synopsis: "Translate, squeeze, and/or delete characters from standard input, writing to standard output. Supports -C character complement.",
 	Usage:    "tr [OPTION]... SET1 [SET2]",
 }
 
@@ -64,6 +64,7 @@ type setSpec struct {
 	fillTokenPos  int  // logical-token insertion point for [c*]; -1 = none
 	fillChar      rune
 	tokens        []setToken
+	usesCollation bool // contains [=c=] or a non-octal range
 }
 
 func (sp *setSpec) append(r rune, tag byte) {
@@ -324,12 +325,21 @@ func planCaseTranslation(set1, set2 *setSpec, tables *charTables, truncate bool,
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithCType(rc, args, prodOpener)
+	return runWithProviders(rc, args, prodOpener, prodCollateOpener)
 }
 
 func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
-	// -C is a synonym for -c/--complement with no long form of its own
-	// (GNU getopt short option): pre-parse it out of short-flag clusters.
+	return runWithLocaleProviders(rc, args, opener, nil, false)
+}
+
+func runWithProviders(rc *tool.RunContext, args []string, opener ctypeOpener, collateOpen collateOpener) int {
+	return runWithLocaleProviders(rc, args, opener, collateOpen, true)
+}
+
+func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpener, collateOpen collateOpener, resolveCollate bool) int {
+	// -C is the character-complement spelling and has no public long form.
+	// Pre-parse it out of short-flag clusters; unlike -c's binary-value order,
+	// its effective translation array follows LC_COLLATE.
 	complementC := false
 	pre := make([]string, 0, len(args))
 	operandsStart := false
@@ -368,7 +378,9 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	if code >= 0 {
 		return code
 	}
-	comp := *complement || complementC || *complementUpper
+	charComplement := complementC || *complementUpper
+	valueComplement := *complement
+	comp := valueComplement || charComplement
 	deleting, squeezing := *del, *squeeze
 
 	if len(operands) == 0 {
@@ -414,6 +426,8 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		fmt.Fprintf(rc.Err, "tr: failed to open LC_CTYPE %q: %v\n", lcCType, ctypeErr)
 		return 2
 	}
+	tables.collate = cCollationTables()
+	tables.discoverCollation = resolveCollate
 
 	set1, errMsg := parseSetTables(operands[0], false, tables)
 	if errMsg != "" {
@@ -426,13 +440,41 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 			return fail(errMsg)
 		}
 	}
+	// LC_COLLATE is relevant only to ranges, equivalence classes, and the
+	// ordered character complement used by -C translation. Literal-only
+	// deletion/squeezing must remain usable under an otherwise uncarried
+	// LC_COLLATE. Parse once with C tables to discover the grammar surface,
+	// then reparse with a complete non-C snapshot when the invocation needs it.
+	needsCollation := set1.usesCollation || set2 != nil && set2.usesCollation || charComplement && translating
+	if resolveCollate && needsCollation {
+		collation, lcCollate, collateErr := openCollationTables(rc.Env, tables, collateOpen)
+		if collateErr != nil {
+			fmt.Fprintf(rc.Err, "tr: failed to open LC_COLLATE %q: %v\n", lcCollate, collateErr)
+			return 2
+		}
+		tables.collate = collation
+		tables.discoverCollation = false
+		set1, errMsg = parseSetTables(operands[0], false, tables)
+		if errMsg != "" {
+			return fail(errMsg)
+		}
+		if nset == 2 {
+			set2, errMsg = parseSetTables(operands[1], true, tables)
+			if errMsg != "" {
+				return fail(errMsg)
+			}
+		}
+	}
+	binaryValueMode := valueComplement && !charComplement && tables.multibyte
 
-	// member1 is the literal SET1 membership; matches applies -c on top of
-	// it. The complemented domain is never enumerated under a multi-byte
-	// LC_CTYPE, where it holds more than a million characters.
+	// member1 is SET1 membership in the selected complement domain: encoded
+	// byte values for multi-byte -c, characters otherwise.
 	member1 := make(map[rune]bool, len(set1.chars))
 	for _, r := range set1.chars {
 		member1[r] = true
+	}
+	if binaryValueMode {
+		member1 = encodedValues(set1.chars)
 	}
 	matches := func(r rune) bool {
 		if comp {
@@ -441,18 +483,21 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		return member1[r]
 	}
 
-	// Effective SET1: with -c it is the ascending sequence of characters
-	// NOT in the expanded SET1 (class membership survives; case tags do
-	// not). Only the single-byte universe is small enough to enumerate.
+	// Effective SET1 is the ordered complement. Byte-value domains are small
+	// enough to enumerate; the multi-byte -C character domain stays symbolic.
 	eff1 := set1
-	if comp && !tables.multibyte {
-		var cb []rune
-		for c := 0; c < 256; c++ {
-			if !member1[rune(c)] {
-				cb = append(cb, rune(c))
+	if comp && (!tables.multibyte || binaryValueMode) {
+		var complementChars []rune
+		if charComplement {
+			complementChars = tables.characterComplement(member1)
+		} else {
+			for c := 0; c < 256; c++ {
+				if !member1[rune(c)] {
+					complementChars = append(complementChars, rune(c))
+				}
 			}
 		}
-		eff1 = &setSpec{chars: cb, tags: make([]byte, len(cb)), fillPos: -1, fillTokenPos: -1}
+		eff1 = &setSpec{chars: complementChars, tags: make([]byte, len(complementChars)), fillPos: -1, fillTokenPos: -1}
 	}
 
 	xlate := make(map[rune]rune)
@@ -461,8 +506,9 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	// character, and every remaining complement member maps to it.
 	var defaultTarget rune
 	hasDefault := false
+	var complementPlan *complementFillPlan
 	if translating {
-		rawFillCount := len(set1.chars) - len(set2.chars)
+		rawFillCount := len(eff1.chars) - len(set2.chars)
 		if rawFillCount < 0 {
 			rawFillCount = 0
 		}
@@ -477,24 +523,24 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, rawFillCount, xlate); errMsg != "" {
 				return fail(errMsg)
 			}
-		case comp && tables.multibyte:
-			// The complemented domain is unbounded here, so a [c*] fill has
-			// no computable repeat count. Refuse it by name rather than
-			// inventing one.
-			if set2.fillTokenPos >= 0 {
-				return tool.NotSupported(rc, cmd, "the [c*] repeat construct in string2 with a complemented string1 under a multi-byte LC_CTYPE")
-			}
+		case charComplement && tables.multibyte:
 			if len(set2.chars) == 0 {
-				if !*truncateSet1 {
+				if set2.fillTokenPos < 0 && !*truncateSet1 {
 					return fail("when not truncating set1, string2 must be non-empty")
 				}
-				break
 			}
-			for i, c1 := range complementPrefix(func(r rune) bool { return member1[r] }, len(set2.chars)) {
-				xlate[c1] = set2.chars[i]
-			}
-			if !*truncateSet1 {
-				defaultTarget, hasDefault = set2.chars[len(set2.chars)-1], true
+			if set2.fillTokenPos >= 0 {
+				// The Unicode scalar universe is large but finite. Keep the
+				// [c*] run symbolic and map by complement rank instead of
+				// allocating roughly 1.1 million entries.
+				complementPlan = newComplementFillPlan(member1, set2)
+			} else {
+				for i, c1 := range complementPrefix(func(r rune) bool { return member1[r] }, len(set2.chars)) {
+					xlate[c1] = set2.chars[i]
+				}
+				if !*truncateSet1 && len(set2.chars) > 0 {
+					defaultTarget, hasDefault = set2.chars[len(set2.chars)-1], true
+				}
 			}
 		default:
 			// Keep complement and all-ordinary translation on the flat path.
@@ -576,6 +622,11 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		if hasDefault && !member1[r] {
 			return defaultTarget
 		}
+		if complementPlan != nil {
+			if to, ok := complementPlan.translate(r); ok {
+				return to
+			}
+		}
 		return r
 	}
 
@@ -594,7 +645,62 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		return fail(fmt.Sprintf("write error: %v", err))
 	}
 
-	if !tables.multibyte {
+	if binaryValueMode {
+		// POSIX -c complements encoded values, not characters. Under a
+		// multi-byte LC_CTYPE, consume one byte value at a time; bytes excluded
+		// by SET1 are copied exactly, while complemented values may map to a
+		// multi-byte SET2 character.
+		var post *characterSqueezer
+		if squeezing {
+			post = &characterSqueezer{out: out, matches: inSqueeze}
+		}
+		for {
+			b, err := in.ReadByte()
+			if err != nil {
+				if err != io.EOF {
+					readErr = err
+				}
+				break
+			}
+			selected := matches(rune(b))
+			if deleting && selected {
+				continue
+			}
+			outRune := rune(b)
+			raw := true
+			if translating && selected {
+				if mapped, ok := xlate[rune(b)]; ok {
+					outRune = mapped
+					raw = false
+				} else if hasDefault {
+					outRune = defaultTarget
+					raw = false
+				}
+			}
+			if raw && b >= utf8.RuneSelf {
+				outRune = escapeRune(b)
+			}
+			var writeErr error
+			if post != nil && raw {
+				writeErr = post.writeBytes([]byte{b})
+			} else if post != nil {
+				writeErr = post.writeRune(outRune)
+			} else if raw {
+				writeErr = out.WriteByte(b)
+			} else {
+				writeErr = writeChar(out, outRune)
+			}
+			if writeErr != nil {
+				writeFailed = onWriteErr(writeErr)
+				break
+			}
+		}
+		if writeFailed < 0 && post != nil {
+			if err := post.finish(); err != nil {
+				writeFailed = onWriteErr(err)
+			}
+		}
+	} else if !tables.multibyte {
 		// Single-byte universe: collapse the plans into 256-entry tables so
 		// the transform stays one array lookup per byte.
 		var deleteByte, squeezeByte [256]bool
@@ -697,6 +803,60 @@ func writeChar(out *bufio.Writer, r rune) error {
 	return err
 }
 
+// characterSqueezer is the post-transform stage required when -c operates on
+// encoded values. Deletion/translation feed it bytes, but -s compares the
+// resulting LC_CTYPE characters. It buffers at most one UTF-8 character and
+// preserves an invalid or incomplete byte exactly via the escaped-byte model.
+type characterSqueezer struct {
+	out     *bufio.Writer
+	matches func(rune) bool
+	pending []byte
+	last    rune
+	have    bool
+}
+
+func (s *characterSqueezer) writeRune(r rune) error {
+	if isEscapedByte(r) {
+		return s.writeBytes([]byte{byte(r - escapeBase)})
+	}
+	var encoded [utf8.UTFMax]byte
+	n := utf8.EncodeRune(encoded[:], r)
+	return s.writeBytes(encoded[:n])
+}
+
+func (s *characterSqueezer) writeBytes(p []byte) error {
+	for _, b := range p {
+		s.pending = append(s.pending, b)
+		if err := s.drain(false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *characterSqueezer) finish() error { return s.drain(true) }
+
+func (s *characterSqueezer) drain(final bool) error {
+	for len(s.pending) > 0 {
+		if !utf8.FullRune(s.pending) && !final {
+			return nil
+		}
+		r, size := utf8.DecodeRune(s.pending)
+		if r == utf8.RuneError && size == 1 {
+			r = escapeRune(s.pending[0])
+		}
+		raw := s.pending[:size]
+		if !(s.matches(r) && s.have && r == s.last) {
+			if _, err := s.out.Write(raw); err != nil {
+				return err
+			}
+		}
+		s.last, s.have = r, true
+		s.pending = s.pending[size:]
+	}
+	return nil
+}
+
 // parseChar consumes one (possibly backslash-escaped) character of s
 // starting at *i and returns its byte value. GNU escapes: \a \b \f \n
 // \r \t \v \\ and \NNN (1-3 octal digits; an out-of-range third digit
@@ -782,7 +942,10 @@ func parseSetWithTables(s string, isSet2 bool, tables *charTables) (*setSpec, st
 			if eqc, adv, ok, errMsg := matchEquiv(s[i:]); errMsg != "" {
 				return nil, errMsg
 			} else if ok {
-				sp.appendOrdinary(rune(eqc))
+				sp.usesCollation = true
+				for _, r := range tables.collate.equivalents(eqc) {
+					sp.appendOrdinary(r)
+				}
 				sp.lastIsClass = false
 				i += adv
 				continue
@@ -810,15 +973,35 @@ func parseSetWithTables(s string, isSet2 bool, tables *charTables) (*setSpec, st
 				continue
 			}
 		}
+		loStart := i
 		lo := parseChar(s, &i)
+		loOctal := isOctalEscapeAt(s, loStart)
 		if i < len(s) && s[i] == '-' && i+1 < len(s) {
 			j := i + 1
+			hiStart := j
 			hi := parseChar(s, &j)
-			if hi < lo {
-				return nil, fmt.Sprintf("range-endpoints of '%c-%c' are in reverse collating sequence order", lo, hi)
-			}
-			for b := int(lo); b <= int(hi); b++ {
-				sp.appendOrdinary(rune(b))
+			hiOctal := isOctalEscapeAt(s, hiStart)
+			if loOctal || hiOctal {
+				if hi < lo {
+					return nil, fmt.Sprintf("range-endpoints of '%c-%c' are in reverse collating sequence order", lo, hi)
+				}
+				for b := int(lo); b <= int(hi); b++ {
+					sp.appendOrdinary(rune(b))
+				}
+			} else {
+				sp.usesCollation = true
+				if tables.discoverCollation {
+					sp.appendOrdinary(rune(lo))
+					sp.appendOrdinary(rune(hi))
+				} else {
+					expanded, ok := tables.collate.rangeChars(lo, hi)
+					if !ok {
+						return nil, fmt.Sprintf("range-endpoints of '%c-%c' are in reverse collating sequence order", lo, hi)
+					}
+					for _, r := range expanded {
+						sp.appendOrdinary(r)
+					}
+				}
 			}
 			i = j
 			sp.lastIsClass = false
@@ -894,6 +1077,10 @@ func matchEquiv(s string) (byte, int, bool, string) {
 		return 0, 0, false, fmt.Sprintf("%s: equivalence class operand must be a single character", inner)
 	}
 	return c, 2 + end + 2, true, ""
+}
+
+func isOctalEscapeAt(s string, i int) bool {
+	return i+1 < len(s) && s[i] == '\\' && s[i+1] >= '0' && s[i+1] <= '7'
 }
 
 // matchRepeat matches a leading "[c*n]" / "[c*]". n is decimal, or
