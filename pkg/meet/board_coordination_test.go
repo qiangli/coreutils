@@ -71,8 +71,12 @@ func TestSeedBoardFromMBAttributesAndPointsBack(t *testing.T) {
 			}, nil
 		})
 
-	if err := SeedBoardFromMB(st, []int64{3, 7}); err != nil {
+	pointerPosted, err := SeedBoardFromMB(st, []int64{3, 7})
+	if err != nil {
 		t.Fatalf("SeedBoardFromMB: %v", err)
+	}
+	if !pointerPosted {
+		t.Fatal("SeedBoardFromMB reported no pointer while PostMB was wired")
 	}
 	if len(gotSeqs) != 2 || gotSeqs[0] != 3 || gotSeqs[1] != 7 {
 		t.Fatalf("fetched seqs = %v", gotSeqs)
@@ -108,14 +112,14 @@ func TestSeedBoardFromMBGuards(t *testing.T) {
 
 	// No seam wired: refuse rather than seed nothing.
 	clearMBSeam(t)
-	if err := SeedBoardFromMB(st, []int64{1}); err == nil || !strings.Contains(err.Error(), "no message-board seam") {
+	if _, err := SeedBoardFromMB(st, []int64{1}); err == nil || !strings.Contains(err.Error(), "no message-board seam") {
 		t.Fatalf("missing seam error = %v", err)
 	}
 
 	// Not a board.
 	recordMB(t, func([]int64) ([]MBPost, error) { return nil, nil })
 	meeting := newRoom(t)
-	if err := SeedBoardFromMB(meeting, []int64{1}); err == nil || !strings.Contains(err.Error(), "not one") {
+	if _, err := SeedBoardFromMB(meeting, []int64{1}); err == nil || !strings.Contains(err.Error(), "not one") {
 		t.Fatalf("non-board seed error = %v", err)
 	}
 }
@@ -349,5 +353,71 @@ func TestParseSeqList(t *testing.T) {
 		if _, err := parseSeqList(bad); err == nil {
 			t.Fatalf("%q must be a usage error", bad)
 		}
+	}
+}
+
+// The shipped defect this pins: bashy wired meet.FetchMB but not meet.PostMB,
+// so seeding SUCCEEDED, the pointer silently no-oped, and the CLI printed
+// "posted a pointer back" regardless. Anyone still on mb would never learn the
+// thread had moved. Seeding without a write seam must report pointerPosted
+// false so the caller can say so.
+func TestSeedBoardFromMBReportsAnUnwiredPointer(t *testing.T) {
+	st := testState()
+	st.Board = true
+	pinStore(t, st)
+
+	origFetch, origPost := FetchMB, PostMB
+	t.Cleanup(func() { FetchMB, PostMB = origFetch, origPost })
+	FetchMB = func([]int64) ([]MBPost, error) {
+		return []MBPost{{Seq: 3, From: "codex-profile-c", Body: "the original claim"}}, nil
+	}
+	PostMB = nil
+
+	posted, err := SeedBoardFromMB(st, []int64{3})
+	if err != nil {
+		t.Fatalf("seeding must still succeed without a write seam: %v", err)
+	}
+	if posted {
+		t.Fatal("reported a pointer as posted while PostMB was nil")
+	}
+
+	events, err := readTranscript(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seeded bool
+	for _, e := range events {
+		if e.Kind == "message" && strings.Contains(e.Text, "the original claim") {
+			seeded = true
+			if e.Speaker != canonAgent("codex-profile-c") {
+				t.Fatalf("seeded post lost its original author: %q", e.Speaker)
+			}
+		}
+	}
+	if !seeded {
+		t.Fatal("the fetch half must still seed the room")
+	}
+}
+
+// Invariant 4: anything that travels to mb and is read on a LATER turn must
+// carry the durable id. Room numbers are the lowest free number among open
+// meetings and are reused on close, so a pointer naming only "room 2" can
+// address a different room by the time it is read — and the reader cannot tell.
+func TestMBBoundBodiesCarryTheDurableID(t *testing.T) {
+	st := boardRoom(t)
+	st.Room = 2
+	posted, _ := recordMB(t, func([]int64) ([]MBPost, error) {
+		return []MBPost{{Seq: 3, From: "codex", Body: "the claim"}}, nil
+	})
+
+	if _, err := SeedBoardFromMB(st, []int64{3}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*posted) != 1 {
+		t.Fatalf("expected one pointer post, got %d", len(*posted))
+	}
+	body := (*posted)[0].Body
+	if !strings.Contains(body, st.ID) {
+		t.Fatalf("mb pointer does not carry the durable id %q:\n%s", st.ID, body)
 	}
 }

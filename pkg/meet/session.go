@@ -342,6 +342,23 @@ func (s *State) roomRef() string {
 	return s.ID
 }
 
+// durableRef is how a room is addressed in anything that OUTLIVES the terminal
+// it was printed in — an mb pointer, a group invite, any message another agent
+// reads on a later turn.
+//
+// It is deliberately not roomRef. Room numbers are shell-job-number semantics:
+// the lowest free number among OPEN meetings, reused the moment one closes. A
+// pointer saying "join room 2" is therefore correct when written and can name a
+// different room by the time it is read — the reader has no way to tell. The
+// durable id never rots, so it leads; the number rides along as a labelled,
+// explicitly volatile convenience for whoever is at a prompt right now.
+func (s *State) durableRef() string {
+	if s.Room > 0 {
+		return fmt.Sprintf("%s (room %d right now)", s.ID, s.Room)
+	}
+	return s.ID
+}
+
 // boardRefusal is the error a chair-driven verb returns when the room is a board.
 // It names the mode and the alternative: there is no chair to run turns, so the
 // caller posts on its own turn with `meet tell`.

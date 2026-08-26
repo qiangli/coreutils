@@ -404,10 +404,19 @@ func newOpenCmd() *cobra.Command {
 				_, _ = record(st, "agenda", procedural(st), string(RoleChair), a)
 			}
 			if len(seqs) > 0 {
-				if err := SeedBoardFromMB(st, seqs); err != nil {
+				posted, err := SeedBoardFromMB(st, seqs)
+				if err != nil {
 					return err
 				}
-				fmt.Fprintf(w, "seeded board %s from mb %s — posted a pointer back\n", st.ID, joinSeqs(seqs))
+				fmt.Fprintf(w, "seeded board %s from mb %s\n", st.ID, joinSeqs(seqs))
+				if posted {
+					fmt.Fprintln(w, "posted a pointer back to mb — the room is the thread")
+				} else {
+					// The pointer is best-effort, but saying it happened when it
+					// did not is the failure this whole surface exists to remove:
+					// anyone still on mb would never learn the thread had moved.
+					fmt.Fprintln(w, "no pointer posted: no message-board seam is wired — tell the thread yourself")
+				}
 			}
 			if !nonInteractive {
 				return repl(cmd, st)
@@ -1233,7 +1242,7 @@ func runOpenInvite(cmd *cobra.Command, ref, actor string, inv OpenInvite) error 
 		return nil
 	}
 	body := fmt.Sprintf("open board %s — %q. %s may join by posting: bashy meet tell %s --as <you> \"...\"",
-		st.roomRef(), st.Topic, inv.describe(), st.roomRef())
+		st.durableRef(), st.Topic, inv.describe(), st.ID)
 	audience := inv
 	if _, err := PostMB(MBPost{From: actor, Topic: st.Topic, Body: body}, &audience); err != nil {
 		return fmt.Errorf("meet: post mb group invite: %w", err)

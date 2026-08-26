@@ -289,7 +289,7 @@ func Create(opts CreateOptions) (*State, error) {
 		_, _ = record(st, "agenda", procedural(st), string(RoleChair), a)
 	}
 	if len(opts.FromMB) > 0 {
-		if err := SeedBoardFromMB(st, opts.FromMB); err != nil {
+		if _, err := SeedBoardFromMB(st, opts.FromMB); err != nil {
 			return nil, err
 		}
 	}
@@ -308,19 +308,19 @@ func Create(opts CreateOptions) (*State, error) {
 // opened the room would erase who actually said it. The pointer back is
 // best-effort: a board that cannot announce itself is still a usable board, but
 // the CLI surfaces the failure so a silent non-report never reads as delivered.
-func SeedBoardFromMB(st *State, seqs []int64) error {
+func SeedBoardFromMB(st *State, seqs []int64) (pointerPosted bool, err error) {
 	if !st.board() {
-		return fmt.Errorf("meet: --from-mb seeds a board; %s is not one", st.ID)
+		return false, fmt.Errorf("meet: --from-mb seeds a board; %s is not one", st.ID)
 	}
 	if len(seqs) == 0 {
-		return fmt.Errorf("meet: --from-mb needs at least one post sequence")
+		return false, fmt.Errorf("meet: --from-mb needs at least one post sequence")
 	}
 	if FetchMB == nil {
-		return fmt.Errorf("meet: --from-mb is unavailable: no message-board seam is wired")
+		return false, fmt.Errorf("meet: --from-mb is unavailable: no message-board seam is wired")
 	}
 	posts, err := FetchMB(seqs)
 	if err != nil {
-		return fmt.Errorf("meet: fetch mb posts: %w", err)
+		return false, fmt.Errorf("meet: fetch mb posts: %w", err)
 	}
 	for _, p := range posts {
 		author := strings.TrimSpace(p.From)
@@ -336,17 +336,19 @@ func SeedBoardFromMB(st *State, seqs []int64) error {
 			Kind: "message", Text: fmt.Sprintf("mb #%d — %s", p.Seq, sanitizeTurn(text)), TS: nowFn(),
 		}
 		if err := AppendEvent(st.ID, ev); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if PostMB != nil {
-		body := fmt.Sprintf("seeded board %s from mb %s — reply there; the room is the thread",
-			st.roomRef(), joinSeqs(seqs))
+		body := fmt.Sprintf("seeded board %s from mb %s — reply there; the room is the thread.\n"+
+			"read: bashy meet read %s --as <you> --wait 15m",
+			st.durableRef(), joinSeqs(seqs), st.ID)
 		if _, err := PostMB(MBPost{From: st.initiatorName(), Topic: st.Topic, Body: body}, nil); err != nil {
-			return fmt.Errorf("meet: post mb pointer: %w", err)
+			return false, fmt.Errorf("meet: post mb pointer: %w", err)
 		}
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // joinSeqs renders a seq list the way the pointer post and receipts show it:
