@@ -1,8 +1,15 @@
 // Package envcmd implements env(1) per the GNU coreutils manual:
 // print the environment, optionally modified by -i, -u NAME, and
-// NAME=VALUE assignments. COMMAND execution is documented but unsupported:
-// this pure-Go implementation refuses it clearly rather than silently
-// answering a COMMAND option such as --help or --version itself.
+// NAME=VALUE assignments, or run a command in that environment.
+//
+// Running COMMAND is the upstream-documented purpose of env, so this is
+// one of the command wrappers exempted from the no-shell-out rule (see
+// docs/commands.md): the utility is invoked directly through exec, never
+// by concatenating a string for a shell. Exit status follows GNU: 126 if
+// COMMAND is found but cannot be invoked, 127 if it cannot be found, 125
+// if env itself fails, otherwise COMMAND's own status (128+N when it is
+// killed by a signal). Usage errors exit 2 per the repo-wide convention,
+// where GNU uses 125.
 //
 // Portions adapted from https://github.com/guonaihong/coreutils env/env.go (Apache-2.0).
 // Changes: rewired to the tool framework over RunContext.Env (no
@@ -80,7 +87,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		rc.Dir = filepath.Clean(rc.Path(*chdir))
 	}
-	_, err := commandSignals(*ignoreSignals)
+	signals, err := commandSignals(*ignoreSignals)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
@@ -153,9 +160,13 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if len(operands) > 0 {
 		if *debug {
-			fmt.Fprintf(rc.Err, "env: would execute: %s\n", strings.Join(commandDebugArgv(*argv0, operands), " "))
+			fmt.Fprintf(rc.Err, "env: executing: %s\n", strings.Join(commandDebugArgv(*argv0, operands), " "))
 		}
-		return tool.NotSupported(rc, cmd, fmt.Sprintf("running COMMAND %q (needs exec)", operands[0]))
+		rawEnv := make([]string, len(env))
+		for i, e := range env {
+			rawEnv[i] = e.raw
+		}
+		return runCommand(rc, operands, rawEnv, *argv0, signals)
 	}
 	if fs.Changed("argv0") {
 		return tool.UsageError(rc, cmd, "--argv0 requires a COMMAND")
