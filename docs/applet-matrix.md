@@ -108,7 +108,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 5 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
-| `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 26 |
+| `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 28 |
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 22 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 3 | 32 |
@@ -120,7 +120,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `make` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
-| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 7 |
+| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 9 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 3 | 33 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
@@ -170,7 +170,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `split` | `cmds/split` | — | GNU Coreutils | yes | yes | 1 | 15 |
 | `stat` | `cmds/stat` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `stdbuf` | `cmds/stdbuf` | — | GNU Coreutils | yes | no | 1 | 5 |
-| `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 1 | 8 |
+| `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 1 | 11 |
 | `strip` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `stty` | `cmds/stty` | — | GNU Coreutils | yes | yes | 3 | 13 |
 | `sum` | `cmds/sum` | — | GNU Coreutils | yes | no | 1 | 2 |

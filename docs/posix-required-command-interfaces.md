@@ -2506,9 +2506,9 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `source_file; target_file; target_dir`. Both synopsis forms are implemented: with two operands where the last is not an existing directory the new entry is target_file, and with an existing-directory last operand (or more than two operands) each source_file is linked at target_dir/basename(source_file); more than two operands with a non-directory last operand is a diagnostic at exit >0; if the destination exists without -f a diagnostic is written, that source_file is abandoned, remaining source_files are still processed, and the exit status is >0; a destination naming the same directory entry as its source_file draws a diagnostic and is left untouched even under -f (checked by inode identity, so hard-link aliases are caught); with -s the source_file need not exist and its text is stored verbatim, including dangling and self-referential names; slash-terminated or otherwise uncreatable destinations fail loudly via the underlying link/symlink call.
+**Operands:** `source_file; target_file; target_dir`. Both synopsis forms are implemented: with two operands where the last is not an existing directory the new entry is target_file, and with an existing-directory last operand each source_file is processed in operand order at target_dir/basename(source_file); more than two operands with a non-directory last operand is a diagnostic at exit >0. An existing destination without -f is diagnosed and left untouched while later sources continue; a destination naming the same directory entry as its source is diagnosed and left untouched even under -f, including hard-link aliases. With -f, a non-identical destination is unlinked before link creation is attempted; unlink failure leaves it intact, and a later link failure does not restore it or stop later sources. With -s the source need not exist and its operand text is stored verbatim, including dangling and self-referential names.
 
-**Special tokens:** -L and -P apply only when creating a hard link to a source_file that is a symbolic link: -L links to the referenced file, -P links to the symlink itself; specifying both is not an error and the last one specified wins (including combined short forms); with -s both are silently ignored; when neither is given the implementation-defined default is -P on aix, darwin, dragonfly, freebsd, linux, netbsd, openbsd, and solaris via linkat without AT_SYMLINK_FOLLOW; other platforms fall back to os.Link and retain platform-defined behavior.
+**Special tokens:** -L and -P affect only hard links whose source_file is a symbolic link: -L links the referent and -P the symlink directory entry; both together are accepted and the last short option wins, including combined forms; -s silently ignores both. With neither, the documented default is -P on darwin, dragonfly, freebsd, linux, netbsd, and openbsd via linkat without AT_SYMLINK_FOLLOW, and on AIX and Solaris via the POSIX link syscall; other targets retain os.Link's platform-defined default. -- ends option parsing; the accepted single-operand form and -b/-S/-i/-n/-r/-t/-T/-v and long options are extensions.
 
 **Standard input:** Not used by any POSIX form; the extension -i prompt reads confirmations from standard input.
 
@@ -2516,11 +2516,11 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Standard output:** Not used by any POSIX form; the extension -v prints one line per created link.
 
-**Standard error:** Used only for diagnostic messages (and the extension -i prompt).
+**Standard error:** Used only for diagnostic messages (and the extension -i prompt), including existing destinations, same-entry identity, unlink failure, and link/symlink failure.
 
-**Effects:** `Creates a new directory entry (hard link) for each source_file, or with -s a symbolic link containing the operand text verbatim; with -f an existing non-identical destination is removed first via unlink; nothing is modified when the destination names the same directory entry as the source_file.`.
+**Effects:** `Creates one hard-link directory entry per successful source, or with -s a symbolic link containing source_file verbatim. -f uses unlink semantics and therefore never removes a destination directory; same-entry detection precedes removal. No output files beyond the requested links are created.`.
 
-**Exit status:** 0 when all specified files were linked successfully; greater than 0 if an error occurred (usage errors exit 2 per the documented repo deviation).
+**Exit status:** 0 when every specified source was linked successfully; greater than 0 if any error occurred while later source operands continued (usage errors exit 2 per the documented repo deviation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2532,7 +2532,7 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ln`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/ln/ln_test.go#TestLnHard;cmds/ln/ln_test.go#TestLnSymbolic;cmds/ln/ln_test.go#TestLnIntoDirectory;cmds/ln/ln_test.go#TestLnForce;cmds/ln/ln_test.go#TestLnLogicalAndPhysicalSourceSymlink;cmds/ln/ln_test.go#TestLnDefaultHardLinkToSymlinkIsPhysical;cmds/ln/ln_test.go#TestLnLastOfLogicalPhysicalWins;cmds/ln/ln_test.go#TestLnSymbolicIgnoresLogicalPhysical;cmds/ln/ln_test.go#TestLnSymbolicDanglingSource;cmds/ln/ln_test.go#TestLnExistingDestinationDiagnosesAndContinues;cmds/ln/ln_test.go#TestLnSameFile;cmds/ln/ln_test.go#TestLnSameFileThroughHardLinkAlias;cmds/ln/ln_test.go#TestLnSymbolicSameFile;cmds/ln/ln_test.go#TestLnSameFileDirectoryForm;cmds/ln/ln_test.go#TestLnErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/ln/ln_test.go#TestLnHard;cmds/ln/ln_test.go#TestLnSymbolic;cmds/ln/ln_test.go#TestLnIntoDirectory;cmds/ln/ln_test.go#TestLnForce;cmds/ln/ln_test.go#TestLnForceDoesNotRemoveDestinationDirectory;cmds/ln/ln_test.go#TestLnForceRemovalPrecedesLinkErrorAndProcessingContinues;cmds/ln/ln_test.go#TestLnLogicalAndPhysicalSourceSymlink;cmds/ln/ln_test.go#TestLnDefaultHardLinkToSymlinkIsPhysical;cmds/ln/ln_test.go#TestLnLastOfLogicalPhysicalWins;cmds/ln/ln_test.go#TestLnSymbolicIgnoresLogicalPhysical;cmds/ln/ln_test.go#TestLnSymbolicDanglingSource;cmds/ln/ln_test.go#TestLnExistingDestinationDiagnosesAndContinues;cmds/ln/ln_test.go#TestLnSameFile;cmds/ln/ln_test.go#TestLnSameFileThroughHardLinkAlias;cmds/ln/ln_test.go#TestLnSymbolicSameFile;cmds/ln/ln_test.go#TestLnSameFileDirectoryForm;cmds/ln/ln_test.go#TestLnErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ln:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [ln](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ln.html).
 
@@ -3038,21 +3038,21 @@ mesg [y|n]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `y; n`. With no operand query message permission status of the first terminal associated with standard input, standard output, or standard error, in that order; with y grant write permission (chmod g+w); with n deny write permission (chmod g-w); extra or invalid operands are usage errors.
+**Operands:** `y; n`. With no operand, report without changing the current permission state of the first terminal associated with standard input, standard output, or standard error, in that order. In the POSIX locale y grants and n denies messages by setting or clearing only group-write permission; extra or invalid operands are usage errors and cause no permission change.
 
-**Special tokens:** -- ends option parsing so following argument is treated as y or n operand.
+**Special tokens:** -- ends option parsing so a following y or n is an operand; no options are defined.
 
-**Standard input:** Examined first to identify an associated terminal; standard output and standard error are checked in that order if standard input is not a terminal.
+**Standard input:** No bytes are read. The descriptors associated with standard input, then standard output, then standard error are examined in order until a terminal is found.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** With no operand write terminal permission status ("is y\n" or "is n\n"); with y or n operand write nothing.
+**Standard output:** With no operand, write the implementation's terminal-state report ("is y\n" or "is n\n"); y and n write nothing. Query output failures are errors.
 
-**Standard error:** Used only for diagnostic messages (not a terminal, stat/chmod failure, usage error, or stdout write error).
+**Standard error:** Used only for diagnostics: unavailable terminal, metadata or permission failure, invalid operands, and query-output failure.
 
-**Effects:** `Modifies the group-write permission bit of the selected standard-stream terminal device.`.
+**Effects:** `Queries or changes only the group-write bit of the selected real terminal device. Real PTY evidence proves y sets and n clears that bit without disturbing other permission bits; Windows refuses because it has no equivalent terminal message permission.`.
 
-**Exit status:** 0 if messages are allowed (query or set y); 1 if messages are denied (query or set n); greater than 1 if an error occurred (2 for non-terminal, permission failure, usage, or stdout write error).
+**Exit status:** 0 when receiving messages is allowed, including after y; 1 when receiving messages is denied, including after n; greater than 1 for every error (2 in this implementation).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3064,7 +3064,7 @@ mesg [y|n]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mesg`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/mesg/mesg_test.go#TestQueryReportsStateThroughExitStatus;cmds/mesg/mesg_test.go#TestSetTogglesOnlyTheGroupWriteBit;cmds/mesg/mesg_test.go#TestBadOperandAndExtraOperand;cmds/mesg/mesg_test.go#TestMesgDoubleDashTerminatesOptions;cmds/mesg/mesg_test.go#TestMesgOutputWriteError;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameUsesRunContextStreamsInOrder;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameRejectsCharacterDeviceThatIsNotTerminal`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mesg/mesg_test.go#TestQueryReportsStateThroughExitStatus;cmds/mesg/mesg_test.go#TestSetTogglesOnlyTheGroupWriteBit;cmds/mesg/mesg_test.go#TestBadOperandAndExtraOperand;cmds/mesg/mesg_test.go#TestMesgDoubleDashTerminatesOptions;cmds/mesg/mesg_test.go#TestMesgOutputWriteError;cmds/mesg/mesg_test.go#TestMesgTerminalMetadataErrors;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameUsesRunContextStreamsInOrder;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameRejectsCharacterDeviceThatIsNotTerminal;cmds/mesg/tty_unix_test.go#TestMesgChangesRealPTYPermissionAndStatus`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [mesg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mesg.html).
 
@@ -4348,21 +4348,21 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Issue 7 option-argument candidate:** `-n=<number>; -t=<format>`.
 
-**Operands:** `file`. Read each file operand; with no file operands, read standard input. number is a positive decimal minimum string length and format is d, o, or x for decimal, octal, or hexadecimal offsets.
+**Operands:** `file`. Process regular-file operands in order and continue after an open or read error; with none, read standard input. -a selects the already-documented whole-file scan; -n takes a positive decimal minimum counted in printable characters (default four); -t takes exactly d, o, or x and reports each string's byte offset from the start of its input file, resetting for each file.
 
-**Special tokens:** NONE
+**Special tokens:** -- ends option parsing. Issue 7 leaves a first argument of - unspecified; this implementation treats - as a literal pathname, and standard input is not consumed when any file operands are supplied.
 
-**Standard input:** Used only when no file operands are present.
+**Standard input:** Used only when no file operand is present; stdin read errors are diagnosed and fail the invocation.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. LC_ALL overrides LC_CTYPE, which overrides LANG. C/POSIX ASCII printability, UTF-8 character-granular classification, exact input-byte preservation, and the carried single-byte provider are evidenced;  arbitrary installed locale databases remain residual.`.
 
-**Standard output:** Write each printable character sequence of at least the selected length, optionally preceded by its file offset in the radix selected by -t.
+**Standard output:** Write each qualifying printable-character sequence followed by newline. Without -t write only the sequence; in POSIX mode -t writes the unpadded Issue 7 format "%d %s", "%o %s", or "%x %s" using a byte offset. Outside POSIX mode the documented GNU-shaped seven-column padding remains an extension.
 
-**Standard error:** Used only for diagnostic messages.
+**Standard error:** Used only for diagnostics, including invalid option arguments, unsupported locale, operand open/read errors, stdin read errors, and standard-output write errors.
 
-**Effects:** `Scans input for printable strings and writes them; creates no output files.`.
+**Effects:** `Scans inputs without modifying them and creates no output files. -a scans every byte; qualifying UTF-8 output preserves the original bytes rather than transcoding.`.
 
-**Exit status:** 0 on successful completion; greater than 0 if an error occurs.
+**Exit status:** 0 only when every selected input was read and all output was written; greater than 0 for option, locale, open, read, or write error while successful file operands remain reported.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4374,7 +4374,7 @@ strings [-a] [-t format] [-n number] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/strings`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/strings/strings_test.go#TestStrings;cmds/strings/strings_test.go#TestStringsFiles;cmds/strings/strings_test.go#TestStringsUTF8;cmds/strings/strings_test.go#TestStringsIOErrorsAreFailures;cmds/strings/strings_test.go#TestStringsErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:strings:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/strings/strings_test.go#TestStrings;cmds/strings/strings_test.go#TestStringsFiles;cmds/strings/strings_test.go#TestStringsPOSIXOffsetFormatIsUnpadded;cmds/strings/strings_test.go#TestStringsFileOrderContinuesAfterOpenError;cmds/strings/strings_test.go#TestStringsDashPathname;cmds/strings/strings_test.go#TestStringsUTF8;cmds/strings/strings_test.go#TestStringsUTF8ReplacementCharacterPreservesBytesAndOffset;cmds/strings/strings_test.go#TestStringsLocalePrecedenceControlsPrintability;cmds/strings/strings_test.go#TestStringsIOErrorsAreFailures;cmds/strings/strings_test.go#TestStringsErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:strings:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [strings](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/strings.html).
 

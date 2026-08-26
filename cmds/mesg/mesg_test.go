@@ -2,6 +2,7 @@ package mesgcmd
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -124,4 +125,34 @@ func TestMesgOutputWriteError(t *testing.T) {
 	if code != 2 || !strings.Contains(errb.String(), "mesg:") {
 		t.Fatalf("mesg query stdout write error = (%q, %d), want status 2", errb.String(), code)
 	}
+}
+
+func TestMesgTerminalMetadataErrors(t *testing.T) {
+	oldTTY, oldStat, oldChmod := ttyName, statFn, chmodFn
+	t.Cleanup(func() { ttyName, statFn, chmodFn = oldTTY, oldStat, oldChmod })
+	ttyName = func(*tool.RunContext) (string, error) { return "tty", nil }
+
+	t.Run("stat", func(t *testing.T) {
+		statFn = func(string) (os.FileInfo, error) { return nil, errors.New("stat failure") }
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Stdio: tool.Stdio{Out: &out, Err: &errb}}
+		if code := run(rc, nil); code != 2 || !strings.Contains(errb.String(), "stat failure") {
+			t.Fatalf("stat error = (%q, %d), want diagnostic and >1", errb.String(), code)
+		}
+	})
+
+	t.Run("chmod", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "tty")
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		statFn = os.Stat
+		ttyName = func(*tool.RunContext) (string, error) { return p, nil }
+		chmodFn = func(string, os.FileMode) error { return errors.New("chmod failure") }
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Stdio: tool.Stdio{Out: &out, Err: &errb}}
+		if code := run(rc, []string{"y"}); code != 2 || !strings.Contains(errb.String(), "chmod failure") {
+			t.Fatalf("chmod error = (%q, %d), want diagnostic and >1", errb.String(), code)
+		}
+	})
 }
