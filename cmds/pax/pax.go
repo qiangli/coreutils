@@ -444,7 +444,12 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	// still follow a later interactive rename.
 	status := 0
 	effectiveNames := make(map[int]string)
-	renames := make(map[string]string)
+	originalOccurrences := make(map[string][]int)
+	for index, h := range members {
+		originalOccurrences[h.Name] = append(originalOccurrences[h.Name], index)
+	}
+	substitutedNames := make(map[int]string)
+	substitutedOccurrences := make(map[string][]int)
 	for index, h := range members {
 		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
 		if !sel.keep(h.Name, isDir) {
@@ -458,6 +463,8 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		if subName == "" {
 			continue
 		}
+		substitutedNames[index] = subName
+		substitutedOccurrences[subName] = append(substitutedOccurrences[subName], index)
 		name, keep, err := renameInteractively(o, subName)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
@@ -467,8 +474,6 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 			continue
 		}
 		effectiveNames[index] = name
-		renames[h.Name] = name
-		renames[subName] = name
 	}
 
 	for index, h := range members {
@@ -479,10 +484,13 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		linkTarget := h.Linkname
 		if linkTarget != "" {
 			linkTarget = applySubstitutions(o.subst, linkTarget, nil)
-			if r, ok := renames[linkTarget]; ok {
-				linkTarget = r
-			} else if r, ok := renames[h.Linkname]; ok {
-				linkTarget = r
+			if targetIndex, ok := listTargetOccurrence(index, h.Linkname, linkTarget,
+				originalOccurrences, substitutedOccurrences); ok {
+				if r, kept := effectiveNames[targetIndex]; kept {
+					linkTarget = r
+				} else if r, substituted := substitutedNames[targetIndex]; substituted {
+					linkTarget = r
+				}
 			}
 		}
 
@@ -541,6 +549,35 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	}
 
 	return status
+}
+
+func listTargetOccurrence(linkIndex int, originalTarget, substitutedTarget string,
+	originalOccurrences, substitutedOccurrences map[string][]int) (int, bool) {
+	// Prefer the archive identity named by the link header. In particular, a
+	// later member whose original name collides with a substituted pathname
+	// must not steal an earlier hard link's target.
+	occurrences := originalOccurrences[originalTarget]
+	if len(occurrences) == 0 {
+		occurrences = substitutedOccurrences[substitutedTarget]
+	}
+	previous := -1
+	for _, index := range occurrences {
+		if index == linkIndex {
+			continue
+		}
+		if index < linkIndex {
+			previous = index
+			continue
+		}
+		if previous >= 0 {
+			return previous, true
+		}
+		return index, true
+	}
+	if previous >= 0 {
+		return previous, true
+	}
+	return 0, false
 }
 
 func effectiveListHeader(h *tar.Header, name, linkTarget string) *tar.Header {

@@ -246,6 +246,10 @@ func TestPAXListVerboseReverseOrderTransformPlan(t *testing.T) {
 			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
 		}
 	})
+
+	t.Run("duplicate_raw_name_occurrence", testPAXListVerboseDuplicateTargetKeepsPriorOccurrence)
+	t.Run("substitution_collision_occurrence", testPAXListVerboseSubstitutionCollisionKeepsRawOccurrence)
+	t.Run("target_occurrence_archive_order", testPAXListTargetOccurrenceUsesArchiveOrder)
 }
 
 func TestPAXListVerboseHardLinkWithSubstitution(t *testing.T) {
@@ -310,6 +314,115 @@ func TestPAXListVerboseForwardInteractiveTargets(t *testing.T) {
 				t.Fatalf("interactive symlink size does not follow target: %q", line)
 			}
 		}
+	}
+}
+
+func testPAXListVerboseDuplicateTargetKeepsPriorOccurrence(t *testing.T) {
+	var arc bytes.Buffer
+	tw := tar.NewWriter(&arc)
+	for _, h := range []*tar.Header{
+		{Name: "target", Typeflag: tar.TypeReg, Size: 1},
+		{Name: "link", Typeflag: tar.TypeLink, Linkname: "target"},
+		{Name: "sym", Typeflag: tar.TypeSymlink, Linkname: "target"},
+		{Name: "target", Typeflag: tar.TypeReg, Size: 1},
+	} {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("x")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tty := newFakeInteractiveTTY("first-target\n.\n.\nsecond-target\n")
+	r := &interactiveRenamer{tty: tty, in: bufio.NewReader(tty)}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Env: []string{"LC_TIME=C", "TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	opener := func(*tool.RunContext, *options) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(arc.Bytes())), nil
+	}
+	code := listModeWithOpener(rc, &options{verbose: true, interactive: true, renamer: r}, nil, opener)
+	if code != 0 || errb.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "link == first-target\n") ||
+		strings.Contains(out.String(), "link == second-target\n") ||
+		!strings.Contains(out.String(), "sym -> first-target\n") ||
+		strings.Contains(out.String(), "sym -> second-target\n") {
+		t.Fatalf("duplicate target occurrence output=%q", out.String())
+	}
+}
+
+func testPAXListVerboseSubstitutionCollisionKeepsRawOccurrence(t *testing.T) {
+	var arc bytes.Buffer
+	tw := tar.NewWriter(&arc)
+	for _, h := range []*tar.Header{
+		{Name: "source", Typeflag: tar.TypeReg, Size: 1},
+		{Name: "link", Typeflag: tar.TypeLink, Linkname: "source"},
+		{Name: "sym", Typeflag: tar.TypeSymlink, Linkname: "source"},
+		{Name: "renamed", Typeflag: tar.TypeReg, Size: 1},
+	} {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("x")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := parseSubstitution("/source/renamed/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tty := newFakeInteractiveTTY("source-final\n.\n.\ncollision-final\n")
+	r := &interactiveRenamer{tty: tty, in: bufio.NewReader(tty)}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Env: []string{"LC_TIME=C", "TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	opener := func(*tool.RunContext, *options) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(arc.Bytes())), nil
+	}
+	code := listModeWithOpener(rc, &options{
+		verbose: true, interactive: true, renamer: r, subst: []substitution{sub},
+	}, nil, opener)
+	if code != 0 || errb.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "link == source-final\n") ||
+		strings.Contains(out.String(), "link == collision-final\n") ||
+		!strings.Contains(out.String(), "sym -> source-final\n") ||
+		strings.Contains(out.String(), "sym -> collision-final\n") {
+		t.Fatalf("substitution collision output=%q", out.String())
+	}
+}
+
+func testPAXListTargetOccurrenceUsesArchiveOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		linkIndex  int
+		original   map[string][]int
+		substitute map[string][]int
+		want       int
+	}{
+		{"latest_preceding", 3, map[string][]int{"target": {0, 2, 5}}, nil, 2},
+		{"first_later", 0, map[string][]int{"target": {1, 4}}, nil, 1},
+		{"raw_before_substitution_collision", 2, map[string][]int{"target": {0}}, map[string][]int{"target": {4}}, 0},
+		{"substituted_fallback", 2, nil, map[string][]int{"target": {1, 4}}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := listTargetOccurrence(tc.linkIndex, "target", "target", tc.original, tc.substitute)
+			if !ok || got != tc.want {
+				t.Fatalf("listTargetOccurrence=(%d, %v), want (%d, true)", got, ok, tc.want)
+			}
+		})
 	}
 }
 

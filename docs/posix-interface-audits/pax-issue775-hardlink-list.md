@@ -28,7 +28,8 @@ When `-o listopt=format` is specified in verbose list mode (`-v`), output format
 
 2. **Name Substitutions & Interactivity**:
    - Selection, substitution, and all interactive decisions are precomputed before output. Both target name (`linkTarget`) and member name (`name`) therefore reflect `-s` and `-i` transformations even when a link precedes its target.
-   - A skipped target is not added to the rename map. An interactive EOF/error fails before partial listing output.
+   - Link-target resolution retains archive-member occurrence identity: the latest preceding occurrence is preferred, with the first later occurrence used for a link-before-target archive. A later duplicate raw pathname or a distinct pathname colliding after `-s` cannot overwrite the effective name of the occurrence actually referenced by an earlier hard link.
+   - A skipped target supplies no effective interactive rename. An interactive EOF/error fails before partial listing output.
 
 3. **Custom `listopt` Interactions**:
    - Custom `-o listopt=format` with `-v` applies the explicit user format string (e.g., `%F`, `%L`, `%(path)s`, `%(linkpath)s`, `%(linkname)s`). Effective path/linkpath values are synchronized into copied PAX records so extended headers cannot override transformed values; archive size semantics remain unchanged for explicit list formats.
