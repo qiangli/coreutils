@@ -1,7 +1,7 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `4326c9e`
-(including the Profile C source waves and accepted Issue 781 repair) against POSIX.1-2016
+This report reconciles the Sprint 79 interface ledger through coreutils `43d7a78`
+(including the Profile C source waves and issues 781-784) against POSIX.1-2016
 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -22,7 +22,7 @@ states are **0 verified, 3 implemented, 97 partial, and 16 missing**.
 
 The implemented owned interfaces are shell-selected `false` and `true`, plus
 Go-selected `nice`. They are not verified because the byte-derived proprietary
-integration verification gate is explicitly deferred and unavailable. The two status-only
+integration verification gate was not rerun for this reconciliation. The two status-only
 shell interfaces have both
 command-specific semantic evidence in `sh` and command-specific Profile B
 routing evidence in `bashy`. `nice` is promoted on the accepted process-level
@@ -101,7 +101,7 @@ lower-ranked edges.
 | 1 | `fc` | `OPERANDS`, `STDOUT`, `EFFECTS`, `EXIT_STATUS` | Accepted tests prove form validation, first-only substitution, and multiline listing. Still add real editor invocation, forward/reverse/clamped ranges, history persistence limits, command re-execution state and status, `FCEDIT`/`HISTFILE`/`HISTSIZE`, and I/O/locale failures. |
 | 1 | `sh` | shell-language clauses beyond entrypoint selection | The process-level Bashy test proves the selected `sh` utility route, `-c`, script-file and stdin forms, `$0`/positional arguments, empty command, missing-file status, and argv0 strict-POSIX engagement. It does not prove the complete shell grammar, expansions, redirections, traps, environments, interactive/job-control behavior, and every 1-127 status consequence; retain partial. |
 | 2 | `at`, `batch`, `crontab` | host scheduler integration | Accepted Issue 743 source now proves strict allow/deny policy parsing and fail-closed stat errors, empty-deny access, unknown-job listing status, correct `-t` diagnostics, and crontab backslash/percent translation. Existing tests cover persisted environment/cwd/umask, queue/load markers, atomic installation, daemon handoff, mail-provider routing, and carried `LC_TIME`/`TZ` forms. Remaining: real system policy directories and privilege products, live mail delivery/load gating, and installed-locale breadth. |
-| 2 | `awk`, `comm`, `csplit`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `unexpand`, `uniq`, `wc` | locale-provider and integration breadth | Locale waves A-C now provide command-surface evidence for the applicable `LC_CTYPE`, `LC_COLLATE`, and `LC_NUMERIC` behavior in the bounded C/POSIX, supported UTF-8, and carried `de_DE.ISO-8859-1` products. Unsupported provider/platform combinations fail closed. These rows remain partial until the canonical evidence lanes and integration boundary are reconciled; the implemented bounded-locale semantics must not be described as absent. |
+| 2 | `awk`, `comm`, `csplit`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `unexpand`, `uniq`, `wc` | locale-provider and integration breadth | Locale waves A-C now provide canonical command-surface evidence for the applicable `LC_CTYPE`, `LC_COLLATE`, and `LC_NUMERIC` behavior in the bounded C/POSIX, supported UTF-8, and carried `de_DE.ISO-8859-1` products. Unsupported provider/platform combinations fail closed. These rows remain partial for arbitrary installed-locale/provider breadth and the unrepeated proprietary integration gate; the implemented bounded-locale semantics must not be described as absent. |
 | 2 | `tr` | locale-provider and integration breadth | Issues 769 and 781 implement the carried multibyte character model; binary-value `-c`; LC_CTYPE-character `-C` ordered by LC_COLLATE; ranges, equivalence, and `[c*]`; post-transform character squeezing; raw-byte preservation; bounded writes; and provider preflight/lifecycle. The repaired `-C` domain includes every carried LC_CTYPE character, including NUL and bytes that LC_COLLATE cannot name as collating elements. Remaining: arbitrary installed locales, a general multibyte collation provider, and integration evidence. |
 | 2 | `cut` | locale-provider integration | Accepted source now applies invocation `LC_CTYPE` to `-c`, `-b -n`, and multibyte `-d` boundaries while preserving exact input bytes; focused tests cover C/POSIX, UTF-8, ISO-8859-1, malformed input, precedence, long lines, and fail-before-I/O behavior. Remaining: the carried locale corpus is bounded and installed locales outside it fail closed. |
 | 2 | `expand` | locale-provider integration | Accepted source now retains exact byte spans and uses invocation `LC_CTYPE` for display-column accounting; focused tests cover C/POSIX, UTF-8 widths, ISO-8859-1, malformed input, precedence, `-i`, read errors, and short writes. Remaining: the carried locale corpus and Unicode width policy are bounded. |
@@ -151,23 +151,25 @@ direct shell owner for `echo`, `false`, `kill`, `printf`, `pwd`, `test`,
 `time`, and `true`.
 
 All 22 shell names have currently resolvable, command-specific semantic and
-routing references. `false` and `true` are implemented, not verified while the
-byte-derived Profile B/D integration verification gate remains deferred. The other twenty
+routing references. `false` and `true` are implemented, not verified because
+the byte-derived integration verification gate was not rerun. The other twenty
 remain partial because their closure audits identify concrete locale, interactive,
 process, filesystem, or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs`
 references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
 uses Bashy's process-level entrypoint contract alongside its two independent
-route/strict-mode tests. Validator evidence is pinned to canonical sibling
-`sh` at `6330c050` and `bashy` at `d9e1622`; retained workspace copies are not
-authoritative evidence roots. No shell repository is modified by this
-reconciliation. These path-and-test references do not prove complete clause
-coverage: that is why twenty rows remain partial.
+route/strict-mode tests. The runner accepts only an explicit `sh` semantic root
+and explicit Bashy routing root, rejects wrong-root and cross-lane evidence,
+and records each resolved revision and dirty-state hash in its contract. The
+final setup used `sh` at `6b123d57` and Bashy at `29513d6`; retained workspace
+copies are not authoritative evidence roots. These path-and-test references do
+not prove complete clause coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `4326c9e`, including the Profile C
-source waves and accepted Issue 781 repair. It credits the accepted command
+This report is reconciled through canonical `43d7a78`, including the Profile C
+source waves, accepted Issue 781 repair, Linux evidence reconciliation, and
+final hermetic `id` evidence correction. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -207,7 +209,9 @@ selected carried radix. Issue 779's cp/nohup option-boundary fixes are
 `bcd6c42`; Issue 777's final ls changes are `5761c57` and `a5f14fc`; the pax
 verbose-list and timestamp closures are `1de6d83`, `598f8d3`, and `e3cbd8f`,
 with archive-sink block sizing at `ed4ed06`. Issue 781's final accepted repair
-is `9e53b12`; its audit reconciliation is `4326c9e`.
+is `9e53b12`; its audit reconciliation is `4326c9e`. Issue 782 makes the
+Ubuntu/Linux Go lane target-runnable, and issue 784 removes a host-account-name
+assumption from `id` evidence without changing production behavior.
 
 The machine-readable evidence lanes retain their validated test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
@@ -215,10 +219,13 @@ pax interactive/preservation/extended-header families, iconv
 charmap/stream/status matrix, fold locale/byte/error matrix, getconf
 inventory/platform/error matrix, cut and expand locale/byte/error matrices,
 paste locale-delimiter/error matrix, and cat injected-read/special-file
-continuation evidence. The issue-specific audits, rather than the unchanged TSV,
-name the newer awk/expr, ls, pax, and locale-wave test IDs listed above; a
-conductor-owned TSV refresh is required before those IDs can be called canonical
-machine-readable evidence.
+continuation evidence. The canonical TSV includes the accepted issue 780
+`awk`/`expr` and issue 781 `tr` TestIDs. On the pinned Ubuntu 24.04 image at
+final coreutils `43d7a78`, a non-root, globally POSIX, network-disabled run
+passed all 78 Go command events and all 1,086 exact TestIDs, with zero missing,
+skipped, or failed references. This is public source-interface evidence, not a
+proprietary certification rerun and not grounds for promoting a row to
+`verified`.
 These recently accepted locale/platform waves remain partial because their
 locale-provider and platform residuals are stated explicitly above.
 
@@ -230,6 +237,7 @@ python3 scripts/posix_manifest.py --require-owned-source-complete
 python3 scripts/posix_manifest.py --require-owned-complete
 python3 -m unittest scripts/posix_manifest_test.py
 scripts/applet-matrix.py --check
+python3 scripts/posix_interface_runner.py --state-dir /state/profile-c --owner go --json
 ```
 
 The owned-source-completion command is expected to fail at this snapshot with
