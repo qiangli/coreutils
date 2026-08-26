@@ -7,7 +7,8 @@ it is not conformance evidence.
 
 ## Result
 
-The audit confirmed and fixed two observable implementation gaps:
+The audit confirmed and fixed two observable implementation gaps and one
+cross-platform backend defect:
 
 - `ln -f` used `os.Remove` for the required destination-removal step. On Unix,
   `os.Remove` retries a directory with `rmdir`, so an empty directory at
@@ -20,6 +21,10 @@ The audit confirmed and fixed two observable implementation gaps:
   `POSIXLY_CORRECT` is present (including an empty value), Bashy now emits the
   exact Issue 7 form while retaining its documented padded default outside
   POSIX mode.
+- The physical hard-link backend selected `x/sys/unix.Linkat` on AIX and
+  Solaris even though that API is unavailable on those targets. Those systems
+  now use their native POSIX `link(2)` syscall; the remaining named Unix
+  targets continue to use `linkat(2)` without `AT_SYMLINK_FOLLOW`.
 
 All three canonical ledger rows remain `partial`. The focused evidence closes
 the audited Profile-C/Linux behavior below, but it is not a complete POSIX
@@ -36,7 +41,7 @@ Source: [Issue 7 `ln`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edit
 | --- | --- |
 | Synopsis and operands | Both required forms are covered: `source_file target_file` and ordered `source_file... target_dir`; a non-directory final operand with more than two operands fails. The accepted one-operand form is an extension. |
 | `-s` | Creates a symlink containing `source_file` verbatim; dangling and self-referential source text is accepted. `-L` and `-P` are silently ignored with `-s`. |
-| `-L` / `-P` | Hard-link-to-symlink behavior is covered for each option, last-option-wins including a combined short form, and the documented `-P` default on the supported Unix `linkat` targets. |
+| `-L` / `-P` | Hard-link-to-symlink behavior is covered for each option, last-option-wins including a combined short form, and the documented `-P` default on supported Unix targets. Darwin, DragonFly BSD, FreeBSD, Linux, NetBSD, and OpenBSD use `linkat(2)`; AIX and Solaris use their POSIX `link(2)` syscall. |
 | Existing destination | Without `-f`, diagnose, preserve the destination, and continue. Same-directory-entry identity is checked before removal, including hard-link aliases and directory-form destinations. |
 | `-f` ordering | A non-identical destination is unlinked before link creation. Unlink failure preserves it; a missing source after successful unlink leaves it absent; either error sets non-zero status and later sources continue. An empty destination directory is never removed. |
 | Streams and status | Required forms do not read stdin or write stdout. Diagnostics use stderr. Status is zero only if every requested link succeeds. |
@@ -72,7 +77,8 @@ Source: [Issue 7 `strings`](https://pubs.opengroup.org/onlinepubs/9699919799.201
 - `ln` retains GNU extensions (`-b`, `-S`, `-i`, `-n`, `-r`, `-t`, `-T`,
   `-v`, long options, and the single-operand form). Its implementation-defined
   default hard-link treatment of a symlink source is evidenced as `-P` on the
-  Unix targets using `linkat`; other targets retain `os.Link` behavior.
+  Unix targets using `linkat` or the AIX/Solaris POSIX `link` syscall; other
+  targets retain `os.Link` behavior.
   Hard-linking a directory remains kernel/platform-defined as Issue 7 permits.
 - `mesg` uses the traditional group-write-bit mechanism, which Issue 7 leaves
   unspecified. Windows fails closed because it has no equivalent terminal
@@ -91,7 +97,8 @@ The following gates passed on the Darwin host:
 - default and `POSIXLY_CORRECT=1` `go test -count=20` for all three packages;
 - default and `POSIXLY_CORRECT=1` `go test -race -count=5` for all three;
 - focused and repository-wide native `go vet`;
-- focused Linux, Darwin, and Windows vet;
+- focused Linux, Darwin, Windows, FreeBSD, DragonFly BSD, NetBSD, OpenBSD,
+  AIX/ppc64, Solaris/amd64, js/wasm, and wasip1/wasm vet/build checks;
 - the remaining full `scripts/crossvet.sh` commands: repository-wide Windows,
   Linux, and Darwin vet, the js/wasip1 ownership-mode canaries, the AIX lock/dd
   build canary, and both WebAssembly `mv` build canaries;

@@ -239,9 +239,9 @@ func prepareExistingDestination(rc *tool.RunContext, dest, destPath, backupMode,
 // createHardLink makes the new directory entry for a hard link.  POSIX
 // Issue 7 leaves the -L/-P default implementation-defined when source_file
 // is a symbolic link; this implementation documents -P (link to the symlink
-// itself) as the default on platforms where hardLinkPhysical uses linkat,
-// matching GNU ln and Linux link(2). os.Link cannot express that portably —
-// darwin's link(2) follows symlinks — so supported Unix targets share the -P
+// itself) as the default on platforms where hardLinkPhysical uses linkat or a
+// native POSIX link syscall. os.Link cannot express that portably — darwin's
+// link(2) follows symlinks — so supported Unix targets use an explicit -P
 // path; fallback targets retain os.Link's platform-defined behavior.
 func createHardLink(targetPath, destPath string, logical bool) error {
 	if logical {
