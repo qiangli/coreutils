@@ -323,6 +323,18 @@ var idioms = []Idiom{
 	{ID: "pair-first", Commands: []string{"login", "sphere"},
 		Pattern: "login, then sphere/kubectl",
 		Note:    "tiers 4-5 need a Tessaro-paired machine", Tier: TierAccount},
+	{ID: "whois-notify", Commands: []string{"whois", "notify"},
+		Pattern: "whois AGENT; notify AGENT \"subject\"",
+		Note:    "resolve the recipient before sending a durable, attributed nudge", Tier: TierWorkspace},
+	{ID: "who-write", Commands: []string{"who", "write"},
+		Pattern: "who; write USER",
+		Note:    "inspect the live audience before opening a terminal conversation", Tier: TierUserland},
+	{ID: "mb-meet", Commands: []string{"mb", "meet"},
+		Pattern: "mb; meet --room ROOM",
+		Note:    "turn a board handoff into a shared conversation", Tier: TierWorkspace},
+	{ID: "notify-inbox", Commands: []string{"notify", "inbox"},
+		Pattern: "notify AGENT \"subject\"; inbox",
+		Note:    "send a subject-only doorbell and receive it through the same bus", Tier: TierWorkspace},
 }
 
 // --- table construction -----------------------------------------------------
@@ -634,6 +646,11 @@ func init() {
 	// is a shared append-only spool with per-reader cursors, so it is neither a
 	// private mailbox nor push-delivered chat; those words stay reserved.
 	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// inbox and notify are the private receive/send faces of the same bus. They
+	// remain separate top-level primitives so the atlas can show composition
+	// without inventing another transport or address-book concept.
+	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("notify", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// handoff/resume: pause a live session and pass the work on -- to another
 	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work
 	// at any stage: a half-finished plan, a half-finished refactor, a half-run
@@ -882,7 +899,7 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "leaderboard", "mb", "agent", "tools", "models", "agents", "people", "whois",
+		"capability", "leaderboard", "mb", "inbox", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
@@ -928,7 +945,7 @@ func init() {
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
-		"rclone", "bus",
+		"rclone", "bus", "notify",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
 		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
 		// anything but a torn final append, and quarantines the exact bytes it discards
@@ -988,7 +1005,7 @@ func init() {
 	// daemon, an installed/upgraded binary.
 	eff(EffPersist,
 		"at", "batch", "crontab", "nohup",
-		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks",
+		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "notify",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
 	)
 
