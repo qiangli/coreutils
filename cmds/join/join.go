@@ -9,18 +9,30 @@
 // sorted on the join field; like GNU, a disorder is diagnosed
 // ("FILE:LINENO: is not sorted: LINE", then a fatal "input is not in
 // sorted order") only when it can matter — i.e. once unpairable lines
-// have been seen. Comparison is C-locale byte order, with -i folding
-// ASCII case.
+// have been seen.
+//
+// Field comparison follows the invocation LC_COLLATE category (POSIX
+// join ENVIRONMENT VARIABLES): the default C/POSIX collation is byte
+// order, and a supported non-C locale routes every field comparison —
+// join equality and the sorted-order check alike — through the shared
+// invocation-owned pkg/collate provider so join agrees with the order
+// sort produced under the same locale. As GNU join does, -i selects a
+// case-insensitive comparison rather than a collating one (GNU keycmp uses
+// memcasecmp): case folding follows LC_CTYPE, so ASCII pairs fold in the C
+// locale and the locale's high-byte letter pairs (e.g. Ä/ä) fold under a
+// supported non-C LC_CTYPE.
 package joincmd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -58,6 +70,8 @@ type options struct {
 	printU         [2]bool
 	suppressed     [2]bool // -v given for that file
 	ignoreCase     bool
+	fold           *[256]byte       // LC_CTYPE uppercase map for -i; nil = ASCII fold
+	collator       *collatorAdapter // nil in C/POSIX or under -i (byte order)
 	seenUnpairable bool
 	checkOrder     bool
 	nocheckOrder   bool
@@ -69,7 +83,28 @@ type options struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithProviders(rc, args, openCollator, openCType)
+}
+
+// runWithCollator keeps LC_COLLATE provider setup invocation-local. Tests that
+// exercise only the collation seam supply a fake collator opener; the LC_CTYPE
+// seam stays on the production opener (never reached unless -i coincides with a
+// non-C LC_CTYPE).
+func runWithCollator(rc *tool.RunContext, args []string, open collatorOpener) int {
+	return runWithProviders(rc, args, open, openCType)
+}
+
+// runWithProviders keeps both the LC_COLLATE and LC_CTYPE provider setups
+// invocation-local. Tests supply fake openers; production supplies openCollator
+// and openCType. No provider state is shared between join invocations.
+func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, openCtype ctypeOpener) int {
 	opt := options{tab: tabDefault}
+	collatorClosed := false
+	defer func() {
+		if opt.collator != nil && !collatorClosed {
+			_ = opt.collator.Close()
+		}
+	}()
 	contractErr := func(format string, a ...any) int {
 		fmt.Fprintf(rc.Err, "join: %s\n", fmt.Sprintf(format, a...))
 		fmt.Fprintf(rc.Err, "join: not every GNU flag is implemented in pure-Go coreutils — see 'join --help' for the supported subset\n")
@@ -158,6 +193,44 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
+	// Resolve LC_COLLATE before any input file is opened, so a missing
+	// provider or unsupported locale fails the invocation before it consumes
+	// operands. -i selects case-insensitive comparison, not collation, so it
+	// stays on the byte path exactly as GNU join does (keycmp uses memcasecmp,
+	// not xmemcoll, when ignore_case is set).
+	if !opt.ignoreCase {
+		if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != locale.Default {
+			provider, err := open(name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "join: LC_COLLATE=%s: %v\n", name, err)
+				return 2
+			}
+			opt.collator = newCollatorAdapter(provider)
+		}
+	} else {
+		// -i folds by LC_CTYPE (GNU keycmp uses memcasecmp). Resolve it before
+		// any input is opened so an unsupported provider fails closed too. The
+		// uppercase table is snapshotted and the provider closed immediately.
+		if name := locale.Resolve(rc.Env, locale.CType); name != "C" && name != locale.Default {
+			provider, err := openCtype(name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "join: LC_CTYPE=%s: %v\n", name, err)
+				return 2
+			}
+			table, snapErr := snapshotFoldTable(provider)
+			closeErr := provider.Close()
+			if snapErr != nil {
+				fmt.Fprintf(rc.Err, "join: LC_CTYPE=%s: %v\n", name, snapErr)
+				return 2
+			}
+			if closeErr != nil {
+				fmt.Fprintf(rc.Err, "join: LC_CTYPE=%s: %v\n", name, closeErr)
+				return 2
+			}
+			opt.fold = table
+		}
+	}
+
 	printJoined := !(opt.suppressed[0] || opt.suppressed[1])
 	var files [2]*fileState
 	for i, op := range operands {
@@ -169,7 +242,11 @@ func run(rc *tool.RunContext, args []string) int {
 		files[i] = &fileState{name: op, lines: lines, field: opt.field[i], idx: i, opt: &opt, rc: rc}
 	}
 
-	bw := bufio.NewWriter(rc.Out)
+	// Locale comparison can fail after groups have tentatively matched. Stage
+	// every byte until all comparisons and the provider close succeed, so an
+	// error can never leak false Cartesian output.
+	var staged bytes.Buffer
+	bw := bufio.NewWriter(&staged)
 	osep := " "
 	if opt.tab >= 0 {
 		osep = string([]byte{byte(opt.tab)})
@@ -266,7 +343,24 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	if err := bw.Flush(); err != nil {
+	_ = bw.Flush() // bytes.Buffer writes cannot fail
+	if opt.collator != nil {
+		if err := opt.collator.Err(); err != nil {
+			fmt.Fprintf(rc.Err, "join: LC_COLLATE comparison failed: %v\n", err)
+			return 1
+		}
+		if err := opt.collator.Close(); err != nil {
+			collatorClosed = true
+			fmt.Fprintf(rc.Err, "join: LC_COLLATE close failed: %v\n", err)
+			return 1
+		}
+		collatorClosed = true
+	}
+	n, err := rc.Out.Write(staged.Bytes())
+	if err == nil && n != staged.Len() {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		fmt.Fprintf(rc.Err, "join: write failed: %v\n", err)
 		return 1
 	}
@@ -510,16 +604,30 @@ func upperByte(c byte) byte {
 	return c
 }
 
+// foldByte maps one byte to its case-folded form for -i: the LC_CTYPE uppercase
+// snapshot when a non-C locale is active, else ASCII uppercasing (the correct
+// fold for the C/POSIX locale).
+func (o *options) foldByte(c byte) byte {
+	if o.fold != nil {
+		return o.fold[c]
+	}
+	return upperByte(c)
+}
+
 func (o *options) compareKeys(a, b string) int {
 	if !o.ignoreCase {
+		if o.collator != nil {
+			return o.collator.Compare(a, b)
+		}
 		return strings.Compare(a, b)
 	}
 	n := len(a)
 	if len(b) < n {
 		n = len(b)
 	}
+	fold := o.foldByte
 	for i := 0; i < n; i++ {
-		ca, cb := upperByte(a[i]), upperByte(b[i])
+		ca, cb := fold(a[i]), fold(b[i])
 		switch {
 		case ca < cb:
 			return -1
