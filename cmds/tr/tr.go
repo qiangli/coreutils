@@ -489,7 +489,7 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 	if comp && (!tables.multibyte || binaryValueMode) {
 		var complementChars []rune
 		if charComplement {
-			complementChars = tables.collate.characterComplement(member1)
+			complementChars = tables.characterComplement(member1)
 		} else {
 			for c := 0; c < 256; c++ {
 				if !member1[rune(c)] {

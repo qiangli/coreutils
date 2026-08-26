@@ -166,13 +166,12 @@ func (t *collationTables) rangeChars(lo, hi byte) ([]rune, bool) {
 	return runes, true
 }
 
-func (t *collationTables) characterComplement(member map[rune]bool) []rune {
-	out := make([]byte, 0, 256)
-	for c := 0; c < 256; c++ {
-		if t.element[c] && !member[rune(c)] {
-			out = append(out, byte(c))
-		}
-	}
+// orderCharacters orders an LC_CTYPE-derived character set using LC_COLLATE.
+// CollatingElements is intentionally not consulted here: it describes which
+// bytes may participate in collation constructs such as ranges, not which
+// bytes are characters in the selected single-byte LC_CTYPE.
+func (t *collationTables) orderCharacters(chars []byte) []rune {
+	out := append([]byte(nil), chars...)
 	sort.Slice(out, func(i, j int) bool {
 		wi, wj := t.weight[out[i]], t.weight[out[j]]
 		if wi != wj {

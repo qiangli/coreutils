@@ -105,6 +105,43 @@ func TestTrLCCollateRangesAndEquivalence(t *testing.T) {
 	}
 }
 
+func TestTrCharacterComplementUsesCTypeDomainAndCollateOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set2 string
+		want string
+	}{
+		{"translate NUL control and high byte", "ABC", "ABC"},
+		{"repeat covers NUL control and high byte", "12[Z*]", "12Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := germanTrCollator()
+			// These are LC_CTYPE characters even when the LC_COLLATE provider
+			// does not expose them as collating elements.
+			for _, c := range []byte{0, 1, 0xff} {
+				p.elements[c] = false
+				p.valid[c] = false
+				p.equiv[c] = nil
+			}
+			p.weights[0] = 1
+			p.weights[1] = 2
+			p.weights[0xff] = 3
+
+			out, errOut, code := runTrProviders(t,
+				[]string{"POSIXLY_CORRECT=1", "LC_CTYPE=C", "LC_COLLATE=de_DE.iso88591"},
+				"\x00\x01\xff", neverOpener(),
+				func(string) (collateProvider, error) { return p, nil },
+				"-Ct", "x", tc.set2)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tc.want)
+			}
+			if p.closes != 1 {
+				t.Fatalf("collator closes=%d", p.closes)
+			}
+		})
+	}
+}
+
 func TestTrLCCollatePrecedence(t *testing.T) {
 	p := germanTrCollator()
 	var ctypeCloses atomic.Int32

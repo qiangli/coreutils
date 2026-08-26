@@ -107,6 +107,19 @@ func (ct *charTables) toUpper(r rune) rune {
 	return rune(ct.bytes.toUpper[byte(r)])
 }
 
+// characterComplement returns the complement in the selected single-byte
+// LC_CTYPE character domain. Every encoded value is a character in the carried
+// C/POSIX and ISO-8859-1 models; LC_COLLATE supplies ordering only.
+func (ct *charTables) characterComplement(member map[rune]bool) []rune {
+	chars := make([]byte, 0, 256-len(member))
+	for c := 0; c < 256; c++ {
+		if !member[rune(c)] {
+			chars = append(chars, byte(c))
+		}
+	}
+	return ct.collate.orderCharacters(chars)
+}
+
 // mbClassPred defines each POSIX character class over Unicode. The
 // definitions follow XBD 7.3.1 LC_CTYPE: digit and xdigit are fixed sets,
 // alnum is alpha plus digit, graph is every printable character except

@@ -32,11 +32,10 @@ selected locale's `LC_CTYPE` data. The divergence is small but real and is
 not papered over: glibc's `blank` class excludes the non-breaking spaces
 U+00A0, U+2007 and U+202F that Unicode's `Zs` category includes, so
 `unexpand` and `uniq` treat those three characters as blanks where glibc
-would not. Closing that — and the `LC_COLLATE` items below — requires a
-shared multi-byte locale provider outside the paths this issue owns, so
-the gap is recorded with standing evidence rather than approximated
-further. `TestTrCollationResidualIsRecorded` is the executable form of
-that record.
+would not. Closing the remaining multi-byte `LC_CTYPE` and general installed-
+locale breadth requires a shared multi-byte locale provider outside the paths
+this issue owns, so the gap is recorded rather than approximated further. The
+carried single-byte `LC_COLLATE` surface is implemented below.
 
 Outside POSIX mode every command keeps its historical GNU-compatible byte
 model and opens no provider, which is what the four
@@ -81,12 +80,14 @@ and applies deletion/translation to input one encoded value at a time. A
 bounded post-transform decoder then applies `-s` to resulting LC_CTYPE
 characters, so surviving or mapped multi-byte characters are one squeeze unit;
 incomplete and uninterpretable bytes retain their exact identity. `-C`
-complements characters and orders them by LC_COLLATE. The latter domain is
-large but finite and is not materialized: a `[c*]` fill in string2 is
-represented by a symbolic plan over the Unicode scalar count, excluded SET1
-characters, and any explicit SET2 prefix/suffix. The single-byte paths likewise
-size `[c*]` from their effective complement rather than the literal
-pre-complement operand.
+complements the characters supplied by LC_CTYPE and orders them by LC_COLLATE.
+For the carried C/POSIX and ISO-8859-1 single-byte models, every encoded value
+is a character even when it is not exposed as an LC_COLLATE collating element.
+The multi-byte character domain is large but finite and is not materialized: a
+`[c*]` fill in string2 is represented by a symbolic plan over the Unicode scalar
+count, excluded SET1 characters, and any explicit SET2 prefix/suffix. The
+single-byte paths likewise size `[c*]` from their effective complement rather
+than the literal pre-complement operand.
 
 Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteCharacterBoundaries`,
