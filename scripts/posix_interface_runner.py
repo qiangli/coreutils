@@ -192,8 +192,7 @@ def parse_ref(command: str, lane: str, raw: str, roots: dict[str, Path]) -> Evid
         if not match:
             raise RunnerError(f"{command}: malformed {lane} reference: {raw}")
         repo = match.group("repo")
-        bashy_sh_entrypoint = command == "sh" and repo == "bashy"
-        if lane == "shell_evidence" and repo != "sh" and not bashy_sh_entrypoint:
+        if lane == "shell_evidence" and repo != "sh":
             raise RunnerError(f"{command}: shell evidence must use sh root: {raw}")
         if lane == "shell_routing_evidence" and repo != "bashy":
             raise RunnerError(f"{command}: shell routing evidence must use bashy root: {raw}")
@@ -235,8 +234,24 @@ def refs_for_row(row: dict[str, str], roots: dict[str, Path]) -> list[EvidenceRe
     elif owner == "shell":
         if row["go_evidence"] != "-":
             raise RunnerError(f"{command}: wrong-owner Go evidence on shell-owned command")
-        for lane in ("shell_evidence", "shell_routing_evidence"):
-            lane_refs = [parse_ref(command, lane, raw, roots) for raw in split_refs(row[lane])]
+        raw_by_lane = {
+            lane: split_refs(row[lane])
+            for lane in ("shell_evidence", "shell_routing_evidence")
+        }
+        # Diagnose exact cross-lane duplication before enforcing lane roots.
+        # The canonical sh row currently repeats one Bashy TestID in both
+        # columns; that is a manager-owned manifest defect and must remain a
+        # duplicate error rather than being obscured by its wrong source lane.
+        cross_lane = sorted(
+            set(raw_by_lane["shell_evidence"])
+            & set(raw_by_lane["shell_routing_evidence"])
+        )
+        if cross_lane:
+            raise RunnerError(
+                f"{command}: duplicate evidence reference(s) across lanes: {', '.join(cross_lane)}"
+            )
+        for lane, raw_refs in raw_by_lane.items():
+            lane_refs = [parse_ref(command, lane, raw, roots) for raw in raw_refs]
             if not lane_refs:
                 raise RunnerError(f"{command}: shell-owned command lacks {lane}")
             refs.extend(lane_refs)
@@ -576,7 +591,11 @@ def run_bounded(
                     else:
                         selector.unregister(key.fileobj)
         if process.poll() is None:
-            process.wait(timeout=max(0.1, deadline - time.monotonic()))
+            try:
+                process.wait(timeout=max(0.1, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                failure = failure or "timeout"
+                terminate_process_group(process)
     finally:
         selector.close()
         process.stdout.close()

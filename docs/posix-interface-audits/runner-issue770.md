@@ -5,11 +5,12 @@ source-interface evidence references declared in
 `docs/posix-required-command-interfaces.tsv`. It covers the 100 implementation
 owned commands in the canonical manifest: 78 `go` rows and 22 `shell` rows.
 References are routed by their strict manifest repo prefix. Shell source tests
-use the explicit `sh` root, except for the canonical `sh` utility-entrypoint
-test declared under `bashy`; shell routing tests use the explicit `bashy` root.
-At this base, the shared `sh` row repeats that utility-entrypoint TestID in both
-shell lanes. Strict cross-lane duplicate validation reports it rather than
-silently collapsing it; the conductor owns reconciliation of the shared row.
+use only the explicit `sh` root, and shell routing tests use only the explicit
+`bashy` root, without command-specific exceptions. At this base, the shared
+`sh` row repeats one Bashy utility-entrypoint TestID in both shell lanes.
+Cross-lane duplicate validation runs before lane-root validation so that exact
+canonical defect is reported rather than silently collapsed or obscured by its
+wrong source lane; the conductor owns reconciliation of the shared row.
 
 Intended invocation:
 
@@ -38,7 +39,8 @@ machine-readable output.
 `--timeout-seconds` (default 300) and `--max-output-bytes` (default 16777216
 combined stdout/stderr bytes per invocation) bound execution. Each test runs in
 a new process group. Timeout or output-limit handling terminates and reaps the
-group, retains bounded artifacts, and records a failed invocation.
+group, retains bounded artifacts, and records a failed invocation, including
+when a hanging process closes both output pipes before the deadline.
 
 The resolved state directory must be outside every configured evidence root.
 Artifact directories and saved resume paths are containment-checked, including

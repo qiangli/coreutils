@@ -95,6 +95,12 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
             "        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
             "        pathlib.Path(os.environ['RUNNER_CHILD_PID']).write_text(str(child.pid))\n"
             "        time.sleep(60)\n"
+            "    if os.environ.get('RUNNER_CLOSE_PIPES_HANG') == '1':\n"
+            "        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "        pathlib.Path(os.environ['RUNNER_CHILD_PID']).write_text(str(child.pid))\n"
+            "        os.close(1)\n"
+            "        os.close(2)\n"
+            "        time.sleep(60)\n"
             "    if os.environ.get('RUNNER_OUTPUT_BYTES'):\n"
             "        os.write(1, b'x' * int(os.environ['RUNNER_OUTPUT_BYTES']))\n"
             "        time.sleep(60)\n"
@@ -547,6 +553,45 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         attempt = next(iter(self.ledger()["runs"].values()))["commands"]["at"]["attempts"][0]
         self.assertEqual(attempt["invocations"][0]["failure_reason"], "timeout")
 
+    def test_timeout_after_closed_pipes_is_recorded_and_kills_descendant(self) -> None:
+        self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
+        self.write_manifest(
+            [{"command": "at", "effective_owner": "go", "go_evidence": "cmds/at/at_test.go#TestAtOne"}]
+        )
+        pid_path = self.tmp / "closed-pipes-child.pid"
+        env = self.env.copy()
+        env.update({"RUNNER_CLOSE_PIPES_HANG": "1", "RUNNER_CHILD_PID": str(pid_path)})
+        result = self.run_runner(
+            "--timeout-seconds", "0.2", "--max-output-bytes", "1024", "at", env=env
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertTrue(pid_path.exists())
+        child_pid = int(pid_path.read_text())
+        deadline = time.monotonic() + 3
+        alive = True
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.02)
+        if alive:
+            os.kill(child_pid, 9)
+        self.assertFalse(alive, "closed-pipe evidence descendant survived process-group cleanup")
+        attempt = next(iter(self.ledger()["runs"].values()))["commands"]["at"]["attempts"][0]
+        invocation = attempt["invocations"][0]
+        self.assertEqual(attempt["terminal"], "fail")
+        self.assertEqual(invocation["failure_reason"], "timeout")
+        self.assertTrue(Path(invocation["stdout_path"]).is_file())
+        self.assertTrue(Path(invocation["stderr_path"]).is_file())
+        self.assertLessEqual(
+            Path(invocation["stdout_path"]).stat().st_size
+            + Path(invocation["stderr_path"]).stat().st_size,
+            1024,
+        )
+
     def test_output_cap_kills_invocation_and_bounds_artifacts(self) -> None:
         self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
         self.write_manifest(
@@ -638,6 +683,21 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         result = self.run_runner("sh")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("duplicate evidence reference(s) across lanes", result.stderr)
+
+    def test_sh_shell_evidence_cannot_use_bashy_root_without_duplicate(self) -> None:
+        self.add_test(self.bashy_repo, "route/sh_source_test.go", "TestShSource")
+        self.add_test(self.bashy_repo, "route/sh_routing_test.go", "TestShRouting")
+        self.write_manifest(
+            [{
+                "command": "sh",
+                "effective_owner": "shell",
+                "shell_evidence": "bashy:route/sh_source_test.go#TestShSource",
+                "shell_routing_evidence": "bashy:route/sh_routing_test.go#TestShRouting",
+            }]
+        )
+        result = self.run_runner("sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("shell evidence must use sh root", result.stderr)
 
     def test_escaped_and_symlinked_saved_artifacts_never_resume(self) -> None:
         self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
