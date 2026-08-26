@@ -601,9 +601,6 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 			for _, r := range set2.chars {
 				squeezeSet[r] = true
 			}
-			if binaryValueMode && !translating {
-				squeezeSet = encodedValues(set2.chars)
-			}
 		} else {
 			squeezeSet, squeezeComplement = member1, comp
 		}
@@ -653,7 +650,10 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 		// multi-byte LC_CTYPE, consume one byte value at a time; bytes excluded
 		// by SET1 are copied exactly, while complemented values may map to a
 		// multi-byte SET2 character.
-		lastOut := rune(-1)
+		var post *characterSqueezer
+		if squeezing {
+			post = &characterSqueezer{out: out, matches: inSqueeze}
+		}
 		for {
 			b, err := in.ReadByte()
 			if err != nil {
@@ -680,12 +680,12 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 			if raw && b >= utf8.RuneSelf {
 				outRune = escapeRune(b)
 			}
-			if squeezing && inSqueeze(outRune) && outRune == lastOut {
-				continue
-			}
-			lastOut = outRune
 			var writeErr error
-			if raw {
+			if post != nil && raw {
+				writeErr = post.writeBytes([]byte{b})
+			} else if post != nil {
+				writeErr = post.writeRune(outRune)
+			} else if raw {
 				writeErr = out.WriteByte(b)
 			} else {
 				writeErr = writeChar(out, outRune)
@@ -693,6 +693,11 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 			if writeErr != nil {
 				writeFailed = onWriteErr(writeErr)
 				break
+			}
+		}
+		if writeFailed < 0 && post != nil {
+			if err := post.finish(); err != nil {
+				writeFailed = onWriteErr(err)
 			}
 		}
 	} else if !tables.multibyte {
@@ -796,6 +801,60 @@ func writeChar(out *bufio.Writer, r rune) error {
 	}
 	_, err := out.WriteRune(r)
 	return err
+}
+
+// characterSqueezer is the post-transform stage required when -c operates on
+// encoded values. Deletion/translation feed it bytes, but -s compares the
+// resulting LC_CTYPE characters. It buffers at most one UTF-8 character and
+// preserves an invalid or incomplete byte exactly via the escaped-byte model.
+type characterSqueezer struct {
+	out     *bufio.Writer
+	matches func(rune) bool
+	pending []byte
+	last    rune
+	have    bool
+}
+
+func (s *characterSqueezer) writeRune(r rune) error {
+	if isEscapedByte(r) {
+		return s.writeBytes([]byte{byte(r - escapeBase)})
+	}
+	var encoded [utf8.UTFMax]byte
+	n := utf8.EncodeRune(encoded[:], r)
+	return s.writeBytes(encoded[:n])
+}
+
+func (s *characterSqueezer) writeBytes(p []byte) error {
+	for _, b := range p {
+		s.pending = append(s.pending, b)
+		if err := s.drain(false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *characterSqueezer) finish() error { return s.drain(true) }
+
+func (s *characterSqueezer) drain(final bool) error {
+	for len(s.pending) > 0 {
+		if !utf8.FullRune(s.pending) && !final {
+			return nil
+		}
+		r, size := utf8.DecodeRune(s.pending)
+		if r == utf8.RuneError && size == 1 {
+			r = escapeRune(s.pending[0])
+		}
+		raw := s.pending[:size]
+		if !(s.matches(r) && s.have && r == s.last) {
+			if _, err := s.out.Write(raw); err != nil {
+				return err
+			}
+		}
+		s.last, s.have = r, true
+		s.pending = s.pending[size:]
+	}
+	return nil
 }
 
 // parseChar consumes one (possibly backslash-escaped) character of s

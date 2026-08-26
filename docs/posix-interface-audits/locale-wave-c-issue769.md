@@ -77,12 +77,16 @@ is unchanged in both behavior and cost.
 The two complement options retain their Issue 7 distinction under a multi-byte
 `LC_CTYPE`. `-c` complements the 256 encoded byte values in ascending binary
 order, treats every byte of a multi-byte SET1 character as a specified value,
-and transforms input one encoded value at a time. `-C` complements characters
-and orders them by LC_COLLATE. The latter domain is large but finite and is not
-materialized: a `[c*]` fill in string2 is represented by a symbolic plan over
-the Unicode scalar count, excluded SET1 characters, and any explicit SET2
-prefix/suffix. The single-byte paths likewise size `[c*]` from their effective
-complement rather than the literal pre-complement operand.
+and applies deletion/translation to input one encoded value at a time. A
+bounded post-transform decoder then applies `-s` to resulting LC_CTYPE
+characters, so surviving or mapped multi-byte characters are one squeeze unit;
+incomplete and uninterpretable bytes retain their exact identity. `-C`
+complements characters and orders them by LC_COLLATE. The latter domain is
+large but finite and is not materialized: a `[c*]` fill in string2 is
+represented by a symbolic plan over the Unicode scalar count, excluded SET1
+characters, and any explicit SET2 prefix/suffix. The single-byte paths likewise
+size `[c*]` from their effective complement rather than the literal
+pre-complement operand.
 
 Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteCharacterBoundaries`,
@@ -93,6 +97,7 @@ Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteRanges`,
 `#TestTrPOSIXMultibyteComplement`,
 `#TestTrPOSIXValueAndCharacterComplementsDiffer`,
+`#TestTrPOSIXValueComplementSqueezesPostTransformCharacters`,
 `#TestTrPOSIXMultibyteRepeatAndTruncate`,
 `#TestTrPOSIXLocalePrecedenceSelectsCTypeCategory`,
 `#TestTrOutsidePOSIXModeKeepsByteCharacters`,

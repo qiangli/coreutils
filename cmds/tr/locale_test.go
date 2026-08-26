@@ -290,6 +290,33 @@ func TestTrPOSIXValueAndCharacterComplementsDiffer(t *testing.T) {
 	}
 }
 
+// TestTrPOSIXValueComplementSqueezesPostTransformCharacters covers the
+// mandated operation order: -c selects encoded values for deletion or
+// translation, then -s collapses repeated characters from the resulting
+// stream according to the last operand.
+func TestTrPOSIXValueComplementSqueezesPostTransformCharacters(t *testing.T) {
+	env := posixUTF8()
+	for _, tc := range []struct {
+		name string
+		args []string
+		in   string
+		want string
+	}{
+		{"delete then squeeze surviving UTF-8", []string{"-c", "-d", "-s", "é", "é"}, "éé", "é"},
+		{"translate values then squeeze mapped UTF-8", []string{"-c", "-s", "a", "é"}, "éé", "é"},
+		{"mapped wide character is one squeeze unit", []string{"-c", "-s", "a", "界"}, "éé", "界"},
+		{"unmapped UTF-8 remains exact", []string{"-c", "-s", "é", "X"}, "ééaa", "ééX"},
+		{"invalid surviving values remain exact", []string{"-c", "-d", "-s", "\\377", "\\377"}, "\xff\xff", "\xff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runTrEnv(t, env, tc.in, tc.args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tc.want)
+			}
+		})
+	}
+}
+
 // TestTrPOSIXMultibyteRepeatAndTruncate covers the [c*n] convention and the
 // -t option in the multi-byte universe.
 func TestTrPOSIXMultibyteRepeatAndTruncate(t *testing.T) {
