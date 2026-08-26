@@ -16,12 +16,13 @@ are not closure evidence.
   ERE tests in `awk_test.go` and `awk_routing_test.go`.
 - **Confirmed state:** LC_CTYPE and LC_COLLATE are invocation-owned and wired
   through the shared byte-regexp locale tables for GoAWK regex entry points.
-- **Honest residual:** LC_NUMERIC remains command-visible but not implemented:
-  a focused red is `LC_NUMERIC=de_DE.UTF-8 awk 'BEGIN { print 1.5 }'`, which
-  should render using the selected locale's radix character where POSIX
-  requires it. GoAWK exposes no local numeric-radix hook, and the repository has
-  no shared LC_NUMERIC provider analogous to LC_TIME. No shared provider or
-  vendored interpreter change was made in this packet.
+- **Honest residual:** LC_NUMERIC remains command-visible but not implemented.
+  The exact focused red is `LC_NUMERIC=de_DE.UTF-8 awk 'BEGIN { print 1.5 }'`;
+  POSIX requires the period character to represent the radix character in
+  program source, but numeric output and string conversion are affected by the
+  selected locale. GoAWK exposes no command-local numeric-radix hook, and this
+  repository has no shared LC_NUMERIC provider analogous to LC_TIME. No shared
+  provider or vendored interpreter change was made in this packet.
 - **Source-complete:** no.
 
 ## comm
@@ -103,3 +104,17 @@ are not closure evidence.
   translated diagnostics are not provided.
 - **Source-complete:** yes, for the command-local interface and carried locale
   corpus.
+
+## Gate run for this packet
+
+The required owned-package gates are:
+
+- `gofmt -w cmds/awk cmds/comm cmds/csplit cmds/expr cmds/fold`
+- `go test -count=20 ./cmds/awk ./cmds/comm ./cmds/csplit ./cmds/expr ./cmds/fold`
+- `go test -race -count=5 ./cmds/awk ./cmds/comm ./cmds/csplit ./cmds/expr ./cmds/fold`
+- `go vet ./cmds/awk ./cmds/comm ./cmds/csplit ./cmds/expr ./cmds/fold`
+- `scripts/applet-matrix.py --check`
+- `scripts/crossvet.sh`
+
+No generated manifest, consolidated report, shared script, sibling repository,
+or unrelated package is edited by this closure packet.
