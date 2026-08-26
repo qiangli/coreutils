@@ -13,6 +13,13 @@ import (
 
 // Drain positions live beside the timeline they index, so an isolated room
 // (BASHY_ROOM_DIR) gets isolated cursors and a test never inherits a real one.
+//
+// pkg/room's timeline retention (room/archive.go) reads this same directory
+// directly rather than importing this package — pkg/bus already imports
+// pkg/room, so the reverse import would cycle. That makes THIS FORMAT a
+// cross-package contract: one bare int64 per file, named for the sanitized
+// subscriber, mtime is the last successful (non-peek) drain. Changing either
+// without the other silently breaks retention's staleness judgment.
 const cursorDir = "cursors"
 
 // resolveSubscriber names the drain cursor.

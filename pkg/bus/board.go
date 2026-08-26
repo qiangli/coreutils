@@ -218,9 +218,17 @@ func PostMessage(p Post) error {
 // cursor is behind THIS seq, `read` means at or past it. A send that could not
 // name the seq it wrote could not tell the two apart, so the write returns it.
 //
-// O_APPEND, so several agents post concurrently without a lock — the same
-// discipline the room timeline and the graph contribution log use. The sequence
-// is assigned from the current line count, which is exact under append-only.
+// The append itself, and the seq it is assigned, happen under a short
+// best-effort lock (see withBoardLock) rather than bare O_APPEND. That
+// changed when archiving did: O_APPEND alone is safe only as long as nothing
+// ever REWRITES the file, and RotateBoard now does exactly that to move old
+// posts into the archive. The seq is `archivedThrough() + live count + 1`,
+// not just live count + 1, so a post written after a rotation can never
+// collide with a sequence rotation has already handed to an archived post.
+//
+// Rotation itself runs after the append, outside the lock and throttled —
+// see rotateBoardOpportunistic — so a hygiene sweep never sits on the
+// critical path of delivering a message.
 func PostMessageSeq(p Post) (int64, error) {
 	dir := BoardDir()
 	if dir == "" {
@@ -235,24 +243,38 @@ func PostMessageSeq(p Post) (int64, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, err
 	}
-	existing, _ := Posts()
 	p.SchemaVersion = BoardSchema
-	p.Seq = int64(len(existing)) + 1
 	if p.At == "" {
 		p.At = time.Now().UTC().Format(time.RFC3339)
 	}
-	line, err := json.Marshal(p)
-	if err != nil {
-		return 0, err
+
+	var writeErr error
+	withBoardLock("append", func() {
+		existing, _ := Posts()
+		p.Seq = archivedThrough() + int64(len(existing)) + 1
+		line, merr := json.Marshal(p)
+		if merr != nil {
+			writeErr = merr
+			return
+		}
+		f, ferr := os.OpenFile(postsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if ferr != nil {
+			writeErr = ferr
+			return
+		}
+		_, werr := f.Write(append(line, '\n'))
+		cerr := f.Close()
+		if werr != nil {
+			writeErr = werr
+			return
+		}
+		writeErr = cerr
+	})
+	if writeErr != nil {
+		return 0, writeErr
 	}
-	f, err := os.OpenFile(postsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return 0, err
-	}
+
+	rotateBoardOpportunistic()
 	return p.Seq, nil
 }
 
