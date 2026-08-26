@@ -481,10 +481,54 @@ func weaveLegacyStateRoots(home string) []string {
 	}
 }
 
+// weaveWorkspaceOwner reports the weave root that OWNS repoRoot, when repoRoot
+// is itself a weave workspace clone.
+//
+// The queue dir is keyed on the repo PATH (see weaveQueueDir), so a weave
+// command run from INSIDE a workspace used to hash that clone's path and mint a
+// brand-new root — one per clone, none of which ever held a queue, because the
+// real queue stayed in the root that dispatched the run. That is how
+// ~/.bashy/weave accumulated 237 empty directories named issue-N-<hash> and
+// <repo>-<hash>: every agent that ran `bashy weave ...` inside its own
+// workspace forked a root instead of finding the one it belonged to.
+//
+// A workspace always lives at <stateRoot>/<tag>/{workspaces,sandboxes}/<name>,
+// so the owner is recoverable from the path alone — no origin lookup, and no
+// need to breach the containment rule that keeps the origin path out of the tag.
+// Legacy roots are included: a workspace under one still belongs to its queue.
+func weaveWorkspaceOwner(home, repoRoot string) (string, bool) {
+	roots := append([]string{weaveStateRoot(home)}, weaveLegacyStateRoots(home)...)
+	clean := filepath.Clean(repoRoot)
+	for _, root := range roots {
+		rel, err := filepath.Rel(filepath.Clean(root), clean)
+		if err != nil || rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		// <tag>/<workspaces|sandboxes>/<name>[/...]
+		if len(parts) < 3 {
+			continue
+		}
+		if parts[1] != "workspaces" && parts[1] != "sandboxes" {
+			continue
+		}
+		owner := filepath.Join(root, parts[0])
+		if st, err := os.Stat(owner); err == nil && st.IsDir() {
+			return owner, true
+		}
+	}
+	return "", false
+}
+
 func weaveQueueDir(repoRoot string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
+	}
+	// A workspace belongs to the queue that CREATED it. Resolve upward before
+	// hashing, or a weave command run inside a workspace forks a fresh root.
+	if owner, ok := weaveWorkspaceOwner(home, repoRoot); ok {
+		return owner, nil
 	}
 	// Containment: the tag must NOT spell out the repo path — the
 	// workspace lives under this dir, so a path-mangled tag hands every
