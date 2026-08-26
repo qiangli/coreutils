@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/room"
+	"github.com/qiangli/coreutils/pkg/schedule"
 )
 
 func runNotifyCommand(t *testing.T, args ...string) (string, string, error) {
@@ -161,6 +163,27 @@ func TestNotifyReceiptUsesCanonicalQueuedAndJSONState(t *testing.T) {
 	}
 	if got.State != StateQueued || got.To != "alice" || got.Subject != "gate finished" || got.Principal != "scheduler" {
 		t.Fatalf("receipt = %+v", got)
+	}
+}
+
+func TestScheduleNotifyCapturesPrincipalInFireCommand(t *testing.T) {
+	isolate(t)
+	state := t.TempDir() + "/schedule.json"
+	t.Setenv("BASHY_SCHEDULE_STATE", state)
+	id, err := ScheduleNotify("scheduler", "alice", "wake up", time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := schedule.NewStore(state).LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs = %+v, err=%v", jobs, err)
+	}
+	job := jobs[0]
+	if job.ID != id || len(job.Command) < 4 || job.Command[1] != "notify" || job.Command[2] != "--as" || job.Command[3] != "scheduler" {
+		t.Fatalf("scheduled command = %#v", job.Command)
+	}
+	if !job.EnvSet {
+		t.Fatal("scheduled notification did not capture its environment")
 	}
 }
 

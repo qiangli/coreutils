@@ -10,8 +10,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/schedule"
 )
 
 // MaxNotifySubjectBytes keeps a notification a doorbell rather than a message
@@ -26,11 +29,74 @@ type NotifyReceipt struct {
 	To            string `json:"to,omitempty"`
 	Subject       string `json:"subject,omitempty"`
 	Error         string `json:"error,omitempty"`
+	JobID         string `json:"job_id,omitempty"`
+	When          string `json:"when,omitempty"`
+}
+
+// NotifyEvent is the shared event-side implementation for --notify. Commands
+// that already have an event (at, batch, crontab, sleep, timeout) call this
+// once when that event occurs; the flag plumbing stays in their common host
+// layer instead of five command-specific publishers.
+func NotifyEvent(principal, target, subject string) error {
+	principal = strings.TrimSpace(principal)
+	if principal == "" || principal == "anonymous" {
+		return fmt.Errorf("notify: sender identity is required")
+	}
+	if err := validateNotifySubject(subject); err != nil {
+		return err
+	}
+	addr, _, ok := resolveNotifyTarget(target)
+	if !ok {
+		return unresolvedTargetError(target)
+	}
+	return Publish(Notification{Principal: principal, To: addr, Body: subject})
+}
+
+// ScheduleNotify records a one-shot notification in the shared scheduler.
+// Principal is deliberately captured in the command line stored in the job:
+// the scheduler fires outside the submitting process and therefore cannot
+// inherit its ambient identity. Replaying an unattributed publish would be
+// rejected by bus.Publish at fire time.
+func ScheduleNotify(principal, target, subject string, when time.Time) (string, error) {
+	principal = strings.TrimSpace(principal)
+	target = strings.TrimSpace(target)
+	if principal == "" || principal == "anonymous" {
+		return "", fmt.Errorf("notify: sender identity is required")
+	}
+	if target == "" {
+		return "", fmt.Errorf("notify: recipient is required")
+	}
+	if err := validateNotifySubject(subject); err != nil {
+		return "", err
+	}
+	if when.IsZero() || !when.After(time.Now()) {
+		return "", fmt.Errorf("notify: scheduled time must be in the future")
+	}
+	now := time.Now()
+	id := strconv.FormatInt(now.UnixNano(), 36)
+	// os.Args[0] is the mounted bashy front door. Using argv, rather than a
+	// shell string, keeps the subject and captured identity lossless.
+	job := &schedule.Job{
+		ID: id, Kind: "at", Spec: when.Format(time.RFC3339Nano),
+		Command: []string{os.Args[0], "notify", "--as", principal, "--to", target, subject},
+		Dir:     os.Getenv("PWD"), Env: append([]string(nil), os.Environ()...), EnvSet: true,
+		Enabled: true, CreatedAt: now, NextRun: when,
+	}
+	if job.Dir == "" {
+		job.Dir, _ = os.Getwd()
+	}
+	if err := schedule.ValidateJobExecution(job); err != nil {
+		return "", err
+	}
+	if err := schedule.StoreFor(job.Dir, job.Env).SubmitJobWithConfirmation(job, func() error { return nil }); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // NewNotifyCmd returns the top-level `notify` command.
 func NewNotifyCmd() *cobra.Command {
-	var as, to string
+	var as, to, in, at string
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "notify [--to <agent>] [<agent>] <subject>",
@@ -66,9 +132,28 @@ deliberately absent.`,
 			if !ok {
 				return notifyFailure(cmd, jsonOut, principal, target, subject, unresolvedTargetError(target))
 			}
+			if in != "" && at != "" {
+				return notifyFailure(cmd, jsonOut, principal, target, subject, fmt.Errorf("notify: --in and --at are mutually exclusive"))
+			}
+			if in != "" || at != "" {
+				when, err := notifyWhen(in, at)
+				if err != nil {
+					return notifyFailure(cmd, jsonOut, principal, target, subject, err)
+				}
+				jobID, err := ScheduleNotify(principal, addr, subject, when)
+				if err != nil {
+					return notifyFailure(cmd, jsonOut, principal, target, subject, err)
+				}
+				receipt := NotifyReceipt{SchemaVersion: SchemaVersion, State: "scheduled", Principal: principal, To: RoleLabelFor(addr), Subject: subject, JobID: jobID, When: when.Format(time.RFC3339)}
+				if jsonOut {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s at %s\n", receipt.State, receipt.To, receipt.When)
+				return nil
+			}
 
 			before := timelineHigh()
-			if err := Publish(Notification{Principal: principal, To: addr, Body: subject}); err != nil {
+			if err := NotifyEvent(principal, target, subject); err != nil {
 				return notifyFailure(cmd, jsonOut, principal, target, subject, err)
 			}
 			state := StateAccepted
@@ -91,8 +176,29 @@ deliberately absent.`,
 	f := cmd.Flags()
 	f.StringVar(&as, "as", "", "send as this identity (default: resolved from your principal)")
 	f.StringVar(&to, "to", "", "recipient agent or role (explicit form of the first operand)")
+	f.StringVar(&in, "in", "", "deliver after a duration (for example, 15m)")
+	f.StringVar(&at, "at", "", "deliver at a local clock time (for example, 09:00)")
 	f.BoolVar(&jsonOut, "json", false, "emit a "+SchemaVersion+" delivery receipt")
 	return cmd
+}
+
+func notifyWhen(in, at string) (time.Time, error) {
+	now := time.Now()
+	if in != "" {
+		d, err := time.ParseDuration(in)
+		if err != nil || d <= 0 {
+			return time.Time{}, fmt.Errorf("notify: --in must be a positive duration")
+		}
+		return now.Add(d), nil
+	}
+	if at == "" {
+		return time.Time{}, fmt.Errorf("notify: missing schedule time")
+	}
+	when, err := schedule.ParseAtTimespecInLocation(at, now, time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("notify: invalid --at: %w", err)
+	}
+	return when, nil
 }
 
 func notifyOperands(to string, args []string) (target, subject string, err error) {
