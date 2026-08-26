@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/room"
+	whodb "github.com/qiangli/coreutils/pkg/who"
 )
 
 // The live-instance registry moved to pkg/room — it is the host room's membership,
@@ -118,6 +119,26 @@ func sessionLog(id string) (path string, sink io.Writer, closeFn func()) {
 		return "", nil, nil
 	}
 	return path, f, func() { _ = f.Close() }
+}
+
+// publishSessionTTY gives an agent session a stable bashy-owned terminal line.
+// The real PTY slave is still the terminal; the file under the pty dir is only
+// the ut_line namespace write(1) resolves under its agent devDir seam.
+func publishSessionTTY(id, realTTY string) (line, link string, err error) {
+	line = strings.TrimSpace(id)
+	if line == "" {
+		line = "agent"
+	}
+	dir := whodb.PTYDirForEnv(os.Environ())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", "", err
+	}
+	link = filepath.Join(dir, line)
+	_ = os.Remove(link)
+	if err := os.Symlink(realTTY, link); err != nil {
+		return "", "", err
+	}
+	return line, link, nil
 }
 
 // refuseIfSessionLive reports the agent's own live SESSION as an error, for

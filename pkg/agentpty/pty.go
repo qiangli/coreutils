@@ -122,9 +122,43 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		}
 	}
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
+	ptmx, tty, err := pty.Open()
 	if err != nil {
+		return 127, "", fmt.Errorf("pty.Open: %w", err)
+	}
+	ttyName := tty.Name()
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols}); err != nil {
+		_ = tty.Close()
+		_ = ptmx.Close()
+		return 127, "", fmt.Errorf("pty.Setsize: %w", err)
+	}
+	if cmd.Stdout == nil {
+		cmd.Stdout = tty
+	}
+	if cmd.Stderr == nil {
+		cmd.Stderr = tty
+	}
+	if cmd.Stdin == nil {
+		cmd.Stdin = tty
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
+	if err := cmd.Start(); err != nil {
+		_ = tty.Close()
+		_ = ptmx.Close()
 		return 127, "", fmt.Errorf("pty.Start: %w", err)
+	}
+	_ = tty.Close()
+	if opts.OnStart != nil {
+		if err := opts.OnStart(ttyName); err != nil {
+			killTree("pty registration failed", 2*time.Second)
+			_ = ptmx.Close()
+			_ = cmd.Wait()
+			return 127, "pty registration failed", err
+		}
 	}
 	defer ptmx.Close()
 

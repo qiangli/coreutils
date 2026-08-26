@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/room"
+	whodb "github.com/qiangli/coreutils/pkg/who"
 )
 
 func isolateHome(t *testing.T) {
@@ -82,6 +83,31 @@ func TestSessionPathsAreKeyedByIdentity(t *testing.T) {
 	if len(filepath.Base(long)) != len(filepath.Base(sockA)) {
 		t.Errorf("socket filename grew with the agent name: %q vs %q",
 			filepath.Base(long), filepath.Base(sockA))
+	}
+}
+
+func TestPublishSessionTTYCreatesBashyOwnedLine(t *testing.T) {
+	isolateHome(t)
+	realTTY := filepath.Join(t.TempDir(), "real-tty")
+	if err := os.WriteFile(realTTY, nil, 0o620); err != nil {
+		t.Fatal(err)
+	}
+	line, link, err := publishSessionTTY("elif", realTTY)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "elif" {
+		t.Fatalf("line = %q, want agent id", line)
+	}
+	if filepath.Dir(link) != whodb.PTYDirForEnv(os.Environ()) {
+		t.Fatalf("link = %q, want under bashy pty dir %q", link, whodb.PTYDirForEnv(os.Environ()))
+	}
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != realTTY {
+		t.Fatalf("pty link points at %q, want %q", target, realTTY)
 	}
 }
 

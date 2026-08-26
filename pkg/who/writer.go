@@ -77,6 +77,16 @@ func FileForEnv(env []string) string {
 	return filepath.Join(home, ".bashy", "who", "sessions")
 }
 
+// PTYDirForEnv returns the bashy-owned device directory for agent terminals.
+// The records in FileForEnv store bare line names; write(1) resolves them under
+// this directory exactly as it resolves ut_line under /dev on a POSIX host.
+func PTYDirForEnv(env []string) string {
+	if p, ok := envValue(env, "BASHY_PTY_DIR"); ok && strings.TrimSpace(p) != "" {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(filepath.Dir(FileForEnv(env)), "pty")
+}
+
 // UserDirForEnv returns the durable directory entry associated with name.
 // Invalid names have no directory: a login name may never escape the who root.
 func UserDirForEnv(env []string, name string) (string, bool) {

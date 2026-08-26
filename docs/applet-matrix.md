@@ -120,7 +120,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `make` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
-| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 9 |
+| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 10 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 3 | 33 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
@@ -210,7 +210,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 4 | 30 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
-| `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 5 | 83 |
+| `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 5 | 84 |
 | `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 50 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
