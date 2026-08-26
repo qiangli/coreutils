@@ -52,6 +52,12 @@ func helperMain(args []string) int {
 		for _, a := range args[1:] {
 			fmt.Printf("[%s]\n", a)
 		}
+	case "version":
+		if len(args) != 2 || args[1] != "--version" {
+			fmt.Fprintf(os.Stderr, "helper: version arguments %q\n", args[1:])
+			return 2
+		}
+		fmt.Println("helper command version")
 	case "environ":
 		for _, e := range os.Environ() {
 			fmt.Printf("%s\n", e)
@@ -486,4 +492,47 @@ func TestEnvDoubleDashEndsOptions(t *testing.T) {
 	if code != 0 || errb != "" || out != "[-i]\n" {
 		t.Errorf("COMMAND options are not env options = (%q, %q, %d)", out, errb, code)
 	}
+}
+
+// TestEnvStopsOptionParsingAtFirstOperand pins the boundary between env's
+// options and the utility it invokes. In particular, a utility's own options
+// must never be consumed by env, while env's standalone --version remains an
+// env option when no operand has appeared.
+func TestEnvStopsOptionParsingAtFirstOperand(t *testing.T) {
+	base := []string{helperEnvKey + "=1"}
+
+	t.Run("command version", func(t *testing.T) {
+		args := append([]string{"FOO=1"}, helperArgv(t)...)
+		args = append(args, "version", "--version")
+		out, errb, code := runExec(t, context.Background(), t.TempDir(), base, args...)
+		if code != 0 || errb != "" || out != "helper command version\n" {
+			t.Fatalf("env FOO=1 COMMAND --version = (%q, %q, %d)", out, errb, code)
+		}
+	})
+
+	t.Run("command short option", func(t *testing.T) {
+		args := append([]string{"FOO=1"}, helperArgv(t)...)
+		args = append(args, "argv", "-n", "hi")
+		out, errb, code := runExec(t, context.Background(), t.TempDir(), base, args...)
+		if code != 0 || errb != "" || out != "[-n]\n[hi]\n" {
+			t.Fatalf("env FOO=1 COMMAND -n hi = (%q, %q, %d)", out, errb, code)
+		}
+	})
+
+	t.Run("command unknown-looking option after clean environment", func(t *testing.T) {
+		args := append([]string{"-i", "PATH=" + os.Getenv("PATH"), helperEnvKey + "=1"}, helperArgv(t)...)
+		args = append(args, "argv", "-run", "X")
+		out, errb, code := runExec(t, context.Background(), t.TempDir(), base, args...)
+		if code != 0 || errb != "" || out != "[-run]\n[X]\n" {
+			t.Fatalf("env -i PATH=... COMMAND -run X = (%q, %q, %d)", out, errb, code)
+		}
+	})
+
+	t.Run("env version without operand", func(t *testing.T) {
+		out, errb, code := runTool(t, nil, "--version")
+		want := "env (qiangli/coreutils) " + tool.Version + "\n"
+		if code != 0 || errb != "" || out != want {
+			t.Fatalf("env --version = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+		}
+	})
 }
