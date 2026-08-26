@@ -186,6 +186,8 @@ var packages = map[string]Package{
 	"timezones":  cmdPkg("tz"),
 	"todo":       cmdPkg("todo"),
 	"treesitter": cmdPkg("ast"),
+	"who": libPkg("who", "PID-liveness for the bashy-owned login records `who` reads — a login row is only true "+
+		"while its process is alive, so a stale row would invite a `write` to a name that will never read it"),
 	"weave":      cmdPkg("weave"),
 	"webinspect": cmdPkg("browser"),
 
