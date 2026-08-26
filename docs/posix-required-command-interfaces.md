@@ -707,7 +707,7 @@ cksum [file...]
 
 **Operands:** `file`. For every operand in order, calculate the Issue 7 Ethernet-polynomial CRC including the encoded file length and count its octets; no operands selects standard input; process later operands after an earlier error.
 
-**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input.
+**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input, an Issue 7-permitted implementation choice.
 
 **Standard input:** Used when no file operand is supplied and for each - operand; otherwise not used.
 
@@ -731,7 +731,7 @@ cksum [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cksum`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/cksum/cksum_test.go#TestCKSumStdinAndFiles;cmds/cksum/cksum_test.go#TestCKSumErrors;cmds/cksum/cksum_test.go#TestCKSumReportsStandardOutputWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cksum/cksum_test.go#TestCKSumStdinAndFiles;cmds/cksum/cksum_test.go#TestCKSumErrors;cmds/cksum/cksum_test.go#TestCKSumReportsStandardOutputWriteError;cmds/cksum/cksum_test.go#TestCKSumStandardInputOperandAndReadError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cksum:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cksum](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cksum.html).
 
@@ -753,9 +753,9 @@ cmp [-l|-s] file1 file2
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file1; file2`. Compare file1 and file2 byte by byte from the beginning, numbering bytes and lines from 1; a - operand reads standard input; identical files produce no output; GNU-diffutils operand extensions (an omitted file2 defaulting to - and trailing SKIP1/SKIP2 skips) are accepted beyond the two-operand Issue 7 synopsis.
+**Operands:** `file1; file2`. Compare file1 and file2 byte by byte from the beginning, numbering bytes and lines from 1; a - operand reads standard input; identical files produce no output. POSIXLY_CORRECT requires exactly two operands; GNU-diffutils omitted-file2 and trailing-SKIP extensions remain outside that mode.
 
-**Special tokens:** -- ends option parsing; a file operand of - selects standard input, accepted for at most one operand (cmp - - is refused).
+**Special tokens:** -- ends option parsing; a file operand of - selects standard input. Both operands selecting stdin, or aliases of one FIFO/block/character special file, are undefined by Issue 7 and are refused deterministically.
 
 **Standard input:** Used only when a file operand is -.
 
@@ -763,7 +763,7 @@ cmp [-l|-s] file1 file2
 
 **Standard output:** Default mode writes "%s %s differ: char %d, line %d" for the first difference; -l lists every difference as "%d %o %o" per line, exactly in POSIX mode (POSIXLY_CORRECT) and with GNU-diffutils column alignment otherwise; -s writes nothing.
 
-**Standard error:** Used only for diagnostic messages; a shorter identical-prefix file yields "cmp: EOF on %s" plus implementation-defined additional information in default and -l modes.
+**Standard error:** Used only for diagnostic messages; a shorter identical-prefix file yields "cmp: EOF on %s" plus implementation-defined additional information in default and -l modes, and a normal-output write failure is diagnosed.
 
 **Effects:** `Reads inputs without modifying them; no output files.`.
 
@@ -779,7 +779,7 @@ cmp [-l|-s] file1 file2
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cmp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/cmp/cmp_test.go#TestCmpIdentical;cmds/cmp/cmp_test.go#TestCmpDiffer;cmds/cmp/cmp_test.go#TestCmpVerbose;cmds/cmp/cmp_test.go#TestCmpSilent;cmds/cmp/cmp_test.go#TestCmpEOF;cmds/cmp/cmp_test.go#TestCmpRejectsRepeatedStandardInput;cmds/cmp/cmp_test.go#TestCmpErrors;cmds/cmp/cmp_posix_test.go#TestCmpVerbosePOSIXModeFormat;cmds/cmp/cmp_posix_test.go#TestCmpVerboseEOFDiagnostic`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cmp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cmp/cmp_test.go#TestCmpIdentical;cmds/cmp/cmp_test.go#TestCmpDiffer;cmds/cmp/cmp_test.go#TestCmpVerbose;cmds/cmp/cmp_test.go#TestCmpSilent;cmds/cmp/cmp_test.go#TestCmpEOF;cmds/cmp/cmp_test.go#TestCmpRejectsRepeatedStandardInput;cmds/cmp/cmp_test.go#TestCmpErrors;cmds/cmp/cmp_posix_test.go#TestCmpVerbosePOSIXModeFormat;cmds/cmp/cmp_posix_test.go#TestCmpVerboseEOFDiagnostic;cmds/cmp/cmp_posix_test.go#TestCmpPOSIXOperandGrammarAndOutputErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cmp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cmp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cmp.html).
 
@@ -2208,9 +2208,9 @@ head [-n number] [file...]
 
 **Issue 7 option-argument candidate:** `-n=<number>`.
 
-**Operands:** `file`. Copy the first number lines of every file operand, or 10 lines when -n is absent; copy an entire shorter file without error; no operands selects standard input; process multiple operands in order.
+**Operands:** `file`. Copy the first number lines of every file operand, or 10 lines when -n is absent; copy an entire shorter file without error; no operands selects standard input; process multiple operands in order and continue after an open/read failure.
 
-**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input.
+**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input, an Issue 7-permitted implementation choice.
 
 **Standard input:** Used when no file operand is supplied and for each - operand; otherwise not used.
 
@@ -2218,7 +2218,7 @@ head [-n number] [file...]
 
 **Standard output:** Write each designated input portion; with multiple operands prefix the first with ==> pathname <== and later ones with a preceding newline before the same header form.
 
-**Standard error:** Used only for diagnostic messages.
+**Standard error:** Used only for diagnostic messages, including read and standard-output failures.
 
 **Effects:** `Reads inputs without modifying them; output is standard output only.`.
 
@@ -2234,7 +2234,7 @@ head [-n number] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/head`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/head/head_test.go#TestHead;cmds/head/head_test.go#TestHeadHeaders;cmds/head/head_test.go#TestHeadErrors;cmds/head/head_test.go#TestHeadWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/head/head_test.go#TestHead;cmds/head/head_test.go#TestHeadHeaders;cmds/head/head_test.go#TestHeadErrors;cmds/head/head_test.go#TestHeadWriteError;cmds/head/head_test.go#TestHeadStandardInputOperandAndReadError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:head:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [head](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/head.html).
 

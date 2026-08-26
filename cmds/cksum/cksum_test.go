@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,6 +17,10 @@ import (
 type cksumFailWriter struct{ err error }
 
 func (w cksumFailWriter) Write([]byte) (int, error) { return 0, w.err }
+
+type cksumFailReader struct{ err error }
+
+func (r cksumFailReader) Read([]byte) (int, error) { return 0, r.err }
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -72,6 +77,25 @@ func TestCKSumReportsStandardOutputWriteError(t *testing.T) {
 	}
 	if got := errb.String(); !strings.Contains(got, "broken pipe") {
 		t.Fatalf("write error diagnostic = %q, want underlying error", got)
+	}
+}
+
+func TestCKSumStandardInputOperandAndReadError(t *testing.T) {
+	out, errb, code := runTool(t, "", "abc", "-")
+	if out != "1219131554 3 -\n" || errb != "" || code != 0 {
+		t.Fatalf("dash stdin = (%q, %q, %d)", out, errb, code)
+	}
+
+	var stderr bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: cksumFailReader{errors.New("input failure")}, Out: io.Discard, Err: &stderr},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("read failure exit = %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "cksum: -: input failure") {
+		t.Fatalf("read failure diagnostic = %q", got)
 	}
 }
 

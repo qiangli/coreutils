@@ -17,6 +17,10 @@ type headFailWriter struct{ err error }
 
 func (w headFailWriter) Write([]byte) (int, error) { return 0, w.err }
 
+type headFailReader struct{ err error }
+
+func (r headFailReader) Read([]byte) (int, error) { return 0, r.err }
+
 func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	if dir == "" {
@@ -205,6 +209,25 @@ func TestHeadWriteError(t *testing.T) {
 	if got := errb.String(); !strings.Contains(got, "head: write error:") ||
 		!strings.Contains(got, "closed pipe") {
 		t.Fatalf("write failure diagnostic = %q", got)
+	}
+}
+
+func TestHeadStandardInputOperandAndReadError(t *testing.T) {
+	out, errb, code := runTool(t, "", "line\n", "-")
+	if out != "line\n" || errb != "" || code != 0 {
+		t.Fatalf("dash stdin = (%q, %q, %d)", out, errb, code)
+	}
+
+	var errbBuf bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: headFailReader{fmt.Errorf("input failure")}, Out: io.Discard, Err: &errbBuf},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("read failure exit = %d, want 1", code)
+	}
+	if got := errbBuf.String(); !strings.Contains(got, "head: error reading '-': Input failure") {
+		t.Fatalf("read failure diagnostic = %q", got)
 	}
 }
 
