@@ -39,8 +39,13 @@ func TestCpPreservePhysicalSymlinkMetadataWithoutMutatingReferent(t *testing.T) 
 
 	oldLchown := lchownFn
 	var lchownPath string
+	var lchownMatchedDestination bool
+	dest := filepath.Join(dir, "copy")
 	lchownFn = func(path string, uid, gid int) error {
 		lchownPath = path
+		gotInfo, gotErr := os.Lstat(path)
+		wantInfo, wantErr := os.Lstat(dest)
+		lchownMatchedDestination = gotErr == nil && wantErr == nil && os.SameFile(gotInfo, wantInfo)
 		return oldLchown(path, uid, gid)
 	}
 	t.Cleanup(func() { lchownFn = oldLchown })
@@ -49,9 +54,8 @@ func TestCpPreservePhysicalSymlinkMetadataWithoutMutatingReferent(t *testing.T) 
 	if code != 0 || errb != "" {
 		t.Fatalf("cp -pP link copy: code=%d err=%q", code, errb)
 	}
-	dest := filepath.Join(dir, "copy")
-	if lchownPath != dest {
-		t.Fatalf("Lchown path=%q, want destination symlink %q", lchownPath, dest)
+	if !lchownMatchedDestination {
+		t.Fatalf("Lchown path=%q did not identify destination symlink %q", lchownPath, dest)
 	}
 
 	destInfo, err := os.Lstat(dest)
