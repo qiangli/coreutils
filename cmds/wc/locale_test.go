@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -138,5 +139,122 @@ func TestOutsidePOSIXModeKeepsLegacyByteCounts(t *testing.T) {
 	out, errOut, code := runWCEnv(t, []string{"LC_ALL=en_US.UTF-8"}, "é\n", "-mwc")
 	if code != 0 || errOut != "" || out != "      1       3       3\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+// TestPOSIXLocalePrecedenceSelectsCTypeCategory proves the XBD
+// Internationalization Variables precedence that XCU:wc:ENVIRONMENT_VARIABLES
+// inherits: LC_ALL overrides LC_CTYPE, LC_CTYPE overrides LANG, and an empty
+// assignment falls through instead of shadowing the next level.
+func TestPOSIXLocalePrecedenceSelectsCTypeCategory(t *testing.T) {
+	old := openCTypeFn
+	defer func() { openCTypeFn = old }()
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"LC_ALL wins", []string{"POSIXLY_CORRECT=", "LANG=lang", "LC_CTYPE=ctype", "LC_ALL=chosen_8bit"}, "chosen_8bit"},
+		{"LC_CTYPE over LANG", []string{"POSIXLY_CORRECT=", "LANG=lang", "LC_CTYPE=chosen_8bit"}, "chosen_8bit"},
+		{"LANG last", []string{"POSIXLY_CORRECT=", "LANG=chosen_8bit"}, "chosen_8bit"},
+		{"empty values fall through", []string{"POSIXLY_CORRECT=", "LC_ALL=", "LC_CTYPE=", "LANG=chosen_8bit"}, "chosen_8bit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeSpaceProvider{space: map[byte]bool{' ': true, 0xa0: true}}
+			openCTypeFn = func(name string) (ctypeProvider, error) {
+				if name != tc.want {
+					t.Fatalf("resolved LC_CTYPE = %q, want %q", name, tc.want)
+				}
+				return p, nil
+			}
+			// 0xA0 separates words only for this provider's <space> set.
+			out, errOut, code := runWCEnv(t, tc.env, "a\xa0b", "-w")
+			if code != 0 || errOut != "" || out != "2\n" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+			}
+			if !p.closed {
+				t.Fatal("LC_CTYPE provider was not closed")
+			}
+		})
+	}
+
+	// A UTF-8 codeset selected through LANG alone reaches the multi-byte
+	// model without any provider being opened.
+	openCTypeFn = func(string) (ctypeProvider, error) {
+		t.Fatal("a UTF-8 locale must not open the single-byte provider")
+		return nil, nil
+	}
+	out, errOut, code := runWCEnv(t, []string{"POSIXLY_CORRECT=1", "LANG=en_US.UTF-8"}, "é\n", "-mc")
+	if code != 0 || errOut != "" || out != "      2       3\n" {
+		t.Fatalf("LANG UTF-8: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+// TestPOSIXUTF8CharacterBoundaryAcrossReadBuffer proves that the LC_CTYPE
+// requirement to interpret "sequences of bytes of text data as characters"
+// holds across the internal read boundary: a multi-byte character split by a
+// buffer refill is still exactly one character.
+func TestPOSIXUTF8CharacterBoundaryAcrossReadBuffer(t *testing.T) {
+	env := []string{"POSIXLY_CORRECT=1", "LC_ALL=en_US.UTF-8"}
+	// bufio's default reader buffer is 4096 bytes; place the 3-byte
+	// character so that its first byte is the last byte of the first fill.
+	for _, lead := range []int{4094, 4095, 4096} {
+		input := strings.Repeat("a", lead) + "界\n"
+		wantChars := int64(lead) + 2
+		wantBytes := int64(lead) + 4
+		out, errOut, code := runWCEnv(t, env, input, "-mc")
+		want := fmt.Sprintf("%7d %7d\n", wantChars, wantBytes)
+		if code != 0 || errOut != "" || out != want {
+			t.Fatalf("lead=%d: code=%d stdout=%q stderr=%q, want %q", lead, code, out, errOut, want)
+		}
+	}
+}
+
+// TestPOSIXUTF8WordsUseLocaleWhiteSpace covers XCU:wc:STDOUT's word count:
+// "a word is a non-zero-length string of characters delimited by white space",
+// where LC_CTYPE decides which characters are white space.
+func TestPOSIXUTF8WordsUseLocaleWhiteSpace(t *testing.T) {
+	// U+3000 IDEOGRAPHIC SPACE is white space under a UTF-8 LC_CTYPE and
+	// three ordinary bytes in the C locale.
+	const in = "a　b\n"
+	out, errOut, code := runWCEnv(t, []string{"POSIXLY_CORRECT=1", "LC_ALL=en_US.UTF-8"}, in, "-w")
+	if code != 0 || errOut != "" || out != "2\n" {
+		t.Fatalf("UTF-8: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runWCEnv(t, []string{"POSIXLY_CORRECT=1", "LC_ALL=C"}, in, "-w")
+	if code != 0 || errOut != "" || out != "1\n" {
+		t.Fatalf("C: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+// TestPOSIXUTF8MaximumLineWidthUsesEffectiveLocale exercises the display-width
+// half of the LC_CTYPE contract for the -L extension: U+00A1 is East Asian
+// Ambiguous, so its column count follows the selected locale.
+func TestPOSIXUTF8MaximumLineWidthUsesEffectiveLocale(t *testing.T) {
+	out, errOut, code := runWCEnv(t, []string{"POSIXLY_CORRECT=1", "LC_ALL=ja_JP.UTF-8"}, "¡\n", "-L")
+	if code != 0 || errOut != "" || out != "2\n" {
+		t.Fatalf("ja: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runWCEnv(t, []string{"POSIXLY_CORRECT=1", "LC_ALL=en_US.UTF-8"}, "¡\n", "-L")
+	if code != 0 || errOut != "" || out != "1\n" {
+		t.Fatalf("en: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+// TestPOSIXNumericLocaleDoesNotAlterCounts pins that wc's counts are written
+// as plain decimal numbers: XCU:wc:ENVIRONMENT_VARIABLES lists no LC_NUMERIC,
+// so no radix or grouping convention may reach standard output.
+func TestPOSIXNumericLocaleDoesNotAlterCounts(t *testing.T) {
+	input := strings.Repeat("word ", 2000) + "\n"
+	want := "      1    2000   10001\n"
+	for _, env := range [][]string{
+		{"POSIXLY_CORRECT=1", "LC_ALL=C"},
+		{"POSIXLY_CORRECT=1", "LC_CTYPE=en_US.UTF-8", "LC_NUMERIC=de_DE.UTF-8"},
+		{"POSIXLY_CORRECT=1", "LC_CTYPE=en_US.UTF-8", "LC_NUMERIC=en_US.UTF-8"},
+	} {
+		out, errOut, code := runWCEnv(t, env, input, "-lwc")
+		if code != 0 || errOut != "" || out != want {
+			t.Fatalf("env=%v: code=%d stdout=%q stderr=%q, want %q", env, code, out, errOut, want)
+		}
 	}
 }

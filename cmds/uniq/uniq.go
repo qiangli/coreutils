@@ -6,10 +6,13 @@
 // filter adjacent matching lines from INPUT (or standard input),
 // writing to OUTPUT (or standard output).
 //
-// Implemented flags: -c -d -u -i -f N -s N -w N. Fields are runs of
-// non-blank characters separated by blanks (skipped before
-// characters); comparisons are byte-wise, with -i folding ASCII case
-// (C-locale semantics).
+// Implemented flags: -c -d -u -i -f N -s N -w N. A field is the maximal
+// string matched by the POSIX basic regular expression
+// [[:blank:]]*[^[:blank:]]*, and -s skips characters after those fields.
+// Both the <blank> set and the character unit come from the invocation's
+// LC_CTYPE in POSIX mode (Issue 7 XCU uniq ENVIRONMENT VARIABLES);
+// outside POSIX mode the historical C/byte model is kept. Comparisons are
+// byte-wise, with -i folding ASCII case (C-locale semantics).
 package uniqcmd
 
 import (
@@ -18,7 +21,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -63,6 +70,11 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if len(operands) > 2 {
 		return tool.UsageError(rc, cmd, "extra operand '%s'", operands[2])
+	}
+	model, err := loadKeyModel(rc.Env, posix)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "uniq: %v\n", err)
+		return 1
 	}
 	delimMode := delimNone
 	if fs.Changed("group") {
@@ -114,7 +126,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	limitChars := fs.Changed("check-chars")
 	keyOf := func(line string) string {
-		k := skipKey(line, *skipFields, *skipChars)
+		k := skipKey(line, *skipFields, *skipChars, model)
 		if limitChars && len(k) > *checkChars {
 			k = k[:*checkChars]
 		}
@@ -309,27 +321,129 @@ func flushWithDelimiter(w *bufio.Writer, group []string, shouldPrint bool, flush
 	return firstPrinted || printed
 }
 
-// skipKey mirrors GNU uniq's find_field: skip N fields (each a run of
-// blanks followed by a run of non-blanks), then N characters, clamped
-// to the end of the line.
-func skipKey(line string, fields, chars int) string {
+// ctypeProvider is the narrow slice of pkg/ctype.Provider that uniq needs:
+// LC_CTYPE says which characters constitute a <blank>.
+type ctypeProvider interface {
+	IsBlank(byte) (bool, error)
+	Close() error
+}
+
+// openCTypeFn is the injection point for the single-byte LC_CTYPE provider.
+var openCTypeFn = func(name string) (ctypeProvider, error) { return ctype.Open(name) }
+
+// keyModel carries the LC_CTYPE-dependent halves of key extraction: the
+// character unit that -s counts, and the <blank> set that delimits a field.
+type keyModel struct {
+	utf8  bool
+	blank [256]bool
+}
+
+// cKeyModel is the C/POSIX model: one byte is one character and <blank> is
+// exactly <space> and <tab>.
+func cKeyModel() *keyModel {
+	m := new(keyModel)
+	m.blank[' '], m.blank['\t'] = true, true
+	return m
+}
+
+// loadKeyModel resolves LC_CTYPE for the invocation. Outside POSIX mode the
+// historical C/byte model is kept unconditionally, so no provider is opened
+// and no locale can make uniq fail. In POSIX mode a UTF-8 codeset selects
+// multi-byte characters with the locale's <blank> characters, and any other
+// non-C locale is answered by the single-byte provider rather than silently
+// inheriting C's <blank> set.
+func loadKeyModel(env []string, posix bool) (*keyModel, error) {
+	if !posix {
+		return cKeyModel(), nil
+	}
+	name := locale.Resolve(env, locale.CType)
+	if name == "C" || name == "POSIX" {
+		return cKeyModel(), nil
+	}
+	if isUTF8Locale(name) {
+		m := cKeyModel()
+		m.utf8 = true
+		return m, nil
+	}
+	p, err := openCTypeFn(name)
+	if err != nil {
+		return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+	}
+	m := new(keyModel)
+	for i := 0; i < 256; i++ {
+		ok, classifyErr := p.IsBlank(byte(i))
+		if classifyErr != nil {
+			err = classifyErr
+			break
+		}
+		m.blank[i] = ok
+	}
+	if closeErr := p.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+	}
+	return m, nil
+}
+
+// isUTF8Locale reports whether the locale name selects the UTF-8 codeset.
+func isUTF8Locale(name string) bool {
+	name, _, _ = strings.Cut(name, "@")
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	name = strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
+	return name == "UTF8"
+}
+
+// nextChar decodes one character of line at i and reports its width in
+// bytes together with whether it is a <blank> in the selected locale. A
+// byte that does not begin a valid multi-byte character is one character
+// wide, so a malformed input line still advances and is never a <blank>.
+func (m *keyModel) nextChar(line string, i int) (size int, blank bool) {
+	if !m.utf8 {
+		return 1, m.blank[line[i]]
+	}
+	r, size := utf8.DecodeRuneInString(line[i:])
+	if r == utf8.RuneError && size <= 1 {
+		return 1, false
+	}
+	return size, r == '\t' || unicode.Is(unicode.Zs, r)
+}
+
+// skipKey implements the Issue 7 uniq key: skip the first fields fields,
+// where a field is the maximal string matched by the basic regular
+// expression [[:blank:]]*[^[:blank:]]*, then skip chars characters. Both
+// counts clamp to the end of the line, where the standard requires a null
+// string to be used for comparison.
+func skipKey(line string, fields, chars int, m *keyModel) string {
 	i := 0
 	for n := 0; n < fields && i < len(line); n++ {
-		for i < len(line) && isBlank(line[i]) {
-			i++
+		for i < len(line) {
+			size, blank := m.nextChar(line, i)
+			if !blank {
+				break
+			}
+			i += size
 		}
-		for i < len(line) && !isBlank(line[i]) {
-			i++
+		for i < len(line) {
+			size, blank := m.nextChar(line, i)
+			if blank {
+				break
+			}
+			i += size
 		}
 	}
-	i += chars
+	for n := 0; n < chars && i < len(line); n++ {
+		size, _ := m.nextChar(line, i)
+		i += size
+	}
 	if i > len(line) {
 		i = len(line)
 	}
 	return line[i:]
 }
-
-func isBlank(c byte) bool { return c == ' ' || c == '\t' }
 
 func envPresent(env []string, key string) bool {
 	prefix := key + "="
