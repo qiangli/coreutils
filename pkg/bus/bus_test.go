@@ -53,7 +53,7 @@ func publish(t *testing.T, args ...string) {
 
 func TestPublishLandsOnTheTimeline(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "rebase", "first")
+	publish(t, "--topic", "build", "--as", "alice", "rebase", "first")
 
 	events, err := room.Timeline(0)
 	if err != nil {
@@ -68,6 +68,36 @@ func TestPublishLandsOnTheTimeline(t *testing.T) {
 	}
 	if e.Body != "rebase first" {
 		t.Errorf("body = %q", e.Body)
+	}
+}
+
+func TestPublishPrincipalIsHiddenDeprecatedAsAlias(t *testing.T) {
+	isolate(t)
+	out, errOut, err := run(t, "publish", "--topic", "build", "--principal", "alice", "rebase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("publish wrote stdout: %q", out)
+	}
+	if !strings.Contains(errOut, "--principal is deprecated; use --as") {
+		t.Fatalf("--principal alias did not print replacement notice: %q", errOut)
+	}
+	cmd := NewBusCmd()
+	pub, _, err := cmd.Find([]string{"publish"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := pub.Flags().Lookup("principal")
+	if flag == nil || !flag.Hidden {
+		t.Fatalf("--principal alias must exist and be hidden, got %#v", flag)
+	}
+	events, err := room.Timeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Principal != "alice" {
+		t.Fatalf("--principal alias did not publish as alice: %+v", events)
 	}
 }
 
@@ -112,7 +142,7 @@ func TestPublishSpacetimeMovementRejectsValues(t *testing.T) {
 // cannot be delivered.
 func TestUnaddressedPublishIsRefused(t *testing.T) {
 	isolate(t)
-	_, _, err := run(t, "publish", "--principal", "alice", "to nobody")
+	_, _, err := run(t, "publish", "--as", "alice", "to nobody")
 	if err == nil {
 		t.Fatal("an unaddressed publish was accepted")
 	}
@@ -141,7 +171,7 @@ func TestPrincipalIsRequired(t *testing.T) {
 // refusal printed "status":"error" and then exited 0.
 func TestJSONRefusalStillFails(t *testing.T) {
 	isolate(t)
-	_, errOut, err := run(t, "publish", "--principal", "alice", "--json", "unaddressed")
+	_, errOut, err := run(t, "publish", "--as", "alice", "--json", "unaddressed")
 	if err == nil {
 		t.Fatal("a --json refusal reported success")
 	}
@@ -161,9 +191,9 @@ func TestJSONRefusalStillFails(t *testing.T) {
 
 func TestWatchDrainFiltersByAddressing(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "build msg")
-	publish(t, "--topic", "deploy", "--principal", "alice", "deploy msg")
-	publish(t, "--to", "dev-2", "--principal", "bob", "direct msg")
+	publish(t, "--topic", "build", "--as", "alice", "build msg")
+	publish(t, "--topic", "deploy", "--as", "alice", "deploy msg")
+	publish(t, "--to", "dev-2", "--as", "bob", "direct msg")
 
 	out, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "sub1")
 	if err != nil {
@@ -184,7 +214,7 @@ func TestWatchIgnoresNonNotifyEvents(t *testing.T) {
 	if err := room.Emit(room.Event{Type: room.EventJoin, Actor: "someone"}); err != nil {
 		t.Fatal(err)
 	}
-	publish(t, "--topic", "build", "--principal", "alice", "real notification")
+	publish(t, "--topic", "build", "--as", "alice", "real notification")
 
 	out, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "sub1")
 	if err != nil {
@@ -206,7 +236,7 @@ func TestWatchRequiresAFilterOrAll(t *testing.T) {
 	if _, _, err := run(t, "watch", "--drain"); err == nil {
 		t.Error("watch with no filter and no --all was accepted")
 	}
-	publish(t, "--topic", "build", "--principal", "alice", "msg")
+	publish(t, "--topic", "build", "--as", "alice", "msg")
 	if _, _, err := run(t, "watch", "--all", "--drain", "--as", "s"); err != nil {
 		t.Errorf("--all should permit an unfiltered watch: %v", err)
 	}
@@ -218,7 +248,7 @@ func TestWatchRequiresAFilterOrAll(t *testing.T) {
 // must not re-deliver.
 func TestDrainIsIncremental(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "first")
+	publish(t, "--topic", "build", "--as", "alice", "first")
 
 	out, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "sub1")
 	if err != nil {
@@ -236,7 +266,7 @@ func TestDrainIsIncremental(t *testing.T) {
 		t.Errorf("a second drain re-delivered an already-seen message:\n%s", out2)
 	}
 
-	publish(t, "--topic", "build", "--principal", "alice", "second")
+	publish(t, "--topic", "build", "--as", "alice", "second")
 	out3, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "sub1")
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +281,7 @@ func TestDrainIsIncremental(t *testing.T) {
 // ran — which is the entire scenario the bus exists to prevent.
 func TestFirstDrainDeliversTheBacklog(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "published before anyone watched")
+	publish(t, "--topic", "build", "--as", "alice", "published before anyone watched")
 
 	out, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "brand-new")
 	if err != nil {
@@ -266,7 +296,7 @@ func TestFirstDrainDeliversTheBacklog(t *testing.T) {
 // copy. That is the difference between a bus and a queue.
 func TestCursorsArePerSubscriber(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "for everyone")
+	publish(t, "--topic", "build", "--as", "alice", "for everyone")
 
 	if out, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "agent-a"); err != nil || !strings.Contains(out, "for everyone") {
 		t.Fatalf("agent-a drain: %v\n%s", err, out)
@@ -284,8 +314,8 @@ func TestCursorsArePerSubscriber(t *testing.T) {
 // narrowed filter would rewind and re-deliver.
 func TestCursorAdvancesPastUnmatchedEvents(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "other", "--principal", "alice", "not mine")
-	publish(t, "--topic", "build", "--principal", "alice", "mine")
+	publish(t, "--topic", "other", "--as", "alice", "not mine")
+	publish(t, "--topic", "build", "--as", "alice", "mine")
 
 	if _, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "sub1"); err != nil {
 		t.Fatal(err)
@@ -303,8 +333,8 @@ func TestCursorAdvancesPastUnmatchedEvents(t *testing.T) {
 
 func TestDrainJSONIsNDJSON(t *testing.T) {
 	isolate(t)
-	publish(t, "--topic", "build", "--principal", "alice", "one")
-	publish(t, "--topic", "build", "--principal", "bob", "two")
+	publish(t, "--topic", "build", "--as", "alice", "one")
+	publish(t, "--topic", "build", "--as", "bob", "two")
 
 	out, _, err := run(t, "watch", "--topic", "build", "--drain", "--as", "sub1", "--json")
 	if err != nil {

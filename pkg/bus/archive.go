@@ -5,7 +5,7 @@ package bus
 // The board is a durable log and reading it is the fast path every agent
 // pays on every turn — Unseen already bounds that cost with a cursor. What
 // was unbounded was the STORE ITSELF: nothing ever left posts.jsonl, so it
-// grew forever and a bare `mb --all` (or anything that reads the whole file)
+// grew forever and a bare `mb --history` (or anything that reads the whole file)
 // grew with it. This is a hygiene fix, not a token fix — a short window still
 // costs real tokens against the full history, because most of a live board
 // was written recently. The point is BOUNDEDNESS: the live file stays sized

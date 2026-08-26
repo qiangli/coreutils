@@ -89,6 +89,38 @@ func TestSendToAReaderWithACursorReportsQueued(t *testing.T) {
 	}
 }
 
+func TestSendAcceptsExplicitTo(t *testing.T) {
+	board(t)
+	seed(t, "reader-a")
+	_, _, err := run(t, bus.NewMessageBoardCmd(), "send", "--as", "sender", "--to", "reader-a", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, bus.NewMessageBoardCmd(), "--as", "reader-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Fatalf("explicit --to send was not readable by addressee:\n%s", out)
+	}
+}
+
+func TestPingAcceptsExplicitTo(t *testing.T) {
+	board(t)
+	seed(t, "reader-a")
+	_, _, err := run(t, bus.NewPingCmd(), "--as", "sender", "--to", "reader-a", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, bus.NewMessageBoardCmd(), "--as", "reader-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Fatalf("ping --to send was not readable by addressee:\n%s", out)
+	}
+}
+
 // The state that earns six over two: a reader with NO cursor is not merely
 // behind. Nothing is known about whether it will ever read, and reporting
 // `queued` there would claim more than the evidence supports.

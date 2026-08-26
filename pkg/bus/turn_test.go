@@ -31,7 +31,7 @@ func TestTurnPreambleDeliversAndClears(t *testing.T) {
 	subscribe(t, Subscription{
 		Subscriber: "dev-b", Topics: []string{"code.api.*"}, Instance: "dev-b-session",
 	})
-	publish(t, "--topic", "code.api.Foo", "--principal", "dev-a", "Foo was renamed")
+	publish(t, "--topic", "code.api.Foo", "--as", "dev-a", "Foo was renamed")
 
 	if _, err := testSidecar(t, &recorder{}).Once(); err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestTurnPreambleDeliversAndClears(t *testing.T) {
 func TestTurnPreambleIsEmptyWithoutASubscription(t *testing.T) {
 	isolate(t)
 	joinLive(t, "lonely-session", "/tmp/lonely.sock")
-	publish(t, "--topic", "code.api.Foo", "--principal", "dev-a", "nobody asked")
+	publish(t, "--topic", "code.api.Foo", "--as", "dev-a", "nobody asked")
 	if _, err := testSidecar(t, &recorder{}).Once(); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestTurnPreambleDoesNotCrossSessions(t *testing.T) {
 	joinLive(t, "b-session", "/tmp/b.sock")
 	subscribe(t, Subscription{Subscriber: "a", Topics: []string{"*"}, Instance: "a-session"})
 	subscribe(t, Subscription{Subscriber: "b", Topics: []string{"*"}, Instance: "b-session"})
-	publish(t, "--topic", "x", "--principal", "p", "for both")
+	publish(t, "--topic", "x", "--as", "p", "for both")
 	if _, err := testSidecar(t, &recorder{}).Once(); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPrependPutsNotificationsBeforeTheMessage(t *testing.T) {
 	isolate(t)
 	joinLive(t, "s", "/tmp/s.sock")
 	subscribe(t, Subscription{Subscriber: "dev", Topics: []string{"*"}, Instance: "s"})
-	publish(t, "--topic", "code.api.Foo", "--principal", "dev-a", "Foo was renamed")
+	publish(t, "--topic", "code.api.Foo", "--as", "dev-a", "Foo was renamed")
 	if _, err := testSidecar(t, &recorder{}).Once(); err != nil {
 		t.Fatal(err)
 	}

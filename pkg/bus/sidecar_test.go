@@ -87,8 +87,8 @@ func TestSidecarQueuesMatchingNotifications(t *testing.T) {
 	isolate(t)
 	subscribe(t, Subscription{Subscriber: "dev-a", Topics: []string{"code.api.*"}})
 
-	publish(t, "--topic", "code.api.Foo", "--principal", "alice", "Foo changed")
-	publish(t, "--topic", "deploy.prod", "--principal", "alice", "not yours")
+	publish(t, "--topic", "code.api.Foo", "--as", "alice", "Foo changed")
+	publish(t, "--topic", "deploy.prod", "--as", "alice", "not yours")
 
 	rec := &recorder{}
 	res, err := testSidecar(t, rec).Once()
@@ -119,7 +119,7 @@ func TestSidecarQueuesMatchingNotifications(t *testing.T) {
 func TestSidecarDoesNotRedeliver(t *testing.T) {
 	isolate(t)
 	subscribe(t, Subscription{Subscriber: "dev-a", Topics: []string{"*"}})
-	publish(t, "--topic", "x", "--principal", "alice", "once")
+	publish(t, "--topic", "x", "--as", "alice", "once")
 
 	sc := testSidecar(t, &recorder{})
 	if _, err := sc.Once(); err != nil {
@@ -150,7 +150,7 @@ func TestInterruptRequiresAnAuthorizedPrincipal(t *testing.T) {
 		InterruptFrom: []string{"steward"},
 	})
 
-	publish(t, "--topic", "x", "--principal", "randomer", "--priority", "interrupt", "let me in")
+	publish(t, "--topic", "x", "--as", "randomer", "--priority", "interrupt", "let me in")
 
 	rec := &recorder{}
 	res, err := testSidecar(t, rec).Once()
@@ -186,7 +186,7 @@ func TestAuthorizedInterruptIsDelivered(t *testing.T) {
 		Instance:      "dev-a-session",
 		InterruptFrom: []string{"steward"},
 	})
-	publish(t, "--topic", "fleet.priority", "--principal", "steward", "--priority", "interrupt", "stop, priorities changed")
+	publish(t, "--topic", "fleet.priority", "--as", "steward", "--priority", "interrupt", "stop, priorities changed")
 
 	rec := &recorder{}
 	res, err := testSidecar(t, rec).Once()
@@ -211,7 +211,7 @@ func TestAuthorizedInterruptIsDelivered(t *testing.T) {
 func TestInterruptFromDefaultsToNobody(t *testing.T) {
 	isolate(t)
 	subscribe(t, Subscription{Subscriber: "dev-a", Topics: []string{"*"}, Instance: "s"})
-	publish(t, "--topic", "x", "--principal", "steward", "--priority", "interrupt", "hello")
+	publish(t, "--topic", "x", "--as", "steward", "--priority", "interrupt", "hello")
 
 	rec := &recorder{}
 	if _, err := testSidecar(t, rec).Once(); err != nil {
@@ -233,7 +233,7 @@ func TestInterruptWithNoInstanceIsDemoted(t *testing.T) {
 		Subscriber: "dev-a", Topics: []string{"*"},
 		InterruptFrom: []string{"steward"}, // but no Instance
 	})
-	publish(t, "--topic", "x", "--principal", "steward", "--priority", "interrupt", "urgent")
+	publish(t, "--topic", "x", "--as", "steward", "--priority", "interrupt", "urgent")
 
 	rec := &recorder{}
 	if _, err := testSidecar(t, rec).Once(); err != nil {
@@ -255,7 +255,7 @@ func TestFailedInterruptStillQueues(t *testing.T) {
 		Subscriber: "dev-a", Topics: []string{"*"},
 		Instance: "gone", InterruptFrom: []string{"steward"},
 	})
-	publish(t, "--topic", "x", "--principal", "steward", "--priority", "interrupt", "urgent")
+	publish(t, "--topic", "x", "--as", "steward", "--priority", "interrupt", "urgent")
 
 	rec := &recorder{fail: errTest}
 	res, err := testSidecar(t, rec).Once()
@@ -299,7 +299,7 @@ func TestInterruptRateLimitDemotesTheSurplus(t *testing.T) {
 		Instance: "s", InterruptFrom: []string{"steward"}, MaxPerMin: 2,
 	})
 	for i := range 5 {
-		publish(t, "--topic", "x", "--principal", "steward", "--priority", "interrupt",
+		publish(t, "--topic", "x", "--as", "steward", "--priority", "interrupt",
 			"urgent", string(rune('a'+i)))
 	}
 
