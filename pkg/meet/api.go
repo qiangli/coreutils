@@ -81,10 +81,14 @@ type RoomSummary struct {
 	Room      int       `json:"room,omitempty"`
 	Name      string    `json:"name,omitempty"`
 	Permanent bool      `json:"permanent,omitempty"`
-	Topic     string    `json:"topic"`
-	Status    string    `json:"status"`
-	Members   []string  `json:"members"`
-	Updated   time.Time `json:"updated"`
+	// Board mirrors State.Board so a channel list can tell a board from a
+	// meeting without loading every room — a browser uses it to not offer
+	// chair-driven actions the server would refuse with ErrWrongMode.
+	Board   bool      `json:"board,omitempty"`
+	Topic   string    `json:"topic"`
+	Status  string    `json:"status"`
+	Members []string  `json:"members"`
+	Updated time.Time `json:"updated"`
 }
 
 // JobRef identifies work a caller started but is not waiting for. The long verbs
@@ -173,7 +177,7 @@ func Rooms() ([]RoomSummary, error) {
 	for _, s := range sessions {
 		out = append(out, RoomSummary{
 			ID: s.ID, Room: s.Room, Name: s.Name, Permanent: s.Permanent,
-			Topic: s.Topic, Status: s.Status,
+			Board: s.Board, Topic: s.Topic, Status: s.Status,
 			Members: s.attendees(), Updated: lastActivity(s),
 		})
 	}

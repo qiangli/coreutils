@@ -12,11 +12,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 const schemaVersion = "bashy-meet-v1"
@@ -730,6 +733,13 @@ func loadState(id string) (*State, error) {
 	return &s, nil
 }
 
+// appendLockWait bounds how long a writer waits for the transcript append lock.
+// The critical section is one small write, so contention clears in milliseconds;
+// the bound exists only so a wedged holder surfaces as an error instead of a
+// hang. Generous because the kernel already releases the lock on holder death —
+// a long queue of live writers is the only way to get anywhere near it.
+const appendLockWait = 30 * time.Second
+
 func appendEvent(id string, e Event) error {
 	dir, err := storeDir(id)
 	if err != nil {
@@ -738,19 +748,46 @@ func appendEvent(id string, e Event) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	// O_APPEND makes concurrent turn-writes safe without a lock.
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	// O_APPEND makes the kernel's seek+write atomic with respect to the OFFSET,
+	// but it does not make the write all-or-nothing: os.File.Write can return a
+	// short count with the partial bytes already in the file, the next append
+	// then concatenates onto a line with no newline, and readTranscript skips
+	// the merged line — two events vanish with every reader's view consistent.
+	// So appends serialize on a lock, and the write loop finishes the line.
+	//
+	// The lock is a DISTINCT inode from run.lock: the run lease is held for a
+	// whole round, so serializing on it would make every message typed during a
+	// round fail ErrMeetingBusy — exactly the lease-free promise Post makes.
+	host, _ := os.Hostname()
+	l, err := lockfile.AcquireWithin(filepath.Join(dir, "append.lock"), appendLockWait, lockfile.Holder{
+		Name: host, PID: os.Getpid(), Intent: "append meeting transcript", Since: nowFn(),
+	})
+	if err != nil {
+		return fmt.Errorf("meet: locking append transcript: %w", err)
+	}
+	defer l.Release()
 	f, err := os.OpenFile(filepath.Join(dir, "transcript.jsonl"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
+	for len(b) > 0 {
+		n, err := f.Write(b)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
 	}
-	_, err = f.Write(append(b, '\n'))
-	return err
+	return nil
 }
 
 func readTranscript(id string) ([]Event, error) {
