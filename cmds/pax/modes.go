@@ -429,16 +429,6 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	if o.archive != "" && o.archive != "-" {
 		archivePath = resolve(rc, o.archive)
 	}
-	// POSIX Issue 7 fixes the default block size only "for character special
-	// archive files"; for the pax format that value is 5120, not the 10240 we
-	// choose for regular files and stdout. Detect a device -f sink and lower
-	// the default to the spec value so a pax archive written to a tape/device
-	// blocks exactly as POSIX requires. An explicit -b always wins.
-	if archivePath != "" && !o.blockExplicit {
-		if info, err := os.Stat(archivePath); err == nil && info.Mode()&os.ModeCharDevice != 0 {
-			o.blockBytes = charSpecialBlockSize(o.format)
-		}
-	}
 	// -a and -u both have to read the archive they are about to extend. On a
 	// pipe there is nothing to read and nothing to seek back to, so the
 	// documented semantics cannot be honored - say so rather than silently
@@ -535,6 +525,30 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			}
 		}
 		out = file
+	}
+	// POSIX fixes the default block size when the archive file is character
+	// special. Inspect the selected sink itself: -f overrides stdout, but
+	// stdout remains the archive file when -f is absent (or is "-") and may
+	// itself be a terminal or another character device. Looking at a pathname
+	// before opening it would both miss that case and introduce a TOCTOU race.
+	if !o.blockExplicit {
+		if statter, ok := out.(interface {
+			Stat() (os.FileInfo, error)
+		}); ok {
+			info, err := statter.Stat()
+			if err != nil {
+				fmt.Fprintf(rc.Err, "pax: cannot inspect archive output: %v\n", err)
+				if file != nil {
+					if closeErr := file.Close(); closeErr != nil {
+						fmt.Fprintf(rc.Err, "pax: %v\n", closeErr)
+					}
+				}
+				return 1
+			}
+			if info.Mode()&os.ModeCharDevice != 0 {
+				o.blockBytes = charSpecialBlockSize(o.format)
+			}
+		}
 	}
 
 	// POSIX pax always writes whole physical blocks; blockBytes is either the

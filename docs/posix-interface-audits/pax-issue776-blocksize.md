@@ -32,11 +32,11 @@ the public normative text quoted below.
 ## Exact normative scope
 
 The three mandated defaults are each qualified **"for character special
-archive files"**. POSIX gives *no* default block size for any other sink — a
-regular file, a pipe, or standard output. For those the default is
-implementation-defined. So the only value POSIX *requires* is the one used when
-the archive is a character-special device (classically a tape), keyed by
-format:
+archive files"**. POSIX gives *no* default block size for any archive whose
+selected output is not character-special, such as a regular file or pipe. For
+those the default is implementation-defined. Standard output is not a separate
+file type: when it is the selected archive output, its underlying file may be
+regular, a pipe, or character-special. The required value is keyed by format:
 
 | `-x` format | character-special default | other sinks |
 | ----------- | ------------------------- | ----------- |
@@ -47,10 +47,10 @@ format:
 ## Finding: confirmed Bashy-owned gap (pax + character-special)
 
 Before this change `defaultBlockSize` returned 10240 for both `pax` and
-`ustar` regardless of sink type. For regular files and stdout that is a legal
+`ustar` regardless of sink type. For regular files and pipes that is a legal
 implementation-defined choice and is unchanged. For a **character-special**
-`-f` sink writing the **pax** format it was wrong: POSIX mandates 5120, not
-10240. `ustar` (10240) and `cpio` (5120) already matched the device mandate.
+archive output writing the **pax** format it was wrong: POSIX mandates 5120,
+not 10240. `ustar` (10240) and `cpio` (5120) already matched the device mandate.
 
 This is a genuine gap and not a spec ambiguity: the pax device default is an
 explicit `shall`, and rule 3 (upstream semantics are immutable — "same
@@ -58,34 +58,38 @@ default") binds it.
 
 ## Distinguishing the sink without suite material
 
-`pax` learns the sink type from the `-f` operand alone. A device archive is a
-character-special file, detectable with a portable `os.Stat` +
-`FileInfo.Mode()&os.ModeCharDevice`. Standard output (no `-f`, or `-f -`) is
-never treated as a "character special archive file" for this purpose — there is
-no path to stat and POSIX's clause is about the archive *file*. `/dev/null` is
-a character-special device on every unix target and is used by the focused test
-as a real, hermetic device sink.
+`pax` learns the sink type from the selected output object. A named archive is
+opened first and its `Stat` result is inspected, avoiding a pathname TOCTOU.
+With no `-f`, or with `-f -`, the standard-output writer is inspected when it
+supports `Stat`; the standalone multicall supplies the real `os.Stdout` file.
+An embedding that supplies an abstract writer with no file mode retains the
+implementation-defined non-device default.
 
 ## Behavior after the fix (fail-closed, exact)
 
 - Default computed in `run()` stays the implementation-defined value
   (`defaultBlockSize`: pax/ustar 10240, cpio 5120).
-- In `writeMode`, once the `-f` path is known, a character-special sink with no
-  explicit `-b` lowers the default to the POSIX device value
+- In `writeMode`, once the actual selected output is available, a sink that
+  reports character-special with no explicit `-b` lowers the default
   (`charSpecialBlockSize`: pax/cpio 5120, ustar 10240).
+- If a selected file-like sink reports a `Stat` error, `pax` fails before the
+  first archive write and closes an archive it opened itself.
 - An explicit `-b` always wins for every sink — the override is a default, not
   a clamp.
 
-## Tests (`issue776_blocksize_test.go`, `//go:build unix`)
+## Tests (`issue776_blocksize_test.go`)
 
-- `TestCharSpecialDefaultBlockSize` — pax→5120, ustar→10240, cpio→5120 written
-  to a real character-special device (`/dev/null`), captured through the
-  `openArchiveSink` seam so the emitted physical block size is observable.
-- `TestRegularFileDefaultBlockSize` — pax to a regular file stays 10240; the
-  discriminator against the device lane (same format, block size decided by
-  sink type alone).
-- `TestCharSpecialExplicitBlockSizeWins` — `-b 512` to a device is honored
-  verbatim (3072-byte logical archive, no padding to 5120).
+- `TestCharSpecialDefaultBlockSize` — pax→5120, ustar→10240, cpio→5120 for
+  opened named sinks and for both stdout spellings. The named pathname does
+  not exist, while the opened sink reports character-special, discriminating
+  actual-sink inspection from pre-open pathname inspection.
+- `TestRegularFileDefaultBlockSize` — pax to a real regular file and to a
+  stdout writer reporting regular both stay 10240.
+- `TestCharSpecialExplicitBlockSizeWins` — `-b 512` is honored verbatim for
+  named and stdout character-special sinks (3072-byte logical archive, no
+  padding to 5120).
+- `TestArchiveSinkStatFailureIsFailClosed` — inspection failure writes no
+  archive bytes and closes a named sink without closing caller-owned stdout.
 - `TestBlockSizeSelectors` — pins the two pure selectors to the exact values.
 
 The single-member archive is 3072 logical bytes, so each lane emits exactly one
