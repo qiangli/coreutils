@@ -116,7 +116,7 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 	if out, code := runSprint(t, "end", "1"); code == 0 {
 		t.Fatalf("end without a gate must fail, exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "end", "1", "--gate", "go version"); code != 0 {
+	if out, code := runSprint(t, "end", "1", "--gate", "true"); code != 0 {
 		t.Fatalf("end exit=%d: %s", code, out)
 	}
 
