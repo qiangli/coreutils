@@ -231,6 +231,14 @@ type State struct {
 	Chair            string `json:"chair,omitempty"`
 	Human            string `json:"human"`
 
+	// Board marks a room where participants read and post on their OWN turns:
+	// no chair runs the floor and no secretary is spawned. It is a room TYPE, not
+	// a turn-model knob — a two-valued Mode string where "" and "meeting" mean the
+	// same state would need a paper-over accessor, exactly the smell DecisionMode
+	// already is. The turn model still follows from the roster (chaired vs
+	// round-robin); Board only says the orchestrator never drives a turn itself.
+	Board bool `json:"board,omitempty"`
+
 	Status      string    `json:"status"`
 	Cwd         string    `json:"cwd"`
 	Out         string    `json:"out,omitempty"`
@@ -299,6 +307,33 @@ func (s *State) chair() string { return strings.TrimSpace(s.Chair) }
 // The turn model is a CONSEQUENCE of who chairs, never a separate flag that can
 // contradict the roster.
 func (s *State) chaired() bool { return s.chair() != "" }
+
+// board reports whether the room is a board: participants read and post on their
+// own turns, and the orchestrator never spawns a turn (no chair loop, no
+// secretary, no automated round/poll/ask). It sits beside chaired()/recorded()
+// because it is the same kind of thing — a fact read off the header, not a mode
+// that can contradict the roster.
+func (s *State) board() bool { return s.Board }
+
+// roomRef is how a human addresses this room on the CLI: the short room number
+// when it holds one, else the full id. Used in refusals that tell the reader the
+// exact command to run.
+func (s *State) roomRef() string {
+	if s.Room > 0 {
+		return fmt.Sprintf("%d", s.Room)
+	}
+	return s.ID
+}
+
+// boardRefusal is the error a chair-driven verb returns when the room is a board.
+// It names the mode and the alternative: there is no chair to run turns, so the
+// caller posts on its own turn with `meet tell`.
+func (s *State) boardRefusal(what string) error {
+	ref := s.roomRef()
+	return fmt.Errorf("meet: room %s is a board — participants read and post on their own turns. "+
+		"There is no chair to %s. Post with: bashy meet tell %s --as <you> %q",
+		ref, what, ref, "...")
+}
 
 // secretary returns the agent recording the room, or "" when nobody does.
 func (s *State) secretary() string { return strings.TrimSpace(s.Secretary) }
@@ -415,6 +450,14 @@ func (s *State) Validate() error {
 	}
 	if s.chaired() && len(s.Participants) == 0 {
 		return fmt.Errorf("meet: a chair needs at least one --participant to call on")
+	}
+
+	// A board has no floor to run: participants read and post on their own turns.
+	// A chair calls on speakers and nobody in a board is callable, so the two are
+	// contradictory rather than merely redundant.
+	if s.Board && s.chaired() {
+		return fmt.Errorf("meet: a board has no chair — participants read and post on their own turns, "+
+			"so there is nobody for %s to call on. Drop --chair, or drop --board", s.chair())
 	}
 
 	// The initiator must be someone at the table, so `close` knows who to ask.

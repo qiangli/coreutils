@@ -211,6 +211,7 @@ type sessionFlags struct {
 	maxStalls    int
 	minBand      int
 	steerable    bool
+	board        bool
 	participants []string
 	agenda       []string
 	context      []string
@@ -264,6 +265,12 @@ func (sf *sessionFlags) newState() (*State, error) {
 			return nil, fmt.Errorf("meet: --context %s: %w", f, err)
 		}
 	}
+	// A board keeps no minutes and spawns no secretary — the default --secretary
+	// "claude" is a meeting default, not a board one. Clear it before the roster
+	// is canonicalized/routability-checked so a board never seats or arms one.
+	if sf.board {
+		sf.secretary = ""
+	}
 	// Seating happens before Validate, so a band-built roster is held to the
 	// same rules as one someone typed out.
 	if err := sf.seatByBand(); err != nil {
@@ -288,7 +295,7 @@ func (sf *sessionFlags) newState() (*State, error) {
 		Human:        sf.humanSeat(),
 		Initiator:    sf.initiator,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
-		Steerable: sf.steerable,
+		Steerable: sf.steerable, Board: sf.board,
 		MaxTurns:  sf.maxTurns, MaxStalls: sf.maxStalls,
 		Status: "open", Cwd: cwd, Out: sf.out,
 		TurnTimeout: sf.turnTimeout, Created: nowFn(),
@@ -413,6 +420,9 @@ func newOpenCmd() *cobra.Command {
 	f.BoolVar(&dry, "dry-run", false, "print the resolved session and exit")
 	f.BoolVar(&nonInteractive, "non-interactive", false, "run rounds then close, no REPL")
 	f.BoolVar(&yes, "yes", false, "close without asking the initiator to confirm")
+	f.BoolVar(&sf.board, "board", false,
+		"open a BOARD: participants read and post on their own turns. No chair runs the "+
+			"floor and no secretary is spawned — post with `bashy meet tell <room> --as <you> \"...\"`")
 	return cmd
 }
 
