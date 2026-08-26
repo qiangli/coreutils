@@ -43,9 +43,10 @@ type options struct {
 	invertMatch     bool // -c
 	selectNoPattern bool // -n
 
-	blocksize    string // -b, parsed into blockBytes after option validation
-	blockBytes   int
-	archiveTimes map[string]time.Time
+	blocksize     string // -b, parsed into blockBytes after option validation
+	blockBytes    int
+	blockExplicit bool // true when -b was given, so a char-special sink must not override the default
+	archiveTimes  map[string]time.Time
 	// links maps a source (device, inode) to the first name archived for it,
 	// so later names for the same inode become hardlink members.
 	links      map[devIno]string
@@ -108,7 +109,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolVarP(&o.invertMatch, "complement", "c", false, "select members NOT matching the patterns")
 	fs.BoolVarP(&o.selectNoPattern, "first", "n", false, "select only the first match per pattern")
 
-	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "physical block size: decimal factors joined by 'x', each optionally suffixed b (512), k (1024), or m (1048576); must be a positive multiple of 512 up to 32256 (default 10240, or 5120 for -x cpio)")
+	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "physical block size: decimal factors joined by 'x', each optionally suffixed b (512), k (1024), or m (1048576); must be a positive multiple of 512 up to 32256 (default 10240, or 5120 for -x cpio; to a character-special archive the POSIX device default applies: pax and cpio 5120, ustar 10240)")
 	optionArgs := fs.StringArrayP("options", "o", nil, "POSIX pax extended-header and algorithm options (repeatable)")
 	fs.BoolVarP(&o.t, "t", "t", false, "reset access times")
 	fs.BoolVarP(&o.X, "X", "X", false, "do not descend into directories on a different device")
@@ -209,7 +210,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	// Physical blocking is not opt-in: POSIX pax always writes whole blocks.
 	// An explicit -b wins; otherwise the format's documented default applies.
-	if !fs.Changed("blocksize") {
+	// writeMode may further lower the default to the POSIX character-special
+	// value once it knows the -f sink is a device (see charSpecialBlockSize).
+	o.blockExplicit = fs.Changed("blocksize")
+	if !o.blockExplicit {
 		o.blockBytes = defaultBlockSize(o.format)
 	}
 
@@ -322,14 +326,34 @@ func mulChecked(a, b uint64) (uint64, error) {
 	return a * b, nil
 }
 
-// defaultBlockSize is the physical block size pax uses when -b is absent:
-// POSIX fixes 10240 bytes (20 512-byte records) for the tar-derived formats
-// and 5120 bytes for cpio.
+// defaultBlockSize is the physical block size pax uses when -b is absent and
+// the archive is NOT a character-special file (a regular file, stdout, or a
+// pipe). POSIX Issue 7 states default blocksizes only "for character special
+// archive files" and leaves every other sink implementation-defined, so this
+// is a bashy choice: 10240 bytes (20 512-byte records) for the tar-derived
+// formats and 5120 for cpio. Character-special sinks instead take the exact
+// POSIX-mandated value; see charSpecialBlockSize.
 func defaultBlockSize(format string) int {
 	if format == "cpio" {
 		return 5120
 	}
 	return 10240
+}
+
+// charSpecialBlockSize is the default physical block size POSIX Issue 7
+// mandates when the archive is a character-special file, keyed by -x format:
+//
+//	ustar -> 10240   pax -> 5120   cpio -> 5120
+//
+// The pax value is the load-bearing one: it is 5120, NOT the 10240 that ustar
+// (and our implementation-defined default) uses, so writing the pax format to
+// a device must lower the block size to match the spec exactly. writeMode
+// calls this only for a character-special -f sink with no explicit -b.
+func charSpecialBlockSize(format string) int {
+	if format == "ustar" {
+		return 10240
+	}
+	return 5120
 }
 
 // resolve makes a relative operand absolute against the caller's directory

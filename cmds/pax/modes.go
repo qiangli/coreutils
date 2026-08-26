@@ -429,6 +429,16 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	if o.archive != "" && o.archive != "-" {
 		archivePath = resolve(rc, o.archive)
 	}
+	// POSIX Issue 7 fixes the default block size only "for character special
+	// archive files"; for the pax format that value is 5120, not the 10240 we
+	// choose for regular files and stdout. Detect a device -f sink and lower
+	// the default to the spec value so a pax archive written to a tape/device
+	// blocks exactly as POSIX requires. An explicit -b always wins.
+	if archivePath != "" && !o.blockExplicit {
+		if info, err := os.Stat(archivePath); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+			o.blockBytes = charSpecialBlockSize(o.format)
+		}
+	}
 	// -a and -u both have to read the archive they are about to extend. On a
 	// pipe there is nothing to read and nothing to seek back to, so the
 	// documented semantics cannot be honored - say so rather than silently
