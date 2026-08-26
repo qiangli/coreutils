@@ -151,6 +151,11 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Err, "grep: warning: --only-matching is specified, but context options are ignored")
 		before, after = 0, 0
 	}
+	locale, localeErr := grepLocaleFromEnv(rc.Env)
+	if localeErr != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, localeErr)
+		return 2
+	}
 
 	pats := append([]string(nil), *patterns...)
 	files := operands
@@ -198,7 +203,6 @@ func run(rc *tool.RunContext, args []string) int {
 	// -w and -o read a match's extent rather than just its existence, so they
 	// need POSIX leftmost-longest matching. In particular, -o must print "ab"
 	// rather than "a" when equally-leftmost alternatives are "a" and "ab".
-	locale := grepLocaleFromEnv(rc.Env)
 	for i := range split {
 		// Under an ISO-8859-1 LC_CTYPE a raw high byte in the pattern denotes
 		// that Latin-1 character, not a UTF-8 lead byte. Decode it to the
@@ -206,7 +210,7 @@ func run(rc *tool.RunContext, args []string) int {
 		// UTF-8 and an accented literal matches the localeMatcher-decoded
 		// subject; without this a pattern such as `grep É` or `grep -F É`
 		// aborts with "invalid UTF-8" instead of matching.
-		if locale.ctypeGerman {
+		if locale.latin1Bytes() {
 			split[i] = latin1ToRunes(split[i])
 		}
 		if !*fixed {
@@ -247,7 +251,7 @@ func run(rc *tool.RunContext, args []string) int {
 		excludeDir:   *excludeDir,
 		onlyMatching: *onlyMatching,
 	}
-	if locale.ctypeGerman {
+	if locale.latin1Bytes() {
 		// Subject bytes are ISO-8859-1; decode them to runes to match the
 		// decoded pattern. This covers -F as well: its pattern was decoded
 		// above, so the subject must be too.
@@ -265,7 +269,7 @@ func run(rc *tool.RunContext, args []string) int {
 	// would search for the decoded (multi-byte) pattern inside the raw
 	// single-byte input and never match; keep those runs — including -F — on
 	// the RE2 + localeMatcher path.
-	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && before == 0 && after == 0 && !locale.ctypeGerman {
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && before == 0 && after == 0 && !locale.latin1Bytes() {
 		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default

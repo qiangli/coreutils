@@ -93,7 +93,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 2 | 22 |
-| `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 4 | 40 |
+| `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 3 | 37 |
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 | `gzip` | `cmds/gzip` | — | Bashy/other extension | no | no | 1 | 10 |
@@ -104,7 +104,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 4 | 38 |
 | `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 24 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
-| `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 2 | 16 |
+| `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 11 |
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 5 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |

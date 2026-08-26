@@ -41,8 +41,20 @@ func (p *fakeSedCollate) EquivalenceClasses() ([]bool, error) {
 }
 func (p *fakeSedCollate) CollationWeights() ([]byte, error) {
 	result := make([]byte, 256)
-	for i := range result {
-		result[i] = byte(i)
+	// Give every valid byte a unique rank, inserting ä (0xe4) between a and
+	// b. Code-point order puts it after b, so a command test using [a-b]
+	// discriminates locale collation from an identity fallback.
+	rank := byte(0)
+	for i := 1; i < 256; i++ {
+		if i == 0xe4 {
+			continue
+		}
+		result[i] = rank
+		rank++
+		if i == 'a' {
+			result[0xe4] = rank
+			rank++
+		}
 	}
 	return result, nil
 }
@@ -294,6 +306,40 @@ func TestSedLocaleEquivalenceClassMatchesInBothGrammars(t *testing.T) {
 			errOut, code := runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader("bab\n"), &out, tc.args, func(string) (ctypeProvider, error) { return provider, nil })
 			if code != 0 || errOut != "" || out.String() != tc.want {
 				t.Fatalf("got=(%q,%q,%d) want=%q", out.String(), errOut, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestSedLocaleCollationRangeMatchesInBothGrammars(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"bre", []string{`s/[a-b]/X/`}},
+		{"ere", []string{"-E", `s/[a-b]/X/`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(),
+				Env: []string{"LC_ALL=de_DE.iso88591"},
+				Stdio: tool.Stdio{
+					In:  strings.NewReader(string([]byte{0xe4, '\n'})),
+					Out: &out,
+					Err: &errOut,
+				},
+			}
+			ctypeFake := &fakeSedCType{}
+			collateFake := &fakeSedCollate{}
+			code := runCommandWithLocales(rc, tc.args,
+				func(string) (ctypeProvider, error) { return ctypeFake, nil },
+				func(string) (collateProvider, error) { return collateFake, nil })
+			if code != 0 || errOut.String() != "" || out.String() != "X\n" {
+				t.Fatalf("nonidentity [a-b] = (%x, %q, %d), want X newline", out.Bytes(), errOut.String(), code)
+			}
+			if ctypeFake.closeCalls != 1 || collateFake.closeCalls != 1 {
+				t.Fatalf("provider closes ctype=%d collate=%d, want 1/1", ctypeFake.closeCalls, collateFake.closeCalls)
 			}
 		})
 	}

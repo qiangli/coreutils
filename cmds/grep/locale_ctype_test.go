@@ -1,6 +1,9 @@
 package grepcmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The bounded de_DE.ISO-8859-1 certification locale is single-byte, so these
 // fixtures build subject and pattern text from raw Latin-1 bytes:
@@ -74,9 +77,8 @@ func TestGrepLocaleOnlyMatchingKeepsByteOffsets(t *testing.T) {
 	}
 }
 
-// TestGrepLocaleFixedStringHighByteIsByteExact confirms -F (which is not
-// decoded) still matches an accented literal byte-for-byte, and does not fold
-// case the way the regex -i path does.
+// TestGrepLocaleFixedStringHighByteIsByteExact confirms -F preserves the
+// original matching byte extent and stays case-sensitive without -i.
 func TestGrepLocaleFixedStringHighByteIsByteExact(t *testing.T) {
 	de := []string{"LC_ALL=de_DE.iso88591"}
 	if out, errOut, code := runGrepEnv(t, "", eAcuteUpper+"\n", de, "-F", eAcuteUpper); out != eAcuteUpper+"\n" || errOut != "" || code != 0 {
@@ -84,5 +86,96 @@ func TestGrepLocaleFixedStringHighByteIsByteExact(t *testing.T) {
 	}
 	if out, errOut, code := runGrepEnv(t, "", eAcuteLower+"\n", de, "-F", eAcuteUpper); out != "" || errOut != "" || code != 1 {
 		t.Fatalf("grep -F case-sensitive = (%q, %q, %d), want no match", out, errOut, code)
+	}
+}
+
+func TestGrepLocaleCompleteLatin1ClassesAndGermanRange(t *testing.T) {
+	de := []string{"LC_ALL=de_DE.iso88591"}
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		input   byte
+	}{
+		{"feminine-ordinal-alpha", "[[:alpha:]]", 0xaa},
+		{"micro-sign-lower", "[[:lower:]]", 0xb5},
+		{"inverted-exclamation-punct", "[[:punct:]]", 0xa1},
+		{"multiplication-sign-punct", "[[:punct:]]", 0xd7},
+		{"c1-control", "[[:cntrl:]]", 0x85},
+		{"nbsp-print", "[[:print:]]", 0xa0},
+		{"german-a-through-b-range", "[a-b]", 0xe4},
+		{"german-collating-range", "[[.a.]-[.b.]]", 0xe4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := string([]byte{tc.input, '\n'})
+			out, errOut, code := runGrepEnv(t, "", input, de, "-o", tc.pattern)
+			want := string([]byte{tc.input, '\n'})
+			if code != 0 || errOut != "" || out != want {
+				t.Fatalf("grep -o %q byte %#x = (%x, %q, %d), want (%x, empty, 0)", tc.pattern, tc.input, out, errOut, code, want)
+			}
+		})
+	}
+	// NBSP is printable but not graphical in ISO-8859-1.
+	if out, errOut, code := runGrepEnv(t, "", "\xa0\n", de, "[[:graph:]]"); code != 1 || out != "" || errOut != "" {
+		t.Fatalf("NBSP graph = (%x, %q, %d), want no match", out, errOut, code)
+	}
+	// LC_COLLATE remains effective when LC_CTYPE independently selects C.
+	out, errOut, code := runGrepEnv(t, "", "\xe4\n",
+		[]string{"LANG=POSIX", "LC_CTYPE=C", "LC_COLLATE=de_DE.iso88591"}, "-o", "[a-b]")
+	if code != 0 || errOut != "" || out != "\xe4\n" {
+		t.Fatalf("independent LC_COLLATE range = (%x, %q, %d), want e4 newline", out, errOut, code)
+	}
+}
+
+func TestGrepLocaleAllLatin1ClassMembership(t *testing.T) {
+	isUpper := func(b byte) bool { return b >= 'A' && b <= 'Z' || b >= 0xc0 && b <= 0xd6 || b >= 0xd8 && b <= 0xde }
+	isLower := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b == 0xaa || b == 0xb5 || b == 0xba || b >= 0xdf && b <= 0xf6 || b >= 0xf8
+	}
+	isAlpha := func(b byte) bool { return isUpper(b) || isLower(b) }
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+	isAlnum := func(b byte) bool { return isAlpha(b) || isDigit(b) }
+	isBlank := func(b byte) bool { return b == ' ' || b == '\t' }
+	isCntrl := func(b byte) bool { return b < 0x20 || b >= 0x7f && b <= 0x9f }
+	isGraph := func(b byte) bool { return b >= 0x21 && b <= 0x7e || b >= 0xa1 }
+	isPrint := func(b byte) bool { return b >= 0x20 && b <= 0x7e || b >= 0xa0 }
+	isSpace := func(b byte) bool { return b == ' ' || b >= '\t' && b <= '\r' }
+	isXDigit := func(b byte) bool { return isDigit(b) || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F' }
+	classes := []struct {
+		name string
+		want func(byte) bool
+	}{
+		{"alpha", isAlpha}, {"alnum", isAlnum}, {"blank", isBlank},
+		{"cntrl", isCntrl}, {"digit", isDigit}, {"graph", isGraph},
+		{"lower", isLower}, {"print", isPrint},
+		{"punct", func(b byte) bool { return isGraph(b) && !isAlnum(b) }},
+		{"space", isSpace}, {"upper", isUpper}, {"xdigit", isXDigit},
+	}
+	locale := grepLocale{ctypeGerman: true}
+	for _, class := range classes {
+		t.Run(class.name, func(t *testing.T) {
+			pattern := locale.rewritePattern("[[:" + class.name + ":]]")
+			re, err := compilePattern([]string{pattern}, false, false, false, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			matcher := localeMatcher{inner: re}
+			for value := 0; value < 256; value++ {
+				got := matcher.MatchString(string([]byte{byte(value)}))
+				if got != class.want(byte(value)) {
+					t.Errorf("byte %#02x match=%v, want %v", value, got, class.want(byte(value)))
+				}
+			}
+		})
+	}
+}
+
+func TestGrepLocaleRejectsUnreviewedCodesetsBeforeInput(t *testing.T) {
+	for _, localeName := range []string{"de_DE.UTF-8", "de_DE.ISO-8859-15", "de_DE"} {
+		t.Run(localeName, func(t *testing.T) {
+			out, errOut, code := runGrepEnv(t, "", "a\n", []string{"LC_ALL=" + localeName}, "a")
+			if code != 2 || out != "" || !strings.Contains(errOut, "unsupported locale") {
+				t.Fatalf("LC_ALL=%s = (%x, %q, %d), want fail-closed exit 2", localeName, out, errOut, code)
+			}
+		})
 	}
 }

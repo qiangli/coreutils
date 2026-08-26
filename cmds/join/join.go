@@ -25,6 +25,7 @@ package joincmd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -98,6 +99,12 @@ func runWithCollator(rc *tool.RunContext, args []string, open collatorOpener) in
 // and openCType. No provider state is shared between join invocations.
 func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, openCtype ctypeOpener) int {
 	opt := options{tab: tabDefault}
+	collatorClosed := false
+	defer func() {
+		if opt.collator != nil && !collatorClosed {
+			_ = opt.collator.Close()
+		}
+	}()
 	contractErr := func(format string, a ...any) int {
 		fmt.Fprintf(rc.Err, "join: %s\n", fmt.Sprintf(format, a...))
 		fmt.Fprintf(rc.Err, "join: not every GNU flag is implemented in pure-Go coreutils — see 'join --help' for the supported subset\n")
@@ -199,7 +206,6 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 				return 2
 			}
 			opt.collator = newCollatorAdapter(provider)
-			defer opt.collator.Close()
 		}
 	} else {
 		// -i folds by LC_CTYPE (GNU keycmp uses memcasecmp). Resolve it before
@@ -236,7 +242,11 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 		files[i] = &fileState{name: op, lines: lines, field: opt.field[i], idx: i, opt: &opt, rc: rc}
 	}
 
-	bw := bufio.NewWriter(rc.Out)
+	// Locale comparison can fail after groups have tentatively matched. Stage
+	// every byte until all comparisons and the provider close succeed, so an
+	// error can never leak false Cartesian output.
+	var staged bytes.Buffer
+	bw := bufio.NewWriter(&staged)
 	osep := " "
 	if opt.tab >= 0 {
 		osep = string([]byte{byte(opt.tab)})
@@ -333,15 +343,26 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 		}
 	}
 
-	if err := bw.Flush(); err != nil {
-		fmt.Fprintf(rc.Err, "join: write failed: %v\n", err)
-		return 1
-	}
+	_ = bw.Flush() // bytes.Buffer writes cannot fail
 	if opt.collator != nil {
 		if err := opt.collator.Err(); err != nil {
 			fmt.Fprintf(rc.Err, "join: LC_COLLATE comparison failed: %v\n", err)
 			return 1
 		}
+		if err := opt.collator.Close(); err != nil {
+			collatorClosed = true
+			fmt.Fprintf(rc.Err, "join: LC_COLLATE close failed: %v\n", err)
+			return 1
+		}
+		collatorClosed = true
+	}
+	n, err := rc.Out.Write(staged.Bytes())
+	if err == nil && n != staged.Len() {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		fmt.Fprintf(rc.Err, "join: write failed: %v\n", err)
+		return 1
 	}
 	if f1.warned || f2.warned {
 		fmt.Fprintln(rc.Err, "join: input is not in sorted order")

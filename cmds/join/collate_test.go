@@ -60,6 +60,7 @@ type fakeJoinCollator struct {
 	compares int
 	closed   bool
 	err      error
+	closeErr error
 }
 
 func (f *fakeJoinCollator) Compare(a, b string) (int, error) {
@@ -70,7 +71,7 @@ func (f *fakeJoinCollator) Compare(a, b string) (int, error) {
 	return germanCompare(a, b), nil
 }
 
-func (f *fakeJoinCollator) Close() error { f.closed = true; return nil }
+func (f *fakeJoinCollator) Close() error { f.closed = true; return f.closeErr }
 
 func writeJoinFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
@@ -206,13 +207,28 @@ func TestJoinLCCollateCompareFailureIsDiagnosed(t *testing.T) {
 	f1 := writeJoinFile(t, dir, "f1", "a x\nb y\n")
 	f2 := writeJoinFile(t, dir, "f2", "a z\n")
 	fake := &fakeJoinCollator{err: errors.New("compare broke")}
-	_, errb, code := runJoinWithFake(t, dir, []string{"LC_COLLATE=de_DE.iso88591"},
+	out, errb, code := runJoinWithFake(t, dir, []string{"LC_COLLATE=de_DE.iso88591"},
 		func(string) (stringCollator, error) { return fake, nil }, f1, f2)
-	if code != 1 || !strings.Contains(errb, "compare broke") {
-		t.Fatalf("compare failure = (err %q, code %d), want exit 1 diagnostic", errb, code)
+	if code != 1 || out != "" || !strings.Contains(errb, "compare broke") {
+		t.Fatalf("compare failure = (out %q, err %q, code %d), want no output and exit 1 diagnostic", out, errb, code)
 	}
 	if !fake.closed {
 		t.Fatal("collator was not closed")
+	}
+}
+
+func TestJoinLCCollateCloseFailureDiscardsOutput(t *testing.T) {
+	dir := t.TempDir()
+	f1 := writeJoinFile(t, dir, "f1", "a A\n")
+	f2 := writeJoinFile(t, dir, "f2", "a B\n")
+	fake := &fakeJoinCollator{closeErr: errors.New("close broke")}
+	out, errb, code := runJoinWithFake(t, dir, []string{"LC_COLLATE=de_DE.iso88591"},
+		func(string) (stringCollator, error) { return fake, nil }, f1, f2)
+	if code != 1 || out != "" || !strings.Contains(errb, "close broke") {
+		t.Fatalf("close failure = (out %q, err %q, code %d), want no output and exit 1 diagnostic", out, errb, code)
+	}
+	if !fake.closed {
+		t.Fatal("collator close was not attempted")
 	}
 }
 
