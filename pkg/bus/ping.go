@@ -124,21 +124,27 @@ func pingBareTarget(cmd *cobra.Command, target string) error {
 	return icmp(cmd, target)
 }
 
-// pingSend posts to the board. A role resolves to its seat's stable address.
+// pingSend posts to the board. The target is resolved AT SEND TIME: a role to
+// its seat's stable address, an agent to its roster name, an existing reader to
+// itself — and a target matching none of the three fails with choices, writing
+// nothing. A confirmation that named a recipient the board has never heard of
+// was indistinguishable from a real delivery, which is the defect this closes.
 func pingSend(cmd *cobra.Command, as, target, body string) error {
 	from, err := BoardIdentity(as)
 	if err != nil {
 		return err
 	}
-	to := strings.TrimSpace(target)
-	if topic, ok := ResolveRole(to); ok {
-		to = topic
+	addr, kind, ok := ResolveSendTarget(target)
+	if !ok {
+		return unresolvedTargetError(target)
 	}
 	// Board FIRST, steer second — the durable copy must not be the optional one.
-	if err := PostMessage(Post{From: from, To: to, Topic: "mb", Body: body}); err != nil {
+	seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: "mb", Body: body})
+	if err != nil {
 		return err
 	}
-	d := SteerLive(to, steerNotice(from, body))
+	d := SteerLive(addr, steerNotice(from, body))
+	d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
 	d.To = RoleLabelFor(d.To)
 	reportDelivery(cmd, []Delivery{d})
 	return nil

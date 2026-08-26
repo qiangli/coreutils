@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -204,24 +205,35 @@ func BoardDir() string {
 
 func postsPath() string { return filepath.Join(BoardDir(), "posts.jsonl") }
 
-// PostMessage appends to the board.
+// PostMessage appends to the board. It discards the assigned sequence; callers
+// that need it to judge delivery use PostMessageSeq.
+func PostMessage(p Post) error {
+	_, err := PostMessageSeq(p)
+	return err
+}
+
+// PostMessageSeq appends to the board and returns the sequence it assigned.
+//
+// The sequence is what a receipt is measured against: `queued` means a reader's
+// cursor is behind THIS seq, `read` means at or past it. A send that could not
+// name the seq it wrote could not tell the two apart, so the write returns it.
 //
 // O_APPEND, so several agents post concurrently without a lock — the same
 // discipline the room timeline and the graph contribution log use. The sequence
 // is assigned from the current line count, which is exact under append-only.
-func PostMessage(p Post) error {
+func PostMessageSeq(p Post) (int64, error) {
 	dir := BoardDir()
 	if dir == "" {
-		return fmt.Errorf("mb: no board directory")
+		return 0, fmt.Errorf("mb: no board directory")
 	}
 	if strings.TrimSpace(p.From) == "" {
 		// A post with no author is unattributable, and an unattributable
 		// message on a shared board is worse than none: nobody can ask the
 		// sender what they meant.
-		return fmt.Errorf("mb: a post needs a sender")
+		return 0, fmt.Errorf("mb: a post needs a sender")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return 0, err
 	}
 	existing, _ := Posts()
 	p.SchemaVersion = BoardSchema
@@ -231,15 +243,17 @@ func PostMessage(p Post) error {
 	}
 	line, err := json.Marshal(p)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	f, err := os.OpenFile(postsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
-	_, err = f.Write(append(line, '\n'))
-	return err
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		return 0, err
+	}
+	return p.Seq, nil
 }
 
 // Posts returns the whole board, oldest first.
@@ -321,15 +335,25 @@ func seenPath(reader string) string {
 // which is what "public" means and the opposite of the private-inbox rule that
 // opens a new mailbox at the head.
 func SeenSeq(reader string) int64 {
+	n, _ := CursorSeq(reader)
+	return n
+}
+
+// CursorSeq is SeenSeq with the one distinction a receipt cannot collapse:
+// whether the reader has a cursor AT ALL. `ok` is false when this reader has
+// never read the board — which is NOT the same as a cursor of zero, because a
+// reader that has never looked cannot be reported as merely `queued`. That
+// difference is the whole reason `unverified` is a separate state.
+func CursorSeq(reader string) (seq int64, ok bool) {
 	b, err := os.ReadFile(seenPath(reader))
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return n
+	return n, true
 }
 
 // MarkSeen advances a reader's cursor. Never moves it backwards: re-reading an
@@ -479,6 +503,10 @@ type Delivery struct {
 	To      string `json:"to"`
 	Steered bool   `json:"steered"`
 	Reason  string `json:"reason,omitempty"` // why it could not be steered
+	// State is the PROVABLE delivery state — one of the six in the block below.
+	// Steered is the raw signal (did SteerLive push?); State is the claim a
+	// receipt is allowed to make about it, which is a narrower thing.
+	State string `json:"state,omitempty"`
 }
 
 // SteerLive injects text into a recipient's live session when it has one.
@@ -651,4 +679,245 @@ func AudienceSize(aud Audience) int {
 		return 0
 	}
 	return len(names)
+}
+
+// --- provable delivery states -----------------------------------------------
+//
+// A receipt may claim only what the store can PROVE. These are the six states,
+// canonical in docs/mb-addressing-model.md, from most contact to least:
+//
+//	delivered   pushed into a live session — SteerLive succeeded
+//	read        the recipient's cursor is at or past the post's sequence
+//	queued      appended, and the recipient's cursor is BEHIND that sequence
+//	unverified  appended, but the recipient has NO cursor at all — it has never
+//	            read the board, so "queued" would claim more than is known
+//	accepted    well-formed and the target resolved, with no single reader
+//	            cursor to judge — a role seat, a selector group, a broadcast
+//	failed      the target resolved to no role, agent or reader; nothing written
+//
+// unverified is the one the old wording erased. `bashy ping X "..."` to a name
+// that has never read the board reported "waiting on the board for X" — a
+// receipt indistinguishable from a real delivery, when the evidence supports
+// only "posted, and nobody by that name has ever looked". A reader that has
+// never read is not merely behind.
+const (
+	StateAccepted   = "accepted"
+	StateQueued     = "queued"
+	StateDelivered  = "delivered"
+	StateRead       = "read"
+	StateFailed     = "failed"
+	StateUnverified = "unverified"
+)
+
+// deliveryState computes the provable state of a directed post to `to` at `seq`.
+//
+// steered is the raw SteerLive outcome. perReader says whether `to` is a single
+// reader with a cursor of its own (an agent, or an existing board reader) or a
+// seat/group with no single cursor to judge (a role, a selector, a broadcast):
+// the cursor-based states apply only to the former, and the latter can prove no
+// more than `accepted`.
+func deliveryState(to string, seq int64, steered, perReader bool) string {
+	if steered {
+		return StateDelivered
+	}
+	if !perReader {
+		return StateAccepted
+	}
+	cur, has := CursorSeq(to)
+	switch {
+	case !has:
+		return StateUnverified
+	case cur >= seq:
+		return StateRead
+	default:
+		return StateQueued
+	}
+}
+
+// The kinds a send target can resolve to, most specific first.
+const (
+	TargetRole   = "role"
+	TargetAgent  = "agent"
+	TargetReader = "reader"
+)
+
+// ResolveSendTarget resolves a target a sender typed to a routable address, AT
+// SEND TIME, and reports how it resolved.
+//
+// This is the guard that turns a post to a name nobody answers into a `failed`
+// instead of a receipt indistinguishable from a real delivery. Precedence:
+//
+//	ROLE    a seat (steward, conductor:22) — survives a handover
+//	AGENT   a name in the roster (`bashy agents list`)
+//	READER  a name with a cursor — it has read the board at least once, so it is
+//	        demonstrably a participant even if the roster does not know it
+//
+// A target matching none of these resolves to nothing, and the caller reports
+// failed with near misses rather than posting into the void. This is the Yoke
+// rule that an unresolvable identity must "fail with choices instead of
+// guessing".
+func ResolveSendTarget(target string) (addr, kind string, ok bool) {
+	t := strings.TrimSpace(target)
+	if t == "" {
+		return "", "", false
+	}
+	if topic, isRole := ResolveRole(t); isRole {
+		return topic, TargetRole, true
+	}
+	if name, isAgent := resolveAgentName(t); isAgent {
+		return name, TargetAgent, true
+	}
+	if _, has := CursorSeq(t); has {
+		return t, TargetReader, true
+	}
+	return "", "", false
+}
+
+// resolveAgentName reports whether target names an agent in the roster, and the
+// canonical name if so. A nickname or principal is canonicalized first, so
+// `dhnt:agent/Omar` resolves the same agent `codex-gpt5.6-sol` does.
+func resolveAgentName(target string) (string, bool) {
+	canon := strings.TrimSpace(target)
+	if FleetResolveName != nil {
+		if n := strings.TrimSpace(FleetResolveName(target)); n != "" {
+			canon = n
+		}
+	}
+	if FleetNames != nil {
+		for _, n := range FleetNames() {
+			if strings.EqualFold(n, canon) || strings.EqualFold(n, target) {
+				return n, true
+			}
+		}
+	}
+	return "", false
+}
+
+// boardReaders lists the names that have a cursor — everyone who has read the
+// board at least once. Best-effort: an unreadable store yields none.
+func boardReaders() []string {
+	entries, err := os.ReadDir(filepath.Join(BoardDir(), "seen"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// NearMisses names the addressable identities closest to an unresolved target,
+// so a failed send offers choices instead of a dead end. It draws from every
+// pool a target could have meant — roles, the roster, and existing readers —
+// and ranks by edit distance, keeping only genuinely close candidates.
+func NearMisses(target string, max int) []string {
+	t := strings.ToLower(strings.TrimSpace(target))
+	if t == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var cands []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		k := strings.ToLower(s)
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		cands = append(cands, s)
+	}
+	if HostRoles != nil {
+		for _, r := range HostRoles() {
+			add(r.Label)
+		}
+	}
+	if FleetNames != nil {
+		for _, n := range FleetNames() {
+			add(n)
+		}
+	}
+	for _, r := range boardReaders() {
+		add(r)
+	}
+
+	type scored struct {
+		name string
+		d    int
+	}
+	var ranked []scored
+	for _, c := range cands {
+		lc := strings.ToLower(c)
+		if lc == t {
+			// An exact match would have resolved; it is not a near miss.
+			continue
+		}
+		d := levenshtein(t, lc)
+		if strings.Contains(lc, t) || strings.Contains(t, lc) {
+			d = 0
+		}
+		if d > 3 {
+			continue
+		}
+		ranked = append(ranked, scored{c, d})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].d < ranked[j].d })
+	var out []string
+	for _, s := range ranked {
+		out = append(out, s.name)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+// unresolvedTargetError is the receipt for a send whose target matched nothing:
+// the word `failed`, what was tried, the near misses, and the broadcast escape
+// hatch. Nothing is written before this is returned.
+func unresolvedTargetError(target string) error {
+	msg := fmt.Sprintf("failed: %q matches no role, agent, or board reader on this host — nothing was posted",
+		strings.TrimSpace(target))
+	if nm := NearMisses(target, 5); len(nm) > 0 {
+		msg += "\n  did you mean: " + strings.Join(nm, ", ")
+	}
+	msg += "\n  or broadcast to everyone: bashy mb post \"...\""
+	return errors.New(msg)
+}
+
+// levenshtein is the edit distance between two strings, for ranking near misses.
+func levenshtein(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min3(cur[j-1]+1, prev[j]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
+}
+
+func min3(a, b, c int) int {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		a = c
+	}
+	return a
 }
