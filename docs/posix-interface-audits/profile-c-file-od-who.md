@@ -2,19 +2,23 @@
 
 Scope: the Profile C (stock GNU Bash 5.3 `sh` + staged Bashy Go userland)
 Go-selected commands `cmds/file`, `cmds/od`, and `cmds/who`, audited against
-POSIX.1-2008 Issue 7 (2016 Edition) at base `9e9dc19`. This audit closes the
-retained stale diagnostic blockers (`file` 14, `od` 11, `who` 11) inherited
-from the pre-Sprint-79 evidence state, re-verifies the exact Issue 7 interface
-against current source, tests, and live binary behavior, and attributes every
-remaining residual precisely. GNU 9.11 extension parity is out of scope.
+POSIX.1-2008 Issue 7 (2016 Edition) at base `9e9dc19`. The issue supplies
+retained diagnostic-blocker counts (`file` 14, `od` 11, `who` 11) from a
+pre-Sprint-79 evidence state. This audit re-verifies the current Issue 7
+interface from source, focused tests, and selected current-source binary
+probes, and attributes the residual classes that remain. GNU 9.11 extension
+parity is out of scope.
 
-## Supersession of the retained diagnostic blockers
+## Treatment of the retained diagnostic-blocker counts
 
-The retained counts enumerate untranslated-diagnostic / message-catalog
-entries from the superseded evidence state. Sprint 79 withdrew that universal
-blocker as too broad ([sprint-79-consolidated.md](sprint-79-consolidated.md),
-"Fail-closed evidence decision"), on four grounds that apply verbatim to
-these three commands:
+The numerical counts and their diagnostic/message-catalog classification come
+from the Issue 774 assignment. No durable, non-licensed in-tree ledger records
+the individual entries, producing run, checkpoint, or source revision, so this
+audit cannot independently reconstruct or validate those historical numbers.
+It does not supersede them as evidence. Sprint 79 did withdraw the universal
+translated-diagnostic blocker as too broad
+([sprint-79-consolidated.md](sprint-79-consolidated.md), "Fail-closed evidence
+decision"), on four grounds that apply to the issue-supplied classification:
 
 1. `ENVIRONMENT VARIABLES` clauses make `LC_ALL`→category precedence and
    honoring a recognized locale mandatory; none of `file`, `od`, or `who` has
@@ -30,22 +34,25 @@ these three commands:
 4. No clause requires a utility to ship translated catalogs; their absence is
    a localization product gap, not a failed interface.
 
-Therefore all three counts are **stale-artifact residuals**: no open
-Bashy-owned interface defect is hidden behind them. The per-command residuals
-that *do* remain are attributed below to locale-provider, platform,
-login-database, or integration boundaries — none is a reproduced product bug.
+Therefore the issue-supplied counts are not evidence of a current Bashy-owned
+interface defect. Because their entries are not reconstructable, this audit
+does not claim entry-by-entry closure. Current source and tests instead leave
+the per-command rows fail-closed with the locale-provider, platform,
+login-database, and integration boundaries attributed below; no current
+product defect was reproduced by the selected checks.
 
 ## file — `file [-dh] [-M file] [-m file] file...` ; `file -i [-h] file...`
 
 Authoritative closure: [file-issue746.md](file-issue746.md) (Issue 746,
 manager-reviewed). Re-verified at this base:
 
-- All five required options register with exact semantics: `-d`
-  (`file.go:74`), `-h` (`file.go:70`), `-i` (`file.go:71`), `-M`
-  (`file.go:75`), `-m` (`file.go:76`), the latter three through the ordered
-  position-sensitive source plan; usage (`file.go:33-35`) states both synopsis
-  forms.
-- Live binary probes (Profile C multicall, current build): missing operand →
+- All five required options register with exact semantics: `-h`
+  (`file.go:86`), `-i` (`file.go:87`), `-d` (`file.go:89`), `-M`
+  (`file.go:90`), and `-m` (`file.go:91`). The `-d`/`-M`/`-m` options feed the
+  ordered, position-sensitive source plan; `-i` is independent and rejects
+  combination with any of those source options (`file.go:99-100`). Usage
+  (`file.go:33-35`) states both synopsis forms.
+- Selected current-source multicall probes: missing operand →
   `file: missing file operand` + status 2; `-i` combined with `-m` →
   `file: -i cannot be combined with -d, -M, or -m` + status 2; nonexistent
   operand → stdout line `cannot open "<name>" (No such file or directory)`
@@ -118,12 +125,18 @@ reproduced as a defect.
 
 ## Changes made
 
-- None to product source. Every audited interface clause is registered,
-  tested by existing focused public tests, and verified live against a
-  Profile C multicall build; no Bashy-owned gap was reproduced, so per the
-  audit policy no speculative test or code change was added.
-- This document supersedes the retained `file` 14 / `od` 11 / `who` 11
-  diagnostic-blocker counts.
+- None to product source. Source registration and the cited focused public
+  tests cover the audited interface, and selected behaviors were probed using
+  a direct current-source multicall build. No Bashy-owned gap was reproduced,
+  so per the audit policy no speculative test or code change was added.
+- Probe provenance: from repository revision `9e9dc19`, build with
+  `go build -o /tmp/coreutils ./cmd/coreutils`, then invoke the `file`, `od`,
+  and `who` operands described above through that binary. This is a
+  current-source check of the Go userland selected by Profile C, not evidence
+  of a staged end-to-end Profile C integration run.
+- The issue-supplied `file` 14 / `od` 11 / `who` 11 counts cannot be
+  independently reconstructed from a durable non-licensed in-tree artifact;
+  the command rows therefore remain fail-closed on the current residuals.
 
 ## Matrix reconciliation owed (manager)
 
