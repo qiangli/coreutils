@@ -41,6 +41,21 @@ type PermanentRoleStartRequest struct {
 	Band  int
 }
 
+// Invitation is the host-neutral body of a meeting invitation. ID is the
+// durable meeting identity: room numbers are recycled after close and must
+// never be sent as an instruction an agent may read later.
+type Invitation struct {
+	ID    string
+	Topic string
+	Join  string
+}
+
+// Notify is supplied by bashy (normally through its message board). Meet does
+// not import bus: delivery transports are host policy. delivered and reason are
+// separate from err so callers can print a receipt that never claims a message
+// arrived when the transport says it did not.
+var Notify func(agent string, inv Invitation) (delivered bool, reason string, err error)
+
 // StartPermanentRole is supplied by bashy, the host that can select and launch
 // an agent. A bare coreutils embedding leaves it nil and fails clearly instead
 // of pretending a role was started.

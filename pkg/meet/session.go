@@ -230,6 +230,10 @@ type State struct {
 	SecretaryBand    int    `json:"secretary_band,omitempty"`
 	Chair            string `json:"chair,omitempty"`
 	Human            string `json:"human"`
+	// Observers are additional human attendees. They are deliberately separate
+	// from Participants: a person reads and posts on their own behalf, never a
+	// seat this host routes or schedules for a turn.
+	Observers []string `json:"observers,omitempty"`
 
 	// Board marks a room where participants read and post on their OWN turns:
 	// no chair runs the floor and no secretary is spawned. It is a room TYPE, not
@@ -358,7 +362,7 @@ func (s *State) turnModel() string {
 
 // attendees lists every seat, so the initiator can be validated against it.
 func (s *State) attendees() []string {
-	out := make([]string, 0, len(s.Participants)+3)
+	out := make([]string, 0, len(s.Participants)+len(s.Observers)+3)
 	out = append(out, s.Participants...)
 	if s.recorded() {
 		out = append(out, s.secretary())
@@ -369,6 +373,7 @@ func (s *State) attendees() []string {
 	if s.Human != "" {
 		out = append(out, s.Human)
 	}
+	out = append(out, s.Observers...)
 	return out
 }
 
@@ -494,10 +499,21 @@ func (s *State) initiatorKind() string {
 	if n == "" {
 		return "agent"
 	}
-	if strings.EqualFold(n, s.Human) {
+	if s.humanAttendee(n) {
 		return "human"
 	}
 	return "agent"
+}
+
+// humanAttendee reports whether name is one of the room's people rather than
+// an agent seat. Observers are attendees for attribution and organizer checks,
+// but are never put in Participants where the turn runner would try to launch
+// them.
+func (s *State) humanAttendee(name string) bool {
+	if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(s.Human)) && strings.TrimSpace(s.Human) != "" {
+		return true
+	}
+	return containsFold(s.Observers, name)
 }
 
 // procedural names the speaker of a procedural act — posing an agenda item, a
