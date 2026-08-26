@@ -10,6 +10,9 @@ import (
 func boardInTempHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	// The board reads subscriptions too (declared concerns route posts), so
+	// the room store must be a temp dir or a test would read the host's.
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	t.Setenv("BASHY_PRINCIPAL", "")
 	t.Setenv("USER", "tester")
 	// ResolveSendTarget's resolver fallback reads the fleet catalog and the
