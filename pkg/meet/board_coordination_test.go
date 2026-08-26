@@ -2,6 +2,7 @@ package meet
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -464,4 +465,50 @@ func TestBoardReadIsOpenButPostingNeedsASeat(t *testing.T) {
 	if !strings.Contains(err.Error(), "no seat") {
 		t.Fatalf("refusal should name the missing seat, got: %v", err)
 	}
+}
+
+// A board's ONE promise is that nothing is spawned. The guard therefore has to
+// live in runPoll/runAsk — the single implementation — not only on the Poll/Ask
+// wrappers: the CLI verbs, the REPL and the --participant forms all call the
+// implementation directly, and with the guard on the wrappers alone
+// `bashy meet poll <board> --question ... --choice ...` ran past the mode check
+// and invoked a model on a room that promised it would not.
+func TestBoardRefusesEveryChairDrivenEntryPoint(t *testing.T) {
+	st := boardRoom(t)
+	if err := inviteTo(st, "qiangli", "codex"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A runner that fails the test if anything reaches it: the refusal must
+	// happen BEFORE a participant is ever invoked.
+	trip := &tripRunner{}
+
+	if _, err := runPoll(context.Background(), st, "ready?", []string{"yes", "no"}, st.Participants, trip); err == nil {
+		t.Error("runPoll must refuse on a board")
+	} else if !strings.Contains(err.Error(), "is a board") {
+		t.Errorf("runPoll refusal must name the mode, got: %v", err)
+	}
+	if _, err := runAsk(context.Background(), st, "thoughts?", true, st.Participants, trip); err == nil {
+		t.Error("runAsk must refuse on a board")
+	} else if !strings.Contains(err.Error(), "is a board") {
+		t.Errorf("runAsk refusal must name the mode, got: %v", err)
+	}
+	if trip.ran {
+		t.Fatal("a board spawned a participant — the mode's one promise is that nothing is spawned")
+	}
+
+	// The mode check must precede argument validation: telling the caller to
+	// supply a --question implies that supplying one would work.
+	if _, err := runPoll(context.Background(), st, "", nil, st.Participants, trip); err == nil ||
+		!strings.Contains(err.Error(), "is a board") {
+		t.Errorf("an empty question on a board must still refuse by MODE, got: %v", err)
+	}
+}
+
+// tripRunner fails the test if a board ever reaches the point of invoking one.
+type tripRunner struct{ ran bool }
+
+func (r *tripRunner) Run(_ context.Context, _ string, _ []string, _ string) (string, int, error) {
+	r.ran = true
+	return "", 0, nil
 }

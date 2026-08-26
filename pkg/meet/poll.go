@@ -140,6 +140,19 @@ func normalizeChoice(reply string, choices []string) string {
 // answers. Every vote is recorded with its normalized choice, so the tally is
 // reproducible from the transcript alone.
 func runPoll(ctx context.Context, st *State, question string, choices, participants []string, runner chat.Runner) (*PollResult, error) {
+	// THE BOARD GUARD BELONGS HERE, not only on the Poll/Ask API wrappers.
+	// Five call sites reach this function directly — the CLI verbs (which pass
+	// their own --participant list), the REPL, and the two whole-room wrappers —
+	// so a guard on the wrappers alone left `bashy meet poll <board>` running
+	// past the mode check and INVOKING A MODEL. A board's one promise is that
+	// nothing is spawned; the check has to sit in the single implementation or
+	// the next caller reopens the hole.
+	if st.board() {
+		return nil, st.boardRefusal("run a poll")
+	}
+	// Argument validation comes AFTER the mode check on purpose: "poll needs a
+	// --question" on a board tells the caller to supply one, which is the wrong
+	// instruction — there is no chair to run a poll at all.
 	if strings.TrimSpace(question) == "" {
 		return nil, fmt.Errorf("meet: poll needs a --question")
 	}
@@ -204,6 +217,19 @@ func runPoll(ctx context.Context, st *State, question string, choices, participa
 // runAsk puts an open question to each participant. When optional, a participant
 // that declines is recorded as abstaining — a real contribution, not a failure.
 func runAsk(ctx context.Context, st *State, question string, optional bool, participants []string, runner chat.Runner) ([]Event, error) {
+	// THE BOARD GUARD BELONGS HERE, not only on the Poll/Ask API wrappers.
+	// Five call sites reach this function directly — the CLI verbs (which pass
+	// their own --participant list), the REPL, and the two whole-room wrappers —
+	// so a guard on the wrappers alone left `bashy meet poll <board>` running
+	// past the mode check and INVOKING A MODEL. A board's one promise is that
+	// nothing is spawned; the check has to sit in the single implementation or
+	// the next caller reopens the hole.
+	if st.board() {
+		return nil, st.boardRefusal("put a question to the room")
+	}
+	// Argument validation comes AFTER the mode check on purpose: "poll needs a
+	// --question" on a board tells the caller to supply one, which is the wrong
+	// instruction — there is no chair to run a poll at all.
 	if strings.TrimSpace(question) == "" {
 		return nil, fmt.Errorf("meet: ask needs a --question")
 	}
