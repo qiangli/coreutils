@@ -1,20 +1,25 @@
-// Package trcmd implements tr(1) per the GNU coreutils manual:
-// translate, squeeze, and/or delete characters from standard input,
-// writing to standard output.
+// Package trcmd implements tr(1) per POSIX.1-2008/2016 Issue 7 and the
+// GNU coreutils manual: translate, squeeze, and/or delete characters
+// from standard input, writing to standard output.
 //
-// Character class expansion and case mapping honour the invocation's
-// LC_CTYPE (resolved from rc.Env via pkg/locale). Under C/POSIX the
-// pure-Go ASCII tables are used directly; under other locales an
-// injectable ctypeOpener provides class membership and case maps.
-// Paired lower/upper translation uses the selected locale's case tables.
+// The unit tr operates on is the character of the invocation's LC_CTYPE
+// (resolved from rc.Env via pkg/locale), which XCU:tr:ENVIRONMENT_VARIABLES
+// defines as "the interpretation of sequences of bytes of text data as
+// characters ... and the behavior of character classes". Under C/POSIX a
+// character is a byte and the pure-Go ASCII tables are used directly;
+// under another single-byte locale an injectable ctypeOpener provides
+// class membership and case maps; under a UTF-8 codeset in POSIX mode a
+// character is a multi-byte sequence. See charmodel.go.
 package trcmd
 
 import (
 	"bufio"
 	"fmt"
 	"io"
+	"maps"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -29,8 +34,9 @@ var cmd = &tool.Tool{
 // cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// Tags mark which bytes of an expanded set came from a case-conversion
-// character class — translation pairs [:upper:]/[:lower:] positionally.
+// Tags mark which characters of an expanded set came from a
+// case-conversion character class — translation pairs
+// [:upper:]/[:lower:] positionally.
 const (
 	tagNone byte = iota
 	tagLower
@@ -43,12 +49,12 @@ type caseClassSpan struct {
 }
 
 type setToken struct {
-	bytes []byte
+	chars []rune
 	tag   byte
 }
 
 type setSpec struct {
-	bytes         []byte
+	chars         []rune
 	tags          []byte
 	caseClasses   []caseClassSpan
 	lastIsClass   bool // last construct parsed was a [:class:]
@@ -56,18 +62,18 @@ type setSpec struct {
 	hasOtherClass bool // contains any other [:class:]
 	fillPos       int  // insertion point of a [c*] fill construct; -1 = none
 	fillTokenPos  int  // logical-token insertion point for [c*]; -1 = none
-	fillByte      byte
+	fillChar      rune
 	tokens        []setToken
 }
 
-func (sp *setSpec) append(b, tag byte) {
-	sp.bytes = append(sp.bytes, b)
+func (sp *setSpec) append(r rune, tag byte) {
+	sp.chars = append(sp.chars, r)
 	sp.tags = append(sp.tags, tag)
 }
 
-func (sp *setSpec) appendOrdinary(b byte) {
-	sp.append(b, tagNone)
-	sp.tokens = append(sp.tokens, setToken{bytes: []byte{b}})
+func (sp *setSpec) appendOrdinary(r rune) {
+	sp.append(r, tagNone)
+	sp.tokens = append(sp.tokens, setToken{chars: []rune{r}})
 }
 
 func (sp *setSpec) applyLogicalFill(tokenNeed, rawNeed int) {
@@ -79,7 +85,7 @@ func (sp *setSpec) applyLogicalFill(tokenNeed, rawNeed int) {
 	}
 	insert := make([]setToken, tokenNeed)
 	for i := range insert {
-		insert[i] = setToken{bytes: []byte{sp.fillByte}}
+		insert[i] = setToken{chars: []rune{sp.fillChar}}
 	}
 	tokens := make([]setToken, 0, len(sp.tokens)+tokenNeed)
 	tokens = append(tokens, sp.tokens[:sp.fillTokenPos]...)
@@ -91,7 +97,7 @@ func (sp *setSpec) applyLogicalFill(tokenNeed, rawNeed int) {
 }
 
 // applyFill expands a [c*] / [c*0] construct to `need` copies of the
-// fill byte (GNU: pad SET2 to the length of SET1).
+// fill character (GNU: pad SET2 to the length of SET1).
 func (sp *setSpec) applyFill(need int) {
 	if sp.fillPos < 0 {
 		return
@@ -99,17 +105,17 @@ func (sp *setSpec) applyFill(need int) {
 	if need < 0 {
 		need = 0
 	}
-	nb := make([]byte, 0, len(sp.bytes)+need)
+	nb := make([]rune, 0, len(sp.chars)+need)
 	nt := make([]byte, 0, len(sp.tags)+need)
-	nb = append(nb, sp.bytes[:sp.fillPos]...)
+	nb = append(nb, sp.chars[:sp.fillPos]...)
 	nt = append(nt, sp.tags[:sp.fillPos]...)
 	for k := 0; k < need; k++ {
-		nb = append(nb, sp.fillByte)
+		nb = append(nb, sp.fillChar)
 		nt = append(nt, tagNone)
 	}
-	nb = append(nb, sp.bytes[sp.fillPos:]...)
+	nb = append(nb, sp.chars[sp.fillPos:]...)
 	nt = append(nt, sp.tags[sp.fillPos:]...)
-	sp.bytes, sp.tags = nb, nt
+	sp.chars, sp.tags = nb, nt
 	if need > 0 {
 		for i := range sp.caseClasses {
 			if sp.caseClasses[i].start >= sp.fillPos {
@@ -136,22 +142,22 @@ func validateCaseClasses(set1, set2 *setSpec) bool {
 	return true
 }
 
-func planCaseTokens(set1 *setSpec, target []setToken, lastIsClass bool, tables *ctypeTables, truncate bool, xlate *[256]byte) string {
+func planCaseTokens(set1 *setSpec, target []setToken, lastIsClass bool, tables *charTables, truncate bool, xlate map[rune]rune) string {
 	if len(target) == 0 && !truncate {
 		return "when not truncating set1, string2 must be non-empty"
 	}
 
 	ti := 0
-	var last byte
+	var last rune
 	haveLast := false
-	nextTarget := func() (byte, bool, string) {
+	nextTarget := func() (rune, bool, string) {
 		if ti < len(target) {
 			t := target[ti]
 			if t.tag != tagNone {
 				return 0, false, "misaligned [:upper:] and/or [:lower:] construct"
 			}
 			ti++
-			last, haveLast = t.bytes[0], true
+			last, haveLast = t.chars[0], true
 			return last, true, ""
 		}
 		if truncate {
@@ -172,29 +178,33 @@ func planCaseTokens(set1 *setSpec, target []setToken, lastIsClass bool, tables *
 			ti++
 			switch {
 			case source.tag == targetToken.tag:
-				for _, b := range source.bytes {
-					xlate[b] = b
+				for _, r := range source.chars {
+					xlate[r] = r
 				}
 			case source.tag == tagLower && targetToken.tag == tagUpper:
-				for _, b := range source.bytes {
-					xlate[b] = tables.toUpper[b]
+				for _, r := range source.chars {
+					xlate[r] = tables.toUpper(r)
 				}
 			case source.tag == tagUpper && targetToken.tag == tagLower:
-				for _, b := range source.bytes {
-					xlate[b] = tables.toLower[b]
+				for _, r := range source.chars {
+					xlate[r] = tables.toLower(r)
 				}
 			}
 			continue
 		}
 
 		// An unpaired source case expands to its ordered ordinary members.
-		for _, b := range source.bytes {
+		for _, r := range source.chars {
 			target, ok, errMsg := nextTarget()
 			if errMsg != "" {
 				return errMsg
 			}
 			if ok {
-				xlate[b] = target
+				xlate[r] = target
+			} else {
+				// Truncated away: record the identity mapping explicitly so
+				// two candidate plans stay comparable key-for-key.
+				xlate[r] = r
 			}
 		}
 	}
@@ -211,11 +221,11 @@ type sourceCursor struct {
 	off   int
 }
 
-func consumeSourceByte(tokens []setToken, cur *sourceCursor) bool {
+func consumeSourceChar(tokens []setToken, cur *sourceCursor) bool {
 	for cur.token < len(tokens) {
-		if cur.off < len(tokens[cur.token].bytes) {
+		if cur.off < len(tokens[cur.token].chars) {
 			cur.off++
-			if cur.off == len(tokens[cur.token].bytes) {
+			if cur.off == len(tokens[cur.token].chars) {
 				cur.token++
 				cur.off = 0
 			}
@@ -231,7 +241,7 @@ func sourceAfterTargetPrefix(source, prefix []setToken) (sourceCursor, bool) {
 	cur := sourceCursor{}
 	for _, target := range prefix {
 		if target.tag == tagNone {
-			consumeSourceByte(source, &cur) // Extra SET2 bytes are harmless.
+			consumeSourceChar(source, &cur) // Extra SET2 characters are harmless.
 			continue
 		}
 		if cur.token >= len(source) || cur.off != 0 || source[cur.token].tag == tagNone {
@@ -242,16 +252,16 @@ func sourceAfterTargetPrefix(source, prefix []setToken) (sourceCursor, bool) {
 	return cur, true
 }
 
-func tokensWithFill(tokens []setToken, pos, count int, b byte) []setToken {
+func tokensWithFill(tokens []setToken, pos, count int, r rune) []setToken {
 	out := make([]setToken, 0, len(tokens)+count)
 	out = append(out, tokens[:pos]...)
 	for i := 0; i < count; i++ {
-		out = append(out, setToken{bytes: []byte{b}})
+		out = append(out, setToken{chars: []rune{r}})
 	}
 	return append(out, tokens[pos:]...)
 }
 
-func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool, rawFillCount int, xlate *[256]byte) string {
+func planCaseTranslation(set1, set2 *setSpec, tables *charTables, truncate bool, rawFillCount int, xlate map[rune]rune) string {
 	if set2.fillTokenPos < 0 {
 		return planCaseTokens(set1, set2.tokens, set2.lastIsClass, tables, truncate, xlate)
 	}
@@ -285,34 +295,30 @@ func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool
 				candidates = append(candidates, k)
 			}
 		}
-		distance += len(set1.tokens[i].bytes) - off
+		distance += len(set1.tokens[i].chars) - off
 	}
 
-	var accepted *[256]byte
+	var accepted map[rune]rune
 	acceptedK := -1
 	for _, k := range candidates {
-		target := tokensWithFill(set2.tokens, fillPos, k, set2.fillByte)
-		var candidate [256]byte
-		for i := range candidate {
-			candidate[i] = byte(i)
-		}
-		if planCaseTokens(set1, target, set2.lastIsClass, tables, truncate, &candidate) != "" {
+		target := tokensWithFill(set2.tokens, fillPos, k, set2.fillChar)
+		candidate := make(map[rune]rune)
+		if planCaseTokens(set1, target, set2.lastIsClass, tables, truncate, candidate) != "" {
 			continue
 		}
 		if accepted == nil {
-			copyMap := candidate
-			accepted = &copyMap
+			accepted = candidate
 			acceptedK = k
 			continue
 		}
-		if *accepted != candidate {
+		if !maps.Equal(accepted, candidate) {
 			return "misaligned [:upper:] and/or [:lower:] construct"
 		}
 	}
 	if accepted == nil {
 		return "misaligned [:upper:] and/or [:lower:] construct"
 	}
-	*xlate = *accepted
+	maps.Copy(xlate, accepted)
 	set2.applyLogicalFill(acceptedK, rawFillCount)
 	return ""
 }
@@ -402,52 +408,61 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		return 1
 	}
 
-	// Resolve LC_CTYPE and build class/case tables.
-	tables, lcCType, ctypeErr := openCType(rc.Env, opener)
+	// Resolve LC_CTYPE and select the character universe.
+	tables, lcCType, ctypeErr := openCharTables(rc.Env, opener)
 	if ctypeErr != nil {
 		fmt.Fprintf(rc.Err, "tr: failed to open LC_CTYPE %q: %v\n", lcCType, ctypeErr)
 		return 2
 	}
 
-	set1, errMsg := parseSetWithTables(operands[0], false, tables)
+	set1, errMsg := parseSetTables(operands[0], false, tables)
 	if errMsg != "" {
 		return fail(errMsg)
 	}
 	var set2 *setSpec
 	if nset == 2 {
-		set2, errMsg = parseSetWithTables(operands[1], true, tables)
+		set2, errMsg = parseSetTables(operands[1], true, tables)
 		if errMsg != "" {
 			return fail(errMsg)
 		}
 	}
 
-	// Effective SET1: complement is the ascending sequence of bytes NOT
-	// in the expanded SET1 (class membership survives; case tags do not).
-	var member1 [256]bool
-	for _, b := range set1.bytes {
-		member1[b] = true
+	// member1 is the literal SET1 membership; matches applies -c on top of
+	// it. The complemented domain is never enumerated under a multi-byte
+	// LC_CTYPE, where it holds more than a million characters.
+	member1 := make(map[rune]bool, len(set1.chars))
+	for _, r := range set1.chars {
+		member1[r] = true
 	}
-	eff1 := set1
-	if comp {
-		var cb []byte
-		for c := 0; c < 256; c++ {
-			if !member1[byte(c)] {
-				cb = append(cb, byte(c))
-			}
+	matches := func(r rune) bool {
+		if comp {
+			return !member1[r]
 		}
-		eff1 = &setSpec{bytes: cb, tags: make([]byte, len(cb)), fillPos: -1}
-		member1 = [256]bool{}
-		for _, b := range cb {
-			member1[b] = true
-		}
+		return member1[r]
 	}
 
-	var xlate [256]byte
-	for c := range xlate {
-		xlate[c] = byte(c)
+	// Effective SET1: with -c it is the ascending sequence of characters
+	// NOT in the expanded SET1 (class membership survives; case tags do
+	// not). Only the single-byte universe is small enough to enumerate.
+	eff1 := set1
+	if comp && !tables.multibyte {
+		var cb []rune
+		for c := 0; c < 256; c++ {
+			if !member1[rune(c)] {
+				cb = append(cb, rune(c))
+			}
+		}
+		eff1 = &setSpec{chars: cb, tags: make([]byte, len(cb)), fillPos: -1, fillTokenPos: -1}
 	}
+
+	xlate := make(map[rune]rune)
+	// defaultTarget answers every character admitted by a complemented SET1
+	// that the enumerated prefix did not reach: GNU pads SET2 with its last
+	// character, and every remaining complement member maps to it.
+	var defaultTarget rune
+	hasDefault := false
 	if translating {
-		rawFillCount := len(set1.bytes) - len(set2.bytes)
+		rawFillCount := len(set1.chars) - len(set2.chars)
 		if rawFillCount < 0 {
 			rawFillCount = 0
 		}
@@ -457,104 +472,118 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		if comp && set2.hasCaseClass {
 			return fail("when translating with complemented character classes,\nstring2 must map all characters in the domain to one")
 		}
-		if !comp && set2.hasCaseClass {
-			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, rawFillCount, &xlate); errMsg != "" {
+		switch {
+		case !comp && set2.hasCaseClass:
+			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, rawFillCount, xlate); errMsg != "" {
 				return fail(errMsg)
 			}
-		} else {
-			// Keep complement and all-ordinary translation on the existing flat path.
+		case comp && tables.multibyte:
+			// The complemented domain is unbounded here, so a [c*] fill has
+			// no computable repeat count. Refuse it by name rather than
+			// inventing one.
+			if set2.fillTokenPos >= 0 {
+				return tool.NotSupported(rc, cmd, "the [c*] repeat construct in string2 with a complemented string1 under a multi-byte LC_CTYPE")
+			}
+			if len(set2.chars) == 0 {
+				if !*truncateSet1 {
+					return fail("when not truncating set1, string2 must be non-empty")
+				}
+				break
+			}
+			for i, c1 := range complementPrefix(func(r rune) bool { return member1[r] }, len(set2.chars)) {
+				xlate[c1] = set2.chars[i]
+			}
+			if !*truncateSet1 {
+				defaultTarget, hasDefault = set2.chars[len(set2.chars)-1], true
+			}
+		default:
+			// Keep complement and all-ordinary translation on the flat path.
 			set2.applyFill(rawFillCount)
 			if !validateCaseClasses(set1, set2) {
 				return fail("misaligned [:upper:] and/or [:lower:] construct")
 			}
 			if *truncateSet1 {
-				if len(set2.bytes) == 0 {
-					eff1.bytes = eff1.bytes[:0]
+				if len(set2.chars) == 0 {
+					eff1.chars = eff1.chars[:0]
 					eff1.tags = eff1.tags[:0]
-				} else if len(eff1.bytes) > len(set2.bytes) {
-					eff1.bytes = eff1.bytes[:len(set2.bytes)]
-					eff1.tags = eff1.tags[:len(set2.bytes)]
+				} else if len(eff1.chars) > len(set2.chars) {
+					eff1.chars = eff1.chars[:len(set2.chars)]
+					eff1.tags = eff1.tags[:len(set2.chars)]
 				}
 			} else {
-				if len(set2.bytes) == 0 {
+				if len(set2.chars) == 0 {
 					return fail("when not truncating set1, string2 must be non-empty")
 				}
-				if len(set2.bytes) < len(eff1.bytes) {
+				if len(set2.chars) < len(eff1.chars) {
 					if set2.lastIsClass {
 						return fail("when translating with string1 longer than string2,\nthe latter string must not end with a character class")
 					}
-					last := set2.bytes[len(set2.bytes)-1]
-					for len(set2.bytes) < len(eff1.bytes) {
+					last := set2.chars[len(set2.chars)-1]
+					for len(set2.chars) < len(eff1.chars) {
 						set2.append(last, tagNone)
 					}
 				}
 			}
-			for i, c1 := range eff1.bytes {
+			for i, c1 := range eff1.chars {
 				t1, t2 := eff1.tags[i], set2.tags[i]
 				switch {
 				case t1 == tagNone && t2 != tagNone:
 					return fail("misaligned [:upper:] and/or [:lower:] construct")
 				case t1 == tagLower && t2 == tagUpper:
-					xlate[c1] = tables.toUpper[c1]
+					xlate[c1] = tables.toUpper(c1)
 				case t1 == tagUpper && t2 == tagLower:
-					xlate[c1] = tables.toLower[c1]
+					xlate[c1] = tables.toLower(c1)
 				default:
-					xlate[c1] = set2.bytes[i]
+					xlate[c1] = set2.chars[i]
 				}
 			}
 		}
 	}
 
-	var squeezeSet [256]bool
+	// The squeeze set is SET2 whenever two strings were given, and the
+	// effective (possibly complemented) SET1 otherwise.
+	var squeezeSet map[rune]bool
+	squeezeComplement := false
 	if squeezing {
-		src := eff1.bytes
 		if nset == 2 {
 			if !translating {
 				// In delete+squeeze mode SET2 is the squeeze set; a [c*]
 				// fill construct still expands to the length of SET1.
-				set2.applyFill(len(set1.bytes) - len(set2.bytes))
+				set2.applyFill(len(set1.chars) - len(set2.chars))
 			}
-			src = set2.bytes
+			squeezeSet = make(map[rune]bool, len(set2.chars))
+			for _, r := range set2.chars {
+				squeezeSet[r] = true
+			}
+		} else {
+			squeezeSet, squeezeComplement = member1, comp
 		}
-		for _, b := range src {
-			squeezeSet[b] = true
+	}
+	inSqueeze := func(r rune) bool {
+		if squeezeSet == nil {
+			return false
 		}
+		if squeezeComplement {
+			return !squeezeSet[r]
+		}
+		return squeezeSet[r]
+	}
+
+	translate := func(r rune) rune {
+		if to, ok := xlate[r]; ok {
+			return to
+		}
+		if hasDefault && !member1[r] {
+			return defaultTarget
+		}
+		return r
 	}
 
 	in := bufio.NewReader(rc.In)
 	out := bufio.NewWriter(rc.Out)
-	lastOut := -1
 	var readErr error
-	for {
-		b, err := in.ReadByte()
-		if err != nil {
-			if err != io.EOF {
-				readErr = err
-			}
-			break
-		}
-		if deleting && member1[b] {
-			continue
-		}
-		if translating {
-			b = xlate[b]
-		}
-		if squeezing && squeezeSet[b] && int(b) == lastOut {
-			continue
-		}
-		lastOut = int(b)
-		if err := out.WriteByte(b); err != nil {
-			if tool.IsClosedPipeError(err) {
-				if rc.SIGPIPEIgnored {
-					fmt.Fprintln(rc.Err, "tr: stdout: Broken pipe")
-					return 1
-				}
-				return 0
-			}
-			return fail(fmt.Sprintf("write error: %v", err))
-		}
-	}
-	if err := out.Flush(); err != nil {
+	writeFailed := -1
+	onWriteErr := func(err error) int {
 		if tool.IsClosedPipeError(err) {
 			if rc.SIGPIPEIgnored {
 				fmt.Fprintln(rc.Err, "tr: stdout: Broken pipe")
@@ -564,10 +593,108 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		}
 		return fail(fmt.Sprintf("write error: %v", err))
 	}
+
+	if !tables.multibyte {
+		// Single-byte universe: collapse the plans into 256-entry tables so
+		// the transform stays one array lookup per byte.
+		var deleteByte, squeezeByte [256]bool
+		var xlateByte [256]byte
+		for c := 0; c < 256; c++ {
+			xlateByte[c] = byte(translate(rune(c)))
+			deleteByte[c] = matches(rune(c))
+			squeezeByte[c] = inSqueeze(rune(c))
+		}
+		lastOut := -1
+		for {
+			b, err := in.ReadByte()
+			if err != nil {
+				if err != io.EOF {
+					readErr = err
+				}
+				break
+			}
+			if deleting && deleteByte[b] {
+				continue
+			}
+			if translating {
+				b = xlateByte[b]
+			}
+			if squeezing && squeezeByte[b] && int(b) == lastOut {
+				continue
+			}
+			lastOut = int(b)
+			if err := out.WriteByte(b); err != nil {
+				writeFailed = onWriteErr(err)
+				break
+			}
+		}
+	} else {
+		lastOut := rune(-1)
+		for {
+			r, err := readChar(in)
+			if err != nil {
+				if err != io.EOF {
+					readErr = err
+				}
+				break
+			}
+			if deleting && matches(r) {
+				continue
+			}
+			if translating {
+				r = translate(r)
+			}
+			if squeezing && inSqueeze(r) && r == lastOut {
+				continue
+			}
+			lastOut = r
+			if err := writeChar(out, r); err != nil {
+				writeFailed = onWriteErr(err)
+				break
+			}
+		}
+	}
+	if writeFailed >= 0 {
+		return writeFailed
+	}
+	if err := out.Flush(); err != nil {
+		return onWriteErr(err)
+	}
 	if readErr != nil {
 		return fail(fmt.Sprintf("read error: %v", readErr))
 	}
 	return 0
+}
+
+// readChar reads one multi-byte character. A byte that begins no valid
+// character is one character that keeps its own value, so tr never
+// rewrites data it cannot interpret.
+func readChar(in *bufio.Reader) (rune, error) {
+	r, size, err := in.ReadRune()
+	if err != nil {
+		return 0, err
+	}
+	if r == utf8.RuneError && size == 1 {
+		if err := in.UnreadRune(); err != nil {
+			return 0, err
+		}
+		b, err := in.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		return escapeRune(b), nil
+	}
+	return r, nil
+}
+
+// writeChar writes one multi-byte character, or the exact byte behind an
+// uninterpretable one.
+func writeChar(out *bufio.Writer, r rune) error {
+	if isEscapedByte(r) {
+		return out.WriteByte(byte(r - escapeBase))
+	}
+	_, err := out.WriteRune(r)
+	return err
 }
 
 // parseChar consumes one (possibly backslash-escaped) character of s
@@ -624,67 +751,38 @@ func parseChar(s string, i *int) byte {
 	return c
 }
 
-// parseSet expands a SET string into its byte sequence: literal and
-// escaped characters, ranges (m-n), [:class:] constructs, [=c=]
-// equivalence classes (single member in the C locale), and — in SET2
-// only — [c*n] / [c*] repeat constructs.
-func parseSet(s string, isSet2 bool) (*setSpec, string) {
-	return parseSetWithTables(s, isSet2, nil)
+// parseSetTables expands a control string into its character sequence for
+// the selected universe.
+func parseSetTables(s string, isSet2 bool, tables *charTables) (*setSpec, string) {
+	if tables.multibyte {
+		return parseSetMultibyte(s, isSet2, tables)
+	}
+	return parseSetWithTables(s, isSet2, tables)
 }
 
-// parseSetWithTables is like parseSet but uses tables for class
-// expansion when non-nil.  When tables is nil the hardcoded C-locale
-// classBytes function is used instead.
-func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, string) {
+// parseSetWithTables expands a SET string into its byte sequence: literal
+// and escaped characters, ranges (m-n), [:class:] constructs, [=c=]
+// equivalence classes (a single member outside a collation provider), and
+// — in SET2 only — [c*n] / [c*] repeat constructs. Every character is a
+// byte here, which is the C/POSIX and single-byte-locale universe.
+func parseSetWithTables(s string, isSet2 bool, tables *charTables) (*setSpec, string) {
 	sp := &setSpec{fillPos: -1, fillTokenPos: -1}
 	i := 0
 	for i < len(s) {
 		if s[i] == '[' {
 			if cls, adv, ok := matchClass(s[i:]); ok {
-				var expanded []byte
-				if tables != nil {
-					var known bool
-					expanded, known = tables.classFromTable(cls)
-					if !known {
-						return nil, fmt.Sprintf("invalid character class '%s'", cls)
-					}
-				} else {
-					expanded = classBytes(cls)
-					if expanded == nil {
-						return nil, fmt.Sprintf("invalid character class '%s'", cls)
-					}
+				expanded, known := tables.classChars(cls)
+				if !known {
+					return nil, fmt.Sprintf("invalid character class '%s'", cls)
 				}
-				tag := tagNone
-				switch cls {
-				case "lower":
-					tag = tagLower
-					sp.hasCaseClass = true
-					sp.caseClasses = append(sp.caseClasses, caseClassSpan{start: len(sp.bytes), tag: tagLower})
-				case "upper":
-					tag = tagUpper
-					sp.hasCaseClass = true
-					sp.caseClasses = append(sp.caseClasses, caseClassSpan{start: len(sp.bytes), tag: tagUpper})
-				default:
-					sp.hasOtherClass = true
-				}
-				if tag == tagNone {
-					for _, b := range expanded {
-						sp.appendOrdinary(b)
-					}
-				} else {
-					for _, b := range expanded {
-						sp.append(b, tag)
-					}
-					sp.tokens = append(sp.tokens, setToken{bytes: expanded, tag: tag})
-				}
-				sp.lastIsClass = true
+				sp.addClass(cls, expanded)
 				i += adv
 				continue
 			}
 			if eqc, adv, ok, errMsg := matchEquiv(s[i:]); errMsg != "" {
 				return nil, errMsg
 			} else if ok {
-				sp.appendOrdinary(eqc)
+				sp.appendOrdinary(rune(eqc))
 				sp.lastIsClass = false
 				i += adv
 				continue
@@ -699,12 +797,12 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 					if sp.fillPos >= 0 {
 						return nil, "only one [c*] repeat construct may appear in string2"
 					}
-					sp.fillPos = len(sp.bytes)
+					sp.fillPos = len(sp.chars)
 					sp.fillTokenPos = len(sp.tokens)
-					sp.fillByte = rb
+					sp.fillChar = rune(rb)
 				} else {
 					for k := 0; k < count; k++ {
-						sp.appendOrdinary(rb)
+						sp.appendOrdinary(rune(rb))
 					}
 				}
 				sp.lastIsClass = false
@@ -720,16 +818,45 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 				return nil, fmt.Sprintf("range-endpoints of '%c-%c' are in reverse collating sequence order", lo, hi)
 			}
 			for b := int(lo); b <= int(hi); b++ {
-				sp.appendOrdinary(byte(b))
+				sp.appendOrdinary(rune(b))
 			}
 			i = j
 			sp.lastIsClass = false
 			continue
 		}
-		sp.appendOrdinary(lo)
+		sp.appendOrdinary(rune(lo))
 		sp.lastIsClass = false
 	}
 	return sp, ""
+}
+
+// addClass records one [:class:] construct and its expansion, tagging
+// [:upper:] and [:lower:] so a translation can pair them positionally.
+func (sp *setSpec) addClass(cls string, expanded []rune) {
+	tag := tagNone
+	switch cls {
+	case "lower":
+		tag = tagLower
+		sp.hasCaseClass = true
+		sp.caseClasses = append(sp.caseClasses, caseClassSpan{start: len(sp.chars), tag: tagLower})
+	case "upper":
+		tag = tagUpper
+		sp.hasCaseClass = true
+		sp.caseClasses = append(sp.caseClasses, caseClassSpan{start: len(sp.chars), tag: tagUpper})
+	default:
+		sp.hasOtherClass = true
+	}
+	if tag == tagNone {
+		for _, r := range expanded {
+			sp.appendOrdinary(r)
+		}
+	} else {
+		for _, r := range expanded {
+			sp.append(r, tag)
+		}
+		sp.tokens = append(sp.tokens, setToken{chars: expanded, tag: tag})
+	}
+	sp.lastIsClass = true
 }
 
 // matchClass matches a leading "[:name:]" and returns (name, length, ok).
@@ -746,8 +873,9 @@ func matchClass(s string) (string, int, bool) {
 	return s[2 : 2+end], 2 + end + 2, true
 }
 
-// matchEquiv matches a leading "[=c=]". In the C locale an equivalence
-// class contains exactly its own character.
+// matchEquiv matches a leading "[=c=]". Without a collation provider an
+// equivalence class contains exactly its own character, which is the
+// complete answer in the POSIX locale.
 func matchEquiv(s string) (byte, int, bool, string) {
 	if len(s) < 4 || s[1] != '=' {
 		return 0, 0, false, ""
@@ -803,22 +931,6 @@ func matchRepeat(s string) (b byte, count int, fill bool, adv int, ok bool, errM
 		n = int(v)
 	}
 	return c, n, digits == "", j + 1, true, ""
-}
-
-// classBytes returns the C-locale members of a POSIX character class in
-// ascending byte order, or nil for an unknown class name.
-func classBytes(name string) []byte {
-	pred, known := classPred[name]
-	if !known {
-		return nil
-	}
-	var out []byte
-	for c := 0; c < 256; c++ {
-		if pred(byte(c)) {
-			out = append(out, byte(c))
-		}
-	}
-	return out
 }
 
 var classPred = map[string]func(byte) bool{

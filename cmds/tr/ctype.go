@@ -246,6 +246,16 @@ func prodOpener(name string) (ctypeProvider, error) {
 	return ctype.Open(name)
 }
 
+// openCTypeTables opens the single-byte provider for a named non-C locale,
+// builds ctypeTables from it, and closes the provider exactly once.
+func openCTypeTables(name string, opener ctypeOpener) (*ctypeTables, error) {
+	p, err := opener(name)
+	if err != nil {
+		return nil, err
+	}
+	return buildProviderTables(p)
+}
+
 // openCType resolves the effective LC_CTYPE from rc.Env and builds
 // ctypeTables.  For C/POSIX (including the default) it returns pure-Go
 // tables and never calls opener.  For other locales it calls opener,
@@ -257,10 +267,6 @@ func openCType(env []string, opener ctypeOpener) (tables *ctypeTables, lcCType s
 	if isCPOSIX(lcCType) {
 		return buildCLocale(), lcCType, nil
 	}
-	p, err := opener(lcCType)
-	if err != nil {
-		return nil, lcCType, err
-	}
-	tables, err = buildProviderTables(p)
+	tables, err = openCTypeTables(lcCType, opener)
 	return tables, lcCType, err
 }

@@ -187,7 +187,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 4 | 29 |
 | `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 1 | 18 |
-| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 17 |
+| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 3 | 29 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |
@@ -195,8 +195,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 14 |
 | `tz` | `cmds/tz` | — | Bashy/other extension | no | no | 1 | 2 |
 | `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 13 |
-| `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 2 | 21 |
-| `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 1 | 6 |
+| `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 2 | 26 |
+| `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 2 | 13 |
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `uptime` | `cmds/uptime` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `users` | `cmds/users` | — | GNU Coreutils | yes | no | 1 | 1 |
@@ -205,7 +205,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `vdir` | `cmds/vdir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `vi` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `watch` | `cmds/watch` | — | Bashy/other extension | no | no | 1 | 4 |
-| `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 3 | 26 |
+| `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 3 | 31 |
 | `which` | `cmds/which` | — | Bashy/other extension | no | no | 1 | 9 |
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 4 | 30 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
