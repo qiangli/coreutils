@@ -52,6 +52,7 @@ type options struct {
 	links      map[devIno]string
 	paxOptions paxOptions
 	timeFormat *locale.TimeFormatter
+	now        func() time.Time // invocation-local clock for age-sensitive verbose timestamps
 	t, X       bool
 	follow     followMode // -H/-L; the last one given wins
 	renamer    *interactiveRenamer
@@ -92,7 +93,7 @@ func (f *followFlag) Set(s string) error {
 func run(rc *tool.RunContext, args []string) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
-	var o options
+	o := options{now: time.Now}
 	fs.BoolVarP(&o.read, "read", "r", false, "read (extract) from the archive")
 	fs.BoolVarP(&o.write, "write", "w", false, "write (create) an archive")
 	fs.StringVarP(&o.archive, "file", "f", "", "archive pathname (default stdin/stdout)")
@@ -470,6 +471,10 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	status := 0
 	effectiveNames := make(map[int]string)
 	originalOccurrences := make(map[string][]int)
+	now := time.Now()
+	if o.now != nil {
+		now = o.now()
+	}
 	for index, h := range members {
 		originalOccurrences[h.Name] = append(originalOccurrences[h.Name], index)
 	}
@@ -531,7 +536,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 				return 1
 			}
 		} else if o.verbose {
-			stamp, err := o.timeFormat.Format(h.ModTime.In(tzenv.Location(rc.Env)), "%b %e %H:%M")
+			stamp, err := verboseListTimestamp(h.ModTime, now, tzenv.Location(rc.Env), o.timeFormat)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "pax: time format: %v\n", err)
 				return 1
@@ -574,6 +579,21 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	}
 
 	return status
+}
+
+// paxSixMonths is the GNU-compatible recent-file cutoff already used by
+// cmds/ls: half of 365.2425 days. POSIX pax requires its default verbose
+// timestamp to have the ls -l shape, which uses the time for a file modified
+// within the last six months and the year at the boundary or for an older or
+// future timestamp.
+const paxSixMonths = 15778476 * time.Second
+
+func verboseListTimestamp(modTime, now time.Time, loc *time.Location, formatter *locale.TimeFormatter) (string, error) {
+	format := "%b %e %H:%M"
+	if modTime.After(now) || now.Sub(modTime) >= paxSixMonths {
+		format = "%b %e  %Y"
+	}
+	return formatter.Format(modTime.In(loc), format)
 }
 
 func listTargetOccurrence(linkIndex int, originalTarget, substitutedTarget string,
