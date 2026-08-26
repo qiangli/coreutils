@@ -52,6 +52,7 @@ type Event struct {
 	Speaker string    `json:"speaker"`
 	Role    string    `json:"role,omitempty"`
 	Kind    string    `json:"kind"` // agenda|human|turn|vote|poll|question|ledger|replan|note|decision|action|confirm|invite|kick
+	To      string    `json:"to,omitempty"`
 	Text    string    `json:"text"`
 	File    string    `json:"file,omitempty"` // per-turn full-text file (context-offloading target)
 	TS      time.Time `json:"ts"`

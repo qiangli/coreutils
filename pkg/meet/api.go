@@ -287,6 +287,16 @@ func Create(opts CreateOptions) (*State, error) {
 // EXECUTION — the read-modify-write over st.Round and the turn loop — and a post
 // is neither.
 func Post(ref, author, text string) (Event, error) {
+	return PostAs(ref, author, "", text)
+}
+
+// PostAs appends a caller-attributed message.
+//
+// In ordinary rooms this preserves Post's long-standing behavior: an empty
+// author is credited to the room human, and the event is a human contribution.
+// In board rooms the author is the participant seat, so it is mandatory and
+// must already be invited.
+func PostAs(ref, author, to, text string) (Event, error) {
 	st, err := roomOf(ref)
 	if err != nil {
 		return Event{}, err
@@ -294,14 +304,47 @@ func Post(ref, author, text string) (Event, error) {
 	if strings.TrimSpace(text) == "" {
 		return Event{}, fmt.Errorf("meet: an empty message is not a contribution")
 	}
+	who := strings.TrimSpace(author)
+	if st.board() {
+		if who == "" {
+			return Event{}, fmt.Errorf("meet: --as NAME is required on a board")
+		}
+		who = canonAgent(who)
+		if !participantSeat(st, who) {
+			return Event{}, fmt.Errorf("meet: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
+				seatLabel(who), st.ID, st.ID, who)
+		}
+		target := ""
+		if strings.TrimSpace(to) != "" {
+			target = canonAgent(strings.TrimSpace(strings.TrimPrefix(to, "@")))
+			if !participantSeat(st, target) {
+				return Event{}, fmt.Errorf("meet: failed: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
+					seatLabel(target), st.ID, st.ID, target)
+			}
+		}
+		ev := Event{
+			Round: st.Round, Speaker: who, Role: string(RoleParticipant),
+			Kind: "message", To: target, Text: sanitizeTurn(text), TS: nowFn(),
+		}
+		return ev, AppendEvent(st.ID, ev)
+	}
 	if err := ensureRoomSecretary(context.Background(), st); err != nil {
 		return Event{}, err
 	}
-	who := strings.TrimSpace(author)
 	if who == "" {
 		who = st.Human
 	}
 	return record(st, "human", who, string(RoleHuman), text)
+}
+
+func participantSeat(st *State, name string) bool {
+	name = canonAgent(strings.TrimSpace(strings.TrimPrefix(name, "@")))
+	for _, p := range st.Participants {
+		if strings.EqualFold(p, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Address puts a message to ONE agent and returns its reply — the REPL's

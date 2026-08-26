@@ -62,7 +62,7 @@ func NewMeetCmd() *cobra.Command {
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(
-		newOpenCmd(), newConsultCmd(), newTellCmd(), newRoundCmd(),
+		newOpenCmd(), newConsultCmd(), newReadCmd(), newTellCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
@@ -296,7 +296,7 @@ func (sf *sessionFlags) newState() (*State, error) {
 		Initiator:    sf.initiator,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
 		Steerable: sf.steerable, Board: sf.board,
-		MaxTurns:  sf.maxTurns, MaxStalls: sf.maxStalls,
+		MaxTurns: sf.maxTurns, MaxStalls: sf.maxStalls,
 		Status: "open", Cwd: cwd, Out: sf.out,
 		TurnTimeout: sf.turnTimeout, Created: nowFn(),
 	}
@@ -829,18 +829,163 @@ func repl(cmd *cobra.Command, st *State) error {
 }
 
 func newTellCmd() *cobra.Command {
-	return &cobra.Command{
+	var as, to string
+	cmd := &cobra.Command{
 		Use:   "tell <room>|<id> <text...>",
 		Short: "append a human contribution to a session",
-		Args:  cobra.MinimumNArgs(2),
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Through api.go, not a second copy of the append: Post is what the
-			// HTTP layer calls too, and a human message must mean the same thing
-			// whichever surface it arrives on. Empty author = the room's human.
-			_, err := Post(args[0], "", strings.Join(args[1:], " "))
-			return err
+			text := strings.Join(args[1:], " ")
+			if strings.TrimSpace(text) == "" {
+				b, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				text = string(b)
+			}
+			ev, err := PostAs(args[0], as, to, text)
+			if err != nil {
+				if strings.Contains(err.Error(), "failed:") {
+					fmt.Fprintf(cmd.ErrOrStderr(), "failed: %s\n", strings.TrimSpace(strings.TrimPrefix(to, "@")))
+				}
+				return err
+			}
+			if ev.Kind == "message" {
+				writeTellReceipts(cmd.ErrOrStderr(), args[0], ev)
+			}
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&as, "as", "", "participant name to post as (required on a board)")
+	cmd.Flags().StringVar(&to, "to", "", "participant name to address")
+	return cmd
+}
+
+func newReadCmd() *cobra.Command {
+	var as string
+	var wait time.Duration
+	var peek, jsonOut bool
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "read <room>|<id> --as NAME [--wait DUR] [--peek] [-n N] [--json]",
+		Short: "read unread board messages for a participant",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			reader := canonAgent(strings.TrimSpace(strings.TrimPrefix(as, "@")))
+			if reader == "" {
+				return fmt.Errorf("meet: --as NAME is required")
+			}
+			if wait < 0 {
+				return fmt.Errorf("meet: --wait cannot be negative")
+			}
+			if limit < 0 {
+				return fmt.Errorf("meet: -n cannot be negative")
+			}
+			st, err := roomOf(args[0])
+			if err != nil {
+				return err
+			}
+			if !st.board() {
+				return fmt.Errorf("meet: room %s is not a board", st.ID)
+			}
+			if !participantSeat(st, reader) {
+				return fmt.Errorf("meet: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
+					seatLabel(reader), st.ID, st.ID, reader)
+			}
+			if wait > 0 {
+				if st.Status == "closed" {
+					return fmt.Errorf("meet: --wait is refused on closed board %s", st.ID)
+				}
+				if err := WaitForRoom(cmd.Context(), st.ID, reader, limit, wait); err != nil {
+					return err
+				}
+			}
+			directed, other, older, err := Unread(st.ID, reader, limit)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			for _, e := range directed {
+				writeEvent(w, e, jsonOut)
+			}
+			for _, e := range other {
+				writeEvent(w, e, jsonOut)
+			}
+			if older > 0 && !jsonOut {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%d older broadcast event(s) hidden by -n\n", older)
+			}
+			if !peek {
+				if err := MarkSeen(st.ID, reader); err != nil {
+					return err
+				}
+			}
+			if len(directed)+len(other) == 0 {
+				if wait > 0 {
+					fmt.Fprintln(cmd.ErrOrStderr(), "EMPTY (timeout)")
+				} else {
+					fmt.Fprintln(cmd.ErrOrStderr(), "EMPTY")
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&as, "as", "", "participant name to read as")
+	cmd.Flags().DurationVar(&wait, "wait", 0, "wait up to DUR for unread board messages")
+	cmd.Flags().BoolVar(&peek, "peek", false, "do not advance the read cursor")
+	cmd.Flags().IntVarP(&limit, "limit", "n", DefaultRoomLimit, "maximum broadcast events to show")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit canonical event JSON")
+	return cmd
+}
+
+func writeTellReceipts(w io.Writer, ref string, ev Event) {
+	st, err := roomOf(ref)
+	if err != nil {
+		return
+	}
+	recipients := []string{}
+	if ev.To != "" {
+		recipients = append(recipients, ev.To)
+	} else {
+		for _, p := range st.Participants {
+			if !strings.EqualFold(p, ev.Speaker) {
+				recipients = append(recipients, p)
+			}
+		}
+	}
+	if len(recipients) == 0 {
+		fmt.Fprintln(w, "queued: room")
+		return
+	}
+	events, err := readRoomTranscript(st.ID)
+	if err != nil {
+		return
+	}
+	seq := int64(len(events))
+	for _, r := range recipients {
+		fmt.Fprintf(w, "%s: %s\n", boardDeliveryState(st.ID, r, seq), r)
+	}
+}
+
+func boardDeliveryState(id, reader string, seq int64) string {
+	p, err := seenPath(id, reader)
+	if err != nil {
+		return "failed"
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "unverified"
+		}
+		return "failed"
+	}
+	at, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return "failed"
+	}
+	if at >= seq {
+		return "read"
+	}
+	return "queued"
 }
 
 func newRoundCmd() *cobra.Command {

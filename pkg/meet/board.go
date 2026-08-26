@@ -61,6 +61,9 @@ func directedEvent(e Event, reader string) bool {
 	if strings.EqualFold(strings.TrimSpace(e.Speaker), reader) {
 		return true
 	}
+	if strings.EqualFold(strings.TrimSpace(e.To), reader) {
+		return true
+	}
 	text := strings.TrimSpace(e.Text)
 	if !strings.HasPrefix(text, "@") {
 		return false
