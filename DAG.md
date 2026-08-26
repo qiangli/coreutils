@@ -13,6 +13,7 @@ bashy dag --list            # available targets
 bashy dag build             # build the multicall binary into ./bin
 bashy dag test              # test coreutils' own packages (CI scope)
 bashy dag crossvet          # cross-OS compile gate (windows/linux/darwin)
+bashy dag consumer-build    # consumer-direction gate: build ../bashy vs this tree
 bashy dag fmtcheck          # gofmt gate — reports, never rewrites
 bashy dag --json test       # machine-readable envelope for an agent
 ```
@@ -21,6 +22,22 @@ bashy dag --json test       # machine-readable envelope for an agent
 ones you are not on. A change is gated by BOTH — `go test` on darwin cannot
 see a build-tag break, because the offending file never compiles for windows.
 Windows is a shipping target here, so a darwin-only green is not a green.
+
+**A third blind spot: the consumer direction.** Both `test` and `crossvet`
+only ever compile coreutils against COREUTILS' OWN module resolution. That is
+not the same as being buildable by a consumer. On 2026-08-26 main reached a
+state where `cd bashy && make build` FAILED while `test` and `crossvet` stayed
+green the whole time: cmds/awk had begun using `interp.Config.DecimalPoint`, a
+symbol present only in a newer goawk fork than bashy — a downstream consumer —
+pinned. A dependency's own `replace` is ignored by the main module, so bashy
+resolved a different goawk and could not compile coreutils' package. Inspection
+found the pin itself was rotten: goawk was `replace`d to a two-commit ORPHAN
+(`coreutils-locale-numeric`, commit 88712e61a085) with no common ancestor to
+the fork's default branch — one branch-deletion from a permanently unbuildable
+tree. `consumer-build` closes both holes: it (a) builds the flat sibling
+consumer `../bashy` against THIS tree, and (b) refuses a versioned `replace`
+whose commit is not an ancestor of the fork's default branch. Run it beside
+`test` and `crossvet` before merge.
 
 The default `test`/`vet` scope **excludes the vendored `external/` forks**
 (ollama, podman) — they pull cgo + platform-specific backends (MLX, btrfs) and
@@ -77,6 +94,37 @@ Effects: read
 
 ```bash
 scripts/crossvet.sh
+```
+
+### consumer-build
+The consumer-direction gate — the one `test` and `crossvet` structurally
+cannot be, because both only ever compile coreutils against coreutils' own
+module resolution. A green coreutils does not mean a buildable consumer: MVS
+plus the consumer's own `replace`/pin can select a different version of a
+shared dependency (a dependency's own `replace` is ignored by the main
+module), and the break only surfaces when the CONSUMER compiles coreutils'
+packages. That is exactly how `cd bashy && make build` failed on 2026-08-26
+over a goawk symbol while every in-repo gate stayed green — see the prose
+above. Two checks:
+
+- **(a)** build the flat sibling consumer `../bashy` against THIS working tree
+  (its coreutils `replace` is redirected here for the build, then restored),
+  failing loudly with the offending package + symbol. Skips cleanly when the
+  sibling is absent, so a standalone clone is not blocked. Point it elsewhere
+  with `CONSUMER_DIR=/path bashy dag consumer-build` or a positional arg.
+- **(b)** refuse a versioned module `replace` pinned to a commit that is not an
+  ancestor of the target fork's default branch, naming the branch the commit
+  actually lives on — the check that would have caught the goawk orphan before
+  it landed. Uses the network only to query the fork's branches; when the fork
+  is unreachable it WARNS and skips rather than blocking an offline build.
+  Consciously-accepted non-ancestor pins are allowlisted (with a reason and the
+  real fix) inside the script; new unlisted ones hard-fail.
+
+The body delegates to `scripts/consumer-build.sh`.
+Effects: read
+
+```bash
+scripts/consumer-build.sh
 ```
 
 ### fmtcheck
