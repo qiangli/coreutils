@@ -48,9 +48,9 @@ can:
               reviewer died on its usage cap) is recorded on cooldown; fleet
               reports it QUOTA-EXHAUSTED or COOLING-DOWN with the reset
               date+time — never 'available' — until the reset passes.
-  capability  with --probe, run '<tool> --version' once (3s timeout) and CACHE
-              the result (` + fleetProbeTTL.String() + ` TTL) under the queue dir, so repeated
-              preflights are instant.
+	probe       with --probe, run a real minimal headless turn once and require
+	              ` + fleet.SmokeToken + ` in stdout. Exit status alone is never trusted. The
+	              verdict is cached (` + fleetProbeTTL.String() + ` TTL) under the queue dir.
 
   model       a roster entry naming an AGENT (a nickname, an alias, or a bare
               tool:model) additionally requires its model to be usable — a
@@ -58,8 +58,9 @@ can:
               healthy its tool is. Bare tool entries have no model, so this
               check does not apply to them.
 
-A row is "available" only if it is installed AND not cooling down AND, for an
-agent, its model is usable.
+Without --probe, a row is only reported as installed: PATH evidence says
+nothing about whether the tool can do work. A probed row is usable only when
+its smoke turn produced the required stdout token.
 
 Availability is mostly a TOOL property — PATH, throttle, sign-in all belong to
 the binary, and two agents sharing a tool share them. What an agent adds is the
@@ -75,7 +76,7 @@ expands the roster to every agent in the registry.`,
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools (default claude,codex,opencode,agy)")
 	cmd.Flags().BoolVar(&agents, "agents", false, "Roster every agent in the registry (`bashy agents list`) instead of the default tool roster")
-	cmd.Flags().BoolVar(&probe, "probe", false, "Also probe capability (`<tool> --version`, 3s timeout) and cache it")
+	cmd.Flags().BoolVar(&probe, "probe", false, "Run and cache an output-gated smoke turn (may use provider capacity)")
 	cmd.Flags().BoolVar(&auth, "auth", false, "Also probe AUTH-readiness (headless launch on a trivial prompt; catches a tool that is installed but not signed in, before it stalls a real run)")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())
 	cmd.AddCommand(newWeaveFleetReviewCmd())
@@ -214,18 +215,19 @@ type fleetRow struct {
 	// why it may not assign the agent.
 	Reason string `json:"reason,omitempty"`
 
-	Available     bool   `json:"available"` // installed AND not cooling down AND its model is usable
-	Found         bool   `json:"found"`     // binary resolves on PATH
-	Path          string `json:"path,omitempty"`
-	CoolingUnit   string `json:"cooling_until,omitempty"`  // RFC3339 local
-	CooldownCause string `json:"cooldown_cause,omitempty"` // quota-exhausted | cooling-down
-	Probed        bool   `json:"probed,omitempty"`
-	Capable       bool   `json:"capable,omitempty"` // --version exited cleanly
-	Version       string `json:"version,omitempty"`
-	AuthProbed    bool   `json:"auth_probed,omitempty"`
-	Auth          string `json:"auth,omitempty"`      // ready | needs-login | stale-contract
-	AuthNote      string `json:"auth_note,omitempty"` // why
-	AuthHint      string `json:"auth_hint,omitempty"` // how to fix (needs-login only)
+	Available     bool      `json:"-"`     // assignable only when live smoke evidence exists
+	Found         bool      `json:"found"` // binary resolves on PATH
+	Path          string    `json:"path,omitempty"`
+	CoolingUnit   string    `json:"cooling_until,omitempty"`  // RFC3339 local
+	CooldownCause string    `json:"cooldown_cause,omitempty"` // quota-exhausted | cooling-down
+	Probed        bool      `json:"probed,omitempty"`
+	Capable       bool      `json:"capable,omitempty"` // smoke stdout contained SmokeToken
+	ProbedAt      time.Time `json:"probed_at,omitempty"`
+	Version       string    `json:"version,omitempty"`
+	AuthProbed    bool      `json:"auth_probed,omitempty"`
+	Auth          string    `json:"auth,omitempty"`      // ready | needs-login | stale-contract
+	AuthNote      string    `json:"auth_note,omitempty"` // why
+	AuthHint      string    `json:"auth_hint,omitempty"` // how to fix (needs-login only)
 
 	// launch is the resolved agent, when the entry named one. Unexported: it
 	// is machinery, not part of the wire shape.
@@ -285,7 +287,7 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 	for _, name := range roster {
 		row, d := fleetRowForEntry(dir, name, now, probe, cache)
 		dirty = dirty || d
-		if auth && row.Available {
+		if auth && row.Found && row.CoolingUnit == "" && row.Reason == "" {
 			row.probeAuth()
 		}
 		rows = append(rows, row)
@@ -297,7 +299,7 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 	if mode == weavecli.OutputJSON {
 		tools := make([]map[string]any, len(rows))
 		for i, r := range rows {
-			m := map[string]any{"tool": r.Tool, "available": r.Available, "found": r.Found}
+			m := map[string]any{"tool": r.Tool, "installed": r.Found}
 			if r.Agent != "" {
 				m["agent"], m["model"], m["binding"] = r.Agent, r.Model, r.Binding
 			}
@@ -314,7 +316,8 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 				m["cooldown_cause"] = r.CooldownCause
 			}
 			if r.Probed {
-				m["probed"], m["capable"] = true, r.Capable
+				m["probed"], m["usable"] = true, r.Capable
+				m["probed_at"] = r.ProbedAt.Format(time.RFC3339)
 				if r.Version != "" {
 					m["version"] = r.Version
 				}
@@ -373,11 +376,11 @@ func (r fleetRow) statusLine(label string) string {
 		return fmt.Sprintf("%-16s %s until %s — last invocation hit a provider limit; not assignable",
 			label, strings.ToUpper(r.CooldownCause), r.coolingUntil.Local().Format("2006-01-02 15:04"))
 	case r.Probed && !r.Capable:
-		return fmt.Sprintf("%-16s installed but --version failed (%s)", label, r.Path)
+		return fmt.Sprintf("%-16s UNUSABLE  smoke output lacked %s (probed %s; %s)", label, fleet.SmokeToken, r.ProbedAt.Local().Format("2006-01-02 15:04"), r.Path)
 	case r.Probed:
-		return fmt.Sprintf("%-16s available  %s (%s)", label, r.Version, r.Path)
+		return fmt.Sprintf("%-16s USABLE    smoke token confirmed (probed %s; %s)", label, r.ProbedAt.Local().Format("2006-01-02 15:04"), r.Path)
 	default:
-		return fmt.Sprintf("%-16s available  (%s)", label, r.Path)
+		return fmt.Sprintf("%-16s installed  (%s; not live-probed)", label, r.Path)
 	}
 }
 
@@ -469,7 +472,7 @@ func fleetRowForBinary(dir, tool, binary string, now time.Time, probe bool, cach
 		row.CooldownCause = cause
 		row.coolingUntil = until
 	}
-	// Capability (opt-in, cached): only meaningful if the binary exists.
+	// Liveness (opt-in, cached): only meaningful if the binary exists.
 	if probe && row.Found {
 		row.Probed = true
 		ent, fresh := cache[tool]
@@ -478,33 +481,27 @@ func fleetRowForBinary(dir, tool, binary string, now time.Time, probe bool, cach
 			cache[tool] = ent
 			dirty = true
 		}
-		row.Capable, row.Version = ent.Capable, ent.Version
+		row.Capable, row.Version, row.ProbedAt = ent.Capable, ent.Version, ent.ProbedAt
 	}
-	row.Available = row.Found && !cooling
+	row.Available = row.Found && !cooling && row.Probed && row.Capable
 	return row, dirty
 }
 
-// probeToolCapability runs `<tool> --version` with a short timeout. A clean
-// exit means the CLI is launchable; the first output line is kept as a version
-// hint. This is the only place fleet executes a tool, and only under --probe.
+// probeToolCapability runs the tool's declared headless launch with a smoke
+// prompt. It judges stdout only: a zero exit carrying an error payload is an
+// unusable tool. This is the only place fleet executes a tool, and only under
+// --probe.
 func probeToolCapability(tool, path string, now time.Time) fleetProbeEntry {
 	ent := fleetProbeEntry{Path: path, ProbedAt: now}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	argv, ok := fleetCatalog().SmokeArgv(tool)
+	if !ok {
+		return ent
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	args := []string{"--version"}
-	if declared, ok := fleetCatalog().Tool(tool); ok {
-		argv := declared.VersionProbeArgv()
-		if len(argv) > 0 {
-			args = argv[1:]
-		}
-	}
-	out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
-	if err == nil {
-		ent.Capable = true
-		if line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]); line != "" {
-			ent.Version = line
-		}
-	}
+	argv[0] = path // execute the exact path LookPath resolved on this host.
+	out, _ := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+	ent.Capable = strings.Contains(string(out), fleet.SmokeToken)
 	return ent
 }
 

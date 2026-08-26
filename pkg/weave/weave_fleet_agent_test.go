@@ -81,8 +81,8 @@ func TestBareToolRowIsUnchanged(t *testing.T) {
 	if row.Agent != "" || row.Model != "" || row.Binding != "" || row.Reason != "" {
 		t.Fatalf("a bare tool row must carry no agent facet: %+v", row)
 	}
-	if !row.Found || !row.Available {
-		t.Fatalf("sh should be found and available: %+v", row)
+	if !row.Found || row.Available {
+		t.Fatalf("sh should be installed but unprobed: %+v", row)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestAgentRowCarriesTheBinding(t *testing.T) {
 	if row.Model != "seat-1" {
 		t.Fatalf("model must be the provider-side id: %q", row.Model)
 	}
-	if !row.Found || !row.Available {
+	if !row.Found || row.Available {
 		t.Fatalf("its tool resolves on PATH: %+v", row)
 	}
 

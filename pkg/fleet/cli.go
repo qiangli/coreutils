@@ -21,7 +21,7 @@ func ExitCode(err error) int { return assetring.ExitCode(err) }
 
 // NewToolsCmd builds the `tools` verb tree.
 func NewToolsCmd(opts ...Option) *cobra.Command {
-	return newRoot("tools", "Agentic CLI harnesses the fleet can drive",
+	return newRoot("tools", "Agentic CLI harnesses registered by the fleet",
 		newToolsList(opts),
 		newToolsShow(opts),
 		newToolsAdd(opts),
