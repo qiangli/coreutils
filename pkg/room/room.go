@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // Card is one live member's record — who it is, what it is bound to, and how to
@@ -327,32 +329,67 @@ func Find(id string) (Card, bool, error) {
 	return Card{}, false, nil // 0 or ambiguous — caller reports the count
 }
 
-// Emit appends an event to the timeline. Seq is the append order (line count),
-// assigned under a lock so concurrent emitters do not collide.
+// Emit appends an event to the timeline. Seq is never stored — Timeline
+// recomputes it from line position plus the archive offset on every read
+// (see archive.go) — so the append itself stays a plain, cheap write.
+//
+// The append is guarded by appendMu (in-process) AND a short cross-process
+// lock (see timelineLockPath) — the latter is what makes it safe for
+// RotateTimeline to later rewrite this same file: without it, a rewrite
+// racing a concurrent process's append could silently drop that append.
+// Locking is best-effort, matching pkg/bus's withBoardLock: on any failure to
+// acquire (contention, or advisory locking unsupported on this platform) the
+// append still proceeds, which is the pre-existing behavior this must not
+// regress.
+//
+// Rotation runs opportunistically after the append, outside both locks and
+// throttled — see rotateTimelineOpportunistic — so a hygiene sweep never
+// sits on the critical path of recording an event.
 func Emit(e Event) error {
 	path, err := timelinePath()
 	if err != nil {
 		return err
 	}
-	appendMu.Lock()
-	defer appendMu.Unlock()
 	if e.TS == "" {
 		e.TS = time.Now().UTC().Format(time.RFC3339)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 	b, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(append(b, '\n'))
-	return err
+
+	appendMu.Lock()
+	lock, lerr := lockfile.AcquireWithin(timelineLockPath(), 2*time.Second, lockfile.Holder{
+		Name: "room-emit", PID: os.Getpid(), Intent: "append",
+	})
+	f, ferr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	var werr, cerr error
+	if ferr == nil {
+		_, werr = f.Write(append(b, '\n'))
+		cerr = f.Close()
+	}
+	if lerr == nil {
+		lock.Release()
+	}
+	appendMu.Unlock()
+	if ferr != nil {
+		return ferr
+	}
+	if werr != nil {
+		return werr
+	}
+	if cerr != nil {
+		return cerr
+	}
+
+	rotateTimelineOpportunistic()
+	return nil
 }
 
-// Timeline returns the last n events (all when n <= 0), oldest-first.
+// Timeline returns the last n events (all when n <= 0), oldest-first. Seq is
+// LINE POSITION PLUS archivedThrough(): the file itself only ever holds the
+// live tail once rotation has run, so the offset is what keeps a seq stable
+// across a rotation that removed everything before it.
 func Timeline(n int) ([]Event, error) {
 	path, err := timelinePath()
 	if err != nil {
@@ -366,7 +403,7 @@ func Timeline(n int) ([]Event, error) {
 		return nil, err
 	}
 	var all []Event
-	seq := int64(0)
+	seq := archivedThrough()
 	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
