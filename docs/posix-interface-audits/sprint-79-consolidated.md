@@ -1,7 +1,8 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `67e7e32`
-against POSIX.1-2016 Issue 7, current source, command-package tests, and the
+This report reconciles the Sprint 79 interface ledger through coreutils `4326c9e`
+(including the Profile C source waves and accepted Issue 781 repair) against POSIX.1-2016
+Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
 GNU extension behavior is not certification evidence.
@@ -100,7 +101,8 @@ lower-ranked edges.
 | 1 | `fc` | `OPERANDS`, `STDOUT`, `EFFECTS`, `EXIT_STATUS` | Accepted tests prove form validation, first-only substitution, and multiline listing. Still add real editor invocation, forward/reverse/clamped ranges, history persistence limits, command re-execution state and status, `FCEDIT`/`HISTFILE`/`HISTSIZE`, and I/O/locale failures. |
 | 1 | `sh` | shell-language clauses beyond entrypoint selection | The process-level Bashy test proves the selected `sh` utility route, `-c`, script-file and stdin forms, `$0`/positional arguments, empty command, missing-file status, and argv0 strict-POSIX engagement. It does not prove the complete shell grammar, expansions, redirections, traps, environments, interactive/job-control behavior, and every 1-127 status consequence; retain partial. |
 | 2 | `at`, `batch`, `crontab` | host scheduler integration | Accepted Issue 743 source now proves strict allow/deny policy parsing and fail-closed stat errors, empty-deny access, unknown-job listing status, correct `-t` diagnostics, and crontab backslash/percent translation. Existing tests cover persisted environment/cwd/umask, queue/load markers, atomic installation, daemon handoff, mail-provider routing, and carried `LC_TIME`/`TZ` forms. Remaining: real system policy directories and privilege products, live mail delivery/load gating, and installed-locale breadth. |
-| 2 | `awk`, `comm`, `csplit`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `tr`, `unexpand`, `uniq`, `wc` | `ENVIRONMENT_VARIABLES`, algorithmic `STDOUT` | Add non-C multibyte `LC_CTYPE`/`LC_COLLATE`/`LC_NUMERIC` fixtures that discriminate character boundaries, classes, equivalence, ranges, ordering, blanks, widths, and numeric rendering for each named command. |
+| 2 | `awk`, `comm`, `csplit`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `unexpand`, `uniq`, `wc` | locale-provider and integration breadth | Locale waves A-C now provide command-surface evidence for the applicable `LC_CTYPE`, `LC_COLLATE`, and `LC_NUMERIC` behavior in the bounded C/POSIX, supported UTF-8, and carried `de_DE.ISO-8859-1` products. Unsupported provider/platform combinations fail closed. These rows remain partial until the canonical evidence lanes and integration boundary are reconciled; the implemented bounded-locale semantics must not be described as absent. |
+| 2 | `tr` | locale-provider and integration breadth | Issues 769 and 781 implement the carried multibyte character model; binary-value `-c`; LC_CTYPE-character `-C` ordered by LC_COLLATE; ranges, equivalence, and `[c*]`; post-transform character squeezing; raw-byte preservation; bounded writes; and provider preflight/lifecycle. The repaired `-C` domain includes every carried LC_CTYPE character, including NUL and bytes that LC_COLLATE cannot name as collating elements. Remaining: arbitrary installed locales, a general multibyte collation provider, and integration evidence. |
 | 2 | `cut` | locale-provider integration | Accepted source now applies invocation `LC_CTYPE` to `-c`, `-b -n`, and multibyte `-d` boundaries while preserving exact input bytes; focused tests cover C/POSIX, UTF-8, ISO-8859-1, malformed input, precedence, long lines, and fail-before-I/O behavior. Remaining: the carried locale corpus is bounded and installed locales outside it fail closed. |
 | 2 | `expand` | locale-provider integration | Accepted source now retains exact byte spans and uses invocation `LC_CTYPE` for display-column accounting; focused tests cover C/POSIX, UTF-8 widths, ISO-8859-1, malformed input, precedence, `-i`, read errors, and short writes. Remaining: the carried locale corpus and Unicode width policy are bounded. |
 | 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Issue 748 and manager review now prove every Issue 7 conversion and E/O fallback in the carried locales, `LC_TIME` precedence/fail-closed behavior, invocation `TZ`/`-u`, validation before the injected clock setter, XSI year rules, setter failure, and output error plus short-write status. Remaining: privileged real clock-set integration, leap-second rendering from a system clock source, additional platform setters, and installed locales outside the bounded C/POSIX and `de_DE` corpus. |
@@ -115,16 +117,17 @@ lower-ranked edges.
 | 2 | `pr` | `ENVIRONMENT_VARIABLES`, platform/locale integration | Issue 747 closes the complete required option/optional-argument matrix, corrects the ledger's XSI classification (`-f`, not `-l`), proves exact headers and page structures, makes `-m` assume `-e`/`-i`, applies invocation `TZ` and bounded `LC_TIME`, defers terminal diagnostics, returns nonzero on SIGINT, and covers read/write/short-write failures. Remaining: multibyte `LC_CTYPE` display widths/printability, installed locales outside the carried corpus, and a real controlling-terminal target-host run. |
 | 2 | `tty` | platform/locale integration | Linux and Darwin have real PTY terminal-name tests, with Darwin `/dev/console` coverage; the exact POSIX-locale nonterminal output, status partition, invalid descriptors, output errors, and short writes are covered. Remaining: truthful terminal pathname lookup on the other POSIX targets, an integration-host controlling-terminal run, and locale message providers outside the POSIX locale. |
 | 2 | `more` | `ENVIRONMENT_VARIABLES`, terminal integration | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are unavailable UTF-8 collation providers and terminal-capability/platform integration—not absent translated catalogs or unsupported `-i`, `-p`, or `-t`. |
-| 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, and Windows runtime paths. |
+| 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Issue 779 keeps POSIX `-i` and `-f` independently effective in either order; GNU last-option-wins remains extension-only outside POSIX mode. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, and Windows runtime paths. |
+| 2 | `ls` | locale/terminal/platform integration | Issue 777 proves last-`-H`/`-L` ordering across clusters and spellings, and sticky output-error/short-write propagation across listing formats, help/version, continuation, and recursion. Remaining: non-C `LC_COLLATE`/`LC_TIME`, terminal width/capability discovery, and non-Unix runtime metadata behavior. |
 | 2 | `touch` | `OUTPUT_FILES`, platform/error integration | Accepted source now obtains reference atime on supported stat layouts and fails loudly when unavailable; literal `-`, TZ, leap second, near-PATH_MAX, and reference-time paths are tested. Remaining: real atime propagation on every target, 0666 creation through umask, `-c` existing-file and multi-operand failure products, and full range rejection. |
 | 2 | `iconv` | `ENVIRONMENT_VARIABLES`, locale-provider integration | Accepted source implements pathname charmaps, strict malformed/truncated detection across every carried multibyte family, `-c` status invariance, exact `-s` scope, locale-derived omitted encodings, aliases, file/stdin ordering, and read/write failures. Remaining: locale codeset discovery is a deterministic carried corpus rather than `nl_langinfo(CODESET)`; unknown unqualified installed locales fail closed. |
 | 3 | `chgrp`, `chown`, `chmod`, `mkdir`, `mkfifo`, `mv`, `rm`, `uudecode`, `uuencode` | `OUTPUT_FILES`, `CONSEQUENCES_OF_ERRORS` | Add privilege-contained kernel/filesystem tests for ownership, mode/set-ID/ctime, symlink/hard-link identity, special files, permission failures, and platform-specific implementations rather than seam-only proof. |
 | 3 | `df`, `du` | `STDOUT`, `CONSEQUENCES_OF_ERRORS` | Add mounted cross-device fixtures, real mount discovery, hard-link products, free-slot/space accounting, output failures, and platform-specific formats. |
 | 3 | `logger` | `EFFECTS`, `EXIT_STATUS` | Add a real local syslog receiver and Windows disposition test; prove message persistence, zero-operand stdin behavior, open/send/close errors, and statuses. |
-| 3 | `nohup` | `OUTPUT_FILES`, `EXIT_STATUS` | Test `nohup.out` mode through umask, append preservation, both output-open failures preventing execution, non-ENOENT start failures, and non-skipping PTY paths. |
+| 3 | `nohup` | `OUTPUT_FILES`, `EXIT_STATUS` | Issue 779 closes the no-option operand boundary: in POSIX mode sole `--`, `--help`, and `--version` are utility operands; outside POSIX mode standalone help/version remain extensions, with `nohup -- --help` the explicit dash-name form. Remaining: `nohup.out` mode/append evidence, both output-open failures preventing execution, non-ENOENT start failures, and non-skipping PTY paths. |
 | 3 | `ps` | `STDOUT`, `ENVIRONMENT_VARIABLES` | Add runtime providers for non-Linux targets and tests for every required field, identity lookup, unavailable-data representation, terminal width, locale time, and live selection semantics. |
 | 3 | `newgrp` | `EFFECTS`, privilege/host integration | Accepted source proves name-before-numeric lookup, membership/password/TTY policy, supplementary capacity fallback, equal real/effective GID plans, unchanged-shell retry after refusal, login argv0/environment/cwd, virtual umask, streams, and shell status/signal propagation. Remaining: a real setuid-root credential transition, attended controlling-terminal password entry, NSS/PAM policy, and non-Unix disposition are host/privilege integration boundaries. |
-| 3 | `pax` | `OUTPUT_FILES`, platform/filesystem integration | Accepted issues 715-717 now cover interactive rename, copy links, source-atime reset, ordered `-p`, preservation failures, the full `-o` grammar/precedence families, extended-header transcoding, complete list formats, locale time, and deterministic errors. Remaining: special-file extraction, privileged ownership/device products, unsupported no-follow metadata platforms, real terminal breadth, and uncarried legacy locale encodings. |
+| 3 | `pax` | `OUTPUT_FILES`, platform/filesystem integration | Accepted issues 715-717, 775, 776, and 778 cover interactive/substitution preflight, copy links, source-atime reset, ordered preservation, the full `-o` families, archive-sink block-size classification, verbose hard/symbolic-link `ls -l` fields and occurrence-bound targets, effective custom-list PAX names, write errors, and deterministic six-month/future timestamp selection. Remaining: special-file extraction, privileged ownership/device products, unsupported no-follow metadata platforms, real terminal breadth, and uncarried legacy locale encodings. |
 | 3 | `renice` | `EFFECTS`, `EXIT_STATUS` | Add a hermetic scheduler seam for exact `which` dispatch and mixed ID success, plus privilege-contained real priority-change tests and Windows disposition. |
 | 3 | `stty`, `tabs`, `tput` | terminal `STDIN`/`STDOUT`, `EFFECTS` | Run required forms against real terminal/terminfo databases across supported platforms, including Windows disposition, unavailable capabilities, atomic state, write errors, and exact statuses. |
 | 3 | `who`, `write` | `INPUT_FILES`, `OUTPUT_FILES`, terminal effects | Add live login-database and PTY fixtures across supported ABIs, credentials, terminal ownership/activity/permission state, interruption, framing, close errors, and platform fail-closed behavior. |
@@ -163,7 +166,8 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `67e7e32`. It credits the accepted command
+This report is reconciled through canonical `4326c9e`, including the Profile C
+source waves and accepted Issue 781 repair. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -190,13 +194,31 @@ handling), and `pr` Issue 747 through manager-completed `987058e`, merged by
 manager reruns independently passed count-20, race-5, vet, and Linux, Darwin,
 Windows, AIX, and FreeBSD cross-build coverage against the existing tests.
 
-The machine-readable evidence lanes name the exact current test IDs, including
+The later Profile C reconciliation credits locale wave A through `1886238`,
+`5548b53`, and `e2c109f`; locale wave B through `96b25a0`, `ae8ff9b`,
+`5cda0c2`, and `525acc1`; locale wave C Issue 769 through `fdab2de`; and awk
+numeric-radix plus expr back-reference closure through Issue 780 commit
+`c418161`. The awk dependency is the public `github.com/qiangli/goawk` fork at
+commit `88712e61a085`, pinned as
+`v0.0.0-20260826042810-88712e61a085`; its added public surface is
+`interp.Config.DecimalPoint`. Program literals and `-v` assignments retain the
+portable period spelling, while input conversion and numeric output use the
+selected carried radix. Issue 779's cp/nohup option-boundary fixes are
+`bcd6c42`; Issue 777's final ls changes are `5761c57` and `a5f14fc`; the pax
+verbose-list and timestamp closures are `1de6d83`, `598f8d3`, and `e3cbd8f`,
+with archive-sink block sizing at `ed4ed06`. Issue 781's final accepted repair
+is `9e53b12`; its audit reconciliation is `4326c9e`.
+
+The machine-readable evidence lanes retain their validated test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
 pax interactive/preservation/extended-header families, iconv
 charmap/stream/status matrix, fold locale/byte/error matrix, getconf
 inventory/platform/error matrix, cut and expand locale/byte/error matrices,
 paste locale-delimiter/error matrix, and cat injected-read/special-file
-continuation evidence.
+continuation evidence. The issue-specific audits, rather than the unchanged TSV,
+name the newer awk/expr, ls, pax, and locale-wave test IDs listed above; a
+conductor-owned TSV refresh is required before those IDs can be called canonical
+machine-readable evidence.
 These recently accepted locale/platform waves remain partial because their
 locale-provider and platform residuals are stated explicitly above.
 

@@ -1,6 +1,6 @@
 # `ls` / `stty` POSIX.1-2016 Issue 7 Audit
 
-Scope: the directory listing utility `ls` and terminal state utility `stty` against The Open Group POSIX.1-2008 Issue 7, 2016 Edition utility pages, audited end-to-end against `cmds/ls` and `cmds/stty` as of main `9e9dc19`.
+Scope: the directory listing utility `ls` and terminal state utility `stty` against The Open Group POSIX.1-2008 Issue 7, 2016 Edition utility pages, audited end-to-end against `cmds/ls` and `cmds/stty` through main `4326c9e`, including the final `ls` fixes `5761c57` and `a5f14fc`.
 
 * <https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ls.html>
 * <https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/stty.html>

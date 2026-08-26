@@ -1,5 +1,14 @@
 # POSIX interface audit — Go batch 4
 
+This is the original point-in-time batch audit. Later closure audits are
+authoritative for repaired behavior: `nohup` commit `9c85d14` removed the
+125/POSIX split and Issue 779 (`bcd6c42`) closed the no-option operand boundary;
+pax Issues 715-717,
+775, 776, and 778 closed the interaction/preservation/options/block/listing
+surfaces; and the later od Profile C audit closed its carried-locale rendering.
+The source excerpts and classifications below are retained as historical
+pre-fix evidence, not statements about current main.
+
 **Scope (13 commands, exactly):** `mkdir`, `mkfifo`, `more`, `mv`, `newgrp`,
 `nice`, `nohup`, `od`, `paste`, `pathchk`, `pax`, `pr`, `ps`.
 

@@ -1,6 +1,6 @@
-# pax list-mode `-v` hard-link output audit (Sprint 79 issue 775)
+# pax verbose list-output audit (Sprint 79 issues 775 and 778)
 
-Scope: POSIX Issue 7 (2016 Edition) STDOUT specification for `pax` in list mode with verbose (`-v`) output for archive members representing hard links to previously listed members.
+Scope: POSIX Issue 7 (2016 Edition) STDOUT specification for `pax` verbose (`-v`) list mode, including link fields and the inherited `ls -l` timestamp shape.
 
 The authoritative reference is the Open Group `pax` STDOUT specification:
 <https://pubs.opengroup.org/onlinepubs/9699919799/utilities/pax.html#tag_20_92_10>
@@ -17,7 +17,7 @@ where `<ls -l listing>` is the format specified by `ls -l`. For symbolic links, 
 
 When `-o listopt=format` is specified in verbose list mode (`-v`), output format is governed by the `listopt` format specification.
 
-## Implemented and Verified Behavior
+## Implemented and focused-tested behavior
 
 1. **Verbose List-Mode (`-v`) Output**:
    - The existing long-list layout is `<mode> <nlink> <owner> <group> <size> <mtime> <name>`.

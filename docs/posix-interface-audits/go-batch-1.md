@@ -29,6 +29,15 @@ gap or a test that asserts non-POSIX output.
 
 ## Result summary
 
+This table preserves the original batch snapshot. Its `awk` locale blocker is
+superseded by locale wave A and Issue 780 (`c418161`): coreutils now resolves
+the carried numeric locales and passes the selected radix through the public
+`interp.Config.DecimalPoint` API in `github.com/qiangli/goawk` commit
+`88712e61a085` (module pin `v0.0.0-20260826042810-88712e61a085`). Program
+numeric literals and `-v` assignments retain the portable period spelling;
+input conversion and numeric output use the selected carried radix, and an
+unsupported locale fails before input.
+
 | Command | Overall classification | Decisive reason |
 | --- | --- | --- |
 | `at` | `implementation_gap` | Required `-m` is absent; empty/blank programs are rejected; time grammar/locale handling and removal-error status are wrong. |
