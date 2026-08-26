@@ -1028,7 +1028,46 @@ func closeMeeting(ctx context.Context, st *State, opt closeOptions, runner chat.
 			return "", err
 		}
 	}
-	return fileMinutes(st)
+	path, err := fileMinutes(st)
+	if err != nil {
+		return "", err
+	}
+	// A board that absorbs a thread and never reports back is how the board
+	// becomes a place nobody trusts. On close, post the outcome to mb WITH the
+	// room id so the correlation the board opened is closed on the same board.
+	if st.board() {
+		if reason := postBoardOutcome(st); reason != "" {
+			fmt.Fprintf(opt.Out, "meet: ⚠ board outcome not posted to mb: %s\n", reason)
+		}
+	}
+	return path, nil
+}
+
+// postBoardOutcome announces a closed board's result on mb, keyed by the room id.
+// It returns a human reason when it could not post (no seam wired, or the post
+// failed) and "" on success or when there was nothing to report; closeMeeting
+// surfaces the reason rather than failing the close, because a filed room that
+// could not announce itself is still closed.
+func postBoardOutcome(st *State) string {
+	if PostMB == nil {
+		return "no message-board seam is wired"
+	}
+	events, err := readTranscript(st.ID)
+	if err != nil {
+		return err.Error()
+	}
+	msgs := 0
+	for _, e := range events {
+		if e.Kind == "message" {
+			msgs++
+		}
+	}
+	body := fmt.Sprintf("board closed — %q, %d message(s) from %d seat(s). Room id: %s",
+		st.Topic, msgs, len(st.Participants), st.ID)
+	if _, err := PostMB(MBPost{From: st.initiatorName(), Topic: st.Topic, Body: body}, nil); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // fileMinutes renders and writes the minutes from whatever is on disk. It is the

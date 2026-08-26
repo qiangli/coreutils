@@ -247,6 +247,15 @@ type State struct {
 	// round-robin); Board only says the orchestrator never drives a turn itself.
 	Board bool `json:"board,omitempty"`
 
+	// OpenTo, when set, DELEGATES SEATING to a declared audience: an agent that
+	// matches it may self-seat on its first board post, recorded as a `join`
+	// event so the roster still shows who came. Empty (the default) keeps seating
+	// organizer-push-only — the default does not change. It is the organizer
+	// delegating to a declared audience, never an unconditional self-join
+	// (agent-reachability-im-layer §4a). Only a board carries one; a chaired or
+	// round-robin meeting spawns turns and cannot admit a seat it will not drive.
+	OpenTo *OpenInvite `json:"open_to,omitempty"`
+
 	Status      string    `json:"status"`
 	Cwd         string    `json:"cwd"`
 	Out         string    `json:"out,omitempty"`

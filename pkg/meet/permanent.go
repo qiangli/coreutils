@@ -64,6 +64,46 @@ type Invitation struct {
 // arrived when the transport says it did not.
 var Notify func(agent string, inv Invitation) (delivered bool, reason string, err error)
 
+// MBPost is a host-neutral projection of one message-board post. Meet reads
+// From/Body/Topic/Seq when SEEDING a board from mb, and fills From/Topic/Body
+// when POSTING back to it. Meet never imports pkg/bus (meet-web-chatroom-design
+// D2); bashy translates to and from pkg/bus.Post.
+type MBPost struct {
+	Seq   int64
+	From  string
+	Topic string
+	Body  string
+}
+
+// FetchMB reads message-board posts by sequence — the READ half of the mb seam,
+// the same wired seam as Notify but pointing the other way (one seam, two
+// directions). bashy wires it to pkg/bus; a bare coreutils embedding leaves it
+// nil and the CLI says so rather than pretending it seeded a room. The returned
+// posts follow the requested order, and a seq that names no post is an error:
+// seeding a room from a post that does not exist would attribute opening context
+// to nobody.
+var FetchMB func(seqs []int64) ([]MBPost, error)
+
+// AudienceMatch reports whether an agent is in the audience an open invite
+// names. bashy wires it to the SAME fleet selection `mb send` uses (the
+// band/tool/provider/family/version predicate behind bus.FleetSelect), so a
+// self-seat can never admit somebody `mb send` would not have reached — the
+// selector vocabulary is mb's, resolved by mb's own code, never a second copy
+// here that could drift. Any is the "anyone" audience: true for any registered
+// agent. Nil in a bare embedding with no fleet, where an open invite matches
+// nobody and seating stays organizer-push-only.
+var AudienceMatch func(agent string, inv OpenInvite) bool
+
+// PostMB posts to the message board and returns the sequence it was assigned.
+// It is the WRITE half of the mb seam used for a board's OWN announcements — the
+// pointer a board posts BACK to mb when it seeds from a thread, the group invite
+// an open board posts, and the outcome a board posts when it closes — as distinct
+// from Notify, which delivers a per-agent invitation. A nil audience is a
+// broadcast (the pointer and outcome); a non-nil one carries mb's own selector
+// vocabulary (the group invite). An empty MBPost.From lets bashy resolve the
+// board's board identity. bashy wires it to pkg/bus; nil in a bare embedding.
+var PostMB func(post MBPost, audience *OpenInvite) (seq int64, err error)
+
 // StartPermanentRole is supplied by bashy, the host that can select and launch
 // an agent. A bare coreutils embedding leaves it nil and fails clearly instead
 // of pretending a role was started.

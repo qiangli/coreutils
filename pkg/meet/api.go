@@ -160,6 +160,11 @@ type CreateOptions struct {
 	// chair, no spawned secretary. It implies NoSecretary — a board keeps no
 	// minutes and must never arm a pending one.
 	Board bool
+	// FromMB seeds the board with these message-board posts as opening context,
+	// attributed to their ORIGINAL authors, and posts a pointer BACK to mb so the
+	// thread and the room are correlated — a room is the correlation id mb never
+	// had. It requires Board; a meeting that spawns turns has no board to seed.
+	FromMB []int64
 }
 
 // Rooms lists every meeting on this host.
@@ -235,6 +240,9 @@ func Create(opts CreateOptions) (*State, error) {
 	if opts.Board {
 		opts.NoSecretary = true
 	}
+	if len(opts.FromMB) > 0 && !opts.Board {
+		return nil, fmt.Errorf("meet: --from-mb seeds a board; pass --board")
+	}
 	sf := sessionFlags{
 		topic: opts.Topic, participants: opts.Participants,
 		secretary: opts.Secretary, chair: opts.Chair,
@@ -280,7 +288,75 @@ func Create(opts CreateOptions) (*State, error) {
 	for _, a := range st.Agenda {
 		_, _ = record(st, "agenda", procedural(st), string(RoleChair), a)
 	}
+	if len(opts.FromMB) > 0 {
+		if err := SeedBoardFromMB(st, opts.FromMB); err != nil {
+			return nil, err
+		}
+	}
 	return st, nil
+}
+
+// SeedBoardFromMB seeds a board with message-board posts as opening context and
+// posts a pointer BACK to mb, in one step. It is the shared body of `meet open
+// --board --from-mb` and CreateOptions.FromMB, so the CLI and a programmatic
+// Create seed identically.
+//
+// The fetch rides the FetchMB seam (Meet does not import pkg/bus); a bare
+// embedding with no seam wired is told so rather than silently seeding nothing.
+// Each post is recorded attributed to its ORIGINAL author — the board is the
+// correlation id the thread lacked, and re-attributing the context to whoever
+// opened the room would erase who actually said it. The pointer back is
+// best-effort: a board that cannot announce itself is still a usable board, but
+// the CLI surfaces the failure so a silent non-report never reads as delivered.
+func SeedBoardFromMB(st *State, seqs []int64) error {
+	if !st.board() {
+		return fmt.Errorf("meet: --from-mb seeds a board; %s is not one", st.ID)
+	}
+	if len(seqs) == 0 {
+		return fmt.Errorf("meet: --from-mb needs at least one post sequence")
+	}
+	if FetchMB == nil {
+		return fmt.Errorf("meet: --from-mb is unavailable: no message-board seam is wired")
+	}
+	posts, err := FetchMB(seqs)
+	if err != nil {
+		return fmt.Errorf("meet: fetch mb posts: %w", err)
+	}
+	for _, p := range posts {
+		author := strings.TrimSpace(p.From)
+		if author == "" {
+			author = "mb"
+		}
+		text := strings.TrimSpace(p.Body)
+		if t := strings.TrimSpace(p.Topic); t != "" {
+			text = "[" + t + "] " + text
+		}
+		ev := Event{
+			Round: st.Round, Speaker: canonAgent(author), Role: string(RoleParticipant),
+			Kind: "message", Text: fmt.Sprintf("mb #%d — %s", p.Seq, sanitizeTurn(text)), TS: nowFn(),
+		}
+		if err := AppendEvent(st.ID, ev); err != nil {
+			return err
+		}
+	}
+	if PostMB != nil {
+		body := fmt.Sprintf("seeded board %s from mb %s — reply there; the room is the thread",
+			st.roomRef(), joinSeqs(seqs))
+		if _, err := PostMB(MBPost{From: st.initiatorName(), Topic: st.Topic, Body: body}, nil); err != nil {
+			return fmt.Errorf("meet: post mb pointer: %w", err)
+		}
+	}
+	return nil
+}
+
+// joinSeqs renders a seq list the way the pointer post and receipts show it:
+// "#3, #7, #12".
+func joinSeqs(seqs []int64) string {
+	parts := make([]string, len(seqs))
+	for i, s := range seqs {
+		parts[i] = fmt.Sprintf("#%d", s)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Post appends a human contribution. It takes NO lease.
@@ -315,8 +391,17 @@ func PostAs(ref, author, to, text string) (Event, error) {
 		}
 		who = canonAgent(who)
 		if !participantSeat(st, who) {
-			return Event{}, fmt.Errorf("meet: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
-				seatLabel(who), st.ID, st.ID, who)
+			// An open board delegates seating to a declared audience: a matching
+			// agent self-seats on this, its first post, rather than being refused.
+			// A non-match still gets the ordinary not-seated error.
+			seated, err := selfSeat(st, who)
+			if err != nil {
+				return Event{}, err
+			}
+			if !seated {
+				return Event{}, fmt.Errorf("meet: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
+					seatLabel(who), st.ID, st.ID, who)
+			}
 		}
 		target := ""
 		if strings.TrimSpace(to) != "" {
