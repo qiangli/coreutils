@@ -296,7 +296,7 @@ func (sf *sessionFlags) newState() (*State, error) {
 		Initiator:    sf.initiator,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
 		Steerable: sf.steerable, Board: sf.board,
-		MaxTurns:  sf.maxTurns, MaxStalls: sf.maxStalls,
+		MaxTurns: sf.maxTurns, MaxStalls: sf.maxStalls,
 		Status: "open", Cwd: cwd, Out: sf.out,
 		TurnTimeout: sf.turnTimeout, Created: nowFn(),
 	}
@@ -942,7 +942,7 @@ func newAskCmd() *cobra.Command {
 // room reference rather than an id, because the human doing it is looking at
 // `bashy meet list` and will type the room number.
 func newInviteCmd() *cobra.Command {
-	var as string
+	var as, notify string
 	cmd := &cobra.Command{
 		Use:   "invite <ref> <agent>",
 		Short: "seat an agent in a running room (organizer only)",
@@ -951,6 +951,9 @@ func newInviteCmd() *cobra.Command {
 			"Inviting somebody already seated is a no-op, not a second seat.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if notify != "mb" && notify != "none" {
+				return fmt.Errorf("meet: --notify must be mb or none, got %q", notify)
+			}
 			actor := strings.TrimSpace(as)
 			if actor == "" {
 				actor = humanName()
@@ -964,10 +967,40 @@ func newInviteCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s is in %s — participants: %s\n",
 				seatLabel(canonAgent(args[1])), st.ID, strings.Join(st.Participants, ", "))
+			inv := invitationFor(st, canonAgent(args[1]))
+			// Always render this literal command. It is both the fallback when no
+			// notifier is configured and the only stable instruction: st.Room is a
+			// reusable convenience number, while inv.ID survives the room lifetime.
+			fmt.Fprintf(cmd.OutOrStdout(), "join: %s\n", inv.Join)
+			switch notify {
+			case "none":
+				fmt.Fprintln(cmd.OutOrStdout(), "notification disabled")
+			case "mb":
+				if Notify == nil {
+					fmt.Fprintln(cmd.OutOrStdout(), "notification unavailable: no notifier is configured")
+					return nil
+				}
+				delivered, reason, err := Notify(canonAgent(args[1]), inv)
+				if err != nil {
+					return fmt.Errorf("meet: notify %s: %w", seatLabel(canonAgent(args[1])), err)
+				}
+				if delivered {
+					if reason != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "notified %s: %s\n", seatLabel(canonAgent(args[1])), reason)
+					} else {
+						fmt.Fprintf(cmd.OutOrStdout(), "notified %s\n", seatLabel(canonAgent(args[1])))
+					}
+				} else if reason != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "notification not delivered: %s\n", reason)
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "notification not delivered")
+				}
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&as, "as", "", "act as this member (default: the human); must be the room's organizer")
+	cmd.Flags().StringVar(&notify, "notify", "mb", "notification transport: mb | none")
 	return cmd
 }
 

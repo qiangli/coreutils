@@ -141,21 +141,38 @@ func latestOpenMeeting() (string, error) {
 // mistake — only by a meeting that has genuinely said nothing.
 func observeFilter(st *State, participants, kinds []string) (func(kind, speaker string) bool, error) {
 	seats := map[string]bool{}
+	var humans []string
 	for _, p := range participants {
 		canon := canonAgent(p)
-		if !st.seated(canon) {
+		// Human observer names are not fleet aliases. Check the stored observer
+		// spelling too, so an observer remains filterable even if a later fleet
+		// entry happens to use a matching nickname.
+		if !st.seated(canon) && !st.humanAttendee(p) {
 			return nil, fmt.Errorf("meet: %q is not seated at this meeting (roster: %s)",
 				p, strings.Join(st.attendees(), ", "))
 		}
-		seats[canon] = true
+		if st.humanAttendee(p) {
+			humans = append(humans, strings.TrimSpace(p))
+		} else {
+			seats[canon] = true
+		}
 	}
 	kindSet := map[string]bool{}
 	for _, k := range kinds {
 		kindSet[strings.TrimSpace(k)] = true
 	}
 	return func(kind, speaker string) bool {
-		if len(seats) > 0 && !seats[speaker] {
-			return false
+		if len(seats)+len(humans) > 0 && !seats[speaker] {
+			found := false
+			for _, human := range humans {
+				if strings.EqualFold(human, speaker) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
 		}
 		if len(kindSet) > 0 && !kindSet[kind] {
 			return false

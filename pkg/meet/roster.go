@@ -378,6 +378,24 @@ func Invite(ref, actor, agent string) error {
 	return inviteTo(st, actor, agent)
 }
 
+// InvitationFor returns the durable invitation body for ref. It is kept beside
+// Invite so every transport receives the same non-volatile join instruction.
+func InvitationFor(ref, agent string) (Invitation, error) {
+	st, err := loadMeeting(ref)
+	if err != nil {
+		return Invitation{}, err
+	}
+	name := canonAgent(strings.TrimSpace(agent))
+	return invitationFor(st, name), nil
+}
+
+func invitationFor(st *State, agent string) Invitation {
+	return Invitation{
+		ID: st.ID, Topic: st.Topic,
+		Join: fmt.Sprintf("bashy meet read %s --as %s", st.ID, agent),
+	}
+}
+
 // inviteTo is Invite against an already-loaded session, so an in-process caller
 // (the REPL) mutates the same State it is about to run a round with, rather than
 // a second copy of it that its own next save would clobber.
@@ -413,8 +431,12 @@ func inviteTo(st *State, actor, agent string) error {
 		st.Participants = prev
 		return err
 	}
-	_, err := record(st, "invite", actorLabel(st, actor), "", fmt.Sprintf("invited %s", seatLabel(name)))
-	return err
+	if _, err := record(st, "invite", actorLabel(st, actor), "", fmt.Sprintf("invited %s", seatLabel(name))); err != nil {
+		return err
+	}
+	// A meeting is not a public board. A freshly seated agent starts at the
+	// current transcript head rather than receiving every prior exchange.
+	return SeedCursor(st.ID, name)
 }
 
 // Kick removes an agent from a running room. Organizer-only.
