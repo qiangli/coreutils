@@ -46,6 +46,20 @@ type Env struct {
 	Paired bool
 	// PairedName is the name the control plane knows this host by.
 	PairedName string
+
+	// The observation stores — where agents on this host leave traces
+	// whether or not anyone cataloged them. Read-only here; an empty path
+	// disables that source, which is what keeps tests hermetic.
+	//
+	// BoardDir is the message board (~/.bashy/mb): seen/<name> cursors and
+	// posts.jsonl authors.
+	BoardDir string
+	// MeetDir is the meet session store (~/.bashy/meet): each session's
+	// state.json names its participants, secretary, and human.
+	MeetDir string
+	// RoomDir is the bus room (~/.bashy/room): subs/<name>.json is a
+	// standing subscription held by that name.
+	RoomDir string
 }
 
 // DefaultEnv reads the real host.
@@ -63,6 +77,20 @@ func DefaultEnv() Env {
 		if name, ok := readOutpostAgentName(filepath.Join(home, ".config", "outpost", "agent.json")); ok {
 			e.Paired, e.PairedName = true, name
 		}
+		e.BoardDir = filepath.Join(home, ".bashy", "mb")
+		e.MeetDir = filepath.Join(home, ".bashy", "meet")
+		e.RoomDir = filepath.Join(home, ".bashy", "room")
+	}
+	// The owning packages honor these overrides when they write; reading the
+	// stores they redirected means following the same variables.
+	if d := strings.TrimSpace(os.Getenv("BASHY_MB_DIR")); d != "" {
+		e.BoardDir = d
+	}
+	if d := strings.TrimSpace(os.Getenv("BASHY_MEET_DIR")); d != "" {
+		e.MeetDir = d
+	}
+	if d := strings.TrimSpace(os.Getenv("BASHY_ROOM_DIR")); d != "" {
+		e.RoomDir = d
 	}
 	e.Hostname, _ = os.Hostname()
 	return e
