@@ -379,7 +379,8 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 		return code
 	}
 	charComplement := complementC || *complementUpper
-	comp := *complement || charComplement
+	valueComplement := *complement
+	comp := valueComplement || charComplement
 	deleting, squeezing := *del, *squeeze
 
 	if len(operands) == 0 {
@@ -464,13 +465,16 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 			}
 		}
 	}
+	binaryValueMode := valueComplement && !charComplement && tables.multibyte
 
-	// member1 is the literal SET1 membership; matches applies -c on top of
-	// it. The complemented domain is never enumerated under a multi-byte
-	// LC_CTYPE, where it holds more than a million characters.
+	// member1 is SET1 membership in the selected complement domain: encoded
+	// byte values for multi-byte -c, characters otherwise.
 	member1 := make(map[rune]bool, len(set1.chars))
 	for _, r := range set1.chars {
 		member1[r] = true
+	}
+	if binaryValueMode {
+		member1 = encodedValues(set1.chars)
 	}
 	matches := func(r rune) bool {
 		if comp {
@@ -479,11 +483,10 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 		return member1[r]
 	}
 
-	// Effective SET1: with -c it is the ascending sequence of characters
-	// NOT in the expanded SET1 (class membership survives; case tags do
-	// not). Only the single-byte universe is small enough to enumerate.
+	// Effective SET1 is the ordered complement. Byte-value domains are small
+	// enough to enumerate; the multi-byte -C character domain stays symbolic.
 	eff1 := set1
-	if comp && !tables.multibyte {
+	if comp && (!tables.multibyte || binaryValueMode) {
 		var complementChars []rune
 		if charComplement {
 			complementChars = tables.collate.characterComplement(member1)
@@ -520,7 +523,7 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, rawFillCount, xlate); errMsg != "" {
 				return fail(errMsg)
 			}
-		case comp && tables.multibyte:
+		case charComplement && tables.multibyte:
 			if len(set2.chars) == 0 {
 				if set2.fillTokenPos < 0 && !*truncateSet1 {
 					return fail("when not truncating set1, string2 must be non-empty")
@@ -598,6 +601,9 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 			for _, r := range set2.chars {
 				squeezeSet[r] = true
 			}
+			if binaryValueMode && !translating {
+				squeezeSet = encodedValues(set2.chars)
+			}
 		} else {
 			squeezeSet, squeezeComplement = member1, comp
 		}
@@ -642,7 +648,54 @@ func runWithLocaleProviders(rc *tool.RunContext, args []string, opener ctypeOpen
 		return fail(fmt.Sprintf("write error: %v", err))
 	}
 
-	if !tables.multibyte {
+	if binaryValueMode {
+		// POSIX -c complements encoded values, not characters. Under a
+		// multi-byte LC_CTYPE, consume one byte value at a time; bytes excluded
+		// by SET1 are copied exactly, while complemented values may map to a
+		// multi-byte SET2 character.
+		lastOut := rune(-1)
+		for {
+			b, err := in.ReadByte()
+			if err != nil {
+				if err != io.EOF {
+					readErr = err
+				}
+				break
+			}
+			selected := matches(rune(b))
+			if deleting && selected {
+				continue
+			}
+			outRune := rune(b)
+			raw := true
+			if translating && selected {
+				if mapped, ok := xlate[rune(b)]; ok {
+					outRune = mapped
+					raw = false
+				} else if hasDefault {
+					outRune = defaultTarget
+					raw = false
+				}
+			}
+			if raw && b >= utf8.RuneSelf {
+				outRune = escapeRune(b)
+			}
+			if squeezing && inSqueeze(outRune) && outRune == lastOut {
+				continue
+			}
+			lastOut = outRune
+			var writeErr error
+			if raw {
+				writeErr = out.WriteByte(b)
+			} else {
+				writeErr = writeChar(out, outRune)
+			}
+			if writeErr != nil {
+				writeFailed = onWriteErr(writeErr)
+				break
+			}
+		}
+	} else if !tables.multibyte {
 		// Single-byte universe: collapse the plans into 256-entry tables so
 		// the transform stays one array lookup per byte.
 		var deleteByte, squeezeByte [256]bool

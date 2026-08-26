@@ -74,14 +74,15 @@ expansion, translation and output rather than collapsing into U+FFFD. The
 single-byte universe keeps its 256-entry lookup tables, so the byte path
 is unchanged in both behavior and cost.
 
-The complemented domain of a multi-byte `LC_CTYPE` is large but finite. It is
-not materialized: ordinary translation consumes only the needed prefix, while
-a `[c*]` fill in string2 is represented by a symbolic plan over the Unicode
-scalar count, the excluded SET1 members, and any explicit SET2 prefix/suffix.
-This implements the required omitted-count repeat form for complemented SET1
-without an allocation proportional to the character set. The single-byte path
-likewise sizes `[c*]` from the effective complemented SET1 rather than the
-literal pre-complement operand.
+The two complement options retain their Issue 7 distinction under a multi-byte
+`LC_CTYPE`. `-c` complements the 256 encoded byte values in ascending binary
+order, treats every byte of a multi-byte SET1 character as a specified value,
+and transforms input one encoded value at a time. `-C` complements characters
+and orders them by LC_COLLATE. The latter domain is large but finite and is not
+materialized: a `[c*]` fill in string2 is represented by a symbolic plan over
+the Unicode scalar count, excluded SET1 characters, and any explicit SET2
+prefix/suffix. The single-byte paths likewise size `[c*]` from their effective
+complement rather than the literal pre-complement operand.
 
 Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteCharacterBoundaries`,
@@ -91,6 +92,7 @@ Tests: `cmds/tr/locale_test.go#TestTrUTF8LocaleIsUsable`,
 `#TestTrPOSIXMultibyteCaseTranslation`,
 `#TestTrPOSIXMultibyteRanges`,
 `#TestTrPOSIXMultibyteComplement`,
+`#TestTrPOSIXValueAndCharacterComplementsDiffer`,
 `#TestTrPOSIXMultibyteRepeatAndTruncate`,
 `#TestTrPOSIXLocalePrecedenceSelectsCTypeCategory`,
 `#TestTrOutsidePOSIXModeKeepsByteCharacters`,

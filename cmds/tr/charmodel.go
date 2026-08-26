@@ -38,6 +38,26 @@ func escapeRune(b byte) rune { return escapeBase + rune(b) }
 
 func isEscapedByte(r rune) bool { return r >= escapeBase+0x80 && r <= escapeBase+0xFF }
 
+// encodedValues returns the individual encoded byte values represented by an
+// expanded character set. This is the SET1 domain for POSIX -c, as distinct
+// from -C's characters: a UTF-8 character contributes each byte of its
+// encoding, while an uninterpretable escaped byte contributes itself.
+func encodedValues(chars []rune) map[rune]bool {
+	values := make(map[rune]bool)
+	var encoded [utf8.UTFMax]byte
+	for _, r := range chars {
+		if isEscapedByte(r) {
+			values[rune(byte(r-escapeBase))] = true
+			continue
+		}
+		n := utf8.EncodeRune(encoded[:], r)
+		for _, b := range encoded[:n] {
+			values[rune(b)] = true
+		}
+	}
+	return values
+}
+
 // charTables is the selected character universe.
 type charTables struct {
 	// multibyte selects the UTF-8 character universe.

@@ -234,9 +234,9 @@ func TestTrPOSIXMultibyteComplement(t *testing.T) {
 		{"delete complement", []string{"-cd", "é\n"}, "héllo\n", "é\n"},
 		{"squeeze complement", []string{"-cs", "é"}, "haaébb\n", "haéb\n"},
 		{"translate complement to one character", []string{"-c", "é\n", "X"}, "héllo\n", "XéXXX\n"},
-		// The complemented domain is unbounded, so -t consumes only its
-		// first character: U+0080, the first character outside ASCII.
-		{"truncate complement", []string{"-ct", "\\000-\\177", "界"}, "a\u0080é\n", "a界é\n"},
+		// The large -C character domain stays symbolic, so -t consumes only
+		// its first character: U+0080, the first character outside ASCII.
+		{"truncate character complement", []string{"-Ct", "\\000-\\177", "界"}, "a\u0080é\n", "a界é\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, errOut, code := runTrEnv(t, env, tc.in, tc.args...)
@@ -260,6 +260,33 @@ func TestTrPOSIXMultibyteComplement(t *testing.T) {
 	_, errOut, code = runTrEnv(t, env, "abc\n", "-c", "abc", "[:upper:]")
 	if code != 1 || !strings.Contains(errOut, "must map all characters in the domain to one") {
 		t.Fatalf("[:upper:] with -c: code=%d stderr=%q", code, errOut)
+	}
+}
+
+// TestTrPOSIXValueAndCharacterComplementsDiffer pins the Issue 7 distinction:
+// -c complements encoded values in binary order, while -C complements
+// LC_CTYPE characters in LC_COLLATE order. A UTF-8 character therefore has
+// two independently translated values under -c and one translation under -C.
+func TestTrPOSIXValueAndCharacterComplementsDiffer(t *testing.T) {
+	env := posixUTF8()
+	for _, tc := range []struct {
+		name string
+		args []string
+		in   string
+		want string
+	}{
+		{"value complement translates both UTF-8 bytes", []string{"-c", "a", "[x*]"}, "é", "xx"},
+		{"character complement translates one character", []string{"-C", "a", "[x*]"}, "é", "x"},
+		{"UTF-8 SET1 contributes its encoded values", []string{"-c", "é", "[x*]"}, "éa", "éx"},
+		{"binary prefix order", []string{"-c", "a", "12[x*]"}, "\x00\x01\x02", "12x"},
+		{"binary domain has 256 values", []string{"-c", "a", "P[x*]S"}, "\x00\xff", "PS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runTrEnv(t, env, tc.in, tc.args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tc.want)
+			}
+		})
 	}
 }
 
