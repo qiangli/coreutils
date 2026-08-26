@@ -13,6 +13,9 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -38,7 +41,28 @@ type patternSpec struct {
 	regex  bool
 }
 
+type ctypeProvider interface {
+	bre.ByteCtype
+	Close() error
+}
+
+type ctypeOpener func(string) (ctypeProvider, error)
+
+type collateProvider interface {
+	bre.ByteEquivalence
+	bre.ByteEquivalenceValidity
+	bre.ByteCollationWeights
+	bre.ByteCollatingElements
+	Close() error
+}
+
+type collateOpener func(string) (collateProvider, error)
+
 func run(rc *tool.RunContext, args []string) int {
+	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) { return collate.Open(name) })
+}
+
+func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
 	fs := tool.NewFlags(cmd.Name)
 	prefix := fs.StringP("prefix", "f", "xx", "use PREFIX instead of 'xx'")
 	digits := fs.IntP("digits", "n", 2, "use DIGITS digits in output file names")
@@ -65,13 +89,17 @@ func run(rc *tool.RunContext, args []string) int {
 	if err := validateSuffixFormat(format); err != nil {
 		return tool.UsageError(rc, cmd, "invalid suffix format '%s': %v", format, err)
 	}
+	tables, code := localeRegexpTables(rc, ctypeOpen, collateOpen)
+	if code >= 0 {
+		return code
+	}
 
 	lines, err := readLines(rc, operands[0])
 	if err != nil {
 		fmt.Fprintf(rc.Err, "csplit: cannot open '%s' for reading: %v\n", operands[0], tool.SysErr(err))
 		return 1
 	}
-	points, code := resolvePatterns(rc, lines, operands[1:], *suppressMatched)
+	points, code := resolvePatterns(rc, lines, operands[1:], *suppressMatched, tables)
 	if code >= 0 {
 		return code
 	}
@@ -119,7 +147,52 @@ func readLines(rc *tool.RunContext, name string) ([]string, error) {
 	}
 }
 
-func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, suppressMatched bool) ([]splitPoint, int) {
+func localeRegexpTables(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen collateOpener) (*bre.LocaleByteTables, int) {
+	lcCType := locale.Resolve(rc.Env, locale.CType)
+	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	var tables *bre.LocaleByteTables
+	if lcCType != "C" && lcCType != "POSIX" {
+		provider, err := ctypeOpen(lcCType)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "csplit: LC_CTYPE %q: %v\n", lcCType, err)
+			return nil, 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = bre.SnapshotLocaleByteCtypeTables(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "csplit: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
+			return nil, 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "csplit: LC_CTYPE %q: %v\n", lcCType, closeErr)
+			return nil, 2
+		}
+	} else {
+		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
+	}
+	if lcCollate != "C" && lcCollate != "POSIX" {
+		provider, err := collateOpen(lcCollate)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "csplit: LC_COLLATE %q: %v\n", lcCollate, err)
+			return nil, 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = tables.WithCollation(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "csplit: LC_COLLATE %q: %v\n", lcCollate, snapshotErr)
+			return nil, 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "csplit: LC_COLLATE %q: %v\n", lcCollate, closeErr)
+			return nil, 2
+		}
+	}
+	return tables, -1
+}
+
+func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, suppressMatched bool, tables *bre.LocaleByteTables) ([]splitPoint, int) {
 	points := make([]splitPoint, 0, len(patterns))
 	start := 0
 	last := ""
@@ -155,7 +228,7 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 			}
 			if repeatToEOF {
 				for {
-					point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched)
+					point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched, tables)
 					if code >= 0 {
 						return nil, code
 					}
@@ -168,7 +241,7 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 				continue
 			}
 			for i := 0; i < repeats; i++ {
-				point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched)
+				point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched, tables)
 				if code >= 0 {
 					return nil, code
 				}
@@ -180,7 +253,7 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 			}
 			continue
 		}
-		point, nextSearch, found, code := resolveOnePattern(rc, lines, pattern, start, suppressMatched)
+		point, nextSearch, found, code := resolveOnePattern(rc, lines, pattern, start, suppressMatched, tables)
 		if code >= 0 {
 			return nil, code
 		}
@@ -213,7 +286,7 @@ func parseRepeat(rc *tool.RunContext, pattern string) (count int, toEOF bool, re
 	return 0, false, false, -1
 }
 
-func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, start int, suppressMatched bool) (splitPoint, int, bool, int) {
+func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, start int, suppressMatched bool, tables *bre.LocaleByteTables) (splitPoint, int, bool, int) {
 	spec, code := parsePattern(rc, pattern)
 	if code >= 0 {
 		return splitPoint{}, start, false, code
@@ -233,19 +306,15 @@ func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, star
 		}
 		return point, idx, true, -1
 	}
-	// csplit patterns are POSIX basic regular expressions, like grep's
-	// default mode — translate through the shared BRE engine.
-	translated, err := bre.ToGo(spec.expr)
-	if err != nil {
-		return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
-	}
-	re, err := regexp.Compile(translated)
+	matcher, err := compileMatcher(spec.expr, tables)
 	if err != nil {
 		return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
 	}
 	found := -1
 	for i := start; i < len(lines); i++ {
-		if re.MatchString(strings.TrimSuffix(lines[i], "\n")) {
+		if ok, err := matcher.match(strings.TrimSuffix(lines[i], "\n")); err != nil {
+			return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
+		} else if ok {
 			found = i
 			break
 		}
@@ -262,6 +331,31 @@ func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, star
 		nextStart = found + 1
 	}
 	return splitPoint{line: line, nextStart: nextStart, skip: spec.skip}, found + 1, true, -1
+}
+
+type lineMatcher struct {
+	re       *regexp.Regexp
+	localeRe *bre.LocaleByteRegexp
+}
+
+func compileMatcher(expr string, tables *bre.LocaleByteTables) (lineMatcher, error) {
+	if tables != nil {
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(expr), tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpBRE})
+		return lineMatcher{localeRe: re}, err
+	}
+	translated, err := bre.ToGo(expr)
+	if err != nil {
+		return lineMatcher{}, err
+	}
+	re, err := regexp.Compile(translated)
+	return lineMatcher{re: re}, err
+}
+
+func (m lineMatcher) match(line string) (bool, error) {
+	if m.localeRe != nil {
+		return m.localeRe.MatchString(line)
+	}
+	return m.re.MatchString(line), nil
 }
 
 func parsePattern(rc *tool.RunContext, pattern string) (patternSpec, int) {

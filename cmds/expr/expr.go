@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -21,6 +25,39 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 type value string
 
+type ctypeProvider interface {
+	bre.ByteCtype
+	Close() error
+}
+
+type ctypeOpener func(string) (ctypeProvider, error)
+
+type collateProvider interface {
+	bre.ByteEquivalence
+	bre.ByteEquivalenceValidity
+	bre.ByteCollationWeights
+	bre.ByteCollatingElements
+	Compare(string, string) (int, error)
+	Close() error
+}
+
+type collateOpener func(string) (collateProvider, error)
+
+type exprLocale struct {
+	characters characterCodec
+	compare    func(value, value) (int, error)
+	tables     *bre.LocaleByteTables
+	close      func() error
+}
+
+type characterCodec int
+
+const (
+	characterBytes characterCodec = iota
+	characterUTF8
+	characterLatin1
+)
+
 // evalError marks a runtime evaluation failure — a well-formed expression that
 // cannot be evaluated, such as division by zero. GNU expr reports these with
 // EXPR_FAILURE (exit 3), distinct from EXPR_INVALID (exit 2) used for a
@@ -30,7 +67,151 @@ type evalError struct{ msg string }
 
 func (e *evalError) Error() string { return e.msg }
 
+func resolveExprLocale(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen collateOpener) (*exprLocale, int) {
+	lcCType := locale.Resolve(rc.Env, locale.CType)
+	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	characters, err := resolveCharacterCodec(lcCType)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "expr: %v\n", err)
+		return nil, 2
+	}
+	loc := &exprLocale{characters: characters, compare: compareC}
+	var tables *bre.LocaleByteTables
+	if needsCTypeProvider(lcCType) {
+		provider, err := ctypeOpen(lcCType)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "expr: LC_CTYPE %q: %v\n", lcCType, err)
+			return nil, 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = bre.SnapshotLocaleByteCtypeTables(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "expr: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
+			return nil, 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "expr: LC_CTYPE %q: %v\n", lcCType, closeErr)
+			return nil, 2
+		}
+	} else {
+		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
+	}
+	if lcCollate != "C" && lcCollate != "POSIX" {
+		provider, err := collateOpen(lcCollate)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "expr: LC_COLLATE %q: %v\n", lcCollate, err)
+			return nil, 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = tables.WithCollation(provider)
+		if snapshotErr != nil {
+			_ = provider.Close()
+			fmt.Fprintf(rc.Err, "expr: LC_COLLATE %q: %v\n", lcCollate, snapshotErr)
+			return nil, 2
+		}
+		loc.compare = func(a, b value) (int, error) {
+			ai, aok := integer(a)
+			bi, bok := integer(b)
+			if aok && bok {
+				return ai.Cmp(bi), nil
+			}
+			return provider.Compare(string(a), string(b))
+		}
+		loc.close = func() error {
+			if err := provider.Close(); err != nil {
+				return fmt.Errorf("LC_COLLATE %q: %w", lcCollate, err)
+			}
+			return nil
+		}
+	}
+	if needsCTypeProvider(lcCType) || lcCollate != "C" && lcCollate != "POSIX" {
+		loc.tables = tables
+	}
+	return loc, -1
+}
+
+func needsCTypeProvider(name string) bool {
+	if name == "C" || name == "POSIX" {
+		return false
+	}
+	base, codeset := splitLocaleName(name)
+	return !((base == "C" || base == "POSIX") && normalizeCodeset(codeset) == "UTF8")
+}
+
+func (l *exprLocale) closeLocale() error {
+	if l != nil && l.close != nil {
+		return l.close()
+	}
+	return nil
+}
+
+func resolveCharacterCodec(name string) (characterCodec, error) {
+	base, codeset := splitLocaleName(name)
+	switch {
+	case (base == "C" || base == "POSIX") && codeset == "":
+		return characterBytes, nil
+	case (base == "C" || base == "POSIX") && normalizeCodeset(codeset) == "UTF8":
+		return characterUTF8, nil
+	case strings.EqualFold(base, "de_DE") && normalizeCodeset(codeset) == "ISO88591":
+		return characterLatin1, nil
+	default:
+		return characterBytes, fmt.Errorf(
+			"LC_CTYPE %q is unavailable; supported locales are C/POSIX, their UTF-8 aliases, and de_DE.ISO-8859-1",
+			name,
+		)
+	}
+}
+
+func splitLocaleName(name string) (base, codeset string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ = strings.Cut(name, ".")
+	return base, codeset
+}
+
+func normalizeCodeset(name string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+}
+
+func (c characterCodec) count(s string) int {
+	return len(c.split(s))
+}
+
+func (c characterCodec) split(s string) [][]byte {
+	switch c {
+	case characterUTF8:
+		var out [][]byte
+		for len(s) > 0 {
+			r, size := utf8.DecodeRuneInString(s)
+			if r == utf8.RuneError && size == 0 {
+				break
+			}
+			out = append(out, []byte(s[:size]))
+			s = s[size:]
+		}
+		return out
+	default:
+		out := make([][]byte, len(s))
+		for i := range s {
+			out[i] = []byte{s[i]}
+		}
+		return out
+	}
+}
+
+func joinCharacterUnits(units [][]byte) string {
+	var b strings.Builder
+	for _, unit := range units {
+		b.Write(unit)
+	}
+	return b.String()
+}
+
 func run(rc *tool.RunContext, args []string) int {
+	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) { return collate.Open(name) })
+}
+
+func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		_, err := fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
 		if err != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(err) {
@@ -53,10 +234,17 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
-	p := &parser{tokens: args}
+	loc, code := resolveExprLocale(rc, ctypeOpen, collateOpen)
+	if code >= 0 {
+		return code
+	}
+	p := &parser{tokens: args, locale: loc}
 	v, err := p.parseOr()
 	if err == nil && p.more() {
 		err = fmt.Errorf("syntax error")
+	}
+	if closeErr := loc.closeLocale(); err == nil && closeErr != nil {
+		err = closeErr
 	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "expr: %v\n", err)
@@ -80,6 +268,7 @@ func run(rc *tool.RunContext, args []string) int {
 type parser struct {
 	tokens []string
 	pos    int
+	locale *exprLocale
 }
 
 func (p *parser) more() bool { return p.pos < len(p.tokens) }
@@ -152,7 +341,10 @@ func (p *parser) parseCompare() (value, error) {
 		if err != nil {
 			return "", err
 		}
-		cmp := compare(left, right)
+		cmp, err := p.locale.compare(left, right)
+		if err != nil {
+			return "", err
+		}
 		ok := map[string]bool{"=": cmp == 0, "==": cmp == 0, "!=": cmp != 0, "<": cmp < 0, "<=": cmp <= 0, ">": cmp > 0, ">=": cmp >= 0}[op]
 		if ok {
 			left = "1"
@@ -230,11 +422,14 @@ func (p *parser) parseMatch() (value, error) {
 		if err != nil {
 			return "", err
 		}
-		re, captures, err := compileBRE(string(pat))
+		re, captures, err := p.compileBRE(string(pat))
 		if err != nil {
 			return "", fmt.Errorf("invalid regular expression")
 		}
-		matches := re.FindAllStringSubmatchIndex(string(left), 1)
+		matches, err := re.findAllStringSubmatchIndex(string(left), 1)
+		if err != nil {
+			return "", err
+		}
 		if len(matches) == 0 || matches[0][0] != 0 {
 			if captures {
 				left = ""
@@ -250,7 +445,7 @@ func (p *parser) parseMatch() (value, error) {
 			}
 		} else {
 			m := matches[0]
-			left = value(strconv.Itoa(utf8.RuneCountInString(string(left)[m[0]:m[1]])))
+			left = value(strconv.Itoa(p.locale.characters.count(string(left)[m[0]:m[1]])))
 		}
 	}
 	return left, nil
@@ -295,7 +490,10 @@ func (p *parser) parseFunction(name string) (value, error) {
 	switch name {
 	case "length":
 		v, err := arg()
-		return value(strconv.Itoa(len([]rune(v)))), err
+		if err != nil {
+			return "", err
+		}
+		return value(strconv.Itoa(p.locale.characters.count(string(v)))), nil
 	case "quote":
 		return arg()
 	case "index":
@@ -307,9 +505,11 @@ func (p *parser) parseFunction(name string) (value, error) {
 		if err != nil {
 			return "", err
 		}
-		for i, r := range []rune(s) {
-			for _, c := range []rune(chars) {
-				if r == c {
+		haystack := p.locale.characters.split(string(s))
+		needles := p.locale.characters.split(string(chars))
+		for i, r := range haystack {
+			for _, c := range needles {
+				if string(r) == string(c) {
 					return value(strconv.Itoa(i + 1)), nil
 				}
 			}
@@ -332,7 +532,7 @@ func (p *parser) parseFunction(name string) (value, error) {
 		if err != nil {
 			return "", err
 		}
-		rs := []rune(s)
+		rs := p.locale.characters.split(string(s))
 		if pos.Sign() <= 0 || ln.Sign() <= 0 {
 			return "", nil
 		}
@@ -346,10 +546,10 @@ func (p *parser) parseFunction(name string) (value, error) {
 		start := pos.Int64() - 1
 		remaining := int64(len(rs)) - start
 		if ln.Cmp(big.NewInt(remaining)) >= 0 {
-			return value(string(rs[int(start):])), nil
+			return value(joinCharacterUnits(rs[int(start):])), nil
 		}
 		end := start + ln.Int64()
-		return value(string(rs[int(start):int(end)])), nil
+		return value(joinCharacterUnits(rs[int(start):int(end)])), nil
 	case "match":
 		s, err := arg()
 		if err != nil {
@@ -359,7 +559,7 @@ func (p *parser) parseFunction(name string) (value, error) {
 		if err != nil {
 			return "", err
 		}
-		sub := &parser{tokens: []string{string(s), ":", string(pat)}}
+		sub := &parser{tokens: []string{string(s), ":", string(pat)}, locale: p.locale}
 		return sub.parseMatch()
 	default:
 		return "", fmt.Errorf("unknown function")
@@ -399,19 +599,19 @@ func integer(v value) (*big.Int, bool) {
 	return n, ok
 }
 
-func compare(a, b value) int {
+func compareC(a, b value) (int, error) {
 	ai, aok := integer(a)
 	bi, bok := integer(b)
 	if aok && bok {
-		return ai.Cmp(bi)
+		return ai.Cmp(bi), nil
 	}
 	if a < b {
-		return -1
+		return -1, nil
 	}
 	if a > b {
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
 func truthy(v value) bool {
@@ -425,13 +625,29 @@ func truthy(v value) bool {
 	return true
 }
 
-func compileBRE(pattern string) (*bre.Regexp, bool, error) {
+type exprRegexp struct {
+	re       *bre.Regexp
+	localeRe *bre.LocaleByteRegexp
+}
+
+func (r exprRegexp) findAllStringSubmatchIndex(src string, n int) ([][]int, error) {
+	if r.localeRe != nil {
+		return r.localeRe.FindAllStringSubmatchIndex(src, n)
+	}
+	return r.re.FindAllStringSubmatchIndex(src, n), nil
+}
+
+func (p *parser) compileBRE(pattern string) (exprRegexp, bool, error) {
+	if p.locale.tables != nil {
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), p.locale.tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpBRE})
+		return exprRegexp{localeRe: re}, hasBRECapture(pattern), err
+	}
 	re, err := bre.Compile(pattern)
 	if err != nil {
-		return nil, false, err
+		return exprRegexp{}, false, err
 	}
 	re.Longest()
-	return re, hasBRECapture(pattern), nil
+	return exprRegexp{re: re}, hasBRECapture(pattern), nil
 }
 
 func hasBRECapture(pattern string) bool {

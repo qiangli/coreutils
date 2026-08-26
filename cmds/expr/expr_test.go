@@ -3,6 +3,7 @@ package exprcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -110,7 +111,7 @@ func TestExprPOSIXMatchAndStringFunctions(t *testing.T) {
 	checkExpr(t, "ab\n", 0, "abab", ":", `\(ab\)\1`)
 	checkExpr(t, "3\n", 0, "abc123", ":", "[[:alpha:]]*")
 	checkExpr(t, "\n", 1, "abc", ":", `a\(z\)`)
-	checkExpr(t, "2\n", 0, "length", "éx")
+	checkExpr(t, "3\n", 0, "length", "éx")
 	checkExpr(t, "bc\n", 0, "substr", "abc", "2", "5")
 	checkExpr(t, "abc\n", 0, "substr", "abc", "1", "9223372036854775808")
 	checkExpr(t, "bc\n", 0, "substr", "abc", "2", "999999999999999999999999999999")
@@ -118,6 +119,174 @@ func TestExprPOSIXMatchAndStringFunctions(t *testing.T) {
 	checkExpr(t, "\n", 1, "substr", "abc", "0", "2")
 	checkExpr(t, "2\n", 0, "index", "abc", "xcb")
 	checkExpr(t, "b\n", 0, "match", "abc", `a\(b\)`)
+}
+
+type fakeExprCType struct {
+	closeCalls int
+	classErr   error
+}
+
+func (p *fakeExprCType) classify(b byte, member bool) (bool, error) {
+	if p.classErr != nil {
+		return false, p.classErr
+	}
+	return member, nil
+}
+func (p *fakeExprCType) IsAlpha(b byte) (bool, error) {
+	return p.classify(b, b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b == 0xe9)
+}
+func (p *fakeExprCType) IsAlnum(b byte) (bool, error) {
+	ok, err := p.IsAlpha(b)
+	return ok || b >= '0' && b <= '9', err
+}
+func (p *fakeExprCType) IsBlank(b byte) (bool, error) { return p.classify(b, b == ' ' || b == '\t') }
+func (p *fakeExprCType) IsCntrl(b byte) (bool, error) {
+	return p.classify(b, b < 0x20 || b == 0x7f)
+}
+func (p *fakeExprCType) IsDigit(b byte) (bool, error) { return p.classify(b, b >= '0' && b <= '9') }
+func (p *fakeExprCType) IsGraph(b byte) (bool, error) { return p.classify(b, b > 0x20 && b != 0x7f) }
+func (p *fakeExprCType) IsLower(b byte) (bool, error) {
+	return p.classify(b, b >= 'a' && b <= 'z' || b == 0xe9)
+}
+func (p *fakeExprCType) IsPrint(b byte) (bool, error) { return p.classify(b, b >= 0x20 && b != 0x7f) }
+func (p *fakeExprCType) IsPunct(b byte) (bool, error) { return p.classify(b, b == '!' || b == '.') }
+func (p *fakeExprCType) IsSpace(b byte) (bool, error) {
+	return p.classify(b, b == ' ' || b == '\t' || b == '\n')
+}
+func (p *fakeExprCType) IsUpper(b byte) (bool, error) {
+	return p.classify(b, b >= 'A' && b <= 'Z')
+}
+func (p *fakeExprCType) IsXDigit(b byte) (bool, error) {
+	return p.classify(b, b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F')
+}
+func (p *fakeExprCType) ToLower(in []byte) ([]byte, error) {
+	if p.classErr != nil {
+		return nil, p.classErr
+	}
+	out := append([]byte(nil), in...)
+	for i, b := range out {
+		if b >= 'A' && b <= 'Z' {
+			out[i] = b + 32
+		}
+	}
+	return out, nil
+}
+func (p *fakeExprCType) Close() error { p.closeCalls++; return nil }
+
+type fakeExprCollate struct {
+	closeCalls int
+	closeErr   error
+}
+
+func (p *fakeExprCollate) Compare(a, b string) (int, error) {
+	return -strings.Compare(a, b), nil
+}
+func (p *fakeExprCollate) Equivalents(value byte) ([]byte, error) {
+	if value == 0 {
+		return nil, nil
+	}
+	if value == 'e' || value == 0xe9 {
+		return []byte{'e', 0xe9}, nil
+	}
+	return []byte{value}, nil
+}
+func (p *fakeExprCollate) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeExprCollate) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	result[0xe9] = 'e'
+	return result, nil
+}
+func (p *fakeExprCollate) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeExprCollate) Close() error { p.closeCalls++; return p.closeErr }
+
+func runExprLocale(env []string, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) (string, string, int) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Env: env, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}}
+	code := runWithLocales(rc, args, ctypeOpen, collateOpen)
+	return out.String(), errb.String(), code
+}
+
+func TestExprLocaleCharacterBoundaries(t *testing.T) {
+	out, errb, code := runExprLocale([]string{"LC_ALL=C"}, []string{"length", "é"}, func(string) (ctypeProvider, error) {
+		panic("C locale must not open provider")
+	}, func(string) (collateProvider, error) {
+		panic("C locale must not open provider")
+	})
+	if code != 0 || errb != "" || out != "2\n" {
+		t.Fatalf("C length = (%q,%q,%d), want byte character count", out, errb, code)
+	}
+
+	out, errb, code = runExprLocale([]string{"LC_ALL=C"}, []string{"é", ":", ".*"}, func(string) (ctypeProvider, error) {
+		panic("C locale must not open provider")
+	}, func(string) (collateProvider, error) {
+		panic("C locale must not open provider")
+	})
+	if code != 0 || errb != "" || out != "2\n" {
+		t.Fatalf("C match length = (%q,%q,%d), want byte character count", out, errb, code)
+	}
+
+	out, errb, code = runExprLocale([]string{"LANG=C", "LC_CTYPE=C.UTF-8", "LC_COLLATE=C"}, []string{"substr", "éx", "2", "1"}, func(string) (ctypeProvider, error) {
+		panic("C.UTF-8 character operations must not open byte provider")
+	}, func(string) (collateProvider, error) {
+		panic("C.UTF-8 character operations must not open collator")
+	})
+	if code != 0 || errb != "" || out != "x\n" {
+		t.Fatalf("C.UTF-8 substr = (%q,%q,%d), want UTF-8 character boundary", out, errb, code)
+	}
+
+	latin1 := string([]byte{'a', 0xe9, 'z'})
+	ctypeFake := &fakeExprCType{}
+	out, errb, code = runExprLocale([]string{"LANG=C", "LC_CTYPE=de_DE.iso88591", "LC_COLLATE=C"}, []string{"substr", latin1, "2", "1"}, func(string) (ctypeProvider, error) {
+		return ctypeFake, nil
+	}, func(string) (collateProvider, error) {
+		return nil, errors.New("collator should not open")
+	})
+	if code != 0 || errb != "" || out != string([]byte{0xe9, '\n'}) || ctypeFake.closeCalls != 1 {
+		t.Fatalf("Latin-1 substr = (%q,%q,%d) close=%d", out, errb, code, ctypeFake.closeCalls)
+	}
+}
+
+func TestExprLocaleRegexClassesEquivalenceAndRanges(t *testing.T) {
+	input := string([]byte{0xe9})
+	for _, pattern := range []string{"[[:alpha:]]", "[[=e=]]", "[d-f]"} {
+		t.Run(pattern, func(t *testing.T) {
+			out, errb, code := runExprLocale([]string{"LC_CTYPE=de_DE.iso88591", "LC_COLLATE=de_DE.iso88591"}, []string{input, ":", pattern}, func(string) (ctypeProvider, error) {
+				return &fakeExprCType{}, nil
+			}, func(string) (collateProvider, error) {
+				return &fakeExprCollate{}, nil
+			})
+			if code != 0 || errb != "" || out != "1\n" {
+				t.Fatalf("expr %q = (%q,%q,%d), want locale match length", pattern, out, errb, code)
+			}
+		})
+	}
+}
+
+func TestExprLocaleCollationComparison(t *testing.T) {
+	collateFake := &fakeExprCollate{}
+	out, errb, code := runExprLocale([]string{"LC_COLLATE=de_DE.iso88591"}, []string{"a", ">", "b"}, func(string) (ctypeProvider, error) {
+		panic("LC_COLLATE alone must not open LC_CTYPE provider")
+	}, func(string) (collateProvider, error) {
+		return collateFake, nil
+	})
+	if code != 0 || errb != "" || out != "1\n" || collateFake.closeCalls != 1 {
+		t.Fatalf("collation compare = (%q,%q,%d) close=%d", out, errb, code, collateFake.closeCalls)
+	}
 }
 
 type epipeWriter struct{}

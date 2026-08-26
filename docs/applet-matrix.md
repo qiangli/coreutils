@@ -67,7 +67,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 7 | 62 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 3 | 25 |
-| `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 18 |
+| `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 3 | 21 |
 | `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 16 |
@@ -84,7 +84,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 30 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 27 |
-| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 9 |
+| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 12 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |

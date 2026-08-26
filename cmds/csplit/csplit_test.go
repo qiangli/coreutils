@@ -3,6 +3,7 @@ package csplitcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,4 +328,145 @@ func TestCsplitSuppressMatchedLineNumber(t *testing.T) {
 	}
 	assertFile(t, dir, "xx00", "l1\n")
 	assertFile(t, dir, "xx01", "l3\n")
+}
+
+type fakeCsplitCType struct{ closeCalls int }
+
+func (p *fakeCsplitCType) classify(b byte, member bool) (bool, error) { return member, nil }
+func (p *fakeCsplitCType) IsAlpha(b byte) (bool, error) {
+	return p.classify(b, b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b == 0xe9)
+}
+func (p *fakeCsplitCType) IsAlnum(b byte) (bool, error) {
+	alpha, err := p.IsAlpha(b)
+	return alpha || b >= '0' && b <= '9', err
+}
+func (p *fakeCsplitCType) IsBlank(b byte) (bool, error) { return p.classify(b, b == ' ' || b == '\t') }
+func (p *fakeCsplitCType) IsCntrl(b byte) (bool, error) {
+	return p.classify(b, b < 0x20 || b == 0x7f)
+}
+func (p *fakeCsplitCType) IsDigit(b byte) (bool, error) { return p.classify(b, b >= '0' && b <= '9') }
+func (p *fakeCsplitCType) IsGraph(b byte) (bool, error) { return p.classify(b, b > 0x20 && b != 0x7f) }
+func (p *fakeCsplitCType) IsLower(b byte) (bool, error) {
+	return p.classify(b, b >= 'a' && b <= 'z' || b == 0xe9)
+}
+func (p *fakeCsplitCType) IsPrint(b byte) (bool, error) {
+	return p.classify(b, b >= 0x20 && b != 0x7f)
+}
+func (p *fakeCsplitCType) IsPunct(b byte) (bool, error) { return p.classify(b, b == '.' || b == '!') }
+func (p *fakeCsplitCType) IsSpace(b byte) (bool, error) {
+	return p.classify(b, b == ' ' || b == '\t' || b == '\n')
+}
+func (p *fakeCsplitCType) IsUpper(b byte) (bool, error) { return p.classify(b, b >= 'A' && b <= 'Z') }
+func (p *fakeCsplitCType) IsXDigit(b byte) (bool, error) {
+	return p.classify(b, b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F')
+}
+func (p *fakeCsplitCType) ToLower(in []byte) ([]byte, error) {
+	out := append([]byte(nil), in...)
+	for i, b := range out {
+		if b >= 'A' && b <= 'Z' {
+			out[i] = b + 32
+		}
+	}
+	return out, nil
+}
+func (p *fakeCsplitCType) Close() error { p.closeCalls++; return nil }
+
+type fakeCsplitCollate struct{ closeCalls int }
+
+func (p *fakeCsplitCollate) Equivalents(value byte) ([]byte, error) {
+	if value == 0 {
+		return nil, nil
+	}
+	if value == 'e' || value == 0xe9 {
+		return []byte{'e', 0xe9}, nil
+	}
+	return []byte{value}, nil
+}
+func (p *fakeCsplitCollate) EquivalenceClasses() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeCsplitCollate) CollationWeights() ([]byte, error) {
+	result := make([]byte, 256)
+	for i := range result {
+		result[i] = byte(i)
+	}
+	result[0xe9] = 'e'
+	return result, nil
+}
+func (p *fakeCsplitCollate) CollatingElements() ([]bool, error) {
+	result := make([]bool, 256)
+	for i := 1; i < len(result); i++ {
+		result[i] = true
+	}
+	return result, nil
+}
+func (p *fakeCsplitCollate) Close() error { p.closeCalls++; return nil }
+
+func runCsplitLocale(t *testing.T, env []string, stdin string, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) (string, string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
+	}
+	code := runWithLocales(rc, args, ctypeOpen, collateOpen)
+	return out.String(), errb.String(), code
+}
+
+func TestCsplitLocaleRegexClassesEquivalenceAndRanges(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Err: &errb}}
+	tables, code := localeRegexpTables(rc, func(string) (ctypeProvider, error) {
+		panic("C locale must not open ctype provider")
+	}, func(string) (collateProvider, error) {
+		panic("C locale must not open collate provider")
+	})
+	if code >= 0 || tables == nil || errb.Len() != 0 {
+		t.Fatalf("C locale tables = (%v,%d,%q), want byte-regexp tables", tables, code, errb.String())
+	}
+	matcher, err := compileMatcher("^.$", tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := matcher.match("é")
+	if err != nil || matched {
+		t.Fatalf("C /^.$/ match for two-byte UTF-8 input = (%v,%v), want false", matched, err)
+	}
+
+	for _, pattern := range []string{"/[[:alpha:]]/", "/[[=e=]]/", "/[d-f]/"} {
+		t.Run(pattern, func(t *testing.T) {
+			ctypeFake := &fakeCsplitCType{}
+			collateFake := &fakeCsplitCollate{}
+			stdout, errb, code := runCsplitLocale(t,
+				[]string{"LC_CTYPE=de_DE.iso88591", "LC_COLLATE=de_DE.iso88591"},
+				string([]byte{'1', '\n', 0xe9, '\n', 'z', '\n'}),
+				[]string{"-s", "-", pattern},
+				func(string) (ctypeProvider, error) { return ctypeFake, nil },
+				func(string) (collateProvider, error) { return collateFake, nil },
+			)
+			if code != 0 || stdout != "" || errb != "" || ctypeFake.closeCalls != 1 || collateFake.closeCalls != 1 {
+				t.Fatalf("csplit %s = (%q,%q,%d), ctypeClose=%d collateClose=%d", pattern, stdout, errb, code, ctypeFake.closeCalls, collateFake.closeCalls)
+			}
+		})
+	}
+}
+
+func TestCsplitLocaleInitFailsBeforeInputOpen(t *testing.T) {
+	want := errors.New("ctype unavailable")
+	_, errb, code := runCsplitLocale(t,
+		[]string{"LC_ALL=de_DE.iso88591"},
+		"",
+		[]string{"missing-input", "/x/"},
+		func(string) (ctypeProvider, error) { return nil, want },
+		func(string) (collateProvider, error) { return nil, errors.New("collator should not open") },
+	)
+	if code != 2 || !strings.Contains(errb, want.Error()) || strings.Contains(errb, "missing-input") {
+		t.Fatalf("locale init failure = (%q,%d), want ctype diagnostic before input open", errb, code)
+	}
 }
