@@ -9,6 +9,7 @@
 package atlas_test
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -131,6 +132,112 @@ func TestAliasTargetsExist(t *testing.T) {
 			}
 			if _, ok := atlas.Lookup(e.AliasOf); !ok {
 				t.Errorf("%s: alias_of %q does not resolve", n, e.AliasOf)
+			}
+		}
+	}
+}
+
+func TestMailAliasSecurityMetadataMatchesMailx(t *testing.T) {
+	mail, ok := atlas.Lookup("mail")
+	if !ok {
+		t.Fatal("mail alias is absent from atlas")
+	}
+	mailx, ok := atlas.Lookup("mailx")
+	if !ok {
+		t.Fatal("mailx is absent from atlas")
+	}
+	if mail.AliasOf != "mailx" {
+		t.Fatalf("mail AliasOf = %q, want mailx", mail.AliasOf)
+	}
+	if !slices.Equal(mail.Caps, mailx.Caps) {
+		t.Errorf("mail caps = %v, mailx caps = %v", mail.Caps, mailx.Caps)
+	}
+	if !slices.Equal(mail.Effects, mailx.Effects) {
+		t.Errorf("mail effects = %v, mailx effects = %v", mail.Effects, mailx.Effects)
+	}
+	if !slices.Contains(mailx.Caps, atlas.CapDestructive) {
+		t.Error("mailx delete-on-quit lacks destructive capability")
+	}
+	if !slices.Contains(mailx.Effects, atlas.EffDestroy) {
+		t.Error("mailx delete-on-quit lacks destroy security effect")
+	}
+}
+
+// The board family is local-file communication: reads consume durable logs,
+// sends append to them, and ordinary reads/drains advance per-reader cursors.
+// Keep those storage effects visible to policy without misclassifying the
+// transport as network egress or an external process.
+func TestLocalBoardCommunicationSecurityMetadata(t *testing.T) {
+	for _, name := range []string{"mb", "messages", "inbox", "bus"} {
+		e, ok := atlas.Lookup(name)
+		if !ok {
+			t.Errorf("%s is absent from atlas", name)
+			continue
+		}
+		for _, effect := range []string{atlas.EffRead, atlas.EffWrite, atlas.EffPersist} {
+			if !slices.Contains(e.Effects, effect) {
+				t.Errorf("%s effects = %v, missing %q for durable local communication", name, e.Effects, effect)
+			}
+		}
+		for _, effect := range []string{atlas.EffNet, atlas.EffExec, atlas.EffRemote} {
+			if slices.Contains(e.Effects, effect) {
+				t.Errorf("%s effects = %v, local-file communication must not declare %q", name, e.Effects, effect)
+			}
+		}
+	}
+	mb, _ := atlas.Lookup("mb")
+	messages, _ := atlas.Lookup("messages")
+	if messages.AliasOf != "mb" {
+		t.Errorf("messages AliasOf = %q, want mb", messages.AliasOf)
+	}
+	if !slices.Equal(messages.Caps, mb.Caps) || !slices.Equal(messages.Effects, mb.Effects) {
+		t.Errorf("messages metadata must match mb: messages caps/effects %v/%v, mb %v/%v",
+			messages.Caps, messages.Effects, mb.Caps, mb.Effects)
+	}
+}
+
+func TestHybridPingSecurityMetadata(t *testing.T) {
+	e, ok := atlas.Lookup("ping")
+	if !ok {
+		t.Fatal("ping front door is absent from atlas")
+	}
+	for _, effect := range []string{atlas.EffRead, atlas.EffWrite, atlas.EffPersist, atlas.EffNet, atlas.EffExec} {
+		if !slices.Contains(e.Effects, effect) {
+			t.Errorf("ping effects = %v, missing %q", e.Effects, effect)
+		}
+	}
+	if !slices.Contains(e.Caps, atlas.CapSpawnsProcesses) {
+		t.Errorf("ping caps = %v, missing %q for the system-ICMP branch", e.Caps, atlas.CapSpawnsProcesses)
+	}
+}
+
+func TestMeetSecurityMetadataIncludesDurableConversationState(t *testing.T) {
+	e, ok := atlas.Lookup("meet")
+	if !ok {
+		t.Fatal("meet is absent from atlas")
+	}
+	for _, effect := range []string{
+		atlas.EffRead, atlas.EffWrite, atlas.EffPersist,
+		atlas.EffNet, atlas.EffExec, atlas.EffSpend,
+	} {
+		if !slices.Contains(e.Effects, effect) {
+			t.Errorf("meet effects = %v, missing %q", e.Effects, effect)
+		}
+	}
+}
+
+// These POSIX communication applets have deliberately local implementations.
+// POSIX owns their interface; this assertion only pins the transport boundary.
+func TestPOSIXLocalCommunicationHasNoFallbackEffects(t *testing.T) {
+	for _, name := range []string{"mail", "mailx", "talk", "write", "mesg"} {
+		e, ok := atlas.Lookup(name)
+		if !ok {
+			t.Errorf("%s is absent from atlas", name)
+			continue
+		}
+		for _, effect := range []string{atlas.EffNet, atlas.EffExec, atlas.EffRemote} {
+			if slices.Contains(e.Effects, effect) {
+				t.Errorf("%s effects = %v, local POSIX implementation must not declare %q", name, e.Effects, effect)
 			}
 		}
 	}

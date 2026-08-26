@@ -1,22 +1,24 @@
 # Pure-Go `mailx`, `pax`, and `make` with agentic extensions
 
-Status: implementation roadmap. No command is considered shipped or a Bashy
-certification provider until it satisfies the repository release and native
-evidence gates.
+Status: historical roadmap. `mailx` and `pax` have since shipped; `make`
+remains a pinned external provider. The current mailx implementation boundary
+and remaining work are maintained in
+[`mailx-continuation-ledger.md`](mailx-continuation-ledger.md). Historical
+diagnostic counts and design phases below are retained as planning context, not
+as current ownership or release claims.
 
 ## Current code checkpoint
 
-This roadmap is no longer entirely design-only, but none of the three command
-providers has shipped:
+Current status supersedes the original checkpoint:
 
-| command | landed foundation | still required before provider credit |
+| command | current implementation | remaining work / status |
 | --- | --- | --- |
-| `mailx` | `pkg/mailx`: strict message parse/serialize, validation, locked local-mbox delivery, tests | interactive/send compatibility surface, command adapter, registration, full gates |
-| `pax` | `pkg/pax`: tar/ustar/pax manifest reader and mutation-free safe-extraction planner, tests | extraction, create/list/copy semantics and formats, command adapter, registration, full gates |
+| `mailx` | `pkg/mailx` plus the registered `cmds/mailx`/`mail` local-file applet | remaining POSIX lanes in `mailx-continuation-ledger.md`; SMTP and remote transport stay out of scope |
+| `pax` | shipped pure-Go command and package | continued conformance hardening |
 | `make` | roadmap only; Bashy's existing `pkg/dag` is reusable agentic machinery, not POSIX make | POSIX parser/engine and recipe semantics, command adapter, registration, full gates |
 
-`ed` is tracked separately in `ed-agentic-feasibility.md`: its feasibility and
-clean-room design are approved, but there is no `cmds/ed` implementation yet.
+`ed` is tracked separately and now has a partial pure-Go implementation; its
+current boundary is recorded in `ed-posix-continuation.md`.
 
 ## Why these three
 

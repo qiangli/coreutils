@@ -1,18 +1,19 @@
 # POSIX external providers
 
-Fourteen POSIX-required commands are deliberately not implemented in Go:
+Twelve POSIX-required commands are deliberately not implemented in Go:
 
 ```
 make  bc  m4  man  ctags  ar  nm  strip  ex  vi
-lp    mailx  localedef  talk
+lp    localedef
 ```
 
 They are **external providers**: the multicall owns the name and dispatches to
 a copy of the upstream program, built locally from a sha256-pinned source
 tarball and checked against its recorded provenance before it runs.
 
-The manifest still contains `ed` and `patch` rows as reproducible differential
-controls. Their pure-Go applets now own those names, so the retained artifacts
+The manifest still contains `ed`, `mailx`, `patch`, and `talk` rows as
+reproducible differential controls. Their pure-Go applets now own those names,
+so the retained artifacts
 remain available to `list`, `check`, and `build` but are excluded from
 registration and `dispatch-plan`.
 
@@ -101,7 +102,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all fourteen provider names, so plain bashy stays standalone-graceful
+unregisters all twelve provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -109,8 +110,9 @@ names and fail loudly. The `posix-providers` applet itself is always registered
 
 ## Licence posture
 
-Every provider is copyleft (GPL-2.0, GPL-3.0, or the Vim licence), so download
-and build are deliberately separated:
+Most active providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence);
+`lp` is Apache-2.0, and retained differential-control rows include permissive
+licences. Download and build remain deliberately separated under one policy:
 
 - **download** — upstream SOURCE only, pinned by sha256. Upstream is the
   distributor; its obligations are already discharged.
@@ -128,7 +130,7 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the fourteen registered provider tools + the `posix-providers` applet; retained control pins do not dispatch |
+| `cmds/posixproviders/` | the twelve registered provider tools + the `posix-providers` applet; retained control pins do not dispatch |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
 | `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |

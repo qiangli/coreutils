@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# comms-cli-audit.sh — prove the S80 comms verbs are REACHABLE on a real,
+# comms-cli-audit.sh — prove the communication surface is REACHABLE on a real,
 # built bashy binary, and spot-check the contracts that package tests cannot
 # see from inside the process.
 #
@@ -8,7 +8,9 @@
 # constructors existed, the host never mounted them. The Go-side audit
 # (test/commscli) proves each front door behaves from a built binary; THIS
 # script proves the actual bashy binary mounts them. Run it against every
-# freshly built bashy:
+# freshly built bashy. This also pins the non-interactive discovery surface for
+# the local POSIX applets, the board aliases, ping, and meet; it never opens an
+# interactive terminal conversation:
 #
 #   BASHY_BIN=/path/to/bashy scripts/comms-cli-audit.sh   # default: bashy on PATH
 #
@@ -44,20 +46,28 @@ fails=0
 pass() { printf 'PASS  %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
 
-# --- 1. REACHABILITY: every S80 verb must be mounted ------------------------
+# --- 1. REACHABILITY: every registered communication surface must be mounted -
 # The exact failure mode this script exists for: a verb whose --help does not
 # exit 0 is not on the binary, whatever the package tests say. inbox and
 # notify were the verbs found missing; the gap is closed and they are pinned
 # here so it cannot silently reopen.
 REQUIRED_VERBS=(
-  "whois --help"
-  "agent whoami --help"
-  "mb --help"
-  "mb send --help"
-  "bus watch --help"
-  "weave fleet --help"
-  "inbox --help"
-  "notify --help"
+	"mail --help"
+	"mailx --help"
+	"talk --help"
+	"write --help"
+	"mesg --help"
+	"whois --help"
+	"agent whoami --help"
+	"mb --help"
+	"messages --help"
+	"mb send --help"
+	"ping --help"
+	"bus watch --help"
+	"meet --help"
+	"weave fleet --help"
+	"inbox --help"
+	"notify --help"
 )
 for v in "${REQUIRED_VERBS[@]}"; do
   # shellcheck disable=SC2086
@@ -67,6 +77,26 @@ for v in "${REQUIRED_VERBS[@]}"; do
     fail "UNREACHABLE: '$BIN $v' did not exit 0 — the verb is not mounted on this binary"
   fi
 done
+
+# Alias identity has two intentional contracts. POSIX mail owns its spelling in
+# help and diagnostics even though it shares mailx's implementation. messages is
+# a transparent Cobra alias and therefore renders the canonical mb help.
+mail_help="$("$BIN" mail --help 2>/dev/null)"
+mailx_help="$("$BIN" mailx --help 2>/dev/null)"
+if printf '%s\n' "$mail_help" | grep -q '^Usage: mail ' &&
+   printf '%s\n' "$mailx_help" | grep -q '^Usage: mailx '; then
+	pass "mail/mailx help owns each invoked spelling"
+else
+	fail "mail/mailx help identity drift: mail='$(printf '%s' "$mail_help" | head -n 1)' mailx='$(printf '%s' "$mailx_help" | head -n 1)'"
+fi
+
+mb_help="$("$BIN" mb --help 2>/dev/null)"
+messages_help="$("$BIN" messages --help 2>/dev/null)"
+if [ "$mb_help" = "$messages_help" ]; then
+	pass "messages is a transparent alias of mb"
+else
+	fail "messages help differs from canonical mb help"
+fi
 
 # --- 2. BEHAVIOR spot checks (skipped per-verb if unreachable) --------------
 

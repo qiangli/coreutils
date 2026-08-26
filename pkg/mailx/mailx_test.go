@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,168 @@ func TestAppendMboxWritesEnvelopeAndEscapesFromLines(t *testing.T) {
 	}
 }
 
+func TestReadMboxRoundTripsMultipleMessages(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spool.mbox")
+	for i, body := range []string{"first\nFrom body line\n", "second without newline"} {
+		msg := &Message{Headers: []Header{{Name: "Subject", Value: fmt.Sprintf("message-%d", i+1)}}, Body: []byte(body)}
+		if err := AppendMbox(path, "alice", time.Unix(int64(i), 0), msg); err != nil {
+			t.Fatalf("AppendMbox(%d): %v", i, err)
+		}
+	}
+	entries, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if got := string(entries[0].Message.Body); got != "first\nFrom body line\n" {
+		t.Fatalf("first body = %q", got)
+	}
+	if got := string(entries[1].Message.Body); got != "second without newline\n" {
+		t.Fatalf("second body = %q", got)
+	}
+}
+
+func TestMboxFromQuotingIsSymmetric(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mailbox")
+	body := "From zero\n>From one\n>>From two\nnot From three\n"
+	msg := &Message{Headers: []Header{{Name: "Subject", Value: "quoting"}}, Body: []byte(body)}
+	if err := AppendMbox(path, "alice", time.Unix(0, 0), msg); err != nil {
+		t.Fatal(err)
+	}
+	wire, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\n>From zero\n", "\n>>From one\n", "\n>>>From two\n"} {
+		if !bytes.Contains(wire, []byte(want)) {
+			t.Fatalf("wire mailbox lacks %q:\n%s", want, wire)
+		}
+	}
+	entries, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(entries[0].Message.Body); got != body {
+		t.Fatalf("body after read = %q, want %q", got, body)
+	}
+	if err := RewriteMbox(path, entries); err != nil {
+		t.Fatal(err)
+	}
+	again, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(again[0].Message.Body); got != body {
+		t.Fatalf("body after rewrite = %q, want %q", got, body)
+	}
+}
+
+func TestRewriteMboxKeepsSelectedEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spool.mbox")
+	for _, subject := range []string{"one", "two", "three"} {
+		msg := &Message{Headers: []Header{{Name: "Subject", Value: subject}}, Body: []byte(subject + "\n")}
+		if err := AppendMbox(path, "alice", time.Unix(0, 0), msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteMbox(path, []MboxEntry{entries[0], entries[2]}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].HeaderValuesForTest("Subject") != "one" || got[1].HeaderValuesForTest("Subject") != "three" {
+		t.Fatalf("rewritten mailbox = %#v", got)
+	}
+	if mode := fileMode(t, path); runtime.GOOS != "windows" && mode.Perm() != 0o600 {
+		t.Fatalf("mode = %o", mode.Perm())
+	}
+}
+
+func TestCommitMboxPreservesMessagesAppendedAfterSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mailbox")
+	for i, subject := range []string{"one", "two"} {
+		msg := &Message{Headers: []Header{{Name: "Subject", Value: subject}}, Body: []byte(subject + "\n")}
+		if err := AppendMbox(path, "alice", time.Unix(int64(i), 0), msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended := &Message{Headers: []Header{{Name: "Subject", Value: "new"}}, Body: []byte("new\n")}
+	if err := AppendMbox(path, "bob", time.Unix(3, 0), appended); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitMbox(path, snapshot, []bool{true, false}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].HeaderValuesForTest("Subject") != "two" || got[1].HeaderValuesForTest("Subject") != "new" {
+		t.Fatalf("committed mailbox subjects = %#v", got)
+	}
+}
+
+func TestCommitMboxRejectsEditedSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mailbox")
+	msg := &Message{Headers: []Header{{Name: "Subject", Value: "original"}}, Body: []byte("body\n")}
+	if err := AppendMbox(path, "alice", time.Unix(0, 0), msg); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ReadMbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := &Message{Headers: []Header{{Name: "Subject", Value: "edited"}}, Body: []byte("body\n")}
+	if err := RewriteMbox(path, []MboxEntry{{Envelope: snapshot[0].Envelope, Message: edited}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitMbox(path, snapshot, []bool{true}); !errors.Is(err, ErrMailboxChanged) {
+		t.Fatalf("CommitMbox error = %v, want ErrMailboxChanged", err)
+	}
+	got, err := ReadMbox(path)
+	if err != nil || len(got) != 1 || got[0].HeaderValuesForTest("Subject") != "edited" {
+		t.Fatalf("mailbox changed on refused commit: %#v, %v", got, err)
+	}
+}
+
+func (e MboxEntry) HeaderValuesForTest(name string) string {
+	values := e.Message.HeaderValues(name)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func fileMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode()
+}
+
+func TestParseMboxRejectsNonMboxData(t *testing.T) {
+	_, err := ParseMbox([]byte("Subject: loose message\n\nbody\n"))
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("err = %v, want ErrMalformed", err)
+	}
+}
+
 func TestAppendMboxReturnsBusyWhenLockExists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "spool.mbox")
@@ -129,6 +292,63 @@ func TestAppendMboxCreatesMissingParentDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("mailbox not created: %v", err)
+	}
+	if mode := fileMode(t, filepath.Join(dir, "a")); runtime.GOOS != "windows" && mode.Perm() != 0o700 {
+		t.Fatalf("new spool parent mode = %o, want 700", mode.Perm())
+	}
+}
+
+func TestMailboxOperationsRejectSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real")
+	linkPath := filepath.Join(dir, "link")
+	msg := &Message{Headers: []Header{{Name: "Subject", Value: "safe"}}, Body: []byte("body\n")}
+	if err := AppendMbox(realPath, "alice", time.Unix(0, 0), msg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := ReadMbox(linkPath); !errors.Is(err, ErrUnsafeMailbox) {
+		t.Errorf("ReadMbox symlink error = %v, want ErrUnsafeMailbox", err)
+	}
+	if err := AppendMbox(linkPath, "alice", time.Unix(1, 0), msg); !errors.Is(err, ErrUnsafeMailbox) {
+		t.Errorf("AppendMbox symlink error = %v, want ErrUnsafeMailbox", err)
+	}
+	entries, err := ReadMbox(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteMbox(linkPath, entries); !errors.Is(err, ErrUnsafeMailbox) {
+		t.Errorf("RewriteMbox symlink error = %v, want ErrUnsafeMailbox", err)
+	}
+	after, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("symlink target was modified")
+	}
+}
+
+func TestMailboxOperationsRejectNonRegularTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "directory")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	msg := &Message{Headers: []Header{{Name: "Subject", Value: "safe"}}, Body: []byte("body\n")}
+	if _, err := ReadMbox(path); !errors.Is(err, ErrUnsafeMailbox) {
+		t.Errorf("ReadMbox directory error = %v, want ErrUnsafeMailbox", err)
+	}
+	if err := AppendMbox(path, "alice", time.Unix(0, 0), msg); !errors.Is(err, ErrUnsafeMailbox) {
+		t.Errorf("AppendMbox directory error = %v, want ErrUnsafeMailbox", err)
+	}
+	if err := RewriteMbox(path, nil); !errors.Is(err, ErrUnsafeMailbox) {
+		t.Errorf("RewriteMbox directory error = %v, want ErrUnsafeMailbox", err)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 )
 
 func TestProfileCDRegistrySelectsIntendedOwners(t *testing.T) {
-	// The provider opt-out (BASHY_POSIX_PROVIDERS=off) unregisters the fourteen
+	// The provider opt-out (BASHY_POSIX_PROVIDERS=off) unregisters the twelve
 	// provider names, so the assembled registry cannot own them. That is a
 	// FAILURE of this certification gate, never a skip: a skipped gate reads
 	// as green in a test log, and green while unmeasured is exactly the silent

@@ -215,18 +215,17 @@ implementation.
 
 The generated [POSIX required-command coverage
 map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
-contract: 116 configured names, with availability of 88 Go applets, 14
-shell-only names, and 15 pinned providers. Expanded interface claims live in a
+contract: 116 configured names, with availability of 90 Go applets, 14
+shell-only names, and 12 active pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
-Profile C/D ownership of 80 Go-selected, 22 shell-selected, and 14 provider
+Profile C/D ownership of 82 Go-selected, 22 shell-selected, and 12 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
 missing, partial, implemented, and verified states rather than treating
 placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
-`patch`, `m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`,
-`mailx`, `localedef`, `talk`) and
+`m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`, `localedef`) and
 dispatches to a copy of the upstream program built locally from a sha256-pinned
 source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
 silently measuring the host's `$PATH`, which is what happened while these names
@@ -234,7 +233,7 @@ were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory (availability 88/14/14, effective selection 80/22/14): it
+116-name inventory (availability 90/14/12, effective selection 82/22/12): it
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH
@@ -281,10 +280,12 @@ ability to provide honest semantics without delegating to a host executable.
 - **P1 — continue scoped implementations:** broaden `ed` according to its
   [explicit continuation ledger](ed-posix-continuation.md), and investigate
   permissive Go prior art before scoping `patch`.
-- **P1 — approved staged implementation:** `mailx`, `pax`, and `make`, following
-  `docs/mailx-pax-make-agentic-plan.md`. This approval does not waive the
-  release gates and does not allow a new `make` provider to hide the existing
-  GNU-make/Bashy-shell differential.
+- **P1 — local implementation landed:** `mail`/`mailx` now provide a pure-Go,
+  local-file mbox send/receive surface with no SMTP or network transport.
+  Continue the interactive command/state lanes from
+  the [mailx continuation ledger](mailx-continuation-ledger.md); the older
+  `mailx-pax-make-agentic-plan.md` is historical, `pax` is shipped, and `make`
+  remains a pinned external provider.
 - **Release rule:** an implementation leaves this TODO only when its command
   package is tested, registered in `cmds/all`, classified in `pkg/atlas`,
   present in the generated applet matrix, and passes `scripts/crossvet.sh`.
@@ -343,7 +344,7 @@ NO (↻ = revisit):
 
 - man (interactive pager)
 
-**Terminal messaging — superseded by `bashy mb`:**
+**Terminal messaging and the durable `bashy mb` alternative:**
 
 - wall, write, mesg, talk
 
@@ -353,21 +354,24 @@ NO (↻ = revisit):
   and these cannot: an agent is usually not "logged in" at the moment you
   need to tell it something.
 
-  `bashy mb` is the replacement and a strict superset for this purpose — a
+  `bashy mb` is the durable replacement and a strict superset for this purpose — a
   durable append-only board with per-reader cursors, so a message to an agent
   that is *not running* waits and is delivered when it next looks, and
   `mb --all` still answers "what was I told, and when" afterwards.
   `mb post` is wall; `mb send <agent>` is write; `bus subscribe
   --interrupt-from` is mesg (it governs who may break into a running turn).
-  Invoking any of the four emits a hint naming the replacement
-  (`pkg/nudge`, `SuggestFailure`).
+  Pure-Go `talk` keeps the traditional logged-in-user boundary: it writes an
+  invitation to an eligible local terminal and exchanges encrypted,
+  authenticated datagrams through ephemeral AF_UNIX sockets. It stores no
+  transcript, rejects remote hosts, and never contacts talkd. `wall`, `write`,
+  and `mesg` retain their existing terminal-oriented behavior.
 
   **POSIX/campaign status:** `write`, `mesg` and `talk` belong to the optional
   POSIX User Portability Utilities group, while `wall` is not POSIX. The
   configured VSC-PCTS2016 POSIX08 campaign nevertheless contains named test
-  sets for `write`, `mesg`, and `talk`, so all three are required provider
-  entries for this campaign. Standard optionality does not permit silently
-  omitting a configured test set.
+  sets for `write`, `mesg`, and `talk`. `talk` is now a partial Go owner while
+  `write` and `mesg` retain their existing Go implementations. Standard
+  optionality does not permit silently omitting a configured test set.
 
 **System administration (in u-root's tree, out of scope for an agent
 userland — outpost/ycode own these concerns):**

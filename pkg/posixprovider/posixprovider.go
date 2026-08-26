@@ -60,7 +60,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the fourteen active names are simply not ours and normal
+// provider cache: with it set, the twelve active names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"
@@ -204,11 +204,16 @@ func Entries() []Entry {
 }
 
 // IsDispatchProvider reports whether name is currently owned by the external
-// provider adapter. The ed and patch pins are deliberately retained as
-// reproducible differential controls after their pure-Go applets became the
-// shipped owners.
+// provider adapter. The ed, mailx, patch, and talk pins are deliberately
+// retained as reproducible differential controls after their pure-Go applets
+// became the shipped owners.
 func IsDispatchProvider(name string) bool {
-	return name != "ed" && name != "patch" && Has(name)
+	switch name {
+	case "ed", "mailx", "patch", "talk":
+		return false
+	default:
+		return Has(name)
+	}
 }
 
 // DispatchEntries returns only manifest rows that still own a command name.

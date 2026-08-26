@@ -308,6 +308,7 @@ export function useMeetRoom() {
 function dmState(dm: DMSummary): State {
   return {
     id: `dm:${dm.agent}`,
+    board: false,
     room: dm.agent,
     name: dm.agent,
     topic: "Direct message",

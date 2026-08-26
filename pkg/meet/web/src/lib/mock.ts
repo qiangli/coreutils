@@ -22,6 +22,7 @@ const now = Date.now()
 export const mockRooms: RoomSummary[] = [
   {
     id: "launch-room",
+    board: false,
     room: "Launch room",
     topic: "Plan the customer preview",
     status: "open",
@@ -35,6 +36,7 @@ export const mockRooms: RoomSummary[] = [
   },
   {
     id: "quality-circle",
+    board: false,
     room: "Quality circle",
     topic: "Release readiness",
     status: "open",
@@ -46,6 +48,7 @@ export const mockRooms: RoomSummary[] = [
   },
   {
     id: "research-notes",
+    board: false,
     room: "Research notes",
     topic: "What customers need next",
     status: "closed",
@@ -60,6 +63,7 @@ export const mockRooms: RoomSummary[] = [
 export const mockState: State = {
   schema: "meet/v1",
   id: "launch-room",
+  board: false,
   room: "Launch room",
   topic: "Plan the customer preview",
   agenda: [
@@ -220,6 +224,7 @@ export async function mockCreateRoom(
   const room = String(mockRooms.length + 1)
   mockRooms.unshift({
     id,
+    board: false,
     room,
     topic,
     status: "open",

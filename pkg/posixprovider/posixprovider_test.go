@@ -123,7 +123,7 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 }
 
 func TestGoAppletPinsAreRetainedButNotDispatchOwners(t *testing.T) {
-	for _, name := range []string{"ed", "patch"} {
+	for _, name := range []string{"ed", "mailx", "patch", "talk"} {
 		if !Has(name) {
 			t.Fatalf("%s differential-control pin was removed", name)
 		}
@@ -134,8 +134,8 @@ func TestGoAppletPinsAreRetainedButNotDispatchOwners(t *testing.T) {
 			t.Fatalf("%s leaked into active provider names", name)
 		}
 	}
-	if len(DispatchEntries()) != len(Entries())-2 {
-		t.Fatalf("active entries=%d all pins=%d, want two retained controls", len(DispatchEntries()), len(Entries()))
+	if len(DispatchEntries()) != len(Entries())-4 {
+		t.Fatalf("active entries=%d all pins=%d, want four retained controls", len(DispatchEntries()), len(Entries()))
 	}
 }
 

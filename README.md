@@ -21,9 +21,9 @@ environment in a single Go process.
 
 This repository is **not a complete POSIX Commands & Utilities
 implementation**. In the configured 116-name VSC-PCTS2016 POSIX08 scenario,
-the canonical Go inventory supplies 86 names and is absent for 30. The shell
-supplies 14 of those 30 and a **pinned POSIX external provider** supplies the
-remaining 16, leaving no external-provider gaps in the assembled Bashy
+the canonical Go inventory supplies 90 names and is absent for 26. The shell
+supplies 14 of those 26 and a **pinned POSIX external provider** supplies the
+remaining 12, leaving no external-provider gaps in the assembled Bashy
 Profiles C/D surface.
 See the generated [required-command coverage
 map](docs/posix-required-commands.md) and its separate, explicitly incomplete
@@ -32,10 +32,12 @@ infer the coreutils gap from the smaller assembled-Bashy number.
 
 A provider is **not** a Go applet, and the matrix counts them separately so
 they can never be read as Go coverage: the multicall owns the NAME
-(`make`, `bc`, `patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`,
-`vi`, `lp`, `mailx`, `localedef`, `talk`) and dispatches to a copy of the upstream program built locally from a
-sha256-pinned source tarball. Owning the name is the point — before it, those
-names fell through to the host's `$PATH`, so a "Bashy-only" arm silently
+(`make`, `bc`, `m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`,
+`localedef`) and dispatches to a copy of the upstream program built locally
+from a sha256-pinned source tarball. The manifest retains `ed`, `mailx`,
+`patch`, and `talk` only as differential controls; their pure-Go applets own
+runtime dispatch. Owning each active provider name is the point — before it,
+those names fell through to the host's `$PATH`, so a "Bashy-only" arm silently
 measured the distro's binaries. There is no fallback: an unprovisioned provider
 exits 127 with the command that fixes it. See
 [POSIX external providers](docs/posix-external-providers.md).
@@ -93,7 +95,8 @@ Every tool in this repo follows the same rules:
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
   against its recorded provenance and **never** downloads or compiles, the
-  sixteen registered provider tools, and
+  twelve registered provider tools plus four retained differential-control
+  pins, and
   `posix-providers build|list|check|dispatch-plan` —
   `build` is the only path allowed to fetch and compile, and `dispatch-plan`
   is the introspection surface disclosing the exact verified binary each
@@ -101,8 +104,8 @@ Every tool in this repo follows the same rules:
   unregisters the provider names. See
   [POSIX external providers](docs/posix-external-providers.md).
   `cmds/posixgate` ships `posix-gate`, the fail-closed effective-owner gate
-  over the 116 POSIX-required names (availability 86/14/16, effective
-  selection 78/22/16): it proves the assembled runtime selects each name's
+  over the 116 POSIX-required names (availability 90/14/12, effective
+  selection 82/22/12): it proves the assembled runtime selects each name's
   intended owner (Go applet, shell builtin/keyword/entry, or pinned provider)
   and rejects count drift on either axis, ambiguous ownership, missing
   provider pins/provenance, host PATH fallback, a provider cache the staged
@@ -112,8 +115,8 @@ Every tool in this repo follows the same rules:
   Profile D: Bashy 5.3). See
   [the POSIX owner gate](docs/posix-owner-gate.md).
 
-- `cmds/` — the userland: 154 shipped Go command packages advertising 175
-  applet names, sixteen of which are external providers rather than Go
+- `cmds/` — the userland: 158 shipped Go command packages advertising 176
+  applet names, twelve of which are external providers rather than Go
   implementations (see the generated [applet matrix](docs/applet-matrix.md)),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),

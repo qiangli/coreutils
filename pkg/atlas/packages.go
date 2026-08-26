@@ -303,10 +303,8 @@ var packages = map[string]Package{
 		"subprocess, drives a prompt turn, reports touched files. No importer in this repo and no " +
 		"front-door verb — the `fanout` condition. Wiring it is in flight elsewhere; reclassify to " +
 		"command/library when it lands, or hold the §2.2a conversation that retired fanout."},
-	"mailx": {Role: RoleUnwired, Note: "pure-Go mailx kernel: message parse/serialize plus a " +
-		"local-mbox delivery transport (lock, append, From-line escaping). No importer and no " +
-		"applet yet — a foundation laid ahead of any mailx command; reclassify to command/library " +
-		"once something (a `mailx`/`mail` applet, or another package) actually reaches it."},
+	"mailx": {Role: RoleLibrary, FrontDoor: "mailx", Note: "pure-Go local-mail kernel used by cmds/mailx and its mail alias: " +
+		"validated message parsing, mbox delivery, locking, transactional mailbox updates, and From-line quoting."},
 	"release": {Role: RoleUnwired, Note: "release pipeline T0 core: .goreleaser.yaml subset, " +
 		"build matrix, deterministic archives, sha256 ledger (`bashy-release-v1`). No importer and " +
 		"no front-door verb yet — the `bashy release` cobra tree is the wiring that lands in bashy, " +

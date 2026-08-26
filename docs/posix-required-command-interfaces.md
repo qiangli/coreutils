@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 88 |
+| Availability | Go | 90 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 14 |
-| Effective owner | Go | 80 |
+| Availability | Provider | 12 |
+| Effective owner | Go | 82 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 14 |
+| Effective owner | Provider | 12 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 3 |
-| Evidence | Partial | 99 |
-| Evidence | Missing | 14 |
+| Evidence | Partial | 101 |
+| Evidence | Missing | 12 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 80 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 82 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 102 owned rows (80 Go plus 22 shell) without treating the
-14 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 104 owned rows (82 Go plus 22 shell) without treating the
+12 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -3010,7 +3010,7 @@ m4 [-s] [-D name[=val]]... [-U name]... file...
 
 ## `mailx`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base; optional`.
 
@@ -3029,33 +3029,33 @@ mailx -f [-HiNn] [-F] [file]
 
 **Issue 7 option-argument candidate:** `-s=<subject>; -u=<user>`.
 
-**Operands:** `address; file`. UNVERIFIED
+**Operands:** `address; file`. address names a local recipient; file names a secondary mbox when -f is present; remote or host-qualified addresses are rejected before delivery.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** A bare -f selects MBOX or HOME/mbox; -- ends option parsing; all delivery is local-file based and no SMTP or network transport is attempted.
 
-**Standard input:** UNVERIFIED
+**Standard input:** In send mode, supplies the message body; in receive mode, supplies interactive mailx commands.
 
 **Environment:** `DEAD; EDITOR; HOME; LANG; LC_ALL; LC_CTYPE; LC_TIME; LC_MESSAGES; LISTER; MAILRC; MBOX; xsi:NLSPATH; PAGER; SHELL; TERM; TZ; VISUAL`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write header summaries, selected messages, command results, and prompts as applicable.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write usage, mailbox, delivery, unsupported-address, and command diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Append validated messages to local mbox files; read and transactionally update a selected mailbox; optionally save or record messages in local files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the requested send or receive operation succeeds; greater than 0 for usage, input, mailbox, delivery, or command errors; -e is greater than 0 when no mail is present.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#mailx`.
+**Implementation:** `cmds/mailx`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mailx`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mailx:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mailx/mailx_test.go#TestSendDeliversMboxToEachLocalRecipient;cmds/mailx/mailx_test.go#TestRemoteRecipientFailsBeforeAnyDelivery;cmds/mailx/mailx_test.go#TestExistAndHeadersModes;cmds/mailx/mailx_test.go#TestDeleteQuitRewritesMailbox;cmds/mailx/mailx_test.go#TestDeleteQuitPreservesConcurrentAppend;cmds/mailx/mailx_test.go#TestFileOptionWithoutOperandReadsMBOX;cmds/mailx/mailx_test.go#TestFileOptionConsumesExplicitOperand;cmds/mailx/mailx_test.go#TestRecordByFirstRecipient;cmds/mailx/mailx_test.go#TestMailAliasIsExecutable`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mailx:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
@@ -4779,7 +4779,7 @@ tail [-f] [-c number|-n number] [file]
 
 ## `talk`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `optional`.
 
@@ -4795,33 +4795,33 @@ tail [-f] [-c number|-n number] [file]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `address; terminal`. UNVERIFIED
+**Operands:** `address; terminal`. address names a local operating-system login account with an active terminal session; terminal optionally selects one of that account's eligible local terminals.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Remote and host-qualified addresses are rejected before session or terminal-notification work; both standard input and standard output must be terminals.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read the local participant's conversation text from a terminal.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; TERM`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write invitations, local and peer conversation text, termination notices, and operational diagnostics.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for syntax diagnostics from the shared option framework.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Write an invitation to an eligible local terminal; exchange encrypted, authenticated conversation and close datagrams through ephemeral AF_UNIX sockets; remove session endpoints on exit without writing a transcript; never contact talkd or another host.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the local conversation terminates normally, on EOF, or on SIGINT; greater than 0 for usage, terminal, identity, target, local IPC, authentication, cleanup, or output errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#talk`.
+**Implementation:** `cmds/talk`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/talk`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/talk/talk_test.go#TestRunUsesOSIdentityNotEnvironmentAndNotifiesTTY;cmds/talk/talk_test.go#TestDefaultAlwaysRequiresWhoAndMesg;cmds/talk/talk_test.go#TestRecipientSelectionSkipsStaleTTYWhenAnotherIsUsable;cmds/talk/talk_test.go#TestRemoteRejectedBeforeSessionOrNotification;cmds/talk/talk_test.go#TestSyntaxAndTerminalRequirements;cmds/talk/talk_test.go#TestLocalUnixTransportIsPrivateAuthenticatedEphemeralAndConverges;cmds/talk/talk_test.go#TestAuthenticatedTransportDiscardsInjectedDatagramAndContinues;cmds/talk/talk_test.go#TestEndpointOwnerMismatchCannotJoin;cmds/talk/talk_test.go#TestDefaultTalkRootIsResolvedRootOwnedStickyDirectory;cmds/talk/talk_test.go#TestConverseCancellationWithBlockedPipeReturnsAndClosesReader`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

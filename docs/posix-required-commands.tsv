@@ -57,7 +57,7 @@ logname	yes	cmds/logname	no	go_applet
 lp	no	cmds/posixproviders	no	external_provider
 ls	yes	cmds/ls	no	go_applet
 m4	no	cmds/posixproviders	no	external_provider
-mailx	no	cmds/posixproviders	no	external_provider
+mailx	yes	cmds/mailx	no	go_applet
 make	no	cmds/posixproviders	no	external_provider
 man	no	cmds/posixproviders	no	external_provider
 mesg	yes	cmds/mesg	no	go_applet
@@ -92,7 +92,7 @@ strip	no	cmds/posixproviders	no	external_provider
 stty	yes	cmds/stty	no	go_applet
 tabs	yes	cmds/tabs	no	go_applet
 tail	yes	cmds/tail	no	go_applet
-talk	no	cmds/posixproviders	no	external_provider
+talk	yes	cmds/talk	no	go_applet
 tee	yes	cmds/tee	no	go_applet
 test	yes	cmds/test	no	go_applet
 time	yes	cmds/time	no	go_applet

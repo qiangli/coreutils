@@ -179,7 +179,7 @@ func verifyOwnership(spec []specRow, registered func(string) bool, providerHas f
 // VerifyProviders is the provisioning/provenance gate: every pinned provider
 // must resolve from the cache with its provenance verified. A platform the
 // manifest does not declare is a FAILURE here, not a skip — a staged
-// certification runtime that cannot supply all fourteen active names is not the
+// certification runtime that cannot supply all twelve active names is not the
 // runtime it claims to be. (posix-providers check keeps its softer per-host
 // semantics; this gate is the certification view.)
 func VerifyProviders(r posixprovider.Resolver) []Finding {
@@ -531,7 +531,7 @@ type planRow struct {
 
 // parseDispatchPlan strictly parses the wrapper's dispatch-plan transcript:
 // exactly one well-formed `command version path built_sha256` TSV row per
-// active pinned provider, fourteen in total. Duplicates, extras, missing names,
+// active pinned provider, twelve in total. Duplicates, extras, missing names,
 // malformed rows, and digests that are not 64 hex characters are each a
 // Finding — a plan the gate cannot fully account for must not certify
 // anything.
@@ -547,7 +547,7 @@ func parseDispatchPlan(plan string) (map[string]planRow, []Finding) {
 				Detail: fmt.Sprintf("malformed dispatch-plan row %d: %q", i+1, line)})
 		case !posixprovider.IsDispatchProvider(f[0]):
 			out = append(out, Finding{Check: "provider-dispatch", Name: f[0],
-				Detail: "dispatch-plan row for a name outside the fourteen active providers"})
+				Detail: "dispatch-plan row for a name outside the twelve active providers"})
 		default:
 			if _, dup := rows[f[0]]; dup {
 				out = append(out, Finding{Check: "provider-dispatch", Name: f[0],

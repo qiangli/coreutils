@@ -23,10 +23,10 @@ func gateTool() *tool.Tool {
 		Usage: `posix-gate <subcommand>
 
   spec                    print the canonical owner projection with its pinned
-                          availability (88/14/14) and effective (80/22/14) splits
+                          availability (90/14/12) and effective (82/22/12) splits
   registry                verify the live tool registry owns every name as intended
                           (hermetic: no cache, no network, nothing spawned)
-  providers               verify every pinned external provider resolves from the
+  providers               verify every active external provider resolves from the
                           cache with its provenance intact
   runtime --profile C|D --manifest FILE --bindir DIR --multicall PATH [--shell NAME]
                           verify the staged runtime end to end: registry + providers
@@ -140,7 +140,7 @@ func runProviders(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return report(rc, "providers", VerifyProviders(r),
-		fmt.Sprintf("%d providers provisioned, provenance verified", pinManifestProviders))
+		fmt.Sprintf("%d active providers provisioned, provenance verified", pinProviders))
 }
 
 func runRuntime(rc *tool.RunContext, args []string) int {

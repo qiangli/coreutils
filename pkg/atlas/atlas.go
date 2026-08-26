@@ -525,11 +525,13 @@ func init() {
 	// which kind they are.
 	addTools(GroupToolchains, "make", "ar", "nm", "strip")
 	addTools(GroupTextutils, "ed", "patch", "m4", "ex", "vi")
-	addTools(GroupShellutils, "bc", "man", "localedef", "talk")
+	addTools(GroupShellutils, "bc", "man", "localedef")
 	addTools(GroupCodeIntel, "ctags")
-	// lp submits a print job; mailx sends/reads mail. Both talk to a local
-	// service (cupsd, an MTA) rather than to the network directly.
-	addTools(GroupNet, "lp", "mailx")
+	// lp submits a print job through cupsd. mail/mailx use local durable mailbox
+	// files; talk uses authenticated ephemeral AF_UNIX IPC. They are communication
+	// tools, but the local-only applets do not acquire the network effect.
+	addTools(GroupNet, "lp", "mail", "mailx", "talk")
+	aliasTool("mail", "mailx")
 	// `posix-providers` is the provisioner in front of them: it is the ONLY
 	// command that downloads and compiles one.
 	addTools(GroupToolchains, "posix-providers")
@@ -545,7 +547,7 @@ func init() {
 		"resources", "why",
 	)
 	capTools(CapDryRun, "rm")
-	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
+	capTools(CapDestructive, "rm", "dd", "shred", "truncate", "mail", "mailx")
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
 		"ls", "od", "ps", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
@@ -583,12 +585,12 @@ func init() {
 	// invocation is a cache lookup that can never download or compile, and that
 	// separation is the point (a build inside a certification arm would inject
 	// network and toolchain variance into measured evidence).
-	// ed and patch are deliberately absent from this list: their multicall
+	// ed, mailx, patch, and talk are deliberately absent from this list: their multicall
 	// names are now owned by pure-Go applets. Their retained manifest pins do
 	// not confer provider-only capabilities on the shipped applets.
 	posixProviders := []string{
 		"make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
-		"lp", "mailx", "localedef", "talk",
+		"lp", "localedef",
 	}
 	capTools(CapCached, posixProviders...)
 	capTools(CapSpawnsProcesses, posixProviders...)
@@ -650,6 +652,11 @@ func init() {
 	// is a shared append-only spool with per-reader cursors, so it is neither a
 	// private mailbox nor push-delivered chat; those words stay reserved.
 	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("messages", Entry{Stage: StageCross, Group: GroupOrch, AliasOf: "mb", Caps: []string{CapJSON}})
+	// ping is an arity-selected front door: board reads/sends share mb's durable
+	// local store, while a bare host or system-ping option execs the platform
+	// ping. It is not an alias because both branches are intentional API.
+	addVerb("ping", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	// inbox and notify are the private receive/send faces of the same bus. They
 	// remain separate top-level primitives so the atlas can show composition
 	// without inventing another transport or address-book concept.
@@ -903,7 +910,7 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "leaderboard", "mb", "inbox", "agent", "tools", "models", "agents", "people", "whois",
+		"capability", "leaderboard", "meet", "mb", "messages", "ping", "inbox", "bus", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
@@ -949,7 +956,7 @@ func init() {
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
-		"rclone", "bus", "notify",
+		"rclone", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
 		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
 		// anything but a torn final append, and quarantines the exact bytes it discards
@@ -958,11 +965,11 @@ func init() {
 	)
 
 	// destroy — can IRREVERSIBLY lose data.
-	eff(EffDestroy, "dd", "rm", "shred", "truncate", "unlink")
+	eff(EffDestroy, "dd", "mail", "mailx", "rm", "shred", "truncate", "unlink")
 
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
-		"ntp", "sntp", "browser", "fetch", "search",
+		"ntp", "sntp", "browser", "fetch", "search", "ping",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "relay", "pair", "judge", "tools", "models", "agents", "act", "sota",
 		"herald",
 		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
@@ -976,7 +983,7 @@ func init() {
 	eff(EffExec,
 		// newgrp REPLACES itself with a new shell carrying a changed group
 		// credential; the shell is beyond anything bashy governs.
-		"newgrp",
+		"newgrp", "ping",
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "relay", "pair", "judge", "supervise", "schedule", "act", "sota",
@@ -1009,7 +1016,7 @@ func init() {
 	// daemon, an installed/upgraded binary.
 	eff(EffPersist,
 		"at", "batch", "crontab", "nohup",
-		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "notify",
+		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
 	)
 
@@ -1032,24 +1039,23 @@ func init() {
 	}
 
 	// Every remaining POSIX external provider is exec: the tool resolves the
-	// cached binary and hands it argv. ed and patch are pure-Go read/write
-	// applets and are classified separately.
+	// cached binary and hands it argv. ed, mailx, patch, and talk are pure-Go
+	// local read/write applets and are classified separately.
 	eff(EffExec, "make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
-		"lp", "mailx", "localedef", "talk")
-	eff(EffRead, "ed", "patch")
+		"lp", "localedef")
+	eff(EffRead, "ed", "mail", "mailx", "patch", "talk")
 	eff(EffRead, "make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
-		// lp reads the file it submits; mailx reads the mailbox; localedef reads
-		// the charmap and locale definition; talk reads the utmp login database.
-		"lp", "mailx", "localedef", "talk")
-	eff(EffWrite, "ed", "patch")
+		// lp reads the file it submits; localedef reads the charmap and locale definition.
+		"lp", "localedef")
+	eff(EffWrite, "ed", "mail", "mailx", "patch", "talk")
+	eff(EffPersist, "mail", "mailx")
 	eff(EffWrite, "make", "ctags", "ar", "strip", "ex", "vi",
-		// mailx writes the mailbox and queues outbound mail; localedef writes the
-		// compiled locale into the locale path.
-		"mailx", "localedef")
-	// lp hands a job to the print scheduler, mailx hands mail to an MTA, and talk
-	// opens a connection to a peer's talkd. All three reach a service beyond this
-	// process, which is the egress surface EffNet exists to mark.
-	eff(EffNet, "lp", "mailx", "talk")
+		// localedef writes the compiled locale into the locale path.
+		"localedef")
+	// lp hands a job to the print scheduler. Local-only mailx and talk never
+	// contact an MTA, talkd, or another host; talk's AF_UNIX session is not
+	// classified as network egress.
+	eff(EffNet, "lp")
 	// The provisioner downloads pinned upstream source, runs a compiler over it,
 	// and installs a binary that outlives the session.
 	eff(EffNet, "posix-providers")
