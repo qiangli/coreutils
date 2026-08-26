@@ -252,8 +252,6 @@ func (s *Session) waitACPTurn(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-s.done:
-		return nil // it exited; that IS a boundary
 	case t := <-s.acp.end:
 		s.mu.Lock()
 		// The answer arrives as DATA. Turn() prefers it over the buffer for the

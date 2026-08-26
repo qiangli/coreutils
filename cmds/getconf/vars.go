@@ -37,6 +37,7 @@ var sysVars = map[string]func() (string, bool){
 	"PAGESIZE":          func() (string, bool) { return sysconfStr(scPagesize) },
 	"PAGE_SIZE":         func() (string, bool) { return sysconfStr(scPagesize) },
 	"RE_DUP_MAX":        reDupMaxStr,
+	"STREAM_MAX":        func() (string, bool) { return sysconfStr(scOpenMax) },
 	"SYMLOOP_MAX":       symloopMaxStr,
 	"_NPROCESSORS_CONF": func() (string, bool) { return sysconfStr(scNprocessorsConf) },
 	"_NPROCESSORS_ONLN": func() (string, bool) { return sysconfStr(scNprocessorsOnln) },

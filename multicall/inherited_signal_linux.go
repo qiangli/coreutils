@@ -80,6 +80,11 @@ func inheritedSIGPIPEWasIgnored() bool {
 	return originalSignals.ok && originalSignals.handlers[syscall.SIGPIPE] == 1
 }
 
+func inheritedSignalSnapshotAvailable() bool {
+	originalSignals.Do(loadOriginalSignals)
+	return originalSignals.ok
+}
+
 func loadOriginalSignals() {
 	path, err := os.Executable()
 	if err != nil {

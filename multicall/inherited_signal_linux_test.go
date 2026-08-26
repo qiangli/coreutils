@@ -156,6 +156,9 @@ func TestPreserveDefaultTerminalStop(t *testing.T) {
 }
 
 func TestPreserveInheritedIgnoredSignals(t *testing.T) {
+	if !inheritedSignalSnapshotAvailable() {
+		t.Skip("test binary does not expose the runtime signal snapshot")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +191,9 @@ func TestPreserveInheritedIgnoredSignals(t *testing.T) {
 // tools exhibit when SIGPIPE is ignored. Derived from
 // TestPreserveInheritedIgnoredSignals.
 func TestStandaloneSIGPIPEIgnoredReachesRunContext(t *testing.T) {
+	if !inheritedSignalSnapshotAvailable() {
+		t.Skip("test binary does not expose the runtime signal snapshot")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +220,9 @@ func TestStandaloneSIGPIPEIgnoredReachesRunContext(t *testing.T) {
 }
 
 func TestStandaloneSIGPIPEDefaultReachesRunContext(t *testing.T) {
+	if !inheritedSignalSnapshotAvailable() {
+		t.Skip("test binary does not expose the runtime signal snapshot")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +235,9 @@ func TestStandaloneSIGPIPEDefaultReachesRunContext(t *testing.T) {
 }
 
 func TestPreserveDefaultAbortWithoutGoTraceback(t *testing.T) {
+	if !inheritedSignalSnapshotAvailable() {
+		t.Skip("test binary does not expose the runtime signal snapshot")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

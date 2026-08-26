@@ -229,13 +229,18 @@ func TestDarwinRegressionValues(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"ATEXIT_MAX": "2147483647", "IOV_MAX": "1024", "LOGIN_NAME_MAX": "255",
-		"PTHREAD_STACK_MIN": "16384", "STREAM_MAX": "2560", "TTY_NAME_MAX": "255",
+		"PTHREAD_STACK_MIN": "16384", "TTY_NAME_MAX": "255",
 		"TZNAME_MAX": "255", "MB_LEN_MAX": "6",
 	} {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != want {
 			t.Errorf("%s = %q (exit %d), want %q", name, got, code, want)
 		}
+	}
+	stream, _, streamCode := runCmd(t, "STREAM_MAX")
+	open, _, openCode := runCmd(t, "OPEN_MAX")
+	if streamCode != 0 || openCode != 0 || stream != open {
+		t.Errorf("STREAM_MAX = %q (exit %d), OPEN_MAX = %q (exit %d)", stream, streamCode, open, openCode)
 	}
 }
 
