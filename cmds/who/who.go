@@ -51,7 +51,7 @@ func run(rc *tool.RunContext, args []string) int {
 		path = rc.Path(path)
 	}
 
-	records, err := session.Read(path)
+	records, err := session.ReadEnv(path, rc.Env)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "who: %v\n", err)
 		return 1

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	whodb "github.com/qiangli/coreutils/pkg/who"
 )
 
 type Record struct {
@@ -66,6 +68,16 @@ func utmpType(t int16) string {
 }
 
 func DefaultFile() string {
+	return DefaultFileForEnv(os.Environ())
+}
+
+// DefaultFileForEnv resolves the invocation's login database. Bashy's agent
+// database is selected only when bashy is actually the agent's shell; POSIX
+// mode always retains the platform database.
+func DefaultFileForEnv(env []string) string {
+	if agentShell(env) {
+		return whodb.FileForEnv(env)
+	}
 	switch runtime.GOOS {
 	case "linux":
 		return "/var/run/utmp"
@@ -81,14 +93,27 @@ func DefaultFile() string {
 }
 
 func Read(path string) ([]Record, error) {
+	return ReadEnv(path, os.Environ())
+}
+
+// ReadEnv is Read using the embedding shell's environment. Commands are
+// in-process, so rc.Env rather than the host process environment is the source
+// of truth for both POSIX mode and agent-shell selection.
+func ReadEnv(path string, env []string) ([]Record, error) {
 	explicit := path != ""
 	if path == "" {
-		path = DefaultFile()
+		path = DefaultFileForEnv(env)
 	}
 	if path == "" {
 		return nil, nil
 	}
-	data, err := os.ReadFile(path)
+	var data []byte
+	var err error
+	if !posixMode(env) && samePath(path, whodb.FileForEnv(env)) {
+		data, err = whodb.ReadLive(path)
+	} else {
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		if !explicit && (os.IsNotExist(err) || os.IsPermission(err)) {
 			return nil, nil
@@ -99,6 +124,86 @@ func Read(path string) ([]Record, error) {
 		return parseText(data), nil
 	}
 	return parseBinary(data)
+}
+
+// AgentUserDir returns the durable directory page for an agent login. It is
+// unavailable in POSIX mode, where agentic enrichment must be completely inert.
+func AgentUserDir(env []string, name string) (string, bool) {
+	if !agentShell(env) {
+		return "", false
+	}
+	dir, ok := whodb.UserDirForEnv(env, name)
+	if !ok {
+		return "", false
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", false
+	}
+	return dir, true
+}
+
+func agentShell(env []string) bool {
+	if posixMode(env) || !hasAgentMarker(env) {
+		return false
+	}
+	for _, key := range []string{"SHELL", "BASH", "CLAUDE_CODE_SHELL", "CODEX_SHELL"} {
+		value, ok := envLookup(env, key)
+		if !ok {
+			continue
+		}
+		base := strings.TrimSuffix(strings.ToLower(filepath.Base(value)), ".exe")
+		if base == "bashy" || strings.HasPrefix(base, "bashy.") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAgentMarker(env []string) bool {
+	for _, key := range []string{"BASHY_AGENTIC", "BASHY_PRINCIPAL", "BASHY_AGENT_ID", "BASHY_AGENT", "WEAVE_AGENT"} {
+		if value, ok := envLookup(env, key); ok && strings.TrimSpace(value) != "" && value != "0" && !strings.EqualFold(value, "false") {
+			return true
+		}
+	}
+	return false
+}
+
+func posixMode(env []string) bool {
+	for _, key := range []string{"POSIXLY_CORRECT", "POSIX_PEDANTIC"} {
+		if _, ok := envLookup(env, key); ok {
+			return true
+		}
+	}
+	if value, ok := envLookup(env, "SHELLOPTS"); ok {
+		for _, option := range strings.Split(value, ":") {
+			if option == "posix" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func envLookup(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return env[i][len(prefix):], true
+		}
+	}
+	return "", false
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
 }
 
 func Users(path string) ([]string, error) {

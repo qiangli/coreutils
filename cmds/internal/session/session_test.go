@@ -4,7 +4,11 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	whodb "github.com/qiangli/coreutils/pkg/who"
 )
 
 func TestReadTextRecords(t *testing.T) {
@@ -25,6 +29,63 @@ func TestReadTextRecords(t *testing.T) {
 	}
 	if len(users) != 2 || users[0] != "alice" || users[1] != "bob" {
 		t.Fatalf("users=%#v", users)
+	}
+	t.Run("agent default is POSIX-inert", testDefaultFileUsesAgentDatabaseButNotInPOSIXMode)
+	t.Run("agent PID pruning is POSIX-inert", testReadEnvPrunesOnlyAgentDatabaseOutsidePOSIX)
+}
+
+func testDefaultFileUsesAgentDatabaseButNotInPOSIXMode(t *testing.T) {
+	root := t.TempDir()
+	agentFile := filepath.Join(root, "who", "sessions")
+	env := []string{
+		"HOME=" + root,
+		"SHELL=/opt/bashy",
+		"BASHY_AGENT_ID=agent-w14",
+		whodb.FileEnv + "=" + agentFile,
+	}
+	if got := DefaultFileForEnv(env); got != agentFile {
+		t.Fatalf("agent DefaultFileForEnv=%q, want %q", got, agentFile)
+	}
+	posix := append(append([]string{}, env...), "POSIXLY_CORRECT=")
+	if got := DefaultFileForEnv(posix); got == agentFile {
+		t.Fatalf("POSIX mode selected agent database %q", got)
+	}
+}
+
+func testReadEnvPrunesOnlyAgentDatabaseOutsidePOSIX(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "who", "sessions")
+	env := []string{"HOME=" + root, "SHELL=/bin/bashy", "BASHY_AGENTIC=1", whodb.FileEnv + "=" + path}
+	deadPID := 1 << 30
+	line := "stale pty/stale 1700000000 mb user id=stale pid=" + strconv.Itoa(deadPID) + "\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, err := ReadEnv("", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("dead agent record survived: %#v", records)
+	}
+
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	posix := append(append([]string{}, env...), "POSIXLY_CORRECT=1")
+	records, err = ReadEnv(path, posix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].User != "stale" {
+		t.Fatalf("explicit POSIX FILE was enriched/pruned: %#v", records)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(b), "stale") {
+		t.Fatalf("POSIX read mutated its operand: data=%q err=%v", b, err)
 	}
 }
 
