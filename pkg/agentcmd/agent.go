@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
-	"github.com/qiangli/coreutils/pkg/sdlc"
+	"github.com/qiangli/coreutils/pkg/bus"
+	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/principal"
 	"github.com/spf13/cobra"
 )
 
@@ -28,9 +31,12 @@ func newWhoamiCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "whoami",
-		Short: "print the active operator agent",
+		Short: "print the active agent identity",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res := WhoAmI()
+			res, err := WhoAmI()
+			if err != nil {
+				return err
+			}
 			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
 				b, _ := json.Marshal(res)
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
@@ -44,10 +50,31 @@ func newWhoamiCmd() *cobra.Command {
 	return cmd
 }
 
-func WhoAmI() WhoAmIResult {
+// WhoAmI resolves the named agent this process is acting as. A harness is a
+// tool, not an agent: without a launcher-stamped agent principal, returning
+// the tool (or the OS login) would make an attribution claim the board rejects.
+func WhoAmI() (WhoAmIResult, error) {
+	self, ok := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self()
+	if !ok || self.Kind != principal.KindAgent {
+		if ok {
+			return WhoAmIResult{}, fmt.Errorf("agent identity unavailable: running under tool %q, which is not an agent identity", self.Name)
+		}
+		return WhoAmIResult{}, fmt.Errorf("agent identity unavailable: no launcher-stamped agent identity")
+	}
+
+	// BoardIdentity's explicit path is exactly what `bashy mb --as <name>`
+	// accepts, including catalog aliases. It intentionally does not inspect the
+	// login fallback, because Self above already established an agent identity.
+	name, err := bus.BoardIdentity(self.Name)
+	if err != nil || strings.TrimSpace(name) == "" {
+		if err != nil {
+			return WhoAmIResult{}, fmt.Errorf("agent identity unavailable: %w", err)
+		}
+		return WhoAmIResult{}, fmt.Errorf("agent identity unavailable: board could not resolve the launcher-stamped identity")
+	}
 	return WhoAmIResult{
 		SchemaVersion: schemaVersion,
-		Agent:         sdlc.DefaultConductorAgent(),
-		Source:        "environment",
-	}
+		Agent:         name,
+		Source:        "launcher principal",
+	}, nil
 }
