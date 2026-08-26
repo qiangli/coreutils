@@ -36,6 +36,13 @@ type Subscription struct {
 	Subscriber string `json:"subscriber"`
 	// Topics are exact (`code.api.Foo`), dotted prefixes (`code.api.*`), or `*`
 	// for everything.
+	//
+	// They are also this reader's DECLARED CONCERNS on the message board: a
+	// board post whose Topic matches one of them is routed into the reader's
+	// uncapped tier (see Post.OnConcern and Unseen in board.go). One field,
+	// one declaration — a subscription that routed bus events and a separate
+	// concern list that routed board posts would be two spellings of one
+	// interest, free to drift.
 	Topics []string `json:"topics,omitempty"`
 	// To also accepts 1:1 notifications addressed to this id.
 	To string `json:"to,omitempty"`
@@ -142,6 +149,52 @@ func (s Subscription) AcceptsInterruptFrom(principal string) bool {
 		}
 	}
 	return false
+}
+
+// --- concerns: the declaration half of the board's subject route ------------
+
+// DeclaredConcerns is the set of topic patterns this reader has declared an
+// interest in — its subscription's Topics, plus ConcernAnnounce, the board's
+// wall, which every reader is subscribed to by default. A reader with no
+// subscription at all still hears announcements; everything else stays behind
+// the cap until it is asked for by name.
+//
+// Declaring is done with the subscription front door the topics already have:
+// `bashy bus subscribe --topic shared-baseline`. Remember the convention it
+// buys into: a declared concern is an obligation to READ it.
+func DeclaredConcerns(reader string) []string {
+	var out []string
+	if s, err := LoadSubscription(reader); err == nil {
+		out = s.Topics
+	}
+	for _, t := range out {
+		if topicMatch(t, ConcernAnnounce) {
+			return out
+		}
+	}
+	return append(out, ConcernAnnounce)
+}
+
+// ConcernDeclarers names the subscribers whose declared topics cover a
+// concern — the denominator for "did everyone concerned read it", answered
+// against the counted views the ModeAll machinery already keeps. Implicit
+// announce subscribers are not listed: the explicit declarations are the only
+// ones that carry the obligation to read.
+func ConcernDeclarers(topic string) []string {
+	subs, err := Subscriptions()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, s := range subs {
+		for _, pat := range s.Topics {
+			if topicMatch(pat, topic) {
+				out = append(out, s.Subscriber)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // --- storage --------------------------------------------------------------

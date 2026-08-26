@@ -30,6 +30,9 @@ func board(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("BASHY_MB_DIR", dir)
+	// The board reads subscriptions too (declared concerns route posts), so
+	// the room store must be a temp dir or a test would read the host's.
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	t.Setenv("BASHY_PRINCIPAL", "")
 	t.Setenv("USER", "tester")
 	return dir

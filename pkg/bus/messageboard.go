@@ -78,7 +78,14 @@ hint about who should act, never a permission. Nothing is deleted — reading on
 advances your own cursor — so --all always answers "what was said, and when".
 
 No setup: there is nothing to subscribe to. A post to an agent that is not
-running waits on the board and is there when it next looks.`,
+running waits on the board and is there when it next looks.
+
+Posts addressed to you are shown in full; the rest is capped at -n, newest
+first, with a count of what was hidden. A CONCERN you have declared
+('bashy bus subscribe --topic shared-baseline') lifts that cap for every post
+tagged with it — declaring one is an obligation to read it. Everyone is
+subscribed to 'announce', the board's wall. The documented concerns:
+shared-baseline, posix-cert, harness, announce.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -108,7 +115,7 @@ running waits on the board and is there when it next looks.`,
 	f.BoolVar(&all, "all", false, "the whole board — every post by everyone, read or not")
 	f.BoolVar(&seenBy, "seen-by", false, "name the agents that have read each post — the receipt record, not just a count")
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
-		"cap posts NOT addressed to you by name (0 = no cap); directed posts are never capped")
+		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
 	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new relevant post")
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
@@ -189,10 +196,11 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		// Observed — a failed `grep -A` killed the first reader mid-render
 		// and the SECOND reader then took work the first had been shown. A
 		// state change that depends on a pipe staying open is not one.
+		concerns := DeclaredConcerns(who)
 		labels := make(map[int64]string, len(posts))
 		if !all && !peek {
 			for _, p := range posts {
-				labels[p.Seq] = resolveLabel(p, who)
+				labels[p.Seq] = resolveLabel(p, who, concerns)
 			}
 		}
 		w := cmd.OutOrStdout()
@@ -210,7 +218,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 			for _, p := range posts {
 				to, ok := labels[p.Seq]
 				if !ok {
-					to = describeFor(p, who)
+					to = describeFor(p, who, concerns)
 				}
 				if seenBy {
 					if v := Viewers(p.Seq); len(v) > 0 {
@@ -345,7 +353,8 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&topic, "topic", "mb", "topic label for the post")
+	f.StringVar(&topic, "topic", "mb",
+		"what the post is about; readers who declared this concern see it uncapped (convention: shared-baseline, posix-cert, harness, announce)")
 	f.StringVar(&as, "as", "", "sender identity (default: resolved from your principal)")
 	f.IntVar(&band, "band", 0, "post to every agent at this band (1-4)")
 	f.StringVar(&tool, "tool", "", "post to every agent on this harness (claude, ycode, agy, codex, opencode)")
@@ -376,7 +385,13 @@ construction — anyone can read it and anyone can respond.
   bashy mb                  # what others have posted to you or to everyone
 
 Use 'mb send <agent>' when exactly one agent needs to act. A broadcast everybody
-must read is how a board becomes noise nobody reads.`,
+must read is how a board becomes noise nobody reads.
+
+A broadcast can still scroll past a busy reader's cap. Tag it with a concern
+(--topic shared-baseline|posix-cert|harness) and everyone who DECLARED that
+concern sees it uncapped; --topic announce reaches every reader's uncapped
+view. Announce is the board's wall: tagging it to skip the cap on routine
+chatter is the same defection as marking every email urgent.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			from, err := BoardIdentity(as)
@@ -401,7 +416,8 @@ must read is how a board becomes noise nobody reads.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&topic, "topic", "mb", "topic label for the post")
+	cmd.Flags().StringVar(&topic, "topic", "mb",
+		"what the post is about; readers who declared this concern see it uncapped (convention: shared-baseline, posix-cert, harness, announce)")
 	cmd.Flags().StringVar(&as, "as", "", "sender identity (default: your principal)")
 	return cmd
 }
@@ -449,7 +465,7 @@ func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 // resolveLabel performs a post's read side effects — claiming an offer, or
 // recording a view — and returns how to label it. Called BEFORE any output, so
 // a broken pipe cannot lose the state change.
-func resolveLabel(p Post, who string) string {
+func resolveLabel(p Post, who string, concerns []string) string {
 	switch {
 	case p.Directed(who):
 		return "you"
@@ -462,34 +478,51 @@ func resolveLabel(p Post, who string) string {
 			return "any of " + p.Audiences() + " — CLAIMED BY YOU"
 		}
 		return "any of " + p.Audiences() + " — already taken by " + holder
-	case p.Audience != nil && !p.Audience.Empty():
+	case (p.Audience != nil && !p.Audience.Empty()) || p.OnConcern(concerns):
 		// The view record IS the receipt: it says WHO read it, not just that
 		// somebody did, so a sender can tell who has actually been reached.
+		// A concern read leaves the same record, and against the concern's
+		// declarers it answers "did everyone concerned read it".
 		_ = RecordView(p.Seq, who)
-		return describeFor(p, who)
+		return describeFor(p, who, concerns)
 	}
 	return p.Audiences()
 }
 
 // describeFor labels a post WITHOUT side effects, for --all and --peek.
-func describeFor(p Post, who string) string {
+func describeFor(p Post, who string, concerns []string) string {
 	if p.Directed(who) {
 		return "you"
 	}
-	if p.Audience == nil || p.Audience.Empty() {
-		return p.Audiences()
-	}
-	if p.Mode == ModeAny {
+	base, counted := "", false
+	switch {
+	case p.Audience == nil || p.Audience.Empty():
+		base = p.Audiences()
+	case p.Mode == ModeAny:
 		if h := ClaimHolder(p.Seq); h != "" {
 			return "any of " + p.Audiences() + " — taken by " + h
 		}
 		return "any of " + p.Audiences() + " — unclaimed"
+	default:
+		seen := len(Viewers(p.Seq))
+		if n := AudienceSize(*p.Audience); n > 0 {
+			base = fmt.Sprintf("%s (seen by %d of %d)", p.Audiences(), seen, n)
+		} else {
+			base = fmt.Sprintf("%s (seen by %d)", p.Audiences(), seen)
+		}
+		counted = true
 	}
-	seen := len(Viewers(p.Seq))
-	if n := AudienceSize(*p.Audience); n > 0 {
-		return fmt.Sprintf("%s (seen by %d of %d)", p.Audiences(), seen, n)
+	if p.OnConcern(concerns) {
+		base += " · concern " + p.Topic
+		if !counted {
+			// The declarers are the denominator the sender cares about: the
+			// readers who OWED this post a read.
+			if m := len(ConcernDeclarers(p.Topic)); m > 0 {
+				base += fmt.Sprintf(" (seen by %d of %d declared)", len(Viewers(p.Seq)), m)
+			}
+		}
 	}
-	return fmt.Sprintf("%s (seen by %d)", p.Audiences(), seen)
+	return base
 }
 
 // nextSteps tells a reader what the board expects of it, in the OUTPUT rather

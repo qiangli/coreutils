@@ -159,6 +159,68 @@ func (p Post) ForReader(reader string) bool {
 	return true
 }
 
+// --- concerns: the subject as a ROUTE, not an address ------------------------
+//
+// A post's Topic names what it is ABOUT; a reader's bus subscription topics
+// (Subscription.Topics) name what it CARES ABOUT. When the two match, the post
+// is routed into that reader's uncapped tier: shown in full by Unseen, like a
+// directed post, instead of being trimmed to the newest -n with a count.
+//
+// This is deliberately a ROUTE in Yoke's sense — a policy-controlled mapping
+// from ingress to a principal — and NOT a fifth Address kind. Yoke's address
+// kinds (principal, agent, tool, role seat, person, host, group, external) are
+// all IDENTITIES: a who that resolves at send time, holds a cursor, and can be
+// reported on in a receipt. A concern is a PREDICATE OVER MESSAGES — a what —
+// with no cursor, no seat and no inbox, so making it addressable would leave
+// every receipt state below `accepted` unreachable and fork the model this
+// family was just aligned to. Hence: the declaration lives on the reader's own
+// SUBSCRIPTION, the tag lives on the POST, resolution happens at READ time,
+// and the send path is untouched — `mb send shared-baseline` still fails with
+// choices, because a subject is not somebody you can send to.
+// See docs/mb-addressing-model.md.
+//
+// The mechanism is general — any topic can be declared — but a vocabulary
+// nobody shares routes nothing, so this small set is the documented
+// convention:
+//
+//	shared-baseline  changes to state every agent builds on: a frozen
+//	                 directory, a rebuilt shared toolchain, a moved gate
+//	posix-cert       the certification campaign
+//	harness          agent harness and tooling changes (a rebuilt bashy,
+//	                 new or renamed verbs)
+//	announce         this board's `wall`: the one concern EVERY reader is
+//	                 subscribed to by default
+//
+// Two rules keep the route honest, and they are conventions enforced by review
+// rather than code: DECLARING A CONCERN IS AN OBLIGATION TO READ IT — the
+// declaration is what lifts the cap, so declaring and then skimming defeats
+// the cap for nothing — and tagging `announce` to skip everyone's cap is the
+// same defection as marking every email urgent, visible to everyone on a
+// public board.
+const ConcernAnnounce = "announce"
+
+// WellKnownConcerns is the documented convention set — see the block above.
+var WellKnownConcerns = []string{"shared-baseline", "posix-cert", "harness", ConcernAnnounce}
+
+// OnConcern reports whether this post rides one of the given declared
+// concerns. Patterns match the way subscription topics always have —
+// segment-anchored, so a declared `cert.*` covers a post tagged `cert.posix`.
+//
+// A work offer (ModeAny) is never concern-routed: it belongs to its pool and
+// its claim rule, and a declarer outside the pool must not be handed — much
+// less claim — work that was not offered to it.
+func (p Post) OnConcern(concerns []string) bool {
+	if p.Mode == ModeAny || strings.TrimSpace(p.Topic) == "" {
+		return false
+	}
+	for _, c := range concerns {
+		if topicMatch(c, p.Topic) {
+			return true
+		}
+	}
+	return false
+}
+
 // audienceCache memoizes selector resolution for the life of one command, so a
 // board full of selector posts costs one catalog load per DISTINCT selector
 // rather than one per post.
@@ -316,31 +378,73 @@ func Posts() ([]Post, error) {
 // returned in full and never truncated. Capping them is how an assignment gets
 // dropped.
 //
-// other is everything else that concerns the reader — broadcasts and selector
-// posts — trimmed to the newest limit, with older reporting how many were left
+// Posts on a concern this reader has DECLARED (see OnConcern) are the same
+// tier of obligation by the reader's own choice, so they are also never
+// truncated — and the route works both ways: a declared concern surfaces a
+// matching post even when it is addressed to somebody else, because a standing
+// interest in the subject is exactly what the declaration says. They are
+// returned inside `other`, in board order, because they carry no reply
+// obligation — only the obligation to read.
+//
+// The rest — broadcasts and selector posts on nothing the reader declared —
+// is trimmed to the newest limit, with older reporting how many were left
 // out. A cap that does not say what it hid is a silent drop, and a reader who
 // cannot tell "nothing else" from "twelve more" will act on the wrong one.
+// An UNDECLARED concern is never silently promoted: the tag alone lifts no
+// cap, or tagging would become the megaphone the convention forbids.
 func Unseen(reader string, limit int) (directed, other []Post, older int, err error) {
 	all, e := Posts()
 	if e != nil {
 		return nil, nil, 0, e
 	}
 	at := SeenSeq(reader)
+	concerns := DeclaredConcerns(reader)
+	var concerned, rest []Post
 	for _, p := range all {
-		if p.Seq <= at || !p.ForReader(reader) {
+		if p.Seq <= at {
 			continue
 		}
-		if p.Directed(reader) {
+		onConcern := p.OnConcern(concerns)
+		if !onConcern && !p.ForReader(reader) {
+			continue
+		}
+		switch {
+		case p.Directed(reader):
 			directed = append(directed, p)
-			continue
+		case onConcern:
+			concerned = append(concerned, p)
+		default:
+			rest = append(rest, p)
 		}
-		other = append(other, p)
 	}
-	if limit > 0 && len(other) > limit {
-		older = len(other) - limit
-		other = other[len(other)-limit:]
+	if limit > 0 && len(rest) > limit {
+		older = len(rest) - limit
+		rest = rest[len(rest)-limit:]
 	}
+	other = mergeBySeq(concerned, rest)
 	return directed, other, older, nil
+}
+
+// mergeBySeq interleaves two seq-ordered slices back into board order, so the
+// cap exemption changes what a reader is shown, never the order it reads in.
+func mergeBySeq(a, b []Post) []Post {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]Post, 0, len(a)+len(b))
+	for len(a) > 0 && len(b) > 0 {
+		if a[0].Seq <= b[0].Seq {
+			out = append(out, a[0])
+			a = a[1:]
+		} else {
+			out = append(out, b[0])
+			b = b[1:]
+		}
+	}
+	return append(append(out, a...), b...)
 }
 
 func seenPath(reader string) string {
