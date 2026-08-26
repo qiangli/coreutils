@@ -8,7 +8,12 @@ specification or a claim of complete POSIX conformance. States are `missing`,
 - `missing`: no behavioral implementation evidence is available.
 - `partial`: focused behavioral evidence exists, but a source-interface residual remains.
 - `implemented`: normative semantics, parser coverage, and focused authored tests are complete.
-- `verified`: `implemented` plus applicable passing full-profile attestations tied to exact inputs, binaries, results, and component revisions.
+- `verified`: reserved for `implemented` plus applicable byte-derived full-run/pair verification from the proprietary harness.
+
+Integration verification is deferred and unavailable in this OSS ledger today.
+`implemented` is therefore the highest currently attainable state. This is a
+fail-closed deferral, not a waiver: every attempted `verified` promotion and every
+non-empty `integration_evidence` value is rejected.
 
 GNU compatibility is explicitly out of scope and deferred.
 
@@ -31,8 +36,8 @@ Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
 covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the
 16 external-provider rows as owned implementation evidence. Both final gates accept
-only `verified`: focused behavioral evidence, complete normative semantics, and the
-exact applicable full-profile PASS attestations are required for every row in scope.
+only `verified`. They intentionally remain red until the proprietary harness adds
+a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
 source-token audit; finding a token is never proof of runtime behavior.
 
@@ -43,22 +48,17 @@ The sole approved exception is the process-level Bashy sh-entrypoint contract,
 recorded as `bashy:<path>#<TestID>` on the `sh` row because it proves behavior
 that exists only at the selected executable boundary. Shell
 routing references separately use `bashy:<approved-path>#<TestID>` against the
-sibling bashy repository and are legal only for shell-selected rows. Verified
-shell rows require both lanes: routing evidence can never substitute for semantic
+sibling bashy repository and are legal only for shell-selected rows. Future verified
+shell rows will require both lanes: routing evidence can never substitute for semantic
 evidence, and a missing cross-repository reference fails closed.
 
-Integration references use `profile-<b|c|d>@<subject-commit>#<command>/<artifact>@sha256=<digest>`.
-Each artifact is strict `key<TAB>value` data under schema
-`s79-posix-command-attestation-v1`. It must record a full-profile PASS-group run, the matching
-profile/command/owner revision, exact coreutils/bashy/sh/readline/harness commits, exact
-run-input/profile-manifest/selection/result-vector/binary/applet/ledger/summary
-paths and hashes. The validator rereads those bytes and proves the exact component
-pins, byte-identical start/end inputs, exact command selection, PASS-group-only
-command vector, full ARM_DONE/117-set/9,337-TP evidence, and zero skips, caps,
-runner failures, or input drift. Hash-shaped caller assertions alone earn no credit.
-Go and provider rows require exactly Profiles C+D; shell rows require exactly B+D.
+The future integration mapping is already fixed and non-negotiable: Go and external
+provider rows require Profiles C+D; shell rows require Profiles B+D. A future gate
+must derive membership, denominators, results, pins, binaries, provider provenance,
+and no-skip/no-cap/no-drift status from authoritative harness bytes; caller-authored
+hashes or attestations cannot establish `verified`.
 
-For verified rows, `NONE` explicitly records an empty option-argument or
+For implemented rows, `NONE` explicitly records an empty option-argument or
 operand set; `-` in those normative slots means missing data. Likewise, paired
 `-` synopsis or option fields are incomplete, and normative prose cannot be `-`.
 
