@@ -8,6 +8,8 @@
 // "Windows_NT", the release is "major.minor.build" from RtlGetVersion,
 // the version is "Build N", and the machine maps GOARCH to the GNU spelling
 // (x86_64, aarch64).
+// Other targets without uname(2) report the Go target, runtime version,
+// hostname, and architecture as implementation-defined symbols.
 //
 // -a is exactly -mnrsv, as Issue 7 requires ("Behave as though all of
 // the options -mnrsv were specified"), and prints the selected symbols
@@ -17,12 +19,13 @@
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/uname/uname.go (BSD-3-Clause)
 // and https://github.com/guonaihong/coreutils uname/uname.go (Apache-2.0).
-// Changes: rewired to the tool framework; Windows probe added; -o
-// operating-system names per GNU spellings.
+// Changes: rewired to the tool framework; Windows and non-Unix probes added;
+// -o operating-system names per GNU spellings.
 package unamecmd
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 
@@ -49,6 +52,12 @@ type sysinfo struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithProbe(rc, args, probe)
+}
+
+type probeFunc func() (sysinfo, error)
+
+func runWithProbe(rc *tool.RunContext, args []string, systemProbe probeFunc) int {
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "behave as though -mnrsv were specified")
 	kernelName := fs.BoolP("kernel-name", "s", false, "print the kernel name")
@@ -89,13 +98,13 @@ func run(rc *tool.RunContext, args []string) int {
 		*kernelName = true
 	}
 
-	info, err := probe()
+	info, err := systemProbe()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "uname: cannot get system name: %v\n", err)
 		return 1
 	}
 
-	parts := assemble(info, selection{
+	sel := selection{
 		all:              *all,
 		sysname:          *kernelName,
 		nodename:         *nodename,
@@ -105,8 +114,21 @@ func run(rc *tool.RunContext, args []string) int {
 		processor:        *processor,
 		hardwarePlatform: *hardwarePlatform,
 		operatingSystem:  *osFlag,
-	})
-	fmt.Fprintf(rc.Out, "%s\n", strings.Join(parts, " "))
+	}
+	if missing := missingRequiredField(info, sel); missing != "" {
+		fmt.Fprintf(rc.Err, "uname: requested %s is unavailable\n", missing)
+		return 1
+	}
+	parts := assemble(info, sel)
+	line := strings.Join(parts, " ") + "\n"
+	n, err := io.WriteString(rc.Out, line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		fmt.Fprintf(rc.Err, "uname: write error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -121,6 +143,26 @@ type selection struct {
 	processor        bool
 	hardwarePlatform bool
 	operatingSystem  bool
+}
+
+func missingRequiredField(info sysinfo, sel selection) string {
+	checks := []struct {
+		selected bool
+		value    string
+		name     string
+	}{
+		{sel.sysname || sel.all, info.sysname, "system name"},
+		{sel.nodename || sel.all, info.nodename, "node name"},
+		{sel.release || sel.all, info.release, "release"},
+		{sel.version || sel.all, info.version, "version"},
+		{sel.machine || sel.all, info.machine, "machine name"},
+	}
+	for _, check := range checks {
+		if check.selected && check.value == "" {
+			return check.name
+		}
+	}
+	return ""
 }
 
 // assemble builds the output fields in the fixed Issue 7 order

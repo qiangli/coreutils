@@ -180,7 +180,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 3 | 27 |
 | `talk` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
-| `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 18 |
+| `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 29 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
 | `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 15 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
@@ -191,10 +191,10 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |
-| `tsort` | `cmds/tsort` | — | GNU Coreutils | yes | yes | 1 | 7 |
+| `tsort` | `cmds/tsort` | — | GNU Coreutils | yes | yes | 1 | 11 |
 | `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 14 |
 | `tz` | `cmds/tz` | — | Bashy/other extension | no | no | 1 | 2 |
-| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 10 |
+| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 13 |
 | `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 2 | 21 |
 | `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 1 | 6 |
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |

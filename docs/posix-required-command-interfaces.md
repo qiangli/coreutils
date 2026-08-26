@@ -4638,19 +4638,19 @@ tee [-ai] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. Copy standard input without buffering to standard output and every file operand; without -a create or truncate named files, with -a append; support at least 13 file operands; after a write failure on one opened file diagnose it and continue the other opened files and standard output.
+**Operands:** `file`. Copy standard input without buffering to standard output and every file operand; without -a create or truncate named files, with -a append; support at least 13 file operands; after an open, write, or close failure on one file diagnose it and continue the other opened files and standard output.
 
-**Special tokens:** -- ends option parsing; a file operand of - always names a literal file called -, never standard output.
+**Special tokens:** -- ends option parsing; a file operand of - always names a literal file called -, never standard output; Retained output-error, long-option, and help/version extensions remain available when POSIXLY_CORRECT is present because they do not conflict with the required forms.
 
 **Standard input:** Read as a byte stream of any type and copy without buffering.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** Write an exact copy of standard input.
+**Standard output:** Write an exact copy of standard input; output failures, including short writes, are diagnosed and return failure.
 
 **Standard error:** Used only for diagnostic messages, including non-signal output errors.
 
-**Effects:** `Creates or truncates each named output file by default, appends under -a, and ignores SIGINT while -i is active.`.
+**Effects:** `Creates or truncates each named output file by default using mode 0666 filtered by the invocation umask without changing an existing file mode, appends under -a, ignores SIGINT while -i is active, and otherwise retains the default SIGINT disposition.`.
 
 **Exit status:** 0 only when standard input is copied successfully to standard output and all output files; greater than 0 if an error occurs.
 
@@ -4664,7 +4664,7 @@ tee [-ai] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tee`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/tee/tee_test.go#TestTeeStdoutOnly;cmds/tee/tee_test.go#TestTeeWritesFiles;cmds/tee/tee_test.go#TestTeeTruncatesByDefault;cmds/tee/tee_test.go#TestTeeAppend;cmds/tee/tee_test.go#TestTeeOpenErrorContinues;cmds/tee/tee_test.go#TestTeeDashIsLiteralFileName;cmds/tee/tee_test.go#TestTeeStdoutWriteErrorPOSIX;cmds/tee/run_signal_test.go#TestTeeIgnoreInterruptsActual;cmds/tee/tee_posix_linux_test.go#TestTeeIssue7FileWriteFailureContinues`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tee/tee_test.go#TestTeeStdoutOnly;cmds/tee/tee_test.go#TestTeeWritesFiles;cmds/tee/tee_test.go#TestTeeIssue7AtLeastThirteenFileOperands;cmds/tee/tee_test.go#TestTeeTruncatesByDefault;cmds/tee/tee_test.go#TestTeeAppend;cmds/tee/tee_test.go#TestTeeIssue7VirtualUmaskAndExistingMode;cmds/tee/tee_test.go#TestTeeOpenErrorContinues;cmds/tee/tee_test.go#TestTeeDashIsLiteralFileName;cmds/tee/tee_test.go#TestTeeStdoutWriteErrorPOSIX;cmds/tee/tee_test.go#TestTeeIssue7ShortWriteFails;cmds/tee/tee_test.go#TestTeeIssue7InputReadFailurePreservesReadBytes;cmds/tee/tee_test.go#TestTeeIssue7StreamsBeforeEOF;cmds/tee/tee_test.go#TestTeeIssue7OutputFailuresContinue;cmds/tee/tee_test.go#TestTeeIssue7OpenFailureContinuesPortably;cmds/tee/tee_test.go#TestTeeExtensionsRemainAvailableWithPOSIXEnvironment;cmds/tee/run_signal_test.go#TestTeeDefaultInterruptDisposition;cmds/tee/run_signal_test.go#TestTeeDefaultSIGPIPEDisposition;cmds/tee/run_signal_test.go#TestTeeIgnoreInterruptsActual;cmds/tee/tee_posix_linux_test.go#TestTeeIssue7FileWriteFailureContinues`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tee:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tee](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tee.html).
 
@@ -4978,21 +4978,21 @@ tsort [file]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. Read blank-separated pairs of non-empty items; unequal items impose first-before-second ordering and identical items declare presence; write every item once in a total order consistent with all imposed relations.
+**Operands:** `file`. Read blank-separated pairs of non-empty items; unequal items impose first-before-second ordering and identical items declare presence; write every item once in a total order consistent with all imposed relations; diagnose every detected cycle and continue sorting.
 
-**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input.
+**Special tokens:** -- ends option parsing; this implementation treats a file operand of - as standard input; The retained -w and help/version extensions remain available when POSIXLY_CORRECT is present because they do not conflict with the required operand form.
 
 **Standard input:** Used when file is omitted or is -; otherwise not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** Write a text file containing one total ordering consistent with the partial-order input.
+**Standard output:** Write a text file containing one total ordering consistent with the partial-order input; output errors and short writes are diagnosed.
 
-**Standard error:** Used only for diagnostic messages.
+**Standard error:** Used only for diagnostic messages, including odd input, cycles, and stream failures.
 
-**Effects:** `Reads the input without modifying it; output is standard output only.`.
+**Effects:** `Reads and closes the selected input without modifying it; output is standard output only.`.
 
-**Exit status:** 0 for successful completion; greater than 0 if an error occurs.
+**Exit status:** 0 for successful completion; greater than 0 for malformed input, a cycle, an input open/read/close error, or an output error; usage errors use 2.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5004,7 +5004,7 @@ tsort [file]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/tsort`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/tsort/tsort_test.go#TestTsort;cmds/tsort/tsort_test.go#TestTsortFileOperand;cmds/tsort/tsort_test.go#TestTsortErrors;cmds/tsort/tsort_test.go#TestTsortPOSIXExample`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/tsort/tsort_test.go#TestTsort;cmds/tsort/tsort_test.go#TestTsortLoop;cmds/tsort/tsort_test.go#TestTsortFileOperand;cmds/tsort/tsort_test.go#TestTsortErrors;cmds/tsort/tsort_test.go#TestTsortPOSIXExample;cmds/tsort/tsort_test.go#TestTsortIssue7BlankSeparatorsAreExact;cmds/tsort/tsort_test.go#TestTsortIssue7StreamFailures;cmds/tsort/tsort_test.go#TestTsortIssue7InputCloseFailure;cmds/tsort/tsort_test.go#TestTsortExtensionsRemainAvailableWithPOSIXEnvironment`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:tsort:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [tsort](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/tsort.html).
 
@@ -5173,19 +5173,19 @@ uname [-amnrsv]
 
 **Operands:** `none`. Any operand is rejected as a usage error.
 
-**Special tokens:** -- ends option parsing; trailing words are still rejected operands.
+**Special tokens:** -- ends option parsing; trailing words are still rejected operands; Retained GNU selectors, long options, and help/version aliases remain available when POSIXLY_CORRECT is present because they do not conflict with the required selectors.
 
 **Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** One line of the selected symbols in the fixed order sysname nodename release version machine regardless of flag order, separated by single spaces; no flags means -s; -a selects exactly -mnrsv; all supported platform probes provide every selected POSIX symbol; repeated selectors do not duplicate fields.
+**Standard output:** One line of the selected symbols in the fixed order sysname nodename release version machine regardless of flag order, separated by single spaces; no flags means -s; -a selects exactly -mnrsv; every selected POSIX symbol must be non-empty; repeated selectors do not duplicate fields; output errors and short writes are diagnosed.
 
 **Standard error:** Used only for diagnostic messages.
 
-**Effects:** `Values come from uname(2) on unix (whitespace runs collapsed); on Windows the kernel name is Windows_NT, release is major.minor.build, version is Build N from RtlGetVersion, and machine maps GOARCH to the GNU spelling.`.
+**Effects:** `Values come from uname(2) on unix (whitespace runs collapsed); on Windows the kernel name is Windows_NT, release is major.minor.build, version is Build N from RtlGetVersion, and machine maps GOARCH to the GNU spelling; other targets use the Go target, runtime version, hostname, and architecture; an unavailable selected provider value fails loudly.`.
 
-**Exit status:** 0 when the requested information was written; 1 when the system probe fails; 2 usage.
+**Exit status:** 0 when the requested information was written; 1 when the system probe, selected provider value, or output fails; 2 usage.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5197,7 +5197,7 @@ uname [-amnrsv]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uname`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/uname/uname_test.go#TestUnameDefaultIsKernelName;cmds/uname/uname_test.go#TestUnameFields;cmds/uname/uname_test.go#TestUnameCombinedAndAll;cmds/uname/uname_test.go#TestUnameAllIsExactlyMNRSV;cmds/uname/uname_test.go#TestUnameErrors;cmds/uname/uname_assemble_test.go#TestAssembleSkipsSyntheticEmptyVersion;cmds/uname/uname_assemble_test.go#TestAssembleFixedOrderWithVersion;cmds/uname/uname_windows_test.go#TestWindowsProbeHasPOSIXVersion`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/uname/uname_test.go#TestUnameDefaultIsKernelName;cmds/uname/uname_test.go#TestUnameFields;cmds/uname/uname_test.go#TestUnameCombinedAndAll;cmds/uname/uname_test.go#TestUnameAllIsExactlyMNRSV;cmds/uname/uname_test.go#TestUnameErrors;cmds/uname/uname_test.go#TestUnameIssue7SelectorCompositionAndOrder;cmds/uname/uname_test.go#TestUnameIssue7ProviderAndOutputFailures;cmds/uname/uname_test.go#TestUnameExtensionsRemainAvailableWithPOSIXEnvironment;cmds/uname/uname_assemble_test.go#TestAssembleSkipsSyntheticEmptyVersion;cmds/uname/uname_assemble_test.go#TestAssembleFixedOrderWithVersion;cmds/uname/uname_windows_test.go#TestWindowsProbeHasPOSIXVersion`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [uname](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uname.html).
 

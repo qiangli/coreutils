@@ -33,6 +33,14 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithOpen(rc, args, func(path string, flags int, perm os.FileMode) (io.WriteCloser, error) {
+		return rc.OpenFile(path, flags, perm)
+	})
+}
+
+type openOutputFunc func(path string, flags int, perm os.FileMode) (io.WriteCloser, error)
+
+func runWithOpen(rc *tool.RunContext, args []string, openOutput openOutputFunc) int {
 	fs := tool.NewFlags(cmd.Name)
 	appendMode := fs.BoolP("append", "a", false, "append to the given FILEs, do not overwrite")
 	ignoreInterrupts := fs.BoolP("ignore-interrupts", "i", false, "ignore interrupt signals")
@@ -60,7 +68,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if mode == "" {
 		// POSIX default: file errors are diagnosed and tee continues;
-		// stdout errors are fatal and silent.
+		// stdout errors are diagnosed and fatal.
 		mode = modePOSIX
 	}
 
@@ -75,12 +83,12 @@ func run(rc *tool.RunContext, args []string) int {
 	type sink struct {
 		name     string
 		w        io.Writer
-		f        *os.File
+		f        io.Closer
 		isStdout bool
 	}
 	sinks := []sink{{name: "standard output", w: rc.Out, isStdout: true}}
 	for _, name := range operands {
-		f, err := os.OpenFile(rc.Path(name), oflags, 0o666)
+		f, err := openOutput(rc.Path(name), oflags, 0o666)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "tee: %s: %v\n", name, pathErr(err))
 			status = 1
@@ -100,7 +108,10 @@ Write:
 				if s.w == nil {
 					continue // already failed; keep copying to the rest
 				}
-				_, werr := s.w.Write(buf[:n])
+				wn, werr := s.w.Write(buf[:n])
+				if werr == nil && wn != n {
+					werr = io.ErrShortWrite
+				}
 				if werr == nil {
 					continue
 				}
@@ -166,7 +177,7 @@ const (
 
 // writeBehavior reports, for a write error to stdout or a file operand,
 // whether the error should be diagnosed and whether tee should stop.
-// POSIX treats stdout specially: write errors there are fatal and silent.
+// POSIX treats stdout specially: write errors there are diagnosed and fatal.
 func (m outputErrorMode) writeBehavior(isStdout, isPipe bool) (diagnose, exit bool) {
 	if isStdout && m == modePOSIX {
 		// POSIX gives only successfully opened file operands the special

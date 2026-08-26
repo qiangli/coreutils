@@ -3,7 +3,9 @@ package tsortcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +104,12 @@ func TestTsortLoop(t *testing.T) {
 	}
 	// All items still appear in the output.
 	assertTopological(t, out, []string{"a", "b"}, nil)
+	if want := "tsort: -: input contains a loop:\ntsort: a\ntsort: b\n"; errb != want {
+		t.Errorf("exact loop diagnostic = %q, want %q", errb, want)
+	}
+	if out != "a\nb\n" {
+		t.Errorf("exact loop output = %q, want %q", out, "a\nb\n")
+	}
 
 	// A cycle plus a dependent tail: the tail still comes after the
 	// cycle members it depends on where possible.
@@ -176,6 +184,22 @@ func TestTsortPOSIXExample(t *testing.T) {
 	}
 }
 
+func TestTsortIssue7BlankSeparatorsAreExact(t *testing.T) {
+	// Issue 7 uses <blank> (space or tab), not the broader Unicode/Go
+	// whitespace class. Form-feed therefore remains part of the first item.
+	out, errb, code := runTool(t, "a\f b\n")
+	if code != 0 || errb != "" || out != "a\f\nb\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+
+	// Space, tab, and newline delimit pairs in the required text input.
+	out, errb, code = runTool(t, "a\tb\nc d\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	assertTopological(t, out, []string{"a", "b", "c", "d"}, [][2]string{{"a", "b"}, {"c", "d"}})
+}
+
 func TestTsortWarn(t *testing.T) {
 	// -w with no cycles exits 0.
 	out, errb, code := runTool(t, "a b\n", "-w")
@@ -227,5 +251,102 @@ func TestTsortHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, "", "-V")
 	if code != 0 || !strings.Contains(out, "tsort") {
 		t.Errorf("-V: code=%d out=%q", code, out)
+	}
+}
+
+type failingReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, r.err
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+type failingWriter struct {
+	err   error
+	short bool
+}
+
+func (w failingWriter) Write(p []byte) (int, error) {
+	if w.short {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
+
+type testReadCloser struct {
+	io.Reader
+	closeErr error
+	closed   bool
+}
+
+func (r *testReadCloser) Close() error {
+	r.closed = true
+	return r.closeErr
+}
+
+func runToolRaw(t *testing.T, env []string, in io.Reader, out io.Writer, args ...string) (string, int) {
+	t.Helper()
+	var errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: env, Stdio: tool.Stdio{In: in, Out: out, Err: &errb}}
+	code := cmd.Run(rc, args)
+	return errb.String(), code
+}
+
+func TestTsortIssue7StreamFailures(t *testing.T) {
+	t.Run("input read", func(t *testing.T) {
+		var out bytes.Buffer
+		errText, code := runToolRaw(t, nil, &failingReader{data: []byte("a b"), err: errors.New("read failed")}, &out)
+		if code != 1 || out.String() != "" || errText != "tsort: -: read failed\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errText)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+	}{
+		{"write error", failingWriter{err: errors.New("write failed")}},
+		{"short write", failingWriter{short: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errText, code := runToolRaw(t, nil, strings.NewReader("a b\n"), tc.out)
+			if code != 1 || !strings.HasPrefix(errText, "tsort: write failed: ") {
+				t.Fatalf("code=%d stderr=%q", code, errText)
+			}
+		})
+	}
+}
+
+func TestTsortIssue7InputCloseFailure(t *testing.T) {
+	source := &testReadCloser{Reader: strings.NewReader("a b\n"), closeErr: errors.New("close failed")}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{In: strings.NewReader("unused"), Out: &out, Err: &errb}}
+	code := runWithOpen(rc, []string{"graph"}, func(string) (io.ReadCloser, error) { return source, nil })
+	if code != 1 || !source.closed || out.String() != "" || errb.String() != "tsort: graph: close failed\n" {
+		t.Fatalf("code=%d closed=%v stdout=%q stderr=%q", code, source.closed, out.String(), errb.String())
+	}
+}
+
+func TestTsortExtensionsRemainAvailableWithPOSIXEnvironment(t *testing.T) {
+	for _, args := range [][]string{{"-w"}, {"--warnings-are-errors"}} {
+		var out bytes.Buffer
+		errText, code := runToolRaw(t, []string{"POSIXLY_CORRECT="}, strings.NewReader("a b\n"), &out, args...)
+		if code != 0 || errText != "" || out.String() != "a\nb\n" {
+			t.Errorf("args=%v code=%d stdout=%q stderr=%q", args, code, out.String(), errText)
+		}
+	}
+	for _, arg := range []string{"--help", "-V"} {
+		var out bytes.Buffer
+		errText, code := runToolRaw(t, []string{"POSIXLY_CORRECT="}, strings.NewReader(""), &out, arg)
+		if code != 0 || errText != "" || out.Len() == 0 {
+			t.Errorf("arg=%s code=%d stdout=%q stderr=%q", arg, code, out.String(), errText)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-//go:build !windows && !darwin
+//go:build unix && !darwin
 
 package unamecmd
 

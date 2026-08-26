@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -56,6 +57,23 @@ func TestTeeWritesFiles(t *testing.T) {
 	}
 }
 
+func TestTeeIssue7AtLeastThirteenFileOperands(t *testing.T) {
+	dir := t.TempDir()
+	var names []string
+	for i := 0; i < 13; i++ {
+		names = append(names, fmt.Sprintf("out-%02d", i))
+	}
+	out, errb, code := runToolDir(t, dir, "thirteen\n", names...)
+	if code != 0 || out != "thirteen\n" || errb != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	for _, name := range names {
+		if got := readFile(t, filepath.Join(dir, name)); got != "thirteen\n" {
+			t.Errorf("%s = %q", name, got)
+		}
+	}
+}
+
 func TestTeeTruncatesByDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f")
@@ -83,6 +101,45 @@ func TestTeeAppend(t *testing.T) {
 	}
 	if got := readFile(t, path); got != "first\nsecond\n" {
 		t.Errorf("file = %q, want %q", got, "first\nsecond\n")
+	}
+}
+
+func TestTeeIssue7VirtualUmaskAndExistingMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Umask: 0o077, UmaskSet: true,
+		Stdio: tool.Stdio{In: strings.NewReader("new\n"), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"f"}); code != 0 || errb.String() != "" {
+		t.Fatalf("new file: code=%d stderr=%q", code, errb.String())
+	}
+	info, err := os.Stat(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("new file mode=%#o, want 0600", got)
+	}
+
+	if err := os.Chmod(filepath.Join(dir, "f"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	rc.In = strings.NewReader("replacement\n")
+	if code := cmd.Run(rc, []string{"f"}); code != 0 || errb.String() != "" {
+		t.Fatalf("existing file: code=%d stderr=%q", code, errb.String())
+	}
+	info, err = os.Stat(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("existing file mode=%#o, want unchanged 0640", got)
 	}
 }
 
@@ -167,6 +224,55 @@ type errWriter struct{ err error }
 
 func (e errWriter) Write(p []byte) (int, error) { return 0, e.err }
 
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+type testWriteCloser struct {
+	bytes.Buffer
+	writeErr error
+	closeErr error
+	short    bool
+	closed   bool
+}
+
+func (w *testWriteCloser) Write(p []byte) (int, error) {
+	if w.writeErr != nil {
+		return 0, w.writeErr
+	}
+	if w.short {
+		return len(p) - 1, nil
+	}
+	return w.Buffer.Write(p)
+}
+
+func (w *testWriteCloser) Close() error {
+	w.closed = true
+	return w.closeErr
+}
+
+type readResult struct {
+	data string
+	err  error
+}
+
+type stagedReader struct{ results <-chan readResult }
+
+func (r stagedReader) Read(p []byte) (int, error) {
+	result, ok := <-r.results
+	if !ok {
+		return 0, io.EOF
+	}
+	return copy(p, result.data), result.err
+}
+
+type channelWriter chan string
+
+func (w channelWriter) Write(p []byte) (int, error) {
+	w <- string(p)
+	return len(p), nil
+}
+
 // pipeErrWriter wraps an io.Writer and reports itself as a pipe via the
 // local pipeMarker interface, letting tests exercise --output-error pipe
 // behavior without creating real OS pipes.
@@ -209,6 +315,116 @@ func TestTeeStdoutWriteErrorPOSIX(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "tee: standard output: Broken") {
 		t.Errorf("stdout error: stderr=%q, want diagnostic", errb.String())
+	}
+}
+
+func TestTeeIssue7ShortWriteFails(t *testing.T) {
+	var errb bytes.Buffer
+	code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), shortWriter{}, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "Short write") {
+		t.Fatalf("short stdout write: code=%d stderr=%q", code, errb.String())
+	}
+}
+
+func TestTeeIssue7InputReadFailurePreservesReadBytes(t *testing.T) {
+	var out, errb bytes.Buffer
+	in := &oneReadError{data: []byte("kept\n"), err: errors.New("input failed")}
+	code := runToolRaw(t, t.TempDir(), in, &out, &errb)
+	if code != 1 || out.String() != "kept\n" || !strings.Contains(errb.String(), "tee: read error: input failed") {
+		t.Fatalf("read error: code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+}
+
+type oneReadError struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *oneReadError) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+func TestTeeIssue7StreamsBeforeEOF(t *testing.T) {
+	results := make(chan readResult)
+	writes := make(channelWriter, 1)
+	done := make(chan int, 1)
+	dir := t.TempDir()
+	go func() {
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: stagedReader{results: results}, Out: writes, Err: io.Discard}}
+		done <- cmd.Run(rc, nil)
+	}()
+	results <- readResult{data: "first\n"}
+	if got := <-writes; got != "first\n" {
+		t.Fatalf("first streamed write = %q", got)
+	}
+	close(results)
+	if code := <-done; code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+}
+
+func TestTeeIssue7OutputFailuresContinue(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(bad *testWriteCloser)
+		wantDetail string
+	}{
+		{"write error", func(bad *testWriteCloser) { bad.writeErr = errors.New("write failed") }, "Write failed"},
+		{"short write", func(bad *testWriteCloser) { bad.short = true }, "Short write"},
+		{"close error", func(bad *testWriteCloser) { bad.closeErr = errors.New("close failed") }, "Close failed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bad, good := &testWriteCloser{}, &testWriteCloser{}
+			tc.configure(bad)
+			opened := map[string]*testWriteCloser{"bad": bad, "good": good}
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{In: strings.NewReader("data\n"), Out: &out, Err: &errb}}
+			code := runWithOpen(rc, []string{"bad", "good"}, func(path string, _ int, _ os.FileMode) (io.WriteCloser, error) {
+				return opened[filepath.Base(path)], nil
+			})
+			if code != 1 || out.String() != "data\n" || good.String() != "data\n" {
+				t.Fatalf("code=%d stdout=%q good=%q stderr=%q", code, out.String(), good.String(), errb.String())
+			}
+			if !strings.Contains(errb.String(), "tee: bad: "+tc.wantDetail) || !bad.closed || !good.closed {
+				t.Fatalf("stderr=%q bad.closed=%v good.closed=%v", errb.String(), bad.closed, good.closed)
+			}
+		})
+	}
+}
+
+func TestTeeIssue7OpenFailureContinuesPortably(t *testing.T) {
+	good := &testWriteCloser{}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{In: strings.NewReader("data\n"), Out: &out, Err: &errb}}
+	code := runWithOpen(rc, []string{"bad", "good"}, func(path string, _ int, _ os.FileMode) (io.WriteCloser, error) {
+		if filepath.Base(path) == "bad" {
+			return nil, errors.New("open failed")
+		}
+		return good, nil
+	})
+	if code != 1 || out.String() != "data\n" || good.String() != "data\n" || !good.closed || !strings.Contains(errb.String(), "tee: bad: Open failed") {
+		t.Fatalf("code=%d stdout=%q good=%q closed=%v stderr=%q", code, out.String(), good.String(), good.closed, errb.String())
+	}
+}
+
+func TestTeeExtensionsRemainAvailableWithPOSIXEnvironment(t *testing.T) {
+	for _, args := range [][]string{{"-p"}, {"--output-error=warn"}, {"--append"}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"POSIXLY_CORRECT="}, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}}
+		if code := cmd.Run(rc, args); code != 0 || errb.String() != "" || out.String() != "" {
+			t.Errorf("args=%v code=%d stdout=%q stderr=%q", args, code, out.String(), errb.String())
+		}
+	}
+	var helpOut, helpErr bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"POSIXLY_CORRECT="}, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &helpOut, Err: &helpErr}}
+	if code := cmd.Run(rc, []string{"--help"}); code != 0 || helpErr.String() != "" || helpOut.Len() == 0 {
+		t.Fatalf("--help: code=%d stdout=%q stderr=%q", code, helpOut.String(), helpErr.String())
 	}
 }
 
