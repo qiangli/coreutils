@@ -408,6 +408,13 @@ func writeEvent(w io.Writer, e Event, asJSON bool) {
 
 	who := seatLabel(e.Speaker)
 	switch e.Kind {
+	case "message":
+		// A board post is directed: name its audience, not just its author.
+		if to := messageTo(e); to != "" {
+			who += " → " + seatLabel(to)
+		} else {
+			who += " → room"
+		}
 	case "decision":
 		who = "DECISION"
 	case "action":
@@ -435,6 +442,24 @@ func writeEvent(w io.Writer, e Event, asJSON bool) {
 		fmt.Fprintf(w, "  %s\n", line)
 	}
 	fmt.Fprintln(w)
+}
+
+// messageTo names the recipient of a board message. The recipient rides the
+// event's "to" wire field, which belongs to the board spine's Event definition
+// (a different workstream owns session.go); reading it from the event's wire
+// form keeps this renderer correct whether or not that field is compiled in
+// yet. Empty means the post addressed the whole room.
+func messageTo(e Event) string {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return ""
+	}
+	s, _ := m["to"].(string)
+	return s
 }
 
 func readEvents(t *lineTail) ([]Event, error) {

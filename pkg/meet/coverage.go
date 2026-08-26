@@ -25,12 +25,14 @@ type Coverage struct {
 	Invalid  int    `json:"invalid,omitempty"`
 	Chars    int    `json:"chars"`
 	Votes    int    `json:"votes,omitempty"`
+	Messages int    `json:"messages,omitempty"` // board posts — presence, never turn quality
 	Last     string `json:"last_status,omitempty"`
 	ExitCode int    `json:"last_exit_code,omitempty"`
 }
 
-// Contributed reports whether the seat produced anything at all.
-func (c Coverage) Contributed() bool { return c.OK+c.Abstain > 0 }
+// Contributed reports whether the seat produced anything at all — a completed
+// turn, an abstention, or a board message.
+func (c Coverage) Contributed() bool { return c.OK+c.Abstain+c.Messages > 0 }
 
 // RetryRecommended reports whether re-running this participant is likely to
 // help — a timeout or crash is usually transient, an empty reply is not.
@@ -46,7 +48,7 @@ func coverage(st *State, events []Event) []Coverage {
 		rows = append(rows, Coverage{Name: p, Role: string(RoleParticipant)})
 	}
 	for _, e := range events {
-		if e.Kind != "turn" && e.Kind != "vote" {
+		if e.Kind != "turn" && e.Kind != "vote" && e.Kind != "message" {
 			continue
 		}
 		i, ok := idx[e.Speaker]
@@ -54,6 +56,16 @@ func coverage(st *State, events []Event) []Coverage {
 			continue
 		}
 		r := &rows[i]
+		if e.Kind == "message" {
+			// A board post is presence, not turn quality: it marks the seat
+			// occupied (Contributed) but never feeds OK — OK flows into
+			// Verdict.decide()'s coverage ratio, and chat traffic must not
+			// inflate a consult's confidence. It carries no turn status either,
+			// so Last keeps whatever the seat's last real turn reported.
+			r.Messages++
+			r.Chars += e.Chars
+			continue
+		}
 		r.Turns++
 		if e.Kind == "vote" {
 			r.Votes++
@@ -86,17 +98,17 @@ func coverage(st *State, events []Event) []Coverage {
 // seat that failed, a diagnosis line naming the failure mode, the exit code, the
 // per-turn log, and whether a retry is worth it.
 func writeCoverageTable(b *strings.Builder, rows []Coverage) {
-	b.WriteString("| Participant | Turns | OK | Abstain | Empty | Timeout | Error | Short | Invalid | Chars |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Participant | Turns | Msgs | OK | Abstain | Empty | Timeout | Error | Short | Invalid | Chars |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, r := range rows {
-		fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
-			r.Name, r.Turns, r.OK, r.Abstain, r.Empty, r.Timeout, r.Errors, r.Short, r.Invalid, r.Chars)
+		fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			r.Name, r.Turns, r.Messages, r.OK, r.Abstain, r.Empty, r.Timeout, r.Errors, r.Short, r.Invalid, r.Chars)
 	}
 	var notes []string
 	for _, r := range rows {
 		switch {
-		case r.Turns == 0:
-			notes = append(notes, fmt.Sprintf("**%s** never took a turn — the seat was empty.", r.Name))
+		case r.Turns+r.Messages == 0:
+			notes = append(notes, fmt.Sprintf("**%s** never took a turn or posted a message — the seat was empty.", r.Name))
 		case !r.Contributed():
 			notes = append(notes, fmt.Sprintf("**%s** contributed nothing across %d turns (last: %s%s). %s",
 				r.Name, r.Turns, r.Last, exitSuffix(r.ExitCode), retryAdvice(r)))
@@ -145,15 +157,15 @@ func writeShow(w io.Writer, st *State, events []Event, syn *Synthesis) {
 	fmt.Fprintln(w)
 
 	rows := coverage(st, events)
-	fmt.Fprintf(w, "%-14s %-6s %5s %4s %4s %6s %6s %6s %8s\n",
-		"PARTICIPANT", "LAST", "TURNS", "OK", "ABST", "EMPTY", "T/OUT", "ERROR", "CHARS")
+	fmt.Fprintf(w, "%-14s %-6s %5s %4s %4s %4s %6s %6s %6s %8s\n",
+		"PARTICIPANT", "LAST", "TURNS", "MSGS", "OK", "ABST", "EMPTY", "T/OUT", "ERROR", "CHARS")
 	for _, r := range rows {
 		last := r.Last
 		if last == "" {
 			last = "-"
 		}
-		fmt.Fprintf(w, "%-14s %-6s %5d %4d %4d %6d %6d %6d %8d\n",
-			r.Name, last, r.Turns, r.OK, r.Abstain, r.Empty, r.Timeout, r.Errors, r.Chars)
+		fmt.Fprintf(w, "%-14s %-6s %5d %4d %4d %4d %6d %6d %6d %8d\n",
+			r.Name, last, r.Turns, r.Messages, r.OK, r.Abstain, r.Empty, r.Timeout, r.Errors, r.Chars)
 	}
 
 	var quiet []string
@@ -185,7 +197,7 @@ func writeContributions(w io.Writer, st *State, events []Event, who string) {
 	want := strings.TrimSpace(who)
 	n := 0
 	for _, e := range events {
-		if e.Kind != "turn" && e.Kind != "vote" && e.Kind != "human" {
+		if e.Kind != "turn" && e.Kind != "vote" && e.Kind != "human" && e.Kind != "message" {
 			continue
 		}
 		if want != "" && !strings.EqualFold(e.Speaker, want) {
@@ -193,7 +205,15 @@ func writeContributions(w io.Writer, st *State, events []Event, who string) {
 		}
 		n++
 		status := statusOf(e)
-		fmt.Fprintf(w, "── round %d · %s · %s", e.Round, e.Speaker, status)
+		who := e.Speaker
+		if e.Kind == "message" {
+			if to := messageTo(e); to != "" {
+				who += " → " + to
+			} else {
+				who += " → room"
+			}
+		}
+		fmt.Fprintf(w, "── round %d · %s · %s", e.Round, who, status)
 		if e.Choice != "" {
 			fmt.Fprintf(w, " · vote=%s", e.Choice)
 		}
