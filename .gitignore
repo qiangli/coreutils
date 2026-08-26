@@ -13,3 +13,7 @@ priorart/
 external/podman/engine/podman_embed/podman.gz
 external/podman/engine/vfkit_embed/vfkit.gz
 external/podman/engine/gvproxy_embed/gvproxy.gz
+
+# Python bytecode from scripts/ (posix_manifest_test.py, applet-matrix.py)
+__pycache__/
+*.pyc
