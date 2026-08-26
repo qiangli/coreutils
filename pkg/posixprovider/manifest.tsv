@@ -1,4 +1,4 @@
-# POSIX external provider manifest — active providers plus retained differential controls.
+# POSIX external provider manifest.
 #
 # LICENSE POSTURE (this is why the file is shaped this way):
 # MOST providers below are COPYLEFT — GPL-2.0, GPL-3.0, or the Vim license.
@@ -6,14 +6,10 @@
 # and trigger GPLv3 s6 / GPLv2 s3: convey corresponding source, build scripts
 # and installation information, for every artifact, indefinitely.
 #
-# TWO rows are PERMISSIVE and the difference is recorded rather than hidden:
-# lp (CUPS, Apache-2.0) and mailx (s-nail, ISC AND BSD-4-Clause). Hosting THOSE
-# binaries would trigger no source-conveyance duty. They are nevertheless
-# fetched-as-source and built locally exactly like every other row. One policy
-# for the whole table is auditable; two policies are a footgun that eventually
-# mirrors the wrong row. The uniform recipe is also what makes any provider
-# attributable to pinned input bytes, which is the certification property.
-# "Permissive" is therefore not permission to mirror a build here.
+# One row is permissive: lp (CUPS, Apache-2.0). Hosting that binary would
+# trigger no source-conveyance duty. It is nevertheless fetched as source and
+# built locally exactly like every other row. One policy for the whole table is
+# auditable; two policies are a footgun that eventually mirrors the wrong row.
 #
 # So build and download are deliberately SEPARATED:
 #   download -> UPSTREAM source only, pinned by sha256. Upstream is the
@@ -48,11 +44,7 @@
 # command	version	license	platforms	sha256	url
 make	4.3	GPL-3.0	linux,darwin,windows	e05fdde47c5f7ca45cb697e973894ff4f5d79e13b750ed57d7b66d8defc78e19	https://ftp.gnu.org/gnu/make/make-4.3.tar.gz
 bc	1.07.1	GPL-3.0	linux,darwin,windows	62adfca89b0a1c0164c2cdca59ca210c1d44c3ffc46daf9931cf4942664cb02a	https://ftp.gnu.org/gnu/bc/bc-1.07.1.tar.gz
-# patch is retained for reproducible differential testing; cmds/patch owns runtime dispatch.
-patch	2.7.6	GPL-3.0	linux,darwin,windows	ac610bda97abe0d9f6b7c963255a11dcb196c25e337c61f94e4778d632f1d8fd	https://ftp.gnu.org/gnu/patch/patch-2.7.6.tar.xz
 m4	1.4.19	GPL-3.0	linux,darwin,windows	63aede5c6d33b6d9b13511cd0be2cac046f2e70fd0a07aa9573a04a82783af96	https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz
-# ed is retained for reproducible differential testing; cmds/ed owns runtime dispatch.
-ed	1.20.1	GPL-2.0	linux,darwin	b1a463b297a141f9876c4b1fcd01477f645cded92168090e9a35db2af4babbca	https://ftp.gnu.org/gnu/ed/ed-1.20.1.tar.lz
 man	2.12.0	GPL-3.0	linux,darwin	415a6284a22764ad22ff0f66710d853be7790dd451cd71436e3d25c74d996a95	https://download.savannah.gnu.org/releases/man-db/man-db-2.12.0.tar.xz
 ctags	6.2.1	GPL-2.0	linux,darwin,windows	f56829e9a576025e98955597ee967099a871987b3476fbd8dbbc2b9dc921f824	https://github.com/universal-ctags/ctags/archive/refs/tags/v6.2.1.tar.gz
 ar	2.42	GPL-3.0	linux,darwin,windows	f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800	https://ftp.gnu.org/gnu/binutils/binutils-2.42.tar.xz
@@ -62,11 +54,7 @@ ex	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737
 vi	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737e9e8bfa4cc298dee061df	https://github.com/vim/vim/archive/refs/tags/v9.1.0016.tar.gz
 # pax: Debian sources 1:20201030 from a non-GNU upstream; pin pending source identification.
 lp	2.4.7	Apache-2.0	linux,darwin	dd54228dd903526428ce7e37961afaed230ad310788141da75cebaa08362cf6c	https://github.com/OpenPrinting/cups/releases/download/v2.4.7/cups-2.4.7-source.tar.gz
-mailx	14.9.25	ISC AND BSD-4-Clause	linux,darwin	20ff055be9829b69d46ebc400dfe516a40d287d7ce810c74355d6bdc1a28d8a9	https://ftp.sdaoden.eu/s-nail-14.9.25.tar.xz
-# mailx is retained for reproducible differential testing; cmds/mailx owns runtime dispatch.
 localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926	https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz
-talk	0.17	BSD-4-Clause	linux	d8f614e8d4d7981a0adf0f84d2d3954018d5fe0e57a8e5731256d66cbcf45e90	https://deb.debian.org/debian/pool/main/n/netkit-ntalk/netkit-ntalk_0.17.orig.tar.gz
-# talk is retained for reproducible differential testing; cmds/talk owns runtime dispatch.
 #
 # lp: CUPS 2.4.7 is exactly what Ubuntu 24.04 ships (cups-client 2.4.7-1.2ubuntu7.14),
 # so the C arm and the GNU A arm run the same upstream release. Apache-2.0 read from
@@ -74,27 +62,6 @@ talk	0.17	BSD-4-Clause	linux	d8f614e8d4d7981a0adf0f84d2d3954018d5fe0e57a8e573125
 # NOTICE adds CUPS-specific exceptions (Sections 4a/4b/4d waiver for embedded object
 # code, and a GPLv2-combination waiver) which only widen the grant. Not windows: the
 # client is POSIX-only (fork/exec, unix sockets) and upstream ships no Windows build.
-#
-# mailx: s-nail, the maintained SysV/BSD mailx lineage, chosen over the alternatives
-# on licence and on pinnability. mailutils 3.17 (the package the strategy doc named)
-# is GPL-3.0 and builds a whole mail framework to obtain one binary; bsd-mailx has no
-# upstream tarball at all, only a Debian CVS snapshot, so it cannot be pinned to an
-# upstream artifact; Heirloom mailx 12.5 is unmaintained since 2011 and carries the
-# known shell-escape defects. Licence read from s-nail-14.9.25/COPYING: ISC for
-# Nurpmeso's own code, BSD-4-Clause (advertising clause) for the Gunnar Ritter
-# heritage, BSD-3-Clause for the UCB/Zoulas heritage — the widest term governs, so
-# the row records ISC AND BSD-4-Clause.
-# DEVIATION, deliberate: Ubuntu 24.04 ships 14.9.24 but upstream no longer publishes
-# it (ftp.sdaoden.eu carries 14.9.25 and -latest only). Pinning 14.9.24 would mean
-# fetching from a distro mirror, which the download rule above forbids. 14.9.25 is
-# the upstream bugfix successor. Re-pin if upstream ever restores 14.9.24.
-# DIFFERENTIAL CONTROL: cmds/mailx now owns Profile C/D runtime dispatch with a
-# deliberately local-file-only implementation. SMTP, an MTA, and provisioning
-# this s-nail row into the measured runtime are not part of that contract. Keep
-# the pin available for explicit differential work; the historical A/B summaries
-# each carried 432 mailx_* code-6 UNINITIATED outcomes, so any future provider
-# replay must identify its arm and environment rather than being mistaken for
-# evidence from the pure-Go owner.
 #
 # localedef: BUILDS, but it is the least ordinary row here and the reasons matter.
 # Upstream has NO standalone build: localedef lives in glibc's locale/programs,
@@ -128,25 +95,3 @@ talk	0.17	BSD-4-Clause	linux	d8f614e8d4d7981a0adf0f84d2d3954018d5fe0e57a8e573125
 # linux only: this compiles glibc's own sources against glibc. There is no
 # darwin or windows build and there will not be one.
 #
-# talk: netkit-ntalk 0.17, the same release Ubuntu 24.04 ships as talk 0.17-18.
-# BSD-4-Clause (the 1983 UCB advertising clause) read from
-# netkit-ntalk-0.17/talk/talk.c -- there is no COPYING file in the tarball, the
-# licence lives in the per-file headers, and README confirms no separate one.
-# linux only, and that is measured, not assumed: on darwin ./configure exits 0
-# but its `echo -n` writes a malformed MCONFIG and make stops at "missing
-# separator" on the first line.
-#
-# THE URL IS AN EXCEPTION AND IT IS THE ONLY ONE IN THIS FILE. netkit's upstream
-# was ftp.uk.linux.org (= ftp.linux.org.uk); that host now 404s the whole
-# pub/linux/Networking/ tree, and no maintained fork exists -- the two on GitHub
-# were last touched in 2015 and 2017. So the pristine upstream tarball survives
-# only inside distro pools, and the row points at Debian's, which carries the
-# unmodified .orig for a non-native package. This is a DEAD-UPSTREAM exception,
-# not a licence to prefer mirrors: every other row must still resolve to a live
-# upstream. Revisit if anyone revives netkit.
-#
-# DIFFERENTIAL CONTROL: cmds/talk now owns Profile C/D runtime dispatch with an
-# authenticated, host-local, ephemeral AF_UNIX transport and no talkd dependency.
-# The retained netkit client still needs a talkd peer and logged-on terminal, so
-# any explicit provider replay must provision that fixture in the named arm; it
-# is not a prerequisite or runtime fallback for the pure-Go owner.

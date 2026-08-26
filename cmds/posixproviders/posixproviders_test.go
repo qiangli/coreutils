@@ -147,15 +147,6 @@ func provision(t *testing.T, root, name, body string) string {
 func TestProviderNamesAreRegistered(t *testing.T) {
 	names := tool.Names()
 	for _, n := range posixprovider.Names() {
-		if !posixprovider.IsDispatchProvider(n) {
-			// This package deliberately does not register the exec-the-
-			// provider tool for a name a Go applet now owns. That applet
-			// lives in its own cmds package,
-			// not imported here, so tool.Lookup would be nil in this
-			// package-local test binary regardless. cmds/all is where the
-			// two are proven not to collide.
-			continue
-		}
 		if !slices.Contains(names, n) {
 			t.Errorf("tool.Names() is missing provider %q", n)
 		}
@@ -170,7 +161,7 @@ func TestProviderNamesAreRegistered(t *testing.T) {
 
 // TestProviderNamesAreRegisteredOnEveryPlatform pins the deliberate choice that
 // platform gating happens at RUN time, not at registration time: the multicall
-// owns `ed` on Windows too, and refuses loudly there rather than letting the
+// owns `man` on Windows too, and refuses loudly there rather than letting the
 // name fall through to whatever $PATH holds.
 func TestProviderNamesAreRegisteredOnEveryPlatform(t *testing.T) {
 	for _, n := range []string{"man"} {

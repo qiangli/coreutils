@@ -10,3 +10,6 @@
 {"op":"add","slug":"cobra-hidden-shorthand-aliases-need-explicit-notices","tool":"codex-gpt-5.5-y","host":"dragon","episode":"weave-issue-25","at":"2026-08-26T09:34:15.939488Z"}
 {"op":"add","slug":"retained-provider-pins-need-a-separate-active-owner-set","tool":"codex-gpt5.6-sol-f","host":"dragon","episode":"weave-issue-32","at":"2026-08-26T17:46:36.074935Z"}
 {"op":"validate","slug":"retained-provider-pins-need-a-separate-active-owner-set","tool":"codex-gpt5.6-sol-f","host":"dragon","episode":"weave-issue-32","at":"2026-08-26T17:46:40.801664Z"}
+{"op":"supersede","slug":"go-applet-migrations-retire-external-provider-pins","tool":"codex-profile-d-sprint","host":"dragon","at":"2026-08-26T23:34:38.725075Z"}
+{"op":"supersede","slug":"retained-provider-pins-need-a-separate-active-owner-set","tool":"codex-profile-d-sprint","host":"dragon","at":"2026-08-26T23:34:38.725834Z"}
+{"op":"validate","slug":"go-applet-migrations-retire-external-provider-pins","tool":"codex-profile-d-sprint","host":"dragon","at":"2026-08-26T23:34:43.389523Z"}

@@ -3,9 +3,8 @@
 
 // Package posixprovider is the READ half of the POSIX external provider
 // mechanism: pinned upstream controls built locally from source and resolved
-// from the binmgr cache. Fourteen currently dispatch so the multicall owns their
-// names; ed and patch remain pinned only as differential controls after their Go
-// migrations.
+// from the binmgr cache. Twelve currently dispatch so the multicall owns their
+// names.
 //
 // # Why the name must be owned
 //
@@ -207,30 +206,15 @@ func Entries() []Entry {
 	return out
 }
 
-// IsDispatchProvider reports whether name is currently owned by the external
-// provider adapter. The ed, mailx, patch, and talk pins are deliberately
-// retained as reproducible differential controls after their pure-Go applets
-// became the shipped owners.
+// IsDispatchProvider reports whether name is owned by the external provider
+// adapter.
 func IsDispatchProvider(name string) bool {
-	switch name {
-	case "ed", "mailx", "patch", "talk":
-		return false
-	default:
-		return Has(name)
-	}
+	return Has(name)
 }
 
-// DispatchEntries returns only manifest rows that still own a command name.
-// Retained differential-control pins remain visible through Entries, Lookup,
-// list, check, and build without creating ambiguous runtime ownership.
+// DispatchEntries returns the manifest rows that own command names.
 func DispatchEntries() []Entry {
-	out := make([]Entry, 0, len(entries))
-	for _, e := range entries {
-		if IsDispatchProvider(e.Command) {
-			out = append(out, e)
-		}
-	}
-	return out
+	return Entries()
 }
 
 // DispatchNames returns the sorted active external-provider owner set.
@@ -249,7 +233,7 @@ func Lookup(name string) (Entry, bool) {
 	return e, ok
 }
 
-// Has reports whether name has a pinned external-provider control artifact.
+// Has reports whether name has a pinned external provider.
 func Has(name string) bool {
 	_, ok := byName[name]
 	return ok

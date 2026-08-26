@@ -36,8 +36,8 @@ non-Coreutils commands such as `ps` use their own official upstream reference.
    ar, nm, strip, ex, vi, lp, localedef) and dispatches to a locally built,
    provenance-checked copy of the upstream program. They exist so a
    "bashy-only" certification arm stops silently measuring the host's
-   `$PATH`. The retained `ed`, `mailx`, `patch`, and `talk` provider pins are
-   differential controls only; pure-Go applets own those runtime names. See
+   `$PATH`. Pure-Go applets exclusively own `ed`, `patch`, `mail`/`mailx`, and
+   `talk`; they have no external-provider pins or fallback. See
    docs/posix-external-providers.md.
 3. **Upstream semantics are immutable.** Every flag, option, and argument
    a tool accepts means exactly what the original command's official

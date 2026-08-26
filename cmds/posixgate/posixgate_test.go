@@ -124,8 +124,8 @@ func TestSpecPinnedCounts(t *testing.T) {
 		t.Errorf("effective selection = %d/%d/%d, want 82/22/12", effGo, effShell, effProv)
 	}
 	if pinTotal != 116 || pinAvailGoApplets != 90 || pinAvailShell != 14 || pinProviders != 12 ||
-		pinEffectiveGoApplets != 82 || pinEffectiveShell != 22 || pinManifestProviders != 16 {
-		t.Error("pin constants drifted from the documented 116 = 90/14/12 availability, 82/22/12 effective, 16 manifest-pinned")
+		pinEffectiveGoApplets != 82 || pinEffectiveShell != 22 || pinManifestProviders != 12 {
+		t.Error("pin constants drifted from the documented 116 = 90/14/12 availability, 82/22/12 effective, 12 manifest-pinned")
 	}
 }
 
@@ -140,6 +140,29 @@ func TestSpecProvidersMatchManifest(t *testing.T) {
 		for _, f := range fs {
 			t.Errorf("%s", f)
 		}
+	}
+}
+
+func TestGoAppletReplacementsAreNotProviders(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ed": "cmds/ed", "mailx": "cmds/mailx", "patch": "cmds/patch", "talk": "cmds/talk",
+	}
+	for _, row := range spec {
+		pkg, ok := want[row.Command]
+		if !ok {
+			continue
+		}
+		if row.Owner != OwnerGoApplet || row.Effective != SelGoApplet || row.GoPackage != pkg {
+			t.Errorf("%s = owner %s selector %s package %s; want Go applet %s", row.Command, row.Owner, row.Effective, row.GoPackage, pkg)
+		}
+		delete(want, row.Command)
+	}
+	if len(want) != 0 {
+		t.Errorf("replacement applets missing from Profile C/D spec: %v", want)
 	}
 }
 

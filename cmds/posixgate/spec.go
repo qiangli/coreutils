@@ -10,9 +10,8 @@
 // names is supplied by exactly one INTENDED owner: a registered Bashy Go
 // applet, the shell (entry point, builtin, or the `time` keyword), or one of
 // the twelve active POSIX external providers whose NAME the multicall
-// dispatches to a pinned upstream copy. Four further manifest entries, `ed`,
-// `mailx`, `patch`, and `talk`, stay pinned for build/provenance/differential
-// testing but no longer own their command names.
+// dispatches to a pinned upstream copy. The Go applets exclusively own `ed`,
+// `patch`, `mail`/`mailx`, and `talk`; those names have no provider pins.
 // `posix-gate` turns the ownership claim into a checkable verdict, and every
 // check is fail-closed: the gate proves the intended owner is selected, or it
 // fails naming the name and the cause. There is no "probably fine" state — an
@@ -111,14 +110,9 @@ const (
 	// shell-owned names plus the seven builtin overlaps and the time keyword
 	pinEffectiveGoApplets = 82
 	pinEffectiveShell     = 22
-	// pinManifestProviders is the full pkg/posixprovider manifest pin count —
-	// deliberately four MORE than pinProviders. `ed`, `mailx`, `patch`, and
-	// `talk` are pinned there
-	// (build/provenance/differential-testing machinery all stay live) but are no
-	// longer external_provider in the inventory above. Provider provisioning
-	// and provenance still use this full count; dispatch-plan validation uses
-	// pinProviders because retained controls are not runtime owners.
-	pinManifestProviders = 16
+	// pinManifestProviders is the full pkg/posixprovider manifest pin count.
+	// Every manifest row is an active runtime owner.
+	pinManifestProviders = 12
 )
 
 // specRow is one required name: its availability owner from the canonical

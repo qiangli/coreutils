@@ -69,8 +69,8 @@ func mustLookup(t *testing.T, name string) Entry {
 
 func TestManifestShape(t *testing.T) {
 	names := Names()
-	want := []string{"ar", "bc", "ctags", "ed", "ex", "localedef", "lp", "m4", "mailx",
-		"make", "man", "nm", "patch", "strip", "talk", "vi"}
+	want := []string{"ar", "bc", "ctags", "ex", "localedef", "lp", "m4",
+		"make", "man", "nm", "strip", "vi"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -83,9 +83,9 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s: incomplete entry %+v", n, e)
 		}
 	}
-	// Unix-only, no windows. CUPS and s-nail are POSIX-only upstream, and
+	// Unix-only, no windows. CUPS and man-db are POSIX-only upstream, and
 	// neither ships a native windows build path.
-	for _, n := range []string{"ed", "man", "lp", "mailx"} {
+	for _, n := range []string{"man", "lp"} {
 		e := mustLookup(t, n)
 		if e.SupportsGOOS("windows") {
 			t.Errorf("%s: manifest now declares windows; update the gating tests", n)
@@ -94,11 +94,8 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s: manifest no longer declares linux+darwin: %v", n, e.Platforms)
 		}
 	}
-	// linux ONLY, and both are measured rather than assumed: localedef compiles
-	// glibc's own sources against glibc, and netkit's configure emits a
-	// malformed MCONFIG on darwin. A darwin claim here would be a lie the build
-	// only discovers three minutes in.
-	for _, n := range []string{"localedef", "talk"} {
+	// linux ONLY: localedef compiles glibc's own sources against glibc.
+	for _, n := range []string{"localedef"} {
 		e := mustLookup(t, n)
 		if !e.SupportsGOOS("linux") {
 			t.Errorf("%s: manifest no longer declares linux: %v", n, e.Platforms)
@@ -122,20 +119,14 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 	}
 }
 
-func TestGoAppletPinsAreRetainedButNotDispatchOwners(t *testing.T) {
-	for _, name := range []string{"ed", "mailx", "patch", "talk"} {
-		if !Has(name) {
-			t.Fatalf("%s differential-control pin was removed", name)
+func TestGoAppletsHaveNoExternalProviderDefinition(t *testing.T) {
+	for _, name := range []string{"ed", "mail", "mailx", "patch", "talk"} {
+		if Has(name) {
+			t.Errorf("%s still has an external-provider definition", name)
 		}
-		if IsDispatchProvider(name) {
-			t.Fatalf("%s is still an active provider despite Go applet ownership", name)
+		if _, ok := Lookup(name); ok {
+			t.Errorf("Lookup(%q) found a provider row", name)
 		}
-		if slices.Contains(DispatchNames(), name) {
-			t.Fatalf("%s leaked into active provider names", name)
-		}
-	}
-	if len(DispatchEntries()) != len(Entries())-4 {
-		t.Fatalf("active entries=%d all pins=%d, want four retained controls", len(DispatchEntries()), len(Entries()))
 	}
 }
 
@@ -299,13 +290,13 @@ func TestResolveCacheMissNamesTheProvisioningCommand(t *testing.T) {
 
 func TestResolveRefusesUndeclaredPlatform(t *testing.T) {
 	root := t.TempDir()
-	e := mustLookup(t, "ed")
+	e := mustLookup(t, "man")
 	// Provision it anyway: the platform gate must refuse BEFORE the cache is
 	// consulted, so a stray binary cannot re-enable an undeclared platform.
 	provision(t, root, e, []byte("#!/bin/sh\nexit 0\n"))
 
 	r := Resolver{CacheRoot: root, GOOS: "windows"}
-	_, err := r.Resolve("ed")
+	_, err := r.Resolve("man")
 	if err == nil {
 		t.Fatal("Resolve succeeded on an undeclared platform")
 	}
@@ -329,7 +320,7 @@ func TestResolveRejectsUnknownName(t *testing.T) {
 }
 
 func TestResolveRejectsProvenanceMismatch(t *testing.T) {
-	e := mustLookup(t, "patch")
+	e := mustLookup(t, "make")
 
 	t.Run("binary does not match built_sha256", func(t *testing.T) {
 		root := t.TempDir()
@@ -340,7 +331,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		_, err := r.Resolve("patch")
+		_, err := r.Resolve("make")
 		if !errors.Is(err, ErrProvenance) {
 			t.Fatalf("error is not ErrProvenance: %v", err)
 		}
@@ -354,7 +345,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			"source_sha256": e.SHA256, "built_sha256": strings.Repeat("b", 64),
 		})
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		_, err := r.Resolve("patch")
+		_, err := r.Resolve("make")
 		if !errors.Is(err, ErrProvenance) {
 			t.Fatalf("error is not ErrProvenance: %v", err)
 		}
@@ -373,7 +364,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			"built_sha256":  hex.EncodeToString(sum[:]),
 		})
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		if _, err := r.Resolve("patch"); !errors.Is(err, ErrProvenance) {
+		if _, err := r.Resolve("make"); !errors.Is(err, ErrProvenance) {
 			t.Fatalf("error is not ErrProvenance: %v", err)
 		}
 	})
@@ -385,7 +376,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		_, err := r.Resolve("patch")
+		_, err := r.Resolve("make")
 		if !errors.Is(err, ErrProvenance) {
 			t.Fatalf("an unattributable binary must be an error, not a warning: %v", err)
 		}

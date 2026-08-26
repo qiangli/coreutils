@@ -74,15 +74,12 @@ for t in curl tar make; do need "$t"; done
 # reimplementing them - so codegen is upstream clang's. The residual risk is
 # driver-flag compatibility with autotools, which is why the choice is recorded
 # per provider rather than assumed uniform. Measured: GNU make 4.3 configures
-# and builds cleanly under zig cc, as do CUPS 2.4.7 (lp) and s-nail 14.9.25
-# (mailx), both also run-tested on darwin; binutils and vim are not yet verified.
+# and builds cleanly under zig cc, as does CUPS 2.4.7 (lp), also run-tested on
+# darwin; binutils and vim are not yet verified.
 #
 # "zig cc" is TWO WORDS, and that is a trap. Autotools tolerates a $CC with a
 # space; a build system that treats $CC as a single word does not, and the
-# failure surfaces nowhere near the cause -- s-nail's configuration step quietly
-# produces nothing and the compile then dies on undeclared su_ERR_* symbols
-# hundreds of lines later. Measured both ways on the same zig: wrapped, s-nail
-# builds; unwrapped, the identical toolchain fails. So the two-word form is
+# failure can surface far from the cause. The two-word form is therefore
 # collapsed into one executable word, and CC_LABEL keeps the provenance record
 # naming the real compiler rather than the wrapper path.
 # The label is written beside the wrapper rather than returned: select_cc runs
@@ -204,28 +201,6 @@ case "$cmd" in
        make -C systemv lp LIBZ= >/dev/null)
     found=$src/systemv/lp
     ;;
-  mailx)
-    # s-nail is not autotools: its own make.rc/mk scripts configure it, so the
-    # knobs are make variables rather than configure flags.
-    #   VAL_SID= VAL_MAILX=mailx  name the binary "mailx" instead of "s-nail",
-    #                             which is also what the found= probe expects.
-    #   OPT_AUTOCC=no             keep $CC as selected above. Without it s-nail
-    #                             picks and tunes a compiler itself, and the
-    #                             provenance line would then name a compiler
-    #                             that did not build the binary.
-    #   OPT_NET=no                POSIX mailx has no network features; disabling
-    #                             them drops the OpenSSL/GSSAPI probes, so the
-    #                             build no longer varies with what headers the
-    #                             host happens to have. Determinism, not size.
-    #   OPT_DOTLOCK=no            that helper is installed setuid root; this
-    #                             recipe installs one unprivileged binary into a
-    #                             user cache and never runs as root.
-    (cd "$src" && make VAL_SID= VAL_MAILX=mailx OPT_AUTOCC=no OPT_NET=no \
-       OPT_DOTLOCK=no config >/dev/null &&
-       make VAL_SID= VAL_MAILX=mailx OPT_AUTOCC=no OPT_NET=no \
-       OPT_DOTLOCK=no build >/dev/null)
-    found=$src/.obj/mailx
-    ;;
   localedef)
     # THE HONEST SHAPE OF THIS ONE: localedef has no standalone upstream build.
     # It lives in glibc's locale/programs, and glibc/locale has no configure of
@@ -320,24 +295,6 @@ PATCHES
          fail 'ctags configure failed'; })
     (cd "$src" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null)
     found=$src/ctags
-    ;;
-  talk)
-    # netkit predates autotools portability: ./configure is a hand-written script
-    # and the tree has no VPATH, so build in-tree like vim and CUPS. Only the
-    # client is built -- talkd is a daemon, and the POSIX utility under test is
-    # talk(1). Needs ncurses headers.
-    #
-    # configure WRITES MCONFIG, so when it fails the build previously died in
-    # make with "../MCONFIG: No such file or directory" -- a confusing symptom
-    # for a plain missing-ncurses diagnosis that ./configure had already printed
-    # onto /dev/null. Keep its output and check for the file it must produce.
-    (cd "$src" && ./configure >"$build_dir/talk-configure.log" 2>&1 ||
-       { sed -n '1,40p' "$build_dir/talk-configure.log" >&2
-         fail 'talk configure failed (needs a terminal library, e.g. libncurses-dev)'; })
-    [ -f "$src/MCONFIG" ] ||
-      fail 'talk configure completed but produced no MCONFIG'
-    (cd "$src" && make -C talk >/dev/null)
-    found=$src/talk/talk
     ;;
   man)
     # man-db's top-level SUBDIRS includes docs, whose man_db.ps target wants a

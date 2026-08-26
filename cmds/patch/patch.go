@@ -8,13 +8,10 @@
 // docs/reference-policy.md is the authority for how POSIX vs. GNU
 // extensions are decided.
 //
-// coreutils continues to also ship the pinned GNU patch POSIX external
-// provider (pkg/posixprovider, cmds/posixproviders) rather than retiring
-// it: this applet's coverage is a documented subset (no -e/ed-script
-// input, no -D/ifdef merges, no RCS/SCCS retrieval, no binary or
-// rename-only git patches, a simplified fuzz/whitespace model), and the
-// provider remains available wherever exact GNU behavior or a feature
-// outside that subset is required.
+// This pure-Go applet is the sole shipped patch owner. Its documented subset
+// remains fail-closed: no -e/ed-script input, no -D/ifdef merges, no RCS/SCCS
+// retrieval, no binary or rename-only git patches, and a simplified
+// fuzz/whitespace model. There is no external-provider fallback.
 package patchcmd
 
 import (

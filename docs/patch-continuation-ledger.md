@@ -1,8 +1,7 @@
 # `patch` continuation ledger
 
-The pure-Go `patch` applet is the default multicall owner. The pinned external
-provider remains a differential control and can be built or checked explicitly;
-it is not part of normal command dispatch.
+The pure-Go `patch` applet is the sole multicall owner. There is no external
+provider definition, build recipe, cache entry, or fallback.
 
 ## Implemented lanes
 

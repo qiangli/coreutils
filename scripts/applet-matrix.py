@@ -89,25 +89,13 @@ PROVIDER_ADMIN = "posix-providers"
 PROVIDER_MANIFEST = ROOT / "pkg/posixprovider/manifest.tsv"
 PROVIDER_FAMILY = "POSIX external provider"
 
-# Pinned manifest entries whose multicall NAME a Go applet now owns instead
-# of cmds/posixproviders (mirrors that package's own goAppletOwned map —
-# tool.Register panics on a duplicate name, so exactly one of the two may
-# register it). The manifest pin, provenance, and build/check machinery stay
-# live for these; only run-time dispatch of the name moved. See
-# each applet's continuation ledger.
-GO_APPLET_OWNED_PROVIDERS = {"ed", "mailx", "patch", "talk"}
-
-
 def provider_names() -> list[str]:
-    """Manifest entries the multicall actually dispatches as a provider —
-    i.e. the pinned set minus whatever a Go applet has since claimed."""
+    """Manifest entries the multicall dispatches as external providers."""
     names = []
     for line in PROVIDER_MANIFEST.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
         name = line.split("\t")[0].strip()
-        if name in GO_APPLET_OWNED_PROVIDERS:
-            continue
         names.append(name)
     if not names:
         raise SystemExit(f"no provider entries in {PROVIDER_MANIFEST}")
@@ -140,9 +128,9 @@ def rows() -> list[dict[str, str | int]]:
     if PROVIDER_PACKAGE not in packages:
         raise SystemExit(f"cmds/{PROVIDER_PACKAGE} is no longer in cmds/all; reconcile the provider axis")
     for applet in sorted(pinned_providers):
-        # A retained pin can remain as a differential control after a Go
-        # applet takes runtime ownership. Never overwrite that Go package.
-        applet_package.setdefault(applet, PROVIDER_PACKAGE)
+        if applet in applet_package:
+            raise SystemExit(f"provider {applet!r} collides with shipped Go package")
+        applet_package[applet] = PROVIDER_PACKAGE
     applet_package[PROVIDER_ADMIN] = PROVIDER_PACKAGE
     for applet, package in ALIASES.items():
         if package not in applet_package:

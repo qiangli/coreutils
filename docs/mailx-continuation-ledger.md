@@ -3,8 +3,8 @@
 The pure-Go `mailx` applet, also registered as `mail`, is the Profile C/D
 runtime owner. It delivers only to local mbox files. SMTP, IMAP, remote address
 routing, and an external MTA are deliberately out of scope; remote-qualified
-addresses fail before any mailbox is changed. The pinned s-nail artifact remains
-available only as a differential control.
+addresses fail before any mailbox is changed. `mail` and `mailx` have no
+external-provider definition, build recipe, cache entry, or fallback.
 
 ## Implemented lanes
 

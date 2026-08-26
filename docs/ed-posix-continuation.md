@@ -33,9 +33,7 @@ The following work remains before complete POSIX `ed` can be claimed:
   remaining error/current-line corner cases; and
 - full Profile C/D and cross-platform behavioral certification evidence.
 
-The `ed` row remains in `pkg/posixprovider/manifest.tsv` as a pinned,
-provenance-checkable differential control. It is deliberately excluded from
-runtime provider registration and dispatch plans, so the pin cannot create a
-second owner for the `ed` command.
+`ed` has no external-provider definition, build recipe, cache entry, or
+fallback. The pure-Go applet is its sole shipped owner.
 
 Normative reference: [POSIX.1 Issue 7 `ed`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ed.html).

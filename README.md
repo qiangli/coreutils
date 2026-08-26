@@ -34,9 +34,9 @@ A provider is **not** a Go applet, and the matrix counts them separately so
 they can never be read as Go coverage: the multicall owns the NAME
 (`make`, `bc`, `m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`,
 `localedef`) and dispatches to a copy of the upstream program built locally
-from a sha256-pinned source tarball. The manifest retains `ed`, `mailx`,
-`patch`, and `talk` only as differential controls; their pure-Go applets own
-runtime dispatch. Owning each active provider name is the point — before it,
+from a sha256-pinned source tarball. The pure-Go applets exclusively own `ed`,
+`patch`, `mail`/`mailx`, and `talk`; there are no external-provider definitions
+or fallback for those names. Owning each active provider name is the point — before it,
 those names fell through to the host's `$PATH`, so a "Bashy-only" arm silently
 measured the distro's binaries. There is no fallback: an unprovisioned provider
 exits 127 with the command that fixes it. See
@@ -95,8 +95,7 @@ Every tool in this repo follows the same rules:
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
   against its recorded provenance and **never** downloads or compiles, the
-  twelve registered provider tools plus four retained differential-control
-  pins, and
+  twelve registered provider tools, and
   `posix-providers build|list|check|dispatch-plan` —
   `build` is the only path allowed to fetch and compile, and `dispatch-plan`
   is the introspection surface disclosing the exact verified binary each

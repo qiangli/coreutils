@@ -11,11 +11,9 @@ They are **external providers**: the multicall owns the name and dispatches to
 a copy of the upstream program, built locally from a sha256-pinned source
 tarball and checked against its recorded provenance before it runs.
 
-The manifest still contains `ed`, `mailx`, `patch`, and `talk` rows as
-reproducible differential controls. Their pure-Go applets now own those names,
-so the retained artifacts
-remain available to `list`, `check`, and `build` but are excluded from
-registration and `dispatch-plan`.
+`ed`, `patch`, `mail`/`mailx`, and `talk` are exclusively pure-Go applets. They
+have no provider rows, provider build recipes, provider-cache expectations, or
+provider fallback.
 
 ## Why the multicall has to own the name
 
@@ -131,9 +129,8 @@ names and fail loudly. The `posix-providers` applet itself is always registered
 
 ## Licence posture
 
-Most active providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence);
-`lp` is Apache-2.0, and retained differential-control rows include permissive
-licences. Download and build remain deliberately separated under one policy:
+Most active providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence), and
+`lp` is Apache-2.0. Download and build remain deliberately separated under one policy:
 
 - **download** — upstream SOURCE only, pinned by sha256. Upstream is the
   distributor; its obligations are already discharged.
@@ -151,7 +148,7 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the twelve registered provider tools + the `posix-providers` applet; retained control pins do not dispatch |
+| `cmds/posixproviders/` | the twelve registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
 | `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |
