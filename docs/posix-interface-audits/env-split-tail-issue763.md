@@ -10,9 +10,11 @@ POSIX mode.
 
 ## Result
 
-The audit confirmed and fixed one observable implementation defect in `tail`
-and closed a set of concrete observable residuals across all three commands
-with focused behavioral tests. No `split` or `env` source change was required:
+The audit confirmed and fixed one observable retained-extension defect in
+`tail` and closed a set of concrete observable residuals across all three
+commands with focused behavioral tests. The `tail` source fix is not claimed
+as POSIX closure because the affected `-c`/`-n` combination is outside the
+POSIX synopsis. No `split` or `env` source change was required:
 their audited C/POSIX-locale algorithms already meet Issue 7, and the remaining
 residuals are truthful platform/locale integration boundaries.
 
@@ -43,7 +45,7 @@ Source: [Issue 7 `env`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edi
 | First-`=` delimiter | Only the first `=` splits `NAME` from `VALUE`; an embedded `=` is data preserved byte-for-byte on output (`A=B=C`), and an empty-`NAME` assignment is still an assignment, not a utility. |
 | Standard input | With no utility operand `env` does not read standard input (proved with an exploding reader that fails on any `Read`); with a utility, standard input is passed through unchanged. |
 | Modified `PATH` lookup | The utility is searched using the environment `env` constructs. A zero-length `PATH` prefix and a wholly empty `PATH` both mean the working directory only, never a silent fallback to a built-in default path. An explicit path skips `PATH`. |
-| Exit status | Utility status is returned verbatim; a utility found but not invokable is 126, a utility not found is 127, and a failure in `env` itself (an unreadable `--file`, an unusable `--chdir` target) lands in the 1-125 band, distinct from 126/127. Usage errors are exit 2 (documented repo-wide deviation within the `>0` latitude). |
+| Exit status | Utility status is returned verbatim; a utility found but not invokable is 126, a utility not found is 127. Usage errors are exit 2 (documented repo-wide deviation within the `>0` latitude). The retained GNU `--file` and `--chdir` extensions are tested separately to remain in the 1-125 env-error band, but those invocations are not POSIX evidence. |
 | Streams | With a utility `env` writes nothing of its own to either stream; without one it writes each resulting `NAME=VALUE` and a newline (or NUL under the `-0` extension), diagnosing a stdout write failure with exit 1. |
 
 ### `split`
@@ -55,8 +57,8 @@ Source: [Issue 7 `split`](https://pubs.opengroup.org/onlinepubs/9699919799.2016e
 | Synopsis and operands | Both required forms (`-l line_count` and `-b n[k|m]`) are covered; at most one `file` and one `name` operand are accepted; an omitted `file` or a `file` of `-` selects standard input; the default prefix is `x`. |
 | Special token `-` | An explicit `-` `file` operand selects standard input exactly like an omitted operand, and the `name`/PREFIX operand still applies. |
 | Suffix namespace | The default suffix length is two lowercase letters. Under `POSIXLY_CORRECT` the namespace is fixed at `xaa`..`xzz` and split fails after it is exhausted rather than inventing a wider suffix; GNU's auto-widening remains outside POSIX mode. |
-| Output files | An empty input creates no output file in every mode. A partial final line (no trailing newline) is preserved byte-for-byte in the last file, and concatenating the outputs reproduces the input exactly. |
-| Consequences of errors | A non-EOF input read failure, and a failed output-file open (a read-only destination directory, Unix), are each diagnosed on stderr and exit 1; the failed output open is diagnosed naming the output file, not a silent success. |
+| Output files | An empty input creates no output file in the required default, `-l`, and `-b` forms. The retained GNU `-C` and `-t` forms are tested separately and are not POSIX evidence. A partial final line (no trailing newline) is preserved byte-for-byte in the last file, and concatenating the outputs reproduces the input exactly. |
+| Consequences of errors | A non-EOF input read failure, and a failed output-file open (through a regular-file intermediate pathname component, Unix), are each diagnosed on stderr and exit 1; the failed output open is diagnosed naming the output file, not a silent success. |
 | Streams and status | Standard output is not used; diagnostics use stderr; 0 on success, `>0` on error. |
 
 ### `tail`
@@ -101,8 +103,8 @@ Source: [Issue 7 `tail`](https://pubs.opengroup.org/onlinepubs/9699919799.2016ed
 
 The following gates passed on the Darwin host:
 
-- default `go test` and `go test -count=3` for `cmds/env`, `cmds/split`, and
-  `cmds/tail`;
+- default-mode and `POSIXLY_CORRECT=1` `go test -count=3` for `cmds/env`,
+  `cmds/split`, and `cmds/tail`;
 - `go test -race` for all three packages;
 - focused Windows, Linux, and Darwin `go vet` (which cross-typechecks tests) of
   all three packages, exercising the `//go:build !windows` split output-error
@@ -118,13 +120,17 @@ The following gates passed on the Darwin host:
   `tail` `go_evidence` test ID is confirmed present in its package
   (`_validate_evidence` reports available and explicit for all three rows).
 
-The official `scripts/posix_manifest.py --check`, `scripts/posix_manifest_test.py`,
-and therefore the `scripts/crossvet.sh` wrapper remain red on a **pre-existing**
-condition unrelated to this audit: the canonical `sh` row's shell semantic
-evidence (`sh: partial state requires focused semantic evidence`). This was
-confirmed identical on the clean baseline (13 failures, 5 errors both before and
-after this change), it concerns the shell-owned `sh` row and not the Go-owned
-`env`/`split`/`tail` rows, and this audit did not alter or launder it. The
-target rows validate individually, their generated Markdown exactly matches the
-canonical TSV, and the cross-vet compile legs the wrapper could not reach all
-passed independently for the three packages.
+The workspace-local `scripts/posix_manifest.py --check`,
+`scripts/posix_manifest_test.py`, and therefore the unqualified
+`scripts/crossvet.sh` remain red on a **pre-existing sibling-revision**
+condition unrelated to this audit: the workspace's adjacent Bashy checkout
+does not contain the canonical `sh` semantic evidence (`sh: partial state
+requires focused semantic evidence`; 13 failures and 5 errors in the manifest
+test). Pointing `POSIX_SH_EVIDENCE_ROOT` and `POSIX_BASHY_EVIDENCE_ROOT` at the
+umbrella's canonical sibling checkouts makes the manifest and all 47 manifest
+tests pass. In that context the full wrapper reaches its compile legs, where
+this host currently reports unrelated Go toolchain/build-cache failures on the
+Windows and Linux all-package legs; Darwin, JS/Wasm, WASI, and AIX pass. The
+three target packages pass focused Windows, Linux, and Darwin vet independently,
+their evidence rows validate, and their generated Markdown exactly matches the
+canonical TSV.

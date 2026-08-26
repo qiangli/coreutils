@@ -43,9 +43,10 @@ func TestEnvValueContainsEquals(t *testing.T) {
 	}
 }
 
-// TestEnvErrorStatusPartition pins that a failure in env itself (unrelated to
-// the utility being found or executable) exits in the 1-125 band, not 126/127
-// which are reserved for utility invocation outcomes.
+// TestEnvErrorStatusPartition pins the status partition for failures in the
+// retained GNU --chdir and --file extensions. These invocations are not POSIX
+// evidence; they ensure extensions do not collide with utility outcomes 126
+// and 127.
 func TestEnvErrorStatusPartition(t *testing.T) {
 	// --chdir to a nonexistent directory: env cannot set up the requested
 	// state, so it fails before any utility lookup.

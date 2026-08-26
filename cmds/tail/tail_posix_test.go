@@ -50,9 +50,10 @@ func TestTailInputReadErrorIsFailure(t *testing.T) {
 	}
 }
 
-// TestTailMissingOperandContinues proves the POSIX/extension multi-operand
-// rule: a failing operand is diagnosed and given exit status 1, while every
-// remaining operand is still processed to stdout with its header.
+// TestTailMissingOperandContinues proves the retained multi-operand extension:
+// a failing operand is diagnosed and given exit status 1, while every remaining
+// operand is still processed to stdout with its header. POSIX admits at most
+// one file operand, so this test is not POSIX evidence.
 func TestTailMissingOperandContinues(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "present", "a\nb\nc\n")
@@ -79,11 +80,8 @@ func TestTailClusteredModeLastWins(t *testing.T) {
 	// -c5 first, then -f followed by -n2 in one cluster. Last mode is -n, so
 	// the last two LINES are emitted, not the last five bytes.
 	//
-	// -f would normally block waiting for growth, so drive it against a
-	// non-follow input by cancelling immediately is unnecessary here: with no
-	// file operand and a pipe/closed stdin, -f is ignored per Issue 7 and the
-	// single pass exits. Use a plain string stdin (a non-pipe reader) — the
-	// ignore path applies because stdin is not an *os.File regular file.
+	// Use the harness's in-memory stdin: follow mode is only entered for an
+	// *os.File regular-file descriptor, so this parser regression is bounded.
 	out, errb, code := runTool(t, "", "l1\nl2\nl3\nl4\n", "-c5", "-fn2")
 	if code != 0 {
 		t.Fatalf("clustered -c5 -fn2: code=%d stderr=%q", code, errb)

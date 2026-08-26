@@ -17,8 +17,27 @@ func TestSplitEmptyInputCreatesNoFiles(t *testing.T) {
 		nil,         // default line mode
 		{"-l", "1"}, // explicit lines
 		{"-b", "4"}, // bytes
-		{"-C", "4"}, // line-bytes
-		{"-t", ":"}, // record separator
+	} {
+		t.Run(strings.Join(mode, " "), func(t *testing.T) {
+			dir := t.TempDir()
+			out, errb, code := runTool(t, dir, "", mode...)
+			if code != 0 || out != "" || errb != "" {
+				t.Fatalf("empty input %v = (%q, %q, %d), want ('', '', 0)", mode, out, errb, code)
+			}
+			if files := listFiles(t, dir); len(files) != 0 {
+				t.Fatalf("empty input created files: %v", files)
+			}
+		})
+	}
+}
+
+// TestSplitEmptyInputExtensions keeps the same empty-input invariant for the
+// retained GNU line-bytes and record-separator extensions. These forms are not
+// POSIX evidence.
+func TestSplitEmptyInputExtensions(t *testing.T) {
+	for _, mode := range [][]string{
+		{"-C", "4"},
+		{"-t", ":"},
 	} {
 		t.Run(strings.Join(mode, " "), func(t *testing.T) {
 			dir := t.TempDir()
@@ -91,7 +110,6 @@ func TestSplitInputReadErrorIsFailure(t *testing.T) {
 	for _, args := range [][]string{
 		{"-l", "1"},
 		{"-b", "3"},
-		{"-C", "3"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			dir := t.TempDir()
@@ -108,5 +126,23 @@ func TestSplitInputReadErrorIsFailure(t *testing.T) {
 				t.Fatalf("read fault %v: missing diagnostic: %q", args, errb.String())
 			}
 		})
+	}
+}
+
+// TestSplitInputReadErrorExtension keeps the input-error invariant for the
+// retained GNU line-bytes mode. This form is not POSIX evidence.
+func TestSplitInputReadErrorExtension(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: &failAfterReader{data: []byte("ab\ncd\n")}, Out: &out, Err: &errb},
+	}
+	if code := run(rc, []string{"-C", "3"}); code != 1 {
+		t.Fatalf("read fault -C: code=%d, want 1 (stderr %q)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "split:") {
+		t.Fatalf("read fault -C: missing diagnostic: %q", errb.String())
 	}
 }

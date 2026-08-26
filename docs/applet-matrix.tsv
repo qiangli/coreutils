@@ -127,7 +127,7 @@ shuf	cmds/shuf		GNU Coreutils	yes	no	1	12
 sleep	cmds/sleep		GNU Coreutils	yes	yes	2	11
 sntp	cmds/ntp	ntp	Bashy/other extension	no	no	1	4
 sort	cmds/sort		GNU Coreutils	yes	yes	4	24
-split	cmds/split		GNU Coreutils	yes	yes	3	20
+split	cmds/split		GNU Coreutils	yes	yes	3	22
 stat	cmds/stat		GNU Coreutils	yes	no	1	18
 stdbuf	cmds/stdbuf		GNU Coreutils	yes	no	1	5
 strings	cmds/strings		POSIX/Unix utility	no	yes	1	11
