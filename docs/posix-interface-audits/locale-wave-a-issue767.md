@@ -117,35 +117,17 @@ Owned-package gates, all green as of this packet:
 - `go test -count=20 ./cmds/awk ./cmds/comm ./cmds/csplit ./cmds/expr ./cmds/fold` — ok.
 - `go test -race -count=5 ./cmds/awk ./cmds/comm ./cmds/csplit ./cmds/expr ./cmds/fold` — ok.
 - `go vet ./cmds/awk ./cmds/comm ./cmds/csplit ./cmds/expr ./cmds/fold` — clean.
-- `GOOS={windows,linux,darwin} go vet` of the five owned packages — all PASS
-  (the cross-OS legs `scripts/crossvet.sh` would run; verified directly here
-  because that script exits early on the manifest check noted below).
-
-### Conductor-owned residual: applet matrix refresh
-
-`scripts/applet-matrix.py --check` (and therefore `scripts/crossvet.sh`, which
-invokes it) currently report **stale**. The regenerator's diff is exactly two
-mechanical test-function count cells in the generated manifests
-`docs/applet-matrix.md` and `docs/applet-matrix.tsv`, both a direct function of
-the owned test additions in this branch:
+- `GOOS={windows,linux,darwin} go vet` of the five owned packages — all PASS.
+- `scripts/applet-matrix.py --check` — PASS after the conductor refreshed the
+  two mechanical test-function count cells generated from this packet:
 
 - `csplit`: `1 | 18` → `1 | 20`
 - `expr`: `1 | 9` → `1 | 12`
 
-No inventory, family, ownership, or coverage assertion changes; no package loses
-tests. Those manifests are shared generated artifacts explicitly outside this
-packet's ownership, and the refresh is historically a separate
-maintainer-authored commit (for example `c354351` "docs: refresh applet matrix
-for fold coverage", `056e48a` for iconv, `befd0dc` for expand — none authored by
-the weave worker). This packet therefore does **not** edit them; the conductor
-closes the gate with the standard step:
+  No inventory, family, ownership, or coverage assertion changed, and no
+  package lost tests.
+- `scripts/crossvet.sh` — PASS for windows, linux, darwin, js/wasm,
+  wasip1/wasm, and aix after the same refresh.
 
-```sh
-python3 scripts/applet-matrix.py   # rewrites docs/applet-matrix.{md,tsv}; then commit as "docs: refresh applet matrix for locale wave A"
-```
-
-After that refresh, `scripts/applet-matrix.py --check` and
-`scripts/crossvet.sh` pass unchanged.
-
-No generated manifest, consolidated report, shared script, sibling repository,
-or unrelated package is edited by this closure packet.
+No consolidated report, shared script, sibling repository, or unrelated
+package is edited by this closure packet.
