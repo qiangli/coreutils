@@ -184,7 +184,10 @@ func TestDarwinAdapterMatchesEverySafelyQueryableValue(t *testing.T) {
 			t.Errorf("%s: ours %q (exit %d), host %q", name, got, code, strings.TrimSpace(string(want)))
 		}
 	}
-	for _, name := range []string{"ARG_MAX", "CHILD_MAX", "NGROUPS_MAX", "OPEN_MAX", "PAGESIZE", "PAGE_SIZE", "_NPROCESSORS_CONF", "_NPROCESSORS_ONLN"} {
+	// OPEN_MAX is deliberately absent: the Go runtime raises its own descriptor
+	// limit during startup, while a separately exec'd getconf observes the
+	// shell's original limit. The applet must report its process limit.
+	for _, name := range []string{"ARG_MAX", "CHILD_MAX", "NGROUPS_MAX", "PAGESIZE", "PAGE_SIZE", "_NPROCESSORS_CONF", "_NPROCESSORS_ONLN"} {
 		want, err := exec.Command("getconf", name).Output()
 		if err != nil {
 			t.Fatal(err)

@@ -820,9 +820,11 @@ func TestAttachCoachPtyFollowsTruncationAndRotation(t *testing.T) {
 	}
 	waitForAttachReport(t, coach, 2)
 
-	if err := os.Remove(card.LogPath); err != nil {
+	rotated := card.LogPath + ".old"
+	if err := os.Rename(card.LogPath, rotated); err != nil {
 		t.Fatal(err)
 	}
+	defer os.Remove(rotated)
 	if err := os.WriteFile(card.LogPath, []byte("third_after_rotation\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -868,9 +870,11 @@ func TestAttachCoachEventsFollowsTruncationAndRotation(t *testing.T) {
 	}
 	waitForAttachReport(t, coach, 2)
 
-	if err := os.Remove(evPath); err != nil {
+	rotated := evPath + ".old"
+	if err := os.Rename(evPath, rotated); err != nil {
 		t.Fatal(err)
 	}
+	defer os.Remove(rotated)
 	if err := os.WriteFile(evPath, []byte(toolCallLine("third_after_rotation")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

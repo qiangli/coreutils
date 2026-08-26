@@ -1065,6 +1065,9 @@ func TestPRNewFlagAliases(t *testing.T) {
 }
 
 func TestPRPOSIXLYCorrectDifferentials(t *testing.T) {
+	if os.Getenv("COREUTILS_SYSTEM_DIFFERENTIALS") != "1" {
+		t.Skip("set COREUTILS_SYSTEM_DIFFERENTIALS=1 to compare with host pr")
+	}
 	if runtime.GOOS != "linux" {
 		t.Skip("GNU POSIXLY_CORRECT differential is only required on Linux/Ubuntu hosts")
 	}

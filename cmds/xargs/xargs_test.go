@@ -144,6 +144,7 @@ func TestXargsTrace(t *testing.T) {
 }
 
 func TestXargsInteractiveReadsControllingTerminal(t *testing.T) {
+	t.Setenv("LC_ALL", "C")
 	original := ttyOpener
 	t.Cleanup(func() { ttyOpener = original })
 	opened := 0

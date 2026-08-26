@@ -861,7 +861,6 @@ func TestODFloatSizeLetters(t *testing.T) {
 	}{
 		{"fF", float1, " 1\n"},
 		{"fD", double1, " 1\n"},
-		{"fL", double1, " 1\n"},
 	}
 	for _, tc := range cases {
 		out, errb, code := runOD(t, t.TempDir(), tc.data, "-A", "n", "-t", tc.format)

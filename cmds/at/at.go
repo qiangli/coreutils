@@ -88,15 +88,6 @@ func run(rc *tool.RunContext, args []string) int {
 	if *touchTime != "" && len(operands) != 0 {
 		return tool.UsageError(rc, cmd, "-t and a timespec operand are mutually exclusive")
 	}
-	if code := checkAtAccess(rc); code != 0 {
-		return code
-	}
-	identity, err := schedule.AuthenticatedIdentity()
-	if err != nil {
-		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
-		return 1
-	}
-
 	loc, err := atLocation(rc.Getenv("TZ"))
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
@@ -123,6 +114,14 @@ func run(rc *tool.RunContext, args []string) int {
 			requested = *touchTime
 		}
 		return tool.UsageError(rc, cmd, "time %q is in the past", requested)
+	}
+	if code := checkAtAccess(rc); code != 0 {
+		return code
+	}
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
+		return 1
 	}
 
 	cwd := rc.Dir

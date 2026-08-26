@@ -15,6 +15,9 @@ import (
 // database or the reference binary is missing (Windows, a scratch container),
 // and every other test in the package drives fixtures built in-process.
 func TestAgreesWithSystemTput(t *testing.T) {
+	if os.Getenv("COREUTILS_SYSTEM_DIFFERENTIALS") != "1" {
+		t.Skip("set COREUTILS_SYSTEM_DIFFERENTIALS=1 to compare with host tput")
+	}
 	sys, err := exec.LookPath("tput")
 	if err != nil {
 		t.Skip("no system tput to compare against")

@@ -11,6 +11,7 @@
 package room
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -133,6 +134,21 @@ func timelinePath() (string, error) {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// memberPath keeps opaque member IDs out of host path syntax. In particular,
+// ':' is invalid in a Windows filename, while '/', '\\', and '..' must never
+// let an ID escape the members directory on any host.
+func memberPath(dir, id string) string {
+	name := base64.RawURLEncoding.EncodeToString([]byte(id))
+	return filepath.Join(dir, "id-"+name+".json")
+}
+
+func legacyMemberPath(dir, id string) (string, bool) {
+	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
+		return "", false
+	}
+	return filepath.Join(dir, id+".json"), true
+}
+
 // ErrLive reports that the id being joined is already held by a LIVE member.
 // Callers unwrap it to tell "someone else is already this" apart from an I/O
 // failure, and to say something useful about it.
@@ -164,8 +180,16 @@ func Join(c Card) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, c.ID+".json")
-	if prior, ok := readCard(path); ok {
+	path := memberPath(dir, c.ID)
+	prior, ok := readCard(path)
+	legacy := ""
+	if !ok {
+		if candidate, safe := legacyMemberPath(dir, c.ID); safe {
+			legacy = candidate
+			prior, ok = readCard(candidate)
+		}
+	}
+	if ok {
 		if prior.PID != c.PID && PidAlive(prior.PID) {
 			return &ErrLive{ID: c.ID, PID: prior.PID}
 		}
@@ -183,6 +207,9 @@ func Join(c Card) error {
 	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return err
+	}
+	if legacy != "" && legacy != path {
+		_ = os.Remove(legacy)
 	}
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
 }
@@ -224,7 +251,12 @@ func LeavePID(id string, pid int) {
 	if err != nil {
 		return
 	}
-	path := filepath.Join(dir, id+".json")
+	path := memberPath(dir, id)
+	if _, ok := readCard(path); !ok {
+		if legacy, safe := legacyMemberPath(dir, id); safe {
+			path = legacy
+		}
+	}
 	if prior, ok := readCard(path); ok && prior.PID != pid && PidAlive(prior.PID) {
 		return
 	}

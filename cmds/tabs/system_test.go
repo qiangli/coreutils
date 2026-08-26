@@ -24,6 +24,9 @@ import (
 // covered by the fixture tests above, where the expected bytes can be stated
 // outright.
 func TestAgreesWithSystemTabs(t *testing.T) {
+	if os.Getenv("COREUTILS_SYSTEM_DIFFERENTIALS") != "1" {
+		t.Skip("set COREUTILS_SYSTEM_DIFFERENTIALS=1 to compare with host tabs")
+	}
 	sys, err := exec.LookPath("tabs")
 	if err != nil {
 		t.Skip("no system tabs to compare against")

@@ -49,6 +49,22 @@ func TestJoinLeaveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMemberIDIsPortableOpaqueData(t *testing.T) {
+	isolate(t)
+	id := `shell:codex:8800/../../outside`
+	if err := Join(Card{ID: id, Binding: "shell:codex", PID: os.Getpid()}); err != nil {
+		t.Fatalf("join opaque id: %v", err)
+	}
+	got, ok, err := Find(id)
+	if err != nil || !ok || got.ID != id {
+		t.Fatalf("find opaque id: card=%+v ok=%v err=%v", got, ok, err)
+	}
+	Leave(id)
+	if _, ok, _ := Find(id); ok {
+		t.Fatal("opaque member survived Leave")
+	}
+}
+
 // TestMembersPrunesDead — a card whose pid is gone is pruned on read, so the room
 // never asserts a dead member is live (absence-of-evidence).
 func TestMembersPrunesDead(t *testing.T) {

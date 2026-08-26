@@ -28,6 +28,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: Install locale fixtures
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y locales
+          sudo sed -i -E 's/^# *(de_DE ISO-8859-1)/\1/' /etc/locale.gen
+          sudo locale-gen
       - name: Configure git identity (weave tests create real commits)
         shell: bash
         run: |
@@ -67,4 +75,12 @@ jobs:
             github.com/qiangli/coreutils/external/act \
             github.com/qiangli/coreutils/external/gh"
           go vet $pkgs
-          go test $pkgs
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # POSIX applets require Unix process, permission, device and path
+            # semantics. Compile every test natively here; Linux and Darwin
+            # execute the behavioral suite, while Bashy's Windows integration
+            # job exercises the portable room, shell and agent surfaces.
+            go test -run '^$' $pkgs
+          else
+            go test $pkgs
+          fi
