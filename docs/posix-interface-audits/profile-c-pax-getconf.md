@@ -3,8 +3,8 @@
 Status: **partial** for both commands. This audit is fail-closed: it records
 only what was re-verified against the current source tree and the POSIX.1-2016
 (Issue 7) utility clauses on this pass, labels the retained diagnostic counts
-as unmapped historical artifacts, and lists the reconciliation candidates that
-remain open rather than claiming them resolved.
+as unmapped historical artifacts, and records the focused repairs that closed
+the two source-owned reconciliation candidates.
 
 ## Scope and method
 
@@ -31,30 +31,31 @@ focused tests cited below.
 
 | Command | Issue 7 source | Verdict | Exact residual after this pass |
 | --- | --- | --- | --- |
-| `getconf` | [getconf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getconf.html) | partial | Utility-syntax surface (arity, `-v` handling, unknown-name vs `undefined`, exit codes) re-verified against source and focused tests. Inventory counts re-measured (see below) and the prior doc's figures corrected. libc-owned values (`PATH` on Linux, `RE_DUP_MAX`, `SYMLOOP_MAX`, non-target programming environments) remain a platform/integration boundary: Linux exposes no kernel API for libc policy. Two open candidates listed for `pax` only; `getconf` carries no open source-owned candidate from this pass, but the row stays partial because the historical 104/26 ledger was not re-derived and host-differential coverage exists only on Darwin/Linux test hosts. |
-| `pax` | [pax](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html) | partial | Four modes, option legality matrix, `-b` grammar, `-s` first-success semantics, selector `-c/-n/-d`, `-p` ordered grammar and set-ID rule, extended-header `-o` grammar/precedence, transcode matrix, traversal `-H/-L/-X` with cycle termination, and copy-mode `-l`/`-t` all re-verified in source and covered by existing focused tests. **Two unconfirmed reconciliation candidates remain open** (see next section) and the historical 113-blocker ledger was not re-derived, so this row is partial. |
+| `getconf` | [getconf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getconf.html) | partial | Utility-syntax surface (arity, `-v` handling, unknown-name vs `undefined`, exit codes) re-verified against source and focused tests. Inventory counts re-measured (see below) and the prior doc's figures corrected. libc-owned values (`PATH` on Linux, `RE_DUP_MAX`, `SYMLOOP_MAX`, non-target programming environments) remain a platform/integration boundary: Linux exposes no kernel API for libc policy. `getconf` carries no open source-owned candidate from this pass, but the row stays partial because the historical 104/26 ledger was not re-derived and host-differential coverage exists only on Darwin/Linux test hosts. |
+| `pax` | [pax](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pax.html) | partial | Four modes, option legality matrix, `-b` grammar, `-s` first-success semantics, selector `-c/-n/-d`, `-p` ordered grammar and set-ID rule, extended-header `-o` grammar/precedence, transcode matrix, traversal `-H/-L/-X` with cycle termination, and copy-mode `-l`/`-t` all re-verified in source and covered by focused tests. The two source-owned reconciliation candidates found by this pass are now repaired and regression-tested (see next section). The historical 113-blocker ledger was not re-derived, so this row remains partial. |
 
-## Open reconciliation candidates (unconfirmed — not claimed as defects)
+## Closed source-owned reconciliation candidates
 
 1. **Default physical blocking for `-x pax`.** Issue 7 `-x format` states the
    default blocksize for the *pax* format for character special archive files
    is 5120 (ustar 10240, cpio 5120). `defaultBlockSize`
-   (`cmds/pax/pax.go`, `defaultBlockSize`) returns 5120 only for `cpio` and
-   10240 for both tar-derived formats, and its comment asserts 10240 for
-   pax/ustar. Candidate source-owned discrepancy. Not reproduced as a
-   user-visible defect in this pass: the spec sentence is scoped to character
-   special archive devices, and for regular-file/stdout sinks the default is
-   format-dependent implementation behavior. Needs a focused decision (and a
-   test) before this can be recorded as a gap or closed.
+   (`cmds/pax/pax.go`, `defaultBlockSize`) formerly returned 10240 for both
+   tar-derived formats regardless of sink. The write path now inspects the
+   actual selected sink after open—including stdout and `-f -`—and chooses
+   5120 for character-special pax/cpio sinks while preserving 10240 for ustar;
+   explicit `-b` remains authoritative. See `pax-issue776-blocksize.md` and
+   `cmds/pax/issue776_blocksize_test.go`.
 2. **Verbose list output for hard links to previous members.** Issue 7 STDOUT
    requires, in list mode with `-v`, `"%s==%s\n", <ls -l listing>, <linkname>`
    for pathnames representing hard links to previous members of the archive.
-   No `==` marker exists in the current list path (`cmds/pax/pax.go`
-   `listModeWithOpener`; `cmds/pax/list_format.go`). Candidate gap. Not
-   reproduced end-to-end in this pass, so it is recorded as open, not fixed.
+   The listing path now emits that marker and resolves link targets by archive
+   occurrence, including interactive rename, substitution, duplicate raw
+   names, and post-substitution collisions. See
+   `pax-issue775-hardlink-list.md` and `cmds/pax/list_hardlink_test.go`.
 
-Both candidates are source-side questions answerable in this repository; they
-are the concrete reason the `pax` row cannot move to `verified` yet.
+Both source-side candidates are closed by focused implementation and tests.
+They no longer justify a current Bashy-source blocker; `pax` remains partial
+for the explicitly attributed integration/evidence boundaries below.
 
 ## Verified evidence and exact mappings
 
@@ -170,8 +171,8 @@ pass with `-count=1` on this pass. Representative clause mappings verified:
   `getconf` message localization; `pax` special-file creation subject to host
   privileges; filesystem timestamp-resolution quantization where `utimensat`
   semantics differ.
-- **Source-owned open items**: the two `pax` candidates above, and nothing
-  else identified on this pass.
+- **Source-owned open items**: none identified by this pass after the two pax
+  repairs above.
 
 ## Verification evidence (this pass)
 
@@ -182,7 +183,7 @@ Executed on this branch, darwin/arm64:
   (uncached).
 - `go vet ./cmds/pax ./cmds/getconf` — clean.
 
-No source changes were made in this pass; the deliverable is this corrected
-audit. The two open `pax` candidates require focused implementation work with
-tests and are intentionally left unimplemented rather than half-fixed under a
-closure deadline.
+The original audit pass made no source changes. The two candidates it isolated
+were subsequently implemented and covered by focused tests; this document now
+records that disposition without treating the unmapped historical counts as
+current failures.
