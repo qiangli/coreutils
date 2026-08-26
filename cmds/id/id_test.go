@@ -371,8 +371,41 @@ func idDefaultField(field, label, id string) bool {
 	if field == prefix {
 		return true
 	}
+	if !strings.HasPrefix(field, prefix) {
+		return false
+	}
 	name := strings.TrimPrefix(field, prefix)
-	return len(name) > 2 && name[0] == '(' && name[len(name)-1] == ')'
+	if len(name) <= 2 || name[0] != '(' || name[len(name)-1] != ')' {
+		return false
+	}
+	return !strings.ContainsAny(name[1:len(name)-1], "()")
+}
+
+func TestIDDefaultField(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		want  bool
+	}{
+		{"bare", "uid=1000", true},
+		{"decorated", "uid=1000(ubuntu)", true},
+		{"missing prefix", "(wrong)", false},
+		{"wrong label", "gid=1000(ubuntu)", false},
+		{"wrong ID", "uid=1001(ubuntu)", false},
+		{"ID with matching prefix", "uid=10000(ubuntu)", false},
+		{"empty name", "uid=1000()", false},
+		{"missing open parenthesis", "uid=1000ubuntu)", false},
+		{"missing close parenthesis", "uid=1000(ubuntu", false},
+		{"extra open parenthesis", "uid=1000((ubuntu)", false},
+		{"extra close parenthesis", "uid=1000(ubuntu))", false},
+		{"trailing bytes", "uid=1000(ubuntu)x", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := idDefaultField(tc.field, "uid", "1000"); got != tc.want {
+				t.Fatalf("idDefaultField(%q)=%v, want %v", tc.field, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestIDRealFlagWithOptions(t *testing.T) {
