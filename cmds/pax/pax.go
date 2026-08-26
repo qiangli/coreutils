@@ -463,7 +463,17 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	}
 	sel.prime(catalog)
 
+	// Resolve the complete selected-name plan before emitting anything. This is
+	// necessary for a link that precedes its target: the displayed target must
+	// still follow a later interactive rename.
 	status := 0
+	effectiveNames := make(map[int]string)
+	originalOccurrences := make(map[string][]int)
+	for index, h := range members {
+		originalOccurrences[h.Name] = append(originalOccurrences[h.Name], index)
+	}
+	substitutedNames := make(map[int]string)
+	substitutedOccurrences := make(map[string][]int)
 	for index, h := range members {
 		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
 		if !sel.keep(h.Name, isDir) {
@@ -473,11 +483,13 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 			fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated\n", h.Name)
 			status = 1
 		}
-		name := applySubstitutions(o.subst, h.Name, rc.Err)
-		if name == "" {
+		subName := applySubstitutions(o.subst, h.Name, rc.Err)
+		if subName == "" {
 			continue
 		}
-		name, keep, err := renameInteractively(o, name)
+		substitutedNames[index] = subName
+		substitutedOccurrences[subName] = append(substitutedOccurrences[subName], index)
+		name, keep, err := renameInteractively(o, subName)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", err)
 			return 1
@@ -485,9 +497,30 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		if !keep {
 			continue
 		}
+		effectiveNames[index] = name
+	}
+
+	for index, h := range members {
+		name, keep := effectiveNames[index]
+		if !keep {
+			continue
+		}
+		linkTarget := h.Linkname
+		if linkTarget != "" {
+			linkTarget = applySubstitutions(o.subst, linkTarget, nil)
+			if targetIndex, ok := listTargetOccurrence(index, h.Linkname, linkTarget,
+				originalOccurrences, substitutedOccurrences); ok {
+				if r, kept := effectiveNames[targetIndex]; kept {
+					linkTarget = r
+				} else if r, substituted := substitutedNames[targetIndex]; substituted {
+					linkTarget = r
+				}
+			}
+		}
+
 		if o.verbose && o.paxOptions.listSet {
-			h.Name = name
-			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env), o.timeFormat)
+			hCopy := effectiveListHeader(h, name, linkTarget)
+			line, err := formatPAXList(hCopy, o.paxOptions.listFormat, tzenv.Location(rc.Env), o.timeFormat)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "pax: listopt: %v\n", err)
 				return 1
@@ -502,9 +535,25 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 				fmt.Fprintf(rc.Err, "pax: time format: %v\n", err)
 				return 1
 			}
-			if _, err := fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
-				headerModeString(h), 1, h.Uname, h.Gname, h.Size, stamp, name); err != nil {
-				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
+			var writeErr error
+			nlink := listNlink(h)
+			size := h.Size
+			if h.Typeflag == tar.TypeSymlink {
+				size = int64(len([]byte(linkTarget)))
+			}
+			switch h.Typeflag {
+			case tar.TypeLink:
+				_, writeErr = fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s == %s\n",
+					headerModeString(h), nlink, h.Uname, h.Gname, size, stamp, name, linkTarget)
+			case tar.TypeSymlink:
+				_, writeErr = fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s -> %s\n",
+					headerModeString(h), nlink, h.Uname, h.Gname, size, stamp, name, linkTarget)
+			default:
+				_, writeErr = fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
+					headerModeString(h), nlink, h.Uname, h.Gname, size, stamp, name)
+			}
+			if writeErr != nil {
+				fmt.Fprintf(rc.Err, "pax: write error: %v\n", writeErr)
 				return 1
 			}
 		} else {
@@ -524,6 +573,70 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	}
 
 	return status
+}
+
+func listTargetOccurrence(linkIndex int, originalTarget, substitutedTarget string,
+	originalOccurrences, substitutedOccurrences map[string][]int) (int, bool) {
+	// Prefer the archive identity named by the link header. In particular, a
+	// later member whose original name collides with a substituted pathname
+	// must not steal an earlier hard link's target.
+	occurrences := originalOccurrences[originalTarget]
+	if len(occurrences) == 0 {
+		occurrences = substitutedOccurrences[substitutedTarget]
+	}
+	previous := -1
+	for _, index := range occurrences {
+		if index == linkIndex {
+			continue
+		}
+		if index < linkIndex {
+			previous = index
+			continue
+		}
+		if previous >= 0 {
+			return previous, true
+		}
+		return index, true
+	}
+	if previous >= 0 {
+		return previous, true
+	}
+	return 0, false
+}
+
+func effectiveListHeader(h *tar.Header, name, linkTarget string) *tar.Header {
+	copyHeader := *h
+	copyHeader.Name = name
+	copyHeader.Linkname = linkTarget
+	if h.PAXRecords != nil {
+		copyHeader.PAXRecords = make(map[string]string, len(h.PAXRecords))
+		for key, value := range h.PAXRecords {
+			copyHeader.PAXRecords[key] = value
+		}
+		if _, ok := copyHeader.PAXRecords["path"]; ok {
+			copyHeader.PAXRecords["path"] = name
+		}
+		for _, key := range []string{"linkpath", "linkname"} {
+			if _, ok := copyHeader.PAXRecords[key]; ok {
+				copyHeader.PAXRecords[key] = linkTarget
+			}
+		}
+	}
+	return &copyHeader
+}
+
+func listNlink(h *tar.Header) uint64 {
+	for _, key := range []string{"SCHILY.nlink", "COREUTILS.cpio.c_nlink"} {
+		if value, ok := h.PAXRecords[key]; ok {
+			if nlink, err := strconv.ParseUint(value, 10, 64); err == nil && nlink > 0 {
+				return nlink
+			}
+		}
+	}
+	if h.Typeflag == tar.TypeLink {
+		return 2
+	}
+	return 1
 }
 
 func headerFor(path string, fi os.FileInfo, link string) (*tar.Header, error) {
