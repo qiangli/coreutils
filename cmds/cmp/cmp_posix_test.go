@@ -31,6 +31,10 @@ type cmpFailWriter struct{ err error }
 
 func (w cmpFailWriter) Write([]byte) (int, error) { return 0, w.err }
 
+type cmpShortWriter struct{}
+
+func (cmpShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
 type cmpFailReader struct{ err error }
 
 func (r cmpFailReader) Read([]byte) (int, error) { return 0, r.err }
@@ -57,6 +61,20 @@ func TestCmpPOSIXOperandGrammarAndOutputErrors(t *testing.T) {
 	}
 	if got := errb.String(); !strings.Contains(got, "cmp: write error: broken pipe") {
 		t.Fatalf("write failure diagnostic = %q", got)
+	}
+
+	for _, args := range [][]string{{"a", "b"}, {"-l", "a", "b"}} {
+		err := new(bytes.Buffer)
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT="},
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: cmpShortWriter{}, Err: err},
+		}
+		if code := cmd.Run(rc, args); code != 2 {
+			t.Errorf("short write for cmp %v: exit = %d, want 2", args, code)
+		}
+		if got := err.String(); !strings.Contains(got, "cmp: write error: short write") {
+			t.Errorf("short write for cmp %v: diagnostic = %q", args, got)
+		}
 	}
 
 	errb.Reset()

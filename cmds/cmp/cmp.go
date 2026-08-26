@@ -239,11 +239,11 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 		if limit < 0 || matched < limit {
 			if b1 != b2 {
 				if printBytes {
-					if _, err := fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n", name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2)); err != nil {
+					if err := writeOutputf(rc, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n", name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2)); err != nil {
 						return outputError(rc, err)
 					}
 				} else {
-					if _, err := fmt.Fprintf(rc.Out, "%s %s differ: char %d, line %d\n", name1, name2, matched+1, newlines+1); err != nil {
+					if err := writeOutputf(rc, "%s %s differ: char %d, line %d\n", name1, name2, matched+1, newlines+1); err != nil {
 						return outputError(rc, err)
 					}
 				}
@@ -309,21 +309,30 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 				differed = true
 				switch {
 				case printBytes:
-					if _, err := fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2)); err != nil {
+					if err := writeOutputf(rc, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2)); err != nil {
 						return outputError(rc, err)
 					}
 				case posix:
-					if _, err := fmt.Fprintf(rc.Out, "%d %o %o\n", pos, b1, b2); err != nil {
+					if err := writeOutputf(rc, "%d %o %o\n", pos, b1, b2); err != nil {
 						return outputError(rc, err)
 					}
 				default:
-					if _, err := fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2); err != nil {
+					if err := writeOutputf(rc, "%*d %3o %3o\n", width, pos, b1, b2); err != nil {
 						return outputError(rc, err)
 					}
 				}
 			}
 		}
 	}
+}
+
+func writeOutputf(rc *tool.RunContext, format string, args ...any) error {
+	output := []byte(fmt.Sprintf(format, args...))
+	n, err := rc.Out.Write(output)
+	if err == nil && n < len(output) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func outputError(rc *tool.RunContext, err error) int {
