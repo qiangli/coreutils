@@ -277,6 +277,28 @@ func TestExprLocaleRegexClassesEquivalenceAndRanges(t *testing.T) {
 	}
 }
 
+func TestExprLocaleBREBackreferences(t *testing.T) {
+	high := string([]byte{0xe9})
+	for _, tc := range []struct {
+		name, input, pattern, want string
+	}{
+		{"class", high + high, `\([[:alpha:]]\)\1`, high + "\n"},
+		{"range", high + high, `\([d-f]\)\1`, high + "\n"},
+		{"leftmost-longest", "aaaa", `\(a\|aa\)\1`, "aa\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runExprLocale([]string{"LC_CTYPE=de_DE.iso88591", "LC_COLLATE=de_DE.iso88591"}, []string{tc.input, ":", tc.pattern}, func(string) (ctypeProvider, error) {
+				return &fakeExprCType{}, nil
+			}, func(string) (collateProvider, error) {
+				return &fakeExprCollate{}, nil
+			})
+			if code != 0 || errb != "" || out != tc.want {
+				t.Fatalf("expr = (%q,%q,%d), want (%q,empty,0)", out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
 func TestExprLocaleCollationComparison(t *testing.T) {
 	collateFake := &fakeExprCollate{}
 	out, errb, code := runExprLocale([]string{"LC_COLLATE=de_DE.iso88591"}, []string{"a", ">", "b"}, func(string) (ctypeProvider, error) {

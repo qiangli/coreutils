@@ -183,6 +183,42 @@ func TestAwkLocaleLifecycle(t *testing.T) {
 	}
 }
 
+func TestAwkLCNumericInputOutputAndPrecedence(t *testing.T) {
+	panicOpen := func(string) (ctypeProvider, error) { panic("numeric-only locale must not open LC_CTYPE") }
+	for _, tc := range []struct {
+		name    string
+		env     []string
+		program string
+		input   string
+		args    []string
+		want    string
+	}{
+		{"input and print", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `{ print $1 + 1 }`, "4,5\n", nil, "5,5\n"},
+		{"printf keeps literal period", []string{"LANG=C", "LC_NUMERIC=de_DE.ISO-8859-1"}, `BEGIN { printf "v.=%0.2f\n", 1.5 }`, "", nil, "v.=1,50\n"},
+		{"source and assignment use period", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print 1.5 + x }`, "", []string{"-v", "x=4.5"}, "6\n"},
+		{"string conversion uses locale", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print "4,5" + 0 }`, "", nil, "4,5\n"},
+		{"assignment comma remains nonnumeric", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print x + 0 }`, "", []string{"-v", "x=4,5"}, "4\n"},
+		{"LC_ALL overrides numeric", []string{"LANG=de_DE.iso88591", "LC_NUMERIC=de_DE.iso88591", "LC_ALL=POSIX"}, `{ print $1 + 1 }`, "4.5\n", nil, "5.5\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append(append([]string(nil), tc.args...), tc.program)
+			out, errOut, code := runAwkLocale(tc.env, strings.NewReader(tc.input), args, panicOpen)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("got=(%q,%q,%d), want=(%q,empty,0)", out, errOut, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestAwkLCNumericUnsupportedFailsBeforeInput(t *testing.T) {
+	out, errOut, code := runAwkLocale([]string{"LANG=C", "LC_NUMERIC=de_DE.UTF-8"}, panicAwkReader{}, []string{`{ print }`}, func(string) (ctypeProvider, error) {
+		panic("unsupported LC_NUMERIC must fail before LC_CTYPE")
+	})
+	if code != 2 || out != "" || !strings.Contains(errOut, `LC_NUMERIC "de_DE.UTF-8"`) {
+		t.Fatalf("got=(%q,%q,%d), want fail-closed LC_NUMERIC diagnostic", out, errOut, code)
+	}
+}
+
 // TestAwkLocaleEquivalenceClassMatches pins POSIX XBD 9.3.5 for awk, which has
 // no BRE mode: every awk ERE went through the compiler that dropped the locale
 // equivalence table, so `/[[=a=]]/` under a non-C LC_CTYPE silently matched

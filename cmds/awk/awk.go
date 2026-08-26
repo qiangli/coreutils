@@ -132,6 +132,12 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	compiler := awkERECompiler{}
 	lcCType := locale.Resolve(rc.Env, locale.CType)
 	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	lcNumeric := locale.Resolve(rc.Env, locale.Numeric)
+	decimalPoint, ok := awkNumericDecimalPoint(lcNumeric)
+	if !ok {
+		fmt.Fprintf(rc.Err, "awk: LC_NUMERIC %q: unsupported locale; only C, POSIX, de_DE.ISO-8859-1, and de_DE.iso88591 are accepted\n", lcNumeric)
+		return 2
+	}
 	var tables *bre.LocaleByteTables
 	if lcCType != "C" && lcCType != "POSIX" {
 		provider, err := ctypeOpen(lcCType)
@@ -198,6 +204,7 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		// no-platform-variance contract).
 		NewlineOutput: interp.RawNewlineMode,
 		Error:         rc.Err,
+		DecimalPoint:  decimalPoint,
 		Argv0:         cmd.Name,
 		Args:          resolveFiles(rc, files),
 		Vars:          vars,
@@ -208,6 +215,19 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		return 2
 	}
 	return status
+}
+
+func awkNumericDecimalPoint(name string) (byte, bool) {
+	switch name {
+	case "C", "POSIX":
+		return '.', true
+	}
+	switch strings.ToLower(name) {
+	case "de_de.iso-8859-1", "de_de.iso88591":
+		return ',', true
+	default:
+		return 0, false
+	}
 }
 
 // awkERECompiler adapts coreutils' POSIX ERE matcher to GoAWK's expression

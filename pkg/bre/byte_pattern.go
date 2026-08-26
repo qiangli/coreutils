@@ -22,7 +22,13 @@ type bytePatternTables struct {
 
 type localeBytePattern struct {
 	codec byteTokenCodec
-	re    *regexp.Regexp
+	re    localeByteMatcher
+}
+
+type localeByteMatcher interface {
+	FindStringSubmatchIndex(string) []int
+	FindAllStringSubmatchIndex(string, int) [][]int
+	NumSubexp() int
 }
 
 // snapshot returns a compile-owned copy of t. The class map is the only
@@ -62,12 +68,36 @@ func compileLocaleBytePattern(pattern []byte, input bytePatternTables, foldCase 
 	if tables.multi {
 		prefix = "(?m)"
 	}
-	re, err := regexp.Compile(prefix + translated)
-	if err != nil {
-		return nil, err
+	var re localeByteMatcher
+	if hasEREBackreference(translated) {
+		custom, compileErr := CompileEREWithFlags(translated, prefix)
+		if compileErr != nil {
+			return nil, compileErr
+		}
+		custom.Longest()
+		re = custom
+	} else {
+		standard, compileErr := regexp.Compile(prefix + translated)
+		if compileErr != nil {
+			return nil, compileErr
+		}
+		standard.Longest()
+		re = standard
 	}
-	re.Longest()
 	return &localeBytePattern{codec: codec, re: re}, nil
+}
+
+func hasEREBackreference(pattern string) bool {
+	for i := 0; i+1 < len(pattern); i++ {
+		if pattern[i] != '\\' {
+			continue
+		}
+		i++
+		if pattern[i] >= '1' && pattern[i] <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 // findSubmatchIndex returns raw byte offsets. Any index not produced at a
@@ -159,7 +189,10 @@ func translateLocaleByteBRE(pattern []byte, codec byteTokenCodec, tables bytePat
 				return "", fmt.Errorf("word-boundary escape \\%c is not supported by the locale byte substrate", next)
 			default:
 				if next >= '1' && next <= '9' {
-					return "", fmt.Errorf("back-reference \\%c is not supported by the locale byte substrate", next)
+					out.WriteByte('\\')
+					out.WriteByte(next)
+					state = posAtom
+					break
 				}
 				if isAlnumByte(next) {
 					return "", fmt.Errorf("unsupported escape \\%c", next)
