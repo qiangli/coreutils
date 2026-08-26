@@ -7,3 +7,4 @@
 {"op":"add","slug":"xargs-issue-7-i-replacement-limits","tool":"codex-gpt5.6-luna-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T03:13:14.086458Z"}
 {"op":"validate","slug":"xargs-issue-7-i-replacement-limits","tool":"codex-gpt5.6-sol-o","host":"dragon","episode":"weave-issue-41","at":"2026-08-25T03:21:49.9315Z"}
 {"op":"add","slug":"agent-write-reachability-needs-a-real-pty-line","tool":"codex-gpt-5.5-u","host":"dragon","episode":"weave-issue-21","at":"2026-08-26T09:11:55.244049Z"}
+{"op":"add","slug":"cobra-hidden-shorthand-aliases-need-explicit-notices","tool":"codex-gpt-5.5-y","host":"dragon","episode":"weave-issue-25","at":"2026-08-26T09:34:15.939488Z"}
