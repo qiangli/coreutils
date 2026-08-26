@@ -197,9 +197,10 @@ collation weights with `a < ä < b` and proves at the command surface that both
 BRE and ERE `[a-b]` match the raw Latin-1 umlaut. This distinguishes locale
 range handling from byte/code-point-order fallback.
 
-Fix/residual: none owed for the bounded corpus. No new test added because the
-discriminating multibyte `LC_CTYPE`/`LC_COLLATE` product is already covered and
-the sprint prohibits locking limitations or imposing synthetic catalogs.
+Fix/residual: no sed product-source change was owed for the bounded corpus.
+`TestSedLocaleCollationRangeMatchesInBothGrammars` was added to make the
+nonidentity `LC_COLLATE` range product explicit in both BRE and ERE without
+locking limitations or imposing synthetic catalogs.
 
 Source-complete eligibility: **eligible (implemented)** for the bounded non-C
 `LC_CTYPE`/`LC_COLLATE` product. Integration verification is
