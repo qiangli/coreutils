@@ -246,11 +246,15 @@ func TestTrPOSIXMultibyteComplement(t *testing.T) {
 		})
 	}
 
-	// A [c*] fill has no computable repeat count against an unbounded
-	// complemented domain, so it is refused by name instead of guessed.
+	// A [c*] fill extends SET2 to the finite character complement without
+	// materializing that large domain.
 	out, errOut, code := runTrEnv(t, env, "abc\n", "-c", "abc", "[x*]")
-	if code != 2 || out != "" || !strings.Contains(errOut, "is not supported") {
+	if code != 0 || out != "abcx" || errOut != "" {
 		t.Fatalf("[c*] with -c: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runTrEnv(t, env, "\x00ab\U0010ffff", "-C", "a", "P[x*]S")
+	if code != 0 || out != "PaxS" || errOut != "" {
+		t.Fatalf("positioned [c*] with -C: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	// Complemented case classes stay refused with the existing diagnostic.
 	_, errOut, code = runTrEnv(t, env, "abc\n", "-c", "abc", "[:upper:]")
@@ -341,33 +345,5 @@ func TestTrOutsidePOSIXModeKeepsByteCharacters(t *testing.T) {
 	}, "-d", "a")
 	if code != 2 || !strings.Contains(errOut, "failed to open LC_CTYPE") {
 		t.Fatalf("unsupported: code=%d stderr=%q", code, errOut)
-	}
-}
-
-// TestTrCollationResidualIsRecorded is the standing evidence for the one
-// clause this issue does not close. XCU:tr:ENVIRONMENT_VARIABLES gives
-// LC_COLLATE "the behavior of range expressions and equivalence classes",
-// and XCU:tr:OPERANDS scopes its definition of c-c to the POSIX locale.
-// This implementation answers both from character values only: a non-C
-// LC_COLLATE changes nothing, and [=c=] holds exactly its own character.
-// Closing that needs a multi-byte collation-sequence provider, which does
-// not exist in this repository — pkg/collate offers strcoll comparison for
-// two ISO-8859-1 aliases and enumerates no equivalence class.
-func TestTrCollationResidualIsRecorded(t *testing.T) {
-	base := []string{"POSIXLY_CORRECT=1", "LC_CTYPE=en_US.UTF-8"}
-	for _, collate := range []string{"C", "en_US.UTF-8", "de_DE.UTF-8"} {
-		env := append(append([]string{}, base...), "LC_COLLATE="+collate)
-		// An equivalence class expands to its own character only. Under a
-		// non-C LC_COLLATE glibc would also admit the accented forms.
-		out, errOut, code := runTrEnv(t, env, "hello héllo\n", "[=e=]", "X")
-		if code != 0 || errOut != "" || out != "hXllo héllo\n" {
-			t.Fatalf("LC_COLLATE=%s equivalence: code=%d stdout=%q stderr=%q", collate, code, out, errOut)
-		}
-		// A range covers the characters between the endpoints by value,
-		// independent of the collating sequence LC_COLLATE names.
-		out, errOut, code = runTrEnv(t, env, "aéz\n", "-d", "a-z")
-		if code != 0 || errOut != "" || out != "é\n" {
-			t.Fatalf("LC_COLLATE=%s range: code=%d stdout=%q stderr=%q", collate, code, out, errOut)
-		}
 	}
 }

@@ -132,6 +132,7 @@ func parseSetMultibyte(s string, isSet2 bool, tables *charTables) (*setSpec, str
 			if eqc, adv, ok, errMsg := matchEquivMB(elems[i:]); errMsg != "" {
 				return nil, errMsg
 			} else if ok {
+				sp.usesCollation = true
 				sp.appendOrdinary(eqc)
 				sp.lastIsClass = false
 				i += adv
@@ -163,8 +164,16 @@ func parseSetMultibyte(s string, isSet2 bool, tables *charTables) (*setSpec, str
 		lo := elems[i].r
 		if i+2 < len(elems) && structural(elems[i+1], '-') {
 			hi := elems[i+2].r
-			if hi < lo {
+			sp.usesCollation = true
+			if hi < lo && !tables.discoverCollation {
 				return nil, fmt.Sprintf("range-endpoints of '%c-%c' are in reverse collating sequence order", lo, hi)
+			}
+			if tables.discoverCollation {
+				sp.appendOrdinary(lo)
+				sp.appendOrdinary(hi)
+				i += 3
+				sp.lastIsClass = false
+				continue
 			}
 			for r := lo; r <= hi; r++ {
 				if r >= 0xD800 && r <= 0xDFFF {

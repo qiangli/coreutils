@@ -18,6 +18,7 @@
 package trcmd
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -44,6 +45,10 @@ type charTables struct {
 	// bytes carries the single-byte classes and case maps; nil when
 	// multibyte is set.
 	bytes *ctypeTables
+	// collate is an invocation-owned snapshot. It is populated after the
+	// LC_CTYPE model is selected and never retains a live provider.
+	collate           *collationTables
+	discoverCollation bool
 }
 
 // classChars returns the members of a POSIX character class in ascending
@@ -184,6 +189,62 @@ func complementPrefix(member func(rune) bool, n int) []rune {
 		}
 	}
 	return out
+}
+
+const unicodeScalarCount = int(unicode.MaxRune) + 1 - (0xE000 - 0xD800)
+
+// complementFillPlan is the finite expansion of a complemented multi-byte
+// SET1 paired with a symbolic [c*] in SET2. It stores only SET1 exclusions and
+// the explicit SET2 edges; translate computes an input character's zero-based
+// rank in the complement without materializing the Unicode scalar universe.
+type complementFillPlan struct {
+	member    map[rune]bool
+	excluded  []rune
+	prefix    []rune
+	suffix    []rune
+	fill      rune
+	fillCount int
+}
+
+func newComplementFillPlan(member map[rune]bool, set2 *setSpec) *complementFillPlan {
+	p := &complementFillPlan{member: member, fill: set2.fillChar}
+	for r := range member {
+		if r >= 0 && r <= unicode.MaxRune && (r < 0xD800 || r > 0xDFFF) {
+			p.excluded = append(p.excluded, r)
+		}
+	}
+	sort.Slice(p.excluded, func(i, j int) bool { return p.excluded[i] < p.excluded[j] })
+	p.prefix = append([]rune(nil), set2.chars[:set2.fillPos]...)
+	p.suffix = append([]rune(nil), set2.chars[set2.fillPos:]...)
+	p.fillCount = unicodeScalarCount - len(p.excluded) - len(p.prefix) - len(p.suffix)
+	if p.fillCount < 0 {
+		p.fillCount = 0
+	}
+	return p
+}
+
+func (p *complementFillPlan) translate(r rune) (rune, bool) {
+	if r < 0 || r > unicode.MaxRune || (r >= 0xD800 && r <= 0xDFFF) || p.member[r] {
+		return 0, false
+	}
+	scalarIndex := int(r)
+	if r > 0xDFFF {
+		scalarIndex -= 0xE000 - 0xD800
+	}
+	excludedThrough := sort.Search(len(p.excluded), func(i int) bool { return p.excluded[i] > r })
+	rank := scalarIndex - excludedThrough
+	if rank < len(p.prefix) {
+		return p.prefix[rank], true
+	}
+	rank -= len(p.prefix)
+	if rank < p.fillCount {
+		return p.fill, true
+	}
+	rank -= p.fillCount
+	if rank < len(p.suffix) {
+		return p.suffix[rank], true
+	}
+	return 0, false
 }
 
 // decodeChar reads one character. An invalid byte is one character that
