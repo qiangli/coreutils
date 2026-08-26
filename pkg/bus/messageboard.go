@@ -292,16 +292,19 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				if any {
 					mode = ModeAny
 				}
-				if err := PostMessage(Post{
+				seq, err := PostMessageSeq(Post{
 					From: from, Audience: &aud, Mode: mode, Topic: topic, Body: body,
-				}); err != nil {
+				})
+				if err != nil {
 					return err
 				}
 				var ds []Delivery
 				if FleetSelect != nil {
 					if names, ferr := FleetSelect(aud); ferr == nil {
 						for _, n := range names {
-							ds = append(ds, SteerLive(n, steerNotice(from, body)))
+							d := SteerLive(n, steerNotice(from, body))
+							d.State = deliveryState(n, seq, d.Steered, true)
+							ds = append(ds, d)
 						}
 					}
 				}
@@ -312,27 +315,30 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 			if len(args) < 2 {
 				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider/--family/--version)")
 			}
-			to := strings.TrimSpace(args[0])
-			// A ROLE resolves to its seat's stable address, so the mail survives
-			// a handover: sent to the holder's name it would follow the agent
-			// rather than the responsibility. An agent name is left exactly as
-			// typed — ResolveRole only answers for roles this host actually has,
-			// so it cannot capture a name that merely looks like one.
-			if topicAddr, ok := ResolveRole(to); ok {
-				to = topicAddr
+			// Resolve the target AT SEND TIME. A ROLE resolves to its seat's
+			// stable address, so the mail survives a handover; an AGENT to its
+			// roster name; an existing READER to itself. A target matching none
+			// of the three fails with choices and writes nothing — a post to a
+			// name nobody answers was a receipt indistinguishable from a real
+			// delivery, which is exactly the defect being closed here.
+			target := strings.TrimSpace(args[0])
+			addr, kind, ok := ResolveSendTarget(target)
+			if !ok {
+				return unresolvedTargetError(target)
 			}
 			body = strings.Join(args[1:], " ")
 			// Board FIRST, steer second. The durable copy is the one that must
 			// not be optional: steering first would lose the message entirely
 			// if the post failed.
-			if err := PostMessage(Post{From: from, To: to, Topic: topic, Body: body}); err != nil {
+			seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: topic, Body: body})
+			if err != nil {
 				return err
 			}
-			d := SteerLive(to, steerNotice(from, body))
+			d := SteerLive(addr, steerNotice(from, body))
+			d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
 			// Report the name the sender typed, not the routing address. A
-			// confirmation reading "waiting on the board for
-			// steward.dragon-u501-b683b300b1" makes a successful send look like
-			// it went somewhere unintended.
+			// confirmation reading "steward.dragon-u501-b683b300b1" makes a
+			// successful send look like it went somewhere unintended.
 			d.To = RoleLabelFor(d.To)
 			reportDelivery(cmd, []Delivery{d})
 			return nil
@@ -378,14 +384,17 @@ must read is how a board becomes noise nobody reads.`,
 				return err
 			}
 			body := strings.Join(args, " ")
-			if err := PostMessage(Post{From: from, Topic: topic, Body: body}); err != nil {
+			seq, err := PostMessageSeq(Post{From: from, Topic: topic, Body: body})
+			if err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "posted to the board")
 			if FleetNames != nil {
 				var ds []Delivery
 				for _, n := range FleetNames() {
-					ds = append(ds, SteerLive(n, steerNotice(from, body)))
+					d := SteerLive(n, steerNotice(from, body))
+					d.State = deliveryState(n, seq, d.Steered, true)
+					ds = append(ds, d)
 				}
 				reportDelivery(cmd, ds)
 			}
@@ -404,28 +413,36 @@ func steerNotice(from, body string) string {
 	return "[mb] from " + from + ": " + body + "\n(also on the board — `bashy mb`)"
 }
 
-// reportDelivery tells the sender which tier reached whom.
+// reportDelivery tells the sender which PROVABLE state each recipient reached.
 //
-// Both outcomes are successes and they are different successes: `steered` means
-// the agent has it in hand this turn, `posted` means it will see it when it next
-// looks. Collapsing them into one "sent" is the failure this whole line of work
-// keeps removing — a sender that cannot tell immediate from eventual will assume
-// the wrong one.
+// Every state is a different success (or the one honest failure), and collapsing
+// them is the failure this whole line of work keeps removing: a sender told
+// "waiting on the board for X" cannot tell an agent that will see the post next
+// turn from a name that has never looked and may not exist. The states are named
+// exactly, in order of contact, so the receipt claims only what the store can
+// prove — see the state block in board.go.
 func reportDelivery(cmd *cobra.Command, ds []Delivery) {
-	var steered, waiting []string
+	groups := map[string][]string{}
 	for _, d := range ds {
-		if d.Steered {
-			steered = append(steered, d.To)
-		} else {
-			waiting = append(waiting, d.To)
+		st := d.State
+		if st == "" {
+			// A delivery with no state set is at least accepted: it was posted.
+			st = StateAccepted
 		}
+		groups[st] = append(groups[st], d.To)
 	}
 	w := cmd.ErrOrStderr()
-	if len(steered) > 0 {
-		fmt.Fprintf(w, "  steered now (live session): %s\n", strings.Join(steered, ", "))
-	}
-	if len(waiting) > 0 {
-		fmt.Fprintf(w, "  waiting on the board for: %s\n", strings.Join(waiting, ", "))
+	for _, o := range []struct{ state, label string }{
+		{StateDelivered, "delivered now (live session)"},
+		{StateRead, "already read by"},
+		{StateQueued, "queued on the board for"},
+		{StateUnverified, "posted, but delivery UNVERIFIED — no read cursor yet for"},
+		{StateAccepted, "posted to the board for"},
+		{StateFailed, "failed for"},
+	} {
+		if names := groups[o.state]; len(names) > 0 {
+			fmt.Fprintf(w, "  %s: %s\n", o.label, strings.Join(names, ", "))
+		}
 	}
 }
 
