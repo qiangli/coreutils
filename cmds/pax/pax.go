@@ -211,7 +211,7 @@ func run(rc *tool.RunContext, args []string) int {
 	// Physical blocking is not opt-in: POSIX pax always writes whole blocks.
 	// An explicit -b wins; otherwise the format's documented default applies.
 	// writeMode may further lower the default to the POSIX character-special
-	// value once it knows the -f sink is a device (see charSpecialBlockSize).
+	// value once it can inspect the selected output sink (see charSpecialBlockSize).
 	o.blockExplicit = fs.Changed("blocksize")
 	if !o.blockExplicit {
 		o.blockBytes = defaultBlockSize(o.format)
@@ -327,12 +327,12 @@ func mulChecked(a, b uint64) (uint64, error) {
 }
 
 // defaultBlockSize is the physical block size pax uses when -b is absent and
-// the archive is NOT a character-special file (a regular file, stdout, or a
-// pipe). POSIX Issue 7 states default blocksizes only "for character special
-// archive files" and leaves every other sink implementation-defined, so this
-// is a bashy choice: 10240 bytes (20 512-byte records) for the tar-derived
-// formats and 5120 for cpio. Character-special sinks instead take the exact
-// POSIX-mandated value; see charSpecialBlockSize.
+// the archive is not known to be a character-special file. POSIX Issue 7
+// states default blocksizes only "for character special archive files" and
+// leaves every other sink implementation-defined, so this is a bashy choice:
+// 10240 bytes (20 512-byte records) for the tar-derived formats and 5120 for
+// cpio. Character-special sinks instead take the exact POSIX-mandated value;
+// see charSpecialBlockSize.
 func defaultBlockSize(format string) int {
 	if format == "cpio" {
 		return 5120
@@ -348,7 +348,8 @@ func defaultBlockSize(format string) int {
 // The pax value is the load-bearing one: it is 5120, NOT the 10240 that ustar
 // (and our implementation-defined default) uses, so writing the pax format to
 // a device must lower the block size to match the spec exactly. writeMode
-// calls this only for a character-special -f sink with no explicit -b.
+// calls this only when the selected output sink reports character-special and
+// no explicit -b was supplied.
 func charSpecialBlockSize(format string) int {
 	if format == "ustar" {
 		return 10240
