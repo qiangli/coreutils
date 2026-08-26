@@ -26,21 +26,35 @@ python3 scripts/posix_interface_runner.py --owner shell --state-dir /path/outsid
 ```
 
 Use `--dry-run` to validate references and print the package-scoped `go test`
-invocations without executing them. Evidence runs include `-count=1` to bypass
-the Go test result cache. Use `--json` for machine-readable output.
+invocations without executing them or creating state. Evidence runs include
+`-count=1` to bypass the Go test result cache and `-json` so that every declared
+TestID must have exact `run` and `pass` events; a package-only pass, skipped
+test, missing test, or malformed event stream fails closed. Use `--json` for
+machine-readable output.
 
-The state directory must be outside the worktree. The ledger is guarded by an
-advisory lock and atomic writes. A successful command is skipped on a later run
-only when the full contract hash matches: runner schema version, manifest
-SHA-256, selected command/reference set, git revisions for every evidence root,
-Go version, `GOOS`/`GOARCH`, and `POSIXLY_CORRECT=1`. Failed, interrupted, and
-unknown attempts remain in the ledger and are retried.
+`--timeout-seconds` (default 300) and `--max-output-bytes` (default 16777216
+combined stdout/stderr bytes per invocation) bound execution. Each test runs in
+a new process group. Timeout or output-limit handling terminates and reaps the
+group, retains bounded artifacts, and records a failed invocation.
+
+The resolved state directory must be outside every configured evidence root.
+Artifact directories and saved resume paths are containment-checked, including
+against symlink escape. The ledger is guarded by an advisory lock and atomic
+writes. Attempts form a validated, monotonically numbered sequence; failed,
+interrupted, and unknown attempts remain in the ledger and are retried.
+
+A successful command is skipped on a later run only when the full contract
+hash matches: runner schema version, manifest SHA-256, selected
+command/reference set, resolved path/revision/dirty-state hash for every used
+evidence root, referenced-test file SHA-256 values, resolved Go executable path
+and SHA-256, Go version, `GOOS`/`GOARCH`, limits, and `POSIXLY_CORRECT=1`. The
+same absolute, hashed Go executable is used for every evidence invocation.
 
 Each command attempt records timestamps, exact argv, exit status, terminal
 pass/fail, stdout/stderr SHA-256 values, and paths to captured stdout/stderr
-files under the state directory. Empty output, missing evidence, malformed
-references, unavailable sibling roots, non-`Test...` identifiers, and failed
-`go test` invocations are terminal failures.
+files under the state directory. Empty output, missing evidence, malformed or
+cross-lane duplicate references, unavailable sibling roots, non-`Test...`
+identifiers, and failed `go test` invocations are terminal failures.
 
 Limitation: this runner executes source-interface implemented evidence only. It
 does not execute or copy VSC-PCTS material, and it must not be used to claim
