@@ -6,11 +6,11 @@ source-interface evidence references declared in
 owned commands in the canonical manifest: 78 `go` rows and 22 `shell` rows.
 References are routed by their strict manifest repo prefix. Shell source tests
 use only the explicit `sh` root, and shell routing tests use only the explicit
-`bashy` root, without command-specific exceptions. At this base, the shared
-`sh` row repeats one Bashy utility-entrypoint TestID in both shell lanes.
-Cross-lane duplicate validation runs before lane-root validation so that exact
-canonical defect is reported rather than silently collapsed or obscured by its
-wrong source lane; the conductor owns reconciliation of the shared row.
+`bashy` root, without command-specific exceptions. Cross-lane duplicate
+validation runs before lane-root validation so malformed shared evidence is
+reported rather than silently collapsed or obscured by a later wrong-root
+diagnostic. The canonical `sh` row now keeps three focused interpreter tests in
+the semantic lane and the argv0/selection tests solely in the routing lane.
 
 Intended invocation:
 

@@ -10,16 +10,17 @@ that ledger or its generator.
 
 ## Verdict vocabulary and evidence limits
 
-- **verified** means the complete applicable Issue 7 interface is both present
-  in the selected shell path and covered by focused public repository evidence.
-  Promotion to verified requires a stable semantic `sh:<path>#<TestID>`
+- **implemented** means the complete applicable Issue 7 source interface is
+  present in the selected shell path and covered by focused public repository
+  evidence. Promotion to implemented requires a stable semantic `sh:<path>#<TestID>`
   reference, a distinct command-specific Bashy selection reference in the
-  `bashy:<approved-path>#<TestID>` routing lane, **and** a separately-made
-  promotion in the canonical ledger.  Routing can prove that the shell wins
+  `bashy:<approved-path>#<TestID>` routing lane, and a separately-made
+  promotion in the canonical ledger. **Verified** additionally requires the
+  deferred byte-derived profile integration gate. Routing can prove that the shell wins
   over a same-name Go applet, but it cannot substitute for command behavior;
   source presence, focused Go-applet tests, and an aggregate differential
-  result are not sufficient.  `false` and `true` now meet that bar; the other
-  20 commands remain partial or unverified.
+  result are not sufficient. `false` and `true` meet the implemented bar; the
+  other 20 commands remain partial, and all 22 remain unverified.
 - **implementation_gap** means source or retained Profile B results identify a
   Bashy-only behavior that still needs a code correction in the Bashy shell/job
   runtime (not a same-name Go applet).  A defect that fails **identically** in
@@ -118,7 +119,7 @@ The canonical ledger represents those two proof obligations independently.
 integration tests from the sibling Bashy repository as
 `bashy:internal/cli/<file>_test.go#<TestID>`.  AgentOS tests are deliberately
 excluded because the AgentOS front door is not Profile D's `sh` route.  The
-routing lane is legal only when `effective_owner=shell`; a verified shell row
+routing lane is legal only when `effective_owner=shell`; an implemented shell row
 must have valid references in both lanes.  Neither lane may stand in for the
 other.  All 22 routing cells now name the command-specific tests accepted in
 Bashy commit `d851773`; this closes only the selection proof, so semantic
@@ -153,8 +154,8 @@ executes.  `time` remains correctly classified as `shell_keyword`.
 | 17 | `hash` | evidence_gap | 12 (medium) | Prior three-identity closure plus unit tests do not cover every Issue 7 effect. |
 | 18 | `getopts` | evidence_gap | 10 (medium) | TP6 was fixed; OPTIND/OPTARG/error-mode matrix remains incomplete. |
 | 19 | `unalias` | evidence_gap | 8 (low) | Focused semantic and routing evidence now exists, but locale and full parse-timing coverage remain open; ledger state is partial. |
-| 20 | `false` | verified | 7 (low) | Complete no-option/no-operand/status-only interface has focused semantic and routing evidence. |
-| 21 | `true` | verified | 6 (low) | Complete no-option/no-operand/status-only interface has focused semantic and routing evidence. |
+| 20 | `false` | implemented | 7 (low) | Complete no-option/no-operand/status-only interface has focused semantic and routing evidence; profile integration remains deferred. |
+| 21 | `true` | implemented | 6 (low) | Complete no-option/no-operand/status-only interface has focused semantic and routing evidence; profile integration remains deferred. |
 | 22 | `jobs` | evidence_gap | 0 (low) | Suite yield is zero, but the conditional standard interface still exists. |
 
 ## Command audits
@@ -179,9 +180,9 @@ Normative interface: [`command [-p] command_name [argument...]` and `command [-p
 
 Normative base interface: [`echo [string...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html), no options, and `--` is an operand.  If the first operand is `-n` or any operand contains `\\`, base POSIX makes results implementation-defined; XSI additionally defines `\\a \\b \\c \\f \\n \\r \\t \\v \\\\ \\0num`.  Bash 5.3 uses `builtins/echo.def`; Bashy uses `builtin.go`'s `echo` case.  `TestEchoIssue7Interface` exposed and fixed a strict-POSIX defect where `-e`, `-E`, and combined option-like operands were incorrectly consumed as Bash options.  It now covers the defined base region, the documented `-n` choice, conditional XSI escapes, output errors, and stdin preservation.  The ledger remains partial because the Profile D XSI feature-selection contract and locale-sensitive branch still need independent closure.
 
-### `false` — verified, low (7)
+### `false` — implemented, low (7)
 
-Normative interface: [`false`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html), no options or operands, no output, exit status greater than zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `false` directly to status 1 in `builtin.go`.  `TestFalseIssue7Interface` proves silent non-zero status and that stdin and environment are unused; `TestProfileBRouteFalse` independently proves the selected Profile B/D route.  The staged Go `false` remains necessary for exec-style use, but direct shell calls select the builtin.  The canonical ledger is therefore promoted to verified.
+Normative interface: [`false`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html), no options or operands, no output, exit status greater than zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `false` directly to status 1 in `builtin.go`.  `TestFalseIssue7Interface` proves silent non-zero status and that stdin and environment are unused; `TestProfileBRouteFalse` independently proves the selected Profile B/D route.  The staged Go `false` remains necessary for exec-style use, but direct shell calls select the builtin.  The canonical ledger is therefore implemented; byte-derived profile integration is still deferred.
 
 ### `fc` — evidence_gap, high (28)
 
@@ -221,7 +222,7 @@ Normative interface: [`read [-r] var...`](https://pubs.opengroup.org/onlinepubs/
 
 ### `sh` — evidence_gap, critical (245)
 
-Normative interfaces: [`sh` command-file, `-c` command-string, and `-s` stdin forms](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html), with required `-a -b -C -e -f -h -i -m -n -u -v -x -o`, matching `+` forms, plus `-c` and `-s`; `-o/+o` take an option name.  The interface also owns shell grammar, expansion, redirection, execution, environment/startup, traps, jobs, and exit semantics.  Profile D routing is the argv0=`sh` strict route described above; Profile C is Bash 5.3 invoked as `sh`.  `sh_08:TP1` passes both arms of the accepted 9,337/9,337 remote pair and Sprint 68 retired eight selected `sh_01`/`sh_03` identities, but neither fact proves the 245-testable-TP command as a whole.  The canonical shell evidence lane is empty, so the only defensible classification is evidence gap.  The former ledger misclassification is closed by canonical commit `fe6f45d`, which records `sh` as `shell_entrypoint`.
+Normative interfaces: [`sh` command-file, `-c` command-string, and `-s` stdin forms](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sh.html), with required `-a -b -C -e -f -h -i -m -n -u -v -x -o`, matching `+` forms, plus `-c` and `-s`; `-o/+o` take an option name.  The interface also owns shell grammar, expansion, redirection, execution, environment/startup, traps, jobs, and exit semantics.  Profile D routing is the argv0=`sh` strict route described above; Profile C is Bash 5.3 invoked as `sh`.  `sh_08:TP1` passes both arms of the accepted 9,337/9,337 remote pair and Sprint 68 retired eight selected `sh_01`/`sh_03` identities, but neither fact proves the 245-testable-TP command as a whole.  The canonical semantic lane now cites strict-mode propagation, POSIX stdin/argv0, and startup-export tests from sh; the separate Bashy lane cites argv0 and route selection. Those focused references are valid but not clause-complete, so the only defensible classification remains evidence gap.  The former ledger misclassification is closed by canonical commit `fe6f45d`, which records `sh` as `shell_entrypoint`.
 
 ### `test` — evidence_gap, critical (207)
 
@@ -231,9 +232,9 @@ Normative interfaces: [`test [expression]` and `[ [expression] ]`](https://pubs.
 
 Normative interface: [`time [-p] utility [argument...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/time.html); `-p` is required, PATH selects the utility, timing output goes to standard error in the required portable format, and the result normally follows the utility status.  Bash 5.3 owns this in `parse.y`/`execute_cmd.c` (`CMD_TIME_POSIX`); Bashy owns it in `syntax.TimeClause` and runner timing code.  The parser and formatting tests prove selected cases, but no full shell evidence covers keyword ambiguity, utility-not-found/status, signal, locale, and output requirements.
 
-### `true` — verified, low (6)
+### `true` — implemented, low (6)
 
-Normative interface: [`true`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html), no options or operands, no output, exit status zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `true` as a no-op success in `builtin.go`.  `TestTrueIssue7Interface` proves silent zero status and that stdin and environment are unused; `TestProfileBRouteTrue` independently proves the selected Profile B/D route.  The staged Go applet backs exec-style calls only.  The canonical ledger is therefore promoted to verified.
+Normative interface: [`true`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html), no options or operands, no output, exit status zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `true` as a no-op success in `builtin.go`.  `TestTrueIssue7Interface` proves silent zero status and that stdin and environment are unused; `TestProfileBRouteTrue` independently proves the selected Profile B/D route.  The staged Go applet backs exec-style calls only.  The canonical ledger is therefore implemented; byte-derived profile integration is still deferred.
 
 ### `umask` — evidence_gap, high (27)
 
@@ -249,10 +250,12 @@ Normative interface: [`wait [pid...]`](https://pubs.opengroup.org/onlinepubs/969
 
 ## Required next evidence
 
-The highest-value next batch is shell-owned, not Go-applet work: add stable
-semantic `sh:<path>#<TestID>` references and independent command-specific
-`bashy:<approved-path>#<TestID>` routing references for `sh`, `test`, `printf`,
-`cd`, and `command`.  The trivial `true`/`false` interfaces are now verified,
+All 22 shell-selected rows now have valid, strictly separated semantic
+`sh:<path>#<TestID>` and command-specific routing
+`bashy:<approved-path>#<TestID>` references. The highest-value next work is to
+expand the focused semantics for `sh`, `test`, `printf`, `cd`, and `command`
+until every applicable clause is covered; adding duplicate routing references
+would not strengthen the evidence. The trivial `true`/`false` interfaces are implemented,
 and `alias`/`echo`/`unalias` have focused partial evidence.  The `kill` job-carrier correction is
 already integrated (`54c05236` is patch-equivalent to the shipped `031d47e2`), so **no
 reintegration or re-measurement is requested**; the residual `kill:TP9`/`TP8`

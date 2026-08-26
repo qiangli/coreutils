@@ -4367,7 +4367,7 @@ sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go#TestProfileBShUtilityEntrypointContract`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteSh;bashy:internal/cli/main_test.go#TestStrictPosixEngagedByArgv0Sh;bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go#TestProfileBShUtilityEntrypointContract`; provider=`-`; clauses=`XCU:sh:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/interp_test.go#TestRunnerPosixStdinArgv0;sh:interp/startup_env_test.go#TestPosixStartupExportAttributes;sh:interp/strictposix_test.go#TestStrictPosixPropagation`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteSh;bashy:internal/cli/main_test.go#TestStrictPosixEngagedByArgv0Sh;bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go#TestProfileBShUtilityEntrypointContract`; provider=`-`; clauses=`XCU:sh:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

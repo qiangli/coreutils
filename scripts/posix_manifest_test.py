@@ -461,19 +461,30 @@ class ManifestValidationTest(unittest.TestCase):
             "shell evidence must use sh:<repo-path>#<test-ID> contract",
         )
 
-    def test_only_process_level_sh_contract_can_use_bashy_semantic_lane(self) -> None:
-        approved = (
-            "bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go"
-            "#TestProfileBShUtilityEntrypointContract"
-        )
+    def test_sh_semantic_lane_uses_only_approved_sh_tests(self) -> None:
+        approved = "sh:interp/interp_test.go#TestRunnerPosixStdinArgv0"
         with mock.patch.object(Path, "is_file", return_value=True), mock.patch.object(
             manifest, "_test_is_declared", return_value=True,
         ):
-            self.assertTrue(
-                manifest._bashy_sh_semantic_evidence_ref("sh", approved, manifest.ROOT)
-            )
-            with self.assertRaisesRegex(manifest.ManifestError, "approved only"):
-                manifest._bashy_sh_semantic_evidence_ref("bg", approved, manifest.ROOT)
+            self.assertTrue(manifest._shell_evidence_ref("sh", approved, manifest.ROOT))
+            with self.assertRaisesRegex(manifest.ManifestError, "not command-specific"):
+                manifest._shell_evidence_ref(
+                    "sh", "sh:interp/interp_test.go#TestRunnerEnvNoModify", manifest.ROOT,
+                )
+
+    def test_sh_semantic_lane_cannot_use_bashy_routing_evidence(self) -> None:
+        changes = self.completed_semantics("sh")
+        changes.update(
+            evidence_state="partial",
+            shell_evidence=(
+                "bashy:internal/cli/profile_b_sh_entrypoint_unix_test.go"
+                "#TestProfileBShUtilityEntrypointContract"
+            ),
+        )
+        self.assertRejected(
+            self.changed("sh", **changes),
+            "shell evidence must use sh:<repo-path>#<test-ID> contract",
+        )
 
     def test_ar_cannot_substitute_pr_test_as_provider_evidence(self) -> None:
         changes = self.completed_semantics("ar")

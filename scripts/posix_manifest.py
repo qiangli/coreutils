@@ -105,9 +105,6 @@ SHELL_EVIDENCE_REF = re.compile(
 SHELL_ROUTING_EVIDENCE_REF = re.compile(
     r"^bashy:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
 )
-BASHY_SEMANTIC_EVIDENCE_REF = re.compile(
-    r"^bashy:(?P<path>[^#]+_test\.go)#(?P<test>Test[A-Za-z0-9_]+)$"
-)
 REQUIRED_INTEGRATION_PROFILES = {
     "go": frozenset({"profile-c", "profile-d"}),
     "shell": frozenset({"profile-b", "profile-d"}),
@@ -116,11 +113,10 @@ REQUIRED_INTEGRATION_PROFILES = {
 BASHY_ROUTING_TEST_ROOTS = (
     Path("internal/cli"),
 )
-BASHY_SH_SEMANTIC_TESTS = frozenset({
-    (
-        Path("internal/cli/profile_b_sh_entrypoint_unix_test.go"),
-        "TestProfileBShUtilityEntrypointContract",
-    ),
+SH_ENTRYPOINT_SEMANTIC_TESTS = frozenset({
+    (Path("interp/interp_test.go"), "TestRunnerPosixStdinArgv0"),
+    (Path("interp/startup_env_test.go"), "TestPosixStartupExportAttributes"),
+    (Path("interp/strictposix_test.go"), "TestStrictPosixPropagation"),
 })
 GENERIC_PROSE = (
     "where POSIX Utility Syntax Guideline 10 applies",
@@ -420,32 +416,13 @@ def _shell_evidence_ref(command: str, raw: str, root: Path) -> bool:
     path = shell_root / relative
     if not path.is_file() or not _test_is_declared(path, match.group("test")):
         return False
-    if not _command_test_name(command, match.group("test")):
+    test = match.group("test")
+    sh_entrypoint_test = (
+        command == "sh" and (relative, test) in SH_ENTRYPOINT_SEMANTIC_TESTS
+    )
+    if not sh_entrypoint_test and not _command_test_name(command, test):
         raise ManifestError(f"{command}: shell evidence test ID is not command-specific")
     return True
-
-
-def _bashy_sh_semantic_evidence_ref(command: str, raw: str, root: Path) -> bool:
-    match = BASHY_SEMANTIC_EVIDENCE_REF.fullmatch(raw)
-    if not match:
-        raise ManifestError(
-            f"{command}: malformed bashy sh semantic evidence reference"
-        )
-    relative = Path(match.group("path"))
-    test = match.group("test")
-    if command != "sh" or (relative, test) not in BASHY_SH_SEMANTIC_TESTS:
-        raise ManifestError(
-            f"{command}: bashy semantic evidence is approved only for the "
-            "process-level sh entrypoint contract"
-        )
-    bashy_root = root.parent / "bashy"
-    if root == ROOT:
-        bashy_root = Path(os.environ.get("POSIX_BASHY_EVIDENCE_ROOT", bashy_root))
-    bashy_root = bashy_root.resolve()
-    path = (bashy_root / relative).resolve()
-    if not path.is_relative_to(bashy_root):
-        raise ManifestError(f"{command}: bashy semantic evidence escapes its repository")
-    return path.is_file() and _test_is_declared(path, test)
 
 
 def _shell_routing_evidence_ref(command: str, raw: str, root: Path) -> bool:
@@ -493,12 +470,7 @@ def _validate_evidence(
     explicit = True
     for ref in refs:
         if lane == "shell_evidence":
-            if ref.startswith("bashy:"):
-                available = _bashy_sh_semantic_evidence_ref(
-                    row["command"], ref, root,
-                ) and available
-            else:
-                available = _shell_evidence_ref(row["command"], ref, root) and available
+            available = _shell_evidence_ref(row["command"], ref, root) and available
         elif lane == "shell_routing_evidence":
             available = _shell_routing_evidence_ref(
                 row["command"], ref, root,
