@@ -29,6 +29,10 @@ export const roomSummarySchema = z.object({
   room: z.union([z.string(), z.number()]).optional(),
   name: z.string().optional(),
   permanent: z.boolean().optional(),
+  // A board is a room whose floor is never run for it: the server refuses
+  // round/poll/ask/converge there (409 wrong-mode), so the UI reads this to
+  // not offer them. omitempty: absent means an ordinary meeting.
+  board: z.boolean().default(false),
   topic: z.string(),
   status: z.string(),
   members: z.array(memberSchema),
@@ -107,6 +111,9 @@ export const stateSchema = z
     room: z.union([z.string(), z.number()]).optional(),
     name: z.string().optional(),
     permanent: z.boolean().optional(),
+    // Same contract as roomSummarySchema.board: marshalled omitempty, so a
+    // missing key IS an ordinary meeting and only `true` marks a board.
+    board: z.boolean().default(false),
     role_holders: z.record(z.string(), z.string()).optional(),
     topic: z.string().default(""),
     agenda: z.array(z.string()).default([]),

@@ -213,44 +213,51 @@ export function Composer({
                 side="top"
                 sideOffset={8}
               >
-                <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Help the room move forward
-                </DropdownMenuLabel>
-                <ActionItem
-                  description="Give every agent a turn"
-                  icon={UsersRound}
-                  label="Hear from everyone"
-                  onSelect={() => onAction("round", "Round table")}
-                />
-                <ActionItem
-                  description="Ask a quick multiple-choice question"
-                  icon={Vote}
-                  label="Take a quick pulse"
-                  onSelect={() =>
-                    onAction("poll", "Quick pulse", {
-                      question:
-                        text.trim() || "Are we ready to move forward?",
-                      choices: ["Yes", "Needs more discussion"],
-                    })
-                  }
-                />
-                <ActionItem
-                  description="Open one question to the whole room"
-                  icon={MessageCircleQuestion}
-                  label="Ask the room"
-                  onSelect={() =>
-                    onAction("ask", "Ask the room", {
-                      question: text.trim() || "What are we missing?",
-                    })
-                  }
-                />
-                <ActionItem
-                  description="Synthesize agreement and open questions"
-                  icon={MessagesSquare}
-                  label="Find common ground"
-                  onSelect={() => onAction("converge", "Convergence")}
-                />
-                <DropdownMenuSeparator />
+                {/* A board's floor is never run for it — the server answers
+                    these four with 409 wrong-mode — so a board simply does not
+                    offer them rather than offering buttons that only refuse. */}
+                {!state?.board && (
+                  <>
+                    <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Help the room move forward
+                    </DropdownMenuLabel>
+                    <ActionItem
+                      description="Give every agent a turn"
+                      icon={UsersRound}
+                      label="Hear from everyone"
+                      onSelect={() => onAction("round", "Round table")}
+                    />
+                    <ActionItem
+                      description="Ask a quick multiple-choice question"
+                      icon={Vote}
+                      label="Take a quick pulse"
+                      onSelect={() =>
+                        onAction("poll", "Quick pulse", {
+                          question:
+                            text.trim() || "Are we ready to move forward?",
+                          choices: ["Yes", "Needs more discussion"],
+                        })
+                      }
+                    />
+                    <ActionItem
+                      description="Open one question to the whole room"
+                      icon={MessageCircleQuestion}
+                      label="Ask the room"
+                      onSelect={() =>
+                        onAction("ask", "Ask the room", {
+                          question: text.trim() || "What are we missing?",
+                        })
+                      }
+                    />
+                    <ActionItem
+                      description="Synthesize agreement and open questions"
+                      icon={MessagesSquare}
+                      label="Find common ground"
+                      onSelect={() => onAction("converge", "Convergence")}
+                    />
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                   Record the current draft
                 </DropdownMenuLabel>

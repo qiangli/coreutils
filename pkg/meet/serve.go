@@ -254,9 +254,26 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
+// ErrWrongMode is returned when a room's TYPE forbids a verb — a board asked to
+// run a round, poll, ask, or converge. It is the same class of failure as
+// ErrMeetingBusy: the request is well-formed, the room's state refuses it, so it
+// maps to 409 rather than 400. A 400 would tell the browser IT got the request
+// wrong, when nothing about the request needs fixing.
+var ErrWrongMode = errors.New("meet: the room's mode does not allow this")
+
+// wrongModeError carries the engine's human-readable refusal (which names the
+// room and the recovery) while classifying as ErrWrongMode for the status map.
+type wrongModeError struct{ cause error }
+
+func (e wrongModeError) Error() string   { return e.cause.Error() }
+func (e wrongModeError) Unwrap() []error { return []error{ErrWrongMode, e.cause} }
+
 // apiErr classifies an engine error into the contract's status codes.
 //
 //	ErrMeetingBusy   409 — somebody else holds the room's floor; retry
+//	ErrWrongMode     409 — the room's mode forbids this verb (a board's floor
+//	                       is never run for it); not retryable, but the request
+//	                       was well-formed and the fault is the room's state
 //	ErrNotOrganizer  403 — a member tried an organizer's act
 //	ErrNoRoom        404 — the reference names no meeting here
 //
@@ -267,6 +284,8 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 func apiErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrMeetingBusy):
+		writeErr(w, http.StatusConflict, err)
+	case errors.Is(err, ErrWrongMode):
 		writeErr(w, http.StatusConflict, err)
 	case errors.Is(err, ErrNotOrganizer):
 		writeErr(w, http.StatusForbidden, err)
@@ -509,6 +528,28 @@ func handleAsync(srvCtx context.Context, verb string) http.HandlerFunc {
 		if err != nil {
 			apiErr(w, err)
 			return
+		}
+
+		// A board's floor is never run for it, so refuse HERE — before startJob.
+		// Deferring to the engine's own guard would hand the browser a 202 for
+		// work that then dies where nobody is looking, which is the exact
+		// fire-and-forget-that-fails-silently shape startJob's probe exists to
+		// prevent, now at the mode level rather than the lease level.
+		if st.board() {
+			switch verb {
+			case "round":
+				apiErr(w, wrongModeError{st.boardRefusal("run a round")})
+				return
+			case "poll":
+				apiErr(w, wrongModeError{st.boardRefusal("run a poll")})
+				return
+			case "ask":
+				apiErr(w, wrongModeError{st.boardRefusal("put a question to the room")})
+				return
+			case "converge":
+				apiErr(w, wrongModeError{st.boardRefusal("run a synthesis pass")})
+				return
+			}
 		}
 
 		var run func(context.Context) error
