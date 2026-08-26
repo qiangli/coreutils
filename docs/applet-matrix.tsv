@@ -6,7 +6,7 @@ ast	cmds/ast		Bashy/other extension	no	no	1	6
 at	cmds/at		POSIX/Unix utility	no	yes	7	36
 atq	cmds/atq		Bashy/other extension	no	no	1	2
 atrm	cmds/atrm		Bashy/other extension	no	no	1	3
-awk	cmds/awk		POSIX/Unix utility	no	yes	3	25
+awk	cmds/awk		POSIX/Unix utility	no	yes	3	27
 b2sum	cmds/b2sum		GNU Coreutils	yes	no	1	5
 base32	cmds/base32		GNU Coreutils	yes	no	1	7
 base64	cmds/base64		GNU Coreutils	yes	no	2	9
@@ -44,7 +44,7 @@ ed	cmds/posixproviders		POSIX external provider	no	yes	3	20
 env	cmds/env		GNU Coreutils	yes	yes	5	30
 ex	cmds/posixproviders		POSIX external provider	no	yes	3	20
 expand	cmds/expand		GNU Coreutils	yes	yes	2	27
-expr	cmds/expr		GNU Coreutils	yes	yes	1	12
+expr	cmds/expr		GNU Coreutils	yes	yes	1	13
 factor	cmds/factor		GNU Coreutils	yes	no	1	3
 false	cmds/false		GNU Coreutils	yes	yes	1	2
 fetch	cmds/fetch		Bashy/other extension	no	no	1	6
@@ -147,7 +147,7 @@ timeout	cmds/timeout		GNU Coreutils	yes	no	1	5
 tokens	cmds/tokens		Bashy/other extension	no	no	1	4
 touch	cmds/touch		GNU Coreutils	yes	yes	4	29
 tput	cmds/tput		POSIX/Unix utility	no	yes	1	18
-tr	cmds/tr		GNU Coreutils	yes	yes	3	29
+tr	cmds/tr		GNU Coreutils	yes	yes	4	34
 tree	cmds/tree		Bashy/other extension	no	no	1	5
 true	cmds/true		GNU Coreutils	yes	yes	1	1
 truncate	cmds/truncate		GNU Coreutils	yes	no	1	6
