@@ -351,16 +351,28 @@ func TestIDDefaultOmitsEffectiveWhenEqual(t *testing.T) {
 	t.Cleanup(func() { processIDsFn, processGroupIDsFn = oldIDs, oldGroups })
 	processIDsFn = func(real bool) (uid, gid string) { return "1000", "1000" }
 	processGroupIDsFn = func() ([]string, error) { return nil, nil }
-	out, _, code := runTool(t)
-	if code != 0 {
-		t.Fatalf("code=%d", code)
+	out, errb, code := runTool(t)
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d stderr=%q", code, errb)
 	}
-	if strings.Contains(out, "euid=") || strings.Contains(out, "egid=") {
-		t.Errorf("no euid=/egid= expected when effective equals real: %q", out)
+	if !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
+		t.Fatalf("default output is not exactly one line: %q", out)
 	}
-	if strings.Contains(out, "groups=") || !strings.HasPrefix(out, "uid=1000 gid=1000\n") {
+	fields := strings.Split(strings.TrimSuffix(out, "\n"), " ")
+	if len(fields) != 2 || !idDefaultField(fields[0], "uid", "1000") || !idDefaultField(fields[1], "gid", "1000") {
 		t.Errorf("default output %q malformed", out)
 	}
+}
+
+// idDefaultField accepts the two POSIX default-report forms for an ID: the
+// numeric value alone, or that value decorated with a resolvable host name.
+func idDefaultField(field, label, id string) bool {
+	prefix := label + "=" + id
+	if field == prefix {
+		return true
+	}
+	name := strings.TrimPrefix(field, prefix)
+	return len(name) > 2 && name[0] == '(' && name[len(name)-1] == ')'
 }
 
 func TestIDRealFlagWithOptions(t *testing.T) {
