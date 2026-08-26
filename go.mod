@@ -63,8 +63,8 @@ require (
 // convention as ycode/outpost/bashy.
 replace mvdan.cc/sh/v3 => ../sh
 
-// Fork pin adds POSIX awk float formats and one error-bearing regex backend across all surfaces.
-replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260811024949-9948781e3cd4
+// Fork pin adds POSIX awk float formats, invocation numeric radix, and one error-bearing regex backend across all surfaces.
+replace github.com/benhoyt/goawk => github.com/qiangli/goawk v0.0.0-20260826042810-88712e61a085
 
 replace github.com/ollama/ollama => ./external/ollama/src
 

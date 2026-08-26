@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxBacktrackSteps = 200000
@@ -124,6 +125,26 @@ func (r *Regexp) FindAllStringSubmatchIndex(s string, n int) [][]int {
 	return r.bt.find(s, n)
 }
 
+// FindStringSubmatchIndex returns the leftmost match and its submatches.
+func (r *Regexp) FindStringSubmatchIndex(s string) []int {
+	if r.re != nil {
+		return r.re.FindStringSubmatchIndex(s)
+	}
+	matches := r.bt.find(s, 1)
+	if len(matches) == 0 {
+		return nil
+	}
+	return matches[0]
+}
+
+// NumSubexp returns the number of parenthesized subexpressions.
+func (r *Regexp) NumSubexp() int {
+	if r.re != nil {
+		return r.re.NumSubexp()
+	}
+	return r.bt.groups
+}
+
 func (r *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
 	return r.FindAllStringSubmatchIndex(string(b), n)
 }
@@ -200,7 +221,14 @@ func ERERequiresBacktracking(p string) bool {
 			} else {
 				state = posAtom
 			}
-		case '(', '|':
+		case '(':
+			if i+2 < len(p) && p[i+1] == '?' && p[i+2] == ':' {
+				i += 3
+				state = posStart
+				continue
+			}
+			state = posStart
+		case '|':
 			state = posStart
 		case ')':
 			state = posAtom
@@ -696,6 +724,18 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 	case '(':
 		if p.extended {
 			p.i++
+			if p.i+1 < len(p.p) && p.p[p.i] == '?' && p.p[p.i+1] == ':' {
+				p.i += 2
+				child, err := p.parseExpr()
+				if err != nil {
+					return nil, state, false, err
+				}
+				if p.i >= len(p.p) || p.p[p.i] != ')' {
+					return nil, state, false, fmt.Errorf("unmatched (?:")
+				}
+				p.i++
+				return child, posAtom, true, nil
+			}
 			p.groups++
 			num := p.groups
 			if num > 9 {
@@ -753,8 +793,13 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 		p.i++
 		return literalNode{lit: string(c), ignoreCase: p.ignoreCase}, posAtom, true, nil
 	default:
-		p.i++
-		return literalNode{lit: string(c), ignoreCase: p.ignoreCase}, posAtom, true, nil
+		_, size := utf8.DecodeRuneInString(p.p[p.i:])
+		if size == 0 {
+			size = 1
+		}
+		lit := p.p[p.i : p.i+size]
+		p.i += size
+		return literalNode{lit: lit, ignoreCase: p.ignoreCase}, posAtom, true, nil
 	}
 }
 

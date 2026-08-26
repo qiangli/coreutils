@@ -287,6 +287,34 @@ func TestLocaleByteRegexpBREAndERE(t *testing.T) {
 	}
 }
 
+func TestLocaleByteRegexpBREBackreferences(t *testing.T) {
+	re, err := CompileLocaleByteRegexp([]byte(`^\([[:alpha:]]\)\1$`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpBRE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		input []byte
+		want  []int
+	}{
+		{[]byte{'a', 'a'}, []int{0, 2, 0, 1}},
+		{[]byte{0xe9, 0xe9}, []int{0, 2, 0, 1}},
+		{[]byte{0xe9, 'a'}, nil},
+	} {
+		got, err := re.FindSubmatchIndex(tc.input)
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("input=%#v indices=%v err=%v, want %v", tc.input, got, err, tc.want)
+		}
+	}
+
+	longest, err := CompileLocaleByteRegexp([]byte(`^\(a\|aa\)\1$`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpBRE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := longest.FindSubmatchIndex([]byte("aaaa")); err != nil || !reflect.DeepEqual(got, []int{0, 4, 0, 2}) {
+		t.Fatalf("leftmost-longest indices=%v err=%v, want [0 4 0 2]", got, err)
+	}
+}
+
 func TestLocaleByteRegexpZeroLengthSingleMatch(t *testing.T) {
 	empty, err := CompileLocaleByteRegexp(nil, newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE})
 	if err != nil {
