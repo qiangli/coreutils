@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/principal"
 	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -130,13 +131,50 @@ func (s *weaveStory) seat() role.Seat {
 	}
 }
 
-// weaveConductorName resolves the acting conductor's name: --as flag >
-// $WEAVE_CONDUCTOR > $WEAVE_AGENT > "conductor".
-func weaveConductorName(asFlag string) string {
-	for _, v := range []string{asFlag, os.Getenv("WEAVE_CONDUCTOR"), os.Getenv("WEAVE_AGENT")} {
+// weaveConductorIdentity resolves process-local evidence for the acting
+// conductor. BASHY_PRINCIPAL is the launcher's authoritative identity; turn a
+// canonical URN back into the short name sprint leases store.
+func weaveConductorIdentity(asFlag string) (string, bool) {
+	for i, v := range []string{
+		asFlag,
+		os.Getenv("BASHY_PRINCIPAL"),
+		os.Getenv("WEAVE_CONDUCTOR"),
+		os.Getenv("BASHY_AGENT_ID"),
+		os.Getenv("BASHY_AGENT"),
+		os.Getenv("WEAVE_AGENT"),
+	} {
 		if s := strings.TrimSpace(v); s != "" {
-			return s
+			if i == 1 {
+				if _, name, _, err := principal.ParseURN(s); err == nil {
+					return name, true
+				}
+			}
+			return s, true
 		}
+	}
+	return "", false
+}
+
+// weaveConductorName resolves the acting conductor's name from process-local
+// identity, falling back only when no launcher or command supplied one.
+func weaveConductorName(asFlag string) string {
+	if who, ok := weaveConductorIdentity(asFlag); ok {
+		return who
+	}
+	return "conductor"
+}
+
+// weaveStoryConductorName bridges ephemeral CLI identity with the durable
+// sprint lease. `sprint take --as X` and a later `sprint start` are separate
+// processes; when the latter has no identity evidence, the live holder is the
+// only truthful actor. Explicit process identity still wins so a different
+// agent cannot silently act through somebody else's lease.
+func weaveStoryConductorName(s *weaveStory, asFlag string) string {
+	if who, ok := weaveConductorIdentity(asFlag); ok {
+		return who
+	}
+	if holder, stale, free := weaveStoryLeaseState(s); !free && !stale {
+		return holder
 	}
 	return "conductor"
 }

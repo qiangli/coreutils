@@ -225,6 +225,13 @@ func runDrainGate(ctx context.Context, dir, command string) gate.Outcome {
 // drainSummary renders what happened, in the order a reader needs it: the
 // blocking problem first, the evidence second.
 func drainSummary(r *drainReport, elapsed, planned time.Duration) string {
+	return drainEvidenceSummary(r) + fmt.Sprintf("; ran %s of %s", roundDur(elapsed), roundDur(planned))
+}
+
+// drainEvidenceSummary reports only evidence the drain actually observed. It
+// is used by `sprint end` for legacy/unboxed work, where inventing elapsed and
+// planned durations at close time would corrupt the cadence record.
+func drainEvidenceSummary(r *drainReport) string {
 	var b strings.Builder
 	if len(r.Paused) > 0 {
 		// The parked branches ARE the resumption pointer — "where it left off"
@@ -248,6 +255,5 @@ func drainSummary(r *drainReport, elapsed, planned time.Duration) string {
 		}
 		fmt.Fprintf(&b, "; %d/%d repo(s) wrapped up", clean, n)
 	}
-	fmt.Fprintf(&b, "; ran %s of %s", roundDur(elapsed), roundDur(planned))
 	return b.String()
 }

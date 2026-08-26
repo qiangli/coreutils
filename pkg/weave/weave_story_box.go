@@ -172,6 +172,7 @@ func roundDur(d time.Duration) string {
 func newSprintStartCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var forDur time.Duration
+	var as string
 	cmd := &cobra.Command{
 		Use:   "start <sprint>",
 		Short: "Open a sprint's time-box: start the clock and set a cutoff",
@@ -218,7 +219,7 @@ func newSprintStartCmd() *cobra.Command {
 				// So start CLAIMS a free (or stale) lease, and refuses to take a
 				// live one from someone else: quietly reassigning delivery
 				// ownership is not something a start command should do.
-				who := weaveConductorName("")
+				who := weaveStoryConductorName(s, as)
 				if prev, stale, free := weaveStoryLeaseState(s); !free && !stale && prev != who {
 					return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
 						id, prev, id)
@@ -253,7 +254,7 @@ func newSprintStartCmd() *cobra.Command {
 					s.Column = "doing"
 					moved = " (backlog → doing)"
 				}
-				weaveStoryAppend(s, weaveConductorName(""), "system",
+				weaveStoryAppend(s, who, "system",
 					fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
 				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s",
 					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote), nil
@@ -261,6 +262,7 @@ func newSprintStartCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&forDur, "for", DefaultSprintBox, "how long this sprint gets")
+	cmd.Flags().StringVar(&as, "as", "", "conductor name (default $BASHY_PRINCIPAL/$WEAVE_CONDUCTOR/$WEAVE_AGENT, then current lease holder)")
 	flags.attach(cmd)
 	return cmd
 }
@@ -343,7 +345,8 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 			var rep drainReport
 			return runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
 				b := s.currentBox()
-				if b == nil {
+				unboxedEnd := ending && len(s.Boxes) == 0
+				if b == nil && !unboxedEnd {
 					// Saying "stopped" about a sprint that was never running
 					// would be a small lie of exactly the kind this feature is
 					// meant to remove.
@@ -352,7 +355,7 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				// PARK THE WORKERS FIRST. Whatever the gate says next, nothing
 				// should still be writing to the tree while it is judged — a
 				// gate racing a live agent measures neither.
-				if b.Draining == nil {
+				if b != nil && b.Draining == nil {
 					b.Draining = &now
 				}
 				paused, problems := pauseLinkedRepos(s)
@@ -369,7 +372,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				out := runDrainGate(gateCtx, gateDir, gateCmd)
 				cancelGate()
 				rep.GateRan, rep.GatePassed, rep.GateCmd = out.Ran, out.Passed, out.Command
-				b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
+				if b != nil {
+					b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
+				}
 
 				// CLOSING CONDITIONS: committed, pushed, pinned. A green gate
 				// says the code works; it says nothing about whether the work
@@ -418,25 +423,33 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					}
 				}
 
-				b.StoppedAt = &now
-				elapsed := b.Elapsed(now)
-				verdict := "within the box"
-				if elapsed > b.Planned {
-					verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-b.Planned))
-				} else if d := b.Planned - elapsed; d > time.Minute {
-					verdict = fmt.Sprintf("under by %s", roundDur(d))
+				msg := ""
+				if unboxedEnd {
+					msg = "ended without a recorded time-box; " + drainEvidenceSummary(&rep)
+				} else {
+					b.StoppedAt = &now
+					elapsed := b.Elapsed(now)
+					verdict := "within the box"
+					if elapsed > b.Planned {
+						verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-b.Planned))
+					} else if d := b.Planned - elapsed; d > time.Minute {
+						verdict = fmt.Sprintf("under by %s", roundDur(d))
+					}
+					msg = fmt.Sprintf("stopped after %s (planned %s) — %s; %s",
+						roundDur(elapsed), roundDur(b.Planned), verdict, drainSummary(&rep, elapsed, b.Planned))
 				}
-				msg := fmt.Sprintf("stopped after %s (planned %s) — %s; %s",
-					roundDur(elapsed), roundDur(b.Planned), verdict, drainSummary(&rep, elapsed, b.Planned))
 				if strings.TrimSpace(note) != "" {
 					msg += ": " + strings.TrimSpace(note)
 				}
 				if ending {
 					from := s.Column
+					who := weaveStoryConductorName(s, "")
 					s.Column = "done"
-					_ = closeSprintRoom(s, weaveConductorName(""))
+					_ = closeSprintRoom(s, who)
 					s.Lease = nil
 					msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
+					weaveStoryAppend(s, who, "system", msg)
+					return fmt.Sprintf("sprint #%d %s", id, msg), nil
 				}
 				weaveStoryAppend(s, weaveConductorName(""), "system", msg)
 				return fmt.Sprintf("sprint #%d %s", id, msg), nil

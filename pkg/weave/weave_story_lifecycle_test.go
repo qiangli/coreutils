@@ -129,3 +129,80 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 		t.Fatalf("end must close the box, release the lease, and move done: %+v", s)
 	}
 }
+
+func TestSprintStartUsesDurableHolderTakenAs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+	for _, key := range []string{"BASHY_PRINCIPAL", "BASHY_AGENT_ID", "BASHY_AGENT", "WEAVE_CONDUCTOR", "WEAVE_AGENT"} {
+		t.Setenv(key, "")
+	}
+
+	if out, code := runSprint(t, "add", "durable holder start"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "take", "1", "--as", "meridian"); code != 0 {
+		t.Fatalf("take exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+		t.Fatalf("start by durable holder exit=%d: %s", code, out)
+	}
+
+	q, err := loadWeaveQueue(home + "/.bashy/sprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := findWeaveStory(q, 1)
+	if s == nil || s.Lease == nil || s.Lease.Holder != "meridian" || !s.currentBox().Running() {
+		t.Fatalf("start must preserve the holder established by take --as: %+v", s)
+	}
+}
+
+func TestSprintStartRecognizesBashyPrincipal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+	t.Setenv("WEAVE_CONDUCTOR", "")
+	t.Setenv("WEAVE_AGENT", "")
+
+	if out, code := runSprint(t, "add", "principal holder start"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "take", "1", "--as", "meridian"); code != 0 {
+		t.Fatalf("take exit=%d: %s", code, out)
+	}
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/meridian")
+	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+		t.Fatalf("start by BASHY_PRINCIPAL exit=%d: %s", code, out)
+	}
+}
+
+func TestSprintEndNeverBoxedDoesNotInventDuration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+	t.Setenv("WEAVE_CONDUCTOR", "Ada")
+
+	if out, code := runSprint(t, "add", "completed before boxes shipped"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	out, code := runSprint(t, "end", "1", "--gate", "true")
+	if code != 0 {
+		t.Fatalf("unboxed end exit=%d: %s", code, out)
+	}
+	if !strings.Contains(out, "without a recorded time-box") || strings.Contains(out, "stopped after") || strings.Contains(out, "under by") {
+		t.Fatalf("end must disclose missing timing evidence without fabricating it: %s", out)
+	}
+
+	q, err := loadWeaveQueue(home + "/.bashy/sprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := findWeaveStory(q, 1)
+	if s == nil || s.Column != "done" || s.Lease != nil || len(s.Boxes) != 0 {
+		t.Fatalf("unboxed end must close lifecycle without creating a box: %+v", s)
+	}
+}
