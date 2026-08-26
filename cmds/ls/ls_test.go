@@ -3,6 +3,8 @@ package lscmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -214,6 +216,133 @@ func TestRecursive(t *testing.T) {
 	if code != 0 || out != want {
 		t.Errorf("ls -R . = (%q, %d), want (%q, 0)", out, code, want)
 	}
+
+	t.Run("stdout_failure_closure", testLSStdoutFailureClosure)
+}
+
+type lsFaultWriter struct {
+	buf       bytes.Buffer
+	failAfter int
+	calls     int
+	short     bool
+	err       error
+}
+
+func (w *lsFaultWriter) Write(p []byte) (int, error) {
+	if w.calls < w.failAfter {
+		w.calls++
+		return w.buf.Write(p)
+	}
+	w.calls++
+	if w.short {
+		if len(p) == 0 {
+			return 0, nil
+		}
+		n := len(p) - 1
+		_, _ = w.buf.Write(p[:n])
+		return n, nil
+	}
+	return 0, w.err
+}
+
+func testLSStdoutFailureClosure(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "alpha", "a")
+	write(t, dir, "beta", "bb")
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "sub"), "child", "c")
+
+	runFault := func(t *testing.T, out *lsFaultWriter, args ...string) (string, int) {
+		t.Helper()
+		var errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: dir,
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: out, Err: &errb},
+		}
+		code := cmd.Run(rc, args)
+		if code == 0 {
+			t.Fatalf("code=0 stdout=%q stderr=%q", out.buf.String(), errb.String())
+		}
+		if got := strings.Count(errb.String(), "ls: write error:"); got != 1 {
+			t.Fatalf("write-error diagnostics=%d, want 1: %q", got, errb.String())
+		}
+		return errb.String(), code
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"single", []string{"-1"}},
+		{"long", []string{"-l"}},
+		{"columns", []string{"-C", "-w", "40"}},
+		{"commas", []string{"-m", "-w", "40"}},
+		{"quoting_and_indicators", []string{"-QF"}},
+		{"recursive_heading", []string{"-R", "."}},
+	} {
+		t.Run("immediate_"+tc.name, func(t *testing.T) {
+			injected := errors.New("injected stdout failure")
+			out := &lsFaultWriter{err: injected}
+			stderr, _ := runFault(t, out, tc.args...)
+			if !strings.Contains(strings.ToLower(stderr), injected.Error()) || out.calls != 1 {
+				t.Fatalf("calls=%d stderr=%q", out.calls, stderr)
+			}
+		})
+	}
+
+	t.Run("short_long", func(t *testing.T) {
+		out := &lsFaultWriter{short: true}
+		stderr, _ := runFault(t, out, "-l")
+		if !strings.Contains(strings.ToLower(stderr), io.ErrShortWrite.Error()) || out.calls != 1 {
+			t.Fatalf("calls=%d stderr=%q", out.calls, stderr)
+		}
+	})
+
+	t.Run("short_long_symlink_target", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation needs privileges on windows")
+		}
+		if err := os.Symlink("alpha", filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		out := &lsFaultWriter{failAfter: 3, short: true}
+		stderr, _ := runFault(t, out, "-l", "link")
+		if !strings.Contains(strings.ToLower(stderr), io.ErrShortWrite.Error()) ||
+			!strings.Contains(out.buf.String(), "link -> alpha") {
+			t.Fatalf("stdout=%q stderr=%q", out.buf.String(), stderr)
+		}
+	})
+
+	t.Run("late_multiple_directory_continuation", func(t *testing.T) {
+		other := filepath.Join(dir, "other")
+		if err := os.Mkdir(other, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, other, "second", "2")
+		out := &lsFaultWriter{failAfter: 3, err: errors.New("late stdout failure")}
+		stderr, _ := runFault(t, out, "sub", "other")
+		if !strings.Contains(strings.ToLower(stderr), "late stdout failure") ||
+			!strings.Contains(out.buf.String(), "other:\nsecond\n\n") || out.calls != 4 {
+			t.Fatalf("calls=%d stdout=%q stderr=%q", out.calls, out.buf.String(), stderr)
+		}
+	})
+
+	t.Run("late_recursive_continuation", func(t *testing.T) {
+		recursiveRoot := filepath.Join(dir, "recursive-root")
+		if err := os.MkdirAll(filepath.Join(recursiveRoot, "nested"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, recursiveRoot, "top", "t")
+		write(t, filepath.Join(recursiveRoot, "nested"), "deep", "d")
+		out := &lsFaultWriter{failAfter: 4, err: errors.New("recursive stdout failure")}
+		stderr, _ := runFault(t, out, "-R", "recursive-root")
+		if !strings.Contains(strings.ToLower(stderr), "recursive stdout failure") ||
+			!strings.Contains(out.buf.String(), "recursive-root:\nnested\ntop\n\n") || out.calls != 5 {
+			t.Fatalf("calls=%d stdout=%q stderr=%q", out.calls, out.buf.String(), stderr)
+		}
+	})
 }
 
 func TestLongFormat(t *testing.T) {

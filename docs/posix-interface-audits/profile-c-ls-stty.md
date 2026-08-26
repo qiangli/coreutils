@@ -59,9 +59,16 @@ Evidence: `TestSttyRowsColsRejectsOverflow`, `TestSttyRowsAppliesWindowSize`, `T
 Observed exit statuses use the POSIX success/non-success partition:
 - `ls` exits `0` on success and `>0` (specifically `1` or `2`) on directory open, stat, or operand errors.
 - `stty` exits `0` on successful query/modification and `>0` (specifically `1`) on non-tty stdin, conflicting options, or execution failures.
-`stty` propagates standard-output write errors. `ls` output writes are not consistently checked, which remains a partial-profile residual.
+Both utilities propagate standard-output write errors. `ls` routes framework
+help/version output and every listing format through one sticky checked writer:
+an immediate error, a nil-error short write, or a late failure during continued
+or recursive output is diagnosed once and forces non-zero status. After the
+first failure, further writes to the failed sink are suppressed while input
+processing can still discover independent errors.
 
-Evidence: `TestNonexistentOperand`, `TestUnknownFlag`, `TestSttyRejectsNonTTY`, `TestSttyRequiredReportsPropagateWriteErrors`.
+Evidence: `TestNonexistentOperand`, `TestUnknownFlag`,
+`TestRecursive/stdout_failure_closure`, `TestSttyRejectsNonTTY`,
+`TestSttyRequiredReportsPropagateWriteErrors`.
 
 ## 7. Platform Disposition and Residuals
 
@@ -70,7 +77,6 @@ Both implementations are pure Go. The residual issues that keep these rows `part
 - **Terminal Capabilities:** `ls` uses its `-w` extension, then `COLUMNS`, then a fixed width of 80; it does not discover PTY/tty width. `stty` necessarily depends on terminal/PTY facilities.
 - **Platform Limitations:** `stty` has termios implementations for Linux, Darwin, FreeBSD, NetBSD, and OpenBSD. Windows, AIX, DragonFly, Solaris, and other unmatched targets use fail-closed stubs; the cross-platform vet commands below are compile-time evidence, not runtime conformance evidence. On Windows, `ls` reports inode 0 and link count 1, while its block count is derived from apparent size; owner/group name lookup is best-effort.
 - **Dangling symlink metadata:** Explicit `-H`/`-L` dereferencing failures for command-line operands are diagnosed with non-zero status. Unresolvable symlinks encountered inside a directory under `ls -lL` are diagnosed and use link metadata as a display fallback.
-- **Output errors:** `ls` does not consistently propagate failures from standard-output writes.
 
 ## 8. Gate Record
 
@@ -87,4 +93,15 @@ GOOS=linux GOARCH=amd64 go vet ./cmds/ls ./cmds/stty
 GOOS=darwin GOARCH=arm64 go vet ./cmds/ls ./cmds/stty
 GOOS=windows GOARCH=amd64 go vet ./cmds/ls ./cmds/stty
 GOOS=aix GOARCH=ppc64 go vet ./cmds/ls ./cmds/stty
+```
+
+Issue 777 re-ran the focused `ls` closure with both normal and process-global
+POSIX environments:
+
+```sh
+go test -count=20 ./cmds/ls
+POSIXLY_CORRECT=1 go test -count=20 ./cmds/ls
+go test -race -count=5 ./cmds/ls
+go vet ./cmds/ls
+git diff --check
 ```
