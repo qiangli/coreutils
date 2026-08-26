@@ -131,6 +131,65 @@ func TestStringsFiles(t *testing.T) {
 	}
 }
 
+func TestStringsPOSIXOffsetFormatIsUnpadded(t *testing.T) {
+	input := "\x00\x00cool\x00"
+	for _, env := range [][]string{{"POSIXLY_CORRECT=1", "LC_ALL=C"}, {"POSIXLY_CORRECT=", "LC_ALL=C"}} {
+		for _, tc := range []struct {
+			format string
+			want   string
+		}{
+			{"d", "2 cool\n"},
+			{"o", "2 cool\n"},
+			{"x", "2 cool\n"},
+		} {
+			out, errb, code := runToolEnv(t, "", env, input, "-t", tc.format)
+			if out != tc.want || errb != "" || code != 0 {
+				t.Errorf("env=%v -t %s = (%q, %q, %d), want (%q, \"\", 0)", env, tc.format, out, errb, code, tc.want)
+			}
+		}
+	}
+
+	// Preserve the documented GNU-shaped default outside POSIX mode.
+	out, errb, code := runToolEnv(t, "", []string{"LC_ALL=C"}, input, "-t", "d")
+	if out != "      2 cool\n" || errb != "" || code != 0 {
+		t.Fatalf("default -t d = (%q, %q, %d), want padded offset", out, errb, code)
+	}
+}
+
+func TestStringsFileOrderContinuesAfterOpenError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "first"), []byte("\x00first\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "last"), []byte("\x00last\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "ignored stdin", "first", "missing", "last")
+	if out != "first\nlast\n" || code != 1 || !strings.Contains(errb, "strings: missing:") {
+		t.Fatalf("ordered files around open error = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestStringsLocalePrecedenceControlsPrintability(t *testing.T) {
+	input := "\x00\xc3\xa9AB\x00"
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"LANG fallback", []string{"LANG=en_US.UTF-8"}, "éAB\n"},
+		{"LC_CTYPE over LANG", []string{"LANG=C", "LC_CTYPE=en_US.UTF-8"}, "éAB\n"},
+		{"LC_ALL over LC_CTYPE", []string{"LANG=en_US.UTF-8", "LC_CTYPE=en_US.UTF-8", "LC_ALL=C"}, "AB\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runToolEnv(t, "", tc.env, input, "-n", "2")
+			if out != tc.want || errb != "" || code != 0 {
+				t.Fatalf("strings locale = (%q, %q, %d), want %q", out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
 func TestStringsDashPathname(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "-"), []byte("\x00dashfile\x00"), 0o644); err != nil {

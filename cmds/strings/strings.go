@@ -55,13 +55,14 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	w := bufio.NewWriter(rc.Out)
+	posixOffsets := envPresent(rc.Env, "POSIXLY_CORRECT")
 	exit := 0
 	if len(operands) == 0 {
 		var in io.Reader = rc.In
 		if in == nil {
 			in = strings.NewReader("")
 		}
-		if err := scan(in, w, *minLen, *radix, isPrint, isUTF8); err != nil {
+		if err := scan(in, w, *minLen, *radix, isPrint, isUTF8, posixOffsets); err != nil {
 			fmt.Fprintf(rc.Err, "strings: %v\n", err)
 			exit = 1
 		}
@@ -73,7 +74,7 @@ func run(rc *tool.RunContext, args []string) int {
 			exit = 1
 			continue
 		}
-		err = scan(f, w, *minLen, *radix, isPrint, isUTF8)
+		err = scan(f, w, *minLen, *radix, isPrint, isUTF8, posixOffsets)
 		f.Close()
 		if err != nil {
 			fmt.Fprintf(rc.Err, "strings: %s: %v\n", name, sysErr(err))
@@ -126,20 +127,31 @@ func getPrintableFunc(rc *tool.RunContext) (func(rune) bool, bool, error) {
 	}, false, nil
 }
 
-func scan(r io.Reader, w *bufio.Writer, minLen int, radix string, isPrint func(rune) bool, isUTF8 bool) error {
+func scan(r io.Reader, w *bufio.Writer, minLen int, radix string, isPrint func(rune) bool, isUTF8, posixOffsets bool) error {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var runBytes []byte
 	var runCharLen int
 	var offset, start int64
 	flush := func() error {
 		if runCharLen >= minLen {
-			switch radix {
-			case "o":
-				fmt.Fprintf(w, "%7o ", start)
-			case "d":
-				fmt.Fprintf(w, "%7d ", start)
-			case "x":
-				fmt.Fprintf(w, "%7x ", start)
+			if posixOffsets {
+				switch radix {
+				case "o":
+					fmt.Fprintf(w, "%o ", start)
+				case "d":
+					fmt.Fprintf(w, "%d ", start)
+				case "x":
+					fmt.Fprintf(w, "%x ", start)
+				}
+			} else {
+				switch radix {
+				case "o":
+					fmt.Fprintf(w, "%7o ", start)
+				case "d":
+					fmt.Fprintf(w, "%7d ", start)
+				case "x":
+					fmt.Fprintf(w, "%7x ", start)
+				}
 			}
 			if _, err := w.Write(runBytes); err != nil {
 				return err
@@ -212,6 +224,18 @@ func scan(r io.Reader, w *bufio.Writer, minLen int, radix string, isPrint func(r
 			offset++
 		}
 	}
+}
+
+// envPresent reports whether key is assigned in the invocation environment,
+// even to an empty value; POSIXLY_CORRECT takes effect on presence alone.
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func sysErr(err error) error {

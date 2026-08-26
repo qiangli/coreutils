@@ -229,7 +229,7 @@ func prepareExistingDestination(rc *tool.RunContext, dest, destPath, backupMode,
 		}
 		return true
 	}
-	if err := os.Remove(destPath); err != nil {
+	if err := unlinkDestination(destPath); err != nil {
 		fmt.Fprintf(rc.Err, "ln: cannot remove '%s': %v\n", dest, reason(err))
 		return false
 	}

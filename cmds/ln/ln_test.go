@@ -197,6 +197,49 @@ func TestLnForce(t *testing.T) {
 	}
 }
 
+// POSIX Issue 7 requires -f replacement to perform the equivalent of
+// unlink(2). In particular, an empty directory at the destination must not be
+// removed (os.Remove would fall back to rmdir and is therefore too broad).
+func TestLnForceDoesNotRemoveDestinationDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "source")
+	if err := os.MkdirAll(filepath.Join(dir, "dest", "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-f", "src", "dest")
+	if code != 1 || !strings.Contains(errb, "cannot remove 'dest/src'") {
+		t.Fatalf("ln -f src dest: code=%d err=%q, want unlink diagnostic", code, errb)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, "dest", "src"))
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("destination directory was removed or replaced: mode=%v err=%v", fi, err)
+	}
+}
+
+// The required -f sequence is unlink first, link second, then continue with
+// later source operands after an error. A missing source therefore still
+// removes its old non-identical destination before the hard-link failure.
+func TestLnForceRemovalPrecedesLinkErrorAndProcessingContinues(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "good"), "good")
+	if err := os.Mkdir(filepath.Join(dir, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "dest", "missing"), "old")
+
+	_, errb, code := runTool(t, dir, "-f", "missing", "good", "dest")
+	if code != 1 || !strings.Contains(errb, "dest/missing") {
+		t.Fatalf("ln -f missing good dest: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "dest", "missing")); !os.IsNotExist(err) {
+		t.Errorf("old destination remains after required unlink-before-link ordering: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "dest", "good")); err != nil || string(got) != "good" {
+		t.Errorf("later source was not processed: content=%q err=%v", got, err)
+	}
+}
+
 func TestLnBackupAndSuffix(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "new")
