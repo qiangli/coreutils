@@ -231,6 +231,15 @@ func TestExprLocaleCharacterBoundaries(t *testing.T) {
 		t.Fatalf("C length = (%q,%q,%d), want byte character count", out, errb, code)
 	}
 
+	out, errb, code = runExprLocale([]string{"LC_ALL=C"}, []string{"é", ":", ".*"}, func(string) (ctypeProvider, error) {
+		panic("C locale must not open provider")
+	}, func(string) (collateProvider, error) {
+		panic("C locale must not open provider")
+	})
+	if code != 0 || errb != "" || out != "2\n" {
+		t.Fatalf("C match length = (%q,%q,%d), want byte character count", out, errb, code)
+	}
+
 	out, errb, code = runExprLocale([]string{"LANG=C", "LC_CTYPE=C.UTF-8", "LC_COLLATE=C"}, []string{"substr", "éx", "2", "1"}, func(string) (ctypeProvider, error) {
 		panic("C.UTF-8 character operations must not open byte provider")
 	}, func(string) (collateProvider, error) {

@@ -189,11 +189,6 @@ func localeRegexpTables(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen 
 			return nil, 2
 		}
 	}
-	if lcCType == "C" || lcCType == "POSIX" {
-		if lcCollate == "C" || lcCollate == "POSIX" {
-			return nil, -1
-		}
-	}
 	return tables, -1
 }
 

@@ -51,7 +51,9 @@ are not closure evidence.
 - **Confirmed fix:** `csplit` now resolves LC_CTYPE and LC_COLLATE before input
   I/O and compiles context BREs through invocation-owned locale byte tables.
   The new tests cover non-C class membership, equivalence classes, collation
-  ranges, provider close, and fail-before-open behavior.
+  ranges, provider close, and fail-before-open behavior. C/POSIX also retains
+  the byte-regexp tables: a two-byte UTF-8 encoding is not incorrectly treated
+  as one C-locale character by `^.$`.
 - **Honest residual:** the shared ctype/collate providers are byte-oriented and
   bounded to C/POSIX plus reviewed Latin-1 aliases. A focused remaining red is
   `LC_ALL=C.UTF-8 csplit -s - '/[[:alpha:]]/'` with multibyte alphabetic input:
@@ -74,7 +76,9 @@ are not closure evidence.
   parsing. C/POSIX string functions count bytes as characters, C/POSIX UTF-8
   aliases use UTF-8 boundaries for string functions, Latin-1 LC_CTYPE uses the
   provider byte tables, LC_COLLATE comparisons call the invocation collator,
-  and non-C BREs use the locale byte-regexp compiler.
+  and non-C BREs use the locale byte-regexp compiler. The no-capture `:` and
+  `match` result is counted with the same selected character codec, including
+  byte counting in C/POSIX rather than unconditional UTF-8 rune counting.
 - **Honest residual:** fully conforming multibyte LC_CTYPE regex class,
   equivalence, and collation behavior needs a shared multibyte provider beyond
   the current byte-oriented corpus. Back-reference support in the locale

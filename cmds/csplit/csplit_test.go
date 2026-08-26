@@ -420,6 +420,25 @@ func runCsplitLocale(t *testing.T, env []string, stdin string, args []string, ct
 }
 
 func TestCsplitLocaleRegexClassesEquivalenceAndRanges(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Err: &errb}}
+	tables, code := localeRegexpTables(rc, func(string) (ctypeProvider, error) {
+		panic("C locale must not open ctype provider")
+	}, func(string) (collateProvider, error) {
+		panic("C locale must not open collate provider")
+	})
+	if code >= 0 || tables == nil || errb.Len() != 0 {
+		t.Fatalf("C locale tables = (%v,%d,%q), want byte-regexp tables", tables, code, errb.String())
+	}
+	matcher, err := compileMatcher("^.$", tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := matcher.match("é")
+	if err != nil || matched {
+		t.Fatalf("C /^.$/ match for two-byte UTF-8 input = (%v,%v), want false", matched, err)
+	}
+
 	for _, pattern := range []string{"/[[:alpha:]]/", "/[[=e=]]/", "/[d-f]/"} {
 		t.Run(pattern, func(t *testing.T) {
 			ctypeFake := &fakeCsplitCType{}

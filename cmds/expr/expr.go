@@ -445,7 +445,7 @@ func (p *parser) parseMatch() (value, error) {
 			}
 		} else {
 			m := matches[0]
-			left = value(strconv.Itoa(utf8.RuneCountInString(string(left)[m[0]:m[1]])))
+			left = value(strconv.Itoa(p.locale.characters.count(string(left)[m[0]:m[1]])))
 		}
 	}
 	return left, nil
