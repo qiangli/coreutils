@@ -7,6 +7,9 @@ owned commands in the canonical manifest: 78 `go` rows and 22 `shell` rows.
 References are routed by their strict manifest repo prefix. Shell source tests
 use the explicit `sh` root, except for the canonical `sh` utility-entrypoint
 test declared under `bashy`; shell routing tests use the explicit `bashy` root.
+At this base, the shared `sh` row repeats that utility-entrypoint TestID in both
+shell lanes. Strict cross-lane duplicate validation reports it rather than
+silently collapsing it; the conductor owns reconciliation of the shared row.
 
 Intended invocation:
 
