@@ -303,3 +303,25 @@ func TestCatWriteError(t *testing.T) {
 		t.Errorf("cat write error = code %d, err %q; want code 1 and write error prefix", code, errb.String())
 	}
 }
+
+type closedPipeWriter struct{}
+
+func (closedPipeWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestCatBrokenPipeHonorsInheritedSIGPIPE(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), SIGPIPEIgnored: true,
+		Stdio: tool.Stdio{In: strings.NewReader("hello\n"), Out: closedPipeWriter{}, Err: &errb},
+	}
+	if code := cmd.Run(rc, nil); code != 1 || !strings.Contains(errb.String(), "cat: write error:") {
+		t.Fatalf("ignored SIGPIPE: code=%d stderr=%q, want status 1 and diagnostic", code, errb.String())
+	}
+
+	errB := new(bytes.Buffer)
+	rc.SIGPIPEIgnored = false
+	rc.Err = errB
+	if code := cmd.Run(rc, nil); code != 0 || errB.Len() != 0 {
+		t.Fatalf("default SIGPIPE boundary: code=%d stderr=%q, want normal closed-pipe completion", code, errB.String())
+	}
+}

@@ -46,12 +46,15 @@ type options struct {
 	maxChars    int // <=0 means unlimited
 	exactSize   bool
 	replace     string
+	replaceSet  bool
 	maxProcs    int
 	eof         string
 	delim       string // raw -d value (pre-unescape); "" = unset
+	strictSize  bool   // POSIX -s requires generated length to be strictly less
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	posixMode := envPresent(rc.Env, "POSIXLY_CORRECT")
 	o := options{maxArgs: -1, maxProcs: 1}
 	args = expandShortOptionClusters(args)
 
@@ -89,11 +92,11 @@ func run(rc *tool.RunContext, args []string) int {
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
-			o.maxArgs, o.maxLines, o.replace = atoiOr(v), 0, ""
+			o.maxArgs, o.maxLines, o.replace, o.replaceSet = atoiOr(v), 0, "", false
 		case strings.HasPrefix(a, "--max-args="):
-			o.maxArgs, o.maxLines, o.replace = atoiOr(a[len("--max-args="):]), 0, ""
+			o.maxArgs, o.maxLines, o.replace, o.replaceSet = atoiOr(a[len("--max-args="):]), 0, "", false
 		case strings.HasPrefix(a, "-n") && len(a) > 2:
-			o.maxArgs, o.maxLines, o.replace = atoiOr(a[2:]), 0, ""
+			o.maxArgs, o.maxLines, o.replace, o.replaceSet = atoiOr(a[2:]), 0, "", false
 		case a == "-L":
 			v, ok := val()
 			if !ok {
@@ -103,35 +106,44 @@ func run(rc *tool.RunContext, args []string) int {
 			if n < 1 {
 				return tool.UsageError(rc, cmd, "-L requires a positive number")
 			}
-			o.maxLines, o.maxArgs, o.replace = n, -1, ""
+			o.maxLines, o.maxArgs, o.replace, o.replaceSet = n, -1, "", false
 		case strings.HasPrefix(a, "-L") && len(a) > 2:
 			n := atoiOr(a[2:])
 			if n < 1 {
 				return tool.UsageError(rc, cmd, "-L requires a positive number")
 			}
-			o.maxLines, o.maxArgs, o.replace = n, -1, ""
+			o.maxLines, o.maxArgs, o.replace, o.replaceSet = n, -1, "", false
 		case a == "-s":
 			v, ok := val()
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
 			o.maxChars = atoiOr(v)
+			o.strictSize = posixMode
 		case strings.HasPrefix(a, "-s") && len(a) > 2:
 			o.maxChars = atoiOr(a[2:])
+			o.strictSize = posixMode
 		case a == "-x":
 			o.exactSize = true
-		case a == "-I" || a == "--replace" || a == "-i":
+		case a == "-I":
 			if v, ok := val(); ok {
-				o.replace, o.maxArgs, o.maxLines = v, -1, 1
+				o.replace, o.replaceSet, o.maxArgs, o.maxLines = v, true, -1, 1
 			} else {
-				o.replace, o.maxArgs, o.maxLines = "{}", -1, 1
+				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
+			}
+			o.exactSize = true
+		case a == "--replace" || a == "-i":
+			if v, ok := val(); ok {
+				o.replace, o.replaceSet, o.maxArgs, o.maxLines = v, true, -1, 1
+			} else {
+				o.replace, o.replaceSet, o.maxArgs, o.maxLines = "{}", true, -1, 1
 			}
 			o.exactSize = true
 		case strings.HasPrefix(a, "-I") && len(a) > 2:
-			o.replace, o.maxArgs, o.maxLines = a[2:], -1, 1
+			o.replace, o.replaceSet, o.maxArgs, o.maxLines = a[2:], true, -1, 1
 			o.exactSize = true
 		case strings.HasPrefix(a, "--replace="):
-			o.replace, o.maxArgs, o.maxLines = a[len("--replace="):], -1, 1
+			o.replace, o.replaceSet, o.maxArgs, o.maxLines = a[len("--replace="):], true, -1, 1
 			o.exactSize = true
 		case a == "-P" || a == "--max-procs":
 			v, ok := val()
@@ -141,7 +153,13 @@ func run(rc *tool.RunContext, args []string) int {
 			o.maxProcs = atoiOr(v)
 		case strings.HasPrefix(a, "-P") && len(a) > 2:
 			o.maxProcs = atoiOr(a[2:])
-		case a == "-E" || a == "--eof":
+		case a == "-E":
+			v, ok := val()
+			if !ok {
+				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
+			}
+			o.eof = v
+		case a == "--eof":
 			if v, ok := val(); ok {
 				o.eof = v
 			}
@@ -177,6 +195,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if o.maxProcs == -2 {
 		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
 	}
+	if o.maxProcs < 0 {
+		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
+	}
 
 	maxSupported := commandSizeLimit(rc.Env)
 	if maxSupported <= 0 {
@@ -193,6 +214,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	} else if o.maxChars > maxSupported {
 		o.maxChars = maxSupported
+		// The automatic ARG_MAX-2048 ceiling permits equality. If that
+		// ceiling, rather than the explicit -s operand, is the binding
+		// constraint, do not apply -s's strict-less-than comparison to it.
+		o.strictSize = false
 	}
 
 	command := args[i:]
@@ -280,7 +305,7 @@ func readItems(r io.Reader, o options) ([]inputItem, error) {
 	}
 	var items []inputItem
 	switch {
-	case o.replace != "":
+	case o.replaceSet:
 		lines := strings.Split(string(data), "\n")
 		for line, text := range lines {
 			if line == len(lines)-1 && text == "" {
@@ -569,10 +594,10 @@ func unescapeDelim(s string) rune {
 // plan turns items into concrete argv batches.
 func plan(command []string, items []inputItem, o options) ([][]string, error) {
 	// Replace mode: one invocation per item, substituting the replace-str.
-	if o.replace != "" {
+	if o.replaceSet || o.replace != "" {
 		replacementArgs := 0
 		for _, a := range command[1:] {
-			if strings.Contains(a, o.replace) {
+			if o.replace != "" && strings.Contains(a, o.replace) {
 				replacementArgs++
 			}
 		}
@@ -584,12 +609,14 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 			argv := append([]string(nil), command...)
 			for k, a := range command[1:] {
 				k++
-				argv[k] = strings.ReplaceAll(a, o.replace, it.value)
-				if strings.Contains(a, o.replace) && len(argv[k]) > 255 {
+				if o.replace != "" {
+					argv[k] = strings.ReplaceAll(a, o.replace, it.value)
+				}
+				if o.replace != "" && strings.Contains(a, o.replace) && len(argv[k]) > 255 {
 					return nil, fmt.Errorf("constructed argument exceeds 255 bytes")
 				}
 			}
-			if argvSize(argv) > o.maxChars {
+			if sizeLimitExceeded(argvSize(argv), o) {
 				return nil, fmt.Errorf("constructed command exceeds size limit")
 			}
 			batches = append(batches, argv)
@@ -602,14 +629,14 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 		if o.noRunEmpty {
 			return nil, nil
 		}
-		if o.maxChars > 0 && baseSize > o.maxChars {
+		if sizeLimitExceeded(baseSize, o) {
 			return nil, fmt.Errorf("command exceeds -s size limit")
 		}
 		return [][]string{append([]string(nil), command...)}, nil // run once, no extra args
 	}
 
 	var batches [][]string
-	if o.maxChars > 0 && baseSize > o.maxChars {
+	if sizeLimitExceeded(baseSize, o) {
 		return nil, fmt.Errorf("command exceeds -s size limit")
 	}
 	for start := 0; start < len(items); {
@@ -626,7 +653,11 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 				break
 			}
 			itemSize := len(it.value) + 1
-			if size+itemSize > o.maxChars {
+			tooLarge := size+itemSize > o.maxChars
+			if o.strictSize {
+				tooLarge = size+itemSize >= o.maxChars
+			}
+			if tooLarge {
 				if o.exactSize || end == start {
 					return nil, fmt.Errorf("constructed command exceeds size limit")
 				}
@@ -655,6 +686,16 @@ func argvSize(argv []string) int {
 		n += len(arg) + 1
 	}
 	return n
+}
+
+func sizeLimitExceeded(size int, o options) bool {
+	if o.maxChars <= 0 {
+		return false
+	}
+	if o.strictSize {
+		return size >= o.maxChars
+	}
+	return size > o.maxChars
 }
 
 const (
@@ -827,4 +868,14 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 // shared LC_MESSAGES provider. Unsupported locales fail closed.
 func affirmativeReply(reply string, env []string) (bool, error) {
 	return locale.MatchAffirmative(env, reply)
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }

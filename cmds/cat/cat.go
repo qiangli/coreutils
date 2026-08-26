@@ -189,6 +189,10 @@ func run(rc *tool.RunContext, args []string) int {
 					if closer != nil {
 						closer.Close()
 					}
+					if rc.SIGPIPEIgnored {
+						fmt.Fprintf(rc.Err, "cat: write error: %v\n", sysErr(we.err))
+						return 1
+					}
 					return 0
 				}
 				fmt.Fprintf(rc.Err, "cat: write error: %v\n", sysErr(we.err))
@@ -201,6 +205,10 @@ func run(rc *tool.RunContext, args []string) int {
 				if closer != nil {
 					closer.Close()
 				}
+				if rc.SIGPIPEIgnored {
+					fmt.Fprintf(rc.Err, "cat: %v\n", sysErr(err))
+					return 1
+				}
 				return 0
 			}
 			fmt.Fprintf(rc.Err, "cat: %s: %v\n", name, sysErr(err))
@@ -212,6 +220,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if err := bw.Flush(); err != nil {
 		if tool.IsClosedPipeError(err) {
+			if rc.SIGPIPEIgnored {
+				fmt.Fprintf(rc.Err, "cat: write error: %v\n", sysErr(err))
+				return 1
+			}
 			return 0
 		}
 		fmt.Fprintf(rc.Err, "cat: write error: %v\n", sysErr(err))

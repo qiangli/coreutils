@@ -3,6 +3,7 @@ package xargscmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sort"
@@ -15,10 +16,16 @@ import (
 func runXargs(t *testing.T, in string, args ...string) (out, errOut string, code int) {
 	t.Helper()
 	var o, e bytes.Buffer
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
+			env = append(env, entry)
+		}
+	}
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   t.TempDir(),
-		Env:   os.Environ(),
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(in), Out: &o, Err: &e},
 	}
 	code = cmd.Run(rc, args)
@@ -270,6 +277,109 @@ func TestXargsReplaceIssue7Limits(t *testing.T) {
 	_, errOut, code = runXargs(t, long+"\n", "-I{}", "echo", "{}")
 	if code == 0 || !strings.Contains(errOut, "255 bytes") {
 		t.Fatalf("-I constructed argument limit: code=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestXargsPOSIXLYCorrectDoesNotDisableExtensions(t *testing.T) {
+	env := []string{"POSIXLY_CORRECT=", "PATH=/bin:/usr/bin"}
+	if out, errOut, code := runXargsEnv(t, t.TempDir(), env, "a\x00b\x00", "-0", "echo"); code != 0 || errOut != "" || out != "a b\n" {
+		t.Fatalf("POSIXLY_CORRECT -0: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if out, errOut, code := runXargsEnv(t, t.TempDir(), env, "a b\n", "--max-args=1", "echo"); code != 0 || errOut != "" || out != "a\nb\n" {
+		t.Fatalf("POSIXLY_CORRECT --max-args: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsEmptyReplacementState(t *testing.T) {
+	out, errOut, code := runXargsEnv(t, t.TempDir(), []string{"POSIXLY_CORRECT=", "PATH=/bin:/usr/bin"}, "x\ny\n", "-I", "", "echo", "pre{}post")
+	if code != 0 || errOut != "" || out != "pre{}post\npre{}post\n" {
+		t.Fatalf("empty POSIX replacement: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runXargs(t, "x\ny\n", "-I", "", "echo", "a", "b", "c", "d", "e", "f")
+	if code != 0 || errOut != "" || out != "a b c d e f\na b c d e f\n" {
+		t.Fatalf("empty replacement with six fixed arguments: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsPOSIXStrictSize(t *testing.T) {
+	_, errOut, code := runXargsEnv(t, t.TempDir(), []string{"POSIXLY_CORRECT=", "PATH=/bin:/usr/bin"}, "a\n", "-s", "7", "echo")
+	if code == 0 || !strings.Contains(errOut, "size") {
+		t.Fatalf("POSIX strict -s boundary: code=%d stderr=%q", code, errOut)
+	}
+	if out, _, code := runXargsEnv(t, t.TempDir(), []string{"PATH=/bin:/usr/bin"}, "a\n", "-s", "7", "echo"); code != 0 || out != "a\n" {
+		t.Fatalf("non-POSIX inclusive -s boundary: code=%d output=%q", code, out)
+	}
+}
+
+func TestXargsPOSIXArgMaxCeilingAllowsEquality(t *testing.T) {
+	original := systemArgMax
+	t.Cleanup(func() { systemArgMax = original })
+	env := []string{"POSIXLY_CORRECT="}
+	envSize := 0
+	for _, entry := range env {
+		envSize += len(entry) + 1
+	}
+	// "echo\x00a\x00" occupies seven bytes. Unlike the explicit -s
+	// boundary, the separate ARG_MAX-2048 ceiling permits equality.
+	systemArgMax = func() int { return argMaxHeadroom + envSize + 7 }
+	for _, args := range [][]string{{"echo"}, {"-s", "8", "echo"}} {
+		out, errOut, code := runXargsEnv(t, t.TempDir(), env, "a\n", args...)
+		if code != 0 || errOut != "" || out != "a\n" {
+			t.Errorf("ARG_MAX equality with %v: code=%d stdout=%q stderr=%q", args, code, out, errOut)
+		}
+	}
+}
+
+func TestXargsRequiredOptionArguments(t *testing.T) {
+	for _, option := range []string{"-E", "-I", "-L", "-n", "-s"} {
+		_, errOut, code := runXargs(t, "", option)
+		if code == 0 || !strings.Contains(errOut, "requires an argument") {
+			t.Errorf("%s without argument: code=%d stderr=%q", option, code, errOut)
+		}
+	}
+}
+
+func TestXargsLastReplacementOrInputLimitOptionWins(t *testing.T) {
+	out, errOut, code := runXargs(t, "a b\n", "-I", "{}", "-n1", "echo", "[{}]")
+	if code != 0 || errOut != "" || out != "[{}] a\n[{}] b\n" {
+		t.Fatalf("-I then -n: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runXargs(t, "a b\nc d\n", "-I{}", "-L2", "echo", "[{}]")
+	if code != 0 || errOut != "" || out != "[{}] a b c d\n" {
+		t.Fatalf("-I then -L: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runXargs(t, "a b\nc d\n", "-n1", "-I{}", "echo", "[{}]")
+	if code != 0 || errOut != "" || out != "[a b]\n[c d]\n" {
+		t.Fatalf("-n then -I: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestXargsChildEnvironmentAndTerminalStatuses(t *testing.T) {
+	env := []string{"PATH=/bin:/usr/bin", "LC_ALL=C", "POSIXLY_CORRECT="}
+	out, _, code := runXargsEnv(t, t.TempDir(), env, "x\n", "sh", "-c", "printf '%s\\n' \"$LC_ALL\"", "sh")
+	if code != 0 || out != "C\n" {
+		t.Fatalf("child environment: code=%d output=%q", code, out)
+	}
+	if _, errOut, code := runXargsEnv(t, t.TempDir(), env, "x y\n", "-n1", "sh", "-c", "exit 255"); code < 1 || code > 125 || strings.Count(errOut, "child returned exit status 255") != 1 {
+		t.Fatalf("child 255: code=%d stderr=%q", code, errOut)
+	}
+	if _, errOut, code := runXargsEnv(t, t.TempDir(), env, "x y\n", "-n1", "sh", "-c", "kill -TERM $$"); code < 1 || code > 125 || strings.Count(errOut, "child terminated by signal") != 1 {
+		t.Fatalf("child signal: code=%d stderr=%q, want 1..125 and one attempted batch", code, errOut)
+	}
+}
+
+type xargsReadError struct{}
+
+func (xargsReadError) Read([]byte) (int, error) { return 0, errors.New("injected read failure") }
+
+func TestXargsReadErrorStopsBeforeExecution(t *testing.T) {
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"PATH=/bin:/usr/bin"},
+		Stdio: tool.Stdio{In: xargsReadError{}, Out: &out, Err: &errOut},
+	}
+	if code := cmd.Run(rc, []string{"echo", "must-not-run"}); code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "injected read failure") {
+		t.Fatalf("read error: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
 	}
 }
 
