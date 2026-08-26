@@ -5,7 +5,7 @@ Scope: the directory listing utility `ls` and terminal state utility `stty` agai
 * <https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ls.html>
 * <https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/stty.html>
 
-Both rows remain **partial** under the consolidated Sprint 79 fail-closed policy while shared process-boundary, terminal capabilities, and non-Unix platform evidence remain incomplete. The stale metrics (from earlier diagnostic reports stating: `ls 115 TPs/20 blockers; stty 101/17 blockers/14 manual`) are superseded by the current, far newer implementation on main, where required C/POSIX-locale features and exact command option/operand/status constraints are covered. The absence of shipped translated catalogs is recorded as a localization product gap, not treated as a command-interface blocker by itself.
+Both rows remain **partial** under the consolidated Sprint 79 fail-closed policy while shared process-boundary, terminal capabilities, and non-Unix platform evidence remain incomplete. Earlier diagnostic metrics (`ls 115 TPs/20 blockers; stty 101/17 blockers/14 manual`) describe an older implementation and are not current counts. This audit records the verified areas and residuals below; it does not claim source-complete conformance. The absence of shipped translated catalogs is recorded as a localization product gap, not treated as a command-interface blocker by itself.
 
 ## 1. `ls` — Options, Operands, and the `--` Special Token
 
@@ -25,13 +25,13 @@ POSIX `-H` and `-L` control symbolic link dereferencing:
 
 A confirmed Bashy-owned gap has been fixed: command-line symbolic links pointing to directories were not being dereferenced under `-H` / `-L` when `-d` (directory only) was specified, incorrectly displaying the symlink metadata instead of the referent directory information. This is now resolved: the referent directory metadata (such as permissions, size, and type `d`) is correctly retrieved and displayed.
 
-Additionally, for dangling symbolic links (where dereferencing is attempted but the target does not exist), the utility gracefully falls back to displaying the symlink's own metadata along with its target arrow (`-> target`) in long listing format, matching POSIX and GNU behaviors.
+When `-H` or `-L` explicitly requires dereferencing a command-line symbolic link, failure to resolve its referent is diagnosed and produces a non-zero status. Without explicit dereferencing, `-F` reports the command-line link itself rather than following a link to a directory.
 
 Evidence: `TestLsDereferenceCommandLineSymlinks`, `TestDereferenceDirectoryEntries`.
 
 ## 3. `ls` — Sizing, Radix, and Columns
 
-Block sizes for `-s` default to 512-byte blocks when `POSIXLY_CORRECT` is set (as required by Issue 7), but use 1024-byte blocks by default or when `-k` is specified. Radix formatting for file sizes adapts to `-h` and `--si` formats in powers of 1024 and 1000, respectively. Column width formatting queries `-w` or the `COLUMNS` environment variable, falling back to 80 columns when running off-tty.
+Block sizes for `-s` default to 512-byte blocks when `POSIXLY_CORRECT` is set (as required by Issue 7), but use 1024-byte blocks by default or when `-k` is specified. The GNU-compatible `-h`, `--si`, and `-w` extensions are retained but are not evidence for the POSIX row. Column formatting uses `COLUMNS` when valid and otherwise falls back to 80 columns; it does not query terminal width.
 
 Evidence: `TestSizeBlocksPOSIX512ByteDefault`, `TestBlockSize`, `TestColumnsHonorsColumnsEnv`.
 
@@ -43,16 +43,16 @@ Evidence: `TestSttyRejectsNonTTY`, `TestSttyRejectsConflictingOutputStylesBefore
 
 ## 5. `stty` — Settings and Control Character Operands
 
-All POSIX required terminal modes (control, input, output, local, and combination modes), baud rates/speeds, and control character settings (including `min`, `time`, and disabled control characters using `undef`) are supported and applied atomically. The validation phase checks the complete operand sequence before performing any state modification, preventing partial terminal configuration changes on error.
+The source inventories the POSIX terminal modes (control, input, output, local, and combination modes), baud rates/speeds, and control character settings, including `min`, `time`, and disabled control characters using `undef`, on its termios-backed targets. The validation phase checks the complete operand sequence before modification. On an application failure it attempts to restore the original terminal state; focused PTY tests show that invalid later operands do not leave partial changes on the exercised host platform.
 
 Evidence: `TestSttyRowsColsRejectsOverflow`, `TestSttyRowsAppliesWindowSize`, `TestSttyColumnsAppliesWindowSize`, `TestSttyRequiredReportsPropagateWriteErrors`, `TestApplyTermiosModeRaw`, `TestApplyTermiosValueMinTime`.
 
 ## 6. Exit Status
 
-All exits conform to POSIX partitions:
+Observed exit statuses use the POSIX success/non-success partition:
 - `ls` exits `0` on success and `>0` (specifically `1` or `2`) on directory open, stat, or operand errors.
 - `stty` exits `0` on successful query/modification and `>0` (specifically `1`) on non-tty stdin, conflicting options, or execution failures.
-Standard output write errors trigger diagnostics and exit status `1` in both commands.
+`stty` propagates standard-output write errors. `ls` output writes are not consistently checked, which remains a partial-profile residual.
 
 Evidence: `TestNonexistentOperand`, `TestUnknownFlag`, `TestSttyRejectsNonTTY`, `TestSttyRequiredReportsPropagateWriteErrors`.
 
@@ -60,9 +60,10 @@ Evidence: `TestNonexistentOperand`, `TestUnknownFlag`, `TestSttyRejectsNonTTY`, 
 
 Both implementations are pure Go. The residual issues that keep these rows `partial`:
 - **Locale Constraints:** `LC_COLLATE` sorting for non-C locales is absent. Non-C `LC_TIME`/`LC_MESSAGES` rendering is unsupported. Missing localized message catalogs are treated as a product localization gap.
-- **Terminal Capabilities:** Real terminal output formatting (e.g. multi-column wrapping) relies on PTY/tty size or `COLUMNS` overrides.
-- **Platform Limitations:** `stty` has no termios/PTY support on Windows by design (fails gracefully with exit status 1). `ls` inode, link counts, and block counts fall back to 0 on Windows.
-- **Dangling symlink metadata:** Unresolvable symlinks inside a directory under `ls -lL` log a diagnostic and return exit status 1, falling back to the symlink's own metadata.
+- **Terminal Capabilities:** `ls` uses its `-w` extension, then `COLUMNS`, then a fixed width of 80; it does not discover PTY/tty width. `stty` necessarily depends on terminal/PTY facilities.
+- **Platform Limitations:** `stty` has termios implementations for Linux, Darwin, FreeBSD, NetBSD, and OpenBSD. Windows, AIX, DragonFly, Solaris, and other unmatched targets use fail-closed stubs; the cross-platform vet commands below are compile-time evidence, not runtime conformance evidence. On Windows, `ls` reports inode 0 and link count 1, while its block count is derived from apparent size; owner/group name lookup is best-effort.
+- **Dangling symlink metadata:** Explicit `-H`/`-L` dereferencing failures for command-line operands are diagnosed with non-zero status. Unresolvable symlinks encountered inside a directory under `ls -lL` are diagnosed and use link metadata as a display fallback.
+- **Output errors:** `ls` does not consistently propagate failures from standard-output writes.
 
 ## 8. Gate Record
 

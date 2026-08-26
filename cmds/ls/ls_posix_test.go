@@ -613,6 +613,7 @@ func TestLsDereferenceCommandLineSymlinks(t *testing.T) {
 	if err := os.Symlink(subdir, link); err != nil {
 		t.Fatal(err)
 	}
+	write(t, subdir, "inside", "")
 
 	// 1. With -ldH, it should show directory details ('d' type) and no target.
 	out, errb, code := runToolAt(t, dir, "-ldH", "link")
@@ -641,17 +642,30 @@ func TestLsDereferenceCommandLineSymlinks(t *testing.T) {
 		t.Errorf("ls -ld link expected symlink type and target arrow: %q", out)
 	}
 
-	// 4. Test dangling symlink under -H. It should show 'l' type and show target.
+	// 4. Explicit dereferencing of a dangling command-line symlink must fail.
 	dangling := filepath.Join(dir, "dangling")
 	if err := os.Symlink("nonexistent", dangling); err != nil {
 		t.Fatal(err)
 	}
 	out, errb, code = runToolAt(t, dir, "-ldH", "dangling")
-	if code != 0 || errb != "" {
-		t.Fatalf("ls -ldH dangling = (%q, %q, %d)", out, errb, code)
+	if code == 0 || out != "" || !strings.Contains(errb, "cannot access 'dangling'") {
+		t.Fatalf("ls -ldH dangling = (%q, %q, %d), want dereference failure", out, errb, code)
 	}
-	if !strings.HasPrefix(out, "l") || !strings.Contains(out, "->") {
-		t.Errorf("ls -ldH dangling expected symlink type and target arrow: %q", out)
+	out, errb, code = runToolAt(t, dir, "-ldL", "dangling")
+	if code == 0 || out != "" || !strings.Contains(errb, "cannot access 'dangling'") {
+		t.Fatalf("ls -ldL dangling = (%q, %q, %d), want dereference failure", out, errb, code)
+	}
+
+	// 5. -F alone requires information about the operand link, not its target.
+	out, errb, code = runToolAt(t, dir, "-F", "link")
+	if code != 0 || errb != "" || out != "link@\n" {
+		t.Fatalf("ls -F link = (%q, %q, %d), want (\"link@\\n\", \"\", 0)", out, errb, code)
+	}
+
+	// Explicit -H still takes precedence over -F and -d.
+	out, errb, code = runToolAt(t, dir, "-dFH", "link")
+	if code != 0 || errb != "" || out != "link/\n" {
+		t.Fatalf("ls -dFH link = (%q, %q, %d), want (\"link/\\n\", \"\", 0)", out, errb, code)
 	}
 }
 

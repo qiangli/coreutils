@@ -479,25 +479,27 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		e := entry{name: op, path: full, info: fi}
 		isDir := fi.IsDir()
-		// Determine if we should dereference this command-line symlink.
-		shouldDeref := false
 		if fi.Mode()&os.ModeSymlink != 0 {
 			if deref || derefCL {
-				shouldDeref = true
-			} else if !opt.dirOnly {
-				// By default, follow command-line symlinks that point to directories,
-				// unless -d (dirOnly) or -l (long) asks about the link itself.
-				if !opt.long || derefCLDir {
-					if ti, terr := os.Stat(full); terr == nil && ti.IsDir() {
-						shouldDeref = true
-					}
+				ti, terr := os.Stat(full)
+				if terr != nil {
+					l.fail(2, "cannot access '%s': %s", op, errMsg(terr))
+					continue
 				}
-			}
-		}
-		if shouldDeref {
-			if ti, terr := os.Stat(full); terr == nil {
 				isDir = ti.IsDir()
 				e.info = ti
+			} else if derefCLDir {
+				if ti, terr := os.Stat(full); terr == nil && ti.IsDir() {
+					isDir = true
+					e.info = ti
+				}
+			} else if !opt.dirOnly && !opt.long && opt.indicator != indicatorClassify {
+				// By default, follow command-line symlinks to directories unless
+				// -d, -F, or -l requires information about the link itself.
+				if ti, terr := os.Stat(full); terr == nil && ti.IsDir() {
+					isDir = true
+					e.info = ti
+				}
 			}
 		}
 		e.tm = l.entryTime(e)
