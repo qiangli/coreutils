@@ -124,7 +124,7 @@ sha384sum	cmds/sha384sum		GNU Coreutils	yes	no	1	4
 sha512sum	cmds/sha512sum		GNU Coreutils	yes	no	1	4
 shred	cmds/shred		GNU Coreutils	yes	no	1	4
 shuf	cmds/shuf		GNU Coreutils	yes	no	1	12
-sleep	cmds/sleep		GNU Coreutils	yes	yes	1	8
+sleep	cmds/sleep		GNU Coreutils	yes	yes	2	11
 sntp	cmds/ntp	ntp	Bashy/other extension	no	no	1	4
 sort	cmds/sort		GNU Coreutils	yes	yes	4	24
 split	cmds/split		GNU Coreutils	yes	yes	1	15

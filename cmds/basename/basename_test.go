@@ -96,6 +96,7 @@ func TestBasenameByteSafety(t *testing.T) {
 		{"café/x", "x\n"},
 		{"日本語", "日本語\n"},
 		{"/日本/", "日本\n"},
+		{"/\xff/\xfe", "\xfe\n"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.arg)
@@ -118,14 +119,24 @@ func (r panicReader) Read([]byte) (int, error) {
 // TestBasenameDoesNotConsumeStdin pins the STDIN clause ("Not used.")
 // across a successful run and an error run.
 func TestBasenameDoesNotConsumeStdin(t *testing.T) {
-	for _, args := range [][]string{{"a/b"}, {"-a", "a/b", "c/d"}, {"missing"}} {
+	tests := []struct {
+		args     []string
+		wantCode int
+	}{
+		{[]string{"a/b"}, 0},
+		{[]string{}, 2},
+		{[]string{"a", "b", "c"}, 2},
+	}
+	for _, tc := range tests {
 		var out, errb bytes.Buffer
 		rc := &tool.RunContext{
 			Ctx:   context.Background(),
 			Dir:   t.TempDir(),
 			Stdio: tool.Stdio{In: panicReader{t}, Out: &out, Err: &errb},
 		}
-		cmd.Run(rc, args)
+		if code := cmd.Run(rc, tc.args); code != tc.wantCode {
+			t.Errorf("basename %v: code=%d, want %d", tc.args, code, tc.wantCode)
+		}
 	}
 }
 

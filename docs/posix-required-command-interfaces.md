@@ -4228,7 +4228,7 @@ sleep time
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/sleep`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/sleep/sleep_test.go#TestSleepZeroish;cmds/sleep/sleep_test.go#TestSleepIssue7IntegralDuration;cmds/sleep/sleep_test.go#TestSleepErrors;cmds/sleep/sleep_test.go#TestSleepEndOfOptions;cmds/sleep/sleep_test.go#TestSleepDoesNotConsumeStdin;cmds/sleep/sleep_test.go#TestSleepCancel;cmds/sleep/sleep_test.go#TestSleepSuffixMath`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/sleep/sleep_test.go#TestSleepZeroish;cmds/sleep/sleep_test.go#TestSleepIssue7IntegralDuration;cmds/sleep/sleep_test.go#TestSleepErrors;cmds/sleep/sleep_test.go#TestSleepEndOfOptions;cmds/sleep/sleep_test.go#TestSleepDoesNotConsumeStdin;cmds/sleep/sleep_test.go#TestSleepCancel;cmds/sleep/sleep_test.go#TestSleepSuffixMath;cmds/sleep/sleep_signal_unix_test.go#TestSleepSIGALRMPermittedDisposition;cmds/sleep/sleep_signal_unix_test.go#TestSleepSIGTERMStandardAction`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:sleep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [sleep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/sleep.html).
 

@@ -12,10 +12,11 @@ Scope: the three string/timing utilities `basename string [suffix]`,
 GNU-only behavior (`basename`/`dirname` `-a`/`-s`/`-z` and multiple operands,
 `sleep` fractional values, `s`/`m`/`h`/`d` suffixes, and multi-operand summing)
 is outside the Issue 7 evidence surface. It is present and does not interfere
-with the required semantics, but is not what promotes a row. Each of the three
-rows stays **partial**: the sole residual is the unimplemented `LC_MESSAGES` /
-`NLSPATH` diagnostic message-catalog clause, which is shared by the entire
-POSIX-required surface of this repo and is therefore not "explicitly absent".
+with the required semantics, but is not what promotes a row. Each row remains
+**partial** under the consolidated Sprint 79 fail-closed policy while shared
+process-boundary and advertised-platform runtime evidence remains incomplete.
+The absence of shipped translated catalogs is recorded as a localization
+product gap, not treated as a command-interface blocker by itself.
 
 ## 1. `basename` — Options, Operands, and the `--` Special Token
 
@@ -41,7 +42,8 @@ The component split is bytewise on `/` (0x2F), which can never be a byte of a
 multi-byte character in a POSIX-conformant encoding, so the result is
 independent of `LC_CTYPE` and non-ASCII component bytes are preserved verbatim.
 This matches the parity clause already pinned for `dirname` and is now pinned
-for `basename` too.
+for `basename` too, including a non-UTF-8 byte fixture that would expose a
+rune-decoding or normalization implementation.
 
 Evidence: `TestBasenameByteSafety`.
 
@@ -70,18 +72,23 @@ interval, never a flag.
 **Asynchronous events.** Issue 7 permits `sleep`, on receiving `SIGALRM`, to
 terminate normally with exit status `0`, to effectively ignore it, or to take
 the signal's default action; the action for all other signals is the standard
-default. This tool runs **in-process** inside the embedding shell and installs
-no signal handlers of its own — signal disposition is inherited from the
-embedding process, so taking the default action is one of the three permitted
-`SIGALRM` outcomes and every other signal keeps its standard action by
-construction. The embedder's interruption seam is `RunContext.Ctx`: a
-cancelled context aborts the suspension promptly and quietly with a non-zero
-status, which is the mechanism a host uses to translate a delivered signal into
-an early return. Completion-by-timer (normal wakeup) and completion-by-cancel
-are both pinned.
+action. Unix process tests now invoke `cmd.Run` inside an actual child process,
+wait for an explicit readiness handshake, then deliver the signal. The
+SIGALRM test accepts only the three permitted dispositions and bounds the
+effective-ignore path by using a one-second POSIX operand under a five-second
+watchdog. The separate SIGTERM test requires a signal-terminated wait status
+whose signal is exactly SIGTERM. The helper is selected with the test binary's
+real `-test.run` flag; it does not pass `sleep` as an ordinary test-binary
+argument and accidentally rely on nonexistent multicall dispatch.
+
+The embedder's separate interruption seam remains `RunContext.Ctx`: a
+cancelled context aborts promptly and quietly with non-zero status. That test
+is useful host integration coverage, but is not substituted for process-level
+signal evidence.
 
 Evidence: `TestSleepIssue7IntegralDuration`, `TestSleepZeroish`,
-`TestSleepErrors`, `TestSleepEndOfOptions`, `TestSleepCancel`.
+`TestSleepErrors`, `TestSleepEndOfOptions`, `TestSleepCancel`,
+`TestSleepSIGALRMPermittedDisposition`, `TestSleepSIGTERMStandardAction`.
 
 ## 5. Standard Input, Output, and Error
 
@@ -110,22 +117,25 @@ Evidence: `TestBasenameErrors`, `TestDirnameErrors`, `TestSleepErrors`,
 
 ## 7. Platform Disposition
 
-All three are pure Go with no build-tagged or platform-conditional behavior:
-the string algorithms and the timer/context suspension are byte- and
-wall-clock-identical on every target. Cross-compiled `go vet` over `linux`,
-`darwin`, and `windows` (plus an `aix/ppc64` build canary in the repo gate)
-covers the tests as well as the sources.
+The three implementations are pure Go; the string algorithms and timer/context
+suspension contain no platform branches. Process signals are necessarily
+platform-specific: focused runtime evidence is Unix-tagged, while Windows has
+no POSIX signal contract and other advertised POSIX targets receive compile/vet
+coverage rather than a runtime signal fixture in this workspace. Cross-vet
+covers `linux`, `darwin`, `windows`, and `aix/ppc64` sources and tests.
 
 ## 8. Residuals (why these rows stay `partial`)
 
 The ENVIRONMENT clause lists `LANG`/`LC_ALL`/`LC_CTYPE`/`LC_MESSAGES`/xsi
-`NLSPATH`. `LC_CTYPE` has no observable effect here because splitting is
-bytewise on `/` (demonstrated), but `LC_MESSAGES`/`NLSPATH` diagnostic
-message-catalog localization is **not implemented** — diagnostics are fixed
-English strings, consistent with the entire POSIX-required surface of this
-repo. Because that clause is applicable and its residual is present (not
-"explicitly absent"), none of the three rows is promoted to `verified`; each
-remains `partial` with this as the exact and only residual.
+`NLSPATH`. `LC_CTYPE` has no observable effect on the pathname split because
+`/` is located bytewise (demonstrated). Diagnostics are fixed English and no
+translated catalogs ship, but Sprint 79's consolidated policy explicitly says
+that absence is a localization product gap rather than, by itself, a failed
+utility interface. The rows remain conservatively `partial` because this wave
+does not supply runtime process-boundary/platform evidence across every
+advertised POSIX target. For `sleep`, Unix process-level SIGALRM and SIGTERM are
+now covered; non-Unix POSIX runtime breadth and embedding-host signal
+translation remain outside this focused evidence.
 
 GNU extensions (`basename`/`dirname` `-a`/`-s`/`-z` and multiple operands;
 `sleep` fractional values, `s`/`m`/`h`/`d` suffixes, and multi-operand summing)
@@ -141,21 +151,27 @@ Required local gate for this issue, run on 2026-08-25:
 go test -count=20 ./cmds/basename ./cmds/dirname ./cmds/sleep
 POSIXLY_CORRECT=1 go test -count=20 ./cmds/basename ./cmds/dirname ./cmds/sleep
 go test -race -count=5 ./cmds/basename ./cmds/dirname ./cmds/sleep
+POSIXLY_CORRECT=1 go test -race -count=5 ./cmds/basename ./cmds/dirname ./cmds/sleep
 go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
-GOOS=linux   go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
-GOOS=darwin  go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
-GOOS=windows go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
+GOOS=linux GOARCH=386   go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
+GOOS=linux GOARCH=amd64 go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
+GOOS=darwin GOARCH=arm64 go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
+GOOS=windows GOARCH=amd64 go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
+GOOS=aix GOARCH=ppc64 go vet ./cmds/basename ./cmds/dirname ./cmds/sleep
+./scripts/fmtcheck.sh
 python3 scripts/applet-matrix.py --check
 python3 scripts/posix_manifest.py --check
 bash scripts/applet-test-coverage.sh
-go vet  $(go list ./... | grep -v /external/)
-go test $(go list ./... | grep -v /external/)
 ```
 
-Results are recorded in the issue's worker log. `python3
-scripts/posix_manifest.py --check` still exits non-zero solely on the
-pre-existing, unrelated `sh: partial state requires focused semantic evidence`
-finding (present on clean `main`); the `basename`/`dirname`/`sleep` TSV rows and
-the rendered `posix-required-command-interfaces.md` were confirmed to match the
-script's `render()` output exactly, so this change introduces no manifest
-staleness of its own.
+All focused default, POSIX, race, vet/cross-target-vet, formatting,
+applet-coverage, and matrix commands above passed. The sole exception,
+`python3 scripts/posix_manifest.py --check`, exits non-zero on the pre-existing,
+unrelated `sh: partial state requires focused semantic evidence` finding;
+independently calling the
+manifest's `read_manifest()`, `render()`, and `validate_rendered()` confirmed
+that the TSV and rendered Markdown are byte-for-byte synchronized.
+
+The Unix signal products are runtime tests on the review host; cross-vet only
+type-checks them for the other Unix targets and is not described as runtime
+signal evidence there.
