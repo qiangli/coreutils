@@ -378,6 +378,12 @@ func shortErr(out string, err error) string {
 // carried on the events, as they always have been, because a participant that
 // failed is a fact about the meeting rather than a failure of running it.
 func runRound(ctx context.Context, st *State, question string, runner chat.Runner) ([]Event, error) {
+	// A board never has its floor run for it — no chair, no orchestrated turns.
+	// Belt-and-braces with the api.Round/deliberate guards so no caller can spawn
+	// a round-robin over a board's participants.
+	if st.board() {
+		return nil, st.boardRefusal("run a round")
+	}
 	lease, err := acquireRunLease(st.ID)
 	if err != nil {
 		return nil, err
@@ -910,7 +916,11 @@ func confirmConclusion(ctx context.Context, st *State, in io.Reader, out io.Writ
 	}
 	brief := fmt.Sprintf("%d rounds, %d turns, %d decisions, %d action items", st.Round, countKind(events, "turn"), dec, act)
 
-	if kind == "agent" {
+	// A board never spawns a participant, not even to confirm its own conclusion:
+	// there is no turn to ask them on. An agent initiator of a board falls through
+	// to the attended path below, which concludes only with a terminal answer or an
+	// explicit --yes — never by launching the agent.
+	if kind == "agent" && !st.board() {
 		// Only claim a synthesis exists when one does — a room with no secretary
 		// has none, and pointing the initiator at it would send it looking for
 		// something that was never written.

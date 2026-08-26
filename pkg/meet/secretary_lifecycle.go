@@ -31,7 +31,10 @@ var StartRoomSecretary func(context.Context, RoomSecretaryStartRequest) (string,
 var ValidateRoomSecretary func(string) error
 
 func ensureRoomSecretary(ctx context.Context, st *State) error {
-	if st == nil || !st.SecretaryPending {
+	// A board keeps no minutes and spawns no secretary. This is belt-and-braces:
+	// the create paths already refuse to arm SecretaryPending for a board, but if
+	// one ever slipped through it must not spawn an agent here.
+	if st == nil || !st.SecretaryPending || st.board() {
 		return nil
 	}
 	base, err := baseDir()

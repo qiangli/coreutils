@@ -152,6 +152,10 @@ type CreateOptions struct {
 	MaxTurns     int
 	MaxStalls    int
 	Steerable    bool
+	// Board opens a room where participants read and post on their own turns: no
+	// chair, no spawned secretary. It implies NoSecretary — a board keeps no
+	// minutes and must never arm a pending one.
+	Board bool
 }
 
 // Rooms lists every meeting on this host.
@@ -222,6 +226,11 @@ func Room(ref string) (*State, *Synthesis, error) {
 // authenticated caller as the room's human is what tells it, and it is also the
 // truth: the person who opened the room is in it.
 func Create(opts CreateOptions) (*State, error) {
+	// A board keeps no minutes and must never arm a pending secretary, so it is
+	// NoSecretary by construction whatever the caller passed.
+	if opts.Board {
+		opts.NoSecretary = true
+	}
 	sf := sessionFlags{
 		topic: opts.Topic, participants: opts.Participants,
 		secretary: opts.Secretary, chair: opts.Chair,
@@ -230,7 +239,7 @@ func Create(opts CreateOptions) (*State, error) {
 		turnTimeout: opts.TurnTimeout, decisionMode: opts.DecisionMode,
 		minBand: opts.MinBand, minTurnChars: opts.MinTurnChars,
 		maxTurns: opts.MaxTurns, maxStalls: opts.MaxStalls,
-		steerable: opts.Steerable,
+		steerable: opts.Steerable, board: opts.Board,
 	}
 	if strings.TrimSpace(sf.out) == "" {
 		sf.out = "docs"
@@ -354,6 +363,9 @@ func Round(ctx context.Context, ref string) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	if st.board() {
+		return nil, st.boardRefusal("run a round")
+	}
 	return runRound(ctx, st, currentAgenda(st), apiRunner())
 }
 
@@ -371,6 +383,9 @@ func Poll(ctx context.Context, ref, q string, choices []string) (*PollResult, er
 	if err != nil {
 		return nil, err
 	}
+	if st.board() {
+		return nil, st.boardRefusal("run a poll")
+	}
 	return runPoll(ctx, st, q, choices, nil, apiRunner())
 }
 
@@ -380,6 +395,9 @@ func Ask(ctx context.Context, ref, q string) ([]Event, error) {
 	st, err := roomOf(ref)
 	if err != nil {
 		return nil, err
+	}
+	if st.board() {
+		return nil, st.boardRefusal("put a question to the room")
 	}
 	return runAsk(ctx, st, q, true, nil, apiRunner())
 }
@@ -453,7 +471,12 @@ func archiveSessionArtifacts(st *State) error {
 		return err
 	}
 	archive := filepath.Join(dir, "archive", nowFn().UTC().Format("20060102T150405.000000000Z"))
-	for _, name := range []string{"transcript.jsonl", "synthesis.json", "live.jsonl", "turns"} {
+	// "seen" is the per-participant read cursor store. It MUST move with the
+	// transcript: reopening restarts ordinals at 1, and a seen/<name> left holding
+	// the prior session's high-water mark leaves every participant permanently
+	// "caught up" — MarkSeen never moves a cursor backwards, so they would never
+	// see another message. Archiving it resets the cursor to zero along with the log.
+	for _, name := range []string{"transcript.jsonl", "synthesis.json", "live.jsonl", "turns", "seen"} {
 		source := filepath.Join(dir, name)
 		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
 			continue
