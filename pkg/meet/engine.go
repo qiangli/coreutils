@@ -1033,14 +1033,60 @@ func closeMeeting(ctx context.Context, st *State, opt closeOptions, runner chat.
 
 // fileMinutes renders and writes the minutes from whatever is on disk. It is the
 // shared tail of `close` and `amend`.
+//
+// Two things it deliberately does NOT do. First, it will not file a document for
+// a room that never held a discussion: a transcript with no turn, vote, post, or
+// marker produces only NOT-EXTRACTED boilerplate, so closing such a room releases
+// its number and marks it closed but writes nothing — the transcript stays in the
+// store. Second, it will not write into a repository that is not the caller's.
+// minutesPath() derives the repo-default destination from st.Cwd, captured when
+// the room was OPENED; a room opened in one repo and closed weeks later from
+// another would otherwise drop a note into the first, silently dirtying a tree
+// nobody is standing in (measured: a close landed a note in a submodule mid
+// certification, from a room three weeks stale). When the recorded Cwd names a
+// different repo than the caller's, it refuses and names the path.
 func fileMinutes(st *State) (string, error) {
 	events, err := readTranscript(st.ID)
 	if err != nil {
 		return "", err
 	}
 	recordOperability(st, events) // self-update the capability matrix from this meeting
-	md := renderMinutes(st, events, loadSynthesis(st.ID))
+
+	// Did anything actually happen in this room? Agenda/procedural markers are
+	// scaffolding, not a discussion — a room holding only those has nothing worth
+	// filing. Boards post as "human", so a board with activity is caught here too.
+	filable := false
+	for _, e := range events {
+		switch e.Kind {
+		case "turn", "vote", "human", "decision", "action", "note":
+			filable = true
+		}
+	}
+	if !filable {
+		// Still close the room and release its number; just publish nothing. The
+		// transcript remains in the store for anyone who wants it.
+		st.Status = "closed"
+		st.Room = 0
+		_ = st.save()
+		dir, _ := storeDir(st.ID)
+		return dir, nil
+	}
+
 	path := minutesPath(st)
+	// Resolve the destination against the caller's repo at CLOSE time. If the
+	// minutes would land inside the repo the room was opened in, and that is not
+	// the repo the caller is standing in now, refuse rather than write into it.
+	if recordedRoot := findRepoRoot(st.Cwd); recordedRoot != "" && strings.HasPrefix(path, recordedRoot) {
+		cwd, _ := os.Getwd()
+		if callerRoot := findRepoRoot(cwd); !sameRepoDir(recordedRoot, callerRoot) {
+			return "", fmt.Errorf("meet: refusing to file minutes into %s — the room was opened in %s, "+
+				"but you are closing it from %s. The transcript remains in the store; re-run from that "+
+				"repo, or pass --out <path> to choose a destination",
+				redactHome(path), redactHome(recordedRoot), redactHome(cwd))
+		}
+	}
+
+	md := renderMinutes(st, events, loadSynthesis(st.ID))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
@@ -1051,4 +1097,21 @@ func fileMinutes(st *State) (string, error) {
 	st.Room = 0
 	_ = st.save()
 	return path, nil
+}
+
+// sameRepoDir reports whether two repo roots are the same directory, resolving
+// symlinks first. macOS tempdirs are /var → /private/var symlinks, so a literal
+// string compare between a recorded Cwd and os.Getwd() can disagree about the
+// same place; EvalSymlinks makes the comparison canonical.
+func sameRepoDir(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	if ra, err := filepath.EvalSymlinks(a); err == nil {
+		a = ra
+	}
+	if rb, err := filepath.EvalSymlinks(b); err == nil {
+		b = rb
+	}
+	return a == b
 }

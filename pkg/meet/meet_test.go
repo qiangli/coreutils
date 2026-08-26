@@ -100,6 +100,7 @@ func TestCloseWritesMinutesWithMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Cwd = repo
+	t.Chdir(repo) // close from the repo the room was opened in (fileMinutes contract)
 	runRound(context.Background(), st, "verb set", fakeRunner{reply: "agree"})
 	_, _ = record(st, "decision", "qiangli", "", "P0 verbs = start, round, close, list")
 	_, _ = record(st, "action", "qiangli", "", "claude: strike deferred verbs")

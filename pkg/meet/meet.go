@@ -64,7 +64,7 @@ func NewMeetCmd() *cobra.Command {
 	cmd.AddCommand(
 		newOpenCmd(), newConsultCmd(), newTellCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
-		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
+		newConvergeCmd(), newCloseCmd(), newAbandonCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
 		newObserveCmd(), newServeCmd(), newServiceCmd(), newSayCmd(),
 	)
@@ -1066,6 +1066,78 @@ func newCloseCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "close without asking the initiator to confirm")
+	return cmd
+}
+
+// newAbandonCmd reaps a room instead of concluding it. `close` is built for a
+// live meeting reaching its end — it runs the secretary (converge SPAWNS an
+// agent, and --yes does not skip it), asks the initiator to confirm, then files
+// minutes. None of that is right for a room dead for six weeks: there is nothing
+// to synthesize, nobody to confirm to, and no repo that wants its minutes.
+//
+// abandon is the janitorial exit. It marks the room ABANDONED (so it never reads
+// like a concluded one afterwards), releases its room number, and archives the
+// transcript beside the room's other artifacts — exactly as a reopen would, so
+// the transcript SURVIVES; this is not a delete. It spawns nothing, synthesizes
+// nothing, and files nothing, which is also why it removes the reason to reach
+// for `close --yes` on a dead room: --yes suppresses the confirmation prompt but
+// not the expensive secretary pass, so it was never the right tool for reaping.
+func newAbandonCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "abandon <room>|<id>",
+		Short: "reap a dead room: mark it abandoned, release its number, archive the transcript (spawns nothing)",
+		Long: "Close a room that will never conclude. Unlike `close`, abandon spawns no\n" +
+			"secretary, synthesizes nothing, and files no minutes: it marks the room\n" +
+			"ABANDONED, releases its room number, and archives the transcript beside the\n" +
+			"room's other artifacts. The transcript survives — this is not a delete.\n\n" +
+			"Use it to reap a stale room instead of `close --yes`, which still runs the\n" +
+			"expensive secretary pass it was never meant to.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := resolveMeeting(args[0])
+			if err != nil {
+				return err
+			}
+			// Take the run lease so a room mid-turn cannot be reaped out from under
+			// an active session; release it as soon as we are done.
+			lease, err := acquireRunLease(id)
+			if err != nil {
+				return err
+			}
+			defer lease.Release()
+			st, err := loadState(id)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			if st.Status == "abandoned" {
+				fmt.Fprintf(w, "%s is already abandoned\n", st.ID)
+				return nil
+			}
+			room := st.Room
+			// Record WHY the room ended before archiving, so the archived transcript
+			// carries the reason and the room never reads as concluded. A plain
+			// marker append — no agent is launched, nothing is extracted.
+			_, _ = record(st, "abandoned", st.Human, "", "room abandoned; not concluded")
+			// Move the transcript and its siblings under archive/<ts>, the same path
+			// a reopen archives through — the transcript is preserved, not deleted.
+			if err := archiveSessionArtifacts(st); err != nil {
+				return err
+			}
+			st.Status = "abandoned"
+			st.Room = 0
+			if err := st.save(); err != nil {
+				return err
+			}
+			if room > 0 {
+				fmt.Fprintf(w, "abandoned %s (released room %d)\n", st.ID, room)
+			} else {
+				fmt.Fprintf(w, "abandoned %s\n", st.ID)
+			}
+			fmt.Fprintln(w, "  no synthesis, no minutes — the transcript is archived in the store")
+			return nil
+		},
+	}
 	return cmd
 }
 
