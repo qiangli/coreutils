@@ -93,7 +93,7 @@ func TestDispatchPlanThroughBuiltMulticall(t *testing.T) {
 	root := t.TempDir()
 	bodies := map[string]string{}
 	declared := map[string]bool{}
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		body := "#!/bin/sh\n# provisioned " + e.Command + "\nexit 0\n"
 		provision(t, root, e.Command, body)
 		bodies[e.Command] = body
@@ -173,7 +173,7 @@ func TestDispatchPlanThroughBuiltMulticall(t *testing.T) {
 		}
 	}
 
-	// An empty cache is sixteen loud failures, never an empty plan.
+	// An empty cache is fifteen loud failures, never an empty plan.
 	code, stdout, stderr = runDispatchPlanSubprocess(t, bin, t.TempDir())
 	if code != 1 || strings.TrimSpace(stdout) != "" ||
 		!strings.Contains(stderr, "no verifiable dispatch target") {

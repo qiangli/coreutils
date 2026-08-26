@@ -1,9 +1,9 @@
 # POSIX external providers
 
-Sixteen POSIX-required commands are deliberately not implemented in Go:
+Fifteen POSIX-required commands are deliberately not implemented in Go:
 
 ```
-make  bc  patch  m4  ed  man  ctags  ar  nm  strip  ex  vi
+make  bc  patch  m4  man  ctags  ar  nm  strip  ex  vi
 lp    mailx  localedef  talk
 ```
 
@@ -11,10 +11,15 @@ They are **external providers**: the multicall owns the name and dispatches to
 a copy of the upstream program, built locally from a sha256-pinned source
 tarball and checked against its recorded provenance before it runs.
 
+The manifest still contains an `ed` 1.20.1 row as a reproducible differential
+control. `cmds/ed` now owns that command in pure Go, so the retained artifact
+is available to `list`, `check`, and `build` but is excluded from registration
+and `dispatch-plan`.
+
 ## Why the multicall has to own the name
 
 Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-coreutils". Until this mechanism existed those sixteen names were not in
+coreutils". Until this mechanism existed those names were not in
 `tool.Names()`, so the shell adapter fell through to `$PATH` and the arm
 measured **Ubuntu's** binaries while reporting itself as bashy-only.
 
@@ -77,13 +82,13 @@ which bytes produced a result.
 
 ## Platform gating
 
-The manifest declares platforms per provider; `ed` and `man` are
-`linux,darwin` only. The gate is enforced at **run** time, not at registration
+The manifest declares platforms per provider; `man` is `linux,darwin` only.
+The gate is enforced at **run** time, not at registration
 time — the name is registered on every platform so the multicall owns it
 everywhere, and an unsupported host gets
 
 ```
-ed: ed 1.20.1 is not supported on windows (manifest declares: linux,darwin)
+man: man-db 2.12.0 is not supported on windows (manifest declares: linux,darwin)
 ```
 
 instead of a silent fall-through to whatever `$PATH` holds. It also keeps the
@@ -96,7 +101,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all sixteen provider names, so plain bashy stays standalone-graceful
+unregisters all fifteen provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -123,7 +128,7 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the sixteen registered provider tools + the `posix-providers` applet |
+| `cmds/posixproviders/` | the fifteen registered provider tools + the `posix-providers` applet; retained control pins do not dispatch |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
 | `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |

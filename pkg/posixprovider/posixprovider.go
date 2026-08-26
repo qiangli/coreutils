@@ -2,16 +2,14 @@
 // See LICENSE for licensing information
 
 // Package posixprovider is the READ half of the POSIX external provider
-// mechanism: the sixteen POSIX-required commands this repository deliberately
-// does not implement in Go (make, bc, patch, m4, ed, man, ctags, ar, nm, strip,
-// ex, vi, lp, mailx, localedef, talk), pinned by manifest, built locally from
-// upstream source, and resolved out of the binmgr cache so the multicall OWNS
-// the name.
+// mechanism: pinned upstream controls built locally from source and resolved
+// from the binmgr cache. Fifteen currently dispatch so the multicall owns their
+// names; ed remains pinned only as a differential control after its Go migration.
 //
 // # Why the name must be owned
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Until this package existed, those sixteen names were not in
+// coreutils". Until this package existed, those provider names were not in
 // tool.Names(), so the shell adapter fell through to $PATH and the arm silently
 // measured Ubuntu's binaries while claiming to measure ours. There is therefore
 // NO fallback here of any kind: an unavailable provider is a loud failure, never
@@ -61,7 +59,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the sixteen names are simply not ours and normal
+// provider cache: with it set, the fifteen active names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"
@@ -204,13 +202,43 @@ func Entries() []Entry {
 	return out
 }
 
+// IsDispatchProvider reports whether name is currently owned by the external
+// provider adapter. The ed pin is deliberately retained as a reproducible
+// differential control after cmds/ed became the shipped pure-Go owner.
+func IsDispatchProvider(name string) bool {
+	return name != "ed" && Has(name)
+}
+
+// DispatchEntries returns only manifest rows that still own a command name.
+// Retained differential-control pins remain visible through Entries, Lookup,
+// list, check, and build without creating ambiguous runtime ownership.
+func DispatchEntries() []Entry {
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if IsDispatchProvider(e.Command) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// DispatchNames returns the sorted active external-provider owner set.
+func DispatchNames() []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range DispatchEntries() {
+		out = append(out, e.Command)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Lookup returns the manifest entry for name.
 func Lookup(name string) (Entry, bool) {
 	e, ok := byName[name]
 	return e, ok
 }
 
-// Has reports whether name is a POSIX external provider.
+// Has reports whether name has a pinned external-provider control artifact.
 func Has(name string) bool {
 	_, ok := byName[name]
 	return ok

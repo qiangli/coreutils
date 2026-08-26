@@ -215,17 +215,17 @@ implementation.
 
 The generated [POSIX required-command coverage
 map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
-contract: 116 configured names, with availability of 86 Go applets, 14
-shell-only names, and 16 pinned providers. Expanded interface claims live in a
+contract: 116 configured names, with availability of 87 Go applets, 14
+shell-only names, and 15 pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
-Profile C/D ownership of 78 Go-selected, 22 shell-selected, and 16 provider
+Profile C/D ownership of 79 Go-selected, 22 shell-selected, and 15 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
 missing, partial, implemented, and verified states rather than treating
 placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
-`patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`,
+`patch`, `m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`,
 `mailx`, `localedef`, `talk`) and
 dispatches to a copy of the upstream program built locally from a sha256-pinned
 source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
@@ -234,7 +234,7 @@ were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory (availability 86/14/16, effective selection 78/22/16): it
+116-name inventory (availability 87/14/15, effective selection 79/22/15): it
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH
@@ -278,11 +278,9 @@ ability to provide honest semantics without delegating to a host executable.
   `uuencode`. Their useful documented subsets fail loudly for unsupported
   formats, encodings, and variants; continue hardening them with VSC deltas and
   cross-platform behavioral cases rather than silently broadening semantics.
-- **P1 — investigate permissive Go prior art, then scope:** `ed` and `patch`.
-  Record source, license, maintenance status, semantic coverage, and
-  adaptation cost before choosing implementation work. `ed` may instead become
-  a separately named modern scriptable editing primitive if that better serves
-  agents; such a primitive does not satisfy or masquerade as POSIX `ed`.
+- **P1 — continue scoped implementations:** broaden `ed` according to its
+  [explicit continuation ledger](ed-posix-continuation.md), and investigate
+  permissive Go prior art before scoping `patch`.
 - **P1 — approved staged implementation:** `mailx`, `pax`, and `make`, following
   `docs/mailx-pax-make-agentic-plan.md`. This approval does not waive the
   release gates and does not allow a new `make` provider to hide the existing

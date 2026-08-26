@@ -1,4 +1,4 @@
-# POSIX external provider manifest — the commands the Go multicall does not implement.
+# POSIX external provider manifest — active providers plus retained differential controls.
 #
 # LICENSE POSTURE (this is why the file is shaped this way):
 # MOST providers below are COPYLEFT — GPL-2.0, GPL-3.0, or the Vim license.
@@ -50,6 +50,7 @@ make	4.3	GPL-3.0	linux,darwin,windows	e05fdde47c5f7ca45cb697e973894ff4f5d79e13b7
 bc	1.07.1	GPL-3.0	linux,darwin,windows	62adfca89b0a1c0164c2cdca59ca210c1d44c3ffc46daf9931cf4942664cb02a	https://ftp.gnu.org/gnu/bc/bc-1.07.1.tar.gz
 patch	2.7.6	GPL-3.0	linux,darwin,windows	ac610bda97abe0d9f6b7c963255a11dcb196c25e337c61f94e4778d632f1d8fd	https://ftp.gnu.org/gnu/patch/patch-2.7.6.tar.xz
 m4	1.4.19	GPL-3.0	linux,darwin,windows	63aede5c6d33b6d9b13511cd0be2cac046f2e70fd0a07aa9573a04a82783af96	https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz
+# ed is retained for reproducible differential testing; cmds/ed owns runtime dispatch.
 ed	1.20.1	GPL-2.0	linux,darwin	b1a463b297a141f9876c4b1fcd01477f645cded92168090e9a35db2af4babbca	https://ftp.gnu.org/gnu/ed/ed-1.20.1.tar.lz
 man	2.12.0	GPL-3.0	linux,darwin	415a6284a22764ad22ff0f66710d853be7790dd451cd71436e3d25c74d996a95	https://download.savannah.gnu.org/releases/man-db/man-db-2.12.0.tar.xz
 ctags	6.2.1	GPL-2.0	linux,darwin,windows	f56829e9a576025e98955597ee967099a871987b3476fbd8dbbc2b9dc921f824	https://github.com/universal-ctags/ctags/archive/refs/tags/v6.2.1.tar.gz

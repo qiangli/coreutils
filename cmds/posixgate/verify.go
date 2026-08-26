@@ -53,9 +53,9 @@ func VerifyRegistry(optOutValue string) []Finding {
 		return []Finding{{Check: "spec", Detail: err.Error()}}
 	}
 	var out []Finding
-	out = append(out, verifyInventory(spec, posixprovider.Names())...)
+	out = append(out, verifyInventory(spec, posixprovider.DispatchNames())...)
 	out = append(out, verifyPins(posixprovider.Entries())...)
-	out = append(out, verifyOwnership(spec, registeredFn, posixprovider.Has,
+	out = append(out, verifyOwnership(spec, registeredFn, posixprovider.IsDispatchProvider,
 		!posixprovider.EnabledIn(optOutValue))...)
 	return out
 }
@@ -135,7 +135,7 @@ func verifyPins(entries []posixprovider.Entry) []Finding {
 // every go_applet and provider name must be registered (the multicall must OWN
 // it, or the harness's PATH wiring silently takes the host's binary), every
 // shell name must NOT be (a registered tool under a shell-owned name is
-// ambiguous ownership), and no applet may double as a pinned provider.
+// ambiguous ownership), and no applet may double as an active provider.
 func verifyOwnership(spec []specRow, registered func(string) bool, providerHas func(string) bool, optOut bool) []Finding {
 	var out []Finding
 	if optOut {
@@ -179,12 +179,12 @@ func verifyOwnership(spec []specRow, registered func(string) bool, providerHas f
 // VerifyProviders is the provisioning/provenance gate: every pinned provider
 // must resolve from the cache with its provenance verified. A platform the
 // manifest does not declare is a FAILURE here, not a skip — a staged
-// certification runtime that cannot supply all sixteen names is not the
+// certification runtime that cannot supply all fifteen active names is not the
 // runtime it claims to be. (posix-providers check keeps its softer per-host
 // semantics; this gate is the certification view.)
 func VerifyProviders(r posixprovider.Resolver) []Finding {
 	var out []Finding
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		st := r.Status(e.Command)
 		switch {
 		case !st.Supported:
@@ -503,7 +503,7 @@ func verifyStagedProviders(rc *tool.RunContext, cfg runtimeConfig, approved stri
 	}
 	rows, fs := parseDispatchPlan(plan)
 	out = append(out, fs...)
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		row, ok := rows[e.Command]
 		if !ok {
 			continue // already rejected as missing by parseDispatchPlan
@@ -531,7 +531,7 @@ type planRow struct {
 
 // parseDispatchPlan strictly parses the wrapper's dispatch-plan transcript:
 // exactly one well-formed `command version path built_sha256` TSV row per
-// pinned provider, sixteen in total. Duplicates, extras, missing names,
+// active pinned provider, fifteen in total. Duplicates, extras, missing names,
 // malformed rows, and digests that are not 64 hex characters are each a
 // Finding — a plan the gate cannot fully account for must not certify
 // anything.
@@ -545,9 +545,9 @@ func parseDispatchPlan(plan string) (map[string]planRow, []Finding) {
 		case len(f) != 4 || f[0] == "" || f[1] == "" || f[2] == "" || !sha256Re.MatchString(f[3]):
 			out = append(out, Finding{Check: "provider-dispatch",
 				Detail: fmt.Sprintf("malformed dispatch-plan row %d: %q", i+1, line)})
-		case !posixprovider.Has(f[0]):
+		case !posixprovider.IsDispatchProvider(f[0]):
 			out = append(out, Finding{Check: "provider-dispatch", Name: f[0],
-				Detail: "dispatch-plan row for a name outside the sixteen pinned providers"})
+				Detail: "dispatch-plan row for a name outside the fifteen active providers"})
 		default:
 			if _, dup := rows[f[0]]; dup {
 				out = append(out, Finding{Check: "provider-dispatch", Name: f[0],
@@ -557,7 +557,7 @@ func parseDispatchPlan(plan string) (map[string]planRow, []Finding) {
 			rows[f[0]] = planRow{version: f[1], path: f[2], builtSHA: strings.ToLower(f[3])}
 		}
 	}
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		if _, ok := rows[e.Command]; !ok {
 			out = append(out, Finding{Check: "provider-dispatch", Name: e.Command,
 				Detail: "no dispatch-plan row for this provider"})

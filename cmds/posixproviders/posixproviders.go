@@ -7,8 +7,8 @@
 // # What this fixes
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Sixteen POSIX-required commands are not implemented in Go
-// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
+// coreutils". Fifteen POSIX-required commands are not implemented in Go
+// (make, bc, patch, m4, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
 // localedef, talk), and until this package existed they were absent from
 // tool.Names() — so the shell adapter fell through to $PATH and the arm measured
 // Ubuntu's binaries while reporting itself as bashy-only. Registering them here
@@ -30,17 +30,17 @@
 //
 // # Platform gating
 //
-// The manifest declares platforms per provider (ed and man are linux,darwin
-// only). The gate is enforced at RUN time, not at registration time: the name is
+// The manifest declares platforms per provider (man is linux,darwin only).
+// The gate is enforced at RUN time, not at registration time: the name is
 // registered on every platform so the multicall owns it everywhere and an
-// unsupported host gets a loud "ed 1.20.1 is not supported on windows" instead
+// unsupported host gets a loud "man 2.12.0 is not supported on windows" instead
 // of a silent fall-through to whatever $PATH holds. It also keeps the registry
 // — and therefore the measured inventory and the pkg/atlas coverage ratchet —
 // the same shape on every platform.
 //
 // # Opt-out
 //
-// BASHY_POSIX_PROVIDERS=off unregisters all sixteen, so plain bashy stays
+// BASHY_POSIX_PROVIDERS=off unregisters all fifteen active providers, so plain bashy stays
 // standalone-graceful on a machine with no provider cache. The `posix-providers`
 // applet itself is always registered: it is how you get out of that state.
 package posixproviderscmd
@@ -73,13 +73,13 @@ func init() {
 	if !posixprovider.Enabled() {
 		return
 	}
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		tool.Register(providerTool(e))
 	}
 }
 
 // ---------------------------------------------------------------------------
-// the sixteen provider tools
+// the fifteen active provider tools
 // ---------------------------------------------------------------------------
 
 func providerTool(e posixprovider.Entry) *tool.Tool {
@@ -191,7 +191,7 @@ func adminTool() *tool.Tool {
 
   list                 show every pinned provider and whether it is provisioned
   check [all|<cmd>]    verify provisioning + provenance; non-zero if any is unusable
-  dispatch-plan        print, one TSV row per pinned provider, the exact binary
+  dispatch-plan        print, one TSV row per active provider, the exact binary
                        THIS invocation would dispatch to: command, version,
                        resolved path, verified built sha256 — the introspection
                        surface posix-gate compares against its own resolution
@@ -233,7 +233,7 @@ func runAdmin(rc *tool.RunContext, args []string) int {
 	}
 }
 
-// runDispatchPlan is the trusted-introspection surface: for every pinned
+// runDispatchPlan is the trusted-introspection surface: for every active
 // provider it prints the binary THIS invocation — this executable, this
 // environment, this cache — would dispatch to, as one strict TSV row:
 //
@@ -256,7 +256,7 @@ func runDispatchPlan(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	bad := 0
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		id, err := r.VerifiedIdentity(e.Command)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "FAIL %s: %v\n", e.Command, err)

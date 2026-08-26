@@ -51,6 +51,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/du"
 	_ "github.com/qiangli/coreutils/cmds/duration"
 	_ "github.com/qiangli/coreutils/cmds/echo"
+	_ "github.com/qiangli/coreutils/cmds/ed"
 	_ "github.com/qiangli/coreutils/cmds/env"
 	_ "github.com/qiangli/coreutils/cmds/expand"
 	_ "github.com/qiangli/coreutils/cmds/expr"
@@ -107,8 +108,8 @@ import (
 	// every name, and rejects count drift, ambiguous ownership, missing
 	// provider pins/provenance, and host PATH fallback.
 	_ "github.com/qiangli/coreutils/cmds/posixgate"
-	// posixproviders registers the sixteen pinned POSIX external providers
-	// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
+	// posixproviders registers fifteen pinned POSIX external providers
+	// (make, bc, patch, m4, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
 	// localedef, talk) plus the
 	// `posix-providers` provisioning applet. It must be in this list: the
 	// certification harness rebuilds its measured PATH from tool.Names(), so a

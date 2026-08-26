@@ -516,14 +516,15 @@ func init() {
 	// sprint + weave are the public orchestration surface. See packages.go.
 	addTools(GroupDiagnostics, "resources", "why")
 
-	// The pinned POSIX external providers (pkg/posixprovider, cmds/posixproviders).
+	// ed is an in-process Go applet. The remaining pinned POSIX external
+	// providers live in pkg/posixprovider and cmds/posixproviders.
 	// These are NOT Go applets: the multicall owns the NAME and executes a
 	// locally built, provenance-checked copy of the upstream program. They are
 	// listed here because they are registered tools — the ratchet is about the
 	// registry, not about who wrote the implementation — and their Subclass says
 	// which kind they are.
 	addTools(GroupToolchains, "make", "ar", "nm", "strip")
-	addTools(GroupTextutils, "patch", "m4", "ed", "ex", "vi")
+	addTools(GroupTextutils, "ed", "patch", "m4", "ex", "vi")
 	addTools(GroupShellutils, "bc", "man", "localedef", "talk")
 	addTools(GroupCodeIntel, "ctags")
 	// lp submits a print job; mailx sends/reads mail. Both talk to a local
@@ -583,7 +584,7 @@ func init() {
 	// separation is the point (a build inside a certification arm would inject
 	// network and toolchain variance into measured evidence).
 	posixProviders := []string{
-		"make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+		"make", "bc", "patch", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		"lp", "mailx", "localedef", "talk",
 	}
 	capTools(CapCached, posixProviders...)
@@ -1031,13 +1032,15 @@ func init() {
 	// "resolve the cached binary and hand it argv", so what runs afterwards is a
 	// process bashy no longer governs. The read/write split below is the upstream
 	// program's own documented behaviour, not ours.
-	eff(EffExec, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+	eff(EffExec, "make", "bc", "patch", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		"lp", "mailx", "localedef", "talk")
-	eff(EffRead, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+	eff(EffRead, "ed")
+	eff(EffRead, "make", "bc", "patch", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		// lp reads the file it submits; mailx reads the mailbox; localedef reads
 		// the charmap and locale definition; talk reads the utmp login database.
 		"lp", "mailx", "localedef", "talk")
-	eff(EffWrite, "make", "patch", "ed", "ctags", "ar", "strip", "ex", "vi",
+	eff(EffWrite, "ed")
+	eff(EffWrite, "make", "patch", "ctags", "ar", "strip", "ex", "vi",
 		// mailx writes the mailbox and queues outbound mail; localedef writes the
 		// compiled locale into the locale path.
 		"mailx", "localedef")

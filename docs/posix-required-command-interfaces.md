@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 86 |
+| Availability | Go | 87 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 16 |
-| Effective owner | Go | 78 |
+| Availability | Provider | 15 |
+| Effective owner | Go | 79 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 16 |
+| Effective owner | Provider | 15 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 3 |
-| Evidence | Partial | 97 |
-| Evidence | Missing | 16 |
+| Evidence | Partial | 98 |
+| Evidence | Missing | 15 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 78 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 79 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the
-16 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 101 owned rows (79 Go plus 22 shell) without treating the
+15 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -1542,7 +1542,7 @@ echo [string...]
 
 ## `ed`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1558,33 +1558,33 @@ ed [-p string] [-s] [file]
 
 **Issue 7 option-argument candidate:** `-p=<string>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Accept at most one file operand and simulate an edit before reading commands; a relative pathname is resolved against the invocation working directory.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a lone - is accepted as the POSIX-unspecified file operand.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read a text stream of ed commands and input-mode text; a line containing only a period ends append, insert, or change input.
 
 **Environment:** `HOME; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write prompts, byte counts, selected buffer lines, and question-mark command diagnostics to standard output.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write option, operand, initial-file, and filesystem diagnostics to standard error.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read the file operand or e target into a private line buffer; modify files only through the w command.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the command stream completes without a diagnostic; 1 after a command or file error; 2 for option or operand usage errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#ed`.
+**Implementation:** `cmds/ed`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ed`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/ed/ed_test.go#TestRegisteredToolScriptEditingAndWrite;cmds/ed/ed_test.go#TestRegisteredToolAddressesSearchAndList;cmds/ed/ed_test.go#TestRegisteredToolBRESubstitution;cmds/ed/ed_test.go#TestRegisteredToolEditWriteCountsAndRememberedFile;cmds/ed/ed_test.go#TestRegisteredToolDirtyQuitAndDiagnostics;cmds/ed/ed_test.go#TestRegisteredToolPromptSilentAndUsage`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ed:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

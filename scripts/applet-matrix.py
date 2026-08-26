@@ -51,7 +51,7 @@ alias bg cd command fc fg getopts hash jobs read sh umask unalias wait
 # find -exec), but a POSIX-mode bash-family shell EFFECTIVELY selects its own
 # builtin (or, for `time`, the reserved word) when they are invoked at shell
 # level. These two sets are the entire difference between the availability
-# split (86/14/16) and the effective-selection split (78/22/16); an eighth
+# split (87/14/15) and the effective-selection split (79/22/15); an eighth
 # builtin overlap appearing anywhere is an ownership violation the gate must
 # reject, so the sets are pinned here, in the one generator that projects the
 # canonical manifest.
@@ -60,8 +60,8 @@ KEYWORD_OVERLAP = {"time"}
 
 # The pinned shape of the required inventory, both axes. cmds/posixgate pins
 # the same numbers as Go constants; changing the inventory must trip both.
-AVAILABILITY_PIN = {"go_applet": 86, "shell": 14, "external_provider": 16}
-EFFECTIVE_PIN = {"go_applet": 78, "shell": 22, "external_provider": 16}
+AVAILABILITY_PIN = {"go_applet": 87, "shell": 14, "external_provider": 15}
+EFFECTIVE_PIN = {"go_applet": 79, "shell": 22, "external_provider": 15}
 
 ALIASES = {
     "[": "test",
@@ -118,15 +118,18 @@ def rows() -> list[dict[str, str | int]]:
             "reconcile it with the configured scenario before regenerating"
         )
     packages = shipped_packages()
-    providers = set(provider_names())
+    pinned_providers = set(provider_names())
     applet_package = {package: package for package in packages}
     # cmds/posixproviders is not itself an advertised name; the names it
     # registers are.
     applet_package.pop(PROVIDER_PACKAGE, None)
     if PROVIDER_PACKAGE not in packages:
         raise SystemExit(f"cmds/{PROVIDER_PACKAGE} is no longer in cmds/all; reconcile the provider axis")
-    for applet in sorted(providers) + [PROVIDER_ADMIN]:
-        applet_package[applet] = PROVIDER_PACKAGE
+    for applet in sorted(pinned_providers):
+        # A retained pin can remain as a differential control after a Go
+        # applet takes runtime ownership. Never overwrite that Go package.
+        applet_package.setdefault(applet, PROVIDER_PACKAGE)
+    applet_package[PROVIDER_ADMIN] = PROVIDER_PACKAGE
     for applet, package in ALIASES.items():
         if package not in applet_package:
             raise SystemExit(f"alias {applet!r} refers to unshipped package {package!r}")
@@ -136,7 +139,7 @@ def rows() -> list[dict[str, str | int]]:
     for applet in sorted(applet_package):
         package = applet_package[applet]
         files, funcs = package_tests(package)
-        if applet in providers:
+        if applet in pinned_providers and package == PROVIDER_PACKAGE:
             family = PROVIDER_FAMILY
         elif applet in GNU:
             family = "GNU Coreutils"
@@ -155,7 +158,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 154 or len(result) != 175:
+    if len(packages) != 155 or len(result) != 175:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -176,7 +179,12 @@ def render_tsv(data: list[dict[str, str | int]]) -> str:
 
 
 def required_rows(data: list[dict[str, str | int]]) -> list[dict[str, str]]:
-    providers = set(provider_names())
+    providers = {
+        str(row["applet"])
+        for row in data
+        if row["go_package"] == f"cmds/{PROVIDER_PACKAGE}"
+        and row["applet"] != PROVIDER_ADMIN
+    }
     # A provider is registered in the multicall but is NOT a Go applet: the name
     # is ours, the implementation is upstream's, built locally from a pinned
     # source tarball. It is therefore neither `go_applet` (which would overstate
@@ -268,7 +276,7 @@ def render_spec_gen(data: list[dict[str, str]]) -> str:
         "// no independent copy of the inventory — regenerating the matrix rewrites",
         "// this file, and --check (crossvet + pre-push) fails when it is stale.",
         "//",
-        "// Pinned shape: availability 86/14/16, effective selection 78/22/16.",
+        "// Pinned shape: availability 87/14/15, effective selection 79/22/15.",
         "",
         "package posixgatecmd",
         "",

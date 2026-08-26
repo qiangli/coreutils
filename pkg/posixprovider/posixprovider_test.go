@@ -122,6 +122,21 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 	}
 }
 
+func TestEdPinIsRetainedButNotDispatchOwner(t *testing.T) {
+	if !Has("ed") {
+		t.Fatal("ed differential-control pin was removed")
+	}
+	if IsDispatchProvider("ed") {
+		t.Fatal("ed is still an active provider despite cmds/ed ownership")
+	}
+	if slices.Contains(DispatchNames(), "ed") {
+		t.Fatal("ed leaked into active provider names")
+	}
+	if len(DispatchEntries()) != len(Entries())-1 {
+		t.Fatalf("active entries=%d all pins=%d, want one retained control", len(DispatchEntries()), len(Entries()))
+	}
+}
+
 func TestParseManifestRefusesBadRows(t *testing.T) {
 	cases := map[string]string{
 		"missing column":  "make\t4.3\tGPL-3.0\tlinux\tdeadbeef\n",

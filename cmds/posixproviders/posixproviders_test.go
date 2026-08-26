@@ -147,6 +147,9 @@ func provision(t *testing.T, root, name, body string) string {
 func TestProviderNamesAreRegistered(t *testing.T) {
 	names := tool.Names()
 	for _, n := range posixprovider.Names() {
+		if n == "ed" {
+			continue // retained pin; the registered owner is cmds/ed
+		}
 		if !slices.Contains(names, n) {
 			t.Errorf("tool.Names() is missing provider %q", n)
 		}
@@ -164,7 +167,7 @@ func TestProviderNamesAreRegistered(t *testing.T) {
 // owns `ed` on Windows too, and refuses loudly there rather than letting the
 // name fall through to whatever $PATH holds.
 func TestProviderNamesAreRegisteredOnEveryPlatform(t *testing.T) {
-	for _, n := range []string{"ed", "man"} {
+	for _, n := range []string{"man"} {
 		e, _ := posixprovider.Lookup(n)
 		if e.SupportsGOOS("windows") {
 			t.Skipf("%s now declares windows; this test no longer distinguishes anything", n)
@@ -413,7 +416,7 @@ func TestOptOutUnregistersProviders(t *testing.T) {
 func TestAdminDispatchPlan(t *testing.T) {
 	root := t.TempDir()
 	bodies := map[string]string{}
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		body := "#!/bin/sh\n# " + e.Command + "\nexit 0\n"
 		bodies[e.Command] = body
 		provision(t, root, e.Command, body)
@@ -431,7 +434,7 @@ func TestAdminDispatchPlan(t *testing.T) {
 		rows[f[0]] = f
 	}
 	unsupported := 0
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		if !e.SupportsGOOS(runtime.GOOS) {
 			// The honest answer for a platform the manifest does not declare
 			// is FAIL, not silence: this host's wrapper cannot dispatch it.

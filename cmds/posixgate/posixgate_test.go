@@ -97,8 +97,8 @@ func TestSpecMatchesCanonicalManifest(t *testing.T) {
 	}
 }
 
-// TestSpecPinnedCounts pins BOTH axes: availability 86/14/16 and effective
-// selection 78/22/16.
+// TestSpecPinnedCounts pins BOTH axes: availability 87/14/15 and effective
+// selection 79/22/15.
 func TestSpecPinnedCounts(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
@@ -117,26 +117,26 @@ func TestSpecPinnedCounts(t *testing.T) {
 			effProv++
 		}
 	}
-	if len(spec) != 116 || avail[OwnerGoApplet] != 86 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 16 {
-		t.Errorf("availability = %d total %v, want 116 split 86/14/16", len(spec), avail)
+	if len(spec) != 116 || avail[OwnerGoApplet] != 87 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 15 {
+		t.Errorf("availability = %d total %v, want 116 split 87/14/15", len(spec), avail)
 	}
-	if effGo != 78 || effShell != 22 || effProv != 16 {
-		t.Errorf("effective selection = %d/%d/%d, want 78/22/16", effGo, effShell, effProv)
+	if effGo != 79 || effShell != 22 || effProv != 15 {
+		t.Errorf("effective selection = %d/%d/%d, want 79/22/15", effGo, effShell, effProv)
 	}
-	if pinTotal != 116 || pinAvailGoApplets != 86 || pinAvailShell != 14 || pinProviders != 16 ||
-		pinEffectiveGoApplets != 78 || pinEffectiveShell != 22 {
-		t.Error("pin constants drifted from the documented 116 = 86/14/16 availability, 78/22/16 effective")
+	if pinTotal != 116 || pinAvailGoApplets != 87 || pinAvailShell != 14 || pinProviders != 15 ||
+		pinEffectiveGoApplets != 79 || pinEffectiveShell != 22 {
+		t.Error("pin constants drifted from the documented 116 = 87/14/15 availability, 79/22/15 effective")
 	}
 }
 
 // TestSpecProvidersMatchManifest: the inventory's external_provider rows and
-// the provider manifest must be the same set, both directions.
+// the active dispatch-provider set must be the same set, both directions.
 func TestSpecProvidersMatchManifest(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fs := verifyInventory(spec, posixprovider.Names()); len(fs) != 0 {
+	if fs := verifyInventory(spec, posixprovider.DispatchNames()); len(fs) != 0 {
 		for _, f := range fs {
 			t.Errorf("%s", f)
 		}
@@ -232,13 +232,13 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One applet dropped: total and go-applet pins both trip.
-	fs := verifyInventory(spec[:len(spec)-1], posixprovider.Names())
+	fs := verifyInventory(spec[:len(spec)-1], posixprovider.DispatchNames())
 	if !findingsHave(fs, "count-drift", "", "pinned") {
 		t.Errorf("dropped name produced no count-drift finding: %v", fs)
 	}
 	// Effective drift with availability intact: an applet-owned name whose
-	// selector flips to shell_builtin (an eighth overlap) keeps 86/14/16 but
-	// breaks 78/22 — the effective pins must catch it on their own.
+	// selector flips to shell_builtin (an eighth overlap) keeps 87/14/15 but
+	// breaks 79/22 — the effective pins must catch it on their own.
 	shifted := make([]specRow, len(spec))
 	copy(shifted, spec)
 	for i, r := range shifted {
@@ -247,18 +247,18 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 			break
 		}
 	}
-	fs = verifyInventory(shifted, posixprovider.Names())
-	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 77") ||
+	fs = verifyInventory(shifted, posixprovider.DispatchNames())
+	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 78") ||
 		!findingsHave(fs, "count-drift", "", "effective shell count is 23") {
 		t.Errorf("effective-selection drift not rejected: %v", fs)
 	}
 	// Manifest pins a name the inventory does not list, and vice versa.
-	fs = verifyInventory(spec, append(posixprovider.Names(), "cpio"))
+	fs = verifyInventory(spec, append(posixprovider.DispatchNames(), "cpio"))
 	if !findingsHave(fs, "provider-set", "cpio", "not an external_provider") {
 		t.Errorf("extra manifest pin not rejected: %v", fs)
 	}
 	var withoutMake []string
-	for _, n := range posixprovider.Names() {
+	for _, n := range posixprovider.DispatchNames() {
 		if n != "make" {
 			withoutMake = append(withoutMake, n)
 		}
@@ -314,27 +314,27 @@ func TestVerifyOwnership(t *testing.T) {
 	reg := fullRegistry(t)
 	lookup := func(n string) bool { return reg[n] }
 
-	if fs := verifyOwnership(spec, lookup, posixprovider.Has, false); len(fs) != 0 {
+	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, false); len(fs) != 0 {
 		t.Fatalf("complete registry rejected: %v", fs)
 	}
 
 	// A missing applet is a name the host would silently supply.
 	reg["ls"] = false
-	if fs := verifyOwnership(spec, lookup, posixprovider.Has, false); !findingsHave(fs, "ownership", "ls", "not in the tool registry") {
+	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, false); !findingsHave(fs, "ownership", "ls", "not in the tool registry") {
 		t.Errorf("unregistered applet not rejected")
 	}
 	reg["ls"] = true
 
 	// A missing provider name, same failure class.
 	reg["make"] = false
-	if fs := verifyOwnership(spec, lookup, posixprovider.Has, false); !findingsHave(fs, "ownership", "make", "not in the tool registry") {
+	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, false); !findingsHave(fs, "ownership", "make", "not in the tool registry") {
 		t.Errorf("unregistered provider not rejected")
 	}
 	reg["make"] = true
 
 	// A registered tool under a shell-owned name is ambiguous ownership.
 	reg["cd"] = true
-	if fs := verifyOwnership(spec, lookup, posixprovider.Has, false); !findingsHave(fs, "ownership", "cd", "ambiguous") {
+	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, false); !findingsHave(fs, "ownership", "cd", "ambiguous") {
 		t.Errorf("shell-name shadowing not rejected")
 	}
 	reg["cd"] = false
@@ -346,7 +346,7 @@ func TestVerifyOwnership(t *testing.T) {
 	}
 
 	// The provider opt-out is a hard failure for a certification runtime.
-	if fs := verifyOwnership(spec, lookup, posixprovider.Has, true); !findingsHave(fs, "opt-out", "", "BASHY_POSIX_PROVIDERS") {
+	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, true); !findingsHave(fs, "opt-out", "", "BASHY_POSIX_PROVIDERS") {
 		t.Errorf("opt-out not rejected")
 	}
 }
@@ -434,9 +434,9 @@ func TestVerifyProviders(t *testing.T) {
 	}
 
 	// A platform a manifest row does not declare is a FAILURE, not a skip: a
-	// runtime that cannot supply all sixteen names is not the claimed runtime.
+	// runtime that cannot supply all fifteen active names is not the claimed runtime.
 	fs := VerifyProviders(posixprovider.Resolver{CacheRoot: root, GOOS: "windows"})
-	if !findingsHave(fs, "provider", "ed", "not declared for windows") {
+	if !findingsHave(fs, "provider", "man", "not declared for windows") {
 		t.Errorf("undeclared platform not rejected: %v", fs)
 	}
 
@@ -523,13 +523,13 @@ func runtimeCfg(bindir, multicall string) runtimeConfig {
 }
 
 // dispatchPlanFor renders the healthy dispatch plan the approved multicall
-// would disclose for a provisioned cache root: one strict TSV row per pinned
+// would disclose for a provisioned cache root: one strict TSV row per active
 // provider, matching the gate's own verified identities exactly.
 func dispatchPlanFor(t *testing.T, root string) string {
 	t.Helper()
 	r := posixprovider.Resolver{CacheRoot: root, GOOS: "linux"}
 	var b strings.Builder
-	for _, e := range posixprovider.Entries() {
+	for _, e := range posixprovider.DispatchEntries() {
 		id, err := r.VerifiedIdentity(e.Command)
 		if err != nil {
 			t.Fatalf("healthy plan for %s: %v", e.Command, err)
@@ -1131,7 +1131,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
 		if !findingsHave(fs, "provider-dispatch", dropped, "no dispatch-plan row") ||
-			!findingsHave(fs, "provider-dispatch", "", "accounts for 15 pinned providers, want exactly 16") {
+			!findingsHave(fs, "provider-dispatch", "", "accounts for 14 pinned providers, want exactly 15") {
 			t.Errorf("missing dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1153,7 +1153,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return append(l, "cpio\t2.15\t/x/cpio\t"+strings.Repeat("a", 64))
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the sixteen pinned providers") {
+		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the fifteen active providers") {
 			t.Errorf("extra dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1258,10 +1258,10 @@ func TestGateSpecSubcommand(t *testing.T) {
 	if len(lines) != pinTotal+2 {
 		t.Errorf("spec printed %d lines, want %d names + 2 summary lines", len(lines), pinTotal)
 	}
-	if !strings.Contains(stdout, "availability 86 go_applet, 14 shell, 16 external_provider") {
+	if !strings.Contains(stdout, "availability 87 go_applet, 14 shell, 15 external_provider") {
 		t.Errorf("availability summary missing from %q", stdout)
 	}
-	if !strings.Contains(stdout, "effective selection: 78 go_applet, 22 shell, 16 external_provider") {
+	if !strings.Contains(stdout, "effective selection: 79 go_applet, 22 shell, 15 external_provider") {
 		t.Errorf("effective-selection summary missing from %q", stdout)
 	}
 }

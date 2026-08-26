@@ -7,7 +7,7 @@
 // no independent copy of the inventory — regenerating the matrix rewrites
 // this file, and --check (crossvet + pre-push) fails when it is stale.
 //
-// Pinned shape: availability 86/14/16, effective selection 78/22/16.
+// Pinned shape: availability 87/14/15, effective selection 79/22/15.
 
 package posixgatecmd
 
@@ -41,7 +41,7 @@ var specRows = []specRow{
 	{Command: "dirname", GoPackage: "cmds/dirname", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "du", GoPackage: "cmds/du", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "echo", GoPackage: "cmds/echo", Owner: OwnerGoApplet, Effective: SelShellBuiltin},
-	{Command: "ed", GoPackage: "cmds/posixproviders", Owner: OwnerProvider, Effective: SelProvider},
+	{Command: "ed", GoPackage: "cmds/ed", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "env", GoPackage: "cmds/env", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "ex", GoPackage: "cmds/posixproviders", Owner: OwnerProvider, Effective: SelProvider},
 	{Command: "expand", GoPackage: "cmds/expand", Owner: OwnerGoApplet, Effective: SelGoApplet},

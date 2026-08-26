@@ -9,15 +9,15 @@
 // The assembled Profile C/D runtime claims that every one of the 116 required
 // names is supplied by exactly one INTENDED owner: a registered Bashy Go
 // applet, the shell (entry point, builtin, or the `time` keyword), or one of
-// the sixteen pinned POSIX external providers. `posix-gate` turns that claim
+// the fifteen active pinned POSIX external providers. `posix-gate` turns that claim
 // into a checkable verdict, and every check is fail-closed: the gate proves
 // the intended owner is selected, or it fails naming the name and the cause.
 // There is no "probably fine" state — an unverifiable owner is a rejection.
 //
 // # What it rejects
 //
-//   - count drift — availability no longer splits 86/14/16, or effective
-//     selection no longer splits 78/22/16
+//   - count drift — availability no longer splits 87/14/15, or effective
+//     selection no longer splits 79/22/15
 //   - duplicate or ambiguous ownership — a name claimed by two dispositions,
 //     a shell name shadowed by a registered tool, an applet that is also a
 //     pinned provider
@@ -99,13 +99,13 @@ const (
 // reports. scripts/applet-matrix.py pins the same splits.
 const (
 	pinTotal = 116
-	// availability: who supplies each name (86/14/16)
-	pinAvailGoApplets = 86
+	// availability: who supplies each name (87/14/15)
+	pinAvailGoApplets = 87
 	pinAvailShell     = 14
-	pinProviders      = 16
-	// effective selection: what the shell selects (78/22/16); the 22 is the 14
+	pinProviders      = 15
+	// effective selection: what the shell selects (79/22/15); the 22 is the 14
 	// shell-owned names plus the seven builtin overlaps and the time keyword
-	pinEffectiveGoApplets = 78
+	pinEffectiveGoApplets = 79
 	pinEffectiveShell     = 22
 )
 

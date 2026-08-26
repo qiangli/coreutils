@@ -28,7 +28,7 @@ diff	yes	cmds/diff	no	go_applet
 dirname	yes	cmds/dirname	no	go_applet
 du	yes	cmds/du	no	go_applet
 echo	yes	cmds/echo	no	go_applet
-ed	no	cmds/posixproviders	no	external_provider
+ed	yes	cmds/ed	no	go_applet
 env	yes	cmds/env	no	go_applet
 ex	no	cmds/posixproviders	no	external_provider
 expand	yes	cmds/expand	no	go_applet
