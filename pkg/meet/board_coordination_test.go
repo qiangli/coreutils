@@ -421,3 +421,47 @@ func TestMBBoundBodiesCarryTheDurableID(t *testing.T) {
 		t.Fatalf("mb pointer does not carry the durable id %q:\n%s", st.ID, body)
 	}
 }
+
+// The board's access contract, in both directions: READING is open to anyone,
+// POSTING needs a seat.
+//
+// The read half is not a preference. A board that seeds from mb posts
+// "read: bashy meet read <id> --as <you>" back to the thread, and every reader
+// of that pointer is by definition unseated -- so gating the read would make
+// the invitation instruct people to run a command that refuses them. It also
+// bought nothing: `meet observe` already renders the same transcript to any
+// caller, so the gate was a bypassable inconvenience, not a boundary.
+func TestBoardReadIsOpenButPostingNeedsASeat(t *testing.T) {
+	st := boardRoom(t)
+	if err := AppendEvent(st.ID, Event{
+		Round: st.Round, Speaker: "codex", Role: string(RoleParticipant),
+		Kind: "message", Text: "the seeded context", TS: nowFn(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	read := newReadCmd()
+	var out, errW bytes.Buffer
+	read.SetOut(&out)
+	read.SetErr(&errW)
+	read.SetArgs([]string{st.ID, "--as", "stranger"})
+	if err := read.Execute(); err != nil {
+		t.Fatalf("an unseated reader must be able to read a board: %v", err)
+	}
+	if !strings.Contains(out.String(), "the seeded context") {
+		t.Fatalf("unseated read returned no content:\n%s", out.String())
+	}
+
+	tell := newTellCmd()
+	var tOut, tErr bytes.Buffer
+	tell.SetOut(&tOut)
+	tell.SetErr(&tErr)
+	tell.SetArgs([]string{st.ID, "--as", "stranger", "posting without a seat"})
+	err := tell.Execute()
+	if err == nil {
+		t.Fatal("an unseated caller must not be able to POST to a board")
+	}
+	if !strings.Contains(err.Error(), "no seat") {
+		t.Fatalf("refusal should name the missing seat, got: %v", err)
+	}
+}

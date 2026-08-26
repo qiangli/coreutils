@@ -941,10 +941,19 @@ func newReadCmd() *cobra.Command {
 			if !st.board() {
 				return fmt.Errorf("meet: room %s is not a board", st.ID)
 			}
-			if !participantSeat(st, reader) {
-				return fmt.Errorf("meet: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
-					seatLabel(reader), st.ID, st.ID, reader)
-			}
+			// READING IS OPEN; only posting needs a seat. Three reasons, and the
+			// third is decisive:
+			//
+			// (1) It is what an mb pointer promises. A board that seeds from a
+			//     thread posts "read: bashy meet read <id> --as <you>" back to
+			//     mb, and everyone who reads that is BY DEFINITION not seated
+			//     yet. Gating the read makes the invitation instruct people to
+			//     run a command that refuses them.
+			// (2) `meet observe` already renders the same transcript to anyone,
+			//     unrestricted and exit 0. So the gate bought no confidentiality
+			//     whatsoever -- it only broke the documented flow.
+			// (3) Membership stays organizer-push regardless: reading takes no
+			//     seat, appears on no roster, and grants no right to post.
 			if wait > 0 {
 				if st.Status == "closed" {
 					return fmt.Errorf("meet: --wait is refused on closed board %s", st.ID)
