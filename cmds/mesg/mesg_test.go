@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	whodb "github.com/qiangli/coreutils/pkg/who"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -75,6 +76,60 @@ func TestSetTogglesOnlyTheGroupWriteBit(t *testing.T) {
 	fi, _ = os.Stat(p)
 	if fi.Mode().Perm() != 0o640 {
 		t.Errorf("mesg n should clear only g+w: got %o want %o", fi.Mode().Perm(), 0o640)
+	}
+}
+
+func TestAgentShellMesgUsesRecordedPTYWhenStreamsAreNotTerminals(t *testing.T) {
+	root := t.TempDir()
+	whoFile := filepath.Join(root, "who", "sessions")
+	env := []string{
+		"HOME=" + root,
+		"SHELL=/bin/bashy",
+		"BASHY_AGENT_ID=agent-one",
+		whodb.FileEnv + "=" + whoFile,
+	}
+	ptyDir := whodb.PTYDirForEnv(env)
+	if err := os.MkdirAll(ptyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := "agent-one"
+	tty := filepath.Join(ptyDir, line)
+	if err := os.WriteFile(tty, nil, 0o620); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tty, 0o620); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(whoFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := "agent-one " + line + " 1700000000 write user id=agent-one pid=1\n"
+	if err := os.WriteFile(whoFile, []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldTTY, oldStat, oldChmod := ttyName, statFn, chmodFn
+	t.Cleanup(func() { ttyName, statFn, chmodFn = oldTTY, oldStat, oldChmod })
+	ttyName, statFn, chmodFn = defaultTTYName, os.Stat, os.Chmod
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	if code := run(rc, nil); code != 0 || !strings.Contains(out.String(), "is y") {
+		t.Fatalf("agent mesg query = stdout %q stderr %q code %d, want is y/0", out.String(), errb.String(), code)
+	}
+	if code := run(rc, []string{"n"}); code != 1 {
+		t.Fatalf("agent mesg n code=%d, want 1", code)
+	}
+	fi, err := os.Stat(tty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm()&0o020 != 0 {
+		t.Fatalf("mesg n did not clear group write on recorded pty: %o", fi.Mode().Perm())
 	}
 }
 

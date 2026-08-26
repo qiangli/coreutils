@@ -76,6 +76,12 @@ type Options struct {
 	// Empty disables steering — and with it, automatic gate clearing.
 	CtlSock string
 
+	// OnStart is called after the child is started on its PTY and before any
+	// sidecar reader begins draining the master. The argument is the real slave
+	// device path, suitable for publishing as a terminal line through a symlink.
+	// A non-nil error terminates the child and fails the run.
+	OnStart func(ttyPath string) error
+
 	// Capture forces the output to be captured even when the parent process is
 	// itself a terminal.
 	//

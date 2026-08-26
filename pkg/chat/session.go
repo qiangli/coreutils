@@ -17,6 +17,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/room"
+	whodb "github.com/qiangli/coreutils/pkg/who"
 )
 
 // A Session is a live agent you can talk to.
@@ -333,19 +334,62 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		return nil, err
 	}
 
+	started := make(chan error, 1)
+	var startedOnce sync.Once
+	reportStarted := func(err error) {
+		startedOnce.Do(func() { started <- err })
+	}
+
 	go func() {
 		defer close(s.done)
 		defer room.Leave(card.ID)
+		var login *whodb.Handle
+		var ptyLink string
+		defer func() {
+			_ = login.Close()
+			if ptyLink != "" {
+				_ = os.Remove(ptyLink)
+			}
+		}()
 		exit, killed, err := agentpty.Run(cmd, sink, agentpty.Options{
 			CtlSock:    sock,
 			Capture:    true, // the caller records this; the human watches via observe
 			MaxRuntime: opt.Timeout,
+			OnStart: func(realTTY string) error {
+				line, link, err := publishSessionTTY(id, realTTY)
+				if err != nil {
+					reportStarted(err)
+					return err
+				}
+				h, err := whodb.Register(whodb.Record{
+					Name:     id,
+					TTY:      line,
+					ID:       id,
+					PID:      os.Getpid(),
+					Started:  time.Now(),
+					Surfaces: []string{"write", "mb", "bus"},
+				})
+				if err != nil {
+					_ = os.Remove(link)
+					reportStarted(err)
+					return err
+				}
+				login = h
+				ptyLink = link
+				reportStarted(nil)
+				return nil
+			},
 		})
+		reportStarted(err)
 		s.mu.Lock()
 		s.exit, s.killed, s.err = exit, killed, err
 		recordLaunchUsage(ctx, l, opt.Prompt, s.buf.String())
 		s.mu.Unlock()
 	}()
+
+	if err := <-started; err != nil {
+		return s, err
+	}
 
 	// A tool that opens an EMPTY session takes its first message over the wire.
 	if !l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {

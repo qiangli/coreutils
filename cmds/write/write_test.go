@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	whodb "github.com/qiangli/coreutils/pkg/who"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -287,6 +288,72 @@ func TestTerminalOperandAcceptsBareAndDevForm(t *testing.T) {
 				t.Errorf("operand %q leaked onto pts/8: %q", operand, got)
 			}
 		})
+	}
+}
+
+func TestAgentShellUsesWhoRegistryAndPtyDir(t *testing.T) {
+	root := t.TempDir()
+	whoFile := filepath.Join(root, "who", "sessions")
+	env := []string{
+		"HOME=" + root,
+		"SHELL=/bin/bashy",
+		"BASHY_AGENT_ID=sender",
+		whodb.FileEnv + "=" + whoFile,
+	}
+	ptyDir := whodb.PTYDirForEnv(env)
+	if err := os.MkdirAll(ptyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := "agent-one"
+	tty := filepath.Join(ptyDir, line)
+	if err := os.WriteFile(tty, nil, writable); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tty, writable); err != nil {
+		t.Fatal(err)
+	}
+	record := fmt.Sprintf("agent-one %s %d write user id=agent-one pid=%d\n", line, epoch.Unix(), os.Getpid())
+	if err := os.MkdirAll(filepath.Dir(whoFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(whoFile, []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldSup, oldSender := supported, senderInfo
+	oldTTY, oldNow := senderTTY, nowFn
+	oldStat, oldOpen := statFn, openTTYFn
+	oldSessionActive, oldTerminalDevice := sessionActiveFn, terminalDeviceFn
+	t.Cleanup(func() {
+		supported, senderInfo = oldSup, oldSender
+		senderTTY, nowFn = oldTTY, oldNow
+		statFn, openTTYFn = oldStat, oldOpen
+		sessionActiveFn, terminalDeviceFn = oldSessionActive, oldTerminalDevice
+	})
+	supported = false // native platform support must not matter for agent records.
+	senderInfo = func() (string, int, error) { return "sender", 1000, nil }
+	senderTTY = func(*tool.RunContext) string { return "" }
+	nowFn = func() time.Time { return epoch.Add(time.Hour) }
+	statFn = os.Stat
+	openTTYFn = func(path string) (io.WriteCloser, error) { return os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) }
+	sessionActiveFn = func(pid int) bool { return pid == os.Getpid() }
+	terminalDeviceFn = func(string) bool { return true }
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader("hello\n"), Out: &out, Err: &errb},
+	}
+	if code := run(rc, []string{"agent-one"}); code != 0 {
+		t.Fatalf("write code=%d stderr=%q", code, errb.String())
+	}
+	got, err := os.ReadFile(tty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "Message from sender (?)") || !strings.Contains(string(got), "hello\nEOT\n") {
+		t.Fatalf("agent pty did not receive write payload: %q", got)
 	}
 }
 

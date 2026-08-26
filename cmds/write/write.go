@@ -55,8 +55,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/cmds/internal/session"
 	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/pkg/locale"
+	whodb "github.com/qiangli/coreutils/pkg/who"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -300,7 +302,19 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	if !supported {
+	records, db, devices, agentDB, err := loginRecords(rc.Env)
+	if err != nil {
+		if errors.Is(err, errNoLayout) {
+			fmt.Fprintf(rc.Err, "write: %v\n", err)
+		} else {
+			fmt.Fprintf(rc.Err, "write: %s: %v\n", db, err)
+		}
+		return 1
+	}
+	if wantTTY != "" {
+		wantTTY = normalizeTTYIn(operands[1], devices)
+	}
+	if !agentDB && !supported {
 		fmt.Fprintf(rc.Err, "write: %v\n", errPlatform)
 		return 1
 	}
@@ -322,7 +336,7 @@ func run(rc *tool.RunContext, args []string) int {
 	sigCh, stopInterrupt := watchInterruptFn()
 	defer stopInterrupt()
 
-	if err := lookupUser(target); err != nil {
+	if err := lookupTarget(target, records, agentDB); err != nil {
 		fmt.Fprintf(rc.Err, "write: %s: no such user\n", target)
 		return 1
 	}
@@ -330,16 +344,6 @@ func run(rc *tool.RunContext, args []string) int {
 	sender, uid, err := senderInfo()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "write: cannot determine the sending user: %v\n", err)
-		return 1
-	}
-
-	records, err := readUtmpFile(dbPath, dbLayout)
-	if err != nil {
-		if errors.Is(err, errNoLayout) {
-			fmt.Fprintf(rc.Err, "write: %v\n", err)
-		} else {
-			fmt.Fprintf(rc.Err, "write: %s: %v\n", dbPath, err)
-		}
 		return 1
 	}
 
@@ -370,17 +374,17 @@ func run(rc *tool.RunContext, args []string) int {
 	// whose accounting database has no sender record.
 	for _, record := range records {
 		if normalizeTTY(record.Line) == myTTY && sessionActiveFn(record.PID) &&
-			sessionOwnsTerminalFn(record.PID, ttyDevice(record.Line)) {
+			(agentDB || sessionOwnsTerminalFn(record.PID, ttyDeviceIn(record.Line, devices))) {
 			sender = record.User
 			break
 		}
 	}
-	line, failure, isMulti := selectTerminal(records, target, wantTTY, myTTY, uid == 0)
+	line, failure, isMulti := selectTerminal(records, target, wantTTY, myTTY, uid == 0, devices, agentDB)
 	if failure != "" {
 		fmt.Fprintf(rc.Err, "write: %s\n", failure)
 		return 1
 	}
-	path := ttyDevice(line)
+	path := ttyDeviceIn(line, devices)
 	term, err := openTTYFn(path)
 	if err != nil {
 		if takeInterrupt(sigCh) {
@@ -504,7 +508,7 @@ func run(rc *tool.RunContext, args []string) int {
 // terminal operand narrowed it: the condition POSIX attaches the informational
 // message to. It is reported even when selection then fails, because the
 // caller only emits the notice on the success path.
-func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot bool) (line, failure string, isMulti bool) {
+func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot bool, devices string, agentDB bool) (line, failure string, isMulti bool) {
 	var candidates []utmpRecord
 	for _, r := range records {
 		if r.User != target {
@@ -533,13 +537,14 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 	activeLogins := 0
 	skippedSelf, missing := false, 0
 	for _, r := range candidates {
-		fi, err := statFn(ttyDevice(r.Line))
+		path := ttyDeviceIn(r.Line, devices)
+		fi, err := statFn(path)
 		if err != nil {
 			missing++
 			continue
 		}
-		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(ttyDevice(r.Line)) ||
-			!sessionOwnsTerminalFn(r.PID, ttyDevice(r.Line)) {
+		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(path) ||
+			(!agentDB && !sessionOwnsTerminalFn(r.PID, path)) {
 			missing++
 			continue
 		}
@@ -571,6 +576,48 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 	default:
 		return "", fmt.Sprintf("%s is not logged in", target), false
 	}
+}
+
+func loginRecords(env []string) ([]utmpRecord, string, string, bool, error) {
+	if agentLoginDB(env) {
+		path := whodb.FileForEnv(env)
+		records, err := session.ReadEnv("", env)
+		if err != nil {
+			return nil, path, whodb.PTYDirForEnv(env), true, err
+		}
+		out := make([]utmpRecord, 0, len(records))
+		for _, r := range records {
+			if !session.IsUser(r) {
+				continue
+			}
+			out = append(out, utmpRecord{
+				User: r.User,
+				Line: r.TTY,
+				Host: r.Host,
+				PID:  r.PID,
+				Time: r.Time,
+			})
+		}
+		return out, path, whodb.PTYDirForEnv(env), true, nil
+	}
+	records, err := readUtmpFile(dbPath, dbLayout)
+	return records, dbPath, devDir, false, err
+}
+
+func agentLoginDB(env []string) bool {
+	return filepath.Clean(session.DefaultFileForEnv(env)) == filepath.Clean(whodb.FileForEnv(env))
+}
+
+func lookupTarget(target string, records []utmpRecord, agentDB bool) error {
+	if agentDB {
+		for _, r := range records {
+			if r.User == target {
+				return nil
+			}
+		}
+		return os.ErrNotExist
+	}
+	return lookupUser(target)
 }
 
 // readLine reads bytes until NL, the terminal's canonical EOL character, or
@@ -892,12 +939,16 @@ func writeMeta(b *strings.Builder, c byte) {
 // name used for comparison, so `write bob pts/3` and `write bob /dev/pts/3`
 // name the same terminal.
 func normalizeTTY(s string) string {
+	return normalizeTTYIn(s, devDir)
+}
+
+func normalizeTTYIn(s, devices string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
 	}
 	s = filepath.Clean(s)
-	if rel, err := filepath.Rel(devDir, s); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(devices, s); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
 		return rel
 	}
 	return s
@@ -905,8 +956,12 @@ func normalizeTTY(s string) string {
 
 // ttyDevice maps a bare ut_line name onto its device path.
 func ttyDevice(line string) string {
+	return ttyDeviceIn(line, devDir)
+}
+
+func ttyDeviceIn(line, devices string) string {
 	if filepath.IsAbs(line) {
 		return line
 	}
-	return filepath.Join(devDir, line)
+	return filepath.Join(devices, line)
 }
