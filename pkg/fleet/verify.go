@@ -35,7 +35,7 @@ func Probes(cache spacetime.Cache) *spacetime.ProbeSet {
 	return spacetime.DefaultProbes(cache)
 }
 
-// VerifyTool reports whether a tool can be driven headless on this host.
+// VerifyTool reports whether a tool is installed and has a launch declaration.
 //
 // Standalone and offline: it asks the PATH whether the binary exists and
 // what version it reports. It never runs the tool's own work.
@@ -73,16 +73,46 @@ func (c *Catalog) VerifyTool(name string, ps *spacetime.ProbeSet) Check {
 	}
 
 	chk.OK = true
-	chk.Reason = "drivable; shell routed through bashy by the launcher"
+	chk.Reason = "installed; PATH and version evidence only (work has not been run)"
 	// codex runs the /etc/passwd login shell on macOS rather than $SHELL,
 	// so shell-forcing does not reach it without an explicit install step.
 	if t.Name == "codex" && runtime.GOOS == "darwin" {
-		chk.Reason = "drivable; shell = the login shell (run `bashy install-agent codex` to route through bashy)"
+		chk.Reason = "installed; PATH and version evidence only; shell = the login shell (run `bashy install-agent codex` to route through bashy)"
 	}
 	if t.CLI.Launch.AuthHint != "" {
 		chk.Reason += "; " + t.CLI.Launch.AuthHint
 	}
 	return chk
+}
+
+// SmokeToken is the exact stdout token a live fleet probe requires. Exit
+// status is deliberately not evidence: harnesses can report provider errors
+// and still exit zero.
+const SmokeToken = "SMOKE-OK"
+
+const smokePrompt = "Reply with exactly: " + SmokeToken
+
+// SmokeArgv renders a real, minimal headless turn for tool. A bare tool has
+// no model in its name, so select its first declared binding; catalog agents
+// are name-sorted, making that choice deterministic.
+func (c *Catalog) SmokeArgv(tool string) ([]string, bool) {
+	t, ok := c.Tool(tool)
+	if !ok || !t.IsCLI() || t.CLI.Launch.Exec == "" {
+		return nil, false
+	}
+	modelID := ""
+	agents, _ := c.Agents()
+	for _, a := range agents {
+		if a.Tool != t.Name {
+			continue
+		}
+		if m, ok := c.Model(a.Model); ok {
+			modelID = m.TargetFor(t.Name)
+			break
+		}
+	}
+	argv := t.Argv(modelID, smokePrompt)
+	return argv, len(argv) > 0
 }
 
 // VerifyModel reports whether a model is usable from this host.

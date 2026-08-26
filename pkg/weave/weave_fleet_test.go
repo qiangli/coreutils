@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // TestFleetRowDetectsMissingTool is the regression for the launch-failure
@@ -33,7 +35,8 @@ func TestFleetRowDetectsMissingTool(t *testing.T) {
 }
 
 // TestFleetRowFindsInstalledTool checks the positive path: a real executable on
-// PATH is Found + Available with its resolved path.
+// PATH is installed with its resolved path. Without --probe, it is deliberately
+// not claimed usable.
 func TestFleetRowFindsInstalledTool(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("temp-exec + PATH shimming is fiddly on windows; existence logic is shared")
@@ -47,8 +50,8 @@ func TestFleetRowFindsInstalledTool(t *testing.T) {
 	t.Setenv("PATH", bindir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	r, _ := fleetRowFor(t.TempDir(), tool, time.Now(), false, map[string]fleetProbeEntry{})
-	if !r.Found || !r.Available {
-		t.Fatalf("installed tool: Found=%v Available=%v, want both true", r.Found, r.Available)
+	if !r.Found || r.Available {
+		t.Fatalf("installed tool: Found=%v Available=%v, want true false", r.Found, r.Available)
 	}
 	if r.Path != exe {
 		t.Fatalf("resolved path = %q, want %q", r.Path, exe)
@@ -103,8 +106,8 @@ func TestFleetReportsQuotaExhaustedNotAvailable(t *testing.T) {
 
 	// Once the reset passes, the member re-engages without manual cleanup.
 	r2, _ := fleetRowFor(dir, "codex", reset.Add(time.Minute), false, map[string]fleetProbeEntry{})
-	if !r2.Available {
-		t.Fatal("member should be available again after its reset passed")
+	if !r2.Found || r2.Available {
+		t.Fatal("member should return to installed/unprobed after its reset passed")
 	}
 }
 
@@ -162,18 +165,68 @@ func TestPairQuotaThrottleRecordsReviewerCooldown(t *testing.T) {
 	}
 }
 
-// A declared probe supplies arguments, never an executable path: fleet must
-// run the exact path LookPath resolved for this host.
-func TestYcodeDeclaredProbeUsesResolvedPath(t *testing.T) {
+// A smoke probe executes the exact path LookPath resolved for this host, not
+// the executable name declared by the catalog.
+func TestSmokeProbeUsesResolvedPathAndRejectsExitZeroError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
-	path := filepath.Join(t.TempDir(), "resolved-ycode")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n[ \"$1\" = version ] || exit 9\necho resolved-ycode-version\n"), 0o755); err != nil {
+	cat := pinFleetWith(t)
+	if err := cat.SaveTool(fleet.Tool{Name: "smoke", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "smoke", Launch: fleet.ToolLaunch{Exec: "smoke {prompt}"}}}); err != nil {
 		t.Fatal(err)
 	}
-	ent := probeToolCapability("ycode", path, time.Now())
-	if !ent.Capable || ent.Version != "resolved-ycode-version" {
-		t.Fatalf("declared ycode probe did not execute resolved path: %+v", ent)
+	path := filepath.Join(t.TempDir(), "resolved-smoke")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'Error: provider unavailable'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ent := probeToolCapability("smoke", path, time.Now())
+	if ent.Capable {
+		t.Fatalf("exit-0 error payload was classified usable: %+v", ent)
+	}
+}
+
+func TestFleetReportsFailingSmokeAsUnusable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	cat := pinFleetWith(t)
+	if err := cat.SaveTool(fleet.Tool{Name: "failing-smoke", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "failing-smoke", Launch: fleet.ToolLaunch{Exec: "failing-smoke {prompt}"}}}); err != nil {
+		t.Fatal(err)
+	}
+	bindir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bindir, "failing-smoke"), []byte("#!/bin/sh\necho 'Error: unexpected server error'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bindir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	now := time.Date(2026, 8, 25, 10, 30, 0, 0, time.Local)
+	r, dirty := fleetRowFor(t.TempDir(), "failing-smoke", now, true, map[string]fleetProbeEntry{})
+	if !dirty || !r.Found || !r.Probed || r.Capable || r.Available {
+		t.Fatalf("exit-0 error probe row = %+v", r)
+	}
+	line := r.statusLine("failing-smoke")
+	if !strings.Contains(line, "UNUSABLE") || !strings.Contains(line, "probed 2026-08-25 10:30") {
+		t.Fatalf("failing smoke must show verdict and timestamp: %q", line)
+	}
+}
+
+func TestFleetDefaultCheckDoesNotExecuteTool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	bindir, dir := t.TempDir(), t.TempDir()
+	marker := filepath.Join(dir, "executed")
+	exe := filepath.Join(bindir, "quiet-smoke")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\ntouch '"+marker+"'\necho SMOKE-OK\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bindir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r, _ := fleetRowFor(dir, "quiet-smoke", time.Now(), false, map[string]fleetProbeEntry{})
+	if !r.Found || r.Probed || r.Available {
+		t.Fatalf("default row = %+v; want installed, unprobed, not claimed usable", r)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("default listing executed the tool: %v", err)
 	}
 }
