@@ -9,8 +9,16 @@
 // sorted on the join field; like GNU, a disorder is diagnosed
 // ("FILE:LINENO: is not sorted: LINE", then a fatal "input is not in
 // sorted order") only when it can matter — i.e. once unpairable lines
-// have been seen. Comparison is C-locale byte order, with -i folding
-// ASCII case.
+// have been seen.
+//
+// Field comparison follows the invocation LC_COLLATE category (POSIX
+// join ENVIRONMENT VARIABLES): the default C/POSIX collation is byte
+// order, and a supported non-C locale routes every field comparison —
+// join equality and the sorted-order check alike — through the shared
+// invocation-owned pkg/collate provider so join agrees with the order
+// sort produced under the same locale. As GNU join does, -i selects a
+// case-insensitive comparison rather than a collating one; that path is
+// byte-wise ASCII case folding here.
 package joincmd
 
 import (
@@ -21,6 +29,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -58,6 +67,7 @@ type options struct {
 	printU         [2]bool
 	suppressed     [2]bool // -v given for that file
 	ignoreCase     bool
+	collator       *collatorAdapter // nil in C/POSIX or under -i (byte order)
 	seenUnpairable bool
 	checkOrder     bool
 	nocheckOrder   bool
@@ -69,6 +79,13 @@ type options struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithCollator(rc, args, openCollator)
+}
+
+// runWithCollator keeps LC_COLLATE provider setup invocation-local. Tests
+// supply a fake opener; production supplies openCollator. No provider state is
+// shared between join invocations.
+func runWithCollator(rc *tool.RunContext, args []string, open collatorOpener) int {
 	opt := options{tab: tabDefault}
 	contractErr := func(format string, a ...any) int {
 		fmt.Fprintf(rc.Err, "join: %s\n", fmt.Sprintf(format, a...))
@@ -155,6 +172,23 @@ func run(rc *tool.RunContext, args []string) int {
 		specs, err = parseFormats(opt.formats)
 		if err != nil {
 			return tool.UsageError(rc, cmd, "%v", err)
+		}
+	}
+
+	// Resolve LC_COLLATE before any input file is opened, so a missing
+	// provider or unsupported locale fails the invocation before it consumes
+	// operands. -i selects case-insensitive comparison, not collation, so it
+	// stays on the byte path exactly as GNU join does (keycmp uses memcasecmp,
+	// not xmemcoll, when ignore_case is set).
+	if !opt.ignoreCase {
+		if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != locale.Default {
+			provider, err := open(name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "join: LC_COLLATE=%s: %v\n", name, err)
+				return 2
+			}
+			opt.collator = newCollatorAdapter(provider)
+			defer opt.collator.Close()
 		}
 	}
 
@@ -269,6 +303,12 @@ func run(rc *tool.RunContext, args []string) int {
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "join: write failed: %v\n", err)
 		return 1
+	}
+	if opt.collator != nil {
+		if err := opt.collator.Err(); err != nil {
+			fmt.Fprintf(rc.Err, "join: LC_COLLATE comparison failed: %v\n", err)
+			return 1
+		}
 	}
 	if f1.warned || f2.warned {
 		fmt.Fprintln(rc.Err, "join: input is not in sorted order")
@@ -512,6 +552,9 @@ func upperByte(c byte) byte {
 
 func (o *options) compareKeys(a, b string) int {
 	if !o.ignoreCase {
+		if o.collator != nil {
+			return o.collator.Compare(a, b)
+		}
 		return strings.Compare(a, b)
 	}
 	n := len(a)

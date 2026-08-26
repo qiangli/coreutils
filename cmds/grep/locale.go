@@ -41,6 +41,10 @@ func germanLocale(name string) bool {
 	return strings.HasPrefix(strings.ToLower(name), "de_de")
 }
 
+// rewritePattern augments a bracket-expression pattern with the certification
+// locale's class and equivalence members. The caller has already decoded any
+// raw ISO-8859-1 high bytes to runes (see latin1ToRunes), so the ASCII class
+// and equivalence tokens matched here are byte-for-byte intact.
 func (l grepLocale) rewritePattern(pattern string) string {
 	if l.ctypeGerman {
 		// POSIX classes are embedded inside an outer bracket expression.
@@ -82,6 +86,29 @@ func (m localeMatcher) FindStringIndex(s string) []int {
 		return nil
 	}
 	return []int{offsets[loc[0]], offsets[loc[1]]}
+}
+
+// latin1ToRunes maps each byte of s to the rune with the same code point,
+// i.e. decodes an ISO-8859-1 string to its UTF-8 rune sequence. It is the
+// pattern-side counterpart of decodeLatin1's subject decoding; it needs no
+// offset table because pattern byte offsets are never reported.
+func latin1ToRunes(s string) string {
+	ascii := true
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		b.WriteRune(rune(s[i]))
+	}
+	return b.String()
 }
 
 func decodeLatin1(s string) (string, map[int]int) {

@@ -199,8 +199,17 @@ func run(rc *tool.RunContext, args []string) int {
 	// need POSIX leftmost-longest matching. In particular, -o must print "ab"
 	// rather than "a" when equally-leftmost alternatives are "a" and "ab".
 	locale := grepLocaleFromEnv(rc.Env)
-	if !*fixed {
-		for i := range split {
+	for i := range split {
+		// Under an ISO-8859-1 LC_CTYPE a raw high byte in the pattern denotes
+		// that Latin-1 character, not a UTF-8 lead byte. Decode it to the
+		// matching rune — for -F fixed strings too — so RE2 compiles valid
+		// UTF-8 and an accented literal matches the localeMatcher-decoded
+		// subject; without this a pattern such as `grep É` or `grep -F É`
+		// aborts with "invalid UTF-8" instead of matching.
+		if locale.ctypeGerman {
+			split[i] = latin1ToRunes(split[i])
+		}
+		if !*fixed {
 			split[i] = locale.rewritePattern(split[i])
 		}
 	}
@@ -238,7 +247,10 @@ func run(rc *tool.RunContext, args []string) int {
 		excludeDir:   *excludeDir,
 		onlyMatching: *onlyMatching,
 	}
-	if locale.ctypeGerman && !*fixed {
+	if locale.ctypeGerman {
+		// Subject bytes are ISO-8859-1; decode them to runes to match the
+		// decoded pattern. This covers -F as well: its pattern was decoded
+		// above, so the subject must be too.
 		re = localeMatcher{inner: re}
 		g.re = re
 	}
@@ -247,7 +259,13 @@ func run(rc *tool.RunContext, args []string) int {
 	// substring work — searchStreamLit skips RE2 and per-line string
 	// allocation. Anything it can't serve byte-identically (-i, -w,
 	// multiple patterns, real regex) keeps the RE2 path unchanged.
-	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && before == 0 && after == 0 {
+	// Under an ISO-8859-1 LC_CTYPE the pattern was decoded to UTF-8 runes and
+	// the subject is decoded by localeMatcher, so the pattern and subject no
+	// longer share a byte representation. The byte-oriented literal fast path
+	// would search for the decoded (multi-byte) pattern inside the raw
+	// single-byte input and never match; keep those runs — including -F — on
+	// the RE2 + localeMatcher path.
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && before == 0 && after == 0 && !locale.ctypeGerman {
 		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default
