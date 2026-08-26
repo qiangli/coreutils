@@ -583,8 +583,11 @@ func init() {
 	// invocation is a cache lookup that can never download or compile, and that
 	// separation is the point (a build inside a certification arm would inject
 	// network and toolchain variance into measured evidence).
+	// ed and patch are deliberately absent from this list: their multicall
+	// names are now owned by pure-Go applets. Their retained manifest pins do
+	// not confer provider-only capabilities on the shipped applets.
 	posixProviders := []string{
-		"make", "bc", "patch", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+		"make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		"lp", "mailx", "localedef", "talk",
 	}
 	capTools(CapCached, posixProviders...)
@@ -1028,19 +1031,18 @@ func init() {
 		eff(EffWrite, n)
 	}
 
-	// The POSIX external providers. EVERY one is exec: the tool's whole body is
-	// "resolve the cached binary and hand it argv", so what runs afterwards is a
-	// process bashy no longer governs. The read/write split below is the upstream
-	// program's own documented behaviour, not ours.
-	eff(EffExec, "make", "bc", "patch", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+	// Every remaining POSIX external provider is exec: the tool resolves the
+	// cached binary and hands it argv. ed and patch are pure-Go read/write
+	// applets and are classified separately.
+	eff(EffExec, "make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		"lp", "mailx", "localedef", "talk")
-	eff(EffRead, "ed")
-	eff(EffRead, "make", "bc", "patch", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+	eff(EffRead, "ed", "patch")
+	eff(EffRead, "make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		// lp reads the file it submits; mailx reads the mailbox; localedef reads
 		// the charmap and locale definition; talk reads the utmp login database.
 		"lp", "mailx", "localedef", "talk")
-	eff(EffWrite, "ed")
-	eff(EffWrite, "make", "patch", "ctags", "ar", "strip", "ex", "vi",
+	eff(EffWrite, "ed", "patch")
+	eff(EffWrite, "make", "ctags", "ar", "strip", "ex", "vi",
 		// mailx writes the mailbox and queues outbound mail; localedef writes the
 		// compiled locale into the locale path.
 		"mailx", "localedef")

@@ -48,6 +48,7 @@
 # command	version	license	platforms	sha256	url
 make	4.3	GPL-3.0	linux,darwin,windows	e05fdde47c5f7ca45cb697e973894ff4f5d79e13b750ed57d7b66d8defc78e19	https://ftp.gnu.org/gnu/make/make-4.3.tar.gz
 bc	1.07.1	GPL-3.0	linux,darwin,windows	62adfca89b0a1c0164c2cdca59ca210c1d44c3ffc46daf9931cf4942664cb02a	https://ftp.gnu.org/gnu/bc/bc-1.07.1.tar.gz
+# patch is retained for reproducible differential testing; cmds/patch owns runtime dispatch.
 patch	2.7.6	GPL-3.0	linux,darwin,windows	ac610bda97abe0d9f6b7c963255a11dcb196c25e337c61f94e4778d632f1d8fd	https://ftp.gnu.org/gnu/patch/patch-2.7.6.tar.xz
 m4	1.4.19	GPL-3.0	linux,darwin,windows	63aede5c6d33b6d9b13511cd0be2cac046f2e70fd0a07aa9573a04a82783af96	https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz
 # ed is retained for reproducible differential testing; cmds/ed owns runtime dispatch.

@@ -9,15 +9,19 @@
 // The assembled Profile C/D runtime claims that every one of the 116 required
 // names is supplied by exactly one INTENDED owner: a registered Bashy Go
 // applet, the shell (entry point, builtin, or the `time` keyword), or one of
-// the fifteen active pinned POSIX external providers. `posix-gate` turns that claim
-// into a checkable verdict, and every check is fail-closed: the gate proves
-// the intended owner is selected, or it fails naming the name and the cause.
-// There is no "probably fine" state — an unverifiable owner is a rejection.
+// the fourteen active POSIX external providers whose NAME the multicall
+// dispatches to a pinned upstream copy. Two further manifest entries, `ed` and
+// `patch`, stay pinned for build/provenance/differential testing but no longer
+// own their command names.
+// `posix-gate` turns the ownership claim into a checkable verdict, and every
+// check is fail-closed: the gate proves the intended owner is selected, or it
+// fails naming the name and the cause. There is no "probably fine" state — an
+// unverifiable owner is a rejection.
 //
 // # What it rejects
 //
-//   - count drift — availability no longer splits 87/14/15, or effective
-//     selection no longer splits 79/22/15
+//   - count drift — availability no longer splits 88/14/14, or effective
+//     selection no longer splits 80/22/14
 //   - duplicate or ambiguous ownership — a name claimed by two dispositions,
 //     a shell name shadowed by a registered tool, an applet that is also a
 //     pinned provider
@@ -99,14 +103,21 @@ const (
 // reports. scripts/applet-matrix.py pins the same splits.
 const (
 	pinTotal = 116
-	// availability: who supplies each name (87/14/15)
-	pinAvailGoApplets = 87
+	// availability: who supplies each name (88/14/14)
+	pinAvailGoApplets = 88
 	pinAvailShell     = 14
-	pinProviders      = 15
-	// effective selection: what the shell selects (79/22/15); the 22 is the 14
+	pinProviders      = 14
+	// effective selection: what the shell selects (80/22/14); the 22 is the 14
 	// shell-owned names plus the seven builtin overlaps and the time keyword
-	pinEffectiveGoApplets = 79
+	pinEffectiveGoApplets = 80
 	pinEffectiveShell     = 22
+	// pinManifestProviders is the full pkg/posixprovider manifest pin count —
+	// deliberately two MORE than pinProviders. `ed` and `patch` are pinned there
+	// (build/provenance/differential-testing machinery all stay live) but are no
+	// longer external_provider in the inventory above. Provider provisioning
+	// and provenance still use this full count; dispatch-plan validation uses
+	// pinProviders because retained controls are not runtime owners.
+	pinManifestProviders = 16
 )
 
 // specRow is one required name: its availability owner from the canonical

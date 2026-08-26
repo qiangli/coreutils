@@ -173,7 +173,7 @@ func TestDispatchPlanThroughBuiltMulticall(t *testing.T) {
 		}
 	}
 
-	// An empty cache is fifteen loud failures, never an empty plan.
+	// An empty cache is fourteen loud failures, never an empty plan.
 	code, stdout, stderr = runDispatchPlanSubprocess(t, bin, t.TempDir())
 	if code != 1 || strings.TrimSpace(stdout) != "" ||
 		!strings.Contains(stderr, "no verifiable dispatch target") {

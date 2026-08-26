@@ -99,6 +99,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/numfmt"
 	_ "github.com/qiangli/coreutils/cmds/od"
 	_ "github.com/qiangli/coreutils/cmds/paste"
+	_ "github.com/qiangli/coreutils/cmds/patch"
 	_ "github.com/qiangli/coreutils/cmds/pathchk"
 	_ "github.com/qiangli/coreutils/cmds/pax"
 	_ "github.com/qiangli/coreutils/cmds/pinky"
@@ -108,8 +109,8 @@ import (
 	// every name, and rejects count drift, ambiguous ownership, missing
 	// provider pins/provenance, and host PATH fallback.
 	_ "github.com/qiangli/coreutils/cmds/posixgate"
-	// posixproviders registers fifteen pinned POSIX external providers
-	// (make, bc, patch, m4, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
+	// posixproviders registers fourteen pinned POSIX external providers
+	// (make, bc, m4, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
 	// localedef, talk) plus the
 	// `posix-providers` provisioning applet. It must be in this list: the
 	// certification harness rebuilds its measured PATH from tool.Names(), so a

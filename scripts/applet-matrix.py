@@ -51,7 +51,7 @@ alias bg cd command fc fg getopts hash jobs read sh umask unalias wait
 # find -exec), but a POSIX-mode bash-family shell EFFECTIVELY selects its own
 # builtin (or, for `time`, the reserved word) when they are invoked at shell
 # level. These two sets are the entire difference between the availability
-# split (87/14/15) and the effective-selection split (79/22/15); an eighth
+# split (88/14/14) and the effective-selection split (80/22/14); an eighth
 # builtin overlap appearing anywhere is an ownership violation the gate must
 # reject, so the sets are pinned here, in the one generator that projects the
 # canonical manifest.
@@ -60,8 +60,8 @@ KEYWORD_OVERLAP = {"time"}
 
 # The pinned shape of the required inventory, both axes. cmds/posixgate pins
 # the same numbers as Go constants; changing the inventory must trip both.
-AVAILABILITY_PIN = {"go_applet": 87, "shell": 14, "external_provider": 15}
-EFFECTIVE_PIN = {"go_applet": 79, "shell": 22, "external_provider": 15}
+AVAILABILITY_PIN = {"go_applet": 88, "shell": 14, "external_provider": 14}
+EFFECTIVE_PIN = {"go_applet": 80, "shell": 22, "external_provider": 14}
 
 ALIASES = {
     "[": "test",
@@ -88,13 +88,26 @@ PROVIDER_ADMIN = "posix-providers"
 PROVIDER_MANIFEST = ROOT / "pkg/posixprovider/manifest.tsv"
 PROVIDER_FAMILY = "POSIX external provider"
 
+# Pinned manifest entries whose multicall NAME a Go applet now owns instead
+# of cmds/posixproviders (mirrors that package's own goAppletOwned map —
+# tool.Register panics on a duplicate name, so exactly one of the two may
+# register it). The manifest pin, provenance, and build/check machinery stay
+# live for these; only run-time dispatch of the name moved. See
+# each applet's continuation ledger.
+GO_APPLET_OWNED_PROVIDERS = {"ed", "patch"}
+
 
 def provider_names() -> list[str]:
+    """Manifest entries the multicall actually dispatches as a provider —
+    i.e. the pinned set minus whatever a Go applet has since claimed."""
     names = []
     for line in PROVIDER_MANIFEST.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
-        names.append(line.split("\t")[0].strip())
+        name = line.split("\t")[0].strip()
+        if name in GO_APPLET_OWNED_PROVIDERS:
+            continue
+        names.append(name)
     if not names:
         raise SystemExit(f"no provider entries in {PROVIDER_MANIFEST}")
     return names
@@ -158,7 +171,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 155 or len(result) != 175:
+    if len(packages) != 156 or len(result) != 175:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -276,7 +289,7 @@ def render_spec_gen(data: list[dict[str, str]]) -> str:
         "// no independent copy of the inventory — regenerating the matrix rewrites",
         "// this file, and --check (crossvet + pre-push) fails when it is stale.",
         "//",
-        "// Pinned shape: availability 87/14/15, effective selection 79/22/15.",
+        "// Pinned shape: availability 88/14/14, effective selection 80/22/14.",
         "",
         "package posixgatecmd",
         "",

@@ -215,10 +215,10 @@ implementation.
 
 The generated [POSIX required-command coverage
 map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
-contract: 116 configured names, with availability of 87 Go applets, 14
+contract: 116 configured names, with availability of 88 Go applets, 14
 shell-only names, and 15 pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
-Profile C/D ownership of 79 Go-selected, 22 shell-selected, and 15 provider
+Profile C/D ownership of 80 Go-selected, 22 shell-selected, and 14 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
 missing, partial, implemented, and verified states rather than treating
 placeholders as conformance evidence.
@@ -234,7 +234,7 @@ were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory (availability 87/14/15, effective selection 79/22/15): it
+116-name inventory (availability 88/14/14, effective selection 80/22/14): it
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH

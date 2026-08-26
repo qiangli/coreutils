@@ -3,8 +3,9 @@
 
 // Package posixprovider is the READ half of the POSIX external provider
 // mechanism: pinned upstream controls built locally from source and resolved
-// from the binmgr cache. Fifteen currently dispatch so the multicall owns their
-// names; ed remains pinned only as a differential control after its Go migration.
+// from the binmgr cache. Fourteen currently dispatch so the multicall owns their
+// names; ed and patch remain pinned only as differential controls after their Go
+// migrations.
 //
 // # Why the name must be owned
 //
@@ -59,7 +60,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the fifteen active names are simply not ours and normal
+// provider cache: with it set, the fourteen active names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"
@@ -203,10 +204,11 @@ func Entries() []Entry {
 }
 
 // IsDispatchProvider reports whether name is currently owned by the external
-// provider adapter. The ed pin is deliberately retained as a reproducible
-// differential control after cmds/ed became the shipped pure-Go owner.
+// provider adapter. The ed and patch pins are deliberately retained as
+// reproducible differential controls after their pure-Go applets became the
+// shipped owners.
 func IsDispatchProvider(name string) bool {
-	return name != "ed" && Has(name)
+	return name != "ed" && name != "patch" && Has(name)
 }
 
 // DispatchEntries returns only manifest rows that still own a command name.

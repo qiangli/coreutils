@@ -122,18 +122,20 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 	}
 }
 
-func TestEdPinIsRetainedButNotDispatchOwner(t *testing.T) {
-	if !Has("ed") {
-		t.Fatal("ed differential-control pin was removed")
+func TestGoAppletPinsAreRetainedButNotDispatchOwners(t *testing.T) {
+	for _, name := range []string{"ed", "patch"} {
+		if !Has(name) {
+			t.Fatalf("%s differential-control pin was removed", name)
+		}
+		if IsDispatchProvider(name) {
+			t.Fatalf("%s is still an active provider despite Go applet ownership", name)
+		}
+		if slices.Contains(DispatchNames(), name) {
+			t.Fatalf("%s leaked into active provider names", name)
+		}
 	}
-	if IsDispatchProvider("ed") {
-		t.Fatal("ed is still an active provider despite cmds/ed ownership")
-	}
-	if slices.Contains(DispatchNames(), "ed") {
-		t.Fatal("ed leaked into active provider names")
-	}
-	if len(DispatchEntries()) != len(Entries())-1 {
-		t.Fatalf("active entries=%d all pins=%d, want one retained control", len(DispatchEntries()), len(Entries()))
+	if len(DispatchEntries()) != len(Entries())-2 {
+		t.Fatalf("active entries=%d all pins=%d, want two retained controls", len(DispatchEntries()), len(Entries()))
 	}
 }
 

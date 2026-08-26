@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 87 |
+| Availability | Go | 88 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 15 |
-| Effective owner | Go | 79 |
+| Availability | Provider | 14 |
+| Effective owner | Go | 80 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 15 |
+| Effective owner | Provider | 14 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 3 |
-| Evidence | Partial | 98 |
-| Evidence | Missing | 15 |
+| Evidence | Partial | 99 |
+| Evidence | Missing | 14 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 79 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 80 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 101 owned rows (79 Go plus 22 shell) without treating the
-15 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 102 owned rows (80 Go plus 22 shell) without treating the
+14 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -3716,7 +3716,7 @@ paste [-s] [-d list] file...
 
 ## `patch`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3732,33 +3732,33 @@ patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p
 
 **Issue 7 option-argument candidate:** `-d=<dir>; -D=<define>; -i=<patchfile>; -o=<outfile>; -p=<num>; -r=<rejectfile>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Accept at most one original-file operand and an optional patch-file operand; header pathnames select files when the original-file operand is omitted.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; unsupported -e and -D modes are diagnosed and fail without modifying files.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read patch text when neither -i nor a patch-file operand is supplied.
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; LC_TIME`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write hunk progress unless quiet mode is selected.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write usage, input, filesystem, unsupported-mode, and rejected-hunk diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read and atomically replace selected files; create, delete, back up, or write reject files as requested.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all hunks apply or are already applied; 1 when a hunk or recognized file section cannot be applied; 2 for usage, parse, or input errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#patch`.
+**Implementation:** `cmds/patch`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/patch`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:patch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/patch/patch_test.go#TestApplyUnifiedInPlace;cmds/patch/patch_test.go#TestApplyFromPatchfileOperand;cmds/patch/patch_test.go#TestApplyReverseFlag;cmds/patch/patch_test.go#TestApplyConflictWritesRejectAndExitsOne;cmds/patch/patch_test.go#TestApplyContextFormat;cmds/patch/roundtrip_test.go#TestRoundTripNormalDiff`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:patch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

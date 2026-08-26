@@ -37,10 +37,10 @@ func TestExitStatusPropagation(t *testing.T) {
 // wrapper would.
 func TestSignalDeathPropagation(t *testing.T) {
 	root := t.TempDir()
-	provision(t, root, "patch", "#!/bin/sh\nkill -TERM $$\n")
+	provision(t, root, "ctags", "#!/bin/sh\nkill -TERM $$\n")
 
 	rc, out, errb := newRC(t, root)
-	code, _, stderr := run(t, "patch", rc, out, errb)
+	code, _, stderr := run(t, "ctags", rc, out, errb)
 
 	wantSig := int(syscall.SIGTERM)
 	if code != 128+wantSig {

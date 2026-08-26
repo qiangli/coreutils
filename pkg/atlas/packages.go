@@ -152,6 +152,7 @@ var packages = map[string]Package{
 	"meet":          cmdPkg("meet"),
 	"mirror":        cmdPkg("mirror"),
 	"pair":          cmdPkg("pair"),
+	"patch":         cmdPkg("patch"),
 	"posixprovider": cmdPkg("posix-providers"),
 	"repomap":       cmdPkg("ast"),
 	"resources":     cmdPkg("resources"),

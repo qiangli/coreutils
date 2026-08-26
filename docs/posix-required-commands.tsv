@@ -71,7 +71,7 @@ nm	no	cmds/posixproviders	no	external_provider
 nohup	yes	cmds/nohup	no	go_applet
 od	yes	cmds/od	no	go_applet
 paste	yes	cmds/paste	no	go_applet
-patch	no	cmds/posixproviders	no	external_provider
+patch	yes	cmds/patch	no	go_applet
 pathchk	yes	cmds/pathchk	no	go_applet
 pax	yes	cmds/pax	no	go_applet
 pr	yes	cmds/pr	no	go_applet
