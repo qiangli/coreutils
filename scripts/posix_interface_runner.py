@@ -176,8 +176,9 @@ def parse_ref(command: str, lane: str, raw: str, roots: dict[str, Path]) -> Evid
         if not match:
             raise RunnerError(f"{command}: malformed {lane} reference: {raw}")
         repo = match.group("repo")
-        if lane == "shell_evidence" and repo not in {"sh", "bashy"}:
-            raise RunnerError(f"{command}: wrong-owner evidence root in {raw}")
+        bashy_sh_entrypoint = command == "sh" and repo == "bashy"
+        if lane == "shell_evidence" and repo != "sh" and not bashy_sh_entrypoint:
+            raise RunnerError(f"{command}: shell evidence must use sh root: {raw}")
         if lane == "shell_routing_evidence" and repo != "bashy":
             raise RunnerError(f"{command}: shell routing evidence must use bashy root: {raw}")
 
@@ -287,7 +288,7 @@ def grouped_invocations(refs: list[EvidenceRef], roots: dict[str, Path]) -> list
     for (repo, package), tests in sorted(grouped.items()):
         unique_tests = sorted(tests)
         run_expr = "^(?:" + "|".join(re.escape(test) for test in unique_tests) + ")$"
-        argv = ["go", "test", "-v", "-run", run_expr, package]
+        argv = ["go", "test", "-count=1", "-v", "-run", run_expr, package]
         invocations.append({"repo": repo, "cwd": str(roots[repo]), "argv": argv, "tests": unique_tests})
     return invocations
 
@@ -341,27 +342,63 @@ def read_ledger(path: Path) -> dict[str, Any]:
 
 def current_run(ledger: dict[str, Any], contract_hash: str, contract: dict[str, Any]) -> dict[str, Any]:
     runs = ledger.setdefault("runs", {})
-    run = runs.setdefault(
-        contract_hash,
-        {"schema_version": SCHEMA_VERSION, "contract_hash": contract_hash, "contract": contract, "commands": {}},
-    )
-    run["schema_version"] = SCHEMA_VERSION
-    run["contract_hash"] = contract_hash
-    run["contract"] = contract
-    run.setdefault("commands", {})
+    if contract_hash not in runs:
+        runs[contract_hash] = {
+            "schema_version": SCHEMA_VERSION,
+            "contract_hash": contract_hash,
+            "contract": contract,
+            "commands": {},
+        }
+    run = runs[contract_hash]
+    if (
+        not isinstance(run, dict)
+        or run.get("schema_version") != SCHEMA_VERSION
+        or run.get("contract_hash") != contract_hash
+        or run.get("contract") != contract
+        or not isinstance(run.get("commands"), dict)
+    ):
+        raise RunnerError(f"ledger contract record is invalid for {contract_hash}")
     return run
 
 
-def successful_terminal_attempt(attempts: list[dict[str, Any]]) -> bool:
+def successful_terminal_attempt(
+    attempts: list[dict[str, Any]], planned_invocations: list[dict[str, Any]]
+) -> bool:
     if not attempts:
         return False
     last = attempts[-1]
-    return (
-        last.get("terminal") == "pass"
-        and last.get("exit_status") == 0
-        and bool(last.get("end_timestamp"))
-        and bool(last.get("invocations"))
-    )
+    records = last.get("invocations")
+    if (
+        last.get("terminal") != "pass"
+        or last.get("exit_status") != 0
+        or not last.get("end_timestamp")
+        or not isinstance(records, list)
+        or len(records) != len(planned_invocations)
+    ):
+        return False
+    for record, planned in zip(records, planned_invocations):
+        if (
+            not isinstance(record, dict)
+            or record.get("repo") != planned["repo"]
+            or record.get("cwd") != planned["cwd"]
+            or record.get("argv") != planned["argv"]
+            or record.get("exit_status") != 0
+            or record.get("output_present") is not True
+        ):
+            return False
+        for stream in ("stdout", "stderr"):
+            expected = record.get(f"{stream}_sha256")
+            output_path = record.get(f"{stream}_path")
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                return False
+            if not isinstance(output_path, str):
+                return False
+            try:
+                if sha256_file(Path(output_path)) != expected:
+                    return False
+            except OSError:
+                return False
+    return True
 
 
 def attempt_status(attempts: list[dict[str, Any]]) -> str:
@@ -384,7 +421,7 @@ def run_command(
 ) -> dict[str, Any]:
     command_record = run["commands"].setdefault(command, {"attempts": []})
     attempts = command_record.setdefault("attempts", [])
-    if successful_terminal_attempt(attempts):
+    if successful_terminal_attempt(attempts, invocations):
         return {"command": command, "status": "skipped", "attempt": len(attempts)}
 
     attempt_no = len(attempts) + 1

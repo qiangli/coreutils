@@ -4,6 +4,9 @@
 source-interface evidence references declared in
 `docs/posix-required-command-interfaces.tsv`. It covers the 100 implementation
 owned commands in the canonical manifest: 78 `go` rows and 22 `shell` rows.
+References are routed by their strict manifest repo prefix. Shell source tests
+use the explicit `sh` root, except for the canonical `sh` utility-entrypoint
+test declared under `bashy`; shell routing tests use the explicit `bashy` root.
 
 Intended invocation:
 
@@ -23,7 +26,8 @@ python3 scripts/posix_interface_runner.py --owner shell --state-dir /path/outsid
 ```
 
 Use `--dry-run` to validate references and print the package-scoped `go test`
-invocations without executing them. Use `--json` for machine-readable output.
+invocations without executing them. Evidence runs include `-count=1` to bypass
+the Go test result cache. Use `--json` for machine-readable output.
 
 The state directory must be outside the worktree. The ledger is guarded by an
 advisory lock and atomic writes. A successful command is skipped on a later run

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -53,9 +54,9 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         git = self.bin / "git"
         git.write_text(
             "#!/usr/bin/env python3\n"
-            "import pathlib, sys\n"
+            "import os, pathlib, sys\n"
             "if sys.argv[1:] == ['rev-parse', 'HEAD']:\n"
-            "    print('rev-' + pathlib.Path.cwd().name)\n"
+            "    print('rev-' + pathlib.Path.cwd().name + os.environ.get('RUNNER_REV_SUFFIX', ''))\n"
             "    raise SystemExit(0)\n"
             "raise SystemExit(1)\n"
         )
@@ -63,7 +64,7 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         go = self.bin / "go"
         go.write_text(
             "#!/usr/bin/env python3\n"
-            "import json, os, pathlib, sys\n"
+            "import json, os, pathlib, sys, time\n"
             "if sys.argv[1:] == ['version']:\n"
             "    print('go version go1.26.4 test/arch')\n"
             "    raise SystemExit(0)\n"
@@ -79,6 +80,7 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
             "    }\n"
             "    with open(os.environ['RUNNER_LOG'], 'a') as handle:\n"
             "        handle.write(json.dumps(entry, sort_keys=True) + '\\n')\n"
+            "    time.sleep(float(os.environ.get('RUNNER_SLEEP', '0')))\n"
             "    if os.environ.get('RUNNER_EMPTY') == '1':\n"
             "        raise SystemExit(0)\n"
             "    print('stdout:' + ' '.join(sys.argv[1:]))\n"
@@ -156,7 +158,10 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         events = self.go_events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["cwd"], str(self.repo.resolve()))
-        self.assertEqual(events[0]["argv"], ["test", "-v", "-run", "^(?:TestAtOne|TestAtTwo)$", "./cmds/at"])
+        self.assertEqual(
+            events[0]["argv"],
+            ["test", "-count=1", "-v", "-run", "^(?:TestAtOne|TestAtTwo)$", "./cmds/at"],
+        )
 
     def test_owner_routing_uses_shell_and_bashy_roots(self) -> None:
         self.add_test(self.sh_repo, "interp/issue7_test.go", "TestEchoIssue7Interface")
@@ -205,6 +210,19 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         self.assertEqual(self.run_runner("at").returncode, 0)
         self.assertEqual(len(self.go_events()), 1)
 
+    def test_missing_saved_output_invalidates_success_and_reruns(self) -> None:
+        self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
+        self.write_manifest(
+            [{"command": "at", "effective_owner": "go", "go_evidence": "cmds/at/at_test.go#TestAtOne"}]
+        )
+        self.assertEqual(self.run_runner("at").returncode, 0)
+        first = next(iter(self.ledger()["runs"].values()))["commands"]["at"]["attempts"][0]
+        Path(first["invocations"][0]["stdout_path"]).unlink()
+        self.assertEqual(self.run_runner("at").returncode, 0)
+        self.assertEqual(len(self.go_events()), 2)
+        attempts = next(iter(self.ledger()["runs"].values()))["commands"]["at"]["attempts"]
+        self.assertEqual([attempt["terminal"] for attempt in attempts], ["pass", "pass"])
+
     def test_manifest_contract_change_reruns_success(self) -> None:
         self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
         self.write_manifest(
@@ -215,6 +233,22 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
             handle.write("# comment that changes the manifest hash\n")
         self.assertEqual(self.run_runner("at").returncode, 0)
         self.assertEqual(len(self.go_events()), 2)
+
+    def test_git_revision_contract_change_reruns_success(self) -> None:
+        self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
+        self.write_manifest(
+            [{"command": "at", "effective_owner": "go", "go_evidence": "cmds/at/at_test.go#TestAtOne"}]
+        )
+        self.assertEqual(self.run_runner("at").returncode, 0)
+        changed_env = self.env.copy()
+        changed_env["RUNNER_REV_SUFFIX"] = "-changed"
+        self.assertEqual(self.run_runner("at", env=changed_env).returncode, 0)
+        self.assertEqual(len(self.go_events()), 2)
+        revisions = {
+            run["contract"]["git_revisions"]["coreutils"]
+            for run in self.ledger()["runs"].values()
+        }
+        self.assertEqual(revisions, {"rev-coreutils", "rev-coreutils-changed"})
 
     def test_failure_is_retained_and_retried(self) -> None:
         self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
@@ -304,6 +338,21 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unavailable evidence root 'sh'", result.stderr)
 
+        self.add_test(self.bashy_repo, "interp/issue7_test.go", "TestEchoIssue7Interface")
+        self.write_manifest(
+            [
+                {
+                    "command": "echo",
+                    "effective_owner": "shell",
+                    "shell_evidence": "bashy:interp/issue7_test.go#TestEchoIssue7Interface",
+                    "shell_routing_evidence": "bashy:internal/cli/profile_b_test.go#TestProfileBRouteEcho",
+                }
+            ]
+        )
+        result = self.run_runner("echo")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("shell evidence must use sh root", result.stderr)
+
     def test_state_dir_must_be_outside_worktree_and_empty_selection_fails(self) -> None:
         self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
         self.write_manifest(
@@ -346,7 +395,47 @@ class PosixInterfaceRunnerTest(unittest.TestCase):
         self.assertNotEqual(empty_result.returncode, 0)
         self.assertIn("empty selection", empty_result.stderr)
 
-    def test_lock_atomic_posixly_correct_and_output_hashes(self) -> None:
+    def test_lock_serializes_runs_and_intermediate_ledger_is_atomic(self) -> None:
+        self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
+        self.write_manifest(
+            [{"command": "at", "effective_owner": "go", "go_evidence": "cmds/at/at_test.go#TestAtOne"}]
+        )
+        slow_env = self.env.copy()
+        slow_env["RUNNER_SLEEP"] = "0.5"
+        argv = [
+            sys.executable,
+            str(SCRIPT),
+            "--manifest",
+            str(self.manifest),
+            "--state-dir",
+            str(self.state),
+            "at",
+        ]
+        first = subprocess.Popen(
+            argv,
+            cwd=self.repo,
+            env=slow_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 3
+        while not self.log.exists() and first.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.log.exists(), "first runner did not begin its evidence invocation")
+        in_progress = self.ledger()
+        attempt = next(iter(in_progress["runs"].values()))["commands"]["at"]["attempts"][0]
+        self.assertEqual(attempt["terminal"], "unknown")
+
+        second = self.run_runner("--json", "at")
+        first_stdout, first_stderr = first.communicate(timeout=3)
+        self.assertEqual(first.returncode, 0, first_stderr or first_stdout)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(json.loads(second.stdout)["events"][0]["status"], "skipped")
+        self.assertEqual(len(self.go_events()), 1)
+        self.assertEqual(list(self.state.glob("*.tmp")), [])
+
+    def test_posixly_correct_and_output_hashes(self) -> None:
         self.add_test(self.repo, "cmds/at/at_test.go", "TestAtOne")
         self.write_manifest(
             [{"command": "at", "effective_owner": "go", "go_evidence": "cmds/at/at_test.go#TestAtOne"}]
