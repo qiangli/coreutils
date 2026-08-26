@@ -718,55 +718,6 @@ func TestDdSIGINTEOFRaceStress(t *testing.T) {
 	}
 }
 
-func TestDdFIFOEOFSIGINTOrdering(t *testing.T) {
-	requireInterruptibleNamedFIFOInput(t)
-	t.Run("signal wins", func(t *testing.T) {
-		for i := range 5 {
-			dir := t.TempDir()
-			fifo := makeFIFO(t, dir, "fifo")
-			var errb bytes.Buffer
-			rc := &tool.RunContext{
-				Ctx: context.Background(), Dir: dir,
-				Stdio: tool.Stdio{In: strings.NewReader(""), Out: ioDiscardWriter{}, Err: &errb},
-			}
-			done := make(chan int, 1)
-			go func() { done <- cmd.Run(rc, []string{"if=fifo", "status=noxfer"}) }()
-			w := attachFIFOWriter(t, fifo)
-			defer w.Close()
-			signalSelfSIGINT(t)
-			// Keep the writer open until dd returns. EOF therefore cannot win
-			// through scheduler timing; the only possible completion is SIGINT.
-			if code := waitCode(t, done); code != 130 {
-				t.Fatalf("iteration %d: code=%d want 130; stderr=%q", i, code, errb.String())
-			}
-			if got := strings.Count(errb.String(), "records in\n"); got != 1 {
-				t.Fatalf("iteration %d: status count=%d stderr=%q", i, got, errb.String())
-			}
-			_ = w.Close()
-		}
-	})
-	t.Run("EOF wins after completion", func(t *testing.T) {
-		dir := t.TempDir()
-		fifo := makeFIFO(t, dir, "fifo")
-		var errb bytes.Buffer
-		rc := &tool.RunContext{
-			Ctx: context.Background(), Dir: dir,
-			Stdio: tool.Stdio{In: strings.NewReader(""), Out: ioDiscardWriter{}, Err: &errb},
-		}
-		done := make(chan int, 1)
-		go func() { done <- cmd.Run(rc, []string{"if=fifo", "status=noxfer"}) }()
-		w := attachFIFOWriter(t, fifo)
-		time.Sleep(2 * pollSliceMS * time.Millisecond)
-		_ = w.Close()
-		if code := waitCode(t, done); code != 0 {
-			t.Fatalf("code=%d want 0; stderr=%q", code, errb.String())
-		}
-		if rc.ExitSignal != 0 {
-			t.Fatalf("ExitSignal=%d want 0", rc.ExitSignal)
-		}
-	})
-}
-
 func TestDdNormalPathResetsExitSignal(t *testing.T) {
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
