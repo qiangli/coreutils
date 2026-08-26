@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `1ae7adc`
+This report reconciles the Sprint 79 interface ledger through coreutils `67e7e32`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -10,17 +10,19 @@ GNU extension behavior is not certification evidence.
 
 The ledger contains exactly 116 required names: 78 effective Go-owned, 22
 effective shell-owned, and 16 external-provider-owned. The current evidence
-states are **3 verified, 97 partial, and 16 unverified**.
+states are **0 verified, 3 implemented, 97 partial, and 16 missing**.
 
-| Effective owner | Verified | Partial | Unverified | Total |
-| --- | ---: | ---: | ---: | ---: |
-| Go | 1 | 77 | 0 | 78 |
-| Shell | 2 | 20 | 0 | 22 |
-| External provider | 0 | 0 | 16 | 16 |
-| Total | 3 | 97 | 16 | 116 |
+| Effective owner | Verified | Implemented | Partial | Missing | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Go | 0 | 1 | 77 | 0 | 78 |
+| Shell | 0 | 2 | 20 | 0 | 22 |
+| External provider | 0 | 0 | 0 | 16 | 16 |
+| Total | 0 | 3 | 97 | 16 | 116 |
 
-The verified owned interfaces are shell-selected `false` and `true`, plus
-Go-selected `nice`. The two status-only shell interfaces have both
+The implemented owned interfaces are shell-selected `false` and `true`, plus
+Go-selected `nice`. They are not verified because the byte-derived proprietary
+integration verification gate is explicitly deferred and unavailable. The two status-only
+shell interfaces have both
 command-specific semantic evidence in `sh` and command-specific Profile B
 routing evidence in `bashy`. `nice` is promoted on the accepted process-level
 barrier evidence at canonical `afee303`: user code cannot begin before the
@@ -45,7 +47,7 @@ are:
 The 22 shell-owned names are `alias bg cd command echo false fc fg getopts
 hash jobs kill printf pwd read sh test time true umask unalias wait`. The 16
 provider rows are outside `--require-owned-complete` and remain separately
-unverified.
+missing.
 
 ## Fail-closed evidence decision
 
@@ -102,16 +104,16 @@ lower-ranked edges.
 | 2 | `cut` | locale-provider integration | Accepted source now applies invocation `LC_CTYPE` to `-c`, `-b -n`, and multibyte `-d` boundaries while preserving exact input bytes; focused tests cover C/POSIX, UTF-8, ISO-8859-1, malformed input, precedence, long lines, and fail-before-I/O behavior. Remaining: the carried locale corpus is bounded and installed locales outside it fail closed. |
 | 2 | `expand` | locale-provider integration | Accepted source now retains exact byte spans and uses invocation `LC_CTYPE` for display-column accounting; focused tests cover C/POSIX, UTF-8 widths, ISO-8859-1, malformed input, precedence, `-i`, read errors, and short writes. Remaining: the carried locale corpus and Unicode width policy are bounded. |
 | 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Issue 748 and manager review now prove every Issue 7 conversion and E/O fallback in the carried locales, `LC_TIME` precedence/fail-closed behavior, invocation `TZ`/`-u`, validation before the injected clock setter, XSI year rules, setter failure, and output error plus short-write status. Remaining: privileged real clock-set integration, leap-second rendering from a system clock source, additional platform setters, and installed locales outside the bounded C/POSIX and `de_DE` corpus. |
-| 2 | `getconf` | platform integration | Accepted source now inventories every mandatory sysconf/pathconf/confstr/minimum name, routes pathname and system queries, distinguishes undefined results, validates programming environments, and propagates path/output errors. Remaining: privileged/kernel-limit products, a non-Linux/Darwin runtime provider, and broader native platform certification fixtures. |
+| 2 | `getconf` | platform integration | Accepted source now inventories every mandatory sysconf/pathconf/confstr/minimum name, routes pathname and system queries, distinguishes undefined results, validates programming environments, and propagates path/output errors. Remaining: privileged/kernel-limit products, a non-Linux/Darwin runtime provider, and broader native platform fixtures. |
 | 2 | `file` | locale/platform integration | Accepted Issue 746 evidence maps every required option (`-d`, `-h`, `-i`, `-M`, `-m`), option ordering, operands/stdin choice, symlink policy, default and custom magic grammar, required type strings, inaccessible operands, status, and output failures. Manager review rejected an attempted `-b` behavior change because `-b` is not an Issue 7 option. Remaining: broader locale providers, platform-specific device wording, and implementation-defined type-string breadth. |
 | 2 | `find` | platform/locale integration | Accepted source now requires a path operand whenever `POSIXLY_CORRECT` is present while preserving the default-`.` extension outside POSIX mode. Focused products cover every required primary/action/operator, real and seam-backed ownership cases, locale precedence for patterns and `-ok`, `-exec` side effects/batching, traversal failures, and aggregate status. Remaining: cross-mount positive `-xdev`, non-Unix identity providers, and locale/filesystem breadth outside the carried corpus. |
 | 2 | `id` | credential/platform integration | Accepted Issue 745 tests now prove named-user default and every selector/name combination, exact name-or-number fallback, portable accounts without supplementary groups, and stdout error/short-write status. Remaining: a real set-ID process fixture and a conformant numeric-credential provider or explicit failure disposition on every non-Unix target. |
-| 2 | `logname` | session/platform integration | Accepted Issue 745 source retains Linux audit-login-UID resolution, adds a native cgo-free `getlogin` provider for Darwin/DragonFly/FreeBSD, proves a real Darwin login session, and keeps required no-login, environment/effective-user isolation, and output-error products. Remaining: live Linux certification-session coverage, runtime DragonFly/FreeBSD coverage, and providers for the explicitly unsupported POSIX targets. |
+| 2 | `logname` | session/platform integration | Accepted Issue 745 source retains Linux audit-login-UID resolution, adds a native cgo-free `getlogin` provider for Darwin/DragonFly/FreeBSD, proves a real Darwin login session, and keeps required no-login, environment/effective-user isolation, and output-error products. Remaining: live Linux target-session coverage, runtime DragonFly/FreeBSD coverage, and providers for the explicitly unsupported POSIX targets. |
 | 2 | `od` | locale-provider integration | Accepted source now applies invocation-owned `LC_CTYPE` to `-t c`, including printable UTF-8 first-byte/`**` continuation fields across output groups, exact Latin-1 bytes, malformed/nonprintable octals, and bounded streaming lookahead. `LC_NUMERIC` controls the radix across all required floating type strings and carried ABIs. Remaining: the locale corpus and Unicode printability tables are bounded and translated catalogs are absent. |
 | 2 | `paste` | locale-provider integration | Accepted source now splits `-d LIST` into delimiter characters per invocation `LC_CTYPE` (carried C/POSIX, their UTF-8 aliases, and `de_DE.ISO-8859-1`, original bytes preserved, unsupported locales failing before any operand opens), and has focused tests for repeated `-` under `-s`, the twelve-operand minimum, the `\\` escape, serial `\0`, mid-file read errors, and stdout write/short-write failures. Remaining: locale codeset discovery is a bounded carried corpus rather than `nl_langinfo(CODESET)`; unqualified installed locales outside that corpus fail closed. |
 | 2 | `pathchk` | filesystem/platform integration | Accepted source now handles failed and indeterminate containing-filesystem limit queries, differing limits at depth, diagnostics, and aggregate status. Linux runtime evidence proves filesystem-valid non-UTF-8 component bytes are not incorrectly rejected by a UTF-8 locale. Remaining: a side-effect-free provider for missing-name syntax on filesystems with additional encoding restrictions and non-Linux/Darwin runtime coverage. |
-| 2 | `pr` | `ENVIRONMENT_VARIABLES`, platform/locale integration | Issue 747 closes the complete required option/optional-argument matrix, corrects the ledger's XSI classification (`-f`, not `-l`), proves exact headers and page structures, makes `-m` assume `-e`/`-i`, applies invocation `TZ` and bounded `LC_TIME`, defers terminal diagnostics, returns nonzero on SIGINT, and covers read/write/short-write failures. Remaining: multibyte `LC_CTYPE` display widths/printability, installed locales outside the carried corpus, and a real controlling-terminal certification-host run. |
-| 2 | `tty` | platform/locale integration | Linux and Darwin have real PTY terminal-name tests, with Darwin `/dev/console` coverage; the exact POSIX-locale nonterminal output, status partition, invalid descriptors, output errors, and short writes are covered. Remaining: truthful terminal pathname lookup on the other POSIX targets, a certification-host controlling-terminal run, and locale message providers outside the POSIX locale. |
+| 2 | `pr` | `ENVIRONMENT_VARIABLES`, platform/locale integration | Issue 747 closes the complete required option/optional-argument matrix, corrects the ledger's XSI classification (`-f`, not `-l`), proves exact headers and page structures, makes `-m` assume `-e`/`-i`, applies invocation `TZ` and bounded `LC_TIME`, defers terminal diagnostics, returns nonzero on SIGINT, and covers read/write/short-write failures. Remaining: multibyte `LC_CTYPE` display widths/printability, installed locales outside the carried corpus, and a real controlling-terminal target-host run. |
+| 2 | `tty` | platform/locale integration | Linux and Darwin have real PTY terminal-name tests, with Darwin `/dev/console` coverage; the exact POSIX-locale nonterminal output, status partition, invalid descriptors, output errors, and short writes are covered. Remaining: truthful terminal pathname lookup on the other POSIX targets, an integration-host controlling-terminal run, and locale message providers outside the POSIX locale. |
 | 2 | `more` | `ENVIRONMENT_VARIABLES`, terminal integration | The accepted implementation now covers the full Issue 7 option and interactive command grammar, `$MORE`/`LINES`/`COLUMNS`/`EDITOR`/`TERM`, tag/search/editor behavior, terminal overstrikes, and I/O failures. Remaining boundaries are unavailable UTF-8 collation providers and terminal-capability/platform integration—not absent translated catalogs or unsupported `-i`, `-p`, or `-t`. |
 | 2 | `cp` | `OUTPUT_FILES`, platform/error integration | Accepted source now rejects unsafe/aliased destinations, preserves physical symlink metadata without mutating referents, preserves portable atime or fails loudly, and has exact same-file/destination/umask/PATH_MAX tests. Remaining: privileged device-node and ownership products, injected mid-copy read/write/unlink failures, non-Linux/Darwin symlink metadata, and Windows runtime paths. |
 | 2 | `touch` | `OUTPUT_FILES`, platform/error integration | Accepted source now obtains reference atime on supported stat layouts and fails loudly when unavailable; literal `-`, TZ, leap second, near-PATH_MAX, and reference-time paths are tested. Remaining: real atime propagation on every target, 0666 creation through umask, `-c` existing-file and multi-operand failure products, and full range rejection. |
@@ -146,8 +148,9 @@ direct shell owner for `echo`, `false`, `kill`, `printf`, `pwd`, `test`,
 `time`, and `true`.
 
 All 22 shell names have currently resolvable, command-specific semantic and
-routing references. `false` and `true` are verified. The other twenty remain
-partial because their closure audits identify concrete locale, interactive,
+routing references. `false` and `true` are implemented, not verified while the
+byte-derived Profile B/D integration verification gate remains deferred. The other twenty
+remain partial because their closure audits identify concrete locale, interactive,
 process, filesystem, or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs`
 references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
@@ -160,7 +163,7 @@ coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `1ae7adc`. It credits the accepted command
+This report is reconciled through canonical `67e7e32`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -201,12 +204,14 @@ locale-provider and platform residuals are stated explicitly above.
 
 ```sh
 python3 scripts/posix_manifest.py --check
+python3 scripts/posix_manifest.py --require-owned-source-complete
 python3 scripts/posix_manifest.py --require-owned-complete
 python3 -m unittest scripts/posix_manifest_test.py
 scripts/applet-matrix.py --check
 ```
 
-The owned-completion command is expected to fail at this snapshot with 97
-items: 77 of 78 Go rows and 20 shell rows are partial. Equivalently, `nice` is
-the sole verified Go row and 20 of 22 shell rows remain incomplete.
-That failure is the truthful Sprint 79 residual, not a waived gate.
+The owned-source-completion command is expected to fail at this snapshot with
+97 partial rows. The final owned-completion command fails all 100 owned rows:
+three are implemented but cannot be promoted before the deferred integration gate exists,
+and 97 remain partial.
+Those failures are the truthful Sprint 79 residual, not waived gates.

@@ -96,10 +96,32 @@ class ManifestValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "heading count/order"):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
-        self.assertIn("| Evidence | Verified | 3 |", rendered)
+        self.assertIn("| Evidence | Verified | 0 |", rendered)
+        self.assertIn("| Evidence | Implemented | 3 |", rendered)
         self.assertIn("| Evidence | Partial | 97 |", rendered)
-        self.assertIn("| Evidence | Unverified | 16 |", rendered)
-        self.assertEqual(self.row("nice")["evidence_state"], "verified")
+        self.assertIn("| Evidence | Missing | 16 |", rendered)
+        self.assertEqual(self.row("nice")["evidence_state"], "implemented")
+
+    def test_exact_four_state_vocabulary_is_enforced(self) -> None:
+        self.assertEqual(
+            manifest.EVIDENCE_STATES,
+            {"missing", "partial", "implemented", "verified"},
+        )
+        for state in ("missing", "partial", "implemented"):
+            with self.subTest(state=state):
+                manifest.validate(
+                    self.changed("nice", evidence_state=state),
+                    self.providers, self.packages, self.flagsets,
+                )
+        self.assertRejected(
+            self.changed("nice", evidence_state="verified"),
+            "verified state is unavailable.*implemented is the highest",
+        )
+        for state in ("unverified", "complete", "typo"):
+            with self.subTest(state=state):
+                self.assertRejected(
+                    self.changed("nice", evidence_state=state), "invalid evidence state",
+                )
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)
@@ -144,8 +166,17 @@ class ManifestValidationTest(unittest.TestCase):
             self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
         )
         self.assertGreater(len(full_errors), len(owned_errors))
-        self.assertIn("ar: state=unverified", full_errors)
-        self.assertNotIn("ar: state=unverified", owned_errors)
+        self.assertIn("ar: state=missing", full_errors)
+        self.assertNotIn("ar: state=missing", owned_errors)
+
+    def test_final_gates_explicitly_reject_implemented(self) -> None:
+        self.assertIn("nice: state=implemented", manifest.completion_errors(self.rows))
+        self.assertIn(
+            "nice: state=implemented",
+            manifest.completion_errors(
+                self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
+            ),
+        )
 
     def test_every_interface_field_is_required(self) -> None:
         for field in manifest.FIELDS:
@@ -316,14 +347,14 @@ class ManifestValidationTest(unittest.TestCase):
         ):
             self.assertRejected(rows, "partial state requires focused semantic evidence")
 
-    def test_verified_shell_row_requires_both_semantic_and_routing_lanes(self) -> None:
+    def test_implemented_shell_row_requires_both_semantic_and_routing_lanes(self) -> None:
         semantic = "sh:interp/posix_bg_test.go#TestBgIssue7Interface"
         routing = (
             "bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteBg"
         )
         changes = self.completed_semantics("bg")
         changes.update(
-            evidence_state="verified", shell_evidence=semantic,
+            evidence_state="implemented", shell_evidence=semantic,
             shell_routing_evidence="-",
         )
         with mock.patch.object(manifest, "_shell_evidence_ref", return_value=True):
@@ -334,7 +365,7 @@ class ManifestValidationTest(unittest.TestCase):
 
         changes = self.completed_semantics("bg")
         changes.update(
-            evidence_state="verified",
+            evidence_state="implemented",
             shell_evidence="-",
             shell_routing_evidence=routing,
         )
@@ -378,10 +409,10 @@ class ManifestValidationTest(unittest.TestCase):
                 with self.subTest(field=field, missing=missing):
                     self.assertRejected(
                         self.changed(
-                            "xargs", evidence_state="verified", go_evidence=evidence,
+                            "xargs", evidence_state="implemented", go_evidence=evidence,
                             **{field: missing},
                         ),
-                        rf"verified state launders.*{field}",
+                        rf"implemented state launders.*{field}",
                     )
 
     def test_nlspath_is_recorded_as_xsi_applicable(self) -> None:
@@ -422,7 +453,7 @@ class ManifestValidationTest(unittest.TestCase):
     def test_true_cannot_substitute_pr_test_as_shell_evidence(self) -> None:
         changes = self.completed_semantics("true")
         changes.update(
-            evidence_state="verified",
+            evidence_state="implemented",
             shell_evidence="cmds/pr/pr_test.go#TestPRDefaultPageStructure",
         )
         self.assertRejected(
@@ -447,7 +478,7 @@ class ManifestValidationTest(unittest.TestCase):
     def test_ar_cannot_substitute_pr_test_as_provider_evidence(self) -> None:
         changes = self.completed_semantics("ar")
         changes.update(
-            evidence_state="verified",
+            evidence_state="implemented",
             provider_evidence="cmds/pr/pr_test.go#TestPRDefaultPageStructure",
         )
         self.assertRejected(
@@ -484,21 +515,103 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertRejected(
             self.changed(
                 "true", **self.completed_semantics("true"),
-                evidence_state="verified",
+                evidence_state="implemented",
                 shell_evidence=(
                     "sh:interp/posix_true_evidence_test.go#TestTrueIssue7Interface"
                 ),
             ),
-            "verified state launders.*focused behavioral evidence",
+            "implemented state launders.*focused behavioral evidence",
         )
 
-    def test_verified_go_evidence_requires_an_explicit_test_id(self) -> None:
+    def test_implemented_go_evidence_requires_an_explicit_test_id(self) -> None:
         self.assertRejected(
             self.changed(
-                "xargs", evidence_state="verified",
+                "xargs", evidence_state="implemented",
                 go_evidence="cmds/xargs/xargs_test.go",
             ),
-            "verified state launders.*focused behavioral evidence",
+            "implemented state launders.*focused behavioral evidence",
+        )
+
+    def test_integration_evidence_is_deferred_and_fails_closed(self) -> None:
+        for evidence in (
+            "certification ledger",
+            "profile-c@" + "a" * 40 + "#nice/run.tsv@sha256=" + "b" * 64,
+        ):
+            with self.subTest(evidence=evidence):
+                self.assertRejected(
+                    self.changed("nice", integration_evidence=evidence),
+                    "integration verification gate is deferred/unavailable",
+                )
+
+    def test_verified_cannot_be_mocked_past_the_deferred_gate(self) -> None:
+        with mock.patch.object(
+            manifest, "_integration_profiles", return_value={"profile-c", "profile-d"},
+        ):
+            self.assertRejected(
+                self.changed("nice", evidence_state="verified"),
+                "verified state is unavailable.*implemented is the highest",
+            )
+
+    def test_future_integration_profile_mapping_is_exact(self) -> None:
+        self.assertEqual(
+            manifest.REQUIRED_INTEGRATION_PROFILES,
+            {
+                "go": frozenset({"profile-c", "profile-d"}),
+                "shell": frozenset({"profile-b", "profile-d"}),
+                "external_provider": frozenset({"profile-c", "profile-d"}),
+            },
+        )
+
+    def test_owned_source_gate_has_exact_scope_and_accepts_only_ready_states(self) -> None:
+        errors = manifest.owned_source_errors(self.rows)
+        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 97)
+        self.assertFalse(any(error.startswith("ar:") for error in errors))
+        with (
+            mock.patch.object(sys, "argv", [str(SCRIPT), "--require-owned-source-complete"]),
+            self.assertRaisesRegex(SystemExit, "owned POSIX source completion blocked"),
+        ):
+            manifest.main()
+
+    def test_owned_source_gate_accepts_ready_rows_and_rejects_missing(self) -> None:
+        rows = copy.deepcopy(self.rows)
+        for row in rows:
+            if row["effective_owner"] in manifest.OWNED_IMPLEMENTATION_OWNERS:
+                row["evidence_state"] = "implemented"
+        self.assertEqual(manifest.owned_source_errors(rows), [])
+        next(row for row in rows if row["command"] == "nice")["evidence_state"] = "missing"
+        self.assertIn("nice: state=missing", manifest.owned_source_errors(rows))
+
+    def test_implemented_state_rejects_every_incomplete_source_lane(self) -> None:
+        self.assertRejected(
+            self.changed("nice", effects=manifest.UNVERIFIED),
+            "implemented state launders.*effects",
+        )
+        self.assertRejected(
+            self.changed("nice", go_evidence="cmds/nice/absent_test.go#TestNiceAbsent"),
+            "evidence path absent",
+        )
+        self.assertRejected(
+            self.changed("false", shell_routing_evidence="-"),
+            "implemented state launders.*shell routing evidence",
+        )
+        with mock.patch.object(manifest, "parser_gaps", return_value={"-Z"}):
+            self.assertRejected(self.changed("nice"), "implemented state launders")
+        with mock.patch.object(
+            manifest, "option_argument_gaps", return_value={"-n=<adjustment>"},
+        ):
+            self.assertRejected(self.changed("nice"), "implemented state launders")
+
+    def test_provider_registration_alone_cannot_establish_implemented(self) -> None:
+        changes = self.completed_semantics("ar")
+        changes.update({
+            "evidence_state": "implemented",
+            "provider_evidence": (
+                "cmds/posixproviders/posixproviders_test.go#"
+                "TestProviderNamesAreRegistered"
+            ),
+        })
+        self.assertRejected(
+            self.changed("ar", **changes), "provider evidence is not command-specific",
         )
 
     def test_partial_go_evidence_requires_explicit_test_ids(self) -> None:
@@ -509,8 +622,8 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_state_laundering_is_rejected(self) -> None:
         self.assertRejected(
-            self.changed("bg", evidence_state="verified", effects="UNVERIFIED"),
-            "verified state launders",
+            self.changed("bg", evidence_state="implemented", effects="UNVERIFIED"),
+            "implemented state launders",
         )
 
     def test_all_normative_semantic_fields_are_fail_closed(self) -> None:
@@ -519,16 +632,16 @@ class ManifestValidationTest(unittest.TestCase):
             for missing in ("", manifest.UNVERIFIED):
                 with self.subTest(field=field, missing=missing):
                     rows = self.changed(
-                        "xargs", evidence_state="verified", go_evidence=evidence,
+                        "xargs", evidence_state="implemented", go_evidence=evidence,
                         **{field: missing},
                     )
                     self.assertRejected(rows, "missing field" if not missing else ".+")
         self.assertRejected(
             self.changed(
-                "basename", evidence_state="verified",
+                "basename", evidence_state="implemented",
                 required_options="-Z", go_evidence="cmds/basename/basename_test.go",
             ),
-            "verified state launders",
+            "implemented state launders",
         )
 
     def test_owned_partial_and_unverified_rows_require_complete_semantics(self) -> None:
@@ -563,6 +676,19 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertIn("conservative source-token audit", rendered.lower())
         self.assertIn("never proof of runtime behavior", rendered)
         self.assertNotIn("PASS: all declared options", rendered)
+
+    def test_render_defines_states_deferred_integration_and_final_gates(self) -> None:
+        rendered = manifest.render(self.rows)
+        for state in ("missing", "partial", "implemented", "verified"):
+            self.assertRegex(rendered, rf"- `{state}`:")
+        self.assertIn("Integration verification is deferred and unavailable", rendered)
+        self.assertIn("implemented` is therefore the highest currently attainable", rendered)
+        self.assertIn("Go and external", rendered)
+        self.assertIn("provider rows require Profiles C+D", rendered)
+        self.assertIn("shell rows require Profiles B+D", rendered)
+        self.assertIn("Both final gates accept", rendered)
+        self.assertIn("only `verified`", rendered)
+        self.assertIn("caller-authored", rendered)
 
     def test_fabricated_parser_option_is_reported_as_gap(self) -> None:
         row = copy.deepcopy(self.row("basename"))

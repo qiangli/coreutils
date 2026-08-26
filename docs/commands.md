@@ -53,7 +53,7 @@ Listing and filesystem info:
 | dircolors | fresh | Bourne/C-shell LS_COLORS output in database order; GNU TERM/COLORTERM gating (pre-TERM entries global); unrecognized keywords and malformed lines are errors; built-in database emitted independent of $TERM (deterministic deviation) |
 | stat | aict | default + -c format subset |
 | du | aict, u-root | -s, -h, -a, -c, -d |
-| df | aict, u-root | POSIX Issue 7 XSI interface in progress: 512-byte units by default, -k for 1024, -P portable format, default/-t free-file-slot fields, and -t total-allocated-space records; signed free space and APFS volume allocation supported; LC_MESSAGES catalogs remain a documented residual and evidence stays unverified; GNU aggregate totals remain available only as --total |
+| df | aict, u-root | POSIX Issue 7 XSI interface in progress: 512-byte units by default, -k for 1024, -P portable format, default/-t free-file-slot fields, and -t total-allocated-space records; signed free space and APFS volume allocation supported; LC_MESSAGES catalogs remain a documented residual, so the interface state remains partial; GNU aggregate totals remain available only as --total |
 | pwd | aict, guonaihong, u-root | -L, -P |
 | realpath | aict, guonaihong, u-root | -e, -m, -s, --relative-to; uutils-parity additions: -E/--canonicalize, -L/--logical, -P/--physical, -q/--quiet, -z/--zero, --relative-base |
 | readlink | u-root | -f, -e, -m, -n; uutils-parity additions: -q/--quiet, -s/--silent, -v/--verbose, -z/--zero |
@@ -220,8 +220,8 @@ shell-only names, and 16 pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
 Profile C/D ownership of 78 Go-selected, 22 shell-selected, and 16 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
-verified, partial, and unverified states rather than treating placeholders as
-conformance evidence.
+missing, partial, implemented, and verified states rather than treating
+placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
