@@ -440,6 +440,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 	sel.prime(catalog)
 
 	status := 0
+	renames := make(map[string]string)
 	for index, h := range members {
 		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
 		if !sel.keep(h.Name, isDir) {
@@ -461,9 +462,26 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		if !keep {
 			continue
 		}
+		renames[h.Name] = name
+		if name != h.Name {
+			renames[applySubstitutions(o.subst, h.Name, nil)] = name
+		}
+
+		linkTarget := h.Linkname
+		if linkTarget != "" {
+			linkTarget = applySubstitutions(o.subst, linkTarget, nil)
+			if r, ok := renames[h.Linkname]; ok {
+				linkTarget = r
+			} else if r, ok := renames[linkTarget]; ok {
+				linkTarget = r
+			}
+		}
+
 		if o.verbose && o.paxOptions.listSet {
-			h.Name = name
-			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env), o.timeFormat)
+			hCopy := *h
+			hCopy.Name = name
+			hCopy.Linkname = linkTarget
+			line, err := formatPAXList(&hCopy, o.paxOptions.listFormat, tzenv.Location(rc.Env), o.timeFormat)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "pax: listopt: %v\n", err)
 				return 1
@@ -478,9 +496,20 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 				fmt.Fprintf(rc.Err, "pax: time format: %v\n", err)
 				return 1
 			}
-			if _, err := fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
-				headerModeString(h), 1, h.Uname, h.Gname, h.Size, stamp, name); err != nil {
-				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
+			var writeErr error
+			switch h.Typeflag {
+			case tar.TypeLink:
+				_, writeErr = fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s == %s\n",
+					headerModeString(h), 1, h.Uname, h.Gname, h.Size, stamp, name, linkTarget)
+			case tar.TypeSymlink:
+				_, writeErr = fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s -> %s\n",
+					headerModeString(h), 1, h.Uname, h.Gname, h.Size, stamp, name, linkTarget)
+			default:
+				_, writeErr = fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
+					headerModeString(h), 1, h.Uname, h.Gname, h.Size, stamp, name)
+			}
+			if writeErr != nil {
+				fmt.Fprintf(rc.Err, "pax: write error: %v\n", writeErr)
 				return 1
 			}
 		} else {
