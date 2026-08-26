@@ -3,6 +3,7 @@ package principal
 import (
 	"os"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/spacetime"
@@ -96,6 +97,16 @@ func (r *Resolver) Resolve(query string) Answer {
 	try(KindPerson, r.resolvePerson)
 	try(KindHost, r.resolveHost)
 
+	// Observation is the subordinate source: only when the catalogs name
+	// NOTHING do the coordination-store traces answer (see observe.go). A
+	// name observed as both an agent seat and a meet human is two matches —
+	// ambiguity to surface, exactly as with the catalogs.
+	if len(ans.Matches) == 0 {
+		t := observe(r.env, name)
+		try(KindAgent, func(n string) (Resolution, bool) { return r.observedAgent(n, t) })
+		try(KindPerson, func(n string) (Resolution, bool) { return r.observedPerson(n, t) })
+	}
+
 	ans.Resolved = len(ans.Matches) > 0
 	return ans
 }
@@ -110,6 +121,7 @@ func (r *Resolver) resolveAgent(name string) (Resolution, bool) {
 	res := Resolution{
 		URN: URN(KindAgent, a.Name, r.owner), Kind: KindAgent, Name: a.Name,
 		Owner: r.owner, Aliases: a.Aliases, Display: a.Display,
+		Source: SourceFleet, Confidence: Declared,
 		Summary: a.MatrixKey(),
 		Facts:   [][2]string{{"binding", a.MatrixKey()}},
 	}
@@ -150,6 +162,20 @@ func (r *Resolver) resolveAgent(name string) (Resolution, bool) {
 		chat.Why = chk.Reason
 	}
 	res.Contacts = []Contact{cli, chat}
+
+	// A target with a fresh trace on this host is RUNNING, and spawning a
+	// second instance is the most expensive reading of "reach it" there is.
+	// So for a live target the async channels rank above cli: chat drops
+	// below cli's cost, and the board — the channel the liveness was
+	// measured on — joins the ladder.
+	if t := observe(r.env, a.Name); t.live(time.Now()) {
+		res.Facts = append(res.Facts, [2]string{"live", "trace on this host at " + t.last.UTC().Format(time.RFC3339)})
+		chat.Cost = 5
+		res.Contacts = []Contact{cli, chat, {
+			Method: "mb", Address: "bashy mb send " + a.Name + " <message>",
+			Source: SourceObserved, Confidence: Observed, Live: true, Cost: 6,
+		}}
+	}
 	rankContacts(res.Contacts)
 	return res, true
 }
@@ -162,6 +188,7 @@ func (r *Resolver) resolveTool(name string) (Resolution, bool) {
 	res := Resolution{
 		URN: URN(KindTool, t.Name, r.owner), Kind: KindTool, Name: t.Name,
 		Owner: r.owner, Aliases: t.Aliases, Display: t.Display,
+		Source: SourceFleet, Confidence: Declared,
 		Summary: t.Kind + " harness",
 	}
 	if t.CLI.Binary != "" {
@@ -193,6 +220,7 @@ func (r *Resolver) resolveModel(name string) (Resolution, bool) {
 	res := Resolution{
 		URN: URN(KindModel, m.Name, r.owner), Kind: KindModel, Name: m.Name,
 		Owner: r.owner, Aliases: m.Aliases, Display: m.Display,
+		Source: SourceFleet, Confidence: Declared,
 		Summary: m.Kind + " backend",
 		Facts:   [][2]string{{"target", m.Target()}},
 	}
@@ -226,6 +254,7 @@ func (r *Resolver) resolvePerson(name string) (Resolution, bool) {
 	res := Resolution{
 		URN: URN(KindPerson, p.Handle, p.Email), Kind: KindPerson, Name: p.Handle,
 		Owner: p.Email, Aliases: p.Aliases, Display: p.Display,
+		Source: SourceFleet, Confidence: Declared,
 	}
 	if p.Email != "" {
 		res.Facts = append(res.Facts, [2]string{"email", p.Email})
@@ -274,6 +303,17 @@ func (r *Resolver) resolveHost(name string) (Resolution, bool) {
 	res := Resolution{
 		URN: URN(KindHost, name, r.owner), Kind: KindHost, Name: name,
 		Owner: r.owner, Aliases: alias.Aliases, Display: alias.Display,
+	}
+	// The identity claim is graded by the best evidence that vouched for the
+	// host's existence: a written alias or ssh stanza is declared, an mDNS or
+	// DNS answer is a direct observation.
+	switch {
+	case hasAlias:
+		res.Source, res.Confidence = SourceFleet, Declared
+	case cfg.Exact:
+		res.Source, res.Confidence = "ssh_config", Declared
+	default:
+		res.Source, res.Confidence = SourceObserved, Observed
 	}
 	switch {
 	case self:

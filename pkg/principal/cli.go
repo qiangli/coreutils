@@ -165,6 +165,13 @@ func printResolution(w io.Writer, r Resolution) {
 	if len(r.Aliases) > 0 {
 		fmt.Fprintf(w, "aliases: %s\n", strings.Join(r.Aliases, " "))
 	}
+	if r.Source != "" {
+		s := r.Source
+		if r.Confidence != "" {
+			s += " (" + string(r.Confidence) + ")"
+		}
+		fmt.Fprintf(w, "%-14s %s\n", "source:", s)
+	}
 	for _, f := range r.Facts {
 		fmt.Fprintf(w, "%-14s %s\n", f[0]+":", f[1])
 	}
