@@ -600,6 +600,131 @@ func TestLsDoubleDashTerminatesOptions(t *testing.T) {
 	}
 }
 
+func TestLsDereferenceCommandLineSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(subdir, link); err != nil {
+		t.Fatal(err)
+	}
+	write(t, subdir, "inside", "")
+
+	// 1. With -ldH, it should show directory details ('d' type) and no target.
+	out, errb, code := runToolAt(t, dir, "-ldH", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ldH link = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "d") || strings.Contains(out, "->") {
+		t.Errorf("ls -ldH link expected directory type and no target arrow: %q", out)
+	}
+
+	// 2. With -ldL, same thing.
+	out, errb, code = runToolAt(t, dir, "-ldL", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ldL link = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "d") || strings.Contains(out, "->") {
+		t.Errorf("ls -ldL link expected directory type and no target arrow: %q", out)
+	}
+
+	// 3. With -ld, it should show symlink details ('l' type) and show the target.
+	out, errb, code = runToolAt(t, dir, "-ld", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -ld link = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "l") || !strings.Contains(out, "->") {
+		t.Errorf("ls -ld link expected symlink type and target arrow: %q", out)
+	}
+
+	// 4. Explicit dereferencing of a dangling command-line symlink must fail.
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink("nonexistent", dangling); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runToolAt(t, dir, "-ldH", "dangling")
+	if code == 0 || out != "" || !strings.Contains(errb, "cannot access 'dangling'") {
+		t.Fatalf("ls -ldH dangling = (%q, %q, %d), want dereference failure", out, errb, code)
+	}
+	out, errb, code = runToolAt(t, dir, "-ldL", "dangling")
+	if code == 0 || out != "" || !strings.Contains(errb, "cannot access 'dangling'") {
+		t.Fatalf("ls -ldL dangling = (%q, %q, %d), want dereference failure", out, errb, code)
+	}
+
+	// 5. -F alone requires information about the operand link, not its target.
+	out, errb, code = runToolAt(t, dir, "-F", "link")
+	if code != 0 || errb != "" || out != "link@\n" {
+		t.Fatalf("ls -F link = (%q, %q, %d), want (\"link@\\n\", \"\", 0)", out, errb, code)
+	}
+
+	// Explicit -H still takes precedence over -F and -d.
+	out, errb, code = runToolAt(t, dir, "-dFH", "link")
+	if code != 0 || errb != "" || out != "link/\n" {
+		t.Fatalf("ls -dFH link = (%q, %q, %d), want (\"link/\\n\", \"\", 0)", out, errb, code)
+	}
+}
+
+func TestLsDereferenceModeLastOptionWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, subdir, "inside", "")
+	if err := os.Symlink("subdir", filepath.Join(dir, "operand-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both modes dereference symbolic links named as command-line operands,
+	// regardless of which mutually exclusive selector appears last.
+	for _, args := range [][]string{
+		{"-ldLH", "operand-link"},
+		{"-ldHL", "operand-link"},
+		{"-ld", "--dereference", "--dereference-command-line", "operand-link"},
+		{"-ld", "--dereference-command-line", "--dereference", "operand-link"},
+	} {
+		out, errb, code := runToolAt(t, dir, args...)
+		if code != 0 || errb != "" || !strings.HasPrefix(out, "d") || strings.Contains(out, "->") {
+			t.Errorf("ls %v = (%q, %q, %d), want dereferenced directory operand", args, out, errb, code)
+		}
+	}
+
+	container := filepath.Join(dir, "container")
+	if err := os.Mkdir(container, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../subdir", filepath.Join(container, "nested")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		args       []string
+		wantFollow bool
+	}{
+		{[]string{"-RLH", "container"}, false},
+		{[]string{"-RHL", "container"}, true},
+		{[]string{"-R", "--dereference", "--dereference-command-line", "container"}, false},
+		{[]string{"-R", "--dereference-command-line", "--dereference", "container"}, true},
+	} {
+		out, errb, code := runToolAt(t, dir, tc.args...)
+		if code != 0 || errb != "" {
+			t.Fatalf("ls %v = (%q, %q, %d)", tc.args, out, errb, code)
+		}
+		followed := strings.Contains(out, "container/nested:\n")
+		if followed != tc.wantFollow {
+			t.Errorf("ls %v followed encountered link = %v, want %v; out=%q", tc.args, followed, tc.wantFollow, out)
+		}
+	}
+}
+
 func containsLine(lines []string, target string) bool {
 	for _, l := range lines {
 		if l == target {
