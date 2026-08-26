@@ -51,12 +51,17 @@ const (
 	KindTool   Kind = "tool"
 	KindModel  Kind = "model"
 	KindHost   Kind = "host"
+	// KindRole is an addressable seat (steward, conductor:22) rather than
+	// whoever holds it. The addresser resolves these — mail to a role survives
+	// a handover — so the resolver must too: whois cannot know fewer names
+	// than the thing that sends (see role.go).
+	KindRole Kind = "role"
 )
 
 // kinds is the set accepted as a `kind:name` prefix.
 var kinds = map[Kind]bool{
 	KindPerson: true, KindAgent: true, KindTool: true,
-	KindModel: true, KindHost: true,
+	KindModel: true, KindHost: true, KindRole: true,
 }
 
 // LocalOwner is the implicit owner of every entry on an unpaired host. On
@@ -173,6 +178,11 @@ type Contact struct {
 const (
 	SourceFleet    = "fleet"
 	SourceObserved = "observed"
+	// SourceHost marks an identity the running host itself vouches for: a
+	// role seat its owner package registered, or the OS login this session
+	// runs as. Neither is a catalog entry, but neither is a mere trace read
+	// out of a store — the authority that created the name declared it.
+	SourceHost = "host"
 )
 
 // Resolution is what a name resolves to.

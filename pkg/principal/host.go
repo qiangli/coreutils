@@ -60,6 +60,10 @@ type Env struct {
 	// RoomDir is the bus room (~/.bashy/room): subs/<name>.json is a
 	// standing subscription held by that name.
 	RoomDir string
+	// LoginDB is the bashy-owned login db (~/.bashy/who/sessions): text
+	// utmp-style rows written by the agent-session writer, one per live
+	// session. Absent on most hosts; an empty path disables the source.
+	LoginDB string
 }
 
 // DefaultEnv reads the real host.
@@ -80,6 +84,7 @@ func DefaultEnv() Env {
 		e.BoardDir = filepath.Join(home, ".bashy", "mb")
 		e.MeetDir = filepath.Join(home, ".bashy", "meet")
 		e.RoomDir = filepath.Join(home, ".bashy", "room")
+		e.LoginDB = filepath.Join(home, ".bashy", "who", "sessions")
 	}
 	// The owning packages honor these overrides when they write; reading the
 	// stores they redirected means following the same variables.
