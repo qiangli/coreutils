@@ -25,7 +25,7 @@ cksum	cmds/cksum		GNU Coreutils	yes	yes	1	12
 clip	cmds/clip		Bashy/other extension	no	no	1	1
 cmp	cmds/cmp		POSIX/Unix utility	no	yes	2	15
 comm	cmds/comm		GNU Coreutils	yes	yes	1	18
-cp	cmds/cp		GNU Coreutils	yes	yes	8	63
+cp	cmds/cp		GNU Coreutils	yes	yes	8	64
 crontab	cmds/crontab		POSIX/Unix utility	no	yes	4	27
 csplit	cmds/csplit		GNU Coreutils	yes	yes	1	21
 ctags	cmds/posixproviders		POSIX external provider	no	yes	4	23
@@ -74,7 +74,7 @@ localedef	cmds/posixproviders		POSIX external provider	no	yes	4	23
 logger	cmds/logger		POSIX/Unix utility	no	yes	3	32
 logname	cmds/logname		GNU Coreutils	yes	yes	1	9
 lp	cmds/posixproviders		POSIX external provider	no	yes	4	23
-ls	cmds/ls		GNU Coreutils	yes	yes	2	56
+ls	cmds/ls		GNU Coreutils	yes	yes	3	61
 m4	cmds/posixproviders		POSIX external provider	no	yes	4	23
 mail	cmds/mailx	mailx	Bashy/other extension	no	no	2	28
 mailx	cmds/mailx		POSIX/Unix utility	no	yes	2	28
