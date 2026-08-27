@@ -33,7 +33,38 @@ func splitRawLines(data []byte) []rawLine {
 	if !trailingNL && len(out) > 0 {
 		out[len(out)-1].noEOL = true
 	}
-	return out
+	return stripCommonIndent(out)
+}
+
+// stripCommonIndent accepts the historical indented-patch transport form.
+// Once the first recognizable control line is indented, the same exact byte
+// prefix is removed from every physical line that carries it. Patch payload
+// indentation after the diff marker is therefore preserved.
+func stripCommonIndent(lines []rawLine) []rawLine {
+	for _, line := range lines {
+		trimmed := strings.TrimLeft(line.text, " \t")
+		if trimmed == line.text {
+			if strings.HasPrefix(trimmed, "Index:") || strings.HasPrefix(trimmed, "diff --git ") ||
+				strings.HasPrefix(trimmed, "--- ") || strings.HasPrefix(trimmed, "*** ") ||
+				normalHunkRe.MatchString(trimmed) {
+				return lines
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Index:") || strings.HasPrefix(trimmed, "diff --git ") ||
+			strings.HasPrefix(trimmed, "--- ") || strings.HasPrefix(trimmed, "*** ") ||
+			normalHunkRe.MatchString(trimmed) {
+			prefix := line.text[:len(line.text)-len(trimmed)]
+			out := append([]rawLine(nil), lines...)
+			for i := range out {
+				if strings.HasPrefix(out[i].text, prefix) {
+					out[i].text = out[i].text[len(prefix):]
+				}
+			}
+			return out
+		}
+	}
+	return lines
 }
 
 var (
@@ -55,35 +86,47 @@ func Parse(data []byte) (*Patch, error) {
 	lines := splitRawLines(data)
 	n := len(lines)
 	var files []FilePatch
+	var indexName string
 	for i := 0; i < n; {
 		switch {
+		case strings.HasPrefix(lines[i].text, "Index:"):
+			indexName = strings.TrimSpace(strings.TrimPrefix(lines[i].text, "Index:"))
+			i++
 		case strings.HasPrefix(lines[i].text, "diff --git "):
 			fp, ni, err := parseGitWrappedFile(lines, i)
 			if err != nil {
 				return nil, err
 			}
+			fp.IndexName = indexName
 			files = append(files, fp)
+			indexName = ""
 			i = ni
 		case strings.HasPrefix(lines[i].text, "--- ") && i+1 < n && strings.HasPrefix(lines[i+1].text, "+++ "):
 			fp, ni, err := parseUnifiedFile(lines, i)
 			if err != nil {
 				return nil, err
 			}
+			fp.IndexName = indexName
 			files = append(files, fp)
+			indexName = ""
 			i = ni
 		case strings.HasPrefix(lines[i].text, "*** ") && i+1 < n && strings.HasPrefix(lines[i+1].text, "--- "):
 			fp, ni, err := parseContextFile(lines, i)
 			if err != nil {
 				return nil, err
 			}
+			fp.IndexName = indexName
 			files = append(files, fp)
+			indexName = ""
 			i = ni
 		case normalHunkRe.MatchString(lines[i].text):
 			fp, ni, err := parseNormalFile(lines, i)
 			if err != nil {
 				return nil, err
 			}
+			fp.IndexName = indexName
 			files = append(files, fp)
+			indexName = ""
 			i = ni
 		default:
 			i++

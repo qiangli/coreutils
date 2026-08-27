@@ -358,11 +358,266 @@ func TestApplyNormalFormatRequiresFileOperand(t *testing.T) {
 	}
 }
 
-func TestEdFlagIsNotSupported(t *testing.T) {
+func withPrompt(t *testing.T, answers ...string) {
+	t.Helper()
+	old := readPromptLine
+	i := 0
+	readPromptLine = func() (string, error) {
+		if i >= len(answers) {
+			return "", os.ErrClosed
+		}
+		answer := answers[i]
+		i++
+		return answer, nil
+	}
+	t.Cleanup(func() { readPromptLine = old })
+}
+
+func TestEdFlagAppliesDiffEdScript(t *testing.T) {
 	dir := t.TempDir()
-	_, stderr, code := runIn(t, dir, "", "--ed")
-	if code != 2 || !strings.Contains(stderr, "not supported") {
+	writeFile(t, dir, "f.txt", "one\ntwo\nthree\n")
+	script := "3a\nfour\n.\n2c\nTWO\n.\n"
+	_, stderr, code := runIn(t, dir, script, "-e", "f.txt")
+	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "f.txt"); got != "one\nTWO\nthree\nfour\n" {
+		t.Fatalf("ed result=%q", got)
+	}
+}
+
+func TestIfdefMergeRetainsBothVersions(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.c", "one\nold\nthree\n")
+	diff := "--- f.c\n+++ f.c\n@@ -1,3 +1,3 @@\n one\n-old\n+new\n three\n"
+	_, stderr, code := runIn(t, dir, diff, "-D", "FEATURE")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	want := "one\n#ifndef FEATURE\nold\n#else\nnew\n#endif\nthree\n"
+	if got := readFile(t, dir, "f.c"); got != want {
+		t.Fatalf("ifdef result=%q want=%q", got, want)
+	}
+}
+
+func TestBackupOverwritesPreexistingOrigOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.txt", "one\n")
+	writeFile(t, dir, "f.txt.orig", "stale\n")
+	diff := "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-one\n+two\n"
+	_, stderr, code := runIn(t, dir, diff, "-b")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "f.txt.orig"); got != "one\n" {
+		t.Fatalf("backup=%q", got)
+	}
+}
+
+func TestDefaultReversalPromptsAndAppliesReverse(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.txt", "new\n")
+	diff := "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+	withPrompt(t, "yes")
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "f.txt"); got != "old\n" {
+		t.Fatalf("reversed result=%q", got)
+	}
+}
+
+func TestCreationPatchAgainstPostimagePromptsAndRemovesOnReverse(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "new.txt", "hello\n")
+	diff := "--- /dev/null\n+++ new.txt\n@@ -0,0 +1 @@\n+hello\n"
+	withPrompt(t, "yes")
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if exists(dir, "new.txt") {
+		t.Fatal("accepted reverse of creation patch did not remove postimage")
+	}
+}
+
+func TestForwardIgnoresAlreadyAppliedCreationPatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "new.txt", "hello\n")
+	diff := "--- /dev/null\n+++ new.txt\n@@ -0,0 +1 @@\n+hello\n"
+	_, stderr, code := runIn(t, dir, diff, "-N")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "new.txt"); got != "hello\n" {
+		t.Fatalf("-N changed an already-applied creation patch: %q", got)
+	}
+}
+
+func TestAcceptedReversePersistsAcrossFollowingFilePortions(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "new-a\n")
+	writeFile(t, dir, "b", "new-b\n")
+	diff := "--- a\n+++ a\n@@ -1 +1 @@\n-old-a\n+new-a\n" +
+		"--- b\n+++ b\n@@ -1 +1 @@\n-old-b\n+new-b\n"
+	withPrompt(t, "yes")
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "a"); got != "old-a\n" {
+		t.Fatalf("a=%q", got)
+	}
+	if got := readFile(t, dir, "b"); got != "old-b\n" {
+		t.Fatalf("-R decision did not persist, b=%q", got)
+	}
+}
+
+func TestIndexSelectsNormalDiffTarget(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.txt", "one\n")
+	diff := "Index: f.txt\n1c1\n< one\n---\n> two\n"
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "f.txt"); got != "two\n" {
+		t.Fatalf("normal result=%q", got)
+	}
+}
+
+func TestIndexExistingTargetPrecedesCreationFallback(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "actual", "")
+	diff := "Index: actual\n--- /dev/null\n+++ missing-new\n@@ -0,0 +1 @@\n+hello\n"
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "actual"); got != "hello\n" {
+		t.Fatalf("Index target=%q", got)
+	}
+	if exists(dir, "missing-new") {
+		t.Fatal("used creation fallback before existing Index target")
+	}
+}
+
+func TestMissingHeaderTargetPromptsForFilename(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "actual.txt", "one\n")
+	diff := "--- missing.old\n+++ missing.new\n@@ -1 +1 @@\n-one\n+two\n"
+	withPrompt(t, "actual.txt")
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "actual.txt"); got != "two\n" {
+		t.Fatalf("prompted result=%q", got)
+	}
+}
+
+func TestIndentedPatchAndMultiFileOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "a\n")
+	writeFile(t, dir, "b", "b\n")
+	diff := "  --- a\n  +++ a\n  @@ -1 +1 @@\n  -a\n  +A\n" +
+		"  --- b\n  +++ b\n  @@ -1 +1 @@\n  -b\n  +B\n"
+	_, stderr, code := runIn(t, dir, diff, "-o", "combined")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "combined"); got != "A\nB\n" {
+		t.Fatalf("combined=%q", got)
+	}
+	if readFile(t, dir, "a") != "a\n" || readFile(t, dir, "b") != "b\n" {
+		t.Fatal("-o modified originals")
+	}
+}
+
+func TestOutputConcatenatesIntermediateVersionsForSameFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "one\n")
+	diff := "--- f\n+++ f\n@@ -1 +1 @@\n-one\n+two\n" +
+		"--- f\n+++ f\n@@ -1 +1 @@\n-two\n+three\n"
+	_, stderr, code := runIn(t, dir, diff, "-o", "versions")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "versions"); got != "two\nthree\n" {
+		t.Fatalf("versions=%q", got)
+	}
+	if got := readFile(t, dir, "f"); got != "one\n" {
+		t.Fatalf("original=%q", got)
+	}
+}
+
+func TestOutputCarriesNewlyCreatedFileIntoLaterPortion(t *testing.T) {
+	dir := t.TempDir()
+	diff := "--- /dev/null\n+++ f\n@@ -0,0 +1 @@\n+one\n" +
+		"--- f\n+++ f\n@@ -1 +1 @@\n-one\n+two\n"
+	_, stderr, code := runIn(t, dir, diff, "-o", "versions")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "versions"); got != "one\ntwo\n" {
+		t.Fatalf("versions=%q", got)
+	}
+	if exists(dir, "f") {
+		t.Fatal("-o created the source pathname")
+	}
+}
+
+func TestOutputBackupAndRejectNamesFollowOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "actual\n")
+	writeFile(t, dir, "out", "stale\n")
+	diff := "--- f\n+++ f\n@@ -1 +1 @@\n-expected\n+new\n"
+	_, stderr, code := runIn(t, dir, diff, "-b", "-o", "out")
+	if code != 1 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "out.orig"); got != "stale\n" {
+		t.Fatalf("output backup=%q", got)
+	}
+	if !exists(dir, "out.rej") || exists(dir, "f.rej") {
+		t.Fatalf("reject names: out=%v original=%v", exists(dir, "out.rej"), exists(dir, "f.rej"))
+	}
+}
+
+func TestReverseRejectSwapsHeadersAndHunk(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "neither\n")
+	diff := "--- old-name\n+++ new-name\n@@ -1 +1 @@\n-old\n+new\n"
+	_, stderr, code := runIn(t, dir, diff, "-R", "f")
+	if code != 1 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	reject := readFile(t, dir, "f.rej")
+	for _, want := range []string{"--- new-name\n", "+++ old-name\n", "-new\n", "+old\n"} {
+		if !strings.Contains(reject, want) {
+			t.Fatalf("reverse reject %q lacks %q", reject, want)
+		}
+	}
+}
+
+func TestFilenamePromptIsWrittenToStdout(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "actual", "one\n")
+	withPrompt(t, "actual")
+	stdout, stderr, code := runIn(t, dir, "1c1\n< one\n---\n> two\n")
+	if code != 0 || !strings.Contains(stdout, "File to patch:") || strings.Contains(stderr, "File to patch:") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestEdRejectsReverseAndIfdefCombination(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{{"-e", "-R", "f"}, {"-e", "-D", "X", "f"}} {
+		_, _, code := runIn(t, dir, "1d\n", args...)
+		if code != 2 {
+			t.Fatalf("args=%v code=%d", args, code)
+		}
 	}
 }
 

@@ -79,8 +79,12 @@ type Hunk struct {
 type FilePatch struct {
 	OldName string
 	NewName string
-	Format  Format
-	Hunks   []Hunk
+	// IndexName is the pathname from the nearest preceding "Index:" line.
+	// Traditional normal diffs have no file headers, so this is often their
+	// only non-interactive target candidate.
+	IndexName string
+	Format    Format
+	Hunks     []Hunk
 
 	// RenameFrom/RenameTo are set for a git-style rename header
 	// ("rename from"/"rename to") even when Unsupported is also set,
