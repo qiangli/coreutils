@@ -464,6 +464,15 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		}
 		return false, e.substitute(first, last, arg)
 	case 'w', 'W':
+		// wq is the historical spelling for writing the addressed range and
+		// then quitting. A separated q remains an ordinary filename.
+		if cmd == 'w' && len(arg) > 0 && arg[0] == 'q' &&
+			(len(arg) == 1 || arg[1] == ' ' || arg[1] == '\t') {
+			if err := e.write(addrs, explicit, arg[1:], false); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
 		return false, e.write(addrs, explicit, arg, cmd == 'W')
 	case 'r':
 		a, err := e.oneAddress(addrs, explicit, e.Buffer.Last(), true)

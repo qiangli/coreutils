@@ -262,6 +262,19 @@ func TestPOSIXRepeatedEditWarningAndRememberedWriteFilename(t *testing.T) {
 	}
 }
 
+func TestPOSIXWriteQuitWritesThenQuits(t *testing.T) {
+	dir := t.TempDir()
+	in := "a\nwritten\n.\nwq result\nthis-command-must-not-run\n"
+	code, out, errb := runEdIn(t, dir, in, "-s")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "result"))
+	if err != nil || string(data) != "written\n" {
+		t.Fatalf("result=%q err=%v", data, err)
+	}
+}
+
 func TestPOSIXListEscapes(t *testing.T) {
 	code, out, errb := runEdIn(t, t.TempDir(), "a\n\\\t\a\v$\u0085\n.\n1l\nQ\n", "-s")
 	if code != 0 || errb != "" {
