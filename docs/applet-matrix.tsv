@@ -3,7 +3,7 @@ applet	go_package	alias_of	family	gnu_coreutils	posix_cert_required	test_files	t
 ar	cmds/posixproviders		POSIX external provider	no	yes	4	23
 arch	cmds/arch		GNU Coreutils	yes	no	1	2
 ast	cmds/ast		Bashy/other extension	no	no	1	6
-at	cmds/at		POSIX/Unix utility	no	yes	7	36
+at	cmds/at		POSIX/Unix utility	no	yes	8	38
 atq	cmds/atq		Bashy/other extension	no	no	1	2
 atrm	cmds/atrm		Bashy/other extension	no	no	1	3
 awk	cmds/awk		POSIX/Unix utility	no	yes	3	32
@@ -26,7 +26,7 @@ clip	cmds/clip		Bashy/other extension	no	no	1	1
 cmp	cmds/cmp		POSIX/Unix utility	no	yes	2	15
 comm	cmds/comm		GNU Coreutils	yes	yes	1	18
 cp	cmds/cp		GNU Coreutils	yes	yes	8	63
-crontab	cmds/crontab		POSIX/Unix utility	no	yes	3	25
+crontab	cmds/crontab		POSIX/Unix utility	no	yes	4	27
 csplit	cmds/csplit		GNU Coreutils	yes	yes	1	21
 ctags	cmds/posixproviders		POSIX external provider	no	yes	4	23
 cut	cmds/cut		GNU Coreutils	yes	yes	3	22
