@@ -310,7 +310,12 @@ func TestAdminHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	for _, want := range []string{"list", "check", "build", "BASHY_POSIX_PROVIDERS=off"} {
+	for _, want := range []string{
+		"list", "check", "build", "BASHY_POSIX_PROVIDERS=off",
+		"Active external providers (12): " + strings.Join(posixprovider.DispatchNames(), ", "),
+		"Go-only replacements, never external providers: ed, patch, mail, mailx, talk",
+		"lp is Apache-2.0",
+	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help does not mention %q", want)
 		}

@@ -27,9 +27,10 @@
 //
 // # Licence posture
 //
-// Every provider is copyleft (GPL-2.0, GPL-3.0, or the Vim licence). We ship the
-// manifest and the recipe, never the binaries — see the header of manifest.tsv
-// and ../../docs/posix-provider-distribution-policy.md in the umbrella.
+// Most providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence); lp is
+// Apache-2.0. We ship the manifest and the recipe, never the binaries — see the
+// header of manifest.tsv and ../../docs/posix-provider-distribution-policy.md
+// in the umbrella.
 package posixprovider
 
 import (

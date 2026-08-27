@@ -277,9 +277,10 @@ ability to provide honest semantics without delegating to a host executable.
   `uuencode`. Their useful documented subsets fail loudly for unsupported
   formats, encodings, and variants; continue hardening them with VSC deltas and
   cross-platform behavioral cases rather than silently broadening semantics.
-- **P1 — continue scoped implementations:** broaden `ed` according to its
-  [explicit continuation ledger](ed-posix-continuation.md), and investigate
-  permissive Go prior art before scoping `patch`.
+- **P1 — local implementations landed:** continue `ed` and `patch` conformance
+  from their [ed](ed-posix-continuation.md) and
+  [patch](patch-continuation-ledger.md) ledgers. Both are registered Go applets
+  with no external-provider definition or fallback.
 - **P1 — local implementation landed:** `mail`/`mailx` now provide a pure-Go,
   local-file mbox send/receive surface with no SMTP or network transport.
   Continue the interactive command/state lanes from

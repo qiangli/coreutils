@@ -1,5 +1,10 @@
 # Sprint 79: POSIX required-command interface status
 
+> **Historical reconciliation.** The 78/22/16 ownership and evidence-state
+> counts below are fixed to coreutils `43d7a78`. Current generated ownership is
+> 82 Go / 22 shell / 12 external provider; `ed`, `patch`, `mailx`, and `talk`
+> moved to Go applets. See `../posix-required-commands.md` for current counts.
+
 This report reconciles the Sprint 79 interface ledger through coreutils `43d7a78`
 (including the Profile C source waves and issues 781-784) against POSIX.1-2016
 Issue 7, current source, command-package tests, and the

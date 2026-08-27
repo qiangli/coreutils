@@ -7,7 +7,7 @@
 // # What this fixes
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Fourteen POSIX-required commands are not implemented in Go
+// coreutils". Twelve POSIX-required commands are not implemented in Go
 // (make, bc, m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef), and until
 // this package existed they were absent from
 // tool.Names() — so the shell adapter fell through to $PATH and the arm measured
@@ -187,10 +187,11 @@ func execProvider(rc *tool.RunContext, name, path string, args []string) int {
 // ---------------------------------------------------------------------------
 
 func adminTool() *tool.Tool {
+	active := strings.Join(posixprovider.DispatchNames(), ", ")
 	t := &tool.Tool{
 		Name:     "posix-providers",
-		Synopsis: "Provision and inspect the pinned POSIX external providers (make, bc, m4, …).",
-		Usage: `posix-providers <subcommand>
+		Synopsis: "Provision and inspect the 12 pinned POSIX external providers.",
+		Usage: fmt.Sprintf(`posix-providers <subcommand>
 
   list                 show every pinned provider and whether it is provisioned
   check [all|<cmd>]    verify provisioning + provenance; non-zero if any is unusable
@@ -204,9 +205,13 @@ build is the ONLY path that downloads or compiles. Running a provider never
 does: provisioning is a prepare-time activity, running is a test-time one, and
 fusing them would put network and toolchain variance inside measured evidence.
 
-Providers are copyleft and are built locally from pinned upstream source; their
-binaries are never redistributed. Set BASHY_POSIX_PROVIDERS=off to unregister
-the provider names entirely.`,
+Active external providers (12): %s
+
+Go-only replacements, never external providers: ed, patch, mail, mailx, talk.
+
+Providers are built locally from pinned upstream source; most are copyleft and
+lp is Apache-2.0. Their binaries are never redistributed. Set
+BASHY_POSIX_PROVIDERS=off to unregister the 12 provider names entirely.`, active),
 	}
 	t.Run = runAdmin
 	return t
