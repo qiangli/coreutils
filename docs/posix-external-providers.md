@@ -76,6 +76,21 @@ sidecar recording what was built, from which pinned bytes, by which compiler.
 The default does not read `HOME`, `USERPROFILE`, or `XDG_CACHE_HOME`; Unix uses
 the real UID's passwd home and Windows uses the current process token's profile.
 
+Source retrieval is bounded and repeatable. Each URL gets two attempts with a
+10-second connect timeout and a 600-second transfer ceiling. GNU archives use
+this fixed order: the canonical `ftp.gnu.org` HTTPS URL from the manifest,
+then the fixed GNU-listed HTTPS mirrors at `ftp.fau.de`,
+`mirror.csclub.uwaterloo.ca`, and `mirrors.ocf.berkeley.edu`. The geographic
+`ftpmirror.gnu.org` redirector is intentionally excluded because its target is
+not repeatable. Non-GNU inputs retry only their pinned URL. A response is
+accepted only after its bytes match the manifest SHA-256; the selected endpoint
+is written as `retrieved_url` in `provenance.tsv`, while `source_url` remains
+the canonical manifest identity. The attempt count and time bounds can be
+tightened for controlled test infrastructure with
+`POSIX_PROVIDER_DOWNLOAD_ATTEMPTS`,
+`POSIX_PROVIDER_DOWNLOAD_CONNECT_TIMEOUT`, and
+`POSIX_PROVIDER_DOWNLOAD_MAX_TIME`.
+
 The applet is a thin driver over that recipe. Shelling out here is a **build
 step**, not a utility implementation — the repo's "never shell out" rule governs
 the coreutils themselves (`cat` never execs `/bin/cat`).

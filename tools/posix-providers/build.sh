@@ -9,6 +9,111 @@
 set -euo pipefail
 
 here=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+
+provider_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+provider_download_candidates() {
+  _provider_url=$1
+  printf '%s\n' "$_provider_url"
+  case "$_provider_url" in
+    https://ftp.gnu.org/gnu/*)
+      _provider_path=${_provider_url#https://ftp.gnu.org/gnu/}
+      # These fixed HTTPS endpoints are on GNU's published mirror list. Keep
+      # the order explicit: ftpmirror.gnu.org redirects by client geography,
+      # which makes it unsuitable for a repeatable certification recipe.
+      printf '%s\n' \
+        "https://ftp.fau.de/gnu/$_provider_path" \
+        "https://mirror.csclub.uwaterloo.ca/gnu/$_provider_path" \
+        "https://mirrors.ocf.berkeley.edu/gnu/$_provider_path"
+      ;;
+  esac
+}
+
+provider_positive_integer() {
+  case "$1" in ''|*[!0-9]*|0) return 1 ;; esac
+}
+
+# provider_download_verified URL SHA256 DEST
+#
+# Prints the URL that supplied the verified bytes. Every endpoint and attempt
+# has a wall-clock bound. A candidate only wins after its bytes match the
+# manifest digest; partial or mismatched files never become the archive.
+provider_download_verified() {
+  _provider_url=$1
+  _provider_sha=$2
+  _provider_dest=$3
+  _provider_attempts=${POSIX_PROVIDER_DOWNLOAD_ATTEMPTS:-2}
+  _provider_connect_timeout=${POSIX_PROVIDER_DOWNLOAD_CONNECT_TIMEOUT:-10}
+  _provider_max_time=${POSIX_PROVIDER_DOWNLOAD_MAX_TIME:-600}
+
+  provider_positive_integer "$_provider_attempts" || {
+    printf 'posix-provider: invalid download attempt count: %s\n' "$_provider_attempts" >&2
+    return 2
+  }
+  provider_positive_integer "$_provider_connect_timeout" || {
+    printf 'posix-provider: invalid download connect timeout: %s\n' "$_provider_connect_timeout" >&2
+    return 2
+  }
+  provider_positive_integer "$_provider_max_time" || {
+    printf 'posix-provider: invalid download max time: %s\n' "$_provider_max_time" >&2
+    return 2
+  }
+
+  if [ -f "$_provider_dest" ]; then
+    _provider_actual=$(provider_sha256 "$_provider_dest")
+    if [ "$_provider_actual" = "$_provider_sha" ]; then
+      if [ -f "$_provider_dest.retrieved-url" ]; then
+        sed -n '1p' "$_provider_dest.retrieved-url"
+      else
+        # Archives created by the pre-fallback recipe have only the canonical
+        # manifest URL as their available transport provenance.
+        printf '%s\n' "$_provider_url"
+      fi
+      return 0
+    fi
+    printf 'posix-provider: cached digest mismatch; refetching %s\n' "$_provider_url" >&2
+    rm -f "$_provider_dest" "$_provider_dest.retrieved-url"
+  fi
+
+  rm -f "$_provider_dest.part"
+  for _provider_candidate in $(provider_download_candidates "$_provider_url"); do
+    _provider_try=1
+    while [ "$_provider_try" -le "$_provider_attempts" ]; do
+      printf 'posix-provider: download attempt %s/%s: %s\n' \
+        "$_provider_try" "$_provider_attempts" "$_provider_candidate" >&2
+      rm -f "$_provider_dest.part"
+      if curl --fail --location --silent --show-error \
+          --connect-timeout "$_provider_connect_timeout" \
+          --max-time "$_provider_max_time" \
+          --output "$_provider_dest.part" "$_provider_candidate"; then
+        _provider_actual=$(provider_sha256 "$_provider_dest.part")
+        if [ "$_provider_actual" = "$_provider_sha" ]; then
+          mv "$_provider_dest.part" "$_provider_dest"
+          printf '%s\n' "$_provider_candidate" > "$_provider_dest.retrieved-url"
+          printf '%s\n' "$_provider_candidate"
+          return 0
+        fi
+        printf 'posix-provider: digest mismatch from %s: got %s want %s\n' \
+          "$_provider_candidate" "$_provider_actual" "$_provider_sha" >&2
+      fi
+      _provider_try=$((_provider_try + 1))
+    done
+  done
+  rm -f "$_provider_dest.part"
+  return 1
+}
+
+# Focused tests source this self-contained recipe to exercise only retrieval.
+# Production invocations never set this variable and continue into the build.
+if [ "${POSIX_PROVIDER_DOWNLOAD_LIBRARY_ONLY:-}" = 1 ]; then
+  return 0 2>/dev/null || exit 0
+fi
 # The manifest is CANONICAL at pkg/posixprovider/manifest.tsv, because the Go
 # library embeds it (//go:embed cannot reach outside its own package directory)
 # and exactly one copy of the pins may exist. This script reads that same file so
@@ -109,16 +214,9 @@ say "compiler: $CC_LABEL"
 
 mkdir -p "$work" "$dest"
 archive=$work/$(basename "$url")
-if [ ! -f "$archive" ]; then
-  say "fetching upstream $cmd $version ($license)"
-  curl -sfL -o "$archive.part" "$url" || fail "download failed: $url"
-  mv "$archive.part" "$archive"
-fi
-
-# Verify BEFORE extraction: a tampered archive must never reach tar.
-actual=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$archive" | awk '{print $1}';
-         else shasum -a 256 "$archive" | awk '{print $1}'; fi)
-[ "$actual" = "$sha" ] || { rm -f "$archive"; fail "$cmd digest mismatch: got $actual want $sha"; }
+say "fetching upstream $cmd $version ($license)"
+retrieved_url=$(provider_download_verified "$url" "$sha" "$archive") ||
+  fail "download failed from every approved source: $url"
 say "digest verified"
 
 # Some providers need MORE than one pinned input. fetch_verified applies the
@@ -128,17 +226,13 @@ say "digest verified"
 fetch_verified() { # url sha256 dest
   _u=$1; _s=$2; _d=$3
   [ ${#_s} -eq 64 ] || fail "secondary input $_u has no full sha256 pin"
-  if [ ! -f "$_d" ]; then
-    curl -sfL -o "$_d.part" "$_u" || fail "download failed: $_u"
-    mv "$_d.part" "$_d"
-  fi
-  _a=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$_d" | awk '{print $1}';
-       else shasum -a 256 "$_d" | awk '{print $1}'; fi)
-  [ "$_a" = "$_s" ] || { rm -f "$_d"; fail "digest mismatch for $_u: got $_a want $_s"; }
+  _ru=$(provider_download_verified "$_u" "$_s" "$_d") ||
+    fail "download failed from every approved source: $_u"
   # A provider assembled from several inputs is only attributable if ALL of them
   # are named. The manifest row can hold one url and one digest, so the rest are
   # recorded here and folded into provenance.tsv beside the primary source.
   printf 'extra_source\t%s\t%s\n' "$_u" "$_s" >> "$work/extra-$cmd.tsv"
+  printf 'extra_retrieved_url\t%s\n' "$_ru" >> "$work/extra-$cmd.tsv"
 }
 
 src=$work/src-$cmd-$version
@@ -357,6 +451,7 @@ install -m 0755 "$found" "$target"
   printf 'version\t%s\n' "$version"
   printf 'license\t%s\n' "$license"
   printf 'source_url\t%s\n' "$url"
+  printf 'retrieved_url\t%s\n' "$retrieved_url"
   printf 'source_sha256\t%s\n' "$sha"
   [ -f "$work/extra-$cmd.tsv" ] && cat "$work/extra-$cmd.tsv"
   printf 'compiler\t%s\n' "$CC_LABEL"
