@@ -53,6 +53,41 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runTool(rc *tool.RunContext, invoked *tool.Tool, args []string) int {
+	// A mailx session emits through many commands and prompts. Keep one
+	// invocation-wide writer so every output failure, including a nil-error
+	// short write, reaches the command boundary instead of being lost at an
+	// individual fmt call.
+	out := &stickyWriter{writer: rc.Out}
+	child := *rc
+	child.Out = out
+	code := runToolCore(&child, invoked, args)
+	if out.err != nil {
+		diagnostic(rc, invoked, "write error: %v", out.err)
+		return 1
+	}
+	return code
+}
+
+type stickyWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *stickyWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func runToolCore(rc *tool.RunContext, invoked *tool.Tool, args []string) int {
 	fs := tool.NewFlags(invoked.Name)
 	o := options{}
 	fs.BoolVarP(&o.existOnly, "exist", "e", false, "test for mail without producing output")
