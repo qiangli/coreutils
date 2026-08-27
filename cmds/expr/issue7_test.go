@@ -90,3 +90,33 @@ func TestExprIssue7DoubleDashAsFirstTokenOnly(t *testing.T) {
 		t.Fatalf("expr a = -- = (%q, %q, %d), want (\"0\\n\", \"\", 1)", out.String(), errb.String(), code)
 	}
 }
+
+func TestExprIssue7OptionLookingOperandsAndQuoteToken(t *testing.T) {
+	for _, env := range [][]string{nil, {"POSIXLY_CORRECT=1"}, {"POSIXLY_CORRECT="}} {
+		t.Run(strings.Join(env, ","), func(t *testing.T) {
+			for _, operand := range []string{"-h", "-V"} {
+				var out, errb bytes.Buffer
+				rc := &tool.RunContext{
+					Ctx:   context.Background(),
+					Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+					Env:   env,
+				}
+				code := run(rc, []string{operand})
+				if code != 0 || out.String() != operand+"\n" || errb.String() != "" {
+					t.Fatalf("expr %s = (%q, %q, %d), want (%q, \"\", 0)", operand, out.String(), errb.String(), code, operand+"\n")
+				}
+			}
+
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:   context.Background(),
+				Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+				Env:   env,
+			}
+			code := run(rc, []string{"quote", "hello"})
+			if code != 2 || out.String() != "" || errb.String() != "expr: syntax error\n" {
+				t.Fatalf("expr quote hello = (%q, %q, %d), want (\"\", \"expr: syntax error\\n\", 2)", out.String(), errb.String(), code)
+			}
+		})
+	}
+}

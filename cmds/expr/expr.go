@@ -213,11 +213,11 @@ func run(rc *tool.RunContext, args []string) int {
 
 func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
 	// The "--" delimiter and the GNU keyword extensions (length, substr,
-	// index, match, quote) are deliberately not gated on POSIXLY_CORRECT:
+	// index, and match) are deliberately not gated on POSIXLY_CORRECT:
 	// XBD Utility Syntax Guideline 10 and the expr APPLICATION USAGE require
 	// "--" to protect leading-minus operands, and Issue 7 leaves the keyword
 	// results unspecified, so the extensions cannot conflict with the grammar.
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+	if len(args) == 1 && args[0] == "--help" {
 		_, err := fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
 		if err != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(err) {
 			fmt.Fprintln(rc.Err, "expr: stdout: Broken pipe")
@@ -225,7 +225,7 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		}
 		return 0
 	}
-	if len(args) == 1 && (args[0] == "--version" || args[0] == "-V") {
+	if len(args) == 1 && args[0] == "--version" {
 		_, err := fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 		if err != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(err) {
 			fmt.Fprintln(rc.Err, "expr: stdout: Broken pipe")
@@ -479,7 +479,7 @@ func (p *parser) parsePrimary() (value, error) {
 	if t == ")" {
 		return "", fmt.Errorf("unmatched closing parenthesis")
 	}
-	if t == "length" || t == "quote" || t == "index" || t == "substr" || t == "match" {
+	if t == "length" || t == "index" || t == "substr" || t == "match" {
 		return p.parseFunction(t)
 	}
 	return value(t), nil
@@ -499,8 +499,6 @@ func (p *parser) parseFunction(name string) (value, error) {
 			return "", err
 		}
 		return value(strconv.Itoa(p.locale.characters.count(string(v)))), nil
-	case "quote":
-		return arg()
 	case "index":
 		s, err := arg()
 		if err != nil {
