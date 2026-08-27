@@ -2,20 +2,17 @@ package patch
 
 import "fmt"
 
-// WriteReject renders failed hunks in the original input notation.
+// WriteReject renders failed hunks in the POSIX-required copied-context form.
 func WriteReject(oldName, newName string, hunks []Hunk) []byte {
 	return WriteRejectFormat(oldName, newName, FormatUnified, hunks)
 }
 
 func WriteRejectFormat(oldName, newName string, format Format, hunks []Hunk) []byte {
-	switch format {
-	case FormatContext:
-		return writeContextReject(oldName, newName, hunks)
-	case FormatNormal:
-		return writeContextReject(oldName, newName, hunks)
-	default:
-		return writeUnifiedReject(oldName, newName, hunks)
-	}
+	// Issue 7 requires rejected hunks in copied-context form regardless of
+	// the input notation. The format argument remains for API compatibility
+	// and for callers that record the source notation in diagnostics.
+	_ = format
+	return writeContextReject(oldName, newName, hunks)
 }
 
 func writeUnifiedReject(oldName, newName string, hunks []Hunk) []byte {
@@ -47,7 +44,9 @@ func writeUnifiedReject(oldName, newName string, hunks []Hunk) []byte {
 
 func writeContextReject(oldName, newName string, hunks []Hunk) []byte {
 	var out []byte
-	out = append(out, fmt.Appendf(nil, "*** %s\n--- %s\n", oldName, newName)...)
+	if oldName != "" || newName != "" {
+		out = append(out, fmt.Appendf(nil, "*** %s\n--- %s\n", oldName, newName)...)
+	}
 	for _, h := range hunks {
 		hasDelete, hasAdd := false, false
 		for _, l := range h.Lines {

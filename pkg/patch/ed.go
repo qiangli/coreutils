@@ -7,12 +7,59 @@ import (
 	"strings"
 )
 
-var edCommandRE = regexp.MustCompile(`^(?:(\d+)(?:,(\d+))?)?([acd])$`)
+var edCommandRE = regexp.MustCompile(`^(?:(\d+)(?:,(\d+))?)?([acdi])$`)
+
+// ExtractEdScript finds the first command emitted by diff -e after optional
+// patch header material. It returns the script proper and the nearest Index:
+// pathname so the CLI can perform normal filename determination.
+func ExtractEdScript(data []byte) (script []byte, indexName string, ok bool) {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "Index:") {
+			indexName = strings.TrimSpace(strings.TrimPrefix(trimmed, "Index:"))
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if edCommandRE.MatchString(trimmed) || trimmed == "s/.//" {
+			prefix := line[:len(line)-len(trimmed)]
+			scriptLines := append([]string(nil), lines[i:]...)
+			if prefix != "" {
+				for j := range scriptLines {
+					if strings.HasPrefix(scriptLines[j], prefix) {
+						scriptLines[j] = scriptLines[j][len(prefix):]
+					}
+				}
+			}
+			return []byte(strings.Join(scriptLines, "\n")), indexName, true
+		}
+	}
+	return nil, indexName, false
+}
+
+// LooksLikeEdScript is the format-only convenience wrapper.
+func LooksLikeEdScript(script []byte) bool {
+	_, _, ok := ExtractEdScript(script)
+	return ok
+}
 
 // ApplyEd applies the command subset emitted by POSIX diff -e. The commands
 // are deliberately executed in input order: diff emits them from the bottom
 // of the file upward, so earlier edits cannot invalidate later addresses.
 func ApplyEd(content, script []byte) ([]byte, error) {
+	return applyEd(content, script, "")
+}
+
+// ApplyEdIfdef applies a diff -e script while retaining both sides under the
+// Issue 7 -D preprocessor contract.
+func ApplyEdIfdef(content, script []byte, define string) ([]byte, error) {
+	return applyEd(content, script, define)
+}
+
+func applyEd(content, script []byte, define string) ([]byte, error) {
 	if len(script) == 0 {
 		return append([]byte(nil), content...), nil
 	}
@@ -47,7 +94,7 @@ func ApplyEd(content, script []byte) ([]byte, error) {
 			return nil, fmt.Errorf("patch: invalid ed address %q", command)
 		}
 		var text []string
-		if m[3] == "a" || m[3] == "c" {
+		if m[3] == "a" || m[3] == "c" || m[3] == "i" {
 			terminated := false
 			for i < len(physical) {
 				line := strings.TrimSuffix(physical[i], "\r")
@@ -68,8 +115,15 @@ func ApplyEd(content, script []byte) ([]byte, error) {
 			if last > len(lines) {
 				return nil, fmt.Errorf("patch: ed address %d exceeds file length %d", last, len(lines))
 			}
-			lines = spliceLines(lines, last, last, text)
-			current = last + len(text)
+			inserted := text
+			if define != "" {
+				inserted = conditionalAddition(text, define)
+			}
+			lines = spliceLines(lines, last, last, inserted)
+			current = last + len(inserted)
+			if define != "" && len(text) > 0 {
+				current-- // Keep dot-unquoting on the final payload line, not #endif.
+			}
 			if last == oldLen {
 				noEOL = false
 			}
@@ -77,7 +131,12 @@ func ApplyEd(content, script []byte) ([]byte, error) {
 			if first < 1 || last > len(lines) {
 				return nil, fmt.Errorf("patch: ed range %d,%d exceeds file length %d", first, last, len(lines))
 			}
-			lines = spliceLines(lines, first-1, last, nil)
+			replacement := []string(nil)
+			if define != "" {
+				replacement = append([]string{"#ifndef " + define}, lines[first-1:last]...)
+				replacement = append(replacement, "#endif")
+			}
+			lines = spliceLines(lines, first-1, last, replacement)
 			current = min(first, len(lines))
 			if last == oldLen {
 				noEOL = false
@@ -86,14 +145,48 @@ func ApplyEd(content, script []byte) ([]byte, error) {
 			if first < 1 || last > len(lines) {
 				return nil, fmt.Errorf("patch: ed range %d,%d exceeds file length %d", first, last, len(lines))
 			}
-			lines = spliceLines(lines, first-1, last, text)
-			current = first - 1 + len(text)
+			replacement := text
+			if define != "" {
+				replacement = append([]string{"#ifndef " + define}, lines[first-1:last]...)
+				replacement = append(replacement, "#else")
+				replacement = append(replacement, text...)
+				replacement = append(replacement, "#endif")
+			}
+			lines = spliceLines(lines, first-1, last, replacement)
+			current = first - 1 + len(replacement)
+			if define != "" && len(text) > 0 {
+				current--
+			}
 			if last == oldLen {
 				noEOL = false
+			}
+		case "i":
+			if first == 0 {
+				first = 1
+			}
+			if first < 1 || first > len(lines) {
+				return nil, fmt.Errorf("patch: ed address %d exceeds file length %d", first, len(lines))
+			}
+			inserted := text
+			if define != "" {
+				inserted = conditionalAddition(text, define)
+			}
+			lines = spliceLines(lines, first-1, first-1, inserted)
+			current = first - 1 + len(inserted)
+			if define != "" && len(text) > 0 {
+				current--
 			}
 		}
 	}
 	return linesToBytes(lines, noEOL), nil
+}
+
+func conditionalAddition(text []string, define string) []string {
+	out := make([]string, 0, len(text)+2)
+	out = append(out, "#ifdef "+define)
+	out = append(out, text...)
+	out = append(out, "#endif")
+	return out
 }
 
 func spliceLines(lines []string, from, to int, replacement []string) []string {

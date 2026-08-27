@@ -95,6 +95,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
+	if flags.Lookup("strip").Changed && *strip < 0 {
+		return tool.UsageError(rc, cmd, "-p/--strip requires a non-negative component count")
+	}
 
 	if *get != autoStripSentinel {
 		return tool.NotSupported(rc, cmd, "-g/--get (RCS/SCCS retrieval)")
@@ -139,14 +142,18 @@ func run(rc *tool.RunContext, args []string) int {
 	if *ifdef != "" && !cIdentifierRE.MatchString(*ifdef) {
 		return tool.UsageError(rc, cmd, "invalid -D define %q", *ifdef)
 	}
+	edScript, edIndex, looksEd := patch.ExtractEdScript(data)
 	if *edFlag {
 		if *reverse {
 			return tool.UsageError(rc, cmd, "-R cannot be used with -e")
 		}
-		if *ifdef != "" {
-			return tool.UsageError(rc, cmd, "-D cannot be used with -e")
+		if looksEd {
+			data = edScript
 		}
-		return runEdScript(rc, data, origFile, *directory, *output, *backup, *dryRun)
+		return runEdScript(rc, data, origFile, edIndex, *strip, *directory, *output, *backup, *dryRun, *ifdef)
+	}
+	if formatHints == 0 && looksEd {
+		return runEdScript(rc, edScript, origFile, edIndex, *strip, *directory, *output, *backup, *dryRun, *ifdef)
 	}
 
 	parsed, err := patch.Parse(data)
@@ -199,6 +206,7 @@ func run(rc *tool.RunContext, args []string) int {
 		rejectStarted: make(map[string]bool),
 		reverseState:  new(bool),
 		reverseProbe:  func() *bool { v := true; return &v }(),
+		hardError:     new(bool),
 		applyOpts: patch.ApplyOptions{
 			Reverse:          *reverse,
 			Fuzz:             *fuzz,
@@ -217,6 +225,7 @@ func run(rc *tool.RunContext, args []string) int {
 	for _, fp := range parsed.Files {
 		if fp.Unsupported != "" {
 			fmt.Fprintf(rc.Err, "%s: %s: %s\n", cmd.Name, filePatchLabel(fp), fp.Unsupported)
+			*ro.hardError = true
 			trouble = true
 			continue
 		}
@@ -228,6 +237,9 @@ func run(rc *tool.RunContext, args []string) int {
 		if !writeAggregateOutput(rc, ro, ro.aggregate.Bytes()) {
 			trouble = true
 		}
+	}
+	if *ro.hardError {
+		return 2
 	}
 	if trouble {
 		return 1
@@ -255,6 +267,7 @@ type runOptions struct {
 	rejectStarted map[string]bool
 	reverseState  *bool
 	reverseProbe  *bool
+	hardError     *bool
 	aggregate     *bytes.Buffer
 	applyOpts     patch.ApplyOptions
 }
@@ -281,25 +294,42 @@ func describeErr(err error) string {
 	return err.Error()
 }
 
-func runEdScript(rc *tool.RunContext, script []byte, origFile, directory, output string, backup, dryRun bool) int {
+func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string, strip int, directory, output string, backup, dryRun bool, define string) int {
+	if origFile == "" && indexName != "" {
+		candidate := stripComponents(indexName, strip)
+		if strip == autoStripSentinel {
+			candidate = filepath.Base(filepath.ToSlash(indexName))
+		}
+		if candidate != "" {
+			path := resolveOperandPath(rc, directory, candidate)
+			if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
+				origFile = candidate
+			}
+		}
+	}
 	if origFile == "" {
 		var err error
 		origFile, err = askPrompt(rc, "File to patch: ", true)
 		if err != nil || origFile == "" {
 			fmt.Fprintf(rc.Err, "%s: cannot determine file to patch: %v\n", cmd.Name, err)
-			return 1
+			return 2
 		}
 	}
 	target := resolveOperandPath(rc, directory, origFile)
 	content, err := os.ReadFile(target)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-		return 1
+		return 2
 	}
-	result, err := patch.ApplyEd(content, script)
+	var result []byte
+	if define != "" {
+		result, err = patch.ApplyEdIfdef(content, script, define)
+	} else {
+		result, err = patch.ApplyEd(content, script)
+	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
-		return 1
+		return 2
 	}
 	if dryRun {
 		return 0
@@ -317,12 +347,12 @@ func runEdScript(rc *tool.RunContext, script []byte, origFile, directory, output
 	if backup && existed {
 		if err := backupFile(outPath); err != nil {
 			fmt.Fprintf(rc.Err, "%s: backup failed: %s\n", cmd.Name, describeErr(err))
-			return 1
+			return 2
 		}
 	}
 	if err := writeFileContent(rc, outPath, result, mode, existed); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-		return 1
+		return 2
 	}
 	return 0
 }
@@ -333,7 +363,7 @@ func writeAggregateOutput(rc *tool.RunContext, ro runOptions, content []byte) bo
 	existed := err == nil
 	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-		return false
+		return hardFailure(ro)
 	}
 	mode := fs.FileMode(0o644)
 	if existed {
@@ -342,14 +372,21 @@ func writeAggregateOutput(rc *tool.RunContext, ro runOptions, content []byte) bo
 	if ro.backup && existed {
 		if err := backupOnce(path, ro.backedUp); err != nil {
 			fmt.Fprintf(rc.Err, "%s: backup failed: %s\n", cmd.Name, describeErr(err))
-			return false
+			return hardFailure(ro)
 		}
 	}
 	if err := writeFileContent(rc, path, content, mode, existed); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-		return false
+		return hardFailure(ro)
 	}
 	return true
+}
+
+func hardFailure(ro runOptions) bool {
+	if ro.hardError != nil {
+		*ro.hardError = true
+	}
+	return false
 }
 
 func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
@@ -383,12 +420,12 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		if !found && !createMode {
 			if ro.force || ro.batch {
 				fmt.Fprintf(rc.Err, "%s: can't find file to patch\n", cmd.Name)
-				return false
+				return hardFailure(ro)
 			}
 			answer, err := askPrompt(rc, "File to patch: ", true)
 			if err != nil || answer == "" {
 				fmt.Fprintf(rc.Err, "%s: cannot determine file to patch: %v\n", cmd.Name, err)
-				return false
+				return hardFailure(ro)
 			}
 			targetPath = resolveOperandPath(rc, ro.directory, answer)
 			displayName = answer
@@ -408,14 +445,14 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 			fi, statErr := os.Stat(targetPath)
 			if statErr != nil {
 				fmt.Fprintf(rc.Err, "%s: can't find file to patch: %s\n", cmd.Name, describeErr(statErr))
-				return false
+				return hardFailure(ro)
 			}
 			origMode = fi.Mode().Perm()
 			var err error
 			content, err = os.ReadFile(targetPath)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-				return false
+				return hardFailure(ro)
 			}
 		}
 		existed = true
@@ -426,19 +463,19 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 	} else if fi, statErr := os.Stat(targetPath); statErr == nil {
 		if fi.IsDir() {
 			fmt.Fprintf(rc.Err, "%s: can't patch directory %s\n", cmd.Name, displayName)
-			return false
+			return hardFailure(ro)
 		}
 		origMode = fi.Mode().Perm()
 		content, err := os.ReadFile(targetPath)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-			return false
+			return hardFailure(ro)
 		}
 		existed = true
 		oldLines, oldNoEOL = splitFileLines(content)
 	} else if !os.IsNotExist(statErr) {
 		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(statErr))
-		return false
+		return hardFailure(ro)
 	}
 
 	creationConflict := createMode && (len(oldLines) != 0 || oldNoEOL)
@@ -462,9 +499,13 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		fmt.Fprintf(rc.Err, "%s %s %s\n", verb, displayName, dryRunSuffix(ro.dryRun))
 	}
 	failed := 0
+	changed := false
 	for _, r := range res.Reports {
 		switch r.Outcome {
+		case patch.HunkApplied:
+			changed = true
 		case patch.HunkAppliedFuzzy:
+			changed = true
 			if !ro.quiet {
 				fmt.Fprintf(rc.Err, "Hunk #%d succeeded at %d with fuzz %d.\n", r.Index, r.At+1, r.FuzzUsed)
 			}
@@ -499,29 +540,32 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 	outExisted := outStatErr == nil
 	if outStatErr != nil && !os.IsNotExist(outStatErr) {
 		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(outStatErr))
-		return false
+		return hardFailure(ro)
 	}
 
 	switch {
 	case ro.aggregate != nil:
 		// The complete -o stream is committed once, after all file sections
 		// have contributed in patch order. Originals are never modified.
+	case !changed:
+		// A wholly rejected or already-applied portion does not modify its
+		// target and therefore must not create a destination or a .orig file.
 	case removeFile:
 		if ro.backup && existed {
 			if err := backupOnce(targetPath, ro.backedUp); err != nil {
 				fmt.Fprintf(rc.Err, "%s: backup failed: %s\n", cmd.Name, describeErr(err))
-				return false
+				return hardFailure(ro)
 			}
 		}
 		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-			return false
+			return hardFailure(ro)
 		}
 	default:
 		if ro.backup && outExisted {
 			if err := backupOnce(outPath, ro.backedUp); err != nil {
 				fmt.Fprintf(rc.Err, "%s: backup failed: %s\n", cmd.Name, describeErr(err))
-				return false
+				return hardFailure(ro)
 			}
 		}
 		content := joinFileLines(res.Lines, res.NoFinalNewline)
@@ -531,7 +575,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		}
 		if err := writeFileContent(rc, outPath, content, outMode, outExisted); err != nil {
 			fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-			return false
+			return hardFailure(ro)
 		}
 	}
 
@@ -557,7 +601,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		}
 		if err != nil {
 			fmt.Fprintf(rc.Err, "%s: could not write reject file: %s\n", cmd.Name, describeErr(err))
-			return false
+			return hardFailure(ro)
 		}
 		ro.rejectStarted[rejPath] = true
 		fmt.Fprintf(rc.Err, "%d out of %d hunks failed -- saving rejects to file %s\n", failed, len(fp.Hunks), rejPath)
@@ -682,6 +726,9 @@ func resolveHeaderTarget(rc *tool.RunContext, dir, oldName, newName, indexName s
 			continue
 		}
 		path := resolveTargetName(rc, dir, name, strip, true)
+		if path == "" {
+			continue
+		}
 		if _, ok := intermediate[path]; ok {
 			return path, name, true
 		}
@@ -690,7 +737,8 @@ func resolveHeaderTarget(rc *tool.RunContext, dir, oldName, newName, indexName s
 		}
 	}
 	if create {
-		return resolveTargetName(rc, dir, newName, strip, false), newName, true
+		path := resolveTargetName(rc, dir, newName, strip, false)
+		return path, newName, path != ""
 	}
 	name := oldName
 	if name == "" || name == patch.DevNull {
@@ -702,7 +750,8 @@ func resolveHeaderTarget(rc *tool.RunContext, dir, oldName, newName, indexName s
 	if name == "" || name == patch.DevNull {
 		return "", "", false
 	}
-	return resolveTargetName(rc, dir, name, strip, true), name, false
+	path := resolveTargetName(rc, dir, name, strip, true)
+	return path, name, false
 }
 
 func resolveOperandPath(rc *tool.RunContext, dir, name string) string {
@@ -718,7 +767,7 @@ func stripComponents(name string, n int) string {
 		return name
 	}
 	if n >= len(comps) {
-		return comps[len(comps)-1]
+		return ""
 	}
 	return strings.Join(comps[n:], "/")
 }

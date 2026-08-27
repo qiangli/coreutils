@@ -152,6 +152,22 @@ func TestFailedDeletionPreservesTarget(t *testing.T) {
 	}
 }
 
+func TestWhollyRejectedPatchDoesNotCreateTargetOrBackup(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "actual\n")
+	diff := "--- f\n+++ f\n@@ -1 +1 @@\n-expected\n+new\n"
+	_, _, code := runIn(t, dir, diff, "-b")
+	if code != 1 || exists(dir, "f.orig") {
+		t.Fatalf("exit=%d backup-created=%v", code, exists(dir, "f.orig"))
+	}
+
+	create := "--- /dev/null\n+++ newfile\n@@ -1 +1 @@\n-impossible\n+new\n"
+	_, _, code = runIn(t, dir, create, "-f")
+	if code != 1 || exists(dir, "newfile") {
+		t.Fatalf("exit=%d rejected creation exists=%v", code, exists(dir, "newfile"))
+	}
+}
+
 func TestDeletionWithOutputLeavesOriginalAndWritesEmptyOutput(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "victim.txt", "bye\n")
@@ -183,7 +199,7 @@ func TestApplyConflictWritesRejectAndExitsOne(t *testing.T) {
 		t.Fatalf("file should be left untouched on reject, got %q", got)
 	}
 	rej := readFile(t, dir, "f.txt.rej")
-	if !strings.Contains(rej, "-two") || !strings.Contains(rej, "+TWO") {
+	if !strings.Contains(rej, "! two") || !strings.Contains(rej, "! TWO") || !strings.Contains(rej, "***************") {
 		t.Fatalf("reject content missing hunk body: %s", rej)
 	}
 }
@@ -386,6 +402,32 @@ func TestEdFlagAppliesDiffEdScript(t *testing.T) {
 	}
 }
 
+func TestEdScriptAutoDetectionAndInsert(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.txt", "one\ntwo\n")
+	script := "2i\ninserted\n.\n"
+	_, stderr, code := runIn(t, dir, script, "f.txt")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "f.txt"); got != "one\ninserted\ntwo\n" {
+		t.Fatalf("auto-detected ed result=%q", got)
+	}
+}
+
+func TestEdScriptUsesIndexAndStripForFilenameDetermination(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.txt", "one\n")
+	script := "Index: tree/f.txt\n1c\ntwo\n.\n"
+	_, stderr, code := runIn(t, dir, script, "-p1")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if got := readFile(t, dir, "f.txt"); got != "two\n" {
+		t.Fatalf("Index-selected ed target=%q", got)
+	}
+}
+
 func TestIfdefMergeRetainsBothVersions(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "f.c", "one\nold\nthree\n")
@@ -535,6 +577,39 @@ func TestIndentedPatchAndMultiFileOutput(t *testing.T) {
 	}
 }
 
+func TestEachPatchCanHaveDifferentCommonIndent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "a\n")
+	writeFile(t, dir, "b", "b\n")
+	diff := "  --- a\n  +++ a\n  @@ -1 +1 @@\n  -a\n  +A\n" +
+		"    --- b\n    +++ b\n    @@ -1 +1 @@\n    -b\n    +B\n"
+	_, stderr, code := runIn(t, dir, diff)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if readFile(t, dir, "a") != "A\n" || readFile(t, dir, "b") != "B\n" {
+		t.Fatalf("a=%q b=%q", readFile(t, dir, "a"), readFile(t, dir, "b"))
+	}
+}
+
+func TestStripTooManyComponentsDoesNotFallBackToBasename(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "old\n")
+	writeFile(t, dir, "actual", "old\n")
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	withPrompt(t, "actual")
+	stdout, stderr, code := runIn(t, dir, diff, "-p9")
+	if code != 0 || !strings.Contains(stdout, "File to patch:") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if got := readFile(t, dir, "f"); got != "old\n" {
+		t.Fatalf("over-stripped header fell back to basename: %q", got)
+	}
+	if got := readFile(t, dir, "actual"); got != "new\n" {
+		t.Fatalf("prompt target=%q", got)
+	}
+}
+
 func TestOutputConcatenatesIntermediateVersionsForSameFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "f", "one\n")
@@ -594,7 +669,7 @@ func TestReverseRejectSwapsHeadersAndHunk(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s", code, stderr)
 	}
 	reject := readFile(t, dir, "f.rej")
-	for _, want := range []string{"--- new-name\n", "+++ old-name\n", "-new\n", "+old\n"} {
+	for _, want := range []string{"*** new-name\n", "--- old-name\n", "! new\n", "! old\n"} {
 		if !strings.Contains(reject, want) {
 			t.Fatalf("reverse reject %q lacks %q", reject, want)
 		}
@@ -611,9 +686,9 @@ func TestFilenamePromptIsWrittenToStdout(t *testing.T) {
 	}
 }
 
-func TestEdRejectsReverseAndIfdefCombination(t *testing.T) {
+func TestEdRejectsReverseCombination(t *testing.T) {
 	dir := t.TempDir()
-	for _, args := range [][]string{{"-e", "-R", "f"}, {"-e", "-D", "X", "f"}} {
+	for _, args := range [][]string{{"-e", "-R", "f"}} {
 		_, _, code := runIn(t, dir, "1d\n", args...)
 		if code != 2 {
 			t.Fatalf("args=%v code=%d", args, code)
@@ -621,9 +696,29 @@ func TestEdRejectsReverseAndIfdefCombination(t *testing.T) {
 	}
 }
 
+func TestEdIfdefCombination(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "old\n")
+	_, stderr, code := runIn(t, dir, "1c\nnew\n.\n", "-e", "-D", "FEATURE", "f")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	want := "#ifndef FEATURE\nold\n#else\nnew\n#endif\n"
+	if got := readFile(t, dir, "f"); got != want {
+		t.Fatalf("ed -D=%q want=%q", got, want)
+	}
+}
+
 func TestExtraOperandIsUsageError(t *testing.T) {
 	dir := t.TempDir()
 	_, _, code := runIn(t, dir, "", "a", "b", "c")
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+}
+
+func TestNegativeStripIsUsageError(t *testing.T) {
+	_, _, code := runIn(t, t.TempDir(), "", "-p", "-1")
 	if code != 2 {
 		t.Fatalf("exit=%d, want 2", code)
 	}
@@ -641,7 +736,25 @@ func TestGitBinaryPatchSectionIsReportedAndFails(t *testing.T) {
 	dir := t.TempDir()
 	diff := "diff --git a/img.png b/img.png\nindex 111..222 100644\nGIT binary patch\nliteral 4\nXcmZ?wb\n"
 	_, stderr, code := runIn(t, dir, diff)
-	if code != 1 || !strings.Contains(stderr, "binary") {
+	if code != 2 || !strings.Contains(stderr, "binary") {
+		t.Fatalf("code=%d stderr=%s", code, stderr)
+	}
+}
+
+func TestMissingTargetIsOperationalError(t *testing.T) {
+	dir := t.TempDir()
+	diff := "--- absent\n+++ absent\n@@ -1 +1 @@\n-old\n+new\n"
+	_, stderr, code := runIn(t, dir, diff, "-f")
+	if code != 2 || !strings.Contains(stderr, "can't find file") {
+		t.Fatalf("code=%d stderr=%s", code, stderr)
+	}
+}
+
+func TestMalformedEdScriptIsOperationalError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "old\n")
+	_, stderr, code := runIn(t, dir, "1x\n", "-e", "f")
+	if code != 2 || stderr == "" {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
 }

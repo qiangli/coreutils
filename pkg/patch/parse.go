@@ -33,38 +33,30 @@ func splitRawLines(data []byte) []rawLine {
 	if !trailingNL && len(out) > 0 {
 		out[len(out)-1].noEOL = true
 	}
-	return stripCommonIndent(out)
+	return out
 }
 
 // stripCommonIndent accepts the historical indented-patch transport form.
 // Once the first recognizable control line is indented, the same exact byte
 // prefix is removed from every physical line that carries it. Patch payload
 // indentation after the diff marker is therefore preserved.
-func stripCommonIndent(lines []rawLine) []rawLine {
-	for _, line := range lines {
-		trimmed := strings.TrimLeft(line.text, " \t")
-		if trimmed == line.text {
-			if strings.HasPrefix(trimmed, "Index:") || strings.HasPrefix(trimmed, "diff --git ") ||
-				strings.HasPrefix(trimmed, "--- ") || strings.HasPrefix(trimmed, "*** ") ||
-				normalHunkRe.MatchString(trimmed) {
-				return lines
-			}
-			continue
-		}
-		if strings.HasPrefix(trimmed, "Index:") || strings.HasPrefix(trimmed, "diff --git ") ||
-			strings.HasPrefix(trimmed, "--- ") || strings.HasPrefix(trimmed, "*** ") ||
-			normalHunkRe.MatchString(trimmed) {
-			prefix := line.text[:len(line.text)-len(trimmed)]
-			out := append([]rawLine(nil), lines...)
-			for i := range out {
-				if strings.HasPrefix(out[i].text, prefix) {
-					out[i].text = out[i].text[len(prefix):]
-				}
-			}
-			return out
+func stripPatchIndentAt(lines []rawLine, start int) bool {
+	trimmed := strings.TrimLeft(lines[start].text, " \t")
+	if trimmed == lines[start].text || !isPatchControlLine(trimmed) {
+		return false
+	}
+	prefix := lines[start].text[:len(lines[start].text)-len(trimmed)]
+	for i := start; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i].text, prefix) {
+			lines[i].text = lines[i].text[len(prefix):]
 		}
 	}
-	return lines
+	return true
+}
+
+func isPatchControlLine(line string) bool {
+	return strings.HasPrefix(line, "Index:") || strings.HasPrefix(line, "diff --git ") ||
+		strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "*** ") || normalHunkRe.MatchString(line)
 }
 
 var (
@@ -88,6 +80,9 @@ func Parse(data []byte) (*Patch, error) {
 	var files []FilePatch
 	var indexName string
 	for i := 0; i < n; {
+		if stripPatchIndentAt(lines, i) {
+			continue
+		}
 		switch {
 		case strings.HasPrefix(lines[i].text, "Index:"):
 			indexName = strings.TrimSpace(strings.TrimPrefix(lines[i].text, "Index:"))
@@ -299,7 +294,7 @@ func parseContextFile(lines []rawLine, i int) (FilePatch, int, error) {
 		i++
 
 		var oldBlock []markedLine
-		if !contextNewRe.MatchString(lines[i].text) {
+		if i < n && !contextNewRe.MatchString(lines[i].text) {
 			oldBlock, i = consumeMarkedBlock(lines, i, oldBlockMarks)
 		}
 		if i >= n {

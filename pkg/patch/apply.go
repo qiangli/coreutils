@@ -130,7 +130,11 @@ func Apply(oldLines []string, oldNoFinalNewline bool, hunks []Hunk, opts ApplyOp
 			appendVerbatim(cur, matchStart)
 			appendVerbatim(matchStart, end)
 			cur = end
-			offset += h.NewCount - h.OldCount
+			// Hunk coordinates are all expressed against the original side of
+			// the patch. Carry only placement drift from the stated location;
+			// size changes from earlier hunks must not be applied to indices in
+			// oldLines, which deliberately remains the original target image.
+			offset = matchStart - h.OldStart
 			reports = append(reports, HunkReport{Index: idx + 1, Outcome: HunkAlreadyApplied, At: matchStart})
 
 		default: // HunkApplied / HunkAppliedFuzzy
@@ -151,7 +155,7 @@ func Apply(oldLines []string, oldNoFinalNewline bool, hunks []Hunk, opts ApplyOp
 			} else if cur >= len(oldLines) {
 				finalNoEOL = false
 			}
-			offset += h.NewCount - h.OldCount
+			offset = matchStart - h.OldStart
 			reports = append(reports, HunkReport{Index: idx + 1, Outcome: outcome, FuzzUsed: peelUsed, At: matchStart})
 		}
 	}
@@ -353,7 +357,20 @@ func matchAt(target, want []string, pos int, ignoreWS bool) bool {
 }
 
 func normalizeWS(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	var out strings.Builder
+	inBlank := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' || s[i] == '\t' {
+			if !inBlank {
+				out.WriteByte(' ')
+				inBlank = true
+			}
+			continue
+		}
+		inBlank = false
+		out.WriteByte(s[i])
+	}
+	return out.String()
 }
 
 func clampInt(v, lo, hi int) int {
