@@ -55,6 +55,35 @@ func TestAwkAbsentArrayReferenceCreatesElement(t *testing.T) {
 	}
 }
 
+// POSIX defers awk string-to-number conversion to ISO C atof, which accepts
+// the special spellings inf/infinity/nan with an optional sign. The
+// conversions and the lowercase string forms of the resulting values are
+// pinned here, along with overflow converting to infinity rather than
+// failing and NaN comparing unequal to itself.
+func TestAwkInfinityAndNaNSemantics(t *testing.T) {
+	out, errb, code := runTool(t, "inf nan +inf -inf infinity\n", `{ print $1+0, $2+0, $3+0, $4+0, $5+0 }`)
+	if out != "inf nan inf -inf inf\n" || errb != "" || code != 0 {
+		t.Fatalf("awk special-value conversions = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "inf nan inf -inf inf\n", "")
+	}
+	program := `BEGIN {
+		print 1e400, -1e400
+		n = "nan" + 0
+		print n, (n == n)
+	}`
+	out, errb, code = runTool(t, "", program)
+	want := "inf -inf\nnan 0\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk overflow and NaN identity = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+func TestAwkDivisionByZeroIsADiagnosedError(t *testing.T) {
+	out, errb, code := runTool(t, "", `BEGIN { print 1/0 }`)
+	if code == 0 || !strings.Contains(errb, "division by zero") || out != "" {
+		t.Fatalf("awk division by zero = (%q, %q, %d), want empty stdout, a diagnostic, and a nonzero status", out, errb, code)
+	}
+}
+
 func TestAwkPOSIXFloatFormats(t *testing.T) {
 	program := `BEGIN {
 		printf "<%a><%A><%a>\n", 0, 0.125, -0.125

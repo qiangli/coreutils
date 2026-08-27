@@ -179,6 +179,15 @@ func invalidPAXText(rc *tool.RunContext, value string) bool {
 	return err != nil
 }
 
+// exceedsDestinationPathLimits reports a pathname the destination hierarchy
+// cannot hold: one whose length reaches the platform {PATH_MAX} (which counts
+// the terminating NUL). POSIX classes such a filename or link name as an
+// invalid value in read and copy mode only; list mode has no destination and
+// must keep writing the member's valid values.
+func exceedsDestinationPathLimits(name string) bool {
+	return len(name) >= destinationPathMax
+}
+
 type paxTextEncoding int
 
 const (
@@ -396,9 +405,11 @@ func translatePAXHeaderToLocal(rc *tool.RunContext, h *tar.Header, action string
 			h.PAXRecords[key] = value
 		}
 	}
-	invalid.name = invalid.name || invalidPAXLocalDestinationName(h.Name)
+	invalid.name = invalid.name || invalidPAXLocalDestinationName(h.Name) ||
+		!listMode && exceedsDestinationPathLimits(h.Name)
 	if h.Linkname != "" {
-		invalid.link = invalid.link || invalidPAXLocalDestinationName(h.Linkname)
+		invalid.link = invalid.link || invalidPAXLocalDestinationName(h.Linkname) ||
+			!listMode && exceedsDestinationPathLimits(h.Linkname)
 	}
 	return invalid
 }

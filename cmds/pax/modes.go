@@ -151,6 +151,16 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			}
 			linkRenames[index] = linkName
 		}
+		// A -s substitution or interactive replacement can produce a pathname
+		// the destination cannot hold even when the archived value was valid.
+		// Attempting to create it would fail after extraction had begun;
+		// bypass the member with a diagnostic instead, like any other invalid
+		// destination value, and keep processing the remaining members.
+		if invalidPAXLocalDestinationName(newName) || exceedsDestinationPathLimits(newName) {
+			fmt.Fprintf(rc.Err, "pax: %s: pathname cannot be created in the destination hierarchy\n", m.name)
+			status = 1
+			continue
+		}
 		selected[index] = newName
 		renames[subName] = newName
 	}

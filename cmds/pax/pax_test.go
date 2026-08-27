@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -73,6 +74,85 @@ func TestExplicitDashArchiveIsAFile(t *testing.T) {
 	out, e, code := exec(t, d, "", "-f", "-")
 	if code != 0 || e != "" || !strings.Contains(out, "src/a.txt") {
 		t.Fatalf("list -f - = (%q, %q, %d), want src/a.txt", out, e, code)
+	}
+}
+
+// overLongDestinationName builds a member pathname that reaches the
+// destination {PATH_MAX} while every component stays within {NAME_MAX}, so
+// the total-pathname limit is what rejects it.
+func overLongDestinationName() string {
+	component := strings.Repeat("d", 200)
+	name := component
+	for len(name) < destinationPathMax {
+		name += "/" + component
+	}
+	return name + "/f.txt"
+}
+
+// POSIX classes a member pathname longer than the destination hierarchy
+// allows as an invalid value: with the default invalid=bypass action the
+// member is skipped with a diagnostic and a nonzero exit while every other
+// member is still extracted. It must not condemn the whole archive.
+func TestOverLongMemberPathnameIsBypassedAndProcessingContinues(t *testing.T) {
+	d := t.TempDir()
+	long := overLongDestinationName()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, m := range []struct{ name, body string }{
+		{"good.txt", "ok"},
+		{long, "deep"},
+	} {
+		h := &tar.Header{Name: m.name, Mode: 0o644, Size: int64(len(m.body)), ModTime: time.Unix(1700000000, 0), Format: tar.FormatPAX}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(m.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "deep.tar"), buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errs, code := exec(t, d, "", "-r", "-f", "deep.tar")
+	if code != 1 || errs == "" {
+		t.Fatalf("over-long member extract = (%d, %q), want status 1 with a diagnostic", code, errs)
+	}
+	if got, err := os.ReadFile(filepath.Join(d, "good.txt")); err != nil || string(got) != "ok" {
+		t.Fatalf("valid sibling member = (%q, %v), want extracted \"ok\"", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(d, strings.Repeat("d", 200))); !os.IsNotExist(err) {
+		t.Fatalf("bypassed member left destination changes: %v", err)
+	}
+	// The same archive lists cleanly: length limits belong to the destination
+	// hierarchy, and list mode has none.
+	out, errs, code := exec(t, d, "", "-f", "deep.tar")
+	if code != 0 || errs != "" || !strings.Contains(out, "good.txt") || !strings.Contains(out, long) {
+		t.Fatalf("list of over-long member = (%q, %q, %d), want both members and status 0", out, errs, code)
+	}
+}
+
+// A -s substitution can rewrite a valid archived name into one the
+// destination cannot hold. The member is bypassed with a diagnostic and a
+// nonzero exit instead of failing mid-extraction.
+func TestSubstitutionToOverLongPathnameIsBypassed(t *testing.T) {
+	d := makeTree(t)
+	if _, e, code := exec(t, d, "", "-w", "-f", "a.tar", "src/a.txt", "src/sub/b.txt"); code != 0 {
+		t.Fatalf("write failed: %d %s", code, e)
+	}
+	dest := t.TempDir()
+	long := overLongDestinationName()
+	_, errs, code := exec(t, dest, "", "-r", "-f", filepath.Join(d, "a.tar"), "-s", ",^src/a\\.txt$,"+long+",")
+	if code != 1 || !strings.Contains(errs, "cannot be created in the destination hierarchy") {
+		t.Fatalf("over-long substitution = (%d, %q), want status 1 with a bypass diagnostic", code, errs)
+	}
+	if got, err := os.ReadFile(filepath.Join(dest, "src", "sub", "b.txt")); err != nil || string(got) != "beta" {
+		t.Fatalf("unrelated member = (%q, %v), want extracted \"beta\"", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, strings.Repeat("d", 200))); !os.IsNotExist(err) {
+		t.Fatalf("bypassed member left destination changes: %v", err)
 	}
 }
 

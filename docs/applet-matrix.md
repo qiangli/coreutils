@@ -46,7 +46,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 7 | 36 |
 | `atq` | `cmds/atq` | — | Bashy/other extension | no | no | 1 | 2 |
 | `atrm` | `cmds/atrm` | — | Bashy/other extension | no | no | 1 | 3 |
-| `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 30 |
+| `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 32 |
 | `b2sum` | `cmds/b2sum` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `base32` | `cmds/base32` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `base64` | `cmds/base64` | — | GNU Coreutils | yes | no | 2 | 9 |
@@ -141,7 +141,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `patch` | `cmds/patch` | — | POSIX/Unix utility | no | yes | 2 | 57 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 24 |
-| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 15 | 174 |
+| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 15 | 176 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 4 | 23 |
 | `posixgate` | `cmds/posixgate` | — | Bashy/other extension | no | no | 1 | 33 |
