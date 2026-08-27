@@ -383,6 +383,9 @@ type grepOutput struct{ g *grepper }
 
 func (w grepOutput) Write(p []byte) (int, error) {
 	n, err := w.g.rc.Out.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
 	if err != nil && !w.g.outputErr {
 		w.g.outputErr = true
 		w.g.anyErr = true
