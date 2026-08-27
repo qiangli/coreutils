@@ -2120,7 +2120,7 @@ getconf [-v specification] path_var pathname
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** Write the variable value followed by a newline, or undefined for a known variable with no determinate value or no limit.
+**Standard output:** Write the variable value followed by a newline, or undefined for a known variable with no determinate value or no limit. On Linux, PATH reports the stable standard-utility search path /opt/bashy/bin:/bin:/usr/bin:/sbin:/usr/sbin — the same guaranteed path `command -p` resolves the standard utilities against — rather than undefined.
 
 **Standard error:** Used only for diagnostics, including unknown variables, unsupported -v specifications, and option/arity errors.
 

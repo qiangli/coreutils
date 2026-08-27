@@ -117,3 +117,39 @@ func TestLinuxDoesNotClaimOtherProgrammingEnvironments(t *testing.T) {
 		}
 	}
 }
+
+// TestLinuxPathReportsStandardUtilityPath pins the `command -p` product
+// contract: getconf PATH is the queryable form of the standard-utility search
+// path, so it must report the stable path the product guarantees rather than
+// undefined. The host-oracle tests deliberately exclude PATH — glibc's
+// confstr(_CS_PATH) "/bin:/usr/bin" is a libc policy, not this guarantee.
+func TestLinuxPathReportsStandardUtilityPath(t *testing.T) {
+	got, stderr, code := runCmd(t, "PATH")
+	if code != 0 || stderr != "" || got != standardUtilsPath {
+		t.Fatalf("PATH = (%q, stderr %q, exit %d), want %q", got, stderr, code, standardUtilsPath)
+	}
+}
+
+// TestLinuxAllIncludesStandardUtilityPath keeps the -a extension honest: it
+// must list PATH exactly once, with the same value the single-variable query
+// reports.
+func TestLinuxAllIncludesStandardUtilityPath(t *testing.T) {
+	out, stderr, code := runCmd(t, "-a")
+	if code != 0 || stderr != "" {
+		t.Fatalf("-a = (exit %d, stderr %q)", code, stderr)
+	}
+	found := 0
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "PATH" {
+			continue
+		}
+		found++
+		if fields[1] != standardUtilsPath {
+			t.Errorf("-a PATH = %q, want %q", fields[1], standardUtilsPath)
+		}
+	}
+	if found != 1 {
+		t.Errorf("-a listed PATH %d times, want exactly 1", found)
+	}
+}

@@ -80,7 +80,21 @@ func linuxLP64Build() bool {
 	return false
 }
 
+// standardUtilsPath is the stable standard-utility search path this product
+// guarantees when the shell locates the standard utilities without $PATH —
+// the exact contract `command -p` resolves against: the conventional system
+// directories in their usual order, with the multicall bin directory first.
+// POSIX defines getconf PATH as "the value of PATH used to find standard
+// utilities", so getconf is the queryable form of that guarantee and must
+// report it rather than undefined. Linux exposes no kernel API for libc's
+// confstr(_CS_PATH) policy, but this value is a product guarantee, not a host
+// measurement: it deliberately diverges from a host glibc's "/bin:/usr/bin".
+const standardUtilsPath = "/opt/bashy/bin:/bin:/usr/bin:/sbin:/usr/sbin"
+
 func platformConfstrValue(name string) (string, bool) {
+	if name == "PATH" {
+		return standardUtilsPath, true
+	}
 	return undefined, isConfstrName(name)
 }
 

@@ -260,7 +260,10 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux only")
 	}
-	for _, name := range []string{"PATH", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "RE_DUP_MAX", "SYMLOOP_MAX"} {
+	// PATH is deliberately absent from this set: on Linux it reports the
+	// product's standard-utility search path (TestLinuxPathReportsStandardUtilityPath),
+	// not an undefined libc boundary.
+	for _, name := range []string{"_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "RE_DUP_MAX", "SYMLOOP_MAX"} {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != undefined {
 			t.Errorf("%s = %q (exit %d), want undefined without a libc adapter", name, got, code)
