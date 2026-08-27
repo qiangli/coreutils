@@ -4797,19 +4797,19 @@ tail [-f] [-c number|-n number] [file]
 
 **Operands:** `address; terminal`. address names a local operating-system login account with an active terminal session; terminal optionally selects one of that account's eligible local terminals.
 
-**Special tokens:** Remote and host-qualified addresses are rejected before session or terminal-notification work; both standard input and standard output must be terminals.
+**Special tokens:** Remote and host-qualified addresses are rejected before session or terminal-notification work; both standard input and standard output must be terminals; TERM must identify a terminal with clear, cursor-addressing, and erase-line capabilities and the display must be at least 20 columns by 6 rows.
 
-**Standard input:** Read the local participant's conversation text from a terminal.
+**Standard input:** Read character-at-a-time input from the local participant's terminal; the configured erase, kill, interrupt, and EOF characters retain their termios meanings.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; TERM`.
 
-**Standard output:** Write invitations, local and peer conversation text, termination notices, and operational diagnostics.
+**Standard output:** Write invitations, operational diagnostics, and a screen-oriented display with independently labelled local and peer regions; alert events emit the terminal's bell capability.
 
-**Standard error:** Used only for syntax diagnostics from the shared option framework.
+**Standard error:** Not used.
 
-**Effects:** `Write an invitation to an eligible local terminal; exchange encrypted, authenticated conversation and close datagrams through ephemeral AF_UNIX sockets; remove session endpoints on exit without writing a transcript; never contact talkd or another host.`.
+**Effects:** `Write an invitation to an eligible local terminal; temporarily enter and exactly restore non-canonical/no-echo terminal mode while preserving unrelated termios mappings and iexten; exchange encrypted, authenticated text/edit/alert/close events through ephemeral AF_UNIX sockets; remove session endpoints on exit without writing a transcript; never contact talkd or another host.`.
 
-**Exit status:** 0 when the local conversation terminates normally, on EOF, or on SIGINT; greater than 0 for usage, terminal, identity, target, local IPC, authentication, cleanup, or output errors.
+**Exit status:** 0 when the local conversation terminates normally, on the configured EOF or interrupt character, or on SIGINT; greater than 0 for usage, terminal, identity, target, local IPC, authentication, cleanup, input, or output errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4821,7 +4821,7 @@ tail [-f] [-c number|-n number] [file]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/talk`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/talk/talk_test.go#TestRunUsesOSIdentityNotEnvironmentAndNotifiesTTY;cmds/talk/talk_test.go#TestDefaultAlwaysRequiresWhoAndMesg;cmds/talk/talk_test.go#TestRecipientSelectionSkipsStaleTTYWhenAnotherIsUsable;cmds/talk/talk_test.go#TestRemoteRejectedBeforeSessionOrNotification;cmds/talk/talk_test.go#TestSyntaxAndTerminalRequirements;cmds/talk/talk_test.go#TestLocalUnixTransportIsPrivateAuthenticatedEphemeralAndConverges;cmds/talk/talk_test.go#TestAuthenticatedTransportDiscardsInjectedDatagramAndContinues;cmds/talk/talk_test.go#TestEndpointOwnerMismatchCannotJoin;cmds/talk/talk_test.go#TestDefaultTalkRootIsResolvedRootOwnedStickyDirectory;cmds/talk/talk_test.go#TestConverseCancellationWithBlockedPipeReturnsAndClosesReader`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/talk/talk_test.go#TestRunUsesOSIdentityNotEnvironmentAndNotifiesTTY;cmds/talk/talk_test.go#TestDefaultAlwaysRequiresWhoAndMesg;cmds/talk/talk_test.go#TestRecipientSelectionSkipsStaleTTYWhenAnotherIsUsable;cmds/talk/talk_test.go#TestRemoteRejectedBeforeSessionOrNotification;cmds/talk/talk_test.go#TestSyntaxAndTerminalRequirements;cmds/talk/talk_test.go#TestLocalUnixTransportIsPrivateAuthenticatedEphemeralAndConverges;cmds/talk/talk_test.go#TestAuthenticatedTransportDiscardsInjectedDatagramAndContinues;cmds/talk/talk_test.go#TestEndpointOwnerMismatchCannotJoin;cmds/talk/talk_test.go#TestDefaultTalkRootIsResolvedRootOwnedStickyDirectory;cmds/talk/talk_test.go#TestConverseCancellationWithBlockedPipeReturnsAndClosesReader;cmds/talk/display_test.go#TestTalkCharacterEventsKeepIndependentRegionsInSync;cmds/talk/display_test.go#TestTalkAlertRefreshAndConfiguredTerminationCharacters;cmds/talk/display_test.go#TestTalkPeerCloseAllowsOnlyLocalExit;cmds/talk/display_test.go#TestTalkUTF8SplitAcrossTerminalReads;cmds/talk/display_test.go#TestTalkRejectsMalformedOrLegacyPeerEvents;cmds/talk/display_pty_unix_test.go#TestTalkPTYUsesCharacterModeAndRestoresTerminal;cmds/talk/display_pty_unix_test.go#TestTalkTerminalCapabilityGateFailsClosed`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:talk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

@@ -139,7 +139,7 @@ sync	cmds/sync		GNU Coreutils	yes	no	1	5
 tabs	cmds/tabs		POSIX/Unix utility	no	yes	2	21
 tac	cmds/tac		GNU Coreutils	yes	no	1	6
 tail	cmds/tail		GNU Coreutils	yes	yes	3	27
-talk	cmds/talk		POSIX/Unix utility	no	yes	2	16
+talk	cmds/talk		POSIX/Unix utility	no	yes	6	24
 tar	cmds/tar		Bashy/other extension	no	no	1	14
 tee	cmds/tee		GNU Coreutils	yes	yes	3	29
 test	cmds/test		GNU Coreutils	yes	yes	3	32

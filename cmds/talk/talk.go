@@ -24,7 +24,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/cmds/internal/session"
-	corelocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -84,15 +83,20 @@ var (
 func run(rc *tool.RunContext, args []string) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	// POSIX assigns talk no standard-error output. Keep the shared parser's
+	// option behavior, but route its diagnostics to talk's permitted
+	// diagnostic stream (standard output).
+	parseRC := *rc
+	parseRC.Err = rc.Out
+	operands, code := tool.Parse(&parseRC, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 	switch {
 	case len(operands) == 0:
-		return tool.UsageError(rc, cmd, "missing address operand")
+		return diagnostic(rc, "missing address operand; usage: %s", cmd.Usage)
 	case len(operands) > 2:
-		return tool.UsageError(rc, cmd, "extra operand %q", operands[2])
+		return diagnostic(rc, "extra operand %q; usage: %s", operands[2], cmd.Usage)
 	}
 	address := strings.TrimSpace(operands[0])
 	if err := validateLocalAddress(address); err != nil {
@@ -110,6 +114,11 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if !isTerminalFn(rc.Out) {
 		return diagnostic(rc, "standard output is not a terminal")
+	}
+	// Fail before notifying the recipient: an unknown, undersized, or
+	// under-capable terminal cannot provide POSIX's two screen regions.
+	if err := checkTerminalCapabilitiesFn(rc); err != nil {
+		return diagnostic(rc, "%v", err)
 	}
 
 	self, err := currentAccountFn()
@@ -170,7 +179,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if _, err := fmt.Fprintf(rc.Out, "[private session %s connected]\n", conv.ID()); err != nil {
 		return diagnostic(rc, "write terminal: %v", err)
 	}
-	return converse(rc, peer.Name, conv, interrupt)
+	return converse(rc, self.Name, peer.Name, conv, interrupt)
 }
 
 func effectivePollInterval() time.Duration {
@@ -293,7 +302,7 @@ func invitationText(from, terminal string) string {
 	return fmt.Sprintf("\nMessage from %s\a\ntalk: connection requested by %s%s\ntalk: respond with: talk %s\n", from, from, where, from)
 }
 
-func converse(rc *tool.RunContext, peer string, conv conversation, interrupt <-chan os.Signal) int {
+func converse(rc *tool.RunContext, self, peer string, conv conversation, interrupt <-chan os.Signal) (code int) {
 	ctx := rc.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -302,8 +311,18 @@ func converse(rc *tool.RunContext, peer string, conv conversation, interrupt <-c
 	if err != nil {
 		return diagnostic(rc, "prepare terminal input: %v", err)
 	}
+	screen, err := newDisplayFn(rc, self, peer)
+	if err != nil {
+		_ = in.Close()
+		return diagnostic(rc, "prepare terminal display: %v", err)
+	}
 	defer func() { _ = conv.Close() }()
 	defer func() { _ = in.Close() }()
+	defer func() {
+		if err := screen.Close(); err != nil && code == 0 {
+			code = diagnostic(rc, "restore terminal: %v", err)
+		}
+	}()
 	peerClosed := false
 	for {
 		messages, closedNow, pollErr := conv.Poll()
@@ -311,16 +330,15 @@ func converse(rc *tool.RunContext, peer string, conv conversation, interrupt <-c
 			return diagnostic(rc, "read private local conversation: %v", pollErr)
 		}
 		for _, body := range messages {
-			if _, err := fmt.Fprintf(rc.Out, "[%s] %s", peer, body); err != nil {
+			if err := screen.Remote(body); err != nil {
 				return diagnostic(rc, "write terminal: %v", err)
-			}
-			if !strings.HasSuffix(body, "\n") {
-				_, _ = io.WriteString(rc.Out, "\n")
 			}
 		}
 		if closedNow && !peerClosed {
 			peerClosed = true
-			_, _ = fmt.Fprintf(rc.Out, "talk: %s has terminated the session; only local exit remains\n", peer)
+			if err := screen.PeerClosed(peer); err != nil {
+				return diagnostic(rc, "write terminal: %v", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -339,19 +357,17 @@ func converse(rc *tool.RunContext, peer string, conv conversation, interrupt <-c
 		if event.err != nil {
 			return diagnostic(rc, "read terminal: %v", event.err)
 		}
-		if peerClosed {
-			continue
+		wires, terminate, err := screen.Local(event.data, !peerClosed)
+		if err != nil {
+			return diagnostic(rc, "update terminal: %v", err)
 		}
-		body, refresh := printableInput(event.data, corelocale.Resolve(rc.Env, corelocale.CType))
-		if refresh {
-			if _, err := io.WriteString(rc.Out, "\x1b[2J\x1b[H"); err != nil {
-				return diagnostic(rc, "refresh terminal: %v", err)
-			}
-		}
-		if body != "" {
-			if err := conv.Send(body); err != nil {
+		for _, wire := range wires {
+			if err := conv.Send(wire); err != nil {
 				return diagnostic(rc, "send message: %v", err)
 			}
+		}
+		if terminate {
+			return 0
 		}
 	}
 }
