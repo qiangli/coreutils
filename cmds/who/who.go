@@ -325,8 +325,7 @@ func terminalState(r session.Record) byte {
 		"BOOT_TIME", "boot", "2",
 		"RUN_LVL", "runlevel", "1",
 		"NEW_TIME", "time", "3", "OLD_TIME", "4",
-		"LOGIN_PROCESS", "login", "6",
-		"INIT_PROCESS", "init", "5":
+		"LOGIN_PROCESS", "login", "6":
 		return ' '
 	}
 	if r.TTY == "" {
@@ -337,7 +336,7 @@ func terminalState(r session.Record) byte {
 
 func stateFieldExists(r session.Record) bool {
 	switch r.Type {
-	case "LOGIN_PROCESS", "login", "6", "INIT_PROCESS", "init", "5":
+	case "LOGIN_PROCESS", "login", "6":
 		return false
 	}
 	return true

@@ -208,7 +208,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `watch` | `cmds/watch` | — | Bashy/other extension | no | no | 1 | 4 |
 | `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 3 | 31 |
 | `which` | `cmds/which` | — | Bashy/other extension | no | no | 1 | 9 |
-| `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 4 | 31 |
+| `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 4 | 32 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
 | `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 5 | 84 |

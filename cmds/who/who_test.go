@@ -343,9 +343,9 @@ func TestExitStatus(t *testing.T) {
 	}
 }
 
-// TestTerminalState verifies the -T '%c' handling: a dead process and
-// records with no live terminal report '?', while a normal record consults
-// the tty writable bit.
+// TestTerminalState verifies the -T '%c' handling: records that cannot be
+// associated with a terminal use a space, while a user record with an unknown
+// terminal uses '?'.
 func TestTerminalState(t *testing.T) {
 	if got := terminalState(session.Record{Type: "DEAD_PROCESS", TTY: "pts/1"}); got != ' ' {
 		t.Fatalf("dead terminalState=%q, want space", got)
@@ -481,8 +481,31 @@ func TestWhoTLoginHasNoStateField(t *testing.T) {
 	if code := run(rc, []string{"-H", "-T", "-l", "utmp"}); code != 0 || out.String() != "NAME     LINE         TIME\nLOGIN tty2 Nov 14 22:13\n" {
 		t.Fatalf("-H -T -l exact fields: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
-	if stateFieldExists(session.Record{Type: "LOGIN_PROCESS"}) || stateFieldExists(session.Record{Type: "INIT_PROCESS"}) {
-		t.Fatal("LOGIN_PROCESS and INIT_PROCESS must not expose a state field")
+	if stateFieldExists(session.Record{Type: "LOGIN_PROCESS"}) {
+		t.Fatal("LOGIN_PROCESS must not expose a state field")
+	}
+	if !stateFieldExists(session.Record{Type: "INIT_PROCESS"}) {
+		t.Fatal("INIT_PROCESS must retain the -T state field")
+	}
+}
+
+// POSIX exempts only -l LOGIN_PROCESS records from the -T state field.
+// INIT_PROCESS records selected by -p retain it; a space is used when the
+// entry is not associated with a terminal, and a real tty reports +, -, or ?.
+func TestWhoTProcessRetainsStateField(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("- - 1700000000 - INIT_PROCESS 17\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"TZ=UTC", "LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := run(rc, []string{"-T", "-p", "utmp"})
+	if code != 0 || errb.String() != "" {
+		t.Fatalf("who -Tp: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	fields := strings.Fields(out.String())
+	if len(fields) < 3 || fields[0] != "-" || fields[1] != "?" {
+		t.Fatalf("INIT_PROCESS -T output lost its state field: %q", out.String())
 	}
 }
 

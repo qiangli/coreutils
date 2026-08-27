@@ -457,18 +457,28 @@ func TestGrepStandalonePreservesLexicalOperands(t *testing.T) {
 	}
 }
 
-type grepFailWriter struct{ err error }
+type grepFailWriter struct {
+	err   error
+	short bool
+}
 
-func (w grepFailWriter) Write([]byte) (int, error) { return 0, w.err }
+func (w grepFailWriter) Write(p []byte) (int, error) {
+	if w.short && len(p) > 0 {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
 
 func TestGrepOutputErrorIsDiagnosticStatusTwo(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		args []string
+		name  string
+		args  []string
+		short bool
 	}{
-		{"literal-buffer-flush", []string{"match"}},
-		{"regexp-line", []string{"m.tch"}},
-		{"files-with-match", []string{"-l", "match"}},
+		{"literal-buffer-flush", []string{"match"}, false},
+		{"regexp-line", []string{"m.tch"}, false},
+		{"files-with-match", []string{"-l", "match"}, false},
+		{"short-write", []string{"m.tch"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var errOut bytes.Buffer
@@ -476,7 +486,7 @@ func TestGrepOutputErrorIsDiagnosticStatusTwo(t *testing.T) {
 				Ctx: context.Background(),
 				Stdio: tool.Stdio{
 					In:  strings.NewReader("match\n"),
-					Out: grepFailWriter{err: errors.New("broken pipe")},
+					Out: grepFailWriter{err: errors.New("broken pipe"), short: tc.short},
 					Err: &errOut,
 				},
 			}
@@ -484,8 +494,12 @@ func TestGrepOutputErrorIsDiagnosticStatusTwo(t *testing.T) {
 				t.Errorf("write error status = %d, want 2", code)
 			}
 			got := strings.ToLower(errOut.String())
-			if !strings.Contains(got, "grep: write error: broken pipe") {
-				t.Errorf("write error diagnostic = %q", got)
+			wantErr := "broken pipe"
+			if tc.short {
+				wantErr = "short write"
+			}
+			if !strings.Contains(got, "grep: write error: "+wantErr) {
+				t.Errorf("write error diagnostic = %q, want %q", got, wantErr)
 			}
 			if n := strings.Count(got, "write error"); n != 1 {
 				t.Errorf("write error diagnostic count = %d, want 1: %q", n, got)
