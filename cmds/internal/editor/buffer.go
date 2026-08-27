@@ -13,6 +13,12 @@ type Buffer struct {
 	Dirty   bool
 }
 
+// Clone returns an independent snapshot suitable for ed's one-command undo.
+func (b Buffer) Clone() Buffer {
+	b.Lines = append([]string(nil), b.Lines...)
+	return b
+}
+
 func (b *Buffer) Last() int { return len(b.Lines) }
 
 func (b *Buffer) Reset(lines []string, dirty bool) {

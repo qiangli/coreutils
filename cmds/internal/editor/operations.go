@@ -1,0 +1,387 @@
+package editor
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/qiangli/coreutils/pkg/bre"
+)
+
+func (e *Engine) changeLines(first, last int, lines []string) error {
+	e.saveUndo()
+	if e.Buffer.Last() == 0 && (first == 0 || first == 1) && (last == 0 || last == 1) {
+		err := e.appendLinesNoUndo(0, lines)
+		if err == nil && len(lines) > 0 {
+			e.changeSeq++
+		}
+		return err
+	}
+	if err := e.deleteLinesNoUndo(first, last); err != nil {
+		return err
+	}
+	if len(lines) == 0 {
+		e.changeSeq++
+		return nil
+	}
+	err := e.appendLinesNoUndo(first-1, lines)
+	if err == nil {
+		e.changeSeq++
+	}
+	return err
+}
+
+func (e *Engine) appendLinesNoUndo(after int, lines []string) error {
+	if err := e.Buffer.Append(after, lines); err != nil {
+		return err
+	}
+	for k, n := range e.marks {
+		if n > after {
+			e.marks[k] = n + len(lines)
+		}
+	}
+	e.adjustGlobalInsert(after, len(lines))
+	return nil
+}
+
+func (e *Engine) deleteLinesNoUndo(first, last int) error {
+	if err := e.Buffer.Delete(first, last); err != nil {
+		return err
+	}
+	delta := last - first + 1
+	e.adjustGlobalDelete(first, last)
+	for k, n := range e.marks {
+		if n >= first && n <= last {
+			delete(e.marks, k)
+		} else if n > last {
+			e.marks[k] = n - delta
+		}
+	}
+	return nil
+}
+
+func (e *Engine) join(first, last int) error {
+	if first < 1 || last < first || last > e.Buffer.Last() {
+		return fmt.Errorf("invalid address")
+	}
+	if first == last {
+		return nil
+	}
+	e.saveUndo()
+	joined := strings.Join(append([]string(nil), e.Buffer.Lines[first-1:last]...), "")
+	var joinedMarks []byte
+	for k, n := range e.marks {
+		if n >= first && n <= last {
+			joinedMarks = append(joinedMarks, k)
+		}
+	}
+	if err := e.deleteLinesNoUndo(first, last); err != nil {
+		return err
+	}
+	if err := e.appendLinesNoUndo(first-1, []string{joined}); err != nil {
+		return err
+	}
+	for _, k := range joinedMarks {
+		e.marks[k] = first
+	}
+	e.changeSeq++
+	return nil
+}
+
+func (e *Engine) addressAndSuffix(arg string) (int, byte, error) {
+	pos := skipBlank(arg, 0)
+	a, next, ok, err := e.parseAddress(arg, pos)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !ok {
+		return 0, 0, fmt.Errorf("destination address required")
+	}
+	style, err := printSuffix(arg[next:])
+	return a, style, err
+}
+
+func (e *Engine) copy(first, last, dest int) error {
+	if dest < 0 || dest > e.Buffer.Last() {
+		return fmt.Errorf("invalid address")
+	}
+	lines := append([]string(nil), e.Buffer.Lines[first-1:last]...)
+	return e.appendLines(dest, lines)
+}
+
+func (e *Engine) move(first, last, dest int) error {
+	if dest < 0 || dest > e.Buffer.Last() || (dest >= first && dest <= last) {
+		return fmt.Errorf("invalid destination")
+	}
+	e.saveUndo()
+	lines := append([]string(nil), e.Buffer.Lines[first-1:last]...)
+	// Preserve marks attached to moved lines by remembering their offsets.
+	movedMarks := map[byte]int{}
+	for k, n := range e.marks {
+		if n >= first && n <= last {
+			movedMarks[k] = n - first
+		}
+	}
+	if err := e.deleteLinesNoUndo(first, last); err != nil {
+		return err
+	}
+	if dest > last {
+		dest -= last - first + 1
+	}
+	if err := e.appendLinesNoUndo(dest, lines); err != nil {
+		return err
+	}
+	for k, off := range movedMarks {
+		e.marks[k] = dest + 1 + off
+	}
+	e.changeSeq++
+	return nil
+}
+
+func (e *Engine) readFile(after int, arg string) error {
+	name := trimBlank(arg)
+	var data []byte
+	var err error
+	if strings.HasPrefix(name, "!") {
+		if e.Shell == nil {
+			return fmt.Errorf("shell escapes unavailable")
+		}
+		command := trimBlank(name[1:])
+		if command == "" {
+			return fmt.Errorf("shell command required")
+		}
+		data, err = e.Shell(command, nil)
+	} else {
+		if name == "" {
+			name = e.Filename
+		}
+		if name == "" {
+			return fmt.Errorf("no current filename")
+		}
+		data, err = e.Files.Read(name)
+	}
+	if err != nil {
+		return err
+	}
+	if err := e.appendLines(after, splitText(data)); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(trimBlank(arg), "!") && e.Filename == "" {
+		e.Filename = name
+	}
+	if !e.Silent {
+		fmt.Fprintln(e.Out, len(data))
+	}
+	return nil
+}
+
+func (e *Engine) shellEscape(arg string) error {
+	if e.Shell == nil {
+		return fmt.Errorf("shell escapes unavailable")
+	}
+	command, expanded, err := e.prepareShell(trimBlank(arg))
+	if err != nil {
+		return err
+	}
+	if expanded {
+		fmt.Fprintln(e.Out, command)
+	}
+	out, err := e.Shell(command, nil)
+	if len(out) > 0 {
+		if _, werr := e.Out.Write(out); werr != nil && err == nil {
+			err = werr
+		}
+	}
+	if err == nil && !e.Silent {
+		_, err = fmt.Fprintln(e.Out, "!")
+	}
+	return err
+}
+
+// prepareShell applies ed's command-line substitutions before invoking sh.
+// A leading unescaped '!' recalls the previous command, while every unescaped
+// '%' denotes the current filename. A backslash quotes either special byte and
+// is removed before the command reaches the shell.
+func (e *Engine) prepareShell(command string) (string, bool, error) {
+	if command == "" {
+		return "", false, fmt.Errorf("shell command required")
+	}
+	replaced := false
+	if command[0] == '!' {
+		if e.lastShell == "" {
+			return "", false, fmt.Errorf("no previous shell command")
+		}
+		command = e.lastShell + command[1:]
+		replaced = true
+	}
+	var expanded strings.Builder
+	for i := 0; i < len(command); i++ {
+		if command[i] == '\\' && i+1 < len(command) &&
+			(command[i+1] == '%' || command[i+1] == '!') {
+			expanded.WriteByte(command[i+1])
+			i++
+			continue
+		}
+		if command[i] == '%' {
+			if e.Filename == "" {
+				return "", false, fmt.Errorf("no current filename")
+			}
+			expanded.WriteString(e.Filename)
+			replaced = true
+			continue
+		}
+		expanded.WriteByte(command[i])
+	}
+	e.lastShell = expanded.String()
+	return e.lastShell, replaced, nil
+}
+
+func (e *Engine) global(addrs []int, explicit bool, arg string, match, interactive bool) error {
+	first, last, err := e.twoAddresses(addrs, explicit, 1, e.Buffer.Last(), false)
+	if err != nil {
+		return err
+	}
+	if arg == "" {
+		return fmt.Errorf("missing regular expression")
+	}
+	delim, delimLen := e.commandDelimiter(arg)
+	if delim == " " || delim == "\n" {
+		return fmt.Errorf("invalid regular expression delimiter")
+	}
+	pattern, rest, closed, err := delimitedBy(arg[delimLen:], delim)
+	if err != nil {
+		return fmt.Errorf("unterminated regular expression")
+	}
+	if !closed {
+		rest = ""
+	}
+	if pattern == "" {
+		pattern = e.lastRE
+	}
+	if pattern == "" {
+		return fmt.Errorf("no previous regular expression")
+	}
+	re, err := bre.Compile(pattern)
+	if err != nil {
+		return err
+	}
+	e.lastRE = pattern
+	command := trimBlank(rest)
+	if interactive && command != "" {
+		return fmt.Errorf("unexpected interactive global command")
+	}
+	if command == "" && !interactive {
+		command = "p"
+	}
+	for !interactive && strings.HasSuffix(command, "\\") {
+		command = strings.TrimSuffix(command, "\\")
+		next, readErr := e.readCommandLine()
+		if readErr != nil && len(next) == 0 {
+			return fmt.Errorf("unterminated command list")
+		}
+		command += "\n" + strings.TrimSuffix(next, "\n")
+	}
+	targets := make([]int, 0)
+	for n := first; n <= last; n++ {
+		if re.MatchString(e.Buffer.Lines[n-1]) == match {
+			targets = append(targets, n)
+		}
+	}
+	oldUndo, oldUndoMarks, oldUndoValid := e.undoBuffer.Clone(), cloneMarks(e.undoMarks), e.undoValid
+	beforeSeq := e.changeSeq
+	e.saveUndo()
+	e.inGlobal = true
+	e.globalTargets = targets
+	defer func() {
+		e.inGlobal = false
+		e.globalTargets = nil
+		if beforeSeq == e.changeSeq {
+			e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
+		}
+	}()
+	previousInteractive := ""
+	for targetIndex := range e.globalTargets {
+		n := e.globalTargets[targetIndex]
+		if n == 0 {
+			continue
+		}
+		// A command that changes this line must not cause it to be selected
+		// again. Address-shifting helpers keep the remaining entries aligned.
+		e.globalTargets[targetIndex] = 0
+		e.Buffer.Current = n
+		lineCommand := command
+		if interactive {
+			fmt.Fprintln(e.Out, e.Buffer.Lines[n-1])
+			var readErr error
+			lineCommand, readErr = e.readCommandLine()
+			if readErr != nil && len(lineCommand) == 0 {
+				return readErr
+			}
+			lineCommand = strings.TrimSuffix(lineCommand, "\n")
+			if lineCommand == "" {
+				continue
+			}
+			if lineCommand == "&" {
+				if previousInteractive == "" {
+					return fmt.Errorf("no previous interactive command")
+				}
+				lineCommand = previousInteractive
+			} else {
+				previousInteractive = lineCommand
+			}
+			_, p, _, parseErr := e.parseAddresses(lineCommand)
+			if parseErr != nil {
+				return parseErr
+			}
+			p = skipBlank(lineCommand, p)
+			if p < len(lineCommand) && strings.ContainsRune("acigGvV", rune(lineCommand[p])) {
+				return fmt.Errorf("command not permitted in interactive global")
+			}
+		}
+		quit, execErr := e.executeGlobalList(lineCommand)
+		if execErr != nil {
+			return execErr
+		}
+		if quit {
+			e.globalQuit = true
+			return nil
+		}
+	}
+	return nil
+}
+
+func (e *Engine) executeGlobalList(commands string) (bool, error) {
+	savedReader, savedInput := e.reader, e.lineInput
+	e.reader = bufio.NewReader(strings.NewReader(commands + "\n"))
+	e.lineInput = nil
+	defer func() {
+		e.reader, e.lineInput = savedReader, savedInput
+	}()
+	for {
+		line, err := e.readCommandLine()
+		if err != nil && len(line) == 0 {
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
+			return false, err
+		}
+		line = strings.TrimSuffix(line, "\n")
+		_, p, _, parseErr := e.parseAddresses(line)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		p = skipBlank(line, p)
+		if p < len(line) && strings.ContainsRune("gGvV", rune(line[p])) {
+			return false, fmt.Errorf("cannot nest global commands")
+		}
+		quit, execErr := e.execute(line)
+		if execErr != nil || quit {
+			return quit, execErr
+		}
+		if err != nil {
+			return false, nil
+		}
+	}
+}
