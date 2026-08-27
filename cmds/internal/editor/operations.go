@@ -165,14 +165,8 @@ func (e *Engine) readFile(after int, arg string) error {
 	if err != nil {
 		return err
 	}
-	if len(data) > 0 {
-		e.saveUndo()
-	}
 	if err := e.appendLines(after, splitText(data)); err != nil {
 		return err
-	}
-	if len(data) > 0 {
-		e.changeSeq++
 	}
 	if !strings.HasPrefix(trimBlank(arg), "!") && e.Filename == "" {
 		e.Filename = name
@@ -244,7 +238,7 @@ func (e *Engine) prepareShell(command string) (string, bool, error) {
 	return e.lastShell, replaced, nil
 }
 
-func (e *Engine) global(addrs []int, explicit bool, arg string, match, interactive bool) error {
+func (e *Engine) global(addrs []int, explicit bool, arg string, match, interactive bool) (retErr error) {
 	first, last, err := e.twoAddresses(addrs, explicit, 1, e.Buffer.Last(), false)
 	if err != nil {
 		return err
@@ -295,18 +289,28 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			targets = append(targets, n)
 		}
 	}
+	oldUndo, oldUndoMarks, oldUndoValid := e.undoBuffer.Clone(), cloneMarks(e.undoMarks), e.undoValid
 	beforeSeq := e.changeSeq
 	e.saveUndo()
+	previousInteractiveGlobal := e.interactiveGlobal
 	e.inGlobal = true
+	e.interactiveGlobal = interactive
 	e.globalTargets = targets
 	defer func() {
 		e.inGlobal = false
+		e.interactiveGlobal = previousInteractiveGlobal
 		e.globalTargets = nil
 		if beforeSeq == e.changeSeq {
-			// A completed global command owns the undo boundary, even when
-			// its command list made no change.
-			e.undoBuffer, e.undoMarks, e.undoValid = e.Buffer.Clone(), cloneMarks(e.marks), true
-			e.changeSeq++
+			if retErr != nil {
+				// A failed no-op global command must not hide the preceding
+				// successful editing operation from undo.
+				e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
+			} else {
+				// A completed global command owns the undo boundary, even when
+				// its command list made no change.
+				e.undoBuffer, e.undoMarks, e.undoValid = e.Buffer.Clone(), cloneMarks(e.marks), true
+				e.changeSeq++
+			}
 		}
 	}()
 	previousInteractive := ""

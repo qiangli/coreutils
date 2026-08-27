@@ -43,25 +43,26 @@ type Engine struct {
 	// It controls command delimiters and l output classification.
 	ByteLocale bool
 
-	lastRE          string
-	lastReplacement string
-	lastDiagnostic  string
-	lastShell       string
-	promptSetting   string
-	help            bool
-	hadError        bool
-	quitArmed       bool
-	editArmed       bool
-	reader          *bufio.Reader
-	lineInput       <-chan lineResult
-	marks           map[byte]int
-	undoBuffer      Buffer
-	undoMarks       map[byte]int
-	undoValid       bool
-	inGlobal        bool
-	globalQuit      bool
-	globalTargets   []int
-	changeSeq       uint64
+	lastRE            string
+	lastReplacement   string
+	lastDiagnostic    string
+	lastShell         string
+	promptSetting     string
+	help              bool
+	hadError          bool
+	quitArmed         bool
+	editArmed         bool
+	reader            *bufio.Reader
+	lineInput         <-chan lineResult
+	marks             map[byte]int
+	undoBuffer        Buffer
+	undoMarks         map[byte]int
+	undoValid         bool
+	inGlobal          bool
+	interactiveGlobal bool
+	globalQuit        bool
+	globalTargets     []int
+	changeSeq         uint64
 }
 
 // Load replaces the buffer from name and remembers it as the default file.
@@ -997,9 +998,9 @@ func (e *Engine) substitute(first, last int, arg string) error {
 		changed, lastChanged = true, n+len(pieces)-1
 	}
 	if !changed {
-		if e.inGlobal {
+		if e.interactiveGlobal {
 			// A substitution which finds no match on one selected line is a
-			// no-op for that line, not a failure of the global command.
+			// no-op for that line during an interactive global command.
 			return nil
 		}
 		e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid

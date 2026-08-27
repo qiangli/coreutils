@@ -109,12 +109,22 @@ func TestPOSIXGlobalSkipsMarkedLineDeletedByEarlierCommand(t *testing.T) {
 	}
 }
 
-func TestPOSIXGlobalNoMatchIsPerLineNoOpAndConsumesUndo(t *testing.T) {
-	// The inner substitution has no match. ed treats that as a no-op for
-	// this global target, continues, and does not let u reach an older change.
-	in := "a\nx\n.\ng/x/s/y/z/\nu\n1,$p\nQ\n"
+func TestPOSIXInteractiveGlobalNoMatchIsPerLineNoOpAndConsumesUndo(t *testing.T) {
+	// The inner substitution has no match. Interactive global treats that as
+	// a no-op for this target and does not let u reach an older change.
+	in := "a\nx\n.\nG/x/\ns/y/z/\nu\n1,$p\nQ\n"
 	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
-	if code != 0 || errb != "" || out != "x\n" {
+	if code != 0 || errb != "" || out != "x\nx\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXNonInteractiveGlobalNoMatchFailsAndPreservesUndo(t *testing.T) {
+	// A substitution failure in non-interactive global is a command error.
+	// Its failed no-op must leave the preceding append reachable by undo.
+	in := "a\nx\n.\ng/x/s/y/z/\nu\n=\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 1 || errb != "" || out != "?\n0\n" {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
 	}
 }
