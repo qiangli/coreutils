@@ -11,7 +11,3 @@ func processExists(pid int) bool {
 	}
 	return true
 }
-
-func inodeKey(fi os.FileInfo) uint64 {
-	return 0
-}

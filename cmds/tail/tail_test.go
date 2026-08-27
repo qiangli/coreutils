@@ -287,6 +287,61 @@ func TestTailFollowByName(t *testing.T) {
 	}
 }
 
+// TestTailFollowByNameDetectsSameSizeRotation pins that --follow=name
+// recognizes a replaced file (remove+recreate, as log rotation does) by
+// identity, not just by a size change. The replacement content here is
+// deliberately the same byte length as the original so that a size-only
+// comparison would never notice the swap; --max-unchanged-stats is set high
+// enough that the unrelated no-change reopen fallback cannot mask a broken
+// identity check within the test's short window.
+func TestTailFollowByNameDetectsSameSizeRotation(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "test.log", "AAAA\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   ctx,
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var code int
+	go func() {
+		defer wg.Done()
+		code = cmd.Run(rc, []string{"--follow=name", "-s", "0.05", "--max-unchanged-stats", "100000", "test.log"})
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+
+	// Replace the file atomically (rename over the old path, as real log
+	// rotation does) so there is no window where the path is briefly
+	// missing; a remove-then-recreate gap would spuriously fail the
+	// unretried stat in the follow loop and is not what this test targets.
+	path := filepath.Join(dir, "test.log")
+	replacement := filepath.Join(dir, "test.log.new")
+	writeFile(t, dir, "test.log.new", "BBBB\n") // same byte length as the original
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	wg.Wait()
+
+	outStr := out.String()
+	if code != 0 {
+		t.Errorf("exit code: got %d, want 0", code)
+	}
+	if !strings.Contains(outStr, "BBBB\n") {
+		t.Errorf("same-size rotation not detected by identity: %q", outStr)
+	}
+}
+
 func TestTailFollowF(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "test.log", "line1\nline2\nline3\n")

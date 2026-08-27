@@ -276,13 +276,13 @@ func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
 
 	unchanged := 0
 	lastSize := int64(-1)
-	lastIno := uint64(0)
+	var lastInfo os.FileInfo
 
 	if f != nil {
 		fi, err := f.Stat()
 		if err == nil {
 			lastSize = fi.Size()
-			lastIno = inodeKey(fi)
+			lastInfo = fi
 		}
 	}
 
@@ -327,8 +327,13 @@ func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
 				return fmt.Errorf("cannot stat %q: %v", fo.name, err)
 			}
 
-			newIno := inodeKey(fi)
-			if newIno != lastIno && lastIno != 0 {
+			// A file replaced in place (log rotation via rename+recreate,
+			// or truncate-then-rewrite that also changes identity) gets a new
+			// inode/file-index even when its size happens to match the old
+			// file's. Detect that by identity, not just by size, so rotation
+			// is picked up immediately instead of waiting for
+			// max-unchanged-stats iterations of an apparently-unchanged size.
+			if lastInfo != nil && !os.SameFile(lastInfo, fi) {
 				if f != nil {
 					f.Close()
 				}
@@ -338,13 +343,13 @@ func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
 				}
 				if f != nil {
 					fi, _ = f.Stat()
-					lastIno = inodeKey(fi)
+					lastInfo = fi
 				}
 				lastSize = -1
 				unchanged = 0
 				continue
 			}
-			lastIno = newIno
+			lastInfo = fi
 
 			if fi.Size() == lastSize {
 				unchanged++

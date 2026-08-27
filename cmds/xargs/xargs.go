@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -715,9 +714,7 @@ func commandSizeLimit(env []string) int {
 	return limit
 }
 
-var ttyOpener = func() (io.ReadCloser, error) {
-	return os.Open("/dev/tty")
-}
+var ttyOpener = defaultTTYOpener
 
 // execBatches runs the planned invocations (parallel when -P>1) and returns the
 // xargs exit status.

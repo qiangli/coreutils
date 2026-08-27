@@ -178,7 +178,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tabs` | `cmds/tabs` | — | POSIX/Unix utility | no | yes | 2 | 21 |
 | `tac` | `cmds/tac` | — | GNU Coreutils | yes | no | 1 | 6 |
-| `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 3 | 27 |
+| `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 3 | 28 |
 | `talk` | `cmds/talk` | — | POSIX/Unix utility | no | yes | 6 | 24 |
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 30 |
@@ -212,7 +212,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
 | `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 5 | 84 |
-| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 50 |
+| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 4 | 51 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 
