@@ -3,6 +3,7 @@ package ducmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -148,6 +149,50 @@ func TestDuIssue7SymlinkNotFollowedByDefault(t *testing.T) {
 	treeOut, _, _ := runToolAt(t, dir, "-A", "-s", "tree")
 	if treeN := parseFirstValue(t, strings.TrimSuffix(treeOut, "\n")); treeN <= 1 {
 		t.Fatalf("control tree total %d too small to discriminate; fixture is broken", treeN)
+	}
+}
+
+// TestDuIssue7OperandErrorsDoNotAbortLaterOperands pins CONSEQUENCES OF
+// ERRORS: an inaccessible operand is diagnosed and makes the final status
+// greater than zero, but later operands are still processed.
+func TestDuIssue7OperandErrorsDoNotAbortLaterOperands(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "good", strings.Repeat("x", 700))
+	out, errb, code := runToolAt(t, dir, "-A", "missing", "good")
+	if code != 1 || !strings.Contains(errb, "cannot access 'missing'") || out != "2 good\n" {
+		t.Fatalf("du missing good = (%q, %q, %d), want later operand output and nonzero status", out, errb, code)
+	}
+}
+
+// TestDuIssue7LastHLWinsForOperandSymlinks pins the mandatory -H/-L option
+// arbitration for symlink operands. With -H last, the root operand is followed;
+// with -L last, nested symlinks are followed as well.
+func TestDuIssue7LastHLWinsForOperandSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on many Windows setups")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "outside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "outside"), "payload", "1234567")
+	if err := os.Mkdir(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../outside", filepath.Join(dir, "target", "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "arg")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, paths := parseDu(t, dir, "-abLH", "arg")
+	if got := strings.Join(paths, " "); got != "arg/link arg" {
+		t.Fatalf("du -LH arg paths = %q, want final -H to follow only the operand symlink", got)
+	}
+	_, paths = parseDu(t, dir, "-abHL", "arg")
+	if got := strings.Join(paths, " "); got != "arg/link/payload arg/link arg" {
+		t.Fatalf("du -HL arg paths = %q, want final -L to follow nested symlinks", got)
 	}
 }
 

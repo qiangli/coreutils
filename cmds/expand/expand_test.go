@@ -35,6 +35,16 @@ func TestExpandDefaultTabsFromStdin(t *testing.T) {
 	}
 }
 
+func TestExpandIssue7AttachedTablistAndRepeatedStdinOperands(t *testing.T) {
+	out, stderr, code := runExpand(t, "a\tb\nc\td\n", "-t4", "-", "-")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "a   b\nc   d\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestExpandCustomTabsAndFile(t *testing.T) {
 	dir := t.TempDir()
 	name := filepath.Join(dir, "in.txt")

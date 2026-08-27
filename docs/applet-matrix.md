@@ -73,17 +73,17 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 6 | 78 |
 | `df` | `cmds/df` | — | GNU Coreutils | yes | yes | 2 | 30 |
-| `diff` | `cmds/diff` | — | POSIX/Unix utility | no | yes | 4 | 42 |
+| `diff` | `cmds/diff` | — | POSIX/Unix utility | no | yes | 5 | 46 |
 | `dir` | `cmds/dir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `dircolors` | `cmds/dircolors` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `dirname` | `cmds/dirname` | — | GNU Coreutils | yes | yes | 1 | 6 |
-| `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 3 | 35 |
+| `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 3 | 37 |
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
 | `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 33 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 32 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
-| `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 27 |
+| `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 28 |
 | `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 13 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
