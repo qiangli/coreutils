@@ -371,6 +371,41 @@ func RewriteMbox(path string, entries []MboxEntry) error {
 	return rewriteMboxLocked(path, entries)
 }
 
+// MergeMbox atomically inserts complete messages at the beginning or end of
+// a mailbox. It is used for POSIX mailx's append/noappend MBOX disposition.
+func MergeMbox(path string, entries []MboxEntry, appendAtEnd bool) error {
+	if path == "" {
+		return ErrMissingMailbox
+	}
+	if err := makeMailboxParent(path); err != nil {
+		return err
+	}
+	unlock, err := acquireLock(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := readMailboxFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		data = nil
+	} else if err != nil {
+		return err
+	}
+	old, err := ParseMbox(data)
+	if err != nil {
+		return err
+	}
+	merged := make([]MboxEntry, 0, len(old)+len(entries))
+	if appendAtEnd {
+		merged = append(merged, old...)
+		merged = append(merged, entries...)
+	} else {
+		merged = append(merged, entries...)
+		merged = append(merged, old...)
+	}
+	return rewriteMboxLocked(path, merged)
+}
+
 // CommitMbox removes entries marked deleted from snapshot. The complete
 // operation is one mailbox transaction: it locks, rereads, verifies that the
 // snapshot is still an unchanged prefix, and rewrites that prefix while
@@ -378,11 +413,30 @@ func RewriteMbox(path string, entries []MboxEntry) error {
 // snapshot entry was edited, removed, or reordered, ErrMailboxChanged is
 // returned and the mailbox is left untouched.
 func CommitMbox(path string, snapshot []MboxEntry, deleted []bool) error {
+	keep := make([]bool, len(deleted))
+	for i := range deleted {
+		keep[i] = !deleted[i]
+	}
+	return CommitMboxChanges(path, snapshot, snapshot, keep)
+}
+
+// CommitMboxChanges transactionally replaces or removes entries from a
+// previously-read prefix while preserving messages appended concurrently.
+// The original snapshot is used only for optimistic concurrency validation;
+// updated supplies the replacement for each retained snapshot entry.
+func CommitMboxChanges(path string, snapshot, updated []MboxEntry, keep []bool) error {
+	return CommitMboxChangesKeep(path, snapshot, updated, keep, true)
+}
+
+// CommitMboxChangesKeep is CommitMboxChanges with POSIX mailx's keep/nokeep
+// empty-mailbox disposition. When keepEmpty is false, an empty mailbox is
+// removed while the mailbox lock is still held.
+func CommitMboxChangesKeep(path string, snapshot, updated []MboxEntry, keep []bool, keepEmpty bool) error {
 	if path == "" {
 		return ErrMissingMailbox
 	}
-	if len(snapshot) != len(deleted) {
-		return fmt.Errorf("%w: snapshot and deletion set differ in length", ErrMailboxChanged)
+	if len(snapshot) != len(updated) || len(snapshot) != len(keep) {
+		return fmt.Errorf("%w: snapshot, update, and retention sets differ in length", ErrMailboxChanged)
 	}
 	if err := makeMailboxParent(path); err != nil {
 		return err
@@ -412,12 +466,28 @@ func CommitMbox(path string, snapshot []MboxEntry, deleted []bool) error {
 		}
 	}
 	kept := make([]MboxEntry, 0, len(latest))
-	for i, entry := range snapshot {
-		if !deleted[i] {
-			kept = append(kept, entry)
+	for i := range snapshot {
+		if keep[i] {
+			kept = append(kept, updated[i])
 		}
 	}
 	kept = append(kept, latest[len(snapshot):]...)
+	if len(kept) == 0 && !keepEmpty {
+		current, exists, err := mailboxTarget(path)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		removeMailboxIfSame(path, current)
+		if _, exists, err := mailboxTarget(path); err != nil {
+			return err
+		} else if exists {
+			return ErrMailboxChanged
+		}
+		return nil
+	}
 	return rewriteMboxLocked(path, kept)
 }
 
