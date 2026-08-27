@@ -76,6 +76,136 @@ func TestColumnsAcross(t *testing.T) {
 	}
 }
 
+func TestPOSIXColumnsUseUniformWidth(t *testing.T) {
+	dir := mkNames(t, "1", "12", "123", "1234", "12345", "123456", "xxxx1", "xxxx123456")
+	out, errOut, code := runToolEnv(t, dir, []string{"POSIXLY_CORRECT=1", "COLUMNS=40"}, "-x")
+	if code != 0 || errOut != "" {
+		t.Fatalf("ls -x: code=%d stderr=%q output=%q", code, errOut, out)
+	}
+	// Every non-final cell begins at the same pitch. Variable per-column
+	// widths violate the Issue 7 requirement that one directory use one
+	// column width.
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected multiple rows, got %q", out)
+	}
+	starts := func(line string) []int {
+		var result []int
+		inWord := false
+		for i := 0; i < len(line); i++ {
+			if line[i] != ' ' && !inWord {
+				result = append(result, i)
+				inWord = true
+			} else if line[i] == ' ' {
+				inWord = false
+			}
+		}
+		return result
+	}
+	want := starts(lines[0])
+	for _, line := range lines[1:] {
+		got := starts(line)
+		for i := 0; i < len(got); i++ {
+			if i >= len(want) || got[i] != want[i] {
+				t.Fatalf("non-uniform column starts: output=%q first=%v got=%v", out, want, got)
+			}
+		}
+	}
+}
+
+func TestPOSIXStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := mkNames(t, "anchor", "-l", "--")
+	out, errOut, code := runToolEnv(t, dir, []string{"POSIXLY_CORRECT=1"}, "anchor", "-l", "--")
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q output=%q", code, errOut, out)
+	}
+	if out != "--\n-l\nanchor\n" {
+		t.Fatalf("post-operand option-like pathnames were parsed as options: %q", out)
+	}
+}
+
+func TestPOSIXFDisablesEarlierSortLongAndReverse(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"z", "a", "m"} {
+		write(t, dir, name, name)
+	}
+	env := []string{"POSIXLY_CORRECT=1"}
+	want, wantErr, wantCode := runToolEnv(t, dir, env, "-f")
+	got, gotErr, gotCode := runToolEnv(t, dir, env, "-ltSrf")
+	if wantCode != 0 || gotCode != 0 || wantErr != "" || gotErr != "" || got != want {
+		t.Fatalf("-f ordering: plain=(%d,%q,%q) combined=(%d,%q,%q)", wantCode, wantErr, want, gotCode, gotErr, got)
+	}
+	if strings.HasPrefix(got, "total ") {
+		t.Fatalf("-f did not disable earlier -l: %q", got)
+	}
+
+	// A later -t is significant and selects time sorting again.
+	old := filepath.Join(dir, "z")
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	tie := time.Now().Add(-time.Minute)
+	for _, name := range []string{"a", "m"} {
+		if err := os.Chtimes(filepath.Join(dir, name), tie, tie); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sorted, sortedErr, sortedCode := runToolEnv(t, dir, env, "-f", "-A", "-t")
+	if sortedCode != 0 || sortedErr != "" || sorted != "a\nm\nz\n" {
+		t.Fatalf("later -t did not replace -f sort mode: code=%d stderr=%q output=%q", sortedCode, sortedErr, sorted)
+	}
+}
+
+func TestPOSIXIssue7RequiredOptionSurface(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "plain", "data")
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("plain", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The Issue 7 ls synopsis has 26 required options and none takes an
+	// option-argument.  Exercise every spelling through the POSIX parser so a
+	// missing flag, an accidental required argument, or a parser regression is
+	// reported by the option's own subtest.
+	required := []string{
+		"-A", "-C", "-F", "-H", "-L", "-R", "-S", "-a", "-c", "-d",
+		"-f", "-g", "-i", "-k", "-l", "-m", "-n", "-o", "-p", "-q",
+		"-r", "-s", "-t", "-u", "-x", "-1",
+	}
+	for _, option := range required {
+		t.Run(strings.TrimPrefix(option, "-"), func(t *testing.T) {
+			out, errOut, code := runToolEnv(t, dir, []string{"POSIXLY_CORRECT=1", "COLUMNS=80"}, option, ".")
+			if code != 0 || errOut != "" {
+				t.Fatalf("ls %s .: code=%d stderr=%q stdout=%q", option, code, errOut, out)
+			}
+		})
+	}
+}
+
+func TestPOSIXIssue7OperandGrammar(t *testing.T) {
+	dir := mkNames(t, "a", "b", "-q")
+	env := []string{"POSIXLY_CORRECT=1"}
+
+	// No operand means the current directory; multiple file operands are
+	// collated together.  A leading -- permits a first operand beginning '-'.
+	defaultOut, defaultErr, defaultCode := runToolEnv(t, dir, env, "-1")
+	multiOut, multiErr, multiCode := runToolEnv(t, dir, env, "-1", "b", "a")
+	dashOut, dashErr, dashCode := runToolEnv(t, dir, env, "--", "-q")
+	if defaultCode != 0 || defaultErr != "" || defaultOut != "-q\na\nb\n" {
+		t.Fatalf("default operand: code=%d stderr=%q stdout=%q", defaultCode, defaultErr, defaultOut)
+	}
+	if multiCode != 0 || multiErr != "" || multiOut != "a\nb\n" {
+		t.Fatalf("multiple operands: code=%d stderr=%q stdout=%q", multiCode, multiErr, multiOut)
+	}
+	if dashCode != 0 || dashErr != "" || dashOut != "-q\n" {
+		t.Fatalf("-- operand: code=%d stderr=%q stdout=%q", dashCode, dashErr, dashOut)
+	}
+}
+
 // A name too wide for the line falls back to one entry per line, and
 // -w 0 means no limit at all.
 func TestColumnsWidthEdges(t *testing.T) {
