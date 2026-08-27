@@ -17,6 +17,7 @@ package patchcmd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -150,10 +151,10 @@ func run(rc *tool.RunContext, args []string) int {
 		if looksEd {
 			data = edScript
 		}
-		return runEdScript(rc, data, origFile, edIndex, *strip, *directory, *output, *backup, *dryRun, *ifdef)
+		return runEdScript(rc, data, origFile, edIndex, *strip, *directory, *output, *rejectFile, *backup, *dryRun, *ifdef)
 	}
 	if formatHints == 0 && looksEd {
-		return runEdScript(rc, edScript, origFile, edIndex, *strip, *directory, *output, *backup, *dryRun, *ifdef)
+		return runEdScript(rc, edScript, origFile, edIndex, *strip, *directory, *output, *rejectFile, *backup, *dryRun, *ifdef)
 	}
 
 	parsed, err := patch.Parse(data)
@@ -294,7 +295,7 @@ func describeErr(err error) string {
 	return err.Error()
 }
 
-func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string, strip int, directory, output string, backup, dryRun bool, define string) int {
+func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string, strip int, directory, output, rejectFile string, backup, dryRun bool, define string) int {
 	if origFile == "" && indexName != "" {
 		candidate := stripComponents(indexName, strip)
 		if strip == autoStripSentinel {
@@ -327,11 +328,15 @@ func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string,
 	} else {
 		result, err = patch.ApplyEd(content, script)
 	}
-	if err != nil {
+	var rejected *patch.EdRejectError
+	if err != nil && !errors.As(err, &rejected) {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
 		return 2
 	}
 	if dryRun {
+		if rejected != nil {
+			return 1
+		}
 		return 0
 	}
 	outPath := target
@@ -344,15 +349,38 @@ func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string,
 	if existed {
 		mode = fi.Mode().Perm()
 	}
-	if backup && existed {
+	writeOutput := output != "" || rejected == nil || rejected.Applied
+	if backup && existed && writeOutput {
 		if err := backupFile(outPath); err != nil {
 			fmt.Fprintf(rc.Err, "%s: backup failed: %s\n", cmd.Name, describeErr(err))
 			return 2
 		}
 	}
-	if err := writeFileContent(rc, outPath, result, mode, existed); err != nil {
-		fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
-		return 2
+	if writeOutput {
+		if err := writeFileContent(rc, outPath, result, mode, existed); err != nil {
+			fmt.Fprintf(rc.Err, "%s: %s\n", cmd.Name, describeErr(err))
+			return 2
+		}
+	}
+	if rejected != nil {
+		rejPath := outPath + ".rej"
+		if rejectFile != "" {
+			rejPath = resolveOperandPath(rc, directory, rejectFile)
+		}
+		rejData := patch.WriteRejectFormat("", "", patch.FormatNormal, rejected.Hunks)
+		rej, writeErr := rc.OpenFile(rejPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if writeErr == nil {
+			_, writeErr = rej.Write(rejData)
+			if closeErr := rej.Close(); writeErr == nil {
+				writeErr = closeErr
+			}
+		}
+		if writeErr != nil {
+			fmt.Fprintf(rc.Err, "%s: could not write reject file: %s\n", cmd.Name, describeErr(writeErr))
+			return 2
+		}
+		fmt.Fprintf(rc.Err, "%d ed-style differences failed -- saving rejects to file %s\n", len(rejected.Hunks), rejPath)
+		return 1
 	}
 	return 0
 }

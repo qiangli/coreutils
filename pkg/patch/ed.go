@@ -9,6 +9,18 @@ import (
 
 var edCommandRE = regexp.MustCompile(`^(?:(\d+)(?:,(\d+))?)?([acdi])$`)
 
+// EdRejectError reports syntactically valid diff -e portions whose addresses
+// could not be placed. Result bytes returned alongside this error include all
+// other portions that could be applied.
+type EdRejectError struct {
+	Hunks   []Hunk
+	Applied bool
+}
+
+func (e *EdRejectError) Error() string {
+	return fmt.Sprintf("patch: %d ed-style difference(s) could not be placed", len(e.Hunks))
+}
+
 // ExtractEdScript finds the first command emitted by diff -e after optional
 // patch header material. It returns the script proper and the nearest Index:
 // pathname so the CLI can perform normal filename determination.
@@ -66,6 +78,8 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 	lines, noEOL := bytesToLines(content)
 	physical := strings.Split(strings.TrimSuffix(string(script), "\n"), "\n")
 	current := 0 // ed's current line address, one-based; zero is before line 1.
+	var rejects []Hunk
+	applied := false
 	for i := 0; i < len(physical); {
 		command := strings.TrimSuffix(physical[i], "\r")
 		i++
@@ -73,9 +87,11 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 		// ".." and then emitting this substitution against the current line.
 		if command == "s/.//" {
 			if current < 1 || current > len(lines) || lines[current-1] == "" {
-				return nil, fmt.Errorf("patch: ed substitution has no non-empty current line")
+				rejects = append(rejects, edRejectHunk(current, current, "s", nil))
+				continue
 			}
 			lines[current-1] = lines[current-1][1:]
+			applied = true
 			continue
 		}
 		m := edCommandRE.FindStringSubmatch(command)
@@ -113,7 +129,8 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 		switch m[3] {
 		case "a":
 			if last > len(lines) {
-				return nil, fmt.Errorf("patch: ed address %d exceeds file length %d", last, len(lines))
+				rejects = append(rejects, edRejectHunk(first, last, m[3], text))
+				continue
 			}
 			inserted := text
 			if define != "" {
@@ -127,9 +144,11 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 			if last == oldLen {
 				noEOL = false
 			}
+			applied = true
 		case "d":
 			if first < 1 || last > len(lines) {
-				return nil, fmt.Errorf("patch: ed range %d,%d exceeds file length %d", first, last, len(lines))
+				rejects = append(rejects, edRejectHunk(first, last, m[3], text))
+				continue
 			}
 			replacement := []string(nil)
 			if define != "" {
@@ -141,9 +160,14 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 			if last == oldLen {
 				noEOL = false
 			}
+			applied = true
 		case "c":
+			if first == 0 {
+				first, last = 1, max(last, 1)
+			}
 			if first < 1 || last > len(lines) {
-				return nil, fmt.Errorf("patch: ed range %d,%d exceeds file length %d", first, last, len(lines))
+				rejects = append(rejects, edRejectHunk(first, last, m[3], text))
+				continue
 			}
 			replacement := text
 			if define != "" {
@@ -160,12 +184,14 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 			if last == oldLen {
 				noEOL = false
 			}
+			applied = true
 		case "i":
 			if first == 0 {
 				first = 1
 			}
 			if first < 1 || first > len(lines) {
-				return nil, fmt.Errorf("patch: ed address %d exceeds file length %d", first, len(lines))
+				rejects = append(rejects, edRejectHunk(first, first, m[3], text))
+				continue
 			}
 			inserted := text
 			if define != "" {
@@ -176,9 +202,36 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 			if define != "" && len(text) > 0 {
 				current--
 			}
+			applied = true
 		}
 	}
-	return linesToBytes(lines, noEOL), nil
+	result := linesToBytes(lines, noEOL)
+	if len(rejects) != 0 {
+		return result, &EdRejectError{Hunks: rejects, Applied: applied}
+	}
+	return result, nil
+}
+
+func edRejectHunk(first, last int, operation string, text []string) Hunk {
+	start := max(first-1, 0)
+	h := Hunk{OldStart: start, NewStart: start}
+	switch operation {
+	case "a":
+		h.OldStart, h.NewStart = max(last, 0), max(last, 0)
+	case "i":
+		// Insertion is before the addressed line.
+	case "c":
+		h.OldCount = max(last-first+1, 0)
+	case "d", "s":
+		h.OldCount = max(last-first+1, 1)
+	}
+	if operation == "a" || operation == "i" || operation == "c" {
+		h.NewCount = len(text)
+		for _, line := range text {
+			h.Lines = append(h.Lines, HunkLine{Kind: LineAdd, Text: line})
+		}
+	}
+	return h
 }
 
 func conditionalAddition(text []string, define string) []string {

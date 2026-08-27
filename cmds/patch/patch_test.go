@@ -758,3 +758,31 @@ func TestMalformedEdScriptIsOperationalError(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
 }
+
+func TestEdPlacementFailureWritesCopiedContextRejectAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "one\ntwo\nthree\n")
+	script := "3c\nTHREE\n.\n99d\n1c\nONE\n.\n"
+	_, stderr, code := runIn(t, dir, script, "-e", "-r", "custom.rej", "f")
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s", code, stderr)
+	}
+	if got, want := readFile(t, dir, "f"), "ONE\ntwo\nTHREE\n"; got != want {
+		t.Fatalf("partial result=%q want=%q", got, want)
+	}
+	if got := readFile(t, dir, "custom.rej"); !strings.Contains(got, "***************\n*** 99 ****\n") || strings.Contains(got, "@@") {
+		t.Fatalf("reject is not copied-context: %q", got)
+	}
+}
+
+func TestWhollyRejectedEdScriptDoesNotCreateBackup(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f", "one\n")
+	_, stderr, code := runIn(t, dir, "99d\n", "-e", "-b", "f")
+	if code != 1 || exists(dir, "f.orig") {
+		t.Fatalf("code=%d backup=%v stderr=%s", code, exists(dir, "f.orig"), stderr)
+	}
+	if got := readFile(t, dir, "f"); got != "one\n" {
+		t.Fatalf("target changed: %q", got)
+	}
+}

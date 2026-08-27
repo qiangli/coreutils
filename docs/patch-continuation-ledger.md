@@ -24,9 +24,10 @@ provider definition, build recipe, cache entry, or fallback.
   per pathname; with `-o`, only a pre-existing output file is backed up.
 - Multi-file `-o` concatenation, including successive intermediate versions
   when several patch portions target the same file.
-- Rejects from unified, copied-context, and normal input are emitted as
-  copied-context, as required by Issue 7. Reversed rejects have swapped hunks
-  and filenames.
+- Rejects from unified, copied-context, normal, and ed-style input are emitted
+  as copied-context, as required by Issue 7. Ed-style placement failures use
+  the permitted zero-context form and do not prevent later commands from being
+  attempted. Reversed rejects have swapped hunks and filenames.
 
 The command and package tests cover parsing, all three textual formats, round
 trips, path stripping, reverse application, creates/deletes, rejects, backups,
@@ -52,7 +53,7 @@ sections.
 | filename determination / indentation / prompt | `TestIndexSelectsNormalDiffTarget`, `TestIndexExistingTargetPrecedesCreationFallback`, `TestParseIndexAndCommonIndent`, `TestMissingHeaderTargetPromptsForFilename`, `TestFilenamePromptIsWrittenToStdout` |
 | default reversal, `-R`, `-N` | `TestDefaultReversalPromptsAndAppliesReverse`, `TestCreationPatchAgainstPostimagePromptsAndRemovesOnReverse`, `TestAcceptedReversePersistsAcrossFollowingFilePortions`, `TestApplyReverseFlag`, `TestAlreadyAppliedRequiresForwardFlag` |
 | `-o` concatenation/intermediate versions | `TestIndentedPatchAndMultiFileOutput`, `TestOutputConcatenatesIntermediateVersionsForSameFile`, `TestOutputCarriesNewlyCreatedFileIntoLaterPortion` |
-| copied-context/unified rejects | `TestRejectUsesCopiedContext`, `TestApplyConflictWritesRejectAndExitsOne`, `TestReverseRejectSwapsHeadersAndHunk` |
+| copied-context rejects for every input form | `TestRejectUsesCopiedContext`, `TestApplyConflictWritesRejectAndExitsOne`, `TestEdPlacementFailureWritesCopiedContextRejectAndContinues`, `TestReverseRejectSwapsHeadersAndHunk` |
 
 The source-level POSIX interface is implemented. The manifest evidence state
 remains **partial** until the independent Profile D integration replay supplies
