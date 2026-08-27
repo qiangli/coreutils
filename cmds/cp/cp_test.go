@@ -719,6 +719,22 @@ func TestCpHelpAndVersion(t *testing.T) {
 	}
 }
 
+func TestCpPosixStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "source"), "payload")
+	if err := os.Mkdir(filepath.Join(dir, "-p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runToolWithInputEnv(t, dir, "", []string{"POSIXLY_CORRECT=1"}, "source", "-p")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp source -p in POSIX mode: code=%d stderr=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "-p", "source")); got != "payload" {
+		t.Fatalf("copied data = %q, want payload", got)
+	}
+}
+
 // TestCpInteractiveDecline pins the POSIX exit status: a declined -i
 // reply is the specified no-copy branch, not an error, so cp exits 0.
 func TestCpInteractiveDecline(t *testing.T) {

@@ -67,6 +67,16 @@ func run(rc *tool.RunContext, args []string) int {
 	args = foldRShorthand(args)
 	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		// POSIX Utility Syntax Guideline 9: once the operands begin, a later
+		// "-"-looking argument is itself an operand (e.g. a destination
+		// directory literally named "-p"), not a new option. GNU getopt
+		// applies this REQUIRE_ORDER rule
+		// exactly when POSIXLY_CORRECT is set; without it, GNU permits
+		// options anywhere (the tool.NewFlags default), so only disable
+		// permutation in POSIX mode.
+		fs.SetInterspersed(false)
+	}
 	recursive := fs.BoolP("recursive", "r", false, "copy directories recursively (-R is identical to -r)")
 	recursiveUpper := fs.BoolP("recursive-uppercase", "R", false, "copy directories recursively")
 	archive := fs.BoolP("archive", "a", false, "same as -dR --preserve=all")
