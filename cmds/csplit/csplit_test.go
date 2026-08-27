@@ -280,6 +280,49 @@ func TestCsplitLineNumberRepeatToEOFCleansUp(t *testing.T) {
 	}
 }
 
+// POSIX OPERANDS: a line_no operand is an addressable line, so the maximum
+// valid split is the last line itself (leaving it as the final piece). A
+// line_no equal to the line count splits there; one past the count is out of
+// range and must be diagnosed with a non-zero status and no output file — never
+// a fabricated empty trailing piece.
+func TestCsplitLineNumberRangeBoundary(t *testing.T) {
+	// N == number of lines: valid; last line becomes the final piece.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, errb, code := runTool(t, dir, "", "-s", "in", "3"); code != 0 || errb != "" {
+		t.Fatalf("N==lines: code=%d err=%q, want success", code, errb)
+	}
+	assertFile(t, dir, "xx00", "l1\nl2\n")
+	assertFile(t, dir, "xx01", "l3\n")
+
+	// N == lines+1: out of range, diagnosed, no files created.
+	dir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "-s", "in", "4")
+	if code == 0 || !strings.Contains(errb, "line number out of range") {
+		t.Fatalf("N==lines+1: code=%d err=%q, want out-of-range diagnostic", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "xx00")); !os.IsNotExist(err) {
+		t.Fatalf("N==lines+1 must not create xx00: stat err=%v", err)
+	}
+
+	// Two increasing line numbers where the second equals the line count.
+	dir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, errb, code := runTool(t, dir, "", "-s", "in", "2", "3"); code != 0 || errb != "" {
+		t.Fatalf("2 3: code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir, "xx00", "l1\n")
+	assertFile(t, dir, "xx01", "l2\n")
+	assertFile(t, dir, "xx02", "l3\n")
+}
+
 // An explicit repeat count that runs past EOF is an error.
 func TestCsplitLineNumberRepeatOutOfRange(t *testing.T) {
 	dir := t.TempDir()

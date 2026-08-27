@@ -296,7 +296,11 @@ func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, star
 		if err != nil {
 			return splitPoint{}, start, false, tool.NotSupported(rc, cmd, fmt.Sprintf("pattern form '%s' (supported: line numbers, /REGEXP/[+-N], %%REGEXP%%[+-N])", pattern))
 		}
-		if n < 1 || n > len(lines)+1 {
+		// POSIX: a line_no operand that exceeds the number of lines in the
+		// file is out of range. GNU errors on N > lines (the maximum valid
+		// split point is the last line itself, leaving it as the final
+		// piece); it never fabricates an empty trailing piece for N=lines+1.
+		if n < 1 || n > len(lines) {
 			return splitPoint{}, start, false, tool.UsageError(rc, cmd, "line number out of range: '%s'", pattern)
 		}
 		idx := n - 1

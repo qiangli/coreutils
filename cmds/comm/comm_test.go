@@ -62,6 +62,51 @@ func TestComm(t *testing.T) {
 	}
 }
 
+// POSIX STDOUT: comm writes three columns — column 1 (lines only in file1),
+// column 2 (only in file2, prefixed by one <tab>), column 3 (in both, prefixed
+// by two <tab>s). Each -1/-2/-3 suppresses its column AND removes the leading
+// <tab> that every printed column to its right carries, so the prefix count of
+// a printed column equals the number of lower-numbered columns still printed.
+func TestCommColumnTabPrefixesPerPOSIX(t *testing.T) {
+	f1 := "a\nb\nc\n" // a only in f1; b,c common
+	f2 := "b\nc\nd\n" // d only in f2
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"all three", nil, "a\n\t\tb\n\t\tc\n\td\n"},
+		{"-1 shifts survivors left", []string{"-1"}, "\tb\n\tc\nd\n"},
+		{"-2 keeps col1 flush, col3 one tab", []string{"-2"}, "a\n\tb\n\tc\n"},
+		{"-3 keeps col1 flush, col2 one tab", []string{"-3"}, "a\n\td\n"},
+		{"-13 leaves only col2 flush", []string{"-13"}, "d\n"},
+		{"-23 leaves only col1 flush", []string{"-23"}, "a\n"},
+		{"-12 leaves only col3 flush", []string{"-12"}, "b\nc\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, f1, f2, c.args...)
+		if code != 0 || errb != "" || out != c.want {
+			t.Errorf("%s: comm %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
+	}
+}
+
+// POSIX OPERANDS/EXIT STATUS: comm requires exactly file1 and file2, and a
+// failure to open an operand is diagnosed with a status greater than zero.
+func TestCommOperandCountAndOpenFailure(t *testing.T) {
+	dir := t.TempDir()
+	if _, errb, code := runRaw(t, dir, "", "only"); code != 2 || !strings.Contains(errb, "missing operand after 'only'") {
+		t.Errorf("one operand: code=%d err=%q", code, errb)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runRaw(t, dir, "", "nosuch", "f2")
+	if code == 0 || out != "" || !strings.Contains(errb, "nosuch") {
+		t.Errorf("open failure: out=%q err=%q code=%d, want >0 naming the operand", out, errb, code)
+	}
+}
+
 func TestCommStdin(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("b\n"), 0o644); err != nil {

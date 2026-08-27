@@ -268,7 +268,7 @@ func parseList(list string, fieldMode bool) ([]rangePair, string) {
 				}
 			} else {
 				if value == 0 {
-					return nil, "fields and positions are numbered from 1"
+					return nil, mode("fields are numbered from 1", "byte/character positions are numbered from 1")
 				}
 				pairs = append(pairs, rangePair{value, value})
 			}

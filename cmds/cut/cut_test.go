@@ -167,9 +167,12 @@ func TestCutUsageErrors(t *testing.T) {
 		{[]string{"-d", ":", "-b", "1"}, "an input delimiter may be specified only when operating on fields"},
 		{[]string{"-d", "ab", "-f", "1"}, "the delimiter must be a single character"},
 		{[]string{"-s", "-b", "1"}, "suppressing non-delimited lines makes sense"},
-		{[]string{"-f", "0"}, "fields and positions are numbered from 1"},
-		{[]string{"-f", ""}, "fields and positions are numbered from 1"},
-		{[]string{"-f", "1,"}, "fields and positions are numbered from 1"},
+		{[]string{"-f", "0"}, "fields are numbered from 1"},
+		{[]string{"-f", ""}, "fields are numbered from 1"},
+		{[]string{"-f", "1,"}, "fields are numbered from 1"},
+		{[]string{"-b", "0"}, "byte/character positions are numbered from 1"},
+		{[]string{"-c", "0"}, "byte/character positions are numbered from 1"},
+		{[]string{"-b", "1,"}, "byte/character positions are numbered from 1"},
 		{[]string{"-f", "0-2"}, "fields are numbered from 1"},
 		{[]string{"-b", "0-2"}, "byte/character positions are numbered from 1"},
 		{[]string{"-f", "-"}, "invalid range with no endpoint: -"},
@@ -186,6 +189,42 @@ func TestCutUsageErrors(t *testing.T) {
 		}
 		if !strings.Contains(errb, "Try 'cut --help'") {
 			t.Errorf("cut %v: missing try-help in %q", c.args, errb)
+		}
+	}
+}
+
+// POSIX OPTIONS: -b/-c/-f lists are "numbered from 1"; position 0 (and an
+// empty or malformed element that resolves to no number) is invalid. GNU
+// phrases the diagnostic per mode — "fields are numbered from 1" for -f, and
+// "byte/character positions are numbered from 1" for -b/-c — for both the bare
+// element and the range forms. The message must never be a generic hybrid.
+func TestCutNumberedFromOneMessagesAreModeSpecific(t *testing.T) {
+	const fieldMsg = "fields are numbered from 1"
+	const posMsg = "byte/character positions are numbered from 1"
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-f", "0"}, fieldMsg},
+		{[]string{"-f", ""}, fieldMsg},
+		{[]string{"-f", "1,"}, fieldMsg},
+		{[]string{"-f", ",2"}, fieldMsg},
+		{[]string{"-f", "0-2"}, fieldMsg},
+		{[]string{"-b", "0"}, posMsg},
+		{[]string{"-b", ""}, posMsg},
+		{[]string{"-b", "1,"}, posMsg},
+		{[]string{"-b", "0-2"}, posMsg},
+		{[]string{"-c", "0"}, posMsg},
+		{[]string{"-c", "0-2"}, posMsg},
+	}
+	for _, c := range cases {
+		_, errb, code := runTool(t, "x\n", c.args...)
+		if code != 2 || !strings.Contains(errb, c.want) {
+			t.Errorf("cut %v: code=%d err=%q, want code 2 containing %q", c.args, code, errb, c.want)
+		}
+		// Guard against the retired generic hybrid message.
+		if strings.Contains(errb, "fields and positions are numbered from 1") {
+			t.Errorf("cut %v: emitted retired generic message: %q", c.args, errb)
 		}
 	}
 }

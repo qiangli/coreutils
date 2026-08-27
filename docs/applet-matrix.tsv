@@ -24,12 +24,12 @@ chown	cmds/chown		GNU Coreutils	yes	yes	4	34
 cksum	cmds/cksum		GNU Coreutils	yes	yes	1	12
 clip	cmds/clip		Bashy/other extension	no	no	1	1
 cmp	cmds/cmp		POSIX/Unix utility	no	yes	2	15
-comm	cmds/comm		GNU Coreutils	yes	yes	1	16
+comm	cmds/comm		GNU Coreutils	yes	yes	1	18
 cp	cmds/cp		GNU Coreutils	yes	yes	8	63
 crontab	cmds/crontab		POSIX/Unix utility	no	yes	3	25
-csplit	cmds/csplit		GNU Coreutils	yes	yes	1	20
+csplit	cmds/csplit		GNU Coreutils	yes	yes	1	21
 ctags	cmds/posixproviders		POSIX external provider	no	yes	4	23
-cut	cmds/cut		GNU Coreutils	yes	yes	3	21
+cut	cmds/cut		GNU Coreutils	yes	yes	3	22
 date	cmds/date		GNU Coreutils	yes	yes	1	16
 dd	cmds/dd		GNU Coreutils	yes	yes	6	78
 df	cmds/df		GNU Coreutils	yes	yes	2	30
