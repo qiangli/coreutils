@@ -15,3 +15,4 @@
 {"op":"validate","slug":"go-applet-migrations-retire-external-provider-pins","tool":"codex-profile-d-sprint","host":"dragon","at":"2026-08-26T23:34:43.389523Z"}
 {"op":"add","slug":"posix-patch-keeps-stdout-unused","tool":"codex-gpt5.6-sol-f","host":"dragon","episode":"weave-issue-6","at":"2026-08-27T09:10:10.422779Z"}
 {"op":"add","slug":"embedded-applets-need-invocation-argv0-for-posix-visible-argv","tool":"codex-gpt-5.5-s","host":"dragon","episode":"weave-issue-19","at":"2026-08-27T16:58:42.332184Z"}
+{"op":"add","slug":"pax-cpio-append-and-update-require-trailer-preserving-rewrite","tool":"codex-gpt5.6-luna-u","host":"dragon","episode":"weave-issue-21","at":"2026-08-27T17:36:32.01022Z"}

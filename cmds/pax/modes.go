@@ -491,11 +491,30 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 				return 1
 			}
 			if archive.kind == archiveCPIO {
+				// Append/update rewrites the archive, so the existing archive and
+				// selected output format must agree before the destination is opened
+				// with O_TRUNC.  Reading newc and crc is supported, but the writer
+				// emits only POSIX odc; silently converting either format would make
+				// -a/-u destructive even when the operation is rejected later.
+				if o.format != "cpio" {
+					fmt.Fprintf(rc.Err, "pax: cannot append %s data to an existing cpio archive\n", o.format)
+					return 1
+				}
+				if string(data[:6]) != "070707" {
+					fmt.Fprintln(rc.Err, "pax: updating or appending to newc/crc cpio archives is not supported")
+					return 1
+				}
 				existingCPIOArchive = true
 				existingCPIO, decodeErr = readCPIOEntries(data)
 				if decodeErr != nil {
 					fmt.Fprintf(rc.Err, "pax: %v\n", decodeErr)
 					return 1
+				}
+				for _, entry := range existingCPIO {
+					if entry.magic != "070707" {
+						fmt.Fprintln(rc.Err, "pax: updating or appending to newc/crc cpio archives is not supported")
+						return 1
+					}
 				}
 				if o.newerOnly {
 					o.archiveTimes = make(map[string]time.Time)
