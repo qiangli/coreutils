@@ -445,9 +445,11 @@ func appendFile(path string, data []byte) error {
 	if e != nil {
 		return e
 	}
-	defer f.Close()
-	_, e = f.Write(data)
-	return e
+	if e = writeBytes(f, data); e != nil {
+		_ = f.Close()
+		return e
+	}
+	return f.Close()
 }
 func (s *mailSession) writeDead(data []byte) error {
 	if len(data) == 0 || !s.boolVar("save", true) {
@@ -647,7 +649,7 @@ func (s *mailSession) editData(data []byte, which string) ([]byte, error) {
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	if _, e = f.Write(data); e != nil {
+	if e = writeBytes(f, data); e != nil {
 		f.Close()
 		return nil, e
 	}

@@ -56,18 +56,55 @@ var readPromptLine = func() (string, error) {
 	return strings.TrimRight(line, "\r\n"), err
 }
 
-func askPrompt(rc *tool.RunContext, prompt string, stdout bool) (string, error) {
-	w := rc.Err
-	if stdout {
-		w = rc.Out
-	}
-	if _, err := io.WriteString(w, prompt); err != nil {
+func askPrompt(rc *tool.RunContext, prompt string) (string, error) {
+	// POSIX specifies that patch does not use standard output; prompts and
+	// informational messages therefore belong on standard error.
+	if _, err := io.WriteString(rc.Err, prompt); err != nil {
 		return "", err
 	}
 	return readPromptLine()
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	out := &stickyWriter{writer: rc.Out}
+	errOut := &stickyWriter{writer: rc.Err}
+	child := *rc
+	child.Out, child.Err = out, errOut
+	code := runCore(&child, args)
+	if out.err != nil || errOut.err != nil {
+		return 2
+	}
+	return code
+}
+
+type stickyWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *stickyWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func writeBytes(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+func runCore(rc *tool.RunContext, args []string) int {
 	flags := tool.NewFlags(cmd.Name)
 	strip := flags.IntP("strip", "p", autoStripSentinel, "strip NUM leading path components from file names (default: use the basename)")
 	reverse := flags.BoolP("reverse", "R", false, "assume this patch was created with the old and new files swapped")
@@ -310,7 +347,7 @@ func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string,
 	}
 	if origFile == "" {
 		var err error
-		origFile, err = askPrompt(rc, "File to patch: ", true)
+		origFile, err = askPrompt(rc, "File to patch: ")
 		if err != nil || origFile == "" {
 			fmt.Fprintf(rc.Err, "%s: cannot determine file to patch: %v\n", cmd.Name, err)
 			return 2
@@ -370,7 +407,7 @@ func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string,
 		rejData := patch.WriteRejectFormat("", "", patch.FormatNormal, rejected.Hunks)
 		rej, writeErr := rc.OpenFile(rejPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 		if writeErr == nil {
-			_, writeErr = rej.Write(rejData)
+			writeErr = writeBytes(rej, rejData)
 			if closeErr := rej.Close(); writeErr == nil {
 				writeErr = closeErr
 			}
@@ -450,7 +487,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 				fmt.Fprintf(rc.Err, "%s: can't find file to patch\n", cmd.Name)
 				return hardFailure(ro)
 			}
-			answer, err := askPrompt(rc, "File to patch: ", true)
+			answer, err := askPrompt(rc, "File to patch: ")
 			if err != nil || answer == "" {
 				fmt.Fprintf(rc.Err, "%s: cannot determine file to patch: %v\n", cmd.Name, err)
 				return hardFailure(ro)
@@ -622,7 +659,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		}
 		rej, err := rc.OpenFile(rejPath, flags, 0o644)
 		if err == nil {
-			_, err = rej.Write(rejData)
+			err = writeBytes(rej, rejData)
 			if closeErr := rej.Close(); err == nil {
 				err = closeErr
 			}
@@ -680,7 +717,7 @@ func applyWithPolicy(rc *tool.RunContext, oldLines []string, oldNoEOL bool, fp p
 	if !reversed.AllApplied() {
 		return forward, false
 	}
-	answer, err := askPrompt(rc, "Reversed (or previously applied) patch detected! Assume -R? [n] ", false)
+	answer, err := askPrompt(rc, "Reversed (or previously applied) patch detected! Assume -R? [n] ")
 	yes, matchErr := corelocale.MatchAffirmative(rc.Env, answer)
 	if err == nil && matchErr == nil && yes {
 		return reversed, true
@@ -839,7 +876,7 @@ func writeFileContent(rc *tool.RunContext, path string, content []byte, perm fs.
 		if err != nil {
 			return err
 		}
-		if _, err := f.Write(content); err != nil {
+		if err := writeBytes(f, content); err != nil {
 			f.Close()
 			return err
 		}
@@ -859,7 +896,7 @@ func writeFileContent(rc *tool.RunContext, path string, content []byte, perm fs.
 			os.Remove(tmpName)
 		}
 	}()
-	if _, err := tmp.Write(content); err != nil {
+	if err := writeBytes(tmp, content); err != nil {
 		return err
 	}
 	if err := tmp.Chmod(perm); err != nil {

@@ -58,11 +58,18 @@ func runTool(rc *tool.RunContext, invoked *tool.Tool, args []string) int {
 	// short write, reaches the command boundary instead of being lost at an
 	// individual fmt call.
 	out := &stickyWriter{writer: rc.Out}
+	errOut := &stickyWriter{writer: rc.Err}
 	child := *rc
-	child.Out = out
+	child.Out, child.Err = out, errOut
 	code := runToolCore(&child, invoked, args)
 	if out.err != nil {
 		diagnostic(rc, invoked, "write error: %v", out.err)
+		return 1
+	}
+	if errOut.err != nil {
+		if code != 0 {
+			return code
+		}
 		return 1
 	}
 	return code
@@ -85,6 +92,14 @@ func (w *stickyWriter) Write(p []byte) (int, error) {
 		w.err = err
 	}
 	return n, err
+}
+
+func writeBytes(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func runToolCore(rc *tool.RunContext, invoked *tool.Tool, args []string) int {
@@ -322,12 +337,12 @@ func saveMessages(path string, entries []mailxpkg.MboxEntry, nums []int, bodyOnl
 		} else {
 			data = entries[n].Message.Bytes()
 		}
-		if _, err := f.Write(data); err != nil {
+		if err := writeBytes(f, data); err != nil {
 			_ = f.Close()
 			return err
 		}
 		if len(data) == 0 || data[len(data)-1] != '\n' {
-			if _, err := f.Write([]byte{'\n'}); err != nil {
+			if err := writeBytes(f, []byte{'\n'}); err != nil {
 				_ = f.Close()
 				return err
 			}

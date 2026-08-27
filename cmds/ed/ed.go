@@ -1,4 +1,4 @@
-// Package edcmd implements a clean-room, pure-Go subset of POSIX.1 Issue 7
+// Package edcmd implements a clean-room, pure-Go POSIX.1 Issue 7
 // ed. The command adapter owns flags, RunContext paths, and filesystem I/O;
 // cmds/internal/editor owns the reusable line buffer and command interpreter.
 package edcmd
@@ -28,6 +28,52 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	out := &stickyWriter{writer: rc.Out}
+	errOut := &stickyWriter{writer: rc.Err}
+	child := *rc
+	child.Out, child.Err = out, errOut
+	code := runCore(&child, args)
+	if out.err != nil {
+		fmt.Fprintf(rc.Err, "ed: write error: %v\n", out.err)
+		return 1
+	}
+	if errOut.err != nil {
+		if code != 0 {
+			return code
+		}
+		return 1
+	}
+	return code
+}
+
+type stickyWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *stickyWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func writeBytes(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+func runCore(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	fs.SetInterspersed(false)
 	prompt := fs.StringP("prompt", "p", "", "use STRING as the command prompt")
@@ -62,7 +108,7 @@ func run(rc *tool.RunContext, args []string) int {
 				if err != nil {
 					return err
 				}
-				_, writeErr := f.Write(data)
+				writeErr := writeBytes(f, data)
 				closeErr := f.Close()
 				if writeErr != nil {
 					return writeErr
@@ -74,7 +120,7 @@ func run(rc *tool.RunContext, args []string) int {
 				if err != nil {
 					return err
 				}
-				_, writeErr := f.Write(data)
+				writeErr := writeBytes(f, data)
 				closeErr := f.Close()
 				if writeErr != nil {
 					return writeErr

@@ -24,6 +24,8 @@ type fakeConversation struct {
 	incoming []string
 	closed   bool
 	cleaned  bool
+	closeErr error
+	cleanErr error
 }
 
 type passthroughDisplay struct{}
@@ -46,8 +48,8 @@ func (f *fakeConversation) Poll() ([]string, bool, error) {
 	f.incoming = nil
 	return in, f.closed, nil
 }
-func (f *fakeConversation) Close() error   { f.closed = true; return nil }
-func (f *fakeConversation) Cleanup() error { f.cleaned = true; return nil }
+func (f *fakeConversation) Close() error   { f.closed = true; return f.closeErr }
+func (f *fakeConversation) Cleanup() error { f.cleaned = true; return f.cleanErr }
 
 func installFakes(t *testing.T, conv *fakeConversation) *string {
 	t.Helper()
@@ -113,6 +115,43 @@ func TestRunUsesOSIdentityNotEnvironmentAndNotifiesTTY(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "private session private connected") {
 		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestConversationCloseAndCleanupFailuresSetErrorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		conv *fakeConversation
+		want string
+	}{
+		{name: "close", conv: &fakeConversation{id: "private", joined: true, closeErr: errors.New("close failed")}, want: "close private local session"},
+		{name: "cleanup", conv: &fakeConversation{id: "private", joined: true, cleanErr: errors.New("cleanup failed")}, want: "clean up private local session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakes(t, tc.conv)
+			code, stdout, stderr := invoke(t, "", "bob")
+			if code != 1 || stderr != "" || !strings.Contains(stdout, tc.want) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if !tc.conv.closed || !tc.conv.cleaned {
+				t.Fatalf("conversation=%#v", tc.conv)
+			}
+		})
+	}
+}
+
+type talkShortWriter struct{}
+
+func (talkShortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return len(p) - 1, nil
+}
+
+func TestTalkWriteHelperRejectsShortWrites(t *testing.T) {
+	if err := writeBytes(talkShortWriter{}, []byte("data")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("write error=%v, want %v", err, io.ErrShortWrite)
 	}
 }
 

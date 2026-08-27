@@ -3,6 +3,8 @@ package edcmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,5 +131,38 @@ func TestRegisteredToolPromptSilentAndUsage(t *testing.T) {
 	code, _, stderr, _ = runEd(t, "", "a", "b")
 	if code != 2 || !strings.Contains(stderr, "extra operand") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+}
+
+type edFailWriter struct {
+	err   error
+	short bool
+}
+
+func (w edFailWriter) Write(p []byte) (int, error) {
+	if w.short && len(p) > 0 {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
+
+func TestRegisteredToolRejectsOutputAndFileShortWrites(t *testing.T) {
+	for _, w := range []io.Writer{
+		edFailWriter{err: errors.New("unavailable")},
+		edFailWriter{short: true},
+	} {
+		if err := writeBytes(w, []byte("data")); err == nil {
+			t.Fatalf("writeBytes(%T) succeeded", w)
+		}
+	}
+
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), FS: tool.NewLocalFS(),
+		Stdio: tool.Stdio{In: strings.NewReader("Q\n"), Out: edFailWriter{short: true}, Err: &errOut}}
+	if code := tool.Lookup("ed").Run(rc, []string{"-p", "> "}); code != 1 {
+		t.Fatalf("short prompt write exit=%d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("diagnostic=%q", errOut.String())
 	}
 }

@@ -3,6 +3,8 @@ package patchcmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -599,7 +601,7 @@ func TestStripTooManyComponentsDoesNotFallBackToBasename(t *testing.T) {
 	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
 	withPrompt(t, "actual")
 	stdout, stderr, code := runIn(t, dir, diff, "-p9")
-	if code != 0 || !strings.Contains(stdout, "File to patch:") {
+	if code != 0 || stdout != "" || !strings.Contains(stderr, "File to patch:") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if got := readFile(t, dir, "f"); got != "old\n" {
@@ -676,13 +678,44 @@ func TestReverseRejectSwapsHeadersAndHunk(t *testing.T) {
 	}
 }
 
-func TestFilenamePromptIsWrittenToStdout(t *testing.T) {
+func TestFilenamePromptIsWrittenToStderr(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "actual", "one\n")
 	withPrompt(t, "actual")
 	stdout, stderr, code := runIn(t, dir, "1c1\n< one\n---\n> two\n")
-	if code != 0 || !strings.Contains(stdout, "File to patch:") || strings.Contains(stderr, "File to patch:") {
+	if code != 0 || stdout != "" || !strings.Contains(stderr, "File to patch:") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+type patchFailWriter struct {
+	err   error
+	short bool
+}
+
+func (w patchFailWriter) Write(p []byte) (int, error) {
+	if w.short && len(p) > 0 {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
+
+func TestStreamAndFileWritesRejectShortWrites(t *testing.T) {
+	for _, w := range []io.Writer{
+		patchFailWriter{err: errors.New("unavailable")},
+		patchFailWriter{short: true},
+	} {
+		if err := writeBytes(w, []byte("data")); err == nil {
+			t.Fatalf("writeBytes(%T) succeeded", w)
+		}
+	}
+
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{
+		In: strings.NewReader(""), Out: patchFailWriter{short: true}, Err: &errOut,
+	}}
+	if code := cmd.Run(rc, []string{"--help"}); code != 2 {
+		t.Fatalf("short help write exit=%d, want 2", code)
 	}
 }
 

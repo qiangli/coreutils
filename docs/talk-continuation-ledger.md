@@ -19,7 +19,9 @@ other durable store. The applet never contacts `talkd` or another host.
 
 Implemented coverage includes reciprocal session convergence, stale-terminal
 fallback, terminal selection and `mesg` permission checks, endpoint ownership
-and datagram authentication, private cleanup, TTY requirements, UTF-8 and
+and datagram authentication, checked private cleanup, TTY requirements,
+two-region terminfo rendering, exact terminal restoration, UTF-8 and configured
 control-character handling, peer close, EOF, cancellation, and SIGINT.
-Interface evidence remains **partial** pending the configured Profile D replay
-and remaining terminal-format and interaction clauses.
+Interface evidence remains **partial** pending the configured Profile D replay;
+the source-level terminal-format and interaction clauses are covered by the
+focused PTY and display suites.

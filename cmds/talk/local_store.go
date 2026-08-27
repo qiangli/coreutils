@@ -102,7 +102,7 @@ func openLocalConversation(root string, self, peer account) (*localConversation,
 	data, _ := json.Marshal(ep)
 	ef, err := os.OpenFile(epPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err == nil {
-		_, err = ef.Write(append(data, '\n'))
+		err = writeBytes(ef, append(data, '\n'))
 		err = errors.Join(err, ef.Close())
 	}
 	if err == nil {

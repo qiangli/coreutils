@@ -16,7 +16,7 @@ provider definition, build recipe, cache entry, or fallback.
 - `-e` scripts from `diff -e`, applied directly by the pure-Go engine.
 - `-D define` conditional merges for insertions, deletions, and replacements.
 - POSIX filename determination through old/new headers, `Index:`, common
-  indentation removal, and a stdout prompt whose answer is read from the
+  indentation removal, and a stderr prompt whose answer is read from the
   controlling terminal.
 - Default reversed/already-applied detection with an LC_MESSAGES `yesexpr`
   prompt; explicit `-R` and `-N` retain their distinct meanings.
@@ -50,7 +50,8 @@ sections.
 | four input forms and selectors `-c/-e/-n/-u` | `TestApplyContextFormat`, `TestRoundTripNormalDiff`, `TestEdFlagAppliesDiffEdScript`, `TestApplyEdDiffDotProtectionAndEmptyScript` |
 | `-D define` | `TestIfdefMergeRetainsBothVersions`, `TestApplyIfdefInsertionDeletionAndReplacement` |
 | `-b` first-copy and overwrite rules | `TestApplyBackupFlag`, `TestBackupOverwritesPreexistingOrigOnce`, `TestOutputBackupAndRejectNamesFollowOutput` |
-| filename determination / indentation / prompt | `TestIndexSelectsNormalDiffTarget`, `TestIndexExistingTargetPrecedesCreationFallback`, `TestParseIndexAndCommonIndent`, `TestMissingHeaderTargetPromptsForFilename`, `TestFilenamePromptIsWrittenToStdout` |
+| filename determination / indentation / prompt | `TestIndexSelectsNormalDiffTarget`, `TestIndexExistingTargetPrecedesCreationFallback`, `TestParseIndexAndCommonIndent`, `TestMissingHeaderTargetPromptsForFilename`, `TestFilenamePromptIsWrittenToStderr` |
+| stream and file write failures | `TestStreamAndFileWritesRejectShortWrites` |
 | default reversal, `-R`, `-N` | `TestDefaultReversalPromptsAndAppliesReverse`, `TestCreationPatchAgainstPostimagePromptsAndRemovesOnReverse`, `TestAcceptedReversePersistsAcrossFollowingFilePortions`, `TestApplyReverseFlag`, `TestAlreadyAppliedRequiresForwardFlag` |
 | `-o` concatenation/intermediate versions | `TestIndentedPatchAndMultiFileOutput`, `TestOutputConcatenatesIntermediateVersionsForSameFile`, `TestOutputCarriesNewlyCreatedFileIntoLaterPortion` |
 | copied-context rejects for every input form | `TestRejectUsesCopiedContext`, `TestApplyConflictWritesRejectAndExitsOne`, `TestEdPlacementFailureWritesCopiedContextRejectAndContinues`, `TestReverseRejectSwapsHeadersAndHunk` |

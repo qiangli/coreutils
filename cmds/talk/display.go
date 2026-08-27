@@ -228,8 +228,7 @@ func (d *screenDisplay) redraw() error {
 		return err
 	}
 	out.WriteString(pos)
-	_, err = io.WriteString(d.out, out.String())
-	return err
+	return writeBytes(d.out, []byte(out.String()))
 }
 
 func (d *screenDisplay) renderRegion(out *strings.Builder, start, height int, label string, b *regionBuffer) error {
@@ -453,8 +452,7 @@ func (d *screenDisplay) Remote(wire string) error {
 	}
 	switch e.Kind {
 	case "alert":
-		_, err = io.WriteString(d.out, d.caps.bel)
-		return err
+		return writeBytes(d.out, []byte(d.caps.bel))
 	case "text":
 		d.remote.textEvent(e.Text)
 	case "erase":
@@ -485,7 +483,7 @@ func (d *screenDisplay) Close() error {
 	}
 	pos, err := d.cursor(d.caps.rows-1, 0)
 	if err == nil {
-		_, err = io.WriteString(d.out, pos+d.caps.el)
+		err = writeBytes(d.out, []byte(pos+d.caps.el))
 	}
 	if first != nil {
 		return first

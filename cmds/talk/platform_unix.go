@@ -71,8 +71,7 @@ func notifyTerminal(record session.Record, peer account, text string) error {
 	if !ok || strconv.FormatUint(uint64(st.Uid), 10) != peer.UID {
 		return errors.New("recipient terminal ownership changed before notification")
 	}
-	_, err = f.WriteString(text)
-	return err
+	return writeBytes(f, []byte(text))
 }
 
 func fileOwnerUID(path string) (string, error) {

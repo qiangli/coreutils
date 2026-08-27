@@ -13,21 +13,19 @@ external-provider definition, build recipe, cache entry, or fallback.
 - Default, `-u`, and `-f [file]` mailbox selection; `-e`, `-H`, and `-N`.
 - Strict mbox parsing, symmetric `From` quoting, locked append, and
   transactional delete-on-quit that preserves concurrently appended mail.
-- Header display and a bounded interactive subset: print/type, headers/from,
-  next/previous, delete/undelete, save/write, quit/exit, current-message and
-  numeric selection.
+- The complete Issue 7 receive command vocabulary, minimum abbreviations,
+  message selectors and disposition state machine.
+- Startup files, aliases, variables, conditionals, replies/followups,
+  composition escapes, paging/editing, signals, and dead-letter handling.
+- Invocation-wide output/error tracking plus checked local-file writes.
 - Refusal of symlink and non-regular mailbox targets.
 
-## Remaining POSIX lanes
+## Remaining certification lanes
 
-- Complete message-state transitions, MBOX movement, default save behavior,
-  command abbreviation and message-list grammars.
-- Startup files, aliases, internal variables, conditional/source commands,
-  replies/followups, composition escapes, paging/editing, and signal/dead-letter
-  behavior.
-- Full locale, terminal prompt, output-failure, identity/authorization, and
-  multiprocess lock-recovery coverage.
+- Profile D PTY replay for terminal pagination and signal timing.
+- Integration evidence for identity/authorization and multiprocess lock
+  recovery on the configured certification hosts.
 
-The interface evidence remains **partial** until those lanes and the targeted
-Profile D replay are complete. Local-only transport is a deliberate product
-boundary, not a claim that SMTP belongs to POSIX certification.
+The interface evidence remains **partial** until those integration lanes are
+complete. Local-only transport is a deliberate product boundary, not a claim
+that SMTP belongs to POSIX certification.

@@ -80,7 +80,7 @@ var (
 	}
 )
 
-func run(rc *tool.RunContext, args []string) int {
+func run(rc *tool.RunContext, args []string) (code int) {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
 	// POSIX assigns talk no standard-error output. Keep the shared parser's
@@ -142,14 +142,18 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return diagnostic(rc, "create private local session: %v", err)
 	}
-	defer conv.Cleanup()
+	defer func() {
+		if cleanupErr := conv.Cleanup(); cleanupErr != nil && code == 0 {
+			code = diagnostic(rc, "clean up private local session: %v", cleanupErr)
+		}
+	}()
 	if err := notifyTTYFn(record, peer, invitationText(self.Name, terminal)); err != nil {
 		return diagnostic(rc, "notify %s on %s: %v", peer.Name, record.TTY, err)
 	}
-	if _, err := fmt.Fprintf(rc.Out, "[talk with %s; local private session pending]\n", peer.Name); err != nil {
+	if err := writeBytes(rc.Out, []byte(fmt.Sprintf("[talk with %s; local private session pending]\n", peer.Name))); err != nil {
 		return diagnostic(rc, "write terminal: %v", err)
 	}
-	if _, err := fmt.Fprintf(rc.Out, "waiting for %s to respond with: talk %s\n", peer.Name, self.Name); err != nil {
+	if err := writeBytes(rc.Out, []byte(fmt.Sprintf("waiting for %s to respond with: talk %s\n", peer.Name, self.Name))); err != nil {
 		return diagnostic(rc, "write terminal: %v", err)
 	}
 
@@ -176,7 +180,7 @@ func run(rc *tool.RunContext, args []string) int {
 		case <-time.After(interval):
 		}
 	}
-	if _, err := fmt.Fprintf(rc.Out, "[private session %s connected]\n", conv.ID()); err != nil {
+	if err := writeBytes(rc.Out, []byte(fmt.Sprintf("[private session %s connected]\n", conv.ID()))); err != nil {
 		return diagnostic(rc, "write terminal: %v", err)
 	}
 	return converse(rc, self.Name, peer.Name, conv, interrupt)
@@ -262,8 +266,16 @@ func normalizeTerminal(name string) string {
 // POSIX specifies no use for standard error by talk. Repository-wide syntax
 // failures still use the flag framework's stderr/exit-2 contract.
 func diagnostic(rc *tool.RunContext, format string, args ...any) int {
-	_, _ = fmt.Fprintf(rc.Out, "talk: "+format+"\n", args...)
+	_ = writeBytes(rc.Out, []byte(fmt.Sprintf("talk: "+format+"\n", args...)))
 	return 1
+}
+
+func writeBytes(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func validateLocalAddress(address string) error {
@@ -316,8 +328,16 @@ func converse(rc *tool.RunContext, self, peer string, conv conversation, interru
 		_ = in.Close()
 		return diagnostic(rc, "prepare terminal display: %v", err)
 	}
-	defer func() { _ = conv.Close() }()
-	defer func() { _ = in.Close() }()
+	defer func() {
+		if closeErr := conv.Close(); closeErr != nil && code == 0 {
+			code = diagnostic(rc, "close private local session: %v", closeErr)
+		}
+	}()
+	defer func() {
+		if closeErr := in.Close(); closeErr != nil && code == 0 {
+			code = diagnostic(rc, "close terminal input: %v", closeErr)
+		}
+	}()
 	defer func() {
 		if err := screen.Close(); err != nil && code == 0 {
 			code = diagnostic(rc, "restore terminal: %v", err)

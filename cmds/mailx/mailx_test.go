@@ -167,6 +167,12 @@ func TestOutputFailuresReachCommandBoundary(t *testing.T) {
 	}
 }
 
+func TestFileWriteHelperRejectsShortWrites(t *testing.T) {
+	if err := writeBytes(mailxFailWriter{short: true}, []byte("data")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("write error=%v, want %v", err, io.ErrShortWrite)
+	}
+}
+
 func TestDeleteQuitRewritesMailbox(t *testing.T) {
 	dir := t.TempDir()
 	path := seedMailbox(t, dir, "one", "two")
