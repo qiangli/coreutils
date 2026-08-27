@@ -31,6 +31,15 @@ formats; standard output stays empty.
   failures fail closed, and a present-but-empty at.deny still permits
   everyone.
 
+## Issue 12 re-audit (2026-08-27)
+
+Re-verified every mandatory clause against the 2016 edition: the
+`at -q b -m now` equivalence (queue `b`, completion mail, immediate
+eligibility under load governance), the option-free and operand-free
+synopsis, stdin as the complete shell program, retained environment/cwd/
+umask, the stderr confirmation shape, exit statuses, and at.allow/at.deny
+gating. No gaps found; no changes required.
+
 ## Gates
 
 - `go test -count=20 ./cmds/batch`

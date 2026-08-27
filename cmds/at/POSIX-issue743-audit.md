@@ -50,6 +50,26 @@ and the `job %s at %s` stderr confirmation plus the `-l` output times.
   malformed lines and stat failures fail closed, while a present-but-empty
   at.deny still permits everyone.
 
+## Issue 12 re-audit (2026-08-27)
+
+- **Comma is a grammar terminal in the year date form.** POSIX writes the
+  date as `month_name day_number "," year_number`, and historical at
+  tokenizes punctuation separately, so the comma may arrive attached to the
+  day, to the year, or standing alone. The parser previously accepted only
+  `Jan 5, 2035` and `Jan 5 , 2035`; `Jan 5,2035` failed as an invalid day and
+  `Jan 5 ,2035` as an invalid year. `normalizeAtTimespec` now detaches every
+  comma into its own token before tokenization (commas appear nowhere else in
+  the timespec grammar), and a comma with no following year_number is now
+  rejected instead of silently defaulting the year
+  (`TestIssue12CommaAdjacentYearForms`, `TestIssue12CommaYearSubmission`).
+- All other mandatory clauses re-verified against the 2016 edition: synopsis
+  families, option-argument validation, timespec grammar including
+  next-year/tomorrow assumption rules, `-t` touch format, stdin/`-f` job
+  source, `job %s at %s` stderr confirmation and `%s\t%s` `-l` stdout shape in
+  `date +"%a %b %e %T %Y"` form, retained environment/cwd/umask, SHELL/TZ/
+  LC_TIME handling, exit statuses, and at.allow/at.deny gating. No further
+  gaps found.
+
 ## Residuals
 
 - `-q` accepts queues `a`–`z`; queues other than `a` and `b` have

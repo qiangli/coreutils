@@ -41,6 +41,25 @@ privileged-only default.
   of line — it is command data the shell must receive unchanged. The
   left-to-right scan also makes `\\%` yield a literal `\%`.
 
+## Issue 12 re-audit (2026-08-27)
+
+- **Mandatory day-field semantics pinned.** The INPUT FILES rules that day
+  of week 0 is Sunday, 7 is invalid, and that a day matching **either** a
+  restricted day-of-month or a restricted day-of-week fires the entry (while
+  a single restricted field governs alone) are delivered by the schedule
+  engine's cron parser. They are now pinned by applet-level tests so a
+  dependency change cannot silently regress them
+  (`TestIssue12DayOfMonthDayOfWeekEitherMatch`).
+- **Field bounds pinned.** Minute [0,59], hour [0,23], day of month [1,31],
+  month [1,12], and day of week [0,6] violations each reject the whole table
+  atomically, leaving the stored crontab untouched
+  (`TestIssue12FieldRangeViolationsRejectAtomically`).
+- All other mandatory clauses re-verified against the 2016 edition: both
+  synopsis forms, `-e`/`-l`/`-r` exclusivity, EDITOR default `vi`, the `%`
+  command/stdin split with `\%` escaping, comment/blank-line skipping, the
+  default execution environment, exit statuses, cron.allow/cron.deny gating,
+  and the consequences-of-errors atomicity guarantee. No further gaps found.
+
 ## Residuals
 
 - Vixie-style environment-assignment lines (`NAME=value`) and the schedule

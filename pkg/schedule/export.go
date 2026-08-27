@@ -178,6 +178,11 @@ func normalizeAtTimespec(s string) string {
 		s = m[1] + " utc " + m[2]
 	}
 	s = adjacentMonthRe.ReplaceAllString(s, "$1 $2$3")
+	// The POSIX year form is month_name day_number "," year_number: the comma
+	// is its own terminal, so historical at accepts it attached to the day, to
+	// the year, or standing alone ("jan 24,2026", "jan 24 ,2026"). Commas
+	// appear nowhere else in the grammar; detach them before tokenization.
+	s = strings.ReplaceAll(s, ",", " , ")
 	return s
 }
 
@@ -292,31 +297,6 @@ func parseClock(fields []string) (hour, minute, consumed int, err error) {
 	return hour, minute, consumed, nil
 }
 
-var weekdays = map[string]time.Weekday{
-	"sun": time.Sunday, "sunday": time.Sunday,
-	"mon": time.Monday, "monday": time.Monday,
-	"tue": time.Tuesday, "tues": time.Tuesday, "tuesday": time.Tuesday,
-	"wed": time.Wednesday, "wednesday": time.Wednesday,
-	"thu": time.Thursday, "thur": time.Thursday, "thurs": time.Thursday, "thursday": time.Thursday,
-	"fri": time.Friday, "friday": time.Friday,
-	"sat": time.Saturday, "saturday": time.Saturday,
-}
-
-var months = map[string]time.Month{
-	"jan": time.January, "january": time.January,
-	"feb": time.February, "february": time.February,
-	"mar": time.March, "march": time.March,
-	"apr": time.April, "april": time.April,
-	"may": time.May,
-	"jun": time.June, "june": time.June,
-	"jul": time.July, "july": time.July,
-	"aug": time.August, "august": time.August,
-	"sep": time.September, "sept": time.September, "september": time.September,
-	"oct": time.October, "october": time.October,
-	"nov": time.November, "november": time.November,
-	"dec": time.December, "december": time.December,
-}
-
 func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Location, formatter posixlocale.TimeFormatter) (time.Time, bool, error) {
 	makeTime := func(year int, month time.Month, day int) (time.Time, error) {
 		t := time.Date(year, month, day, hour, minute, 0, 0, loc)
@@ -356,13 +336,16 @@ func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Loc
 	if !ok {
 		return time.Time{}, false, fmt.Errorf("invalid month")
 	}
-	dayText := strings.TrimSuffix(fields[1], ",")
-	day, err := strconv.Atoi(dayText)
+	// normalizeAtTimespec detaches every comma into its own token, so the day
+	// and year fields arrive bare.
+	day, err := strconv.Atoi(fields[1])
 	if err != nil || day < 1 || day > 31 {
 		return time.Time{}, false, fmt.Errorf("invalid day")
 	}
 	rest := fields[2:]
+	sawComma := false
 	if len(rest) > 0 && rest[0] == "," {
+		sawComma = true
 		rest = rest[1:]
 	}
 	year := now.Year()
@@ -371,11 +354,14 @@ func parseAtDate(fields []string, hour, minute int, now time.Time, loc *time.Loc
 		if len(rest) != 1 {
 			return time.Time{}, false, fmt.Errorf("invalid date")
 		}
-		year, err = strconv.Atoi(strings.TrimSuffix(rest[0], ","))
+		year, err = strconv.Atoi(rest[0])
 		if err != nil || year < 1970 || year > 9999 {
 			return time.Time{}, false, fmt.Errorf("invalid year")
 		}
 		explicitYear = true
+	} else if sawComma {
+		// month_name day_number "," requires a following year_number.
+		return time.Time{}, false, fmt.Errorf("invalid date")
 	}
 	out, err := makeTime(year, month, day)
 	if err == nil && !explicitYear && !out.After(now) {

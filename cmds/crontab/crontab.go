@@ -60,8 +60,6 @@ func init() {
 	cmd.Run = func(rc *tool.RunContext, args []string) int { return runWithConfig(rc, args, defaultRunConfig()) }
 	tool.Register(cmd)
 }
-func run(rc *tool.RunContext, args []string) int { return runWithConfig(rc, args, defaultRunConfig()) }
-
 func runWithConfig(rc *tool.RunContext, args []string, cfg runConfig) int {
 	fs := tool.NewFlags(cmd.Name)
 	listFlag := fs.BoolP("list", "l", false, "list the current crontab")
