@@ -39,6 +39,11 @@ type RunContext struct {
 	FS  *LocalFS // local OS filesystem with path translation; never nil in practice
 	Stdio
 
+	// InvocationName is argv[0] as supplied to the utility. Standalone
+	// multicall dispatch sets it to os.Args[0]; embedded callers may leave it
+	// empty when the utility has no specified argv[0]-visible behavior.
+	InvocationName string
+
 	// Umask is the embedding shell's virtual file-creation mask. UmaskSet is
 	// false for standalone tools, where the child process's inherited OS umask
 	// remains authoritative. In-process adapters set both fields so creation
