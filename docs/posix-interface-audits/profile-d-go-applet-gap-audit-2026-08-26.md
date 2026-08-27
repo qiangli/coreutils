@@ -49,7 +49,7 @@ audit found the blockers below despite green package tests.
 | Rank | Command | Confirmed missing or incorrect behavior | Corrective lane |
 | ---: | --- | --- | --- |
 | 1 | `ed` | Required commands and behavior including global/inverse-global forms, join, marks and marked addresses, move/copy, prompt toggle, read, undo, append-write, shell escapes, command suffixes, script-vs-interactive errors, signals/`ed.hup`, and list/address/current-line rules were absent. | Implemented on `feature/posix-ed-completion` at `0818e88ed7faeca770456d043aa3012dc15a1a17`; review/merge and Profile D replay pending. |
-| 2 | `mailx` | Startup files, `-n`/`-i`, message states and MBOX disposition, complete message-list grammar, mandatory receive commands and variables, replies/followups, composition escapes, signal/DEAD behavior, prompts, and headers were incomplete. Local-file-only delivery remains the deliberate scope; SMTP is not required. | Implemented on `feature/posix-mailx-completion` at `ecd88071e84aad14287f58e2eb21f9347a54c598`; review/merge and Profile D PTY replay pending. |
+| 2 | `mailx` | Startup files, `-n`/`-i`, message states and MBOX disposition, complete message-list grammar, mandatory receive commands and variables, replies/followups, composition escapes, signal/DEAD behavior, prompts, and headers were incomplete. Local-file-only delivery remains the deliberate scope; SMTP is not required. | Independently reviewed and merged to `main` at `20cedcbeb0d357a0a2180c5fd7dafa16d54468b2`; review added command-boundary output-error and short-write handling. Profile D PTY replay remains pending. |
 | 3 | `patch` | Mandatory `-D` and `-e` were rejected; `.orig`, reversed/already-applied prompting, filename selection/prompting, reject formats, indentation, and multi-file `-o` behavior were incorrect or incomplete. | Implemented on `feature/posix-patch-completion` at `607f02dfb26abaed5e6317fbe46a05070997a0c8`; review/merge and Profile D replay pending. |
 | 4 | `talk` | Local-user-only addressing is permitted, but the required simultaneous screen-oriented interaction remains incomplete: separate regions, character-level display, erase/kill handling, and terminal-capability behavior need closure and PTY evidence. | Next parallel implementation lane. |
 | 5 | `pax` | The advertised `cpio` format rejects append/update. Resolve whether the implementation-defined format rule permits this restriction before classifying it as a defect. | Focused specification ruling and differential test. |
@@ -108,7 +108,7 @@ as documented or rejected clearly rather than silently acting as no-ops.
 
 ## Sprint acceptance for this task
 
-1. Independently review and merge the `ed`, `patch`, and `mailx` branch tips.
+1. Independently review and merge the `ed` and `patch` branch tips (`mailx` is merged).
 2. Complete `talk` terminal semantics with PTY evidence.
 3. Resolve the `pax` cpio ruling and fix it if POSIX requires append/update.
 4. Run focused and cross-platform gates after integration.
