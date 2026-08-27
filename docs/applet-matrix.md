@@ -71,7 +71,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 3 | 22 |
 | `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 16 |
-| `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 6 | 78 |
+| `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 6 | 80 |
 | `df` | `cmds/df` | — | GNU Coreutils | yes | yes | 2 | 30 |
 | `diff` | `cmds/diff` | — | POSIX/Unix utility | no | yes | 5 | 45 |
 | `dir` | `cmds/dir` | — | GNU Coreutils | yes | no | 1 | 4 |

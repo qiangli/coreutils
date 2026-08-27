@@ -297,6 +297,46 @@ func TestDdNoerrorProcessesDataReturnedWithReadError(t *testing.T) {
 	}
 }
 
+func TestDdNoerrorImmediateStatusSnapshotsReblockedAndTruncatedRecords(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Stdio: tool.Stdio{In: &dataAndErrorReaderWithData{data: "abcdef\n"}, Out: &out, Err: &errb},
+	}
+	cfg := config{ibs: 7, obs: 2, cbs: 3, count: -1, noerror: true, block: true, reblock: true}
+	if code := copyDD(rc, cfg); code != 1 {
+		t.Fatalf("code=%d want 1; err=%q", code, errb.String())
+	}
+	wantImmediate := "injected read failure\n1+0 records in\n1+0 records out\n1 truncated record\n"
+	if !strings.Contains(errb.String(), wantImmediate) {
+		t.Fatalf("immediate status did not snapshot reblock/truncation counters:\n%s", errb.String())
+	}
+}
+
+type dataAndErrorReaderWithData struct {
+	data string
+	read bool
+}
+
+func (r *dataAndErrorReaderWithData) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, r.data), errors.New("injected read failure")
+}
+
+func TestDdAcceptsZeroConversionBlockSizeWithoutConversion(t *testing.T) {
+	out, errb, code := runTool(t, t.TempDir(), "abc", "cbs=0", "status=none")
+	if code != 0 || out != "abc" || errb != "" {
+		t.Fatalf("cbs=0 without conversion = (%q, %q, %d), want (abc, empty, 0)", out, errb, code)
+	}
+	_, errb, code = runTool(t, t.TempDir(), "abc", "cbs=0", "conv=block", "status=none")
+	if code != 2 || !strings.Contains(errb, "cbs= is required") {
+		t.Fatalf("cbs=0 conv=block = stderr %q, code %d; want required-cbs usage error", errb, code)
+	}
+}
+
 type errorOnlyReader struct {
 	err error
 }

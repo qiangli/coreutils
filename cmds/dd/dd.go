@@ -116,7 +116,7 @@ func run(rc *tool.RunContext, args []string) int {
 			cfg.reblock = true
 		case "cbs":
 			n, err := parseBytes(v)
-			if err != nil || n <= 0 {
+			if err != nil || n < 0 {
 				return tool.UsageError(rc, cmd, "invalid number: '%s'", v)
 			}
 			cfg.cbs = n
@@ -491,6 +491,13 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			if !cfg.noerror {
 				return 1
 			}
+			// POSIX requires the current record counts immediately after every
+			// input error that conv=noerror permits us to continue past.
+			snapshotDDStatus(&status)
+			if err := emitStatus(rc.Err, &status); err != nil {
+				fmt.Fprintf(rc.Err, "dd: error writing status: %v\n", reason(err))
+				return 1
+			}
 			hadReadError = true
 			if n == 0 {
 				if cfg.sync {
@@ -572,9 +579,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 		outf = nil
 	}
-	if blockConv != nil {
-		status.truncated = blockConv.truncated
-	}
+	snapshotDDStatus(&status)
 	if sigctx.Interrupted() {
 		return finishInterrupted(rc, sigctx, &status)
 	}
@@ -607,6 +612,12 @@ type ddStatus struct {
 
 func finishInterrupted(rc *tool.RunContext, sigctx *interruptContext, status *ddStatus) int {
 	code := interruptedExitCode(rc, sigctx)
+	snapshotDDStatus(status)
+	_ = emitStatus(rc.Err, status)
+	return code
+}
+
+func snapshotDDStatus(status *ddStatus) {
 	if status.blockConv != nil {
 		status.truncated = status.blockConv.truncated
 	}
@@ -616,8 +627,6 @@ func finishInterrupted(rc *tool.RunContext, sigctx *interruptContext, status *dd
 		// exactly as the normal completion path does.
 		status.outFull, status.outPartial = status.blocker.full, status.blocker.partial
 	}
-	_ = emitStatus(rc.Err, status)
-	return code
 }
 
 func interruptedExitCode(rc *tool.RunContext, sigctx *interruptContext) int {
