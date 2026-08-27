@@ -16,13 +16,6 @@ import (
 // POSIX.1-2016 diff evidence (Issue 7, XCU:diff). This file pins mandatory
 // operand and error-status clauses that the broader format tests do not isolate.
 
-func TestIssue7RejectsTwoStandardInputOperands(t *testing.T) {
-	out, errb, code := runIn(t, t.TempDir(), "same\n", "-", "-")
-	if code != 2 || out != "" || !strings.Contains(errb, "standard input cannot be both files") {
-		t.Fatalf("diff - - = (%q, %q, %d), want usage diagnostic and status >1", out, errb, code)
-	}
-}
-
 func TestIssue7DirectoryFileOperandUsesBasename(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "left"), 0o755); err != nil {

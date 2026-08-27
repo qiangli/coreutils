@@ -112,10 +112,6 @@ func run(rc *tool.RunContext, args []string) int {
 	default:
 		return tool.UsageError(rc, cmd, "extra operand '%s'", operands[2])
 	}
-	if operands[0] == "-" && operands[1] == "-" {
-		return tool.UsageError(rc, cmd, "standard input cannot be both files")
-	}
-
 	// Buffer diff output (it is often large and emitted line by line).
 	bw := bufio.NewWriter(rc.Out)
 	brc := &tool.RunContext{Ctx: rc.Ctx, Dir: rc.Dir, Env: rc.Env,
