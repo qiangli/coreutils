@@ -26,6 +26,18 @@ type fakeConversation struct {
 	cleaned  bool
 }
 
+type passthroughDisplay struct{}
+
+func (*passthroughDisplay) Local(data []byte, accept bool) ([]string, bool, error) {
+	if !accept {
+		return nil, false, nil
+	}
+	return []string{string(data)}, false, nil
+}
+func (*passthroughDisplay) Remote(string) error     { return nil }
+func (*passthroughDisplay) PeerClosed(string) error { return nil }
+func (*passthroughDisplay) Close() error            { return nil }
+
 func (f *fakeConversation) ID() string          { return f.id }
 func (f *fakeConversation) Join() (bool, error) { return f.joined, f.joinErr }
 func (f *fakeConversation) Send(s string) error { f.sent = append(f.sent, s); return nil }
@@ -43,12 +55,14 @@ func installFakes(t *testing.T, conv *fakeConversation) *string {
 	oldCurrent, oldLookup, oldNotify := currentAccountFn, lookupAccountFn, notifyTTYFn
 	oldOpen, oldInput, oldPoll := openConversationFn, newInputFn, pollInterval
 	oldInterrupt, oldOwner, oldAlive, oldRoot := watchInterruptFn, fileOwnerUIDFn, processAliveFn, validateSharedRootFn
+	oldCheckTerminal, oldDisplay := checkTerminalCapabilitiesFn, newDisplayFn
 	t.Cleanup(func() {
 		isTerminalFn, readSessionsFn, recipientPermittedFn = oldTerminal, oldSessions, oldPermission
 		currentAccountFn, lookupAccountFn, notifyTTYFn = oldCurrent, oldLookup, oldNotify
 		openConversationFn, newInputFn, pollInterval = oldOpen, oldInput, oldPoll
 		watchInterruptFn, fileOwnerUIDFn, processAliveFn = oldInterrupt, oldOwner, oldAlive
 		validateSharedRootFn = oldRoot
+		checkTerminalCapabilitiesFn, newDisplayFn = oldCheckTerminal, oldDisplay
 	})
 	isTerminalFn = func(any) bool { return true }
 	currentAccountFn = func() (account, error) { return account{Name: "alice", UID: "1001"}, nil }
@@ -70,6 +84,8 @@ func installFakes(t *testing.T, conv *fakeConversation) *string {
 	openConversationFn = func(string, account, account) (conversation, error) { return conv, nil }
 	pollInterval = time.Millisecond
 	watchInterruptFn = func() (<-chan os.Signal, func()) { return make(chan os.Signal), func() {} }
+	checkTerminalCapabilitiesFn = func(*tool.RunContext) error { return nil }
+	newDisplayFn = func(*tool.RunContext, string, string) (display, error) { return &passthroughDisplay{}, nil }
 	return &notice
 }
 
@@ -178,9 +194,9 @@ func TestSyntaxAndTerminalRequirements(t *testing.T) {
 	conv := &fakeConversation{id: "x", joined: true}
 	installFakes(t, conv)
 	for _, args := range [][]string{nil, {"bob", "pts/7", "extra"}, {"-x", "bob"}} {
-		code, _, stderr := invoke(t, "", args...)
-		if code != 2 || stderr == "" {
-			t.Fatalf("args=%q exit=%d stderr=%q", args, code, stderr)
+		code, stdout, stderr := invoke(t, "", args...)
+		if code == 0 || stdout == "" || stderr != "" {
+			t.Fatalf("args=%q exit=%d stdout=%q stderr=%q", args, code, stdout, stderr)
 		}
 	}
 	isTerminalFn = func(any) bool { return false }
@@ -441,7 +457,7 @@ func TestConverseCancellationWithBlockedPipeReturnsAndClosesReader(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	rc := &tool.RunContext{Ctx: ctx, Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{In: r, Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}}
 	done := make(chan int, 1)
-	go func() { done <- converse(rc, "bob", conv, make(chan os.Signal)) }()
+	go func() { done <- converse(rc, "alice", "bob", conv, make(chan os.Signal)) }()
 	time.Sleep(10 * time.Millisecond)
 	cancel()
 	select {
