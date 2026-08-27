@@ -132,8 +132,13 @@ func TestChmodFiles(t *testing.T) {
 			t.Errorf("mode=%v want %v", fi.Mode().Perm(), want)
 		}
 	}
-	if _, errb, code := runTool(t, dir, "600", "f"); code != 0 {
+	out, errb, code := runTool(t, dir, "600", "f")
+	if code != 0 {
 		t.Fatalf("chmod 600: code=%d err=%q", code, errb)
+	}
+	// POSIX: standard output is not used.
+	if out != "" {
+		t.Errorf("chmod 600 wrote to stdout: %q", out)
 	}
 	check(0o600)
 	if _, _, code := runTool(t, dir, "u+x,g+r", "f"); code != 0 {
