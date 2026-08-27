@@ -67,6 +67,7 @@ func processRunContext() *tool.RunContext {
 		Dir:              dir,
 		DirIsProcessCwd:  true,
 		DedicatedProcess: true,
+		InvocationName:   os.Args[0],
 		Env:              os.Environ(),
 		FS:               tool.NewLocalFS(),
 		SIGPIPEIgnored:   inheritedSIGPIPEWasIgnored(),

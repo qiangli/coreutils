@@ -196,6 +196,10 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		return 2
 	}
 
+	argv0 := rc.InvocationName
+	if argv0 == "" {
+		argv0 = cmd.Name
+	}
 	status, err := interp.ExecProgram(prog, &interp.Config{
 		Stdin:  readerOrEmpty(rc.In),
 		Output: rc.Out,
@@ -205,7 +209,7 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		NewlineOutput: interp.RawNewlineMode,
 		Error:         rc.Err,
 		DecimalPoint:  decimalPoint,
-		Argv0:         cmd.Name,
+		Argv0:         argv0,
 		Args:          resolveFiles(rc, files),
 		Vars:          vars,
 		Environ:       environPairs(rc.Env),

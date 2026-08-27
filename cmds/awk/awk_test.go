@@ -257,6 +257,28 @@ func TestAwkPOSIXProgramFromStdinAndEmptyProgram(t *testing.T) {
 	}
 }
 
+func TestAwkARGV0UsesInvocationNameWhenAvailable(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:            context.Background(),
+		Dir:            t.TempDir(),
+		InvocationName: "/vsc/cushim/awk",
+		Stdio:          tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{`BEGIN { print ARGV[0] }`})
+	if code != 0 || errb.String() != "" || out.String() != "/vsc/cushim/awk\n" {
+		t.Fatalf("awk ARGV[0] = (%q, %q, %d), want invocation path", out.String(), errb.String(), code)
+	}
+
+	out.Reset()
+	errb.Reset()
+	rc.InvocationName = ""
+	code = cmd.Run(rc, []string{`BEGIN { print ARGV[0] }`})
+	if code != 0 || errb.String() != "" || out.String() != "awk\n" {
+		t.Fatalf("embedded awk ARGV[0] = (%q, %q, %d), want fallback command name", out.String(), errb.String(), code)
+	}
+}
+
 func TestAwkInvalidAssignmentAndPOSIXMissingInput(t *testing.T) {
 	if _, errb, code := runTool(t, "", "-v", "1bad=x", `BEGIN { print "bad" }`); code != 2 || !strings.Contains(errb, "invalid -v assignment") {
 		t.Fatalf("invalid -v assignment = (%q, %d), want usage error", errb, code)
