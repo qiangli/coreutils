@@ -270,8 +270,9 @@ func TestMinimalIdentificationSymlinkAndStandardInput(t *testing.T) {
 	}
 
 	// -i still follows a usable symbolic link by default, but -h (and a
-	// dangling link) identify the link itself. This is the portable way for a
-	// shell script to distinguish a regular file from the other file types.
+	// dangling link) identify the link itself using the STDOUT alternative
+	// format: "%s: %s %s\n", <file>, "symbolic link to", <contents>. -i only
+	// restricts classification of regular files.
 	out, errb, code := invoke(t, dir, "", "-i", "link", "dangling")
 	want := "link: regular file\ndangling: symbolic link to missing\n"
 	if out != want || errb != "" || code != 0 {

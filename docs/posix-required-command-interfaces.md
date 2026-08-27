@@ -1760,7 +1760,7 @@ expr operand...
 
 **Operands:** `operand`. Evaluate the expression formed by all operands after an optional -- delimiter; operands are separate tokens and no stdin data is consumed.
 
-**Special tokens:** Operators are |, &, =, >, >=, <, <=, !=, +, -, *, /, %, :, and parentheses; leading + forces the following token to be a string operand; GNU string-function keywords remain extensions outside the POSIX base grammar.
+**Special tokens:** Operators are |, &, =, >, >=, <, <=, !=, +, -, *, /, %, :, and parentheses; leading + forces the following token to be a string operand; GNU string-function keywords remain extensions in every mode because Issue 7 leaves their results unspecified, so POSIXLY_CORRECT does not strip them.
 
 **Standard input:** Not used.
 
@@ -1784,7 +1784,7 @@ expr operand...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/expr`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/expr/expr_test.go#TestExprPOSIXArithmeticAndComparison;cmds/expr/expr_test.go#TestExprPOSIXBooleanAndExitStatus;cmds/expr/expr_test.go#TestExprPOSIXMatchAndStringFunctions;cmds/expr/expr_test.go#TestExprPOSIXOperandsStdinAndDiagnostics;cmds/expr/expr_test.go#TestExprLocaleCharacterBoundaries;cmds/expr/expr_test.go#TestExprLocaleCollationComparison;cmds/expr/expr_test.go#TestExprLocaleRegexClassesEquivalenceAndRanges;cmds/expr/expr_test.go#TestExprLocaleBREBackreferences`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/expr/expr_test.go#TestExprPOSIXArithmeticAndComparison;cmds/expr/expr_test.go#TestExprPOSIXBooleanAndExitStatus;cmds/expr/expr_test.go#TestExprPOSIXMatchAndStringFunctions;cmds/expr/expr_test.go#TestExprPOSIXOperandsStdinAndDiagnostics;cmds/expr/expr_test.go#TestExprLocaleCharacterBoundaries;cmds/expr/expr_test.go#TestExprLocaleCollationComparison;cmds/expr/expr_test.go#TestExprLocaleRegexClassesEquivalenceAndRanges;cmds/expr/expr_test.go#TestExprLocaleBREBackreferences;cmds/expr/issue7_test.go#TestExprIssue7DoubleDashDelimiter;cmds/expr/issue7_test.go#TestExprIssue7NonconflictingExtensionsSurvivePosixlyCorrect;cmds/expr/issue7_test.go#TestExprIssue7DoubleDashAsFirstTokenOnly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
@@ -1987,7 +1987,7 @@ file -i [-h] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/file`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError;cmds/file/issue7_test.go#TestFileIssue7MagicOptionArgumentsAndPermutation;cmds/file/issue7_test.go#TestFileIssue7DoubleDashParsing`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError;cmds/file/issue7_test.go#TestFileIssue7MagicOptionArgumentsAndPermutation;cmds/file/issue7_test.go#TestFileIssue7DoubleDashParsing;cmds/file/issue7_test.go#TestFileIssue7SymbolicLinkAlternativeFormat`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
@@ -2037,7 +2037,7 @@ find [-H|-L] path... [operand_expression...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/find`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/find/issue7_test.go#TestFindIssue7OperatorPrecedence;cmds/find/issue7_test.go#TestFindIssue7NameLeadingPeriodNotSpecial;cmds/find/issue7_test.go#TestFindIssue7NumericArgumentTrichotomy;cmds/find/issue7_test.go#TestFindIssue7FollowOptionsOnlyLeading;cmds/find/issue7_test.go#TestFindIssue7DoubleDashEndsLeadingOptions;cmds/find/issue7_unix_test.go#TestFindIssue7NouserUnownedPositivePath;cmds/find/issue742_test.go#TestFindIssue7POSIXModeRequiresPathOperand;cmds/find/issue742_test.go#TestFindIssue7StatusAggregation;cmds/find/issue742_test.go#TestFindIssue7ExecSideEffectsAndBatching;cmds/find/issue742_test.go#TestFindIssue7LCAllPrecedenceForOKAffirmative;cmds/find/issue742_unix_test.go#TestFindIssue7OwnershipSeamUnassignedOwnerAndGroup;cmds/find/issue742_unix_test.go#TestFindIssue7NewerMissingReference;cmds/find/issue742_unix_test.go#TestFindIssue7UnreadableDirectoryTraversal`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/find/issue7_test.go#TestFindIssue7OperatorPrecedence;cmds/find/issue7_test.go#TestFindIssue7NameLeadingPeriodNotSpecial;cmds/find/issue7_test.go#TestFindIssue7NumericArgumentTrichotomy;cmds/find/issue7_test.go#TestFindIssue7FollowOptionsOnlyLeading;cmds/find/issue7_test.go#TestFindIssue7DoubleDashEndsLeadingOptions;cmds/find/issue7_unix_test.go#TestFindIssue7NouserUnownedPositivePath;cmds/find/issue742_test.go#TestFindIssue7POSIXModeRequiresPathOperand;cmds/find/issue742_test.go#TestFindIssue7StatusAggregation;cmds/find/issue742_test.go#TestFindIssue7ExecSideEffectsAndBatching;cmds/find/issue742_test.go#TestFindIssue7LCAllPrecedenceForOKAffirmative;cmds/find/issue742_unix_test.go#TestFindIssue7OwnershipSeamUnassignedOwnerAndGroup;cmds/find/issue742_unix_test.go#TestFindIssue7NewerMissingReference;cmds/find/issue742_unix_test.go#TestFindIssue7UnreadableDirectoryTraversal;cmds/find/issue7_test.go#TestFindIssue7DepthPruneAndGlobalScope`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:find:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

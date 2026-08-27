@@ -132,4 +132,40 @@ func TestFileIssue7DoubleDashParsing(t *testing.T) {
 	}
 }
 
+// TestFileIssue7SymbolicLinkAlternativeFormat pins the STDOUT alternative
+// format clause: when file is identified as a symbolic link (via -h, or a
+// dangling link, which the -h option text says is identified "as if -h had
+// been specified"), the output form is "%s: %s %s\n", <file>, <type>,
+// <contents of link>, with <type> containing "symbolic link to". The -i
+// option only restricts further classification of regular files, so it does
+// not change the symbolic-link line.
+func TestFileIssue7SymbolicLinkAlternativeFormat(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "target", []byte("payload\n"))
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlink creation failed: %v", err)
+	}
+	if err := os.Symlink("absent", filepath.Join(dir, "dangling")); err != nil {
+		t.Skipf("symlink creation failed: %v", err)
+	}
+	out, errb, code := invoke(t, dir, "", "-h", "link", "dangling")
+	want := "link: symbolic link to target\ndangling: symbolic link to absent\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("file -h = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	// Without -h the usable link is followed, so its line reports content
+	// classification ("regular file" itself is only forced by -i); the
+	// dangling link still uses the alternative format.
+	out, errb, code = invoke(t, dir, "", "link", "dangling")
+	want = "link: ASCII text\ndangling: symbolic link to absent\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("file links = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	// -i leaves the symbolic-link clause untouched.
+	out, errb, code = invoke(t, dir, "", "-i", "-h", "link")
+	if code != 0 || errb != "" || out != "link: symbolic link to target\n" {
+		t.Fatalf("file -i -h link = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func mkdir(dir, name string) error { return os.Mkdir(filepath.Join(dir, name), 0o755) }

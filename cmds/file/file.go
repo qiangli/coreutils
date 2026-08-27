@@ -137,6 +137,23 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan testPlan, open regularFileOpener) (string, error) {
 	if name == "-" {
 		if minimal {
+			if f, ok := rc.In.(interface{ Stat() (os.FileInfo, error) }); ok {
+				if info, err := f.Stat(); err == nil {
+					switch {
+					case info.IsDir():
+						return "directory", nil
+					case info.Mode()&os.ModeNamedPipe != 0:
+						return "fifo", nil
+					case info.Mode()&os.ModeSocket != 0:
+						return "socket", nil
+					case info.Mode()&os.ModeDevice != 0:
+						if info.Mode()&os.ModeCharDevice != 0 {
+							return "character special", nil
+						}
+						return "block special", nil
+					}
+				}
+			}
 			return "regular file", nil
 		}
 		data, err := inspectStream(rc.In, plan)
@@ -152,6 +169,9 @@ func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan tes
 		return "", err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
+		// The -i option only restricts classification of regular files;
+		// symbolic links still use the STDOUT alternative format whose
+		// <type> contains "symbolic link to" followed by the link contents.
 		if noFollow {
 			return describeSymlink(path)
 		}
@@ -167,10 +187,19 @@ func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan tes
 	case info.IsDir():
 		return "directory", nil
 	case info.Mode()&os.ModeNamedPipe != 0:
+		if minimal {
+			return "fifo", nil
+		}
 		return "fifo (named pipe)", nil
 	case info.Mode()&os.ModeSocket != 0:
 		return "socket", nil
 	case info.Mode()&os.ModeDevice != 0:
+		if minimal {
+			if info.Mode()&os.ModeCharDevice != 0 {
+				return "character special", nil
+			}
+			return "block special", nil
+		}
 		return specialDeviceType(info), nil
 	case !info.Mode().IsRegular():
 		return "special file", nil

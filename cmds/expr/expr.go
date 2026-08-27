@@ -212,6 +212,11 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
+	// The "--" delimiter and the GNU keyword extensions (length, substr,
+	// index, match, quote) are deliberately not gated on POSIXLY_CORRECT:
+	// XBD Utility Syntax Guideline 10 and the expr APPLICATION USAGE require
+	// "--" to protect leading-minus operands, and Issue 7 leaves the keyword
+	// results unspecified, so the extensions cannot conflict with the grammar.
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		_, err := fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
 		if err != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(err) {

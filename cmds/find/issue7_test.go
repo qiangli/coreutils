@@ -1,6 +1,8 @@
 package findcmd
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -154,5 +156,39 @@ func TestFindIssue7DoubleDashEndsLeadingOptions(t *testing.T) {
 	_, errb, code := runFind(t, dir, "--", "-H")
 	if code == 0 || !strings.Contains(errb, "-H") {
 		t.Errorf("-H after -- must be an expression error: err=%q code=%d", errb, code)
+	}
+}
+
+// TestFindIssue7DepthPruneAndGlobalScope pins two whole-expression clauses
+// from the -depth and -prune primary descriptions: "If the -depth primary is
+// specified, the -prune primary shall have no effect", and -depth "shall
+// apply to the entire expression even if the -depth primary would not
+// normally be evaluated" (here it sits on the false side of an -o).
+func TestFindIssue7DepthPruneAndGlobalScope(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sub/inner.txt", "top.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Depth-first order is observable: sub/inner.txt precedes sub, and the
+	// start point comes last. -depth reached only via the false branch of an
+	// -o must still reorder the walk.
+	out, errb, code := runFind(t, dir, ".", "-name", "zzz", "-o", "-depth")
+	want := "./sub/inner.txt\n./sub\n./top.txt\n.\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("find . -name zzz -o -depth = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	// With -depth active, -prune no longer suppresses descent into "sub":
+	// its children are still visited. "./sub" itself still prints because
+	// -prune evaluates true, and the true branch of -o feeds the default
+	// -print; without -depth the "sub" subtree would be absent entirely.
+	out, errb, code = runFind(t, dir, ".", "-depth", "-name", "sub", "-prune", "-o", "-type", "f")
+	want = "./sub/inner.txt\n./sub\n./top.txt\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("find . -depth -name sub -prune -o -type f = (%q, %q, %d), want %q", out, errb, code, want)
 	}
 }
