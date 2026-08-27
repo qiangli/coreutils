@@ -109,6 +109,28 @@ func TestPOSIXGlobalSkipsMarkedLineDeletedByEarlierCommand(t *testing.T) {
 	}
 }
 
+func TestPOSIXGlobalNoMatchIsPerLineNoOpAndConsumesUndo(t *testing.T) {
+	// The inner substitution has no match. ed treats that as a no-op for
+	// this global target, continues, and does not let u reach an older change.
+	in := "a\nx\n.\ng/x/s/y/z/\nu\n1,$p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "x\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXReadCreatesUndoBoundary(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("read\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := "a\nold\n.\n0r in\nu\n1,$p\nQ\n"
+	code, out, errb := runEdIn(t, dir, in, "-s")
+	if code != 0 || errb != "" || out != "old\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
 func TestPOSIXGlobalUnmarksAnotherTargetMovedByCommand(t *testing.T) {
 	in := "a\nx1\nx2\nz\n.\ng/^x/+1m0\n1,$p\nQ\n"
 	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")

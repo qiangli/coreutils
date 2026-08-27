@@ -988,6 +988,11 @@ func (e *Engine) substitute(first, last int, arg string) error {
 		changed, lastChanged = true, n+len(pieces)-1
 	}
 	if !changed {
+		if e.inGlobal {
+			// A substitution which finds no match on one selected line is a
+			// no-op for that line, not a failure of the global command.
+			return nil
+		}
 		e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
 		return fmt.Errorf("no match")
 	}

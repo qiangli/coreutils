@@ -165,8 +165,14 @@ func (e *Engine) readFile(after int, arg string) error {
 	if err != nil {
 		return err
 	}
+	if len(data) > 0 {
+		e.saveUndo()
+	}
 	if err := e.appendLines(after, splitText(data)); err != nil {
 		return err
+	}
+	if len(data) > 0 {
+		e.changeSeq++
 	}
 	if !strings.HasPrefix(trimBlank(arg), "!") && e.Filename == "" {
 		e.Filename = name
@@ -289,7 +295,6 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			targets = append(targets, n)
 		}
 	}
-	oldUndo, oldUndoMarks, oldUndoValid := e.undoBuffer.Clone(), cloneMarks(e.undoMarks), e.undoValid
 	beforeSeq := e.changeSeq
 	e.saveUndo()
 	e.inGlobal = true
@@ -298,7 +303,10 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 		e.inGlobal = false
 		e.globalTargets = nil
 		if beforeSeq == e.changeSeq {
-			e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
+			// A completed global command owns the undo boundary, even when
+			// its command list made no change.
+			e.undoBuffer, e.undoMarks, e.undoValid = e.Buffer.Clone(), cloneMarks(e.marks), true
+			e.changeSeq++
 		}
 	}()
 	previousInteractive := ""
