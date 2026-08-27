@@ -56,6 +56,7 @@ type Engine struct {
 	undoMarks       map[byte]int
 	undoValid       bool
 	inGlobal        bool
+	globalQuit      bool
 	changeSeq       uint64
 }
 
@@ -456,9 +457,13 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		}
 		return false, err
 	case 'g', 'v':
-		return false, e.global(addrs, explicit, arg, cmd == 'g', false)
+		e.globalQuit = false
+		err := e.global(addrs, explicit, arg, cmd == 'g', false)
+		return e.globalQuit, err
 	case 'G', 'V':
-		return false, e.global(addrs, explicit, arg, cmd == 'G', true)
+		e.globalQuit = false
+		err := e.global(addrs, explicit, arg, cmd == 'G', true)
+		return e.globalQuit, err
 	case 'P':
 		if explicit {
 			return false, fmt.Errorf("unexpected address or argument")

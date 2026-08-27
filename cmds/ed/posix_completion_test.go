@@ -92,6 +92,13 @@ func TestPOSIXGlobalInputModeAndInteractiveRecall(t *testing.T) {
 	}
 }
 
+func TestPOSIXGlobalCommandListCanQuit(t *testing.T) {
+	code, out, errb := runEdIn(t, t.TempDir(), "a\nx\n.\ng/x/Q\nthis-is-not-a-command\n", "-s")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
 func TestPOSIXReadAppendWriteAndShellForms(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("file\n"), 0o644); err != nil {

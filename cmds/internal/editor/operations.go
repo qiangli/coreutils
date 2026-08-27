@@ -354,6 +354,7 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			return execErr
 		}
 		if quit {
+			e.globalQuit = true
 			return nil
 		}
 		start = e.Buffer.Current + 1
