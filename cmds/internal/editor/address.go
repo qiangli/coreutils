@@ -25,6 +25,7 @@ func (e *Engine) parseAddresses(s string) ([]int, int, bool, error) {
 			return out, p, len(out) > 0, nil
 		}
 		sep := s[p]
+		firstOmitted := len(out) == 0
 		if len(out) == 0 {
 			if sep == ',' {
 				out = append(out, 1)
@@ -41,12 +42,14 @@ func (e *Engine) parseAddresses(s string) ([]int, int, bool, error) {
 			return nil, p, true, err
 		}
 		if !found {
-			b, n = out[len(out)-1], p
+			if firstOmitted {
+				b = e.Buffer.Last()
+			} else {
+				b = out[len(out)-1]
+			}
+			n = p
 		}
 		out = append(out, b)
-		if len(out) > 2 {
-			out = out[len(out)-2:]
-		}
 		pos = n
 	}
 }
@@ -58,6 +61,19 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 	}
 	value, found := 0, true
 	switch s[pos] {
+	case '\'':
+		if pos+1 >= len(s) || s[pos+1] < 'a' || s[pos+1] > 'z' {
+			return 0, pos, false, fmt.Errorf("invalid mark address")
+		}
+		if e.marks == nil {
+			return 0, pos, false, fmt.Errorf("invalid address")
+		}
+		var ok bool
+		value, ok = e.marks[s[pos+1]]
+		if !ok {
+			return 0, pos, false, fmt.Errorf("invalid address")
+		}
+		pos += 2
 	case '.':
 		value, pos = e.Buffer.Current, pos+1
 	case '$':
