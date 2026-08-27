@@ -84,12 +84,12 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 32 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 28 |
-| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 13 |
+| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
-| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 36 |
-| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 11 | 74 |
+| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 37 |
+| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 11 | 75 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 2 | 22 |
