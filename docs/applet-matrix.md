@@ -116,8 +116,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 51 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
-| `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 1 | 14 |
-| `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 1 | 14 |
+| `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 2 | 27 |
+| `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 2 | 27 |
 | `make` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |

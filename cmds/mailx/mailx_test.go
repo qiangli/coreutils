@@ -2,6 +2,8 @@ package mailxcmd
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,18 @@ import (
 	mailxpkg "github.com/qiangli/coreutils/pkg/mailx"
 	"github.com/qiangli/coreutils/tool"
 )
+
+type mailxFailWriter struct {
+	err   error
+	short bool
+}
+
+func (w mailxFailWriter) Write(p []byte) (int, error) {
+	if w.short && len(p) > 0 {
+		return len(p) - 1, nil
+	}
+	return 0, w.err
+}
 
 func invoke(t *testing.T, stdin string, args ...string) (string, string, int, string) {
 	t.Helper()
@@ -122,6 +136,34 @@ func TestExistAndHeadersModes(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "one") || !strings.Contains(got, "two") {
 		t.Fatalf("headers = %q", got)
+	}
+}
+
+func TestOutputFailuresReachCommandBoundary(t *testing.T) {
+	dir := t.TempDir()
+	path := seedMailbox(t, dir, "one")
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		want string
+	}{
+		{name: "error", out: mailxFailWriter{err: errors.New("output unavailable")}, want: "output unavailable"},
+		{name: "short write", out: mailxFailWriter{short: true}, want: "short write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Dir:   dir,
+				Env:   []string{"LOGNAME=alice", "MAIL=" + path},
+				Stdio: tool.Stdio{In: strings.NewReader(""), Out: tc.out, Err: &errOut},
+			}
+			if code := run(rc, []string{"-H", "-n"}); code != 1 {
+				t.Fatalf("exit %d, want 1", code)
+			}
+			if got := errOut.String(); !strings.Contains(got, "mailx: write error:") || !strings.Contains(got, tc.want) {
+				t.Fatalf("diagnostic = %q", got)
+			}
+		})
 	}
 }
 
