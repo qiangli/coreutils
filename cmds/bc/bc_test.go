@@ -76,18 +76,6 @@ func TestFilesPrecedeStandardInputAndShareState(t *testing.T) {
 	}
 }
 
-func TestReadConsumesExpressionFromStandardInput(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/program.bc"
-	if err := os.WriteFile(path, []byte("read()*2\nquit\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out, errOut, code := runBC(t, "21\n", path)
-	if code != 0 || errOut != "" || out != "42\n" {
-		t.Fatalf("got (%q,%q,%d)", out, errOut, code)
-	}
-}
-
 func TestDiagnosticsAndExitStatus(t *testing.T) {
 	_, errOut, code := runBC(t, "1/0\n")
 	if code == 0 || !strings.Contains(errOut, "divide by zero") {
@@ -141,6 +129,15 @@ func TestPOSIXOptionAndOperandContract(t *testing.T) {
 	_, errOut, code = runBC(t, "", "-x")
 	if code != 2 || !strings.Contains(errOut, "unknown shorthand flag") {
 		t.Fatalf("unknown option: stderr=%q code=%d", errOut, code)
+	}
+}
+
+func TestRejectsNonPOSIXLanguageExtensions(t *testing.T) {
+	for _, src := range []string{"# comment\n", "if(0) 1 else 2\n", "i=0; continue\n", "halt\n", "read()\n", "!1\n", "1&&1\n", "return 1\n"} {
+		_, errOut, code := runBC(t, src)
+		if code == 0 || errOut == "" {
+			t.Fatalf("%q unexpectedly accepted: stderr=%q code=%d", src, errOut, code)
+		}
 	}
 }
 

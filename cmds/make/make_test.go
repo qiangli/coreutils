@@ -142,6 +142,18 @@ func TestAllRequiredOptionsParseAndOrderedKeepStop(t *testing.T) {
 	}
 }
 
+func TestUniversalHelpAndVersion(t *testing.T) {
+	d := t.TempDir()
+	out, errOut, code := runMake(t, d, nil, "--help")
+	if code != 0 || errOut != "" || !strings.Contains(out, "Usage: make [-einpqrst]") || !strings.Contains(out, "-f makefile") {
+		t.Fatalf("--help=(%q,%q,%d)", out, errOut, code)
+	}
+	out, errOut, code = runMake(t, d, nil, "-V")
+	if code != 0 || errOut != "" || !strings.Contains(out, "make (qiangli/coreutils)") {
+		t.Fatalf("-V=(%q,%q,%d)", out, errOut, code)
+	}
+}
+
 func TestGroupedFileOption(t *testing.T) {
 	o, _, err := parseArgs([]string{"-enfBuildfile"}, options{})
 	if err != nil || !o.envOverride || !o.dry || len(o.files) != 1 || o.files[0] != "Buildfile" {

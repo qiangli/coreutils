@@ -77,6 +77,9 @@ type engine struct {
 var errOutOfDate = errors.New("target is out of date")
 
 func run(rc *tool.RunContext, args []string) int {
+	if code, handled := universalHelpVersion(rc, args); handled {
+		return code
+	}
 	restoreSignals := installMakeSignalContext(rc)
 	defer restoreSignals()
 	if rc.FS == nil {
@@ -176,6 +179,26 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Out, "make: nothing to be done")
 	}
 	return 0
+}
+
+// universalHelpVersion keeps make on the same multicall help/version contract
+// as commands that use tool.Parse.  make has an order-sensitive POSIX parser,
+// so routing its options through pflag would change the meaning of -k/-S and
+// macro operands.
+func universalHelpVersion(rc *tool.RunContext, args []string) (int, bool) {
+	for _, arg := range args {
+		switch arg {
+		case "--":
+			return 0, false
+		case "--help", "-h":
+			fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n  -e              environment variables override makefile variables\n  -f makefile     read makefile (may be repeated; '-' is standard input)\n  -i              ignore recipe errors\n  -k, -S          continue after errors, or stop at the first error\n  -n, -p, -q      print recipes, print database, or query out-of-date status\n  -r, -s, -t      disable built-ins, silence recipes, or touch targets\n  -h, --help      display this help and exit\n  -V, --version   output version information and exit\n", cmd.Usage, cmd.Synopsis)
+			return 0, true
+		case "--version", "-V":
+			fmt.Fprintf(rc.Out, "make (qiangli/coreutils) %s\n", tool.Version)
+			return 0, true
+		}
+	}
+	return 0, false
 }
 
 func parseArgs(args []string, o options) (options, []string, error) {

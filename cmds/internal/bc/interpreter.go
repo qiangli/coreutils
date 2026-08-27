@@ -84,7 +84,6 @@ type flow int
 const (
 	flowNone flow = iota
 	flowBreak
-	flowContinue
 	flowReturn
 	flowQuit
 )
@@ -195,18 +194,12 @@ func (p *parser) statement() (stmt, error) {
 		case "break":
 			p.take()
 			return flowStmt(flowBreak), nil
-		case "continue":
-			p.take()
-			return flowStmt(flowContinue), nil
 		case "quit":
 			p.take()
 			// POSIX quit is lexical: it terminates even in an unselected arm
 			// or function definition, without requiring the enclosing syntax
 			// to be completed.
 			return nil, io.EOF
-		case "halt":
-			p.take()
-			return flowStmt(flowQuit), nil
 		case "return":
 			p.take()
 			var e expr = numberExpr{fromInt64(0)}
@@ -217,12 +210,6 @@ func (p *parser) statement() (stmt, error) {
 					return nil, err
 				}
 				if err = p.want(")"); err != nil {
-					return nil, err
-				}
-			} else if p.cur().k != tNL && p.cur().s != "}" {
-				var err error
-				e, err = p.expression()
-				if err != nil {
 					return nil, err
 				}
 			}
@@ -336,16 +323,7 @@ func (p *parser) parseIf() (stmt, error) {
 		return nil, err
 	}
 	body := []stmt{s}
-	var alt []stmt
-	if p.cur().s == "else" {
-		p.take()
-		p.skipNL()
-		s, err = p.statement()
-		if err == nil {
-			alt = []stmt{s}
-		}
-	}
-	return ifStmt{c, body, alt}, err
+	return ifStmt{c, body, nil}, err
 }
 func (p *parser) parseWhile() (stmt, error) {
 	p.take()
@@ -401,7 +379,7 @@ func (p *parser) parseFor() (stmt, error) {
 	return forStmt{init, cond, post, []stmt{s}}, err
 }
 
-var prec = map[string]int{"=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1, "^=": 1, "||": 2, "&&": 3, "+": 5, "-": 5, "*": 6, "/": 6, "%": 6, "^": 7}
+var prec = map[string]int{"=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1, "^=": 1, "+": 5, "-": 5, "*": 6, "/": 6, "%": 6, "^": 7}
 
 func (p *parser) expression() (expr, error) { return p.binary(1) }
 func (p *parser) binary(min int) (expr, error) {
@@ -432,13 +410,6 @@ func (p *parser) unary() (expr, error) {
 	if p.accept("-") {
 		e, err := p.unary()
 		return unaryExpr{"-", e}, err
-	}
-	if p.accept("+") {
-		return p.unary()
-	}
-	if p.accept("!") {
-		e, err := p.unary()
-		return unaryExpr{"!", e}, err
 	}
 	if p.accept("++") {
 		e, err := p.unary()
@@ -776,28 +747,6 @@ type callExpr struct {
 }
 
 func (x callExpr) eval(b *Interpreter) (Number, error) {
-	if x.name == "read" {
-		if len(x.args) != 0 {
-			return Zero(), fmt.Errorf("read requires no arguments")
-		}
-		line, err := b.In.ReadString('\n')
-		if err != nil && len(line) == 0 {
-			return Zero(), fmt.Errorf("read: %w", err)
-		}
-		toks, lexErr := lex(line)
-		if lexErr != nil {
-			return Zero(), lexErr
-		}
-		p := parser{t: toks}
-		value, parseErr := p.expression()
-		if parseErr != nil {
-			return Zero(), parseErr
-		}
-		if p.cur().k != tNL && p.cur().k != tEOF {
-			return Zero(), fmt.Errorf("read: expected one expression")
-		}
-		return value.eval(b)
-	}
 	if b.Mathlib && b.funcs[x.name] == nil && len(x.name) == 1 && strings.Contains("scael", x.name) {
 		if len(x.args) != 1 {
 			return Zero(), fmt.Errorf("%s requires one argument", x.name)
@@ -1015,8 +964,6 @@ func (s whileStmt) run(b *Interpreter) (result, error) {
 		switch r.flow {
 		case flowBreak:
 			return result{}, nil
-		case flowContinue:
-			continue
 		case flowReturn, flowQuit:
 			return r, nil
 		}

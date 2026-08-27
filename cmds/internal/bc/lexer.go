@@ -57,12 +57,6 @@ func lex(src string) ([]token, error) {
 			i = j + 2
 			continue
 		}
-		if c == '#' {
-			for i < len(src) && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
 		if c == '"' {
 			startLine := line
 			j := i + 1
@@ -109,13 +103,24 @@ func lex(src string) ([]token, error) {
 			i = j
 			continue
 		}
-		if unicode.IsLetter(rune(c)) || c == '_' {
-			j := i + 1
-			for j < len(src) && (unicode.IsLetter(rune(src[j])) || unicode.IsDigit(rune(src[j])) || src[j] == '_') {
-				j++
+		if c >= 'a' && c <= 'z' {
+			// POSIX has only one-character ordinary, array, and function
+			// identifiers.  Its reserved words are the sole multi-character
+			// identifiers, and take precedence under the longest-token rule.
+			keyword := ""
+			for _, candidate := range []string{"define", "return", "length", "break", "while", "scale", "sqrt", "auto", "ibase", "obase", "quit", "for", "if"} {
+				if strings.HasPrefix(src[i:], candidate) {
+					keyword = candidate
+					break
+				}
 			}
-			out = append(out, token{tIdent, src[i:j], line})
-			i = j
+			if keyword != "" {
+				out = append(out, token{tIdent, keyword, line})
+				i += len(keyword)
+			} else {
+				out = append(out, token{tIdent, string(c), line})
+				i++
+			}
 			continue
 		}
 		if unicode.IsDigit(rune(c)) || c == '.' {
@@ -145,7 +150,7 @@ func lex(src string) ([]token, error) {
 			continue
 		}
 		matched := ""
-		for _, op := range []string{"++", "--", "+=", "-=", "*=", "/=", "%=", "^=", "==", "!=", "<=", ">=", "&&", "||"} {
+		for _, op := range []string{"++", "--", "+=", "-=", "*=", "/=", "%=", "^=", "==", "!=", "<=", ">="} {
 			if strings.HasPrefix(src[i:], op) {
 				matched = op
 				break
@@ -156,7 +161,7 @@ func lex(src string) ([]token, error) {
 			i += len(matched)
 			continue
 		}
-		if strings.ContainsRune("+-*/%^=<>!(),{}[]", rune(c)) {
+		if strings.ContainsRune("+-*/%^=<>(),{}[]", rune(c)) {
 			out = append(out, token{tOp, string(c), line})
 			i++
 			continue

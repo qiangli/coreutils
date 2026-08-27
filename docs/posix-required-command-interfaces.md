@@ -401,7 +401,7 @@ bc [-l] [file...]
 
 **Special tokens:** -- ends option parsing; -l loads the required math library and initializes scale to 20.
 
-**Standard input:** Read after all file operands, or immediately when no file is supplied; the read() extension consumes expressions from the same stream.
+**Standard input:** Read after all file operands, or immediately when no file is supplied.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
