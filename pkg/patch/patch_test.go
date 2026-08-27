@@ -303,7 +303,7 @@ func TestApplyRejectOnConflict(t *testing.T) {
 		t.Fatalf("rejected hunk must leave content untouched, got %q", got)
 	}
 	rej := WriteReject("f", "f", res.Rejects)
-	if !strings.Contains(string(rej), "-b\n+B\n") {
+	if !strings.Contains(string(rej), "! b\n") || !strings.Contains(string(rej), "! B\n") {
 		t.Fatalf("reject content missing expected hunk body: %s", rej)
 	}
 }
