@@ -141,7 +141,7 @@ tac	cmds/tac		GNU Coreutils	yes	no	1	6
 tail	cmds/tail		GNU Coreutils	yes	yes	3	27
 talk	cmds/talk		POSIX/Unix utility	no	yes	6	24
 tar	cmds/tar		Bashy/other extension	no	no	1	14
-tee	cmds/tee		GNU Coreutils	yes	yes	3	29
+tee	cmds/tee		GNU Coreutils	yes	yes	3	30
 test	cmds/test		GNU Coreutils	yes	yes	3	32
 time	cmds/time		POSIX/Unix utility	no	yes	4	15
 timeout	cmds/timeout		GNU Coreutils	yes	no	1	5
@@ -152,10 +152,10 @@ tr	cmds/tr		GNU Coreutils	yes	yes	4	34
 tree	cmds/tree		Bashy/other extension	no	no	1	5
 true	cmds/true		GNU Coreutils	yes	yes	1	1
 truncate	cmds/truncate		GNU Coreutils	yes	no	1	6
-tsort	cmds/tsort		GNU Coreutils	yes	yes	1	11
+tsort	cmds/tsort		GNU Coreutils	yes	yes	1	13
 tty	cmds/tty		GNU Coreutils	yes	yes	3	14
 tz	cmds/tz		Bashy/other extension	no	no	1	2
-uname	cmds/uname		GNU Coreutils	yes	yes	3	13
+uname	cmds/uname		GNU Coreutils	yes	yes	3	14
 unexpand	cmds/unexpand		GNU Coreutils	yes	yes	2	26
 uniq	cmds/uniq		GNU Coreutils	yes	yes	2	13
 unlink	cmds/unlink		GNU Coreutils	yes	no	1	3

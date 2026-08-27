@@ -369,6 +369,42 @@ func TestUnameIssue7SelectorCompositionAndOrder(t *testing.T) {
 	}
 }
 
+// TestUnameIssue7OptionTerminatorAndSelectorOrder pins the XBD Utility
+// Syntax Guidelines behind the Issue 7 synopsis "uname [-amnrsv]" and the
+// STDOUT clause: "--" ends option parsing (later option-shaped tokens are
+// operands, and OPERANDS is "None"), and output order never follows flag
+// order.
+func TestUnameIssue7OptionTerminatorAndSelectorOrder(t *testing.T) {
+	// OPERANDS: None; after the terminator "-s" is an operand, rejected.
+	var out bytes.Buffer
+	errText, code := runUnameRaw(t, nil, &out, fixedProbe, "--", "-s")
+	if code != 2 || out.Len() != 0 || !strings.Contains(errText, "extra operand") {
+		t.Fatalf("terminator operand: code=%d stdout=%q stderr=%q", code, out.String(), errText)
+	}
+
+	// A lone "-" is also an operand, not standard input.
+	out.Reset()
+	errText, code = runUnameRaw(t, nil, &out, fixedProbe, "-")
+	if code != 2 || out.Len() != 0 || !strings.Contains(errText, "extra operand") {
+		t.Fatalf("dash operand: code=%d stdout=%q stderr=%q", code, out.String(), errText)
+	}
+
+	// A bare terminator leaves no selectors: the default -s applies.
+	out.Reset()
+	errText, code = runUnameRaw(t, nil, &out, fixedProbe, "--")
+	if code != 0 || errText != "" || out.String() != "S\n" {
+		t.Fatalf("bare terminator: code=%d stdout=%q stderr=%q", code, out.String(), errText)
+	}
+
+	// STDOUT: symbols are written in sysname nodename release version
+	// machine order regardless of the order the selectors were typed.
+	out.Reset()
+	errText, code = runUnameRaw(t, nil, &out, fixedProbe, "-m", "-v", "-r", "-n", "-s")
+	if code != 0 || errText != "" || out.String() != "S N R V M\n" {
+		t.Fatalf("reverse selector order: code=%d stdout=%q stderr=%q", code, out.String(), errText)
+	}
+}
+
 func TestUnameIssue7ProviderAndOutputFailures(t *testing.T) {
 	t.Run("probe", func(t *testing.T) {
 		var out bytes.Buffer

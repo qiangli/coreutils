@@ -334,6 +334,51 @@ func TestTsortIssue7InputCloseFailure(t *testing.T) {
 	}
 }
 
+// TestTsortIssue7StdinNotUsedWithFileOperand pins the XCU:tsort STDIN
+// clause: "Otherwise, the standard input shall not be used." A file
+// operand must win even when standard input holds malformed input.
+func TestTsortIssue7StdinNotUsedWithFileOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "g.txt"), []byte("x y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The lone "z" would be an odd-number-of-tokens failure if read.
+	out, errb, code := runToolDir(t, dir, "z", "g.txt")
+	if code != 0 || errb != "" || out != "x\ny\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+}
+
+// TestTsortIssue7OptionTerminator pins the XBD Utility Syntax Guidelines
+// behind the Issue 7 operand form "tsort [file]": "--" ends option
+// parsing, so option-shaped tokens after it are pathnames.
+func TestTsortIssue7OptionTerminator(t *testing.T) {
+	dir := t.TempDir()
+
+	// "-w" after the terminator is a pathname, not the warnings flag:
+	// the file holds two independent cycles, which exits 1 without -w
+	// but 2 with it, and stdin "p q" would exit 0 if misparsed away.
+	if err := os.WriteFile(filepath.Join(dir, "-w"), []byte("a b\nb a\nc d\nd c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runToolDir(t, dir, "p q\n", "--", "-w")
+	if code != 1 || strings.Count(errb, "input contains a loop:") != 2 {
+		t.Fatalf("terminator before -w: code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	if out != "a\nb\nc\nd\n" {
+		t.Fatalf("terminator before -w: stdout=%q", out)
+	}
+
+	// The terminator before an ordinary operand keeps working.
+	if err := os.WriteFile(filepath.Join(dir, "g"), []byte("x y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runToolDir(t, dir, "z", "--", "g")
+	if code != 0 || errb != "" || out != "x\ny\n" {
+		t.Fatalf("terminator before g: code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+}
+
 func TestTsortExtensionsRemainAvailableWithPOSIXEnvironment(t *testing.T) {
 	for _, args := range [][]string{{"-w"}, {"--warnings-are-errors"}} {
 		var out bytes.Buffer

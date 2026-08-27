@@ -104,3 +104,39 @@ tests, race runs, native and relevant cross-target vet/build checks, manifest
 render/check, applet matrix generation/check, structural applet coverage,
 formatting, and `git diff --check`. Exact commands and results are recorded in
 the accepting commit and review handoff.
+
+## Independent re-audit addendum (2026-08-27, weave issue 3)
+
+A second auditor re-read the Open Group Issue 7, 2016 Edition pages for
+`tee`, `tsort`, and `uname` at coreutils `26d766f` and re-probed the built
+multicall applets against every clause area above. Findings:
+
+- No required-clause implementation gap was confirmed. In particular the
+  Issue 7 `uname` synopsis is exactly `uname [-amnrsv]` (the
+  `-sysname`/`-all`-style long spellings are an Issue 8, 2024 addition and
+  are not required here; the existing `--sysname`/`--release` aliases and GNU
+  long names remain harmless extensions).
+- `tee`'s literal `-` operand, 13-file minimum, umask-filtered `0666`
+  creation, POSIX continue-after-file-write-error rule, and default
+  SIGINT/SIGPIPE dispositions were re-verified behaviorally.
+- `tsort`'s `<blank>`-exact grammar was re-verified against the
+  `a b c c d e / g g / f g e f / h h` example (byte-exact `a`–`h` output),
+  and the strict POSIX reading — carriage return, form feed, and vertical
+  tab stay inside items because `<blank>` is space and tab only — remains
+  the deliberate POSIX-over-GNU choice.
+- Clause-focused tests were added for previously unpinned XBD Utility
+  Syntax Guidelines clauses: `--` terminates option parsing for all three
+  commands (option-shaped tokens after it are operands: `tee -- -a` writes a
+  literal file `-a`, `tsort -- -w` reads a pathname `-w`, `uname -- -s`
+  rejects the operand), short-flag bundling (`tee -ai`/`-ia` append), the
+  XCU:tsort STDIN clause that standard input is not used when a file
+  operand is given, and XCU:uname STDOUT selector-order independence.
+  `go_evidence` rows and the applet matrix were regenerated.
+
+Gate outcome for this addendum: focused and race package tests pass,
+`applet-matrix.py --check` passes, and `posix_manifest.py --check` fails
+only on the shell-owned `alias` row because this weave workspace lacks the
+sibling `bashy`/`sh` evidence checkouts that its
+`sh:interp/issue7_command_interface_test.go` routing references resolve
+against. That failure is present at the untouched `26d766f` tree, predates
+this change, and is unrelated to the three Go applets audited here.

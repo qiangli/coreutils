@@ -428,6 +428,57 @@ func TestTeeExtensionsRemainAvailableWithPOSIXEnvironment(t *testing.T) {
 	}
 }
 
+// TestTeeIssue7OptionTerminatorAndShortBundles pins the XBD Utility
+// Syntax Guidelines clauses behind the Issue 7 synopsis "tee [-ai]
+// [file...]": "--" ends option parsing so later option-shaped tokens are
+// file operands, and single-character options may be bundled.
+func TestTeeIssue7OptionTerminatorAndShortBundles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Guideline 10: after "--", "-a" is a pathname, not the append option.
+	// The file is therefore created and truncated, not appended.
+	out, errb, code := runToolDir(t, dir, "x", "--", "-a")
+	if code != 0 || errb != "" || out != "x" {
+		t.Fatalf("terminator: code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	if got := readFile(t, filepath.Join(dir, "-a")); got != "x" {
+		t.Fatalf("literal -a operand: file content %q, want \"x\"", got)
+	}
+
+	// A long-option-shaped token after the terminator is a pathname too.
+	out, errb, code = runToolDir(t, dir, "y", "--", "--output-error")
+	if code != 0 || errb != "" || out != "y" {
+		t.Fatalf("long token after terminator: code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	if got := readFile(t, filepath.Join(dir, "--output-error")); got != "y" {
+		t.Fatalf("long token operand: file content %q, want \"y\"", got)
+	}
+
+	// A bare terminator with no operands is a pure copy to standard output.
+	out, errb, code = runToolDir(t, dir, "z", "--")
+	if code != 0 || errb != "" || out != "z" {
+		t.Fatalf("bare terminator: code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "--")); !os.IsNotExist(err) {
+		t.Fatalf("bare terminator created a file named \"--\": %v", err)
+	}
+
+	// Guideline 5-style bundling: -ai and -ia are -a plus -i, appending.
+	for _, bundle := range []string{"-ai", "-ia"} {
+		f := filepath.Join(dir, "f"+bundle)
+		if err := os.WriteFile(f, []byte("old"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		out, errb, code = runToolDir(t, dir, "new", bundle, f)
+		if code != 0 || errb != "" || out != "new" {
+			t.Fatalf("bundle %s: code=%d stdout=%q stderr=%q", bundle, code, out, errb)
+		}
+		if got := readFile(t, f); got != "oldnew" {
+			t.Fatalf("bundle %s: file content %q, want \"oldnew\"", bundle, got)
+		}
+	}
+}
+
 func TestTeeStdoutWriteErrorGNUWarn(t *testing.T) {
 	// GNU --output-error=warn: diagnose errors writing to any output,
 	// including standard output.
