@@ -7,12 +7,10 @@ package mailxcmd
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -152,20 +150,59 @@ func spoolPath(rc *tool.RunContext, user string) (string, error) {
 }
 
 func send(rc *tool.RunContext, invoked *tool.Tool, o options, operands []string) int {
-	body, err := io.ReadAll(rc.In)
+	s := &mailSession{rc: rc, invoked: invoked, opts: o, reader: bufio.NewReader(rc.In), user: identity(rc), vars: defaultVariables(rc), aliases: map[string][]string{}, ignore: map[string]bool{}, retain: map[string]bool{}, alts: map[string]bool{}, cwd: rc.Dir, active: true}
+	if o.ignoreInterrupt {
+		s.vars["ignore"] = ""
+	}
+	if err := s.readStartup(); err != nil {
+		diagnostic(rc, invoked, "%v", err)
+		return 1
+	}
+	if s.quitRequested {
+		return 0
+	}
+	to, cc, bcc := s.expandAliases(operands), s.expandAliases(o.cc), s.expandAliases(o.bcc)
+	var body []byte
+	var err error
+	if mailxIsTerminal(rc.In) {
+		if o.subject == "" && s.boolVar("asksub", true) {
+			fmt.Fprint(rc.Out, "Subject: ")
+			line, _ := s.reader.ReadString('\n')
+			o.subject = strings.TrimSpace(line)
+		}
+		if s.boolVar("askcc", false) {
+			fmt.Fprint(rc.Out, "Cc: ")
+			line, _ := s.reader.ReadString('\n')
+			cc = append(cc, strings.Fields(line)...)
+		}
+		if s.boolVar("askbcc", false) {
+			fmt.Fprint(rc.Out, "Bcc: ")
+			line, _ := s.reader.ReadString('\n')
+			bcc = append(bcc, strings.Fields(line)...)
+		}
+		var sendIt bool
+		body, to, cc, bcc, o.subject, sendIt, err = s.readComposition(to, cc, bcc, o.subject)
+		if !sendIt {
+			if s.quitRequested {
+				return 0
+			}
+			return 1
+		}
+	} else {
+		body, err = io.ReadAll(s.reader)
+	}
 	if err != nil {
 		diagnostic(rc, invoked, "read message: %v", err)
 		return 1
 	}
-	to := append([]string(nil), operands...)
 	if o.headerRecipients {
-		parsed, err := mailxpkg.ParseMessage(body)
-		if err != nil {
-			diagnostic(rc, invoked, "%v", err)
+		parsed, parseErr := mailxpkg.ParseMessage(body)
+		if parseErr != nil {
+			diagnostic(rc, invoked, "%v", parseErr)
 			return 1
 		}
 		to = append(to, headerAddresses(parsed, "To")...)
-		o.cc = append(o.cc, headerAddresses(parsed, "Cc")...)
+		cc = append(cc, headerAddresses(parsed, "Cc")...)
 		body = parsed.Body
 		if o.subject == "" {
 			if v := parsed.HeaderValues("Subject"); len(v) > 0 {
@@ -173,62 +210,17 @@ func send(rc *tool.RunContext, invoked *tool.Tool, o options, operands []string)
 			}
 		}
 	}
-	all := append(append(append([]string{}, to...), o.cc...), o.bcc...)
-	if len(all) == 0 {
-		return tool.UsageError(rc, invoked, "no recipients specified")
+	to, cc, bcc = s.expandAliases(to), s.expandAliases(cc), s.expandAliases(bcc)
+	if o.from != "" {
+		s.user = o.from
 	}
-	paths := make([]string, len(all))
-	for i, address := range all {
-		if !localAddress(address) {
-			diagnostic(rc, invoked, "remote delivery is not supported: %s", address)
+	if err = s.deliver(body, to, cc, bcc, o.subject, o.recordByRecipient); err != nil {
+		if deadErr := s.writeDead(body); deadErr != nil {
+			diagnostic(rc, invoked, "%v; save dead letter: %v", err, deadErr)
 			return 1
 		}
-		paths[i], err = spoolPath(rc, address)
-		if err != nil {
-			diagnostic(rc, invoked, "%v", err)
-			return 1
-		}
-	}
-	sender := o.from
-	if sender == "" {
-		sender = identity(rc)
-	}
-	if !localAddress(sender) {
-		diagnostic(rc, invoked, "envelope sender must be a local user: %s", sender)
-		return 1
-	}
-	when := nowFn().UTC()
-	headers := []mailxpkg.Header{
-		{Name: "Date", Value: when.Format(time.RFC1123Z)},
-		{Name: "From", Value: sender},
-		{Name: "To", Value: strings.Join(to, ", ")},
-	}
-	if len(o.cc) > 0 {
-		headers = append(headers, mailxpkg.Header{Name: "Cc", Value: strings.Join(o.cc, ", ")})
-	}
-	if o.subject != "" {
-		headers = append(headers, mailxpkg.Header{Name: "Subject", Value: o.subject})
-	}
-	msg := &mailxpkg.Message{Headers: headers, Body: body}
-	if err := msg.Validate(); err != nil {
 		diagnostic(rc, invoked, "%v", err)
 		return 1
-	}
-	for i, path := range paths {
-		if err := mailxpkg.AppendMbox(path, sender, when, msg); err != nil {
-			diagnostic(rc, invoked, "deliver to %s: %v", all[i], err)
-			return 1
-		}
-	}
-	if o.recordByRecipient {
-		if len(to) == 0 {
-			diagnostic(rc, invoked, "-F requires a To recipient")
-			return 1
-		}
-		if err := mailxpkg.AppendMbox(rc.Path(to[0]), sender, when, msg); err != nil {
-			diagnostic(rc, invoked, "record for %s: %v", to[0], err)
-			return 1
-		}
 	}
 	return 0
 }
@@ -242,64 +234,7 @@ func headerAddresses(msg *mailxpkg.Message, name string) []string {
 }
 
 func receive(rc *tool.RunContext, invoked *tool.Tool, o options) int {
-	user := o.user
-	if user == "" {
-		user = identity(rc)
-	}
-	path := o.file
-	var err error
-	if path == "" {
-		path, err = spoolPath(rc, user)
-	} else {
-		path = rc.Path(path)
-	}
-	if err != nil {
-		diagnostic(rc, invoked, "%v", err)
-		return 1
-	}
-	entries, err := mailxpkg.ReadMbox(path)
-	if err != nil {
-		diagnostic(rc, invoked, "%v", err)
-		return 1
-	}
-	if o.existOnly {
-		if len(entries) == 0 {
-			return 1
-		}
-		return 0
-	}
-	if len(entries) == 0 {
-		if !o.headersOnly {
-			fmt.Fprintf(rc.Out, "No mail for %s\n", user)
-		}
-		return 0
-	}
-	deleted := make([]bool, len(entries))
-	current := 0
-	if o.headersOnly {
-		printHeaders(rc.Out, entries, deleted, current)
-		return 0
-	}
-	if !o.noInitialHeaders {
-		printHeaders(rc.Out, entries, deleted, current)
-	}
-	return commandLoop(rc, invoked, path, entries, deleted, current)
-}
-
-func printHeaders(w io.Writer, entries []mailxpkg.MboxEntry, deleted []bool, current int) {
-	for i, entry := range entries {
-		if deleted[i] {
-			continue
-		}
-		marker := " "
-		if i == current {
-			marker = ">"
-		}
-		from := firstHeader(entry.Message, "From", "unknown")
-		subject := firstHeader(entry.Message, "Subject", "")
-		lines := bytes.Count(entry.Message.Body, []byte{'\n'})
-		fmt.Fprintf(w, "%s%3d %-16.16s %4d/%-6d %s\n", marker, i+1, from, lines, len(entry.Message.Body), subject)
-	}
+	return runReceiveSession(rc, invoked, o)
 }
 
 func firstHeader(msg *mailxpkg.Message, name, fallback string) string {
@@ -315,109 +250,6 @@ func printMessage(w io.Writer, entry mailxpkg.MboxEntry) {
 	if b := entry.Message.Bytes(); len(b) > 0 && b[len(b)-1] != '\n' {
 		fmt.Fprintln(w)
 	}
-}
-
-func commandLoop(rc *tool.RunContext, invoked *tool.Tool, path string, entries []mailxpkg.MboxEntry, deleted []bool, current int) int {
-	if rc.In == nil {
-		return 0
-	}
-	sc := bufio.NewScanner(rc.In)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			line = "+"
-		}
-		fields := strings.Fields(line)
-		verb := fields[0]
-		args := fields[1:]
-		switch verb {
-		case "q", "quit":
-			return commit(rc, invoked, path, entries, deleted)
-		case "x", "xit", "exit":
-			return 0
-		case "h", "headers":
-			printHeaders(rc.Out, entries, deleted, current)
-		case "p", "print", "t", "type":
-			for _, n := range messageList(args, current, len(entries)) {
-				if !deleted[n] {
-					printMessage(rc.Out, entries[n])
-					current = n
-				}
-			}
-		case "d", "delete", "u", "undelete":
-			value := verb == "d" || verb == "delete"
-			for _, n := range messageList(args, current, len(entries)) {
-				deleted[n] = value
-				current = n
-			}
-		case "+", "next":
-			if n := nextMessage(deleted, current, 1); n >= 0 {
-				current = n
-				printMessage(rc.Out, entries[n])
-			}
-		case "-":
-			if n := nextMessage(deleted, current, -1); n >= 0 {
-				current = n
-				printMessage(rc.Out, entries[n])
-			}
-		case "=":
-			fmt.Fprintln(rc.Out, current+1)
-		case "f", "from":
-			for _, n := range messageList(args, current, len(entries)) {
-				fmt.Fprintf(rc.Out, "%d %s %s\n", n+1, firstHeader(entries[n].Message, "From", "unknown"), firstHeader(entries[n].Message, "Subject", ""))
-			}
-		case "s", "save", "w", "write":
-			if len(args) == 0 {
-				diagnostic(rc, invoked, "filename required")
-				continue
-			}
-			file := args[len(args)-1]
-			nums := messageList(args[:len(args)-1], current, len(entries))
-			if err := saveMessages(rc.Path(file), entries, nums, verb == "w" || verb == "write"); err != nil {
-				diagnostic(rc, invoked, "%v", err)
-			}
-		default:
-			if n, err := strconv.Atoi(verb); err == nil && n >= 1 && n <= len(entries) {
-				current = n - 1
-				printMessage(rc.Out, entries[current])
-			} else {
-				diagnostic(rc, invoked, "unknown command: %s", verb)
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
-		diagnostic(rc, invoked, "read commands: %v", err)
-		return 1
-	}
-	return commit(rc, invoked, path, entries, deleted)
-}
-
-func messageList(args []string, current, total int) []int {
-	if len(args) == 0 {
-		return []int{current}
-	}
-	var out []int
-	for _, arg := range args {
-		if arg == "*" {
-			for i := 0; i < total; i++ {
-				out = append(out, i)
-			}
-			continue
-		}
-		if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= total {
-			out = append(out, n-1)
-		}
-	}
-	return out
-}
-
-func nextMessage(deleted []bool, current, step int) int {
-	for n := current + step; n >= 0 && n < len(deleted); n += step {
-		if !deleted[n] {
-			return n
-		}
-	}
-	return -1
 }
 
 func saveMessages(path string, entries []mailxpkg.MboxEntry, nums []int, bodyOnly bool) error {
@@ -444,21 +276,6 @@ func saveMessages(path string, entries []mailxpkg.MboxEntry, nums []int, bodyOnl
 		}
 	}
 	return f.Close()
-}
-
-func commit(rc *tool.RunContext, invoked *tool.Tool, path string, entries []mailxpkg.MboxEntry, deleted []bool) int {
-	changed := false
-	for _, value := range deleted {
-		changed = changed || value
-	}
-	if !changed {
-		return 0
-	}
-	if err := mailxpkg.CommitMbox(path, entries, deleted); err != nil {
-		diagnostic(rc, invoked, "%v", err)
-		return 1
-	}
-	return 0
 }
 
 func diagnostic(rc *tool.RunContext, invoked *tool.Tool, format string, args ...any) {
