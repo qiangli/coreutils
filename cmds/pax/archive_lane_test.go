@@ -389,7 +389,9 @@ func TestTarAppendRejectsMismatchedFormat(t *testing.T) {
 		t.Fatalf("create ustar: %d %s", code, errs)
 	}
 	before, _ := os.ReadFile(arc)
-	if _, errs, code := exec(t, d, "", "-w", "-a", "-x", "pax", "-f", arc, "file"); code == 0 || !strings.Contains(errs, "existing ustar") {
+	// With no -x, the selected output format is the default pax format. It
+	// still must be checked against the existing archive before O_TRUNC.
+	if _, errs, code := exec(t, d, "", "-w", "-a", "-f", arc, "file"); code == 0 || !strings.Contains(errs, "existing ustar") {
 		t.Fatalf("mismatched append: code=%d stderr=%q", code, errs)
 	}
 	after, _ := os.ReadFile(arc)
@@ -398,7 +400,59 @@ func TestTarAppendRejectsMismatchedFormat(t *testing.T) {
 	}
 }
 
-func TestAppendRequiresSeekableArchiveAndCPIOFailsWithoutMutation(t *testing.T) {
+func TestCPIOAppendRejectsMismatchedAndUnsupportedFormatsWithoutMutation(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+		args []string
+		want string
+	}{
+		{
+			name: "odc-default-pax-output",
+			data: buildODC(t, []cpioSpec{{name: "old", data: []byte("old")}}),
+			args: []string{"-w", "-a"},
+			want: "existing cpio",
+		},
+		{
+			name: "newc",
+			data: buildNewc(t, false, []cpioSpec{{name: "old", data: []byte("old")}}),
+			args: []string{"-w", "-a", "-x", "cpio"},
+			want: "newc/crc",
+		},
+		{
+			name: "crc",
+			data: buildNewc(t, true, []cpioSpec{{name: "old", data: []byte("old")}}),
+			args: []string{"-w", "-u", "-x", "cpio"},
+			want: "newc/crc",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			arc := filepath.Join(d, tc.name+".cpio")
+			if err := os.WriteFile(arc, tc.data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			args := append(append([]string{}, tc.args...), "-f", arc, "file")
+			if _, errs, code := exec(t, d, "", args...); code == 0 || !strings.Contains(errs, tc.want) {
+				t.Fatalf("format rejection: code=%d stderr=%q", code, errs)
+			}
+			after, err := os.ReadFile(arc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(tc.data, after) {
+				t.Fatal("rejected cpio rewrite changed archive bytes")
+			}
+		})
+	}
+}
+
+func TestAppendRequiresSeekableArchiveAndRewritesCPIO(t *testing.T) {
 	d := t.TempDir()
 	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -410,13 +464,11 @@ func TestAppendRequiresSeekableArchiveAndCPIOFailsWithoutMutation(t *testing.T) 
 	if _, errs, code := exec(t, d, "", "-w", "-x", "cpio", "-f", arc, "file"); code != 0 {
 		t.Fatalf("create cpio: %d %s", code, errs)
 	}
-	before, _ := os.ReadFile(arc)
-	if _, errs, code := exec(t, d, "", "-w", "-a", "-x", "cpio", "-f", arc, "file"); code == 0 || !strings.Contains(errs, "not supported") {
+	if _, errs, code := exec(t, d, "", "-w", "-a", "-x", "cpio", "-f", arc, "file"); code != 0 {
 		t.Fatalf("cpio append: code=%d stderr=%q", code, errs)
 	}
-	after, _ := os.ReadFile(arc)
-	if !bytes.Equal(before, after) {
-		t.Fatal("failed cpio append mutated the archive")
+	if out, errs, code := exec(t, d, "", "-f", arc); code != 0 || strings.Count(out, "file\n") != 2 {
+		t.Fatalf("cpio append list: code=%d out=%q err=%q", code, out, errs)
 	}
 }
 

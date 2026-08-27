@@ -461,11 +461,6 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		files, inputStatus = readPathnames(rc)
 		status = inputStatus
 	}
-	if o.appendMode && o.format == "cpio" {
-		fmt.Fprintln(rc.Err, "pax: appending to cpio archives is not supported")
-		return 1
-	}
-
 	archivePath := ""
 	if o.archive != "" {
 		archivePath = resolve(rc, o.archive)
@@ -480,6 +475,8 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	}
 	appendExisting := o.appendMode
 	var existing []byte
+	var existingCPIO []cpioEntry
+	existingCPIOArchive := false
 	if archivePath != "" && (o.appendMode || o.newerOnly) {
 		data, err := os.ReadFile(archivePath)
 		if err != nil && !os.IsNotExist(err) {
@@ -494,24 +491,58 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 				return 1
 			}
 			if archive.kind == archiveCPIO {
-				fmt.Fprintln(rc.Err, "pax: updating or appending to cpio archives is not supported")
-				return 1
-			}
-			existingFormat := "ustar"
-			if archive.pax {
-				existingFormat = "pax"
-			}
-			if o.format != existingFormat {
-				fmt.Fprintf(rc.Err, "pax: cannot append %s data to an existing %s archive\n", o.format, existingFormat)
-				return 1
-			}
-			if o.newerOnly {
-				o.archiveTimes, decodeErr = archiveMemberTimes(archive.tarData)
+				// Append/update rewrites the archive, so the existing archive and
+				// selected output format must agree before the destination is opened
+				// with O_TRUNC.  Reading newc and crc is supported, but the writer
+				// emits only POSIX odc; silently converting either format would make
+				// -a/-u destructive even when the operation is rejected later.
+				if o.format != "cpio" {
+					fmt.Fprintf(rc.Err, "pax: cannot append %s data to an existing cpio archive\n", o.format)
+					return 1
+				}
+				if string(data[:6]) != "070707" {
+					fmt.Fprintln(rc.Err, "pax: updating or appending to newc/crc cpio archives is not supported")
+					return 1
+				}
+				existingCPIOArchive = true
+				existingCPIO, decodeErr = readCPIOEntries(data)
 				if decodeErr != nil {
 					fmt.Fprintf(rc.Err, "pax: %v\n", decodeErr)
 					return 1
 				}
+				for _, entry := range existingCPIO {
+					if entry.magic != "070707" {
+						fmt.Fprintln(rc.Err, "pax: updating or appending to newc/crc cpio archives is not supported")
+						return 1
+					}
+				}
+				if o.newerOnly {
+					o.archiveTimes = make(map[string]time.Time)
+					for _, entry := range existingCPIO {
+						mtime := time.Unix(int64(entry.mtime), 0)
+						if old, ok := o.archiveTimes[entry.name]; !ok || mtime.After(old) {
+							o.archiveTimes[entry.name] = mtime
+						}
+					}
+				}
 				appendExisting = true
+			} else {
+				existingFormat := "ustar"
+				if archive.pax {
+					existingFormat = "pax"
+				}
+				if o.format != existingFormat {
+					fmt.Fprintf(rc.Err, "pax: cannot append %s data to an existing %s archive\n", o.format, existingFormat)
+					return 1
+				}
+				if o.newerOnly {
+					o.archiveTimes, decodeErr = archiveMemberTimes(archive.tarData)
+					if decodeErr != nil {
+						fmt.Fprintf(rc.Err, "pax: %v\n", decodeErr)
+						return 1
+					}
+					appendExisting = true
+				}
 			}
 		}
 	}
@@ -521,7 +552,7 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	var blockPrefix []byte
 	if archivePath != "" {
 		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		if appendExisting && len(existing) != 0 {
+		if appendExisting && len(existing) != 0 && !existingCPIOArchive {
 			flags = os.O_RDWR
 		}
 		var err error
@@ -530,7 +561,7 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
 		}
-		if appendExisting && len(existing) != 0 {
+		if appendExisting && len(existing) != 0 && !existingCPIOArchive {
 			end, _, scanErr := scanTar(existing)
 			if scanErr != nil {
 				fmt.Fprintf(rc.Err, "pax: %v\n", scanErr)
@@ -597,7 +628,7 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	blocker := newBlockWriter(out, o.blockBytes, blockPrefix)
 	out = blocker
 	if o.format == "cpio" {
-		if writeStatus := writeCPIOMode(rc, o, out, files); writeStatus != 0 {
+		if writeStatus := writeCPIOMode(rc, o, out, files, existingCPIO); writeStatus != 0 {
 			status = 1
 		}
 	} else {
@@ -796,6 +827,29 @@ func (w *cpioWriter) add(name string, fi os.FileInfo, id fileIdentity, emitted d
 	return w.write(data)
 }
 
+// addEntry copies an existing POSIX cpio member without normalizing its
+// metadata.  Append and update are implemented as a rewrite because cpio's
+// TRAILER!!! record must remain last; preserving the original fields also
+// avoids changing an archive merely because it was updated.
+func (w *cpioWriter) addEntry(entry cpioEntry) error {
+	if entry.magic != "070707" {
+		return fmt.Errorf("cannot rewrite cpio format %q", entry.magic)
+	}
+	if entry.namesize != uint64(len([]byte(entry.name))+1) || entry.filesize != uint64(len(entry.data)) {
+		return fmt.Errorf("invalid cpio member %q", entry.name)
+	}
+	header := fmt.Sprintf("070707%06o%06o%06o%06o%06o%06o%06o%011o%06o%011o",
+		entry.dev, entry.ino, entry.mode, entry.uid, entry.gid, entry.nlink,
+		entry.rdev, entry.mtime, entry.namesize, entry.filesize)
+	if len(header) != 76 {
+		return fmt.Errorf("internal cpio header length %d", len(header))
+	}
+	if err := w.write(append([]byte(header), append([]byte(entry.name), 0)...)); err != nil {
+		return err
+	}
+	return w.write(entry.data)
+}
+
 func (w *cpioWriter) close() error {
 	info := syntheticFileInfo{name: "TRAILER!!!"}
 	if err := w.add("TRAILER!!!", info, fileIdentity{}, devIno{}, nil); err != nil {
@@ -865,7 +919,7 @@ func odcIdentities(members []cpioMember) []devIno {
 // writeCPIOMode buffers the whole member list before emitting anything: POSIX
 // cpio carries a hardlink group's file data on the LAST member of the group,
 // which is not knowable while the walk is still running.
-func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []string) int {
+func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []string, existing []cpioEntry) int {
 	status := 0
 	var members []cpioMember
 	for _, name := range files {
@@ -891,6 +945,12 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 		}
 	}
 	w := &cpioWriter{w: out}
+	for _, entry := range existing {
+		if err := w.addEntry(entry); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %s: %v\n", entry.name, err)
+			status = 1
+		}
+	}
 	for i, m := range members {
 		data := m.data
 		if holder, ok := dataHolder[ids[i]]; ok && holder != i {

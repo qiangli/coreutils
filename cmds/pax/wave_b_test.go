@@ -486,22 +486,28 @@ func TestWriteUpdateRequiresSeekableArchive(t *testing.T) {
 	}
 }
 
-// cpio has no in-place update lane here, and an unsupported update must not
-// leave a half-rewritten archive behind.
-func TestWriteUpdateOnCPIOFailsLoudWithoutMutation(t *testing.T) {
+func TestWriteUpdateOnCPIORewritesArchive(t *testing.T) {
 	d := t.TempDir()
 	writeFileAt(t, d, "file", "x")
 	arc := filepath.Join(d, "archive.cpio")
 	if _, errs, code := exec(t, d, "", "-w", "-x", "cpio", "-f", arc, "file"); code != 0 {
 		t.Fatalf("create cpio: %d %s", code, errs)
 	}
-	before := mustRead(t, arc)
-	_, errs, code := exec(t, d, "", "-w", "-u", "-x", "cpio", "-f", arc, "file")
-	if code == 0 || !strings.Contains(errs, "not supported") {
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("updated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(d, "file"), time.Now().Add(time.Hour), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := exec(t, d, "", "-w", "-u", "-x", "cpio", "-f", arc, "file"); code != 0 {
 		t.Fatalf("cpio update: code=%d stderr=%q", code, errs)
 	}
-	if !bytes.Equal(before, mustRead(t, arc)) {
-		t.Fatal("failed cpio update mutated the archive")
+	dest := t.TempDir()
+	if _, errs, code := exec(t, dest, "", "-r", "-f", arc); code != 0 {
+		t.Fatalf("extract updated cpio: code=%d stderr=%q", code, errs)
+	}
+	if got := string(mustRead(t, filepath.Join(dest, "file"))); got != "updated" {
+		t.Fatalf("updated cpio data=%q", got)
 	}
 }
 
