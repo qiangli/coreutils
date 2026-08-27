@@ -3,16 +3,16 @@
 The assembled Profile C/D runtime makes a precise claim: every one of the 116
 POSIX-required utility names is supplied by exactly one **intended owner** —
 
-- a registered **Bashy Go applet** (90 names),
+- a registered **Bashy Go applet** (92 names),
 - the **shell** (14 names: the `sh` entry point plus builtins), or
-- one of the twelve **active pinned POSIX external providers** the multicall
+- one of the ten **active pinned POSIX external providers** the multicall
   registers and dispatches (see
   [posix-external-providers.md](posix-external-providers.md)).
 
-That is the **availability** split, 90/14/12. What a POSIX-mode shell
+That is the **availability** split, 92/14/10. What a POSIX-mode shell
 actually **selects** differs for exactly eight names (the seven builtin
 overlaps plus the `time` keyword), giving the **effective selection** split
-82/22/12. The gate pins both, explicitly, and verifies the effective split
+84/22/10. The gate pins both, explicitly, and verifies the effective split
 against the staged shell's own answers.
 
 `posix-gate` turns the claim into a checkable verdict. Every check is
@@ -35,14 +35,14 @@ compares row by row.
 
 | Rejection | Meaning |
 | --- | --- |
-| count drift | availability no longer splits 116 = 90/14/12, **or** effective selection no longer splits 82/22/12; both axes are hard pins that must be changed deliberately, in one reviewed place |
+| count drift | availability no longer splits 116 = 92/14/10, **or** effective selection no longer splits 84/22/10; both axes are hard pins that must be changed deliberately, in one reviewed place |
 | duplicate / ambiguous ownership | a name claimed twice: a shell-owned name that also has a registered tool, an applet that is also pinned as a provider, inventory/manifest provider sets that disagree |
 | missing provider pin | a provider row without a full sha256 source pin, version, platform list, or upstream URL |
 | missing / broken provenance | a provider whose cached binary is absent, or does not hash to what its `provenance.tsv` records — an unattributable binary is worse than a missing one, because it still produces numbers |
 | broken build manifest | the externally supplied build/run manifest (`--manifest`) unreadable, missing a required pin (`profile`, `shell_sha256`, `multicall_sha256`), carrying a malformed digest (a digest is exactly 64 hexadecimal characters), a duplicate pin, or an unknown profile — with no root of trust, nothing else is verified |
 | profile mismatch | the gate invoked for one profile with a manifest approved for the other: approved builds do not transfer between profiles |
 | unbound provider cache | the staged environment does not name `BASHY_BIN_CACHE`, so provenance cannot be bound to the cache the staged wrapper will actually dispatch from |
-| unbound provider dispatch | the approved multicall's own dispatch plan (`posix-providers dispatch-plan`, run with the staged environment) failing, not accounting for exactly the twelve active providers, or disclosing a resolved executable/version/built digest that differs from the gate's independently verified cache identity — a valid cache the wrapper does not actually dispatch from fails here |
+| unbound provider dispatch | the approved multicall's own dispatch plan (`posix-providers dispatch-plan`, run with the staged environment) failing, not accounting for exactly the ten active providers, or disclosing a resolved executable/version/built digest that differs from the gate's independently verified cache identity — a valid cache the wrapper does not actually dispatch from fails here |
 | host PATH fallback | a staged runtime in which a multicall-owned name resolves outside the staged tool directory (or not at all) |
 | unapproved executable identity | a staged entry — even one inside the tool directory — whose resolved target does not hash to the manifest's approved multicall digest: a staged symlink to an arbitrary host `/bin` tool fails here |
 | host PATH shell / unapproved shell build | the interrogated shell resolving outside the staged directory, or its bytes not hashing to the manifest's approved `shell_sha256` — a forgeable `--version` line or target triplet is never accepted as a build identity |
@@ -74,7 +74,7 @@ certification arm measures it.
 
 `providers` deliberately differs from `posix-providers check` in one respect:
 a platform the manifest does not declare is a **failure** here, not a skip. A
-staged certification runtime that cannot supply all twelve active names is not the
+staged certification runtime that cannot supply all ten active names is not the
 runtime it claims to be; `posix-providers check` keeps its softer per-host
 semantics for ordinary provisioning work.
 
@@ -117,7 +117,7 @@ It verifies, in order:
    `multicall_sha256`. Identity is **mandatory**: there is no
    membership-in-a-directory shortcut and no self-derived digest.
 3. **PATH ownership + identity of every multicall-owned name** — every
-   multicall-owned name (90 applets + 12 providers) and `sh` itself must
+   multicall-owned name (92 applets + 10 providers) and `sh` itself must
    resolve, through the environment's own PATH, to an entry inside
    `--bindir`, **and** each multicall-owned entry's resolved target must hash
    to the approved multicall's digest. Staged entries are routinely symlinks
@@ -173,7 +173,7 @@ answers about itself are worthless) disclose its own plan with
 observed resolved executable, version, and built digest for every provider
 must equal the gate's independently verified identity
 (`posixprovider.Resolver.VerifiedIdentity`) for the same name; the plan is
-parsed as strictly as the classification transcript (exactly twelve rows,
+parsed as strictly as the classification transcript (exactly ten rows,
 no duplicates, extras, or malformed rows). A valid-but-unused cache
 alongside a wrapper that would dispatch an arbitrary staged executable fails
 here.
@@ -188,7 +188,7 @@ on PATH for exec-style callers (`env`, `xargs`, `find -exec`). Both facts are
 intended, and the gate verifies **both**: the classification probe requires
 `builtin`/`keyword` for exactly these names, and the PATH probe still
 requires the staged file with the approved digest. These eight names are the
-entire 90/14/12 → 82/22/12 difference; the effective pins mean an eighth
+entire 92/14/10 → 84/22/10 difference; the effective pins mean an eighth
 builtin overlap (or a lost one) is count drift, not a curiosity.
 
 The 14 shell-owned names split the same way: `sh` must classify as `file`

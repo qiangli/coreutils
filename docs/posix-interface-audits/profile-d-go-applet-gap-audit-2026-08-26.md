@@ -4,6 +4,17 @@ Date: 2026-08-26
 Audited baseline: `aee4ff5eb827f5e600a8f2e57ba5b8fc34ca0222` (`coreutils` main)  
 Sprint: Sprint 82, Profile D zero-blocker POSIX closure
 
+> **Historical reconciliation.** The 90/14/12 availability and 82/22/12
+> effective counts below are fixed to the audited baseline `aee4ff5e`, when
+> `make` and `bc` were still counted as pinned external providers. They were
+> subsequently reclassified as pure-Go applets, so the current generated ledger
+> is availability **92 Go / 14 shell / 10 external provider** and effective
+> selection **84 Go / 22 shell / 10 external provider**, with exactly ten
+> providers (`ar, ctags, ex, localedef, lp, m4, man, nm, strip, vi`). The
+> per-command findings in this snapshot remain valid for the 90 applets audited;
+> `make` and `bc` were audited under `posix-external-providers.md` at that
+> baseline. See `../posix-required-commands.md` for current counts.
+
 ## Scope and authority
 
 This is a read-only interface and implementation audit of all 90 commands
