@@ -281,3 +281,21 @@ func TestEnvWriteErrorDiagnostic(t *testing.T) {
 		t.Fatalf("write failure stderr=%q, want diagnostic", got)
 	}
 }
+
+type envShortWriter struct{}
+
+func (envShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestEnvShortWriteDiagnostic(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"A=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: envShortWriter{}, Err: &errb},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("short write code=%d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "env: write error: short write") {
+		t.Fatalf("short write stderr=%q", got)
+	}
+}

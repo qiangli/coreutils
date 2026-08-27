@@ -526,9 +526,13 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 			c.errf("cannot open '%s' for reading: %s", src, reason(err))
 			return
 		}
-		_, werr := io.Copy(out, in)
+		rerr, werr := copyRegularData(out, in)
 		_ = in.Close()
 		cerr := out.Close()
+		if rerr != nil {
+			c.errf("error reading '%s': %s", src, reason(rerr))
+			return
+		}
 		if werr != nil {
 			c.errf("error writing '%s': %s", dst, reason(werr))
 			return
@@ -546,6 +550,34 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 	}
 	c.debugf("copied '%s' -> '%s'", src, dst)
 	c.verbosef("'%s' -> '%s'", src, dst)
+}
+
+// copyRegularData keeps read-side and write-side failures distinct. io.Copy
+// returns one undifferentiated error, which previously caused a source read
+// failure to be diagnosed as a destination write failure.
+func copyRegularData(dst io.Writer, src io.Reader) (readErr, writeErr error) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			written, werr := dst.Write(buf[:n])
+			if werr == nil && written != n {
+				werr = io.ErrShortWrite
+			}
+			if werr != nil {
+				return nil, werr
+			}
+		}
+		if rerr == io.EOF {
+			return nil, nil
+		}
+		if rerr != nil {
+			return rerr, nil
+		}
+		if n == 0 {
+			return io.ErrNoProgress, nil
+		}
+	}
 }
 
 func (c *copier) copySymlink(src, dst string, fi os.FileInfo) {

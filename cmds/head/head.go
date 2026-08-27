@@ -8,6 +8,7 @@ package headcmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -16,6 +17,24 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type headWriteError struct{ err error }
+
+func (e *headWriteError) Error() string { return e.err.Error() }
+func (e *headWriteError) Unwrap() error { return e.err }
+
+type headWriter struct{ io.Writer }
+
+func (w headWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return n, &headWriteError{err: err}
+	}
+	return n, nil
+}
 
 var cmd = &tool.Tool{
 	Name:     "head",
@@ -76,7 +95,8 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	showHeaders := v || (len(files) > 1 && !q)
 
-	w := bufio.NewWriter(rc.Out)
+	bw := bufio.NewWriter(rc.Out)
+	w := headWriter{Writer: bw}
 	hp := headerPrinter{}
 	exit := 0
 	for _, name := range files {
@@ -98,18 +118,23 @@ func run(rc *tool.RunContext, args []string) int {
 			closer.Close()
 		}
 		if err != nil {
+			var writeErr *headWriteError
+			if errors.As(err, &writeErr) {
+				fmt.Fprintf(rc.Err, "head: write error: %v\n", writeErr.err)
+				return 1
+			}
 			fmt.Fprintf(rc.Err, "head: error reading '%s': %v\n", name, sysErr(err))
 			exit = 1
 		}
 	}
-	if err := w.Flush(); err != nil {
+	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "head: write error: %v\n", err)
 		return 1
 	}
 	return exit
 }
 
-func headStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromEnd bool, lineEnd byte) error {
+func headStream(r io.Reader, w io.Writer, bytesMode bool, n int64, fromEnd bool, lineEnd byte) error {
 	br := bufio.NewReader(r)
 	switch {
 	case bytesMode && !fromEnd:

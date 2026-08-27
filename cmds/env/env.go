@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,12 +178,20 @@ func run(rc *tool.RunContext, args []string) int {
 		sep = "\x00"
 	}
 	for _, e := range env {
-		if _, err := fmt.Fprintf(rc.Out, "%s%s", e.raw, sep); err != nil {
+		if err := writeEnvOutput(rc.Out, e.raw+sep); err != nil {
 			fmt.Fprintf(rc.Err, "env: write error: %v\n", err)
 			return 1
 		}
 	}
 	return 0
+}
+
+func writeEnvOutput(w io.Writer, s string) error {
+	n, err := io.WriteString(w, s)
+	if err == nil && n != len(s) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func envFileEntries(data string) []string {

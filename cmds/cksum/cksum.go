@@ -409,10 +409,9 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, withNam
 		if raw {
 			var be [4]byte
 			binary.BigEndian.PutUint32(be[:], crc)
-			_, err = rc.Out.Write(be[:])
-			return err
+			return writeCKSumOutput(rc.Out, be[:])
 		}
-		_, writeErr = fmt.Fprintf(rc.Out, "%d %d%s%s", crc, size, suffix, lineEnd)
+		writeErr = writeCKSumOutput(rc.Out, []byte(fmt.Sprintf("%d %d%s%s", crc, size, suffix, lineEnd)))
 	case "crc32b":
 		crc, size, err := crc32bOperand(rc, name)
 		if err != nil {
@@ -421,12 +420,11 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, withNam
 		if raw {
 			var be [4]byte
 			binary.BigEndian.PutUint32(be[:], crc)
-			_, err = rc.Out.Write(be[:])
-			return err
+			return writeCKSumOutput(rc.Out, be[:])
 		}
 		// GNU dispatches crc32b to the same decimal untagged output
 		// as crc.
-		_, writeErr = fmt.Fprintf(rc.Out, "%d %d%s%s", crc, size, suffix, lineEnd)
+		writeErr = writeCKSumOutput(rc.Out, []byte(fmt.Sprintf("%d %d%s%s", crc, size, suffix, lineEnd)))
 	case "sum":
 		result, err := legacySumOperand(rc, name, mode.sysv)
 		if err != nil {
@@ -435,13 +433,12 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, withNam
 		if raw {
 			var be [2]byte
 			binary.BigEndian.PutUint16(be[:], result.checksum)
-			_, err = rc.Out.Write(be[:])
-			return err
+			return writeCKSumOutput(rc.Out, be[:])
 		}
 		if mode.sysv {
-			_, writeErr = fmt.Fprintf(rc.Out, "%d %d%s%s", result.checksum, result.blocks, suffix, lineEnd)
+			writeErr = writeCKSumOutput(rc.Out, []byte(fmt.Sprintf("%d %d%s%s", result.checksum, result.blocks, suffix, lineEnd)))
 		} else {
-			_, writeErr = fmt.Fprintf(rc.Out, "%05d %5d%s%s", result.checksum, result.blocks, suffix, lineEnd)
+			writeErr = writeCKSumOutput(rc.Out, []byte(fmt.Sprintf("%05d %5d%s%s", result.checksum, result.blocks, suffix, lineEnd)))
 		}
 	case "digest":
 		sum, err := digestOperand(rc, mode, mode.bits, name)
@@ -449,8 +446,7 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, withNam
 			return err
 		}
 		if raw {
-			_, err = rc.Out.Write(sum)
-			return err
+			return writeCKSumOutput(rc.Out, sum)
 		}
 		encoded := hex.EncodeToString(sum)
 		if b64 {
@@ -461,12 +457,20 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, withNam
 			outName, prefix = hashenc.EscapeFilename(name)
 		}
 		if untagged {
-			_, writeErr = fmt.Fprintf(rc.Out, "%s%s  %s%s", prefix, encoded, outName, lineEnd)
+			writeErr = writeCKSumOutput(rc.Out, []byte(fmt.Sprintf("%s%s  %s%s", prefix, encoded, outName, lineEnd)))
 		} else {
-			_, writeErr = fmt.Fprintf(rc.Out, "%s%s (%s) = %s%s", prefix, mode.tagLabel(), outName, encoded, lineEnd)
+			writeErr = writeCKSumOutput(rc.Out, []byte(fmt.Sprintf("%s%s (%s) = %s%s", prefix, mode.tagLabel(), outName, encoded, lineEnd)))
 		}
 	}
 	return writeErr
+}
+
+func writeCKSumOutput(w io.Writer, p []byte) error {
+	n, err := w.Write(p)
+	if err == nil && n != len(p) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func digestOperand(rc *tool.RunContext, mode cksumMode, bits int, name string) ([]byte, error) {

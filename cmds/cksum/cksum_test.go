@@ -80,6 +80,24 @@ func TestCKSumReportsStandardOutputWriteError(t *testing.T) {
 	}
 }
 
+type cksumShortWriter struct{}
+
+func (cksumShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestCKSumReportsStandardOutputShortWrite(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader("abc"), Out: cksumShortWriter{}, Err: &errb},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("short write exit = %d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "short write") {
+		t.Fatalf("short write diagnostic = %q", got)
+	}
+}
+
 func TestCKSumStandardInputOperandAndReadError(t *testing.T) {
 	out, errb, code := runTool(t, "", "abc", "-")
 	if out != "1219131554 3 -\n" || errb != "" || code != 0 {

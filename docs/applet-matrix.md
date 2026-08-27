@@ -61,11 +61,11 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 4 | 38 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 5 | 36 |
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 4 | 34 |
-| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 11 |
+| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 12 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 15 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 16 |
-| `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 7 | 62 |
+| `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 8 | 63 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 3 | 25 |
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
@@ -81,7 +81,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
 | `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 32 |
-| `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 31 |
+| `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 32 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 27 |
 | `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 13 |
@@ -97,7 +97,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 | `gzip` | `cmds/gzip` | — | Bashy/other extension | no | no | 1 | 10 |
-| `head` | `cmds/head` | — | GNU Coreutils | yes | yes | 1 | 10 |
+| `head` | `cmds/head` | — | GNU Coreutils | yes | yes | 1 | 11 |
 | `hexdump` | `cmds/hexdump` | — | Bashy/other extension | no | no | 1 | 6 |
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |

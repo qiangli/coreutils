@@ -212,6 +212,24 @@ func TestHeadWriteError(t *testing.T) {
 	}
 }
 
+func TestHeadMidStreamWriteErrorIsNotReportedAsReadError(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(strings.Repeat("line\n", 2000)),
+			Out: headFailWriter{err: io.ErrClosedPipe},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, []string{"-n", "2000"}); code != 1 {
+		t.Fatalf("mid-stream write failure exit = %d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "head: write error:") || strings.Contains(got, "error reading") {
+		t.Fatalf("mid-stream write diagnostic = %q", got)
+	}
+}
+
 func TestHeadStandardInputOperandAndReadError(t *testing.T) {
 	out, errb, code := runTool(t, "", "line\n", "-")
 	if out != "line\n" || errb != "" || code != 0 {
