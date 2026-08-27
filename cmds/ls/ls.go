@@ -63,6 +63,7 @@ type options struct {
 	blockUnit                                uint64 // -s / total block divisor
 	timeStyle                                timeStyle
 	timeSel                                  timeSel
+	posix                                    bool
 	hide, ignore                             []string
 }
 
@@ -244,10 +245,20 @@ func run(rc *tool.RunContext, args []string) (code int) {
 	// -l, -t, -S, -1 have no GNU long form: pre-parse them out of the
 	// short-flag clusters before pflag sees the args.
 	fs := GetFlagSet(cmd.Name)
-	rest, short := ExtractShort(args, "ltS1gGnoCpfUXQNbqsvCxZHLVF", fs)
+	posixMode := envPresent(rc.Env, "POSIXLY_CORRECT")
+	rest, short := extractShort(args, "ltS1gGnoCpfUXQNbqsvCxZHLVF", posixMode, fs)
+	if posixMode {
+		// POSIX utility syntax stops option recognition at the first operand.
+		// In particular, a later pathname such as "-l" remains an operand.
+		fs.SetInterspersed(false)
+	}
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
+	}
+	optionArgs := args
+	if posixMode {
+		optionArgs = posixOptionPrefix(args, fs)
 	}
 	if short['V'] > 0 {
 		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
@@ -286,7 +297,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 
 	showControl, _ := fs.GetBool("show-control-chars")
 	hideControlFlag, _ := fs.GetBool("hide-control-chars")
-	literal, quoteName, escape = lastQuotingStyle(args, fs)
+	literal, quoteName, escape = lastQuotingStyle(optionArgs, fs)
 
 	opt := options{
 		long:           short['l'] > 0 || longFlag,
@@ -304,7 +315,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 		sortTime:       short['t'] > 0,
 		sortSize:       short['S'] > 0,
 		sizeBlocks:     short['s'] > 0 || sizeFlag,
-		indicator:      lastIndicatorStyle(args, fs),
+		indicator:      lastIndicatorStyle(optionArgs, fs),
 		zero:           zero,
 		comma:          short['m'] > 0,
 		unsorted:       short['U'] > 0,
@@ -316,6 +327,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 		escape:         escape,
 		hide:           hide,
 		ignore:         ignore,
+		posix:          posixMode,
 	}
 	// -q / --hide-control-chars vs --show-control-chars: last one wins.
 	if short['q'] > 0 || hideControlFlag || showControl {
@@ -357,7 +369,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 	}
 	// Resolve format options in argument order, including GNU's documented
 	// exception that -1 does not cancel an active long format.
-	if kind, ok := lastFormat(args, fs); ok {
+	if kind, ok := lastFormat(optionArgs, fs); ok {
 		opt.format = kind
 	}
 	if opt.zero {
@@ -398,7 +410,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 	// POSIX places -H and -L in a mutually exclusive set, so the last one
 	// specified wins. The original argv is required here because ExtractShort
 	// intentionally reduces short options to occurrence counts.
-	opt.deref = lastDereferenceMode(args, fs)
+	opt.deref = lastDereferenceMode(optionArgs, fs)
 	opt.width = lineWidth(rc, fs)
 
 	si, _ := fs.GetBool("si")
@@ -448,7 +460,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 	}
 	// -c, -u, and --time=WORD all set the same timestamp selector; the
 	// last occurrence wins (GNU).
-	switch lastTimeSelector(args, fs) {
+	switch lastTimeSelector(optionArgs, fs) {
 	case 'c':
 		opt.timeSel = selCtime
 	case 'u':
@@ -473,7 +485,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 	// GNU last-one-wins pairs: -a vs -A and -t vs -S each set a single
 	// internal mode, so the later occurrence wins.
 	if opt.all && opt.almostAll {
-		if lastFlag(args, fs, 'a', "all") >= lastFlag(args, fs, 'A', "almost-all") {
+		if lastFlag(optionArgs, fs, 'a', "all") >= lastFlag(optionArgs, fs, 'A', "almost-all") {
 			opt.almostAll = false
 		} else {
 			opt.all = false
@@ -485,6 +497,9 @@ func run(rc *tool.RunContext, args []string) (code int) {
 		} else {
 			opt.sortTime = false
 		}
+	}
+	if posixMode {
+		applyPOSIXOptionOrdering(optionArgs, fs, &opt)
 	}
 
 	if len(operands) == 0 {
@@ -783,9 +798,9 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 		case opt.format == fmtCommas:
 			printCommas(out, cells, opt.width)
 		case opt.format == fmtColumns:
-			printColumns(out, cells, opt.width, true)
+			printColumns(out, cells, opt.width, true, opt.posix)
 		case opt.format == fmtAcross:
-			printColumns(out, cells, opt.width, false)
+			printColumns(out, cells, opt.width, false, opt.posix)
 		default:
 			for _, c := range cells {
 				fmt.Fprintln(out, c)
@@ -861,11 +876,11 @@ const colGutter = 2
 // down true (-C) entries run down each column before moving right;
 // with down false (-x) they run across each row. Trailing padding is
 // never written, so a one-column layout is byte-identical to -1.
-func printColumns(out io.Writer, cells []string, width int, down bool) {
+func printColumns(out io.Writer, cells []string, width int, down, uniform bool) {
 	if len(cells) == 0 {
 		return
 	}
-	cols, rows, colW := columnLayout(cells, width, down)
+	cols, rows, colW := columnLayout(cells, width, down, uniform)
 	idx := func(r, c int) int {
 		if down {
 			return r + c*rows
@@ -899,7 +914,22 @@ const minColumnWidth = 3
 // starts at minColumnWidth, each entry claims a colGutter separator
 // except in the last column, and a candidate is valid only when its
 // line length is strictly less than the width.
-func columnLayout(cells []string, width int, down bool) (cols, rows int, colW []int) {
+func columnLayout(cells []string, width int, down, uniform bool) (cols, rows int, colW []int) {
+	if uniform {
+		widest := 0
+		for _, cell := range cells {
+			widest = max(widest, cellWidth(cell))
+		}
+		pitch := max(widest+colGutter, minColumnWidth)
+		maxCols := min(len(cells), max(1, (width+colGutter)/pitch))
+		cols = maxCols
+		rows = (len(cells) + cols - 1) / cols
+		colW = make([]int, cols)
+		for i := range colW {
+			colW[i] = pitch
+		}
+		return cols, rows, colW
+	}
 	maxCols := min(len(cells), max(1, width/minColumnWidth))
 	cols, rows, colW = 1, len(cells), []int{minColumnWidth}
 	for n := 1; n <= maxCols; n++ {
@@ -1287,6 +1317,10 @@ func ExtractShort(args []string, chars string, flagSets ...*pflag.FlagSet) ([]st
 	if len(flagSets) > 0 && flagSets[0] != nil {
 		fs = flagSets[0]
 	}
+	return extractShort(args, chars, false, fs)
+}
+
+func extractShort(args []string, chars string, stopAtOperand bool, fs *pflag.FlagSet) ([]string, map[byte]int) {
 	found := map[byte]int{}
 	seq := 0
 	var rest []string
@@ -1332,9 +1366,86 @@ func ExtractShort(args []string, chars string, flagSets ...*pflag.FlagSet) ([]st
 			}
 			continue
 		}
+		if stopAtOperand {
+			rest = append(rest, args[i:]...)
+			break
+		}
 		rest = append(rest, a)
 	}
 	return rest, found
+}
+
+// applyPOSIXOptionOrdering applies the ordered side effects of -f. Issue 7
+// requires -f to enable -a and disable -l, -t, -S, and -r at the point it is
+// encountered; a later mutually-exclusive option can select a new mode.
+func applyPOSIXOptionOrdering(args []string, fs *pflag.FlagSet, opt *options) {
+	args = posixOptionPrefix(args, fs)
+	f := lastFlag(args, fs, 'f', "")
+	if f == 0 {
+		return
+	}
+	a := lastFlag(args, fs, 'a', "all")
+	almost := lastFlag(args, fs, 'A', "almost-all")
+	if f > max(a, almost) {
+		opt.all, opt.almostAll = true, false
+	}
+
+	lastLong := lastFlag(args, fs, 'l', "long")
+	lastLong = max(lastLong, lastFlag(args, fs, 'g', ""))
+	lastLong = max(lastLong, lastFlag(args, fs, 'n', "numeric-uid-gid"))
+	lastLong = max(lastLong, lastFlag(args, fs, 'o', ""))
+	if f > lastLong && opt.format == fmtLong {
+		opt.format, opt.long = fmtOnePerLine, false
+	}
+
+	t := lastFlag(args, fs, 't', "")
+	s := lastFlag(args, fs, 'S', "")
+	switch latest := max(f, t, s); latest {
+	case f:
+		opt.unsorted, opt.sortTime, opt.sortSize = true, false, false
+	case t:
+		opt.unsorted, opt.sortTime, opt.sortSize = false, true, false
+	case s:
+		opt.unsorted, opt.sortTime, opt.sortSize = false, false, true
+	}
+	if f > lastFlag(args, fs, 'r', "reverse") {
+		opt.reverse = false
+	}
+}
+
+// posixOptionPrefix returns the option-and-option-argument prefix before the
+// first operand. It mirrors the parser's non-interspersed POSIX mode so the
+// order-sensitive scans cannot reinterpret a later "-name" pathname.
+func posixOptionPrefix(args []string, fs *pflag.FlagSet) []string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return args[:i+1]
+		}
+		if len(a) < 2 || a[0] != '-' {
+			return args[:i]
+		}
+		if strings.HasPrefix(a, "--") {
+			name := strings.TrimPrefix(a, "--")
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				continue
+			}
+			flag := fs.Lookup(canonicalLongName(fs, name))
+			if flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		for j := 1; j < len(a); j++ {
+			if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+				if j+1 == len(a) && i+1 < len(args) {
+					i++
+				}
+				break
+			}
+		}
+	}
+	return args
 }
 
 // formatWord maps a --format=WORD value to its format, reporting
