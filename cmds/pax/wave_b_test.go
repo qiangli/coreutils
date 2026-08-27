@@ -470,8 +470,11 @@ func TestWriteUpdateRequiresSeekableArchive(t *testing.T) {
 	if _, errs, code := exec(t, d, "", "-w", "-u", "file"); code == 0 || !strings.Contains(errs, "seekable") {
 		t.Fatalf("nonseekable update: code=%d stderr=%q", code, errs)
 	}
-	if _, errs, code := exec(t, d, "", "-w", "-u", "-f", "-", "file"); code == 0 || !strings.Contains(errs, "seekable") {
-		t.Fatalf("explicit stdout update: code=%d stderr=%q", code, errs)
+	if _, errs, code := exec(t, d, "", "-w", "-u", "-f", "-", "file"); code != 0 {
+		t.Fatalf("explicit dash pathname update: code=%d stderr=%q", code, errs)
+	}
+	if names := listNames(t, mustRead(t, filepath.Join(d, "-"))); len(names) != 1 || names[0] != "file" {
+		t.Fatalf("dash pathname archive members = %v", names)
 	}
 	// A seekable target that does not exist yet is a plain create.
 	arc := filepath.Join(d, "archive.tar")

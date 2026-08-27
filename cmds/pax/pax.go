@@ -93,6 +93,10 @@ func (f *followFlag) Set(s string) error {
 func run(rc *tool.RunContext, args []string) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
+	// Utility Syntax Guideline 10: the first operand ends option parsing.
+	// This is significant for portable archive pathnames such as "-d" and
+	// "--", which must remain operands when they follow an earlier operand.
+	fs.SetInterspersed(false)
 	o := options{now: time.Now}
 	fs.BoolVarP(&o.read, "read", "r", false, "read (extract) from the archive")
 	fs.BoolVarP(&o.write, "write", "w", false, "write (create) an archive")
@@ -371,7 +375,7 @@ func resolve(rc *tool.RunContext, p string) string {
 }
 
 func openArchive(rc *tool.RunContext, o *options) (io.ReadCloser, error) {
-	if o.archive == "" || o.archive == "-" {
+	if o.archive == "" {
 		return io.NopCloser(rc.In), nil
 	}
 	return os.Open(resolve(rc, o.archive))

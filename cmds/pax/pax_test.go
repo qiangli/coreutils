@@ -61,6 +61,21 @@ func TestWriteThenListThenExtractRoundTrips(t *testing.T) {
 	}
 }
 
+func TestExplicitDashArchiveIsAFile(t *testing.T) {
+	d := makeTree(t)
+	if _, e, code := exec(t, d, "", "-w", "-f", "-", "src/a.txt"); code != 0 {
+		t.Fatalf("write -f - failed: %d %s", code, e)
+	}
+	archive := filepath.Join(d, "-")
+	if info, err := os.Stat(archive); err != nil || info.Size() == 0 {
+		t.Fatalf("explicit dash archive = (%v, %v), want non-empty regular file", info, err)
+	}
+	out, e, code := exec(t, d, "", "-f", "-")
+	if code != 0 || e != "" || !strings.Contains(out, "src/a.txt") {
+		t.Fatalf("list -f - = (%q, %q, %d), want src/a.txt", out, e, code)
+	}
+}
+
 // The planner refuses the whole archive rather than extracting the safe prefix.
 // A member-by-member loop would already have written files before reaching the
 // escaping member, which is the bug this design exists to prevent.
@@ -107,6 +122,45 @@ func TestCopyModeUsesTheSameSafetyPathAsExtract(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dest, "src", "a.txt"))
 	if err != nil || string(got) != "alpha" {
 		t.Fatalf("copy did not reproduce content: %q %v", got, err)
+	}
+}
+
+func TestCopyModeReadsSourceOperandsFromStandardInput(t *testing.T) {
+	d := makeTree(t)
+	dest := filepath.Join(d, "dest")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, e, code := exec(t, d, "src/a.txt\nsrc/sub/b.txt\n", "-r", "-w", "dest"); code != 0 {
+		t.Fatalf("copy from standard input failed: %d %s", code, e)
+	}
+	for path, want := range map[string]string{
+		"src/a.txt":     "alpha",
+		"src/sub/b.txt": "beta",
+	} {
+		got, err := os.ReadFile(filepath.Join(dest, path))
+		if err != nil || string(got) != want {
+			t.Fatalf("copied %s = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}
+
+func TestFirstOperandEndsOptionParsing(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "source"), []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{"-d", "--"} {
+		if err := os.Mkdir(filepath.Join(d, destination), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, e, code := exec(t, d, "", "-r", "-w", "source", destination); code != 0 {
+			t.Fatalf("copy to operand %q failed: %d %s", destination, code, e)
+		}
+		got, err := os.ReadFile(filepath.Join(d, destination, "source"))
+		if err != nil || string(got) != "content" {
+			t.Fatalf("copy to %q = %q, %v; want content", destination, got, err)
+		}
 	}
 }
 

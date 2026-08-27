@@ -94,8 +94,8 @@ func writeCapturingStdout(t *testing.T, dir string, mode os.FileMode, dash bool,
 // TestCharSpecialDefaultBlockSize is the load-bearing discriminator. The
 // named lane deliberately uses a nonexistent pathname whose opened sink
 // reports character-special; a pre-open pathname stat therefore cannot pass.
-// Both stdout spellings prove that stdout is the archive file, not a separate
-// implementation-defined category.
+// An omitted -f selects stdout. POSIX treats an explicitly supplied "-" as
+// an archive pathname, so that spelling is covered by the regular-file lane.
 func TestCharSpecialDefaultBlockSize(t *testing.T) {
 	for _, sink := range []struct {
 		name  string
@@ -104,9 +104,6 @@ func TestCharSpecialDefaultBlockSize(t *testing.T) {
 		{"named", writeCapturingNamedSink},
 		{"stdout", func(t *testing.T, dir string, mode os.FileMode, args ...string) int {
 			return writeCapturingStdout(t, dir, mode, false, args...)
-		}},
-		{"stdout-dash", func(t *testing.T, dir string, mode os.FileMode, args ...string) int {
-			return writeCapturingStdout(t, dir, mode, true, args...)
 		}},
 	} {
 		for _, format := range []struct {

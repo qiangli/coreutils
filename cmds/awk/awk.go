@@ -115,7 +115,7 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	}
 
 	vars := []string{}
-	if *fieldSep != "" {
+	if fs.Changed("field-separator") {
 		// POSIX: -F sepstring is equivalent to -v FS=sepstring, so the
 		// value undergoes the same escape processing (-F '\t' is a tab).
 		vars = append(vars, "FS", unescape(*fieldSep))

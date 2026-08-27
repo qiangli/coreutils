@@ -457,7 +457,7 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	}
 
 	archivePath := ""
-	if o.archive != "" && o.archive != "-" {
+	if o.archive != "" {
 		archivePath = resolve(rc, o.archive)
 	}
 	// -a and -u both have to read the archive they are about to extend. On a
@@ -1183,11 +1183,15 @@ func newerThanArchive(o *options, name string, mtime time.Time) bool {
 // destination safety rules are IDENTICAL to the archive path rather than a
 // second implementation that could drift from it.
 func copyMode(rc *tool.RunContext, o *options, operands []string) int {
-	if len(operands) < 2 {
-		return tool.UsageError(rc, cmd, "copy mode requires at least one file and a target directory")
+	if len(operands) < 1 {
+		return tool.UsageError(rc, cmd, "copy mode requires a target directory")
 	}
 	dest := operands[len(operands)-1]
 	files := operands[:len(operands)-1]
+	inputStatus := 0
+	if len(files) == 0 {
+		files, inputStatus = readPathnames(rc)
+	}
 	full := resolve(rc, dest)
 	fi, err := os.Stat(full)
 	if err != nil || !fi.IsDir() {
@@ -1201,7 +1205,11 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 			return 1
 		}
 		if !needsRename {
-			return linkCopyMode(rc, o, files, full)
+			status := linkCopyMode(rc, o, files, full)
+			if inputStatus != 0 && status == 0 {
+				status = inputStatus
+			}
+			return status
 		}
 	}
 	invalidRenameDiagnosed, err := preflightCopyInvalidRenames(rc, o, files)
@@ -1266,7 +1274,7 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	inner.Stdio = rc.Stdio
 	inner.In = pr
 	status := readMode(&inner, &sub, nil)
-	if (<-diagCh || invalidRenameDiagnosed) && status == 0 {
+	if (<-diagCh || invalidRenameDiagnosed || inputStatus != 0) && status == 0 {
 		status = 1
 	}
 	return status

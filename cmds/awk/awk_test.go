@@ -33,6 +33,7 @@ func TestAwk(t *testing.T) {
 		{"field", "a b c\n", []string{`{print $2}`}, "b\n"},
 		{"sum", "1\n2\n3\n", []string{`{s+=$1} END{print s}`}, "6\n"},
 		{"separator", "x:y\n", []string{"-F", ":", `{print $1}`}, "x\n"},
+		{"empty-separator", "abc\n", []string{"-F", "", `{print NF, $1, $2, $3}`}, "3 a b c\n"},
 		{"var", "", []string{"-v", "n=5", `BEGIN{print n*2}`}, "10\n"},
 		{"record", "one\ntwo\nthree\n", []string{`NR==2`}, "two\n"},
 	}
@@ -43,6 +44,14 @@ func TestAwk(t *testing.T) {
 				t.Errorf("awk %v = (%q, %q, %d), want (%q, %q, 0)", c.args, out, errb, code, c.want, "")
 			}
 		})
+	}
+}
+
+func TestAwkAbsentArrayReferenceCreatesElement(t *testing.T) {
+	program := `BEGIN { print ("missing" in a); x = a["missing"]; print ("missing" in a), x }`
+	out, errb, code := runTool(t, "", program)
+	if out != "0\n1 \n" || errb != "" || code != 0 {
+		t.Fatalf("awk absent array reference = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "0\n1 \n", "")
 	}
 }
 
@@ -116,6 +125,27 @@ func TestAwkPOSIXEREDotNewlineAndLeftmostLongest(t *testing.T) {
 	want := "1 1\n1 1 2\n"
 	if out != want || errb != "" || code != 0 {
 		t.Fatalf("awk ERE semantics = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+func TestAwkPOSIXEREOpenIntervalMatches(t *testing.T) {
+	program := `BEGIN {
+		print match("aabcaab", /([a-c]*){0,}/), RSTART, RLENGTH
+		print match("abababccccccd", /(ab){2,}/), RSTART, RLENGTH
+		print match("abababccccccd", /(ab){4,}/), RSTART, RLENGTH
+	}`
+	out, errb, code := runTool(t, "", program)
+	want := "1 1 7\n1 1 6\n0 0 -1\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk open interval EREs = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+func TestAwkPOSIXEREOpenIntervalAtLineLimit(t *testing.T) {
+	program := `BEGIN { print match("` + strings.Repeat("c", 2047) + `", /c{2048,}/), RSTART, RLENGTH }`
+	out, errb, code := runTool(t, "", program)
+	if out != "0 0 -1\n" || errb != "" || code != 0 {
+		t.Fatalf("awk line-limit open interval = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "0 0 -1\n", "")
 	}
 }
 
