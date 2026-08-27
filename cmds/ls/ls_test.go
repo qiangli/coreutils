@@ -368,6 +368,43 @@ func TestLongFormat(t *testing.T) {
 	}
 }
 
+// TestTZEnvironmentShiftsLongFormatTimestamp is the POSIX VSC ls TP46
+// regression: TZ must be honored per-invocation when rendering -l
+// timestamps, including the POSIX offset-only forms ("EST5", "UTC0")
+// that GNU/glibc accepts but Go's time.LoadLocation does not recognize
+// as an IANA zoneinfo name (see tz.go's parsePosixTZ).
+func TestTZEnvironmentShiftsLongFormatTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	p := write(t, dir, "example.c", "")
+	mtime := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(p, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(tz string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Env:   []string{"TZ=" + tz},
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		}
+		code := cmd.Run(rc, []string{"-l", "example.c"})
+		if code != 0 {
+			t.Fatalf("TZ=%s: exit %d, stderr %q", tz, code, errb.String())
+		}
+		return out.String()
+	}
+
+	if utc := run("UTC0"); !strings.Contains(utc, "1980") {
+		t.Errorf("TZ=UTC0: want \"1980\" in output, got %q", utc)
+	}
+	if est := run("EST5"); !strings.Contains(est, "1979") {
+		t.Errorf("TZ=EST5: want \"1979\" in output (UTC midnight Jan 1 1980 is Dec 31 1979 EST), got %q", est)
+	}
+}
+
 func TestLongHuman(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "two-k", strings.Repeat("x", 2048))

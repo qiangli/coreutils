@@ -506,7 +506,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 		operands = []string{"."}
 	}
 
-	l := &lister{rc: rc, opt: opt}
+	l := &lister{rc: rc, opt: opt, loc: resolveTZLocation(rc.Getenv("TZ"))}
 	var files, dirs []entry
 	for _, op := range operands {
 		full := rc.Path(op)
@@ -593,6 +593,7 @@ func (w *checkedOutputWriter) Err() error { return w.err }
 type lister struct {
 	rc    *tool.RunContext
 	opt   options
+	loc   *time.Location // -l timestamp display zone, from TZ (see tz.go)
 	exit  int
 	wrote bool
 }
@@ -814,7 +815,7 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 	}
 	rows := make([]row, len(ents))
 	var nlinkW, ownerW, authorW, groupW, sizeW int
-	now := time.Now()
+	now := time.Now().In(l.loc)
 	for i, e := range ents {
 		sys := sysOf(e.info, e.path)
 		owner, group := sys.owner, sys.group
@@ -828,7 +829,7 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 			author: owner,
 			group:  group,
 			size:   sizeString(e.info, sys, opt),
-			mtime:  timeString(e.tm, now, opt.timeStyle),
+			mtime:  timeString(e.tm.In(l.loc), now, opt.timeStyle),
 			name:   displayName(e, opt),
 		}
 		if e.info.Mode()&os.ModeSymlink != 0 && e.target != "" {
