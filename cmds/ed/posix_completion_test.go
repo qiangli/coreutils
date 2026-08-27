@@ -99,6 +99,98 @@ func TestPOSIXGlobalCommandListCanQuit(t *testing.T) {
 	}
 }
 
+func TestPOSIXGlobalSkipsMarkedLineDeletedByEarlierCommand(t *testing.T) {
+	// Both x lines are marked initially. The first command deletes the second
+	// marked line, so that deleted target must not cause z to be processed.
+	in := "a\nx\nx\nz\n.\ng/x/+1d\n1,$p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "x\nz\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXGlobalUnmarksAnotherTargetMovedByCommand(t *testing.T) {
+	in := "a\nx1\nx2\nz\n.\ng/^x/+1m0\n1,$p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "x2\nx1\nz\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXSubstituteEscapedNewlineSplitsLine(t *testing.T) {
+	in := "a\nabc\n.\n1ka\n1s/b/X\\\nY/\n1,$n\n'a=\nu\n1p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "1\taX\n2\tYc\n2\nabc\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXTabIsAValidREDelimiter(t *testing.T) {
+	in := "a\nabc\nxyz\n.\n1s\tb\tB\t\ng\tx\tp\n1p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "xyz\naBc\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXMultibyteREDelimiterInUTF8Locale(t *testing.T) {
+	var out, errb bytes.Buffer
+	in := "a\nabc\nxyz\n.\n1s§b§B§\ng§x§p\n1p\nQ\n"
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), FS: tool.NewLocalFS(),
+		Env:   []string{"PATH=/bin:/usr/bin", "LC_ALL=C.UTF-8"},
+		Stdio: tool.Stdio{In: strings.NewReader(in), Out: &out, Err: &errb}}
+	code := tool.Lookup("ed").Run(rc, []string{"-s"})
+	if code != 0 || errb.String() != "" || out.String() != "xyz\naBc\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
+func TestPOSIXEmptyInsertAndCarriageReturnInput(t *testing.T) {
+	in := "a\none\ntwo\n.\n1i\n.\n.=\n1c\nx\r\n.\n1l\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "1\nx\\r$\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXCarriageReturnIsNotCommandBlank(t *testing.T) {
+	code, out, errb := runEdIn(t, t.TempDir(), "Q\r\nQ\n", "-s")
+	if code != 1 || errb != "" || out != "?\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXListUsesLCTypeCharacterModel(t *testing.T) {
+	run := func(env []string) (int, string, string) {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), FS: tool.NewLocalFS(), Env: env,
+			Stdio: tool.Stdio{In: strings.NewReader("a\né\n.\n1l\nQ\n"), Out: &out, Err: &errb}}
+		return tool.Lookup("ed").Run(rc, []string{"-s"}), out.String(), errb.String()
+	}
+	if code, out, errb := run([]string{"PATH=/bin:/usr/bin", "LC_ALL=C"}); code != 0 || errb != "" || out != "\\303\\251$\n" {
+		t.Fatalf("C locale code=%d out=%q err=%q", code, out, errb)
+	}
+	if code, out, errb := run([]string{"PATH=/bin:/usr/bin", "LC_ALL=C.UTF-8"}); code != 0 || errb != "" || out != "é$\n" {
+		t.Fatalf("UTF-8 locale code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXHangupDoesNotSaveEmptyModifiedBuffer(t *testing.T) {
+	signals := make(chan string, 1)
+	signals <- "hangup"
+	called := false
+	eng := &editor.Engine{
+		Buffer: editor.Buffer{Dirty: true}, Out: io.Discard, ExitOnError: true, Signals: signals,
+		Hangup: func([]byte) error { called = true; return nil },
+	}
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	if code := eng.Run(reader); code != 1 || called {
+		t.Fatalf("code=%d hangup-called=%v", code, called)
+	}
+}
+
 func TestPOSIXReadAppendWriteAndShellForms(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("file\n"), 0o644); err != nil {
@@ -118,6 +210,21 @@ func TestPOSIXReadAppendWriteAndShellForms(t *testing.T) {
 	}
 	if !strings.Contains(out, "2\n") || !strings.Contains(out, "bang\n") {
 		t.Fatalf("shell output=%q", out)
+	}
+}
+
+func TestPOSIXShellExitStatusIsNotAnEditorCommandError(t *testing.T) {
+	in := "!false\n0r !printf x; exit 7\n1p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "x\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXWriteRejectsZeroAddress(t *testing.T) {
+	code, out, errb := runEdIn(t, t.TempDir(), "a\nx\n.\n0w out\nQ\n", "-s")
+	if code != 1 || errb != "" || out != "?\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
 	}
 }
 

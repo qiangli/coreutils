@@ -42,6 +42,7 @@ func (e *Engine) appendLinesNoUndo(after int, lines []string) error {
 			e.marks[k] = n + len(lines)
 		}
 	}
+	e.adjustGlobalInsert(after, len(lines))
 	return nil
 }
 
@@ -50,6 +51,7 @@ func (e *Engine) deleteLinesNoUndo(first, last int) error {
 		return err
 	}
 	delta := last - first + 1
+	e.adjustGlobalDelete(first, last)
 	for k, n := range e.marks {
 		if n >= first && n <= last {
 			delete(e.marks, k)
@@ -139,14 +141,14 @@ func (e *Engine) move(first, last, dest int) error {
 }
 
 func (e *Engine) readFile(after int, arg string) error {
-	name := strings.TrimSpace(arg)
+	name := trimBlank(arg)
 	var data []byte
 	var err error
 	if strings.HasPrefix(name, "!") {
 		if e.Shell == nil {
 			return fmt.Errorf("shell escapes unavailable")
 		}
-		command := strings.TrimSpace(name[1:])
+		command := trimBlank(name[1:])
 		if command == "" {
 			return fmt.Errorf("shell command required")
 		}
@@ -166,7 +168,7 @@ func (e *Engine) readFile(after int, arg string) error {
 	if err := e.appendLines(after, splitText(data)); err != nil {
 		return err
 	}
-	if !strings.HasPrefix(strings.TrimSpace(arg), "!") && e.Filename == "" {
+	if !strings.HasPrefix(trimBlank(arg), "!") && e.Filename == "" {
 		e.Filename = name
 	}
 	if !e.Silent {
@@ -179,7 +181,7 @@ func (e *Engine) shellEscape(arg string) error {
 	if e.Shell == nil {
 		return fmt.Errorf("shell escapes unavailable")
 	}
-	command, expanded, err := e.prepareShell(strings.TrimSpace(arg))
+	command, expanded, err := e.prepareShell(trimBlank(arg))
 	if err != nil {
 		return err
 	}
@@ -244,11 +246,11 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	if arg == "" {
 		return fmt.Errorf("missing regular expression")
 	}
-	delim := arg[0]
-	if delim == ' ' || delim == '\t' || delim == '\n' {
+	delim, delimLen := e.commandDelimiter(arg)
+	if delim == " " || delim == "\n" {
 		return fmt.Errorf("invalid regular expression delimiter")
 	}
-	pattern, rest, closed, err := delimited(arg[1:], delim)
+	pattern, rest, closed, err := delimitedBy(arg[delimLen:], delim)
 	if err != nil {
 		return fmt.Errorf("unterminated regular expression")
 	}
@@ -266,7 +268,7 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 		return err
 	}
 	e.lastRE = pattern
-	command := strings.TrimSpace(rest)
+	command := trimBlank(rest)
 	if interactive && command != "" {
 		return fmt.Errorf("unexpected interactive global command")
 	}
@@ -279,45 +281,35 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 		if readErr != nil && len(next) == 0 {
 			return fmt.Errorf("unterminated command list")
 		}
-		command += "\n" + strings.TrimRight(next, "\r\n")
+		command += "\n" + strings.TrimSuffix(next, "\n")
 	}
-	targets := make([]string, 0)
+	targets := make([]int, 0)
 	for n := first; n <= last; n++ {
 		if re.MatchString(e.Buffer.Lines[n-1]) == match {
-			targets = append(targets, e.Buffer.Lines[n-1])
+			targets = append(targets, n)
 		}
 	}
 	oldUndo, oldUndoMarks, oldUndoValid := e.undoBuffer.Clone(), cloneMarks(e.undoMarks), e.undoValid
 	beforeSeq := e.changeSeq
 	e.saveUndo()
 	e.inGlobal = true
+	e.globalTargets = targets
 	defer func() {
 		e.inGlobal = false
+		e.globalTargets = nil
 		if beforeSeq == e.changeSeq {
 			e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
 		}
 	}()
-	start := first
 	previousInteractive := ""
-	for _, original := range targets {
-		n := 0
-		for i := start - 1; i < e.Buffer.Last(); i++ {
-			if e.Buffer.Lines[i] == original {
-				n = i + 1
-				break
-			}
-		}
-		if n == 0 {
-			for i := 0; i < start-1 && i < e.Buffer.Last(); i++ {
-				if e.Buffer.Lines[i] == original {
-					n = i + 1
-					break
-				}
-			}
-		}
+	for targetIndex := range e.globalTargets {
+		n := e.globalTargets[targetIndex]
 		if n == 0 {
 			continue
 		}
+		// A command that changes this line must not cause it to be selected
+		// again. Address-shifting helpers keep the remaining entries aligned.
+		e.globalTargets[targetIndex] = 0
 		e.Buffer.Current = n
 		lineCommand := command
 		if interactive {
@@ -327,9 +319,8 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			if readErr != nil && len(lineCommand) == 0 {
 				return readErr
 			}
-			lineCommand = strings.TrimRight(lineCommand, "\r\n")
+			lineCommand = strings.TrimSuffix(lineCommand, "\n")
 			if lineCommand == "" {
-				start = n + 1
 				continue
 			}
 			if lineCommand == "&" {
@@ -357,7 +348,6 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			e.globalQuit = true
 			return nil
 		}
-		start = e.Buffer.Current + 1
 	}
 	return nil
 }
@@ -377,7 +367,7 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 			}
 			return false, err
 		}
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		line = strings.TrimSuffix(line, "\n")
 		_, p, _, parseErr := e.parseAddresses(line)
 		if parseErr != nil {
 			return false, parseErr

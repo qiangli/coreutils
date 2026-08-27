@@ -180,3 +180,5 @@ func skipBlank(s string, p int) int {
 	}
 	return p
 }
+
+func trimBlank(s string) string { return strings.Trim(s, " \t") }

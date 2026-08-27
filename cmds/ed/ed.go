@@ -6,12 +6,15 @@ package edcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/qiangli/coreutils/cmds/internal/editor"
+	corelocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/term"
 )
@@ -41,9 +44,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	eng := &editor.Engine{
-		Out:    rc.Out,
-		Silent: *silent,
-		Prompt: *prompt,
+		Out:        rc.Out,
+		Silent:     *silent,
+		Prompt:     *prompt,
+		ByteLocale: !isUTF8Locale(corelocale.Resolve(rc.Env, corelocale.CType)),
 		Files: editor.Files{
 			Read: func(name string) ([]byte, error) {
 				f, err := rc.FS.Open(rc.Path(name))
@@ -101,6 +105,13 @@ func run(rc *tool.RunContext, args []string) int {
 		var out bytes.Buffer
 		c.Stdout = &out
 		err := c.Run()
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && ctx.Err() == nil {
+			// ed submits the line to the command interpreter; the utility's
+			// exit status is not a command-language failure. Preserve any
+			// produced output for e/r !command and bare !command alike.
+			err = nil
+		}
 		if err != nil {
 			return out.Bytes(), fmt.Errorf("shell command: %v", err)
 		}
@@ -132,4 +143,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	return eng.Run(rc.In)
+}
+
+func isUTF8Locale(name string) bool {
+	compact := strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+	return strings.Contains(compact, "UTF8")
 }

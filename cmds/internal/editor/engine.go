@@ -39,6 +39,9 @@ type Engine struct {
 	Hangup     func(data []byte) error
 	// ExitOnError selects the Issue 7 non-terminal-input rule.
 	ExitOnError bool
+	// ByteLocale selects the single-byte POSIX/C LC_CTYPE character model.
+	// It controls command delimiters and l output classification.
+	ByteLocale bool
 
 	lastRE          string
 	lastReplacement string
@@ -57,6 +60,7 @@ type Engine struct {
 	undoValid       bool
 	inGlobal        bool
 	globalQuit      bool
+	globalTargets   []int
 	changeSeq       uint64
 }
 
@@ -86,7 +90,7 @@ func (e *Engine) Run(in io.Reader) int {
 		if e.PollSignal != nil {
 			switch e.PollSignal() {
 			case "hangup":
-				if e.Buffer.Dirty && e.Hangup != nil {
+				if e.Buffer.Dirty && e.Buffer.Last() > 0 && e.Hangup != nil {
 					_ = e.Hangup(joinLines(e.Buffer.Lines))
 				}
 				return 1
@@ -104,7 +108,7 @@ func (e *Engine) Run(in io.Reader) int {
 		line, err := e.readCommandLine()
 		if sig, ok := err.(signalError); ok {
 			if string(sig) == "hangup" {
-				if e.Buffer.Dirty && e.Hangup != nil {
+				if e.Buffer.Dirty && e.Buffer.Last() > 0 && e.Hangup != nil {
 					_ = e.Hangup(joinLines(e.Buffer.Lines))
 				}
 				return 1
@@ -126,12 +130,11 @@ func (e *Engine) Run(in io.Reader) int {
 			break
 		}
 		line = strings.TrimSuffix(line, "\n")
-		line = strings.TrimSuffix(line, "\r")
 		quit, cmdErr := e.execute(line)
 		if cmdErr != nil {
 			if sig, ok := cmdErr.(signalError); ok {
 				if string(sig) == "hangup" {
-					if e.Buffer.Dirty && e.Hangup != nil {
+					if e.Buffer.Dirty && e.Buffer.Last() > 0 && e.Hangup != nil {
 						_ = e.Hangup(joinLines(e.Buffer.Lines))
 					}
 					return 1
@@ -226,6 +229,7 @@ func (e *Engine) appendLines(after int, lines []string) error {
 	}
 	if len(lines) > 0 {
 		e.changeSeq++
+		e.adjustGlobalInsert(after, len(lines))
 	}
 	for k, n := range e.marks {
 		if n > after {
@@ -241,6 +245,7 @@ func (e *Engine) deleteLines(first, last int) error {
 		return err
 	}
 	e.changeSeq++
+	e.adjustGlobalDelete(first, last)
 	delta := last - first + 1
 	for k, n := range e.marks {
 		if n >= first && n <= last {
@@ -250,6 +255,29 @@ func (e *Engine) deleteLines(first, last int) error {
 		}
 	}
 	return nil
+}
+
+func (e *Engine) adjustGlobalInsert(after, count int) {
+	if count == 0 {
+		return
+	}
+	for i, n := range e.globalTargets {
+		if n > after {
+			e.globalTargets[i] = n + count
+		}
+	}
+}
+
+func (e *Engine) adjustGlobalDelete(first, last int) {
+	delta := last - first + 1
+	for i, n := range e.globalTargets {
+		switch {
+		case n >= first && n <= last:
+			e.globalTargets[i] = 0
+		case n > last:
+			e.globalTargets[i] = n - delta
+		}
+	}
 }
 
 func (e *Engine) commandError(detail string) {
@@ -314,6 +342,11 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 				a = 1
 			}
 			err = e.appendLines(a-1, text)
+			if err == nil && len(text) == 0 {
+				// Unlike append, an empty insert leaves dot at the addressed
+				// line, not at the insertion position immediately before it.
+				e.Buffer.Current = a
+			}
 		default:
 			first, last, err := e.twoAddresses(addrs, explicit, e.Buffer.Current, e.Buffer.Current, true)
 			if err != nil {
@@ -425,6 +458,10 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		if err != nil {
 			return false, err
 		}
+		arg, err = e.readSubstituteArgument(arg)
+		if err != nil {
+			return false, err
+		}
 		return false, e.substitute(first, last, arg)
 	case 'w', 'W':
 		return false, e.write(addrs, explicit, arg, cmd == 'W')
@@ -452,6 +489,11 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		e.Buffer, e.marks = e.undoBuffer.Clone(), cloneMarks(e.undoMarks)
 		e.undoBuffer, e.undoMarks = curB, curM
 		e.changeSeq++
+		if e.inGlobal {
+			for i := range e.globalTargets {
+				e.globalTargets[i] = 0
+			}
+		}
 		if style != 0 && e.Buffer.Current > 0 {
 			err = e.printRange([]int{e.Buffer.Current}, 1, style)
 		}
@@ -504,7 +546,7 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			e.editArmed = true
 			return false, fmt.Errorf("warning: buffer modified")
 		}
-		name := strings.TrimSpace(arg)
+		name := trimBlank(arg)
 		if name == "" {
 			name = e.Filename
 		}
@@ -516,7 +558,7 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			if e.Shell == nil {
 				return false, fmt.Errorf("shell escapes unavailable")
 			}
-			command := strings.TrimSpace(name[1:])
+			command := trimBlank(name[1:])
 			if command == "" {
 				return false, fmt.Errorf("shell command required")
 			}
@@ -535,12 +577,17 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			return false, err
 		}
 		e.changeSeq++
+		if e.inGlobal {
+			for i := range e.globalTargets {
+				e.globalTargets[i] = 0
+			}
+		}
 		if !e.Silent {
 			fmt.Fprintln(e.Out, n)
 		}
 		return false, nil
 	case 'q', 'Q':
-		if explicit || strings.TrimSpace(arg) != "" {
+		if explicit || trimBlank(arg) != "" {
 			return false, fmt.Errorf("unexpected address or argument")
 		}
 		if cmd == 'q' && e.Buffer.Dirty && !wasQuitArmed {
@@ -555,7 +602,7 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		if arg != "" && arg[0] != ' ' && arg[0] != '\t' {
 			return false, fmt.Errorf("file argument requires a separating blank")
 		}
-		name := strings.TrimSpace(arg)
+		name := trimBlank(arg)
 		if name != "" {
 			e.Filename = name
 		}
@@ -622,7 +669,6 @@ func (e *Engine) readInput() ([]string, error) {
 			return nil, err
 		}
 		line = strings.TrimSuffix(line, "\n")
-		line = strings.TrimSuffix(line, "\r")
 		if line == "." {
 			return lines, nil
 		}
@@ -634,6 +680,32 @@ func (e *Engine) readInput() ([]string, error) {
 			return nil, err
 		}
 	}
+}
+
+func (e *Engine) readSubstituteArgument(arg string) (string, error) {
+	for hasOddTrailingBackslashes(arg) {
+		if e.inGlobal {
+			return "", fmt.Errorf("newline substitution not permitted in global command list")
+		}
+		next, err := e.readCommandLine()
+		if err != nil && len(next) == 0 {
+			return "", fmt.Errorf("unterminated substitute replacement")
+		}
+		next = strings.TrimSuffix(next, "\n")
+		arg = arg[:len(arg)-1] + "\n" + next
+		if err != nil {
+			return "", fmt.Errorf("unterminated substitute replacement")
+		}
+	}
+	return arg, nil
+}
+
+func hasOddTrailingBackslashes(s string) bool {
+	n := 0
+	for i := len(s) - 1; i >= 0 && s[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 func (e *Engine) oneAddress(addrs []int, explicit bool, def int, allowZero bool) (int, error) {
@@ -677,7 +749,7 @@ func (e *Engine) printRange(addrs []int, max int, style byte) error {
 		case 'n':
 			fmt.Fprintf(e.Out, "%d\t%s\n", n, line)
 		case 'l':
-			fmt.Fprintln(e.Out, listLine(line))
+			fmt.Fprintln(e.Out, listLine(line, e.ByteLocale))
 		default:
 			fmt.Fprintln(e.Out, line)
 		}
@@ -686,10 +758,13 @@ func (e *Engine) printRange(addrs []int, max int, style byte) error {
 	return nil
 }
 
-func listLine(s string) string {
+func listLine(s string, byteMode bool) string {
 	var escaped strings.Builder
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
+		if byteMode && s[0] >= utf8.RuneSelf {
+			r, size = utf8.RuneError, 1
+		}
 		if r == utf8.RuneError && size == 1 {
 			fmt.Fprintf(&escaped, "\\%03o", s[0])
 			s = s[1:]
@@ -743,10 +818,10 @@ func (e *Engine) write(addrs []int, explicit bool, arg string, appendMode bool) 
 	if arg != "" && arg[0] != ' ' && arg[0] != '\t' {
 		return fmt.Errorf("file argument requires a separating blank")
 	}
-	name := strings.TrimSpace(arg)
+	name := trimBlank(arg)
 	shellCommand := strings.HasPrefix(name, "!")
 	if shellCommand {
-		name = strings.TrimSpace(strings.TrimPrefix(name, "!"))
+		name = trimBlank(strings.TrimPrefix(name, "!"))
 		if name == "" {
 			return fmt.Errorf("shell command required")
 		}
@@ -760,7 +835,7 @@ func (e *Engine) write(addrs []int, explicit bool, arg string, appendMode bool) 
 	first, last := 1, e.Buffer.Last()
 	if explicit {
 		var err error
-		first, last, err = e.twoAddresses(addrs, true, first, last, true)
+		first, last, err = e.twoAddresses(addrs, true, first, last, false)
 		if err != nil {
 			return err
 		}
@@ -810,15 +885,15 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	if arg == "" {
 		return fmt.Errorf("missing substitute expression")
 	}
-	delim := arg[0]
-	if delim == ' ' || delim == '\t' {
+	delim, delimLen := e.commandDelimiter(arg)
+	if delim == " " || delim == "\n" {
 		return fmt.Errorf("invalid substitute delimiter")
 	}
-	pattern, rest, closed, err := delimited(arg[1:], delim)
+	pattern, rest, closed, err := delimitedBy(arg[delimLen:], delim)
 	if err != nil || !closed {
 		return fmt.Errorf("unterminated regular expression")
 	}
-	replacement, flags, replacementClosed, err := delimited(rest, delim)
+	replacement, flags, replacementClosed, err := delimitedBy(rest, delim)
 	if err != nil {
 		return err
 	}
@@ -850,7 +925,9 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	oldUndo, oldUndoMarks, oldUndoValid := e.undoBuffer.Clone(), cloneMarks(e.undoMarks), e.undoValid
 	e.saveUndo()
 	changed, lastChanged := false, 0
-	for n := first; n <= last; n++ {
+	offset := 0
+	for original := first; original <= last; original++ {
+		n := original + offset
 		line := e.Buffer.Lines[n-1]
 		matches := re.FindAllStringSubmatchIndex(line, -1)
 		if len(matches) == 0 {
@@ -880,8 +957,35 @@ func (e *Engine) substitute(first, last int, arg string) error {
 			at = m[1]
 		}
 		b.WriteString(line[at:])
-		e.Buffer.Lines[n-1] = b.String()
-		changed, lastChanged = true, n
+		pieces := strings.Split(b.String(), "\n")
+		delta := len(pieces) - 1
+		updated := make([]string, 0, len(e.Buffer.Lines)+delta)
+		updated = append(updated, e.Buffer.Lines[:n-1]...)
+		updated = append(updated, pieces...)
+		updated = append(updated, e.Buffer.Lines[n:]...)
+		e.Buffer.Lines = updated
+		// The original marked line was modified and is no longer eligible
+		// for another pass of the surrounding global command. Other marked
+		// lines retain their identity as their addresses shift.
+		for i, target := range e.globalTargets {
+			switch {
+			case target == n:
+				e.globalTargets[i] = 0
+			case target > n:
+				e.globalTargets[i] = target + delta
+			}
+		}
+		for k, mark := range e.marks {
+			if mark == n {
+				// When a replacement introduces newlines, ed associates a
+				// mark on the original line with the last resulting line.
+				e.marks[k] = mark + delta
+			} else if mark > n {
+				e.marks[k] = mark + delta
+			}
+		}
+		offset += delta
+		changed, lastChanged = true, n+len(pieces)-1
 	}
 	if !changed {
 		e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
@@ -895,6 +999,17 @@ func (e *Engine) substitute(first, last int, arg string) error {
 		return e.printRange([]int{lastChanged}, 1, style)
 	}
 	return nil
+}
+
+func (e *Engine) commandDelimiter(s string) (string, int) {
+	if s == "" {
+		return "", 0
+	}
+	if e.ByteLocale {
+		return s[:1], 1
+	}
+	_, size := utf8.DecodeRuneInString(s)
+	return s[:size], size
 }
 
 func parseSubFlags(s string) (global bool, count int, style byte, err error) {
@@ -970,6 +1085,29 @@ func delimited(s string, delim byte) (text, rest string, closed bool, err error)
 			continue
 		}
 		b.WriteByte(s[i])
+	}
+	return b.String(), "", false, nil
+}
+
+func delimitedBy(s, delim string) (text, rest string, closed bool, err error) {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], delim) {
+			return b.String(), s[i+len(delim):], true, nil
+		}
+		if s[i] == '\\' && strings.HasPrefix(s[i+1:], delim) {
+			b.WriteString(delim)
+			i += 1 + len(delim)
+			continue
+		}
+		if s[i] == '\\' && i+1 < len(s) {
+			b.WriteByte(s[i])
+			b.WriteByte(s[i+1])
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
 	}
 	return b.String(), "", false, nil
 }

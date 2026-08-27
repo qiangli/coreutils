@@ -9,15 +9,18 @@ extensions are not certification requirements.
 - [x] `-p string`, `-s`, and the optional file operand
 - [x] simple, relative, mark, search, comma, semicolon, and omitted addresses
 - [x] `a`, `c`, `d`, `i`, `j`, `k`, `m`, `t`, and one-command toggling `u`
-- [x] `g`, `v`, `G`, and `V`, including non-nesting and multi-line command lists
+- [x] `g`, `v`, `G`, and `V`, including non-nesting, multi-line command lists,
+  and line-identity tracking when earlier commands move or delete marked lines
 - [x] `p`, `l`, `n`, `=`, and applicable `p`/`l`/`n` command suffixes
-- [x] `s`, remembered BRE/replacement state, occurrence counts, and print flags
+- [x] `s`, remembered BRE/replacement state, occurrence counts, print flags,
+  and escaped-newline replacements (including mark relocation)
 - [x] `e`, `E`, `f`, `r`, `w`, `q`, `Q`, `h`, `H`, and `P`
 - [x] bare `!` plus the `e`/`r`/`w` shell-command forms, previous-command
   recall, current-filename expansion, and quoting of special substitutions
 - [x] terminal versus non-terminal command-error behavior
 - [x] `SIGHUP` recovery to `ed.hup` and command-input interruption
-- [x] POSIX list-mode escapes, end marker, and 70-column folding
+- [x] POSIX list-mode escapes, LC_CTYPE character handling, end marker, and
+  70-column folding
 - [x] current-line, dirty-buffer warning, mark relocation, and undo state rules
 
 Known non-POSIX extensions deliberately left out: encrypted files, restricted
