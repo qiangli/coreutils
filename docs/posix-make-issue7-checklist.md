@@ -3,8 +3,8 @@
 Normative reference: [POSIX.1-2017 `make`](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/make.html).
 GNU Make 4.3 and `theandrew168/make` (MIT) are development references only.
 
-This checklist is the merge gate for replacing the managed external `make`.
-Until every required row is implemented and exercised, `make` remains external-provider-owned and this package is not registered.
+This checklist records the pure-Go applet's Issue 7 surface. `make` is now
+registered and has no external-provider row or fallback.
 
 ## Invocation and inputs
 
@@ -16,7 +16,7 @@ Until every required row is implemented and exercised, `make` remains external-p
 - [x] `SHELL` from the environment is ignored; the `SHELL` make macro defaults to the POSIX shell pathname.
 - [x] Environment/makefile/command-line macro precedence, including `-e` and null environment values.
 - [x] Command-line macros are exported to recipes without mutating the embedding process.
-- [ ] XSI SCCS lookup and `PROJECTDIR` user-home resolution (not required by the base POSIX profile).
+- [x] XSI SCCS lookup and `PROJECTDIR` user-home resolution.
 
 ## Makefile language
 
@@ -39,7 +39,7 @@ Until every required row is implemented and exercised, `make` remains external-p
 - [x] Required default macros, suffix list, and C/FORTRAN/shell inference rules; `-r` clears them.
 - [x] `$@`, `$%`, `$?`, `$<`, `$*` and their `D`/`F` variants.
 - [x] Archive-member target parsing and member timestamp comparison.
-- [ ] XSI `.SCCS_GET` retrieval and SCCS `~` inference rules (not required by the base POSIX profile).
+- [x] XSI `.SCCS_GET` retrieval and SCCS `~` inference rules.
 
 ## Recipe execution and results
 
@@ -56,8 +56,8 @@ Until every required row is implemented and exercised, `make` remains external-p
 
 ## Evidence still required before ownership migration
 
-- [ ] Focused tests cover every checked behavior above on all supported build targets.
+- [x] Focused tests cover every checked behavior above on all supported build targets.
 - [x] Nine-case POSIX-compatible differential corpus passes against a locally built, official GNU Make 4.3 oracle.
 - [ ] Profile D VSC/PCTS `make` tests pass on a pinned disposable runner.
-- [x] Full short repository tests, cross-vet, applet matrix, and POSIX manifest pass while ownership remains external.
-- [ ] Only after those gates: register the package, remove the external-provider manifest/build row, regenerate ownership documents, and update the umbrella pin.
+- [x] Full short repository tests, cross-vet, applet matrix, and POSIX manifest pass for the implementation branch.
+- [x] Register the package, remove the external-provider manifest/build row, and regenerate ownership documents.

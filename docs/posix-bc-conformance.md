@@ -3,8 +3,8 @@
 Normative reference: The Open Group Base Specifications Issue 7, 2018
 edition, [`bc`](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/bc.html).
 GNU bc 1.07.1 and Gavin D. Howard's BSD-2-Clause `bc` are differential
-oracles only. No GNU/GPL source is used. The Go implementation is intentionally
-not registered while `bc` remains external-provider-owned.
+oracles only. No GNU/GPL source is used. The Go implementation is registered
+and exclusively owns `bc`; there is no external-provider row or fallback.
 
 | Clause | Required surface | Focused evidence |
 |---|---|---|

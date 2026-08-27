@@ -97,8 +97,8 @@ func TestSpecMatchesCanonicalManifest(t *testing.T) {
 	}
 }
 
-// TestSpecPinnedCounts pins BOTH axes: availability 90/14/12 and effective
-// selection 82/22/12.
+// TestSpecPinnedCounts pins BOTH axes: availability 92/14/10 and effective
+// selection 84/22/10.
 func TestSpecPinnedCounts(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
@@ -117,15 +117,15 @@ func TestSpecPinnedCounts(t *testing.T) {
 			effProv++
 		}
 	}
-	if len(spec) != 116 || avail[OwnerGoApplet] != 90 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 12 {
-		t.Errorf("availability = %d total %v, want 116 split 90/14/12", len(spec), avail)
+	if len(spec) != 116 || avail[OwnerGoApplet] != 92 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 10 {
+		t.Errorf("availability = %d total %v, want 116 split 92/14/10", len(spec), avail)
 	}
-	if effGo != 82 || effShell != 22 || effProv != 12 {
-		t.Errorf("effective selection = %d/%d/%d, want 82/22/12", effGo, effShell, effProv)
+	if effGo != 84 || effShell != 22 || effProv != 10 {
+		t.Errorf("effective selection = %d/%d/%d, want 84/22/10", effGo, effShell, effProv)
 	}
-	if pinTotal != 116 || pinAvailGoApplets != 90 || pinAvailShell != 14 || pinProviders != 12 ||
-		pinEffectiveGoApplets != 82 || pinEffectiveShell != 22 || pinManifestProviders != 12 {
-		t.Error("pin constants drifted from the documented 116 = 90/14/12 availability, 82/22/12 effective, 12 manifest-pinned")
+	if pinTotal != 116 || pinAvailGoApplets != 92 || pinAvailShell != 14 || pinProviders != 10 ||
+		pinEffectiveGoApplets != 84 || pinEffectiveShell != 22 || pinManifestProviders != 10 {
+		t.Error("pin constants drifted from the documented 116 = 92/14/10 availability, 84/22/10 effective, 10 manifest-pinned")
 	}
 }
 
@@ -180,7 +180,7 @@ func TestValidateSpecRejectsCorruptProjections(t *testing.T) {
 		{"duplicate", []specRow{row("cat", OwnerGoApplet, SelGoApplet), row("cat", OwnerGoApplet, SelGoApplet)}, "twice"},
 		{"unknown owner", []specRow{row("cat", Owner("host_binary"), SelGoApplet)}, "unknown availability owner"},
 		{"unknown selector", []specRow{row("cat", OwnerGoApplet, Selector("magic"))}, "unknown effective selector"},
-		{"provider selecting applet", []specRow{row("make", OwnerProvider, SelGoApplet)}, "cannot exist"},
+		{"provider selecting applet", []specRow{row("m4", OwnerProvider, SelGoApplet)}, "cannot exist"},
 		{"shell name as entry", []specRow{row("cd", OwnerShell, SelShellEntry)}, "cannot exist"},
 		{"sh as builtin", []specRow{row("sh", OwnerShell, SelShellBuiltin)}, "cannot exist"},
 		{"shell owner selecting applet", []specRow{row("cd", OwnerShell, SelGoApplet)}, "cannot exist"},
@@ -205,7 +205,7 @@ func TestExpectedShellClasses(t *testing.T) {
 		// the one keyword overlap
 		"time": "keyword",
 		// plain applets and providers stay files
-		"sed": "file", "ls": "file", "make": "file", "vi": "file",
+		"sed": "file", "ls": "file", "m4": "file", "vi": "file",
 	}
 	spec, err := loadSpec()
 	if err != nil {
@@ -260,7 +260,7 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 		t.Errorf("dropped name produced no count-drift finding: %v", fs)
 	}
 	// Effective drift with availability intact: an applet-owned name whose
-	// selector flips to shell_builtin keeps 90/14/12 but breaks 82/22 — the
+	// selector flips to shell_builtin keeps 92/14/10 but breaks 82/22 — the
 	// effective pins must catch it on their own.
 	shifted := make([]specRow, len(spec))
 	copy(shifted, spec)
@@ -271,7 +271,7 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 		}
 	}
 	fs = verifyInventory(shifted, posixprovider.DispatchNames())
-	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 81") ||
+	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 83") ||
 		!findingsHave(fs, "count-drift", "", "effective shell count is 23") {
 		t.Errorf("effective-selection drift not rejected: %v", fs)
 	}
@@ -282,12 +282,12 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 	}
 	var withoutMake []string
 	for _, n := range posixprovider.DispatchNames() {
-		if n != "make" {
+		if n != "m4" {
 			withoutMake = append(withoutMake, n)
 		}
 	}
 	fs = verifyInventory(spec, withoutMake)
-	if !findingsHave(fs, "provider-set", "make", "does not pin it") {
+	if !findingsHave(fs, "provider-set", "m4", "does not pin it") {
 		t.Errorf("missing manifest pin not rejected: %v", fs)
 	}
 }
@@ -349,11 +349,11 @@ func TestVerifyOwnership(t *testing.T) {
 	reg["ls"] = true
 
 	// A missing provider name, same failure class.
-	reg["make"] = false
-	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, false); !findingsHave(fs, "ownership", "make", "not in the tool registry") {
+	reg["m4"] = false
+	if fs := verifyOwnership(spec, lookup, posixprovider.IsDispatchProvider, false); !findingsHave(fs, "ownership", "m4", "not in the tool registry") {
 		t.Errorf("unregistered provider not rejected")
 	}
-	reg["make"] = true
+	reg["m4"] = true
 
 	// A registered tool under a shell-owned name is ambiguous ownership.
 	reg["cd"] = true
@@ -447,7 +447,7 @@ func TestVerifyProviders(t *testing.T) {
 	r := posixprovider.Resolver{CacheRoot: root, GOOS: "linux"}
 
 	// Unprovisioned cache: every provider is a rejection.
-	if fs := VerifyProviders(r); !findingsHave(fs, "provider", "make", "not provisioned") {
+	if fs := VerifyProviders(r); !findingsHave(fs, "provider", "m4", "not provisioned") {
 		t.Errorf("empty cache not rejected: %v", fs)
 	}
 
@@ -457,19 +457,19 @@ func TestVerifyProviders(t *testing.T) {
 	}
 
 	// A platform a manifest row does not declare is a FAILURE, not a skip: a
-	// runtime that cannot supply all twelve active names is not the claimed runtime.
+	// runtime that cannot supply all ten active names is not the claimed runtime.
 	fs := VerifyProviders(posixprovider.Resolver{CacheRoot: root, GOOS: "windows"})
 	if !findingsHave(fs, "provider", "man", "not declared for windows") {
 		t.Errorf("undeclared platform not rejected: %v", fs)
 	}
 
 	// A binary that no longer matches its provenance is unattributable.
-	e, _ := posixprovider.Lookup("make")
+	e, _ := posixprovider.Lookup("m4")
 	bin := filepath.Join(root, e.Command, e.Version, e.Command)
 	if err := os.WriteFile(bin, []byte("tampered"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if fs := VerifyProviders(r); !findingsHave(fs, "provider", "make", "provenance") {
+	if fs := VerifyProviders(r); !findingsHave(fs, "provider", "m4", "provenance") {
 		t.Errorf("tampered binary not rejected: %v", fs)
 	}
 }
@@ -738,14 +738,14 @@ func TestRuntimeGateRejectsUnresolvableName(t *testing.T) {
 		t.Fatal(err)
 	}
 	bindir, multicall := stageRuntime(t, spec)
-	if err := os.Remove(filepath.Join(bindir, "make")); err != nil {
+	if err := os.Remove(filepath.Join(bindir, "m4")); err != nil {
 		t.Fatal(err)
 	}
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
 	withFakeShell(t, fakeShell(t, spec, healthySim()))
 
 	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
-	if !findingsHave(fs, "path-owner", "make", "not resolvable") {
+	if !findingsHave(fs, "path-owner", "m4", "not resolvable") {
 		t.Errorf("missing staged make not rejected: %v", fs)
 	}
 }
@@ -1096,15 +1096,15 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 
 	t.Run("unused valid cache, arbitrary staged executable", func(t *testing.T) {
 		rc, cfg, root := stageCertified(t, spec, healthySim())
-		// The wrapper would dispatch `make` to an arbitrary executable while
+		// The wrapper would dispatch `m4` to an arbitrary executable while
 		// the valid cache sits unused.
-		rogue := filepath.Join(t.TempDir(), "make")
+		rogue := filepath.Join(t.TempDir(), "m4")
 		if err := os.WriteFile(rogue, []byte(hostToolBody), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
 			for i, line := range l {
-				if strings.HasPrefix(line, "make\t") {
+				if strings.HasPrefix(line, "m4\t") {
 					f := strings.Split(line, "\t")
 					l[i] = strings.Join([]string{f[0], f[1], rogue, sha256Hex(hostToolBody)}, "\t")
 				}
@@ -1112,7 +1112,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return l
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "make", "verified cache identity") {
+		if !findingsHave(fs, "provider-dispatch", "m4", "verified cache identity") {
 			t.Errorf("unused-cache bypass not rejected: %v", fs)
 		}
 	})
@@ -1126,7 +1126,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return l
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "make", "verified cache identity") {
+		if !findingsHave(fs, "provider-dispatch", "m4", "verified cache identity") {
 			t.Errorf("digest-mismatched dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1140,7 +1140,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return l
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "make", "verified cache identity") {
+		if !findingsHave(fs, "provider-dispatch", "m4", "verified cache identity") {
 			t.Errorf("version-mismatched dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1154,7 +1154,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
 		if !findingsHave(fs, "provider-dispatch", dropped, "no dispatch-plan row") ||
-			!findingsHave(fs, "provider-dispatch", "", "accounts for 11 active providers, want exactly 12") {
+			!findingsHave(fs, "provider-dispatch", "", "accounts for 9 active providers, want exactly 10") {
 			t.Errorf("missing dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1165,7 +1165,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return append(l, l[0])
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "make", "duplicate dispatch-plan row") {
+		if !findingsHave(fs, "provider-dispatch", "m4", "duplicate dispatch-plan row") {
 			t.Errorf("duplicate dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1176,17 +1176,17 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return append(l, "cpio\t2.15\t/x/cpio\t"+strings.Repeat("a", 64))
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the twelve active providers") {
+		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the ten active providers") {
 			t.Errorf("extra dispatch row not rejected: %v", fs)
 		}
 	})
 
 	t.Run("malformed rows", func(t *testing.T) {
 		for _, bad := range []string{
-			"make\t4.4.1\t/x/make",                             // three columns
-			"make\t4.4.1\t/x/make\tnot-a-digest",               // non-hex digest
-			"make\t4.4.1\t/x/make\t" + strings.Repeat("a", 63), // truncated digest
-			"make\t4.4.1\t/x/make\t" + strings.Repeat("a", 65), // padded digest
+			"m4\t1.4.19\t/x/m4",                             // three columns
+			"m4\t1.4.19\t/x/m4\tnot-a-digest",               // non-hex digest
+			"m4\t1.4.19\t/x/m4\t" + strings.Repeat("a", 63), // truncated digest
+			"m4\t1.4.19\t/x/m4\t" + strings.Repeat("a", 65), // padded digest
 		} {
 			rc, cfg, root := stageCertified(t, spec, healthySim())
 			withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
@@ -1281,10 +1281,10 @@ func TestGateSpecSubcommand(t *testing.T) {
 	if len(lines) != pinTotal+2 {
 		t.Errorf("spec printed %d lines, want %d names + 2 summary lines", len(lines), pinTotal)
 	}
-	if !strings.Contains(stdout, "availability 90 go_applet, 14 shell, 12 external_provider") {
+	if !strings.Contains(stdout, "availability 92 go_applet, 14 shell, 10 external_provider") {
 		t.Errorf("availability summary missing from %q", stdout)
 	}
-	if !strings.Contains(stdout, "effective selection: 82 go_applet, 22 shell, 12 external_provider") {
+	if !strings.Contains(stdout, "effective selection: 84 go_applet, 22 shell, 10 external_provider") {
 		t.Errorf("effective-selection summary missing from %q", stdout)
 	}
 }
@@ -1308,7 +1308,7 @@ func TestGateProvidersSubcommand(t *testing.T) {
 	provisionAll(t, root)
 	rc := runtimeRC(t, "BASHY_BIN_CACHE="+root)
 	code, stdout, stderr := runGateCmd(t, rc, "providers")
-	if code != 0 || !strings.Contains(stdout, "posix-gate providers: PASS (12 active providers provisioned") ||
+	if code != 0 || !strings.Contains(stdout, "posix-gate providers: PASS (10 active providers provisioned") ||
 		strings.Contains(stdout, "16 providers provisioned") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}

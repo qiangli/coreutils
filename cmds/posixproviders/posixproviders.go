@@ -7,8 +7,8 @@
 // # What this fixes
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Twelve POSIX-required commands are not implemented in Go
-// (make, bc, m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef), and until
+// coreutils". Ten POSIX-required commands are not implemented in Go
+// (m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef), and until
 // this package existed they were absent from
 // tool.Names() — so the shell adapter fell through to $PATH and the arm measured
 // Ubuntu's binaries while reporting itself as bashy-only. Registering them here
@@ -40,7 +40,7 @@
 //
 // # Opt-out
 //
-// BASHY_POSIX_PROVIDERS=off unregisters all twelve active providers, so plain
+// BASHY_POSIX_PROVIDERS=off unregisters all active providers, so plain
 // bashy stays standalone-graceful on a machine with no provider cache. The `posix-providers`
 // applet itself is always registered: it is how you get out of that state.
 package posixproviderscmd
@@ -79,7 +79,7 @@ func init() {
 }
 
 // ---------------------------------------------------------------------------
-// the twelve active provider tools
+// the active provider tools
 // ---------------------------------------------------------------------------
 
 func providerTool(e posixprovider.Entry) *tool.Tool {
@@ -134,8 +134,8 @@ var execProviderFn = execProvider
 // status.
 //
 // argv[0] is the plain COMMAND NAME, not the cache path. That is not cosmetic:
-// GNU make and binutils derive their diagnostic prefix from argv[0] (a cert
-// arm diffs those strings), and vim decides between vi mode and ex mode by
+// GNU binutils derive their diagnostic prefix from argv[0] (a cert arm diffs
+// those strings), and vim decides between vi mode and ex mode by
 // looking at argv[0] — an `ex` invoked as the cache path would come up in vi
 // mode and hang a scripted edit.
 func execProvider(rc *tool.RunContext, name, path string, args []string) int {
@@ -188,9 +188,10 @@ func execProvider(rc *tool.RunContext, name, path string, args []string) int {
 
 func adminTool() *tool.Tool {
 	active := strings.Join(posixprovider.DispatchNames(), ", ")
+	activeCount := len(posixprovider.DispatchNames())
 	t := &tool.Tool{
 		Name:     "posix-providers",
-		Synopsis: "Provision and inspect the 12 pinned POSIX external providers.",
+		Synopsis: fmt.Sprintf("Provision and inspect the %d pinned POSIX external providers.", activeCount),
 		Usage: fmt.Sprintf(`posix-providers <subcommand>
 
   list                 show every pinned provider and whether it is provisioned
@@ -205,13 +206,13 @@ build is the ONLY path that downloads or compiles. Running a provider never
 does: provisioning is a prepare-time activity, running is a test-time one, and
 fusing them would put network and toolchain variance inside measured evidence.
 
-Active external providers (12): %s
+Active external providers (%d): %s
 
-Go-only replacements, never external providers: ed, patch, mail, mailx, talk.
+Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk.
 
 Providers are built locally from pinned upstream source; most are copyleft and
 lp is Apache-2.0. Their binaries are never redistributed. Set
-BASHY_POSIX_PROVIDERS=off to unregister the 12 provider names entirely.`, active),
+BASHY_POSIX_PROVIDERS=off to unregister the provider names entirely.`, activeCount, active),
 	}
 	t.Run = runAdmin
 	return t
@@ -392,7 +393,7 @@ func runBuild(rc *tool.RunContext, args []string) int {
 
 // runBuildScript invokes the recipe. Shelling out here is a BUILD STEP, not a
 // utility implementation: the "never shell out" rule governs the coreutils
-// themselves (cat never execs /bin/cat), and compiling GNU make from source is
+// themselves (cat never execs /bin/cat), and compiling an external provider is
 // categorically not that. The recipe keeps the sha256-before-extraction
 // property; nothing about it is reimplemented here.
 func runBuildScript(rc *tool.RunContext, script, cacheRoot, manifest, name string) int {

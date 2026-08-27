@@ -7,7 +7,7 @@
 // no independent copy of the inventory — regenerating the matrix rewrites
 // this file, and --check (crossvet + pre-push) fails when it is stale.
 //
-// Pinned shape: availability 90/14/12, effective selection 82/22/12.
+// Pinned shape: availability 92/14/10, effective selection 84/22/10.
 
 package posixgatecmd
 
@@ -18,7 +18,7 @@ var specRows = []specRow{
 	{Command: "awk", GoPackage: "cmds/awk", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "basename", GoPackage: "cmds/basename", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "batch", GoPackage: "cmds/batch", Owner: OwnerGoApplet, Effective: SelGoApplet},
-	{Command: "bc", GoPackage: "cmds/posixproviders", Owner: OwnerProvider, Effective: SelProvider},
+	{Command: "bc", GoPackage: "cmds/bc", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "bg", GoPackage: "", Owner: OwnerShell, Effective: SelShellBuiltin},
 	{Command: "cat", GoPackage: "cmds/cat", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "cd", GoPackage: "", Owner: OwnerShell, Effective: SelShellBuiltin},
@@ -71,7 +71,7 @@ var specRows = []specRow{
 	{Command: "ls", GoPackage: "cmds/ls", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "m4", GoPackage: "cmds/posixproviders", Owner: OwnerProvider, Effective: SelProvider},
 	{Command: "mailx", GoPackage: "cmds/mailx", Owner: OwnerGoApplet, Effective: SelGoApplet},
-	{Command: "make", GoPackage: "cmds/posixproviders", Owner: OwnerProvider, Effective: SelProvider},
+	{Command: "make", GoPackage: "cmds/make", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "man", GoPackage: "cmds/posixproviders", Owner: OwnerProvider, Effective: SelProvider},
 	{Command: "mesg", GoPackage: "cmds/mesg", Owner: OwnerGoApplet, Effective: SelGoApplet},
 	{Command: "mkdir", GoPackage: "cmds/mkdir", Owner: OwnerGoApplet, Effective: SelGoApplet},

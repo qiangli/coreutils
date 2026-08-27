@@ -51,7 +51,7 @@ alias bg cd command fc fg getopts hash jobs read sh umask unalias wait
 # find -exec), but a POSIX-mode bash-family shell EFFECTIVELY selects its own
 # builtin (or, for `time`, the reserved word) when they are invoked at shell
 # level. These two sets are the entire difference between the availability
-# split (90/14/12) and the effective-selection split (82/22/12); an eighth
+# split (92/14/10) and the effective-selection split (84/22/10); an eighth
 # builtin overlap appearing anywhere is an ownership violation the gate must
 # reject, so the sets are pinned here, in the one generator that projects the
 # canonical manifest.
@@ -60,8 +60,8 @@ KEYWORD_OVERLAP = {"time"}
 
 # The pinned shape of the required inventory, both axes. cmds/posixgate pins
 # the same numbers as Go constants; changing the inventory must trip both.
-AVAILABILITY_PIN = {"go_applet": 90, "shell": 14, "external_provider": 12}
-EFFECTIVE_PIN = {"go_applet": 82, "shell": 22, "external_provider": 12}
+AVAILABILITY_PIN = {"go_applet": 92, "shell": 14, "external_provider": 10}
+EFFECTIVE_PIN = {"go_applet": 84, "shell": 22, "external_provider": 10}
 
 ALIASES = {
     "[": "test",
@@ -82,7 +82,7 @@ IMPORT = re.compile(r'github\.com/qiangli/coreutils/cmds/([^"/]+)"')
 #
 # These are deliberately NOT reported as Go applets. The multicall owns the name
 # and executes a locally built, provenance-checked copy of the upstream program;
-# calling that a Go applet would overstate the Go userland by twelve commands and
+# calling that a Go applet would overstate the Go userland by ten commands and
 # corrupt the very denominator this matrix exists to state honestly.
 PROVIDER_PACKAGE = "posixproviders"
 PROVIDER_ADMIN = "posix-providers"
@@ -160,7 +160,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 158 or len(result) != 176:
+    if len(packages) != 160 or len(result) != 176:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -278,7 +278,7 @@ def render_spec_gen(data: list[dict[str, str]]) -> str:
         "// no independent copy of the inventory — regenerating the matrix rewrites",
         "// this file, and --check (crossvet + pre-push) fails when it is stale.",
         "//",
-        "// Pinned shape: availability 90/14/12, effective selection 82/22/12.",
+        "// Pinned shape: availability 92/14/10, effective selection 84/22/10.",
         "",
         "package posixgatecmd",
         "",

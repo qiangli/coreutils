@@ -21,8 +21,8 @@ with open(path, newline="") as handle:
 if len(rows) != 116 or len({row["command"] for row in rows}) != 116:
     raise SystemExit("POSIX required-command map must contain exactly 116 unique names")
 counts = Counter(row["profile_cd_disposition"] for row in rows)
-want = Counter({"go_applet": 90, "shell": 14, "external_provider": 12})
+want = Counter({"go_applet": 92, "shell": 14, "external_provider": 10})
 if counts != want:
     raise SystemExit(f"POSIX required-command availability drift: {dict(counts)}")
-print("validate-posix-required-commands: PASS (five columns; 116 names; 90/14/12)")
+print("validate-posix-required-commands: PASS (five columns; 116 names; 92/14/10)")
 PY

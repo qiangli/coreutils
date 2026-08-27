@@ -12,15 +12,15 @@ providers. Profiles C/D place Bashy Go coreutils first.
 
 | Disposition | Count |
 | --- | ---: |
-| Registered Bashy Go applet | 90 |
+| Registered Bashy Go applet | 92 |
 | Shell entry point or builtin | 14 |
-| Pinned POSIX external provider | 12 |
+| Pinned POSIX external provider | 10 |
 | External provider gap in assembled C/D | 0 |
 | Required names | 116 |
 
-Coreutils alone therefore covers 90 of 116 same-name required sets and
-is absent for 26 names. 14 of those 26 are supplied by the shell and
-12 by a pinned POSIX external provider that the multicall itself registers
+Coreutils alone therefore covers 92 of 116 same-name required sets and
+is absent for 24 names. 14 of those 24 are supplied by the shell and
+10 by a pinned POSIX external provider that the multicall itself registers
 and resolves from the provider cache (`pkg/posixprovider`), leaving
 0 true external-provider gaps in the assembled C/D environment.
 
@@ -40,8 +40,8 @@ name on PATH for exec-style callers (`env`, `xargs`, `find -exec`).
 
 | Axis | Go applet | Shell | Pinned provider |
 | --- | ---: | ---: | ---: |
-| Availability | 90 | 14 | 12 |
-| Effective selection | 82 | 22 | 12 |
+| Availability | 92 | 14 | 10 |
+| Effective selection | 84 | 22 | 10 |
 
 `posix-gate` pins both splits and verifies the effective selection
 against the staged shell's own `type -t` classification.
@@ -61,7 +61,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `awk` | yes | `cmds/awk` | no | internal Go applet |
 | `basename` | yes | `cmds/basename` | no | internal Go applet |
 | `batch` | yes | `cmds/batch` | no | internal Go applet |
-| `bc` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
+| `bc` | yes | `cmds/bc` | no | internal Go applet |
 | `bg` | no | — | yes | shell entry/builtin |
 | `cat` | yes | `cmds/cat` | no | internal Go applet |
 | `cd` | no | — | yes | shell entry/builtin |
@@ -114,7 +114,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `ls` | yes | `cmds/ls` | no | internal Go applet |
 | `m4` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `mailx` | yes | `cmds/mailx` | no | internal Go applet |
-| `make` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
+| `make` | yes | `cmds/make` | no | internal Go applet |
 | `man` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `mesg` | yes | `cmds/mesg` | no | internal Go applet |
 | `mkdir` | yes | `cmds/mkdir` | no | internal Go applet |

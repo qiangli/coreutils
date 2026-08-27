@@ -585,10 +585,10 @@ func init() {
 	// invocation is a cache lookup that can never download or compile, and that
 	// separation is the point (a build inside a certification arm would inject
 	// network and toolchain variance into measured evidence).
-	// ed, mailx, patch, and talk are deliberately absent from this list: their
+	// bc, ed, mailx, make, patch, and talk are deliberately absent from this list: their
 	// multicall names are exclusively owned by pure-Go applets.
 	posixProviders := []string{
-		"make", "bc", "m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+		"m4", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
 		"lp", "localedef",
 	}
 	capTools(CapCached, posixProviders...)

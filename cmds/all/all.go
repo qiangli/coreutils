@@ -26,6 +26,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/basename"
 	_ "github.com/qiangli/coreutils/cmds/basenc"
 	_ "github.com/qiangli/coreutils/cmds/batch"
+	_ "github.com/qiangli/coreutils/cmds/bc"
 	_ "github.com/qiangli/coreutils/cmds/browser"
 	_ "github.com/qiangli/coreutils/cmds/cal"
 	_ "github.com/qiangli/coreutils/cmds/cat"
@@ -83,6 +84,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/logname"
 	_ "github.com/qiangli/coreutils/cmds/ls"
 	_ "github.com/qiangli/coreutils/cmds/mailx"
+	_ "github.com/qiangli/coreutils/cmds/make"
 	_ "github.com/qiangli/coreutils/cmds/md5sum"
 	_ "github.com/qiangli/coreutils/cmds/mesg"
 	_ "github.com/qiangli/coreutils/cmds/mkdir"
@@ -110,8 +112,8 @@ import (
 	// every name, and rejects count drift, ambiguous ownership, missing
 	// provider pins/provenance, and host PATH fallback.
 	_ "github.com/qiangli/coreutils/cmds/posixgate"
-	// posixproviders registers twelve pinned POSIX external providers
-	// (make, bc, m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef) plus the
+	// posixproviders registers ten pinned POSIX external providers
+	// (m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef) plus the
 	// `posix-providers` provisioning applet. It must be in this list: the
 	// certification harness rebuilds its measured PATH from tool.Names(), so a
 	// name that is not registered is a name the arm silently takes from the host.

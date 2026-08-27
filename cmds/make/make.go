@@ -1,8 +1,7 @@
 // Package makecmd implements the POSIX make dependency builder in pure Go.
 //
 // POSIX.1 Issue 7 is the normative contract. GNU make 4.3 is used only as a
-// differential oracle. This package intentionally remains unregistered until
-// its conformance suite and the Profile D tests close.
+// differential oracle.
 package makecmd
 
 import (
@@ -22,6 +21,8 @@ import (
 )
 
 var cmd = &tool.Tool{Name: "make", Synopsis: "Maintain, update, and regenerate groups of programs.", Usage: "make [-einpqrst] [-f makefile]... [-k|-S] [macro=value...] [target_name...]"}
+
+func init() { cmd.Run = run; tool.Register(cmd) }
 
 type options struct {
 	envOverride, ignore, keep, dry, print, question, noBuiltins, silent, touch bool

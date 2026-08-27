@@ -24,7 +24,7 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 158 |
+| Shipped Go command packages | 160 |
 | Advertised applet names | 176 |
 | Alias applet names | 6 |
 | GNU Coreutils names | 106 |
@@ -53,7 +53,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `basename` | `cmds/basename` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `basenc` | `cmds/basenc` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `batch` | `cmds/batch` | — | POSIX/Unix utility | no | yes | 4 | 14 |
-| `bc` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
+| `bc` | `cmds/bc` | — | POSIX/Unix utility | no | yes | 1 | 13 |
 | `browser` | `cmds/browser` | — | Bashy/other extension | no | no | 1 | 9 |
 | `cal` | `cmds/cal` | — | Bashy/other extension | no | no | 1 | 6 |
 | `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 4 | 14 |
@@ -118,7 +118,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 2 | 27 |
 | `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 2 | 27 |
-| `make` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
+| `make` | `cmds/make` | — | POSIX/Unix utility | no | yes | 3 | 33 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
 | `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 10 |

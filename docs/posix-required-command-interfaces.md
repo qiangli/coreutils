@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 90 |
+| Availability | Go | 92 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 12 |
-| Effective owner | Go | 82 |
+| Availability | Provider | 10 |
+| Effective owner | Go | 84 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 12 |
+| Effective owner | Provider | 10 |
 | Evidence | Verified | 0 |
-| Evidence | Implemented | 3 |
-| Evidence | Partial | 101 |
-| Evidence | Missing | 12 |
+| Evidence | Implemented | 4 |
+| Evidence | Partial | 102 |
+| Evidence | Missing | 10 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 82 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 84 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 104 owned rows (82 Go plus 22 shell) without treating the
-12 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 106 owned rows (84 Go plus 22 shell) without treating the
+10 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -381,7 +381,7 @@ batch
 
 ## `bc`
 
-**Evidence state:** `missing`.
+**Evidence state:** `implemented`.
 
 **Applicability:** `base`.
 
@@ -397,33 +397,33 @@ bc [-l] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Read every file operand in order, preserving calculator state, then read standard input; an inaccessible or invalid file stops later processing with a diagnostic.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; -l loads the required math library and initializes scale to 20.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read after all file operands, or immediately when no file is supplied; the read() extension consumes expressions from the same stream.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write non-assignment expression values and string literals in language order, using the selected output base and required continued-line formatting.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics; invalid non-interactive input and input failures are non-zero.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Evaluates arbitrary-precision expressions and functions in one shared state; reads named files and standard input and creates no files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on successful completion or quit; greater than 0 for option, file, input, parse, arithmetic, or output errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#bc`.
+**Implementation:** `cmds/bc`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/bc`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:bc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/bc/bc_test.go#TestPOSIXOptionAndOperandContract;cmds/bc/bc_test.go#TestFilesPrecedeStandardInputAndShareState;cmds/bc/bc_test.go#TestPOSIXArithmeticScaleAndBases;cmds/bc/bc_test.go#TestPOSIXFunctionsArraysAndControlFlow;cmds/bc/bc_test.go#TestPOSIXMathLibrary;cmds/bc/bc_test.go#TestDiagnosticsAndExitStatus`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:bc:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
@@ -3063,7 +3063,7 @@ mailx -f [-HiNn] [-F] [file]
 
 ## `make`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `development`.
 
@@ -3079,33 +3079,33 @@ mailx -f [-HiNn] [-F] [file]
 
 **Issue 7 option-argument candidate:** `-f=<makefile>`.
 
-**Operands:** `target_name; macro=value`. UNVERIFIED
+**Operands:** `target_name; macro=value`. Process options, macro definitions, and targets in operand order; command-line macros override makefile and environment values; with no target use the first ordinary target.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Repeated -f files are read in order and -f - reads standard input; MAKEFLAGS is processed before command-line arguments; the last -k or -S controls continuation.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read only for a -f - makefile; recipe commands inherit the invocation streams.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; MAKEFLAGS; xsi:NLSPATH; PROJECTDIR`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write recipe command echoes, -p database output, -t touch messages, and required no-work information unless suppressed by the selected mode.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write makefile, dependency, recipe, signal, and update diagnostics; ignored recipe failures are reported without making final status fail.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read makefiles and dependency timestamps; execute recipe commands; create, update, touch, or remove targets according to dependency and signal semantics.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when requested targets are current or successfully updated; -q returns 1 when an update is needed; greater than 1 for errors, with repository usage errors using 2.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`custom`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#make`.
+**Implementation:** `cmds/make`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/make`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:make:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/make/make_test.go#TestAllRequiredOptionsParseAndOrderedKeepStop;cmds/make/make_test.go#TestStdinAndMultipleMakefiles;cmds/make/make_test.go#TestMakeflagsPrecedenceMacroAndRecipeEnvironment;cmds/make/make_test.go#TestBuildsDependenciesAndAutomaticMacros;cmds/make/make_test.go#TestQuestionDryAndTouchExecutePlusRecipe;cmds/make/make_test.go#TestProjectdirSCCSLookupAndOverrideRecipe`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:make:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

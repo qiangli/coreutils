@@ -32,12 +32,12 @@ non-Coreutils commands such as `ps` use their own official upstream reference.
    directly, exactly as the GNU binary does — see docs/commands.md's
    NO-list preamble. The **POSIX external providers** are the second,
    narrower exception and are explicitly not Go implementations: the
-   multicall owns twelve POSIX-required names (make, bc, m4, man, ctags,
-   ar, nm, strip, ex, vi, lp, localedef) and dispatches to a locally built,
+   multicall owns ten POSIX-required names (m4, man, ctags, ar, nm, strip,
+   ex, vi, lp, localedef) and dispatches to a locally built,
    provenance-checked copy of the upstream program. They exist so a
    "bashy-only" certification arm stops silently measuring the host's
-   `$PATH`. Pure-Go applets exclusively own `ed`, `patch`, `mail`/`mailx`, and
-   `talk`; they have no external-provider pins or fallback. See
+   `$PATH`. Pure-Go applets exclusively own `make`, `bc`, `ed`, `patch`,
+   `mail`/`mailx`, and `talk`; they have no external-provider pins or fallback. See
    docs/posix-external-providers.md.
 3. **Upstream semantics are immutable.** Every flag, option, and argument
    a tool accepts means exactly what the original command's official

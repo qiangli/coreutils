@@ -23,7 +23,7 @@ func gateTool() *tool.Tool {
 		Usage: `posix-gate <subcommand>
 
   spec                    print the canonical owner projection with its pinned
-                          availability (90/14/12) and effective (82/22/12) splits
+                          availability (92/14/10) and effective (84/22/10) splits
   registry                verify the live tool registry owns every name as intended
                           (hermetic: no cache, no network, nothing spawned)
   providers               verify every active external provider resolves from the

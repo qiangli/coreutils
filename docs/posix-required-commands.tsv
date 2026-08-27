@@ -5,7 +5,7 @@ at	yes	cmds/at	no	go_applet
 awk	yes	cmds/awk	no	go_applet
 basename	yes	cmds/basename	no	go_applet
 batch	yes	cmds/batch	no	go_applet
-bc	no	cmds/posixproviders	no	external_provider
+bc	yes	cmds/bc	no	go_applet
 bg	no		yes	shell
 cat	yes	cmds/cat	no	go_applet
 cd	no		yes	shell
@@ -58,7 +58,7 @@ lp	no	cmds/posixproviders	no	external_provider
 ls	yes	cmds/ls	no	go_applet
 m4	no	cmds/posixproviders	no	external_provider
 mailx	yes	cmds/mailx	no	go_applet
-make	no	cmds/posixproviders	no	external_provider
+make	yes	cmds/make	no	go_applet
 man	no	cmds/posixproviders	no	external_provider
 mesg	yes	cmds/mesg	no	go_applet
 mkdir	yes	cmds/mkdir	no	go_applet

@@ -64,14 +64,14 @@ func provisionSelf(t *testing.T, root, name string) {
 // would come up in vi mode and hang a scripted edit.
 func TestArgvPassthrough(t *testing.T) {
 	root := t.TempDir()
-	provisionSelf(t, root, "bc")
+	provisionSelf(t, root, "m4")
 
 	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "bc", rc, out, errb, "-l", "--", "a b", "-x")
+	code, stdout, stderr := run(t, "m4", rc, out, errb, "-l", "--", "a b", "-x")
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}
-	want := "argv0:bc\narg:-l\narg:--\narg:a b\narg:-x\n"
+	want := "argv0:m4\narg:-l\narg:--\narg:a b\narg:-x\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -181,7 +181,7 @@ func TestProviderNamesAreRegisteredOnEveryPlatform(t *testing.T) {
 
 func TestUnprovisionedProviderFailsLoudly(t *testing.T) {
 	rc, out, errb := newRC(t, t.TempDir())
-	code, stdout, stderr := run(t, "make", rc, out, errb)
+	code, stdout, stderr := run(t, "m4", rc, out, errb)
 
 	if code != 127 {
 		t.Errorf("exit = %d, want 127 (command not found)", code)
@@ -192,7 +192,7 @@ func TestUnprovisionedProviderFailsLoudly(t *testing.T) {
 	if !strings.Contains(stderr, "not provisioned") {
 		t.Errorf("stderr does not say why: %q", stderr)
 	}
-	if !strings.Contains(stderr, "bashy posix-providers build make") {
+	if !strings.Contains(stderr, "bashy posix-providers build m4") {
 		t.Errorf("stderr does not name the fix: %q", stderr)
 	}
 }
@@ -220,7 +220,7 @@ func TestProviderWithBadProvenanceFailsLoudly(t *testing.T) {
 
 func TestAdminList(t *testing.T) {
 	root := t.TempDir()
-	provision(t, root, "bc", "#!/bin/sh\nexit 0\n")
+	provision(t, root, "m4", "#!/bin/sh\nexit 0\n")
 
 	rc, out, errb := newRC(t, root)
 	code, stdout, stderr := run(t, "posix-providers", rc, out, errb, "list")
@@ -288,7 +288,7 @@ func TestAdminUsageErrors(t *testing.T) {
 	}{
 		{"no subcommand", nil},
 		{"unknown subcommand", []string{"install"}},
-		{"list takes no operands", []string{"list", "make"}},
+		{"list takes no operands", []string{"list", "m4"}},
 		// build must reject an unknown name BEFORE it goes looking for a
 		// compiler or a network.
 		{"build unknown name", []string{"build", "gcc"}},
@@ -312,8 +312,8 @@ func TestAdminHelp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"list", "check", "build", "BASHY_POSIX_PROVIDERS=off",
-		"Active external providers (12): " + strings.Join(posixprovider.DispatchNames(), ", "),
-		"Go-only replacements, never external providers: ed, patch, mail, mailx, talk",
+		"Active external providers (10): " + strings.Join(posixprovider.DispatchNames(), ", "),
+		"Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk",
 		"lp is Apache-2.0",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -503,19 +503,19 @@ func TestAdminDispatchPlan(t *testing.T) {
 	}
 
 	// A tampered provider has no verifiable dispatch target: FAIL, exit 1.
-	e, _ := posixprovider.Lookup("make")
-	if err := os.WriteFile(filepath.Join(root, "make", e.Version, "make"), []byte("tampered"), 0o755); err != nil {
+	e, _ := posixprovider.Lookup("m4")
+	if err := os.WriteFile(filepath.Join(root, "m4", e.Version, "m4"), []byte("tampered"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rc, out, errb = newRC(t, root)
 	code, _, stderr = run(t, "posix-providers", rc, out, errb, "dispatch-plan")
-	if code != 1 || !strings.Contains(stderr, "FAIL make") || !strings.Contains(stderr, "no verifiable dispatch target") {
-		t.Errorf("tampered make: exit = %d, stderr = %q", code, stderr)
+	if code != 1 || !strings.Contains(stderr, "FAIL m4") || !strings.Contains(stderr, "no verifiable dispatch target") {
+		t.Errorf("tampered m4: exit = %d, stderr = %q", code, stderr)
 	}
 
 	// Operands are a usage error: the plan is always the whole pinned set.
 	rc, out, errb = newRC(t, root)
-	code, _, _ = run(t, "posix-providers", rc, out, errb, "dispatch-plan", "make")
+	code, _, _ = run(t, "posix-providers", rc, out, errb, "dispatch-plan", "m4")
 	if code != 2 {
 		t.Errorf("dispatch-plan with an operand: exit = %d, want 2", code)
 	}

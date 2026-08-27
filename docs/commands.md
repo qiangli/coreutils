@@ -215,17 +215,17 @@ implementation.
 
 The generated [POSIX required-command coverage
 map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
-contract: 116 configured names, with availability of 90 Go applets, 14
-shell-only names, and 12 active pinned providers. Expanded interface claims live in a
+contract: 116 configured names, with availability of 92 Go applets, 14
+shell-only names, and 10 active pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
-Profile C/D ownership of 82 Go-selected, 22 shell-selected, and 12 provider
+Profile C/D ownership of 84 Go-selected, 22 shell-selected, and 10 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
 missing, partial, implemented, and verified states rather than treating
 placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
-never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
-`m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`, `localedef`) and
+never be read as Go coverage.** The multicall owns the name (`m4`, `man`,
+`ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`, `localedef`) and
 dispatches to a copy of the upstream program built locally from a sha256-pinned
 source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
 silently measuring the host's `$PATH`, which is what happened while these names
@@ -233,7 +233,7 @@ were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory (availability 90/14/12, effective selection 82/22/12): it
+116-name inventory (availability 92/14/10, effective selection 84/22/10): it
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH
@@ -285,8 +285,8 @@ ability to provide honest semantics without delegating to a host executable.
   local-file mbox send/receive surface with no SMTP or network transport.
   Continue the interactive command/state lanes from
   the [mailx continuation ledger](mailx-continuation-ledger.md); the older
-  `mailx-pax-make-agentic-plan.md` is historical, `pax` is shipped, and `make`
-  remains a pinned external provider.
+  `mailx-pax-make-agentic-plan.md` is historical, and `pax`, `make`, and `bc`
+  are shipped pure-Go applets.
 - **Release rule:** an implementation leaves this TODO only when its command
   package is tested, registered in `cmds/all`, classified in `pkg/atlas`,
   present in the generated applet matrix, and passes `scripts/crossvet.sh`.

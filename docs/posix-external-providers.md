@@ -1,17 +1,16 @@
 # POSIX external providers
 
-Twelve POSIX-required commands are deliberately not implemented in Go:
+Ten POSIX-required commands are deliberately not implemented in Go:
 
 ```
-make  bc  m4  man  ctags  ar  nm  strip  ex  vi
-lp    localedef
+m4  man  ctags  ar  nm  strip  ex  vi  lp  localedef
 ```
 
 They are **external providers**: the multicall owns the name and dispatches to
 a copy of the upstream program, built locally from a sha256-pinned source
 tarball and checked against its recorded provenance before it runs.
 
-`ed`, `patch`, `mail`/`mailx`, and `talk` are exclusively pure-Go applets. They
+`make`, `bc`, `ed`, `patch`, `mail`/`mailx`, and `talk` are exclusively pure-Go applets. They
 have no provider rows, provider build recipes, provider-cache expectations, or
 provider fallback.
 
@@ -36,7 +35,7 @@ compile, does not touch the network, and has no code path that could.
 
 Provisioning is a **prepare-time** activity; running is a **test-time** one.
 Fusing them would let a resolve inside a six-hour certification arm decide to
-fetch and compile GNU make — injecting network and toolchain variance into
+fetch and compile an upstream provider — injecting network and toolchain variance into
 measured evidence, and risking a hang that costs the whole arm.
 
 ## The ctags FIFO semantic adapter
@@ -63,7 +62,7 @@ implementation or a host-PATH fallback.
 ```sh
 bashy posix-providers list          # what is pinned, and what is provisioned
 bashy posix-providers check         # verify provisioning + provenance (non-zero if any is unusable)
-bashy posix-providers build make    # fetch pinned SOURCE, verify sha256, build locally
+bashy posix-providers build m4      # fetch pinned SOURCE, verify sha256, build locally
 bashy posix-providers build all
 ```
 
@@ -79,8 +78,7 @@ the real UID's passwd home and Windows uses the current process token's profile.
 
 The applet is a thin driver over that recipe. Shelling out here is a **build
 step**, not a utility implementation — the repo's "never shell out" rule governs
-the coreutils themselves (`cat` never execs `/bin/cat`), and compiling GNU make
-from source is categorically not that.
+the coreutils themselves (`cat` never execs `/bin/cat`).
 
 `build` needs the recipe on disk. It looks at `$POSIX_PROVIDER_BUILD`, then
 walks up from the working directory and from the executable's directory for
@@ -96,8 +94,8 @@ sha256 of the binary itself. A mismatch is an **error**, never a warning. An
 unattributable binary in a certification arm is worse than a missing one,
 because it still produces numbers.
 
-The cost is one sha256 of the binary per invocation (sub-millisecond for `make`,
-a few milliseconds for a binutils tool). That is the price of being able to say
+The cost is one sha256 of the binary per invocation (typically a few
+milliseconds for a binutils tool). That is the price of being able to say
 which bytes produced a result.
 
 ## Platform gating
@@ -121,7 +119,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all twelve provider names, so plain bashy stays standalone-graceful
+unregisters all ten provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -148,7 +146,7 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the twelve registered provider tools + the `posix-providers` applet |
+| `cmds/posixproviders/` | the ten registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
 | `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |

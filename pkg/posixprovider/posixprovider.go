@@ -22,7 +22,7 @@
 // PREPARE-time activity (tools/posix-providers/build.sh, driven by the
 // `posix-providers` applet); running is a TEST-time activity. Fusing them would
 // let a resolve inside a six-hour certification arm decide to fetch and compile
-// GNU make, injecting network and toolchain variance into measured evidence and
+// an upstream build, injecting network and toolchain variance into measured evidence and
 // risking a hang that costs the whole arm. The separation is the design.
 //
 // # Licence posture
@@ -58,7 +58,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the twelve active names are simply not ours and normal
+// provider cache: with it set, the ten active names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"
