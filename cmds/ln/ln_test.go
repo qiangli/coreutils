@@ -632,3 +632,143 @@ func TestLnHelpAndVersion(t *testing.T) {
 		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }
+
+// lnPanicReader proves a code path never reads standard input: POSIX Issue 7
+// documents ln STDIN as "Not used" when -i is not specified.
+type lnPanicReader struct{ t *testing.T }
+
+func (r lnPanicReader) Read([]byte) (int, error) {
+	r.t.Helper()
+	r.t.Fatal("ln must not read standard input without -i")
+	return 0, nil
+}
+
+// TestLnPOSIXStdinNotUsed covers the POSIX Issue 7 STDIN requirement ("Not
+// used") across hard link, symbolic link, and error paths. Without the GNU -i
+// extension, ln must never touch standard input.
+func TestLnPOSIXStdinNotUsed(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	write(t, filepath.Join(dir, "exist"), "old")
+
+	run := func(args ...string) (stdout, stderr string, code int) {
+		t.Helper()
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{In: lnPanicReader{t}, Out: &out, Err: &errb},
+		}
+		code = cmd.Run(rc, args)
+		return out.String(), errb.String(), code
+	}
+	// Successful hard link.
+	if _, _, code := run("a", "b"); code != 0 {
+		t.Errorf("hard link: code=%d", code)
+	}
+	// Successful symbolic link.
+	if _, _, code := run("-s", "a", "sym"); code != 0 {
+		t.Errorf("symbolic link: code=%d", code)
+	}
+	// Error: existing destination without -f.
+	if _, errb, code := run("a", "exist"); code != 1 || errb == "" {
+		t.Errorf("existing dest: code=%d err=%q", code, errb)
+	}
+	// Error: missing target.
+	if _, errb, code := run("no-such", "out"); code != 1 || errb == "" {
+		t.Errorf("missing target: code=%d err=%q", code, errb)
+	}
+}
+
+// TestLnPOSIXStdoutNotUsed verifies that without the GNU -v extension, ln
+// produces no standard output, matching the POSIX Issue 7 STDOUT requirement
+// ("Not used").
+func TestLnPOSIXStdoutNotUsed(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Hard link (two-operand form).
+	out, _, code := runTool(t, dir, "a", "b")
+	if code != 0 || out != "" {
+		t.Errorf("hard link stdout=%q code=%d", out, code)
+	}
+	// Symbolic link (two-operand form).
+	out, _, code = runTool(t, dir, "-s", "a", "sym")
+	if code != 0 || out != "" {
+		t.Errorf("sym link stdout=%q code=%d", out, code)
+	}
+	// Directory form (multi-operand).
+	out, _, code = runTool(t, dir, "-sf", "a", "d")
+	if code != 0 || out != "" {
+		t.Errorf("dir form stdout=%q code=%d", out, code)
+	}
+}
+
+// lnErrWriter simulates a broken standard error stream.
+type lnErrWriter struct{}
+
+func (lnErrWriter) Write([]byte) (int, error) {
+	return 0, os.ErrClosed
+}
+
+// TestLnDiagnosticWriteFailureStillFails verifies that a broken standard
+// error stream does not mask an operand failure: exit status must still
+// reflect the failed link even though the diagnostic itself could not be
+// written. This covers POSIX's "Consequences of Errors: Default."
+func TestLnDiagnosticWriteFailureStillFails(t *testing.T) {
+	dir := t.TempDir()
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: lnErrWriter{}},
+	}
+	code := cmd.Run(rc, []string{"no-such-target", "output"})
+	if code != 1 {
+		t.Errorf("ln with broken stderr: code=%d, want 1", code)
+	}
+}
+
+// TestLnPOSIXMoreThanTwoOperandsNonDir covers the POSIX requirement: "if more
+// than two operands are specified and the final is not an existing directory,
+// an error shall result."
+func TestLnPOSIXMoreThanTwoOperandsNonDir(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	write(t, filepath.Join(dir, "b"), "b")
+	_, errb, code := runTool(t, dir, "a", "b", "not-a-dir")
+	if code != 1 || !strings.Contains(errb, "is not a directory") {
+		t.Errorf("ln a b not-a-dir: code=%d err=%q", code, errb)
+	}
+}
+
+// TestLnPOSIXForceUnlinkFailureDiagnosesAndContinues covers the POSIX step:
+// "Actions shall be performed equivalent to the unlink() function ... If this
+// fails for any reason, ln shall write a diagnostic message to standard error,
+// do nothing more with the current source_file, and go on to any remaining
+// source_files."
+func TestLnPOSIXForceUnlinkFailureDiagnosesAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src1"), "1")
+	write(t, filepath.Join(dir, "src2"), "2")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Create a destination directory at d/src1 — unlink will fail because
+	// POSIX unlink does not remove directories.
+	if err := os.MkdirAll(filepath.Join(dir, "d", "src1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-f", "src1", "src2", "d")
+	// src1 fails (unlink of directory), src2 succeeds.
+	if code != 1 || !strings.Contains(errb, "src1") {
+		t.Errorf("code=%d err=%q", code, errb)
+	}
+	// src2 was still linked into d.
+	if got, err := os.ReadFile(filepath.Join(dir, "d", "src2")); err != nil || string(got) != "2" {
+		t.Errorf("remaining source not processed: content=%q err=%v", got, err)
+	}
+}

@@ -96,7 +96,7 @@ func parseInterval(s string) (float64, error) {
 		return 0, strconv.ErrSyntax
 	}
 	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || v < 0 || math.IsNaN(v) {
+	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0, strconv.ErrSyntax
 	}
 	return v * mult, nil

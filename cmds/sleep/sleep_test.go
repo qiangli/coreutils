@@ -135,6 +135,10 @@ func TestSleepErrors(t *testing.T) {
 		{"1", "bogus"}, // any bad operand fails
 		{"1_000"},      // Go-only digit-separator syntax; not valid strtod/POSIX input
 		{"1_0s"},       // digit separator before a suffix
+		{"Inf"},        // infinity is not a valid POSIX decimal integer
+		{"inf"},        // case variant of infinity
+		{"+Inf"},       // signed infinity
+		{"infinity"},   // GNU extension rejected under POSIX-overrides policy
 	}
 	for _, args := range cases {
 		_, errb, code := runTool(t, context.Background(), args...)
@@ -152,5 +156,51 @@ func TestSleepHelp(t *testing.T) {
 	out, _, code := runTool(t, context.Background(), "--help")
 	if code != 0 || !strings.Contains(out, "Usage: sleep") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+}
+
+// TestSleepPOSIXStdoutNotUsed verifies that sleep produces no standard output,
+// matching the POSIX Issue 7 STDOUT requirement ("Not used").
+func TestSleepPOSIXStdoutNotUsed(t *testing.T) {
+	out, errb, code := runTool(t, context.Background(), "0")
+	if code != 0 || out != "" || errb != "" {
+		t.Errorf("sleep 0: out=%q err=%q code=%d", out, errb, code)
+	}
+}
+
+// TestSleepPOSIXLargeIntegerAccepted verifies that sleep accepts the POSIX-
+// required minimum range of 2^31-1 (2147483647) seconds without a parse
+// error. The actual sleep is cancelled immediately; we verify only that
+// the operand is accepted.
+func TestSleepPOSIXLargeIntegerAccepted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, errb, code := runTool(t, ctx, "2147483647")
+	// Exit code 1 from context cancellation is expected; a parse error
+	// would exit 2 with a diagnostic on stderr.
+	if code == 2 || strings.Contains(errb, "invalid time interval") {
+		t.Errorf("sleep 2147483647: code=%d err=%q, want accepted operand", code, errb)
+	}
+}
+
+// TestSleepPOSIXInfinityRejected verifies that Inf/inf/infinity values are
+// rejected as invalid POSIX operands. POSIX requires a non-negative decimal
+// integer; infinity is a GNU extension.
+func TestSleepPOSIXInfinityRejected(t *testing.T) {
+	for _, op := range []string{"Inf", "inf", "+Inf", "infinity", "Infinity"} {
+		_, errb, code := runTool(t, context.Background(), op)
+		if code != 2 || !strings.Contains(errb, "invalid time interval") {
+			t.Errorf("sleep %q: code=%d err=%q, want usage error 2", op, code, errb)
+		}
+	}
+}
+
+// TestSleepPOSIXNaNRejected verifies NaN is rejected.
+func TestSleepPOSIXNaNRejected(t *testing.T) {
+	for _, op := range []string{"NaN", "nan"} {
+		_, errb, code := runTool(t, context.Background(), op)
+		if code != 2 || !strings.Contains(errb, "invalid time interval") {
+			t.Errorf("sleep %q: code=%d err=%q, want usage error 2", op, code, errb)
+		}
 	}
 }

@@ -544,3 +544,73 @@ func TestRmdirDiagnosticWriteFailureStillFails(t *testing.T) {
 		t.Errorf("rmdir with broken stderr: code=%d, want 1", code)
 	}
 }
+
+// TestRmdirPOSIXEmptyStringOperand covers the POSIX requirement that rmdir()
+// with an empty pathname fails. An empty string is not a valid directory.
+func TestRmdirPOSIXEmptyStringOperand(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "")
+	if code != 1 || !strings.Contains(errb, "failed to remove ''") {
+		t.Errorf("rmdir '': code=%d err=%q", code, errb)
+	}
+}
+
+// TestRmdirPOSIXParentsSingleComponent covers the POSIX -p spec: "If the dir
+// operand includes more than one pathname component, effects equivalent to
+// rmdir -p $(dirname dir) shall occur." A single component (no directory
+// separator) removes only itself — no ancestor walk.
+func TestRmdirPOSIXParentsSingleComponent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "only"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-p", "only")
+	if code != 0 || errb != "" {
+		t.Errorf("rmdir -p only: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "only")); !os.IsNotExist(err) {
+		t.Error("single component not removed")
+	}
+}
+
+// TestRmdirPOSIXStdoutNotUsed verifies that without the GNU -v extension,
+// rmdir produces no standard output, matching the POSIX Issue 7 STDOUT
+// requirement ("Not used").
+func TestRmdirPOSIXStdoutNotUsed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Successful removal — no stdout.
+	out, errb, code := runTool(t, dir, "-p", filepath.Join("a", "b"))
+	if code != 0 || out != "" || errb != "" {
+		t.Errorf("rmdir -p a/b: out=%q err=%q code=%d", out, errb, code)
+	}
+	// Failed removal (missing) — diagnostics go to stderr, not stdout.
+	out, errb, code = runTool(t, dir, "nope")
+	if code != 1 || out != "" || errb == "" {
+		t.Errorf("rmdir nope: out=%q err=%q code=%d", out, errb, code)
+	}
+}
+
+// TestRmdirPOSIXSymlinkToDirRejected verifies that rmdir rejects a symlink
+// that points to a directory. POSIX rmdir() shall fail with ENOTDIR if the
+// path names a symbolic link.
+func TestRmdirPOSIXSymlinkToDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not available: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "link")
+	if code != 1 || !strings.Contains(errb, "failed to remove 'link'") ||
+		!strings.Contains(errb, "Not a directory") {
+		t.Errorf("rmdir link: code=%d err=%q", code, errb)
+	}
+	// real directory must not have been removed.
+	if _, err := os.Stat(filepath.Join(dir, "real")); err != nil {
+		t.Errorf("real directory was affected: %v", err)
+	}
+}
