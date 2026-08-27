@@ -356,10 +356,32 @@ func (s *mailSession) readComposition(to, cc, bcc []string, subject string) ([]b
 					return nil, to, cc, bcc, subject, false, nil
 				}
 			case 'h':
-				subject = s.promptField("Subject", subject)
-				to = strings.Fields(s.promptField("To", strings.Join(to, " ")))
-				cc = strings.Fields(s.promptField("Cc", strings.Join(cc, " ")))
-				bcc = strings.Fields(s.promptField("Bcc", strings.Join(bcc, " ")))
+				var abort bool
+				var promptErr error
+				if subject, abort, promptErr = s.promptField("Subject", subject, body.Bytes()); !abort && promptErr == nil {
+					var value string
+					value, abort, promptErr = s.promptField("To", strings.Join(to, " "), body.Bytes())
+					to = strings.Fields(value)
+				}
+				if !abort && promptErr == nil {
+					var value string
+					value, abort, promptErr = s.promptField("Cc", strings.Join(cc, " "), body.Bytes())
+					cc = strings.Fields(value)
+				}
+				if !abort && promptErr == nil {
+					var value string
+					value, abort, promptErr = s.promptField("Bcc", strings.Join(bcc, " "), body.Bytes())
+					bcc = strings.Fields(value)
+				}
+				if promptErr != nil {
+					return nil, to, cc, bcc, subject, false, promptErr
+				}
+				if abort {
+					if s.receive {
+						return nil, to, cc, bcc, subject, false, nil
+					}
+					return nil, to, cc, bcc, subject, false, fmt.Errorf("message aborted by interrupt")
+				}
 			default:
 				diagnostic(s.rc, s.invoked, "unknown escape: %c", c)
 			}
@@ -377,17 +399,45 @@ func expandSignature(v string) string {
 	return strings.ReplaceAll(v, `\n`, "\n")
 }
 
-func (s *mailSession) promptField(label, current string) string {
-	fmt.Fprintf(s.rc.Out, "%s: ", label)
-	s.ensureInput()
-	r, ok := <-s.input
-	if s.inputOwned {
-		s.input, s.inputOwned = nil, false
+func (s *mailSession) promptField(label, current string, dead []byte) (string, bool, error) {
+	interrupted, discardNext := false, false
+	for {
+		fmt.Fprintf(s.rc.Out, "%s: ", label)
+		s.ensureInput()
+		select {
+		case r, ok := <-s.input:
+			if s.inputOwned {
+				s.input, s.inputOwned = nil, false
+			}
+			if discardNext {
+				discardNext = false
+				interrupted = false
+				continue
+			}
+			if !ok || strings.TrimSpace(r.line) == "" {
+				return current, false, nil
+			}
+			if r.err == io.EOF {
+				return strings.TrimSpace(r.line), false, nil
+			}
+			return strings.TrimSpace(r.line), false, r.err
+		case <-s.interrupt:
+			if s.boolVar("ignore", false) {
+				fmt.Fprintln(s.rc.Out, "@")
+				discardNext = true
+				continue
+			}
+			if !interrupted {
+				fmt.Fprintln(s.rc.Out, "(Interrupt -- one more to kill letter)")
+				interrupted = true
+				continue
+			}
+			if err := s.writeDead(dead); err != nil {
+				return current, true, err
+			}
+			return current, true, nil
+		}
 	}
-	if !ok || strings.TrimSpace(r.line) == "" {
-		return current
-	}
-	return strings.TrimSpace(r.line)
 }
 
 func appendFile(path string, data []byte) error {

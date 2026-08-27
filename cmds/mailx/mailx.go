@@ -165,19 +165,42 @@ func send(rc *tool.RunContext, invoked *tool.Tool, o options, operands []string)
 	var body []byte
 	var err error
 	if mailxIsTerminal(rc.In) {
+		createdInterrupt := s.ensureInterrupt()
+		if createdInterrupt {
+			defer s.stopInterrupt()
+		}
 		if o.subject == "" && s.boolVar("asksub", true) {
-			fmt.Fprint(rc.Out, "Subject: ")
-			line, _ := s.reader.ReadString('\n')
-			o.subject = strings.TrimSpace(line)
+			var abort bool
+			o.subject, abort, err = s.promptField("Subject", o.subject, nil)
+			if err != nil || abort {
+				if err != nil {
+					diagnostic(rc, invoked, "%v", err)
+				}
+				return 1
+			}
 		}
 		if s.boolVar("askcc", false) {
-			fmt.Fprint(rc.Out, "Cc: ")
-			line, _ := s.reader.ReadString('\n')
+			var line string
+			var abort bool
+			line, abort, err = s.promptField("Cc", "", nil)
+			if err != nil || abort {
+				if err != nil {
+					diagnostic(rc, invoked, "%v", err)
+				}
+				return 1
+			}
 			cc = append(cc, strings.Fields(line)...)
 		}
 		if s.boolVar("askbcc", false) {
-			fmt.Fprint(rc.Out, "Bcc: ")
-			line, _ := s.reader.ReadString('\n')
+			var line string
+			var abort bool
+			line, abort, err = s.promptField("Bcc", "", nil)
+			if err != nil || abort {
+				if err != nil {
+					diagnostic(rc, invoked, "%v", err)
+				}
+				return 1
+			}
 			bcc = append(bcc, strings.Fields(line)...)
 		}
 		var sendIt bool

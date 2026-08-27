@@ -221,6 +221,26 @@ func TestPOSIXCompositionInterruptAndIgnore(t *testing.T) {
 	if !strings.Contains(out.String(), "@\n") {
 		t.Fatalf("ignore marker=%q", out.String())
 	}
+
+	out.Reset()
+	input = make(chan composeRead)
+	signals = make(chan os.Signal)
+	s = &mailSession{rc: rc, invoked: cmd, user: "alice", vars: defaultVariables(rc), input: input, interrupt: signals, stopInterrupt: func() {}}
+	type promptResult struct {
+		abort bool
+		err   error
+	}
+	promptDone := make(chan promptResult, 1)
+	go func() {
+		_, abort, err := s.promptField("Subject", "", nil)
+		promptDone <- promptResult{abort, err}
+	}()
+	signals <- os.Interrupt
+	signals <- os.Interrupt
+	pr := <-promptDone
+	if !pr.abort || pr.err != nil {
+		t.Fatalf("prompt abort=%v err=%v", pr.abort, pr.err)
+	}
 }
 
 func TestPOSIXCommandMinimumAbbreviations(t *testing.T) {
