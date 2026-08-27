@@ -276,6 +276,7 @@ func send(rc *tool.RunContext, invoked *tool.Tool, o options, operands []string)
 		}
 		to = append(to, headerAddresses(parsed, "To")...)
 		cc = append(cc, headerAddresses(parsed, "Cc")...)
+		bcc = append(bcc, headerAddresses(parsed, "Bcc")...)
 		body = parsed.Body
 		if o.subject == "" {
 			if v := parsed.HeaderValues("Subject"); len(v) > 0 {

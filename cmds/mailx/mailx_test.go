@@ -110,6 +110,29 @@ func TestHeaderRecipientMode(t *testing.T) {
 	}
 }
 
+func TestHeaderRecipientModeUsesBccAndRecordsFirstRecipient(t *testing.T) {
+	withClock(t)
+	raw := "Bcc: bob\n\nbody\n"
+	_, stderr, code, dir := invoke(t, raw, "-t", "-F")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	delivered, err := mailxpkg.ReadMbox(filepath.Join(dir, "spool", "bob"))
+	if err != nil || len(delivered) != 1 {
+		t.Fatalf("delivered=%d err=%v", len(delivered), err)
+	}
+	if got := string(delivered[0].Message.Body); got != "body\n" {
+		t.Fatalf("delivered body = %q", got)
+	}
+	recorded, err := mailxpkg.ReadMbox(filepath.Join(dir, "bob"))
+	if err != nil || len(recorded) != 1 {
+		t.Fatalf("recorded=%d err=%v", len(recorded), err)
+	}
+	if got := string(recorded[0].Message.Body); got != "body\n" {
+		t.Fatalf("recorded body = %q", got)
+	}
+}
+
 func seedMailbox(t *testing.T, dir string, subjects ...string) string {
 	t.Helper()
 	path := filepath.Join(dir, "spool", "alice")

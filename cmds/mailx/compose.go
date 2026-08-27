@@ -154,7 +154,7 @@ func (s *mailSession) deliver(body []byte, to, cc, bcc []string, subject string,
 	if record || s.vars["record"] != "" {
 		file := s.vars["record"]
 		if record || file == "" {
-			file = to[0]
+			file = all[0]
 		}
 		if s.boolVar("outfolder", false) {
 			file = "+" + file
