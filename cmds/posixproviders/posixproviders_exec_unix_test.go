@@ -10,10 +10,107 @@
 package posixproviderscmd
 
 import (
+	"bufio"
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/tool"
 )
+
+const dedicatedExecHelperEnv = "BASHY_POSIX_PROVIDER_DEDICATED_EXEC_HELPER"
+
+// TestDedicatedProcessExecPreservesProviderPID is the public reducer for the
+// standalone signal boundary.  A passthrough provider must replace the
+// multicall process so a signal sent to the utility PID reaches the provider;
+// fork-and-wait would leave a second, orphanable process behind.
+func TestDedicatedProcessExecPreservesProviderPID(t *testing.T) {
+	if path := os.Getenv(dedicatedExecHelperEnv); path != "" {
+		rc := &tool.RunContext{
+			DedicatedProcess: true,
+			DirIsProcessCwd:  true,
+			Env:              os.Environ(),
+			Stdio:            tool.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
+		}
+		attempted, code := execProviderDedicated(rc, "lp", path, []string{"ready"})
+		if !attempted {
+			os.Exit(125)
+		}
+		os.Exit(code)
+	}
+
+	dir := t.TempDir()
+	provider := dir + "/lp-provider"
+	if err := os.WriteFile(provider, []byte("#!/bin/sh\nprintf '%s %s\\n' \"$$\" \"$1\"\nkill -STOP $$\nread line\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	child := exec.Command(os.Args[0], "-test.run=^TestDedicatedProcessExecPreservesProviderPID$")
+	child.Env = append(os.Environ(), dedicatedExecHelperEnv+"="+provider)
+	var stderr bytes.Buffer
+	child.Stderr = &stderr
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	line := make(chan string, 1)
+	go func() {
+		s := bufio.NewScanner(stdout)
+		if s.Scan() {
+			line <- s.Text()
+			return
+		}
+		line <- ""
+	}()
+	var got string
+	select {
+	case got = <-line:
+	case <-time.After(5 * time.Second):
+		_ = child.Process.Kill()
+		t.Fatal("provider did not report its process identity")
+	}
+	providerPID, marker, ok := strings.Cut(got, " ")
+	if !ok || marker != "ready" {
+		_ = child.Process.Kill()
+		t.Fatalf("provider handshake = %q, stderr=%q", got, stderr.String())
+	}
+	wantPID := strconv.Itoa(child.Process.Pid)
+	if providerPID != wantPID {
+		_ = child.Process.Kill()
+		t.Fatalf("provider PID = %s, advertised utility PID = %s; provider was not exec-replaced", providerPID, wantPID)
+	}
+
+	if err := child.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	err = child.Wait()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("wait = %v, stderr=%q; want signal termination", err, stderr.String())
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGTERM {
+		t.Fatalf("wait status = %v, stderr=%q; want SIGTERM", exitErr.ProcessState, stderr.String())
+	}
+}
 
 func TestExitStatusPropagation(t *testing.T) {
 	for _, want := range []int{0, 1, 2, 42, 127} {

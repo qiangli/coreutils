@@ -123,6 +123,9 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 	if e.Command == "ctags" {
 		return ctagsfifo.Run(rc, e.Command, path, args, execProviderFn)
 	}
+	if attempted, code := execProviderDedicated(rc, e.Command, path, args); attempted {
+		return code
+	}
 	return execProviderFn(rc, e.Command, path, args)
 }
 
