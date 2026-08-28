@@ -494,6 +494,22 @@ func TestAppendMboxMaximumLengthBasename(t *testing.T) {
 	}
 }
 
+func TestMailboxLockPathNeverLengthensOperand(t *testing.T) {
+	for _, base := range []string{"x", "mailbox", strings.Repeat("x", 255)} {
+		path := filepath.Join("relative", "tree", base)
+		lock := mailboxLockPath(path)
+		if filepath.Dir(lock) != filepath.Dir(path) {
+			t.Fatalf("mailbox %q lock escaped its directory: %q", path, lock)
+		}
+		if len(lock) > len(path) {
+			t.Fatalf("mailbox %q (%d bytes) lock %q is longer (%d bytes)", path, len(path), lock, len(lock))
+		}
+		if filepath.Base(lock) == "" {
+			t.Fatalf("mailbox %q has an empty lock name", path)
+		}
+	}
+}
+
 func TestAppendMboxRejectsHeaderNameInjection(t *testing.T) {
 	badNames := []string{
 		"",

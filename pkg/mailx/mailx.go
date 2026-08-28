@@ -660,17 +660,28 @@ func AppendMboxWithMode(path, sender string, when time.Time, msg *Message, mode 
 	return nil
 }
 
-// mailboxLockPath keeps the lock in the mailbox's directory but does not add
-// bytes to a possibly NAME_MAX-length basename. The full digest retains a
-// deterministic one-to-one lock identity while staying below NAME_MAX on the
-// supported filesystems.
+// mailboxLockPath keeps the lock in the mailbox's directory without making
+// either the final component or the complete pathname longer than the mailbox
+// operand. This covers both NAME_MAX-length basenames and valid relative paths
+// at PATH_MAX. Short basenames carry a correspondingly shortened digest; a
+// rare collision fails closed as a busy mailbox rather than risking concurrent
+// modification.
 func mailboxLockPath(path string) string {
 	canonical, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		canonical = filepath.Clean(path)
 	}
 	sum := sha256.Sum256([]byte(canonical))
-	return filepath.Join(filepath.Dir(path), ".mailx-lock-"+hex.EncodeToString(sum[:]))
+	digest := hex.EncodeToString(sum[:])
+	baseLen := len(filepath.Base(path))
+	name := digest
+	if baseLen >= 2 {
+		name = "." + digest
+	}
+	if len(name) > baseLen {
+		name = name[:baseLen]
+	}
+	return filepath.Join(filepath.Dir(path), name)
 }
 
 func acquireMailboxLock(path string) (func(), error) {
