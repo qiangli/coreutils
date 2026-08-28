@@ -892,7 +892,7 @@ type exprStmt struct {
 func (s exprStmt) run(b *Interpreter) (result, error) {
 	v, e := s.e.eval(b)
 	if e == nil && s.print {
-		fmt.Fprintln(b.Out, v.wrappedStringBase(b.OBase))
+		_, e = fmt.Fprintln(b.Out, v.wrappedStringBase(b.OBase))
 	}
 	return result{}, e
 }
@@ -900,8 +900,8 @@ func (s exprStmt) run(b *Interpreter) (result, error) {
 type stringStmt string
 
 func (s stringStmt) run(b *Interpreter) (result, error) {
-	fmt.Fprint(b.Out, string(s))
-	return result{}, nil
+	_, err := fmt.Fprint(b.Out, string(s))
+	return result{}, err
 }
 
 type blockStmt []stmt

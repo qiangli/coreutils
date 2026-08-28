@@ -3,6 +3,7 @@ package bccmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,26 @@ func TestDiagnosticsAndExitStatus(t *testing.T) {
 		t.Fatalf("got stderr=%q code=%d", errOut, code)
 	}
 }
+
+func TestStdoutWriteErrors(t *testing.T) {
+	for _, src := range []string{"1\n", `"hello"`} {
+		t.Run(src, func(t *testing.T) {
+			var errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:   context.Background(),
+				Stdio: tool.Stdio{In: strings.NewReader(src), Out: failingWriter{}, Err: &errOut},
+				FS:    tool.NewLocalFS(),
+			}
+			if code := run(rc, nil); code == 0 || !strings.Contains(errOut.String(), "output unavailable") {
+				t.Fatalf("stderr=%q code=%d", errOut.String(), code)
+			}
+		})
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("output unavailable") }
 
 func TestPOSIXMathLibrary(t *testing.T) {
 	out, errOut, code := runBC(t, "s(0)\nc(0)\ns(1)\nc(1)\na(1)\nl(e(1))\n", "-l")
