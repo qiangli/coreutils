@@ -13,7 +13,10 @@ import (
 )
 
 const (
-	MaxBase  = 99
+	// GNU bc 1.07.1, the certification reference, supports output bases
+	// through 999. POSIX requires at least {BC_BASE_MAX}; accepting the
+	// reference implementation's larger range is a compatible extension.
+	MaxBase  = 999
 	MaxDim   = 2048
 	MaxScale = 99
 )

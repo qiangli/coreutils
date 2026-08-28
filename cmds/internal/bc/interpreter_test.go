@@ -106,10 +106,44 @@ obase=99.9
 			t.Fatalf("src=%q stdout=%q want %q", tc.src, got, tc.want)
 		}
 	}
-	for _, src := range []string{"scale=100\n", "ibase=1\n", "obase=100\n"} {
+	for _, src := range []string{"scale=100\n", "ibase=1\n", "obase=1000\n"} {
 		if _, err := execute(t, src, false); err == nil {
 			t.Fatalf("expected range error for %q", src)
 		}
+	}
+}
+
+func TestPOSIXParenthesizedAssignmentIsPrinted(t *testing.T) {
+	got, err := execute(t, "a=4\n(a=8)\na\nibase=2\nobase=(A)\nobase\n", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "8\n8\n10\n"; got != want {
+		t.Fatalf("stdout=%q, want %q", got, want)
+	}
+}
+
+func TestReferenceOutputBasesAbovePOSIXMinimum(t *testing.T) {
+	got, err := execute(t, "obase=100\n257\n257.95\nobase=101\n1111111111111111\n1234567890123456\n105101005\n", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := " 02 57\n 02 57.95\n" +
+		" 010 036 072 041 038 070 044 000\n" +
+		" 011 052 001 090 077 010 026 089\n" +
+		" 001 001 001 001 001\n"
+	if got != want {
+		t.Fatalf("stdout=%q, want %q", got, want)
+	}
+}
+
+func TestOutputBaseBelowMinimumIsConstrainedAndExecutionContinues(t *testing.T) {
+	got, err := execute(t, "obase=0\n0\nobase\nobase=1.9\n3\n", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "0\n10\n11\n"; got != want {
+		t.Fatalf("stdout=%q, want %q", got, want)
 	}
 }
 

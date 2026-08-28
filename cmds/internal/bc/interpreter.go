@@ -478,7 +478,10 @@ func (p *parser) primary() (expr, error) {
 			if err = p.want(")"); err != nil {
 				return nil, err
 			}
-			return e, nil
+			// Parentheses make an assignment a containing expression. POSIX
+			// suppresses output only for an assignment statement itself, so
+			// (a=1) must still print its value.
+			return parenExpr{e}, nil
 		}
 	}
 	return nil, fmt.Errorf("line %d: expected expression near %q", t.line, t.s)
@@ -491,6 +494,10 @@ func (e literalExpr) eval(b *Interpreter) (Number, error) { return ParseNumber(e
 type numberExpr struct{ n Number }
 
 func (e numberExpr) eval(*Interpreter) (Number, error) { return e.n.clone(), nil }
+
+type parenExpr struct{ expr }
+
+func (e parenExpr) eval(b *Interpreter) (Number, error) { return e.expr.eval(b) }
 
 type variableExpr struct {
 	name  string
@@ -569,11 +576,18 @@ func (e variableExpr) set(b *Interpreter, v Number) error {
 		}
 		return err
 	case "obase":
-		n, err := truncatedInt(v, 2, MaxBase)
-		if err == nil {
-			b.OBase = n
+		n, err := truncatedInt(v, 0, MaxBase)
+		if err != nil {
+			return err
 		}
-		return err
+		// The register is constrained to its legal minimum rather than
+		// making the remainder of an otherwise valid program unreachable.
+		// This matches the traditional bc behavior for a value below two.
+		if n < 2 {
+			n = 2
+		}
+		b.OBase = n
+		return nil
 	}
 	b.vars[e.name] = v.clone()
 	return nil
@@ -626,7 +640,7 @@ func (x *binaryExpr) eval(b *Interpreter) (Number, error) {
 		var rv Number
 		var err error
 		if x.op == "=" && lv.index == nil && (lv.name == "ibase" || lv.name == "obase") {
-			if lit, ok := x.r.(literalExpr); ok && len(lit.s) == 1 && strings.ContainsRune("0123456789ABCDEF", rune(lit.s[0])) {
+			if lit, ok := singleDigitLiteral(x.r); ok {
 				rv, err = ParseNumber(lit.s, 16)
 			} else {
 				rv, err = x.r.eval(b)
@@ -683,6 +697,20 @@ func (x *binaryExpr) eval(b *Interpreter) (Number, error) {
 	}
 	return arith(x.op, a, c, b.Scale)
 }
+
+func singleDigitLiteral(e expr) (literalExpr, bool) {
+	for {
+		switch x := e.(type) {
+		case literalExpr:
+			return x, len(x.s) == 1 && strings.ContainsRune("0123456789ABCDEF", rune(x.s[0]))
+		case parenExpr:
+			e = x.expr
+		default:
+			return literalExpr{}, false
+		}
+	}
+}
+
 func arith(op string, a, c Number, s int) (Number, error) {
 	switch op {
 	case "+":
