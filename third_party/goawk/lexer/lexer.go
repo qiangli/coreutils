@@ -303,6 +303,7 @@ func (l *Lexer) ScanRegex() (Position, Token, string) {
 func (l *Lexer) scanRegex() (Position, Token, string) {
 	pos := l.pos
 	chars := make([]byte, 0, 32) // most won't require heap allocation
+	inBracket := false
 	switch l.lastTok {
 	case DIV:
 		// Regex after '/' (the usual case)
@@ -324,16 +325,78 @@ func (l *Lexer) scanRegex() (Position, Token, string) {
 		}
 		if c == '\\' {
 			l.next()
-			if l.ch != '/' {
+			switch l.ch {
+			case '"', '/':
+				c = l.ch
+				l.next()
+			case '\\':
+				chars = appendRegexLiteralByte(chars, l.ch, inBracket)
+				l.next()
+				continue
+			case 'a':
+				c = '\a'
+				l.next()
+			case 'b':
+				c = '\b'
+				l.next()
+			case 'f':
+				c = '\f'
+				l.next()
+			case 'n':
+				c = '\n'
+				l.next()
+			case 'r':
+				c = '\r'
+				l.next()
+			case 't':
+				c = '\t'
+				l.next()
+			case 'v':
+				c = '\v'
+				l.next()
+			case '0', '1', '2', '3', '4', '5', '6', '7':
+				c = 0
+				for digits := 0; digits < 3 && l.ch >= '0' && l.ch <= '7'; digits++ {
+					c = c*8 + l.ch - '0'
+					l.next()
+				}
+			default:
+				// The result of an unrecognized escape is undefined by POSIX.
+				// Preserve it for the regexp backend, matching the historical
+				// GoAWK behavior instead of inventing another interpretation.
 				chars = append(chars, '\\')
+				c = l.ch
+				l.next()
+				chars = append(chars, c)
+				continue
 			}
-			c = l.ch
+			chars = appendRegexLiteralByte(chars, c, inBracket)
+			continue
 		}
 		chars = append(chars, c)
+		if c == '[' && !inBracket {
+			inBracket = true
+		} else if c == ']' && inBracket {
+			inBracket = false
+		}
 		l.next()
 	}
 	l.next()
 	return pos, REGEX, string(chars)
+}
+
+func appendRegexLiteralByte(dst []byte, b byte, inBracket bool) []byte {
+	meta := ".^$[\\()*+?{|"
+	if inBracket {
+		meta = "\\]-^"
+	}
+	for i := 0; i < len(meta); i++ {
+		if b == meta[i] {
+			dst = append(dst, '\\')
+			break
+		}
+	}
+	return append(dst, b)
 }
 
 // Load the next character into l.ch (or 0 on end of input) and update

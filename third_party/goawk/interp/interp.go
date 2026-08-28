@@ -931,8 +931,8 @@ func (p *interp) setSpecial(index int, v value) error {
 		p.recordSep = p.toString(v)
 		switch { // compare to interp.newScanner
 		case len(p.recordSep) <= 1:
-			// Simple cases use specialized splitters, not regex. However, we still update
-			// recordSepRegex in case an active regexSplitter is still using it.
+			// Simple cases don't use the compiled regex. Keep it synchronized so a
+			// scanner can observe later RS changes without being recreated.
 			sep := regexp.QuoteMeta(p.recordSep)
 			re, err := p.compileRegexStd(sep)
 			if err != nil {

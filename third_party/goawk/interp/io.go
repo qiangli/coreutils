@@ -257,22 +257,64 @@ func (p *interp) newScanner(input io.Reader, buffer []byte) *bufio.Scanner {
 			setFieldNames: p.setFieldNames,
 		}
 		scanner.Split(splitter.scan)
-	case p.recordSep == "\n":
-		// Scanner default is to split on newlines
-	case p.recordSep == "":
-		// Empty string for RS means split on \n\n (blank lines)
-		splitter := blankLineSplitter{terminator: &p.recordTerminator}
-		scanner.Split(splitter.scan)
-	case len(p.recordSep) == 1:
-		splitter := byteSplitter{sep: p.recordSep[0]}
-		scanner.Split(splitter.scan)
-	case utf8.RuneCountInString(p.recordSep) >= 1:
-		// Multi-byte and single char but multi-byte RS use regex
-		splitter := regexSplitter{re: &p.recordSepRegex, terminator: &p.recordTerminator}
+	default:
+		// RS can be assigned between records. Keep one scanner for the stream,
+		// but have its split function consult the current separator every time
+		// instead of freezing the value that was active when the file opened.
+		splitter := recordSplitter{
+			sep:        &p.recordSep,
+			re:         &p.recordSepRegex,
+			terminator: &p.recordTerminator,
+		}
 		scanner.Split(splitter.scan)
 	}
 	scanner.Buffer(buffer, maxRecordLength)
 	return scanner
+}
+
+// recordSplitter dispatches each scan using the current RS value. POSIX awk
+// permits an action to assign RS, and that assignment controls how the next
+// record is read from an already-open stream.
+type recordSplitter struct {
+	sep        *string
+	re         *regex.Regexp
+	terminator *string
+}
+
+func (s recordSplitter) scan(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	sep := *s.sep
+	switch {
+	case sep == "\n":
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			*s.terminator = "\n"
+			return i + 1, dropCR(data[:i]), nil
+		}
+		if atEOF {
+			*s.terminator = ""
+			return len(data), dropCR(data), nil
+		}
+		return 0, nil, nil
+	case sep == "":
+		return (blankLineSplitter{terminator: s.terminator}).scan(data, atEOF)
+	case len(sep) == 1:
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexByte(data, sep[0]); i >= 0 {
+			*s.terminator = sep
+			return i + 1, data[:i], nil
+		}
+		if atEOF {
+			*s.terminator = ""
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	default:
+		return (regexSplitter{re: s.re, terminator: s.terminator}).scan(data, atEOF)
+	}
 }
 
 // setFieldNames is called by csvSplitter.scan on the first row (if the

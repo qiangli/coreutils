@@ -57,6 +57,45 @@ func TestAwkAbsentArrayReferenceCreatesElement(t *testing.T) {
 	}
 }
 
+func TestAwkEREConstantsDecodeControlCharacterEscapes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		pattern string
+	}{
+		{"alert", "\aentry\n", `/^[\a]/`},
+		{"backspace", "\bentry\n", `/^[\b]/`},
+		{"form-feed", "\fentry\n", `/^[\f]/`},
+		{"carriage-return", "\rentry\n", `/^[\r]/`},
+		{"tab", "\tentry\n", `/^[\t]/`},
+		{"vertical-tab", "\ventry\n", `/^[\v]/`},
+		{"octal", "@entry\n", `/^[\100]/`},
+		{"octal-metacharacter", ".entry\n", `/^\056/`},
+		{"octal-bracket-metacharacter", "-entry\n", `/^[\055]/`},
+		{"backslash", "\\entry\n", `/^\\/`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runTool(t, tc.input, tc.pattern+` { print "matched" }`)
+			if out != "matched\n" || errb != "" || code != 0 {
+				t.Fatalf("awk ERE escape = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "matched\n", "")
+			}
+		})
+	}
+}
+
+func TestAwkRecordSeparatorReassignmentAffectsNextRecord(t *testing.T) {
+	input := "one\ntwo\nleftXrightXupYdownYendZtail"
+	program := `NR == 2 { RS = "X" }
+NR == 4 { RS = "Y" }
+NR == 6 { RS = "Z" }
+{ print NR ":" $0 }`
+	want := "1:one\n2:two\n3:left\n4:right\n5:up\n6:down\n7:end\n8:tail\n"
+	out, errb, code := runTool(t, input, program)
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk dynamic RS = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
 // POSIX defers awk string-to-number conversion to ISO C atof, which accepts
 // the special spellings inf/infinity/nan with an optional sign. The
 // conversions and the lowercase string forms of the resulting values are
