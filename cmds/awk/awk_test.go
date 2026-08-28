@@ -57,6 +57,16 @@ func TestAwkAbsentArrayReferenceCreatesElement(t *testing.T) {
 	}
 }
 
+// POSIX gives ~ and !~ the same precedence and left associativity. A chain
+// therefore feeds each match result (0 or 1) into the next match operation.
+func TestAwkMatchOperatorsAreLeftAssociative(t *testing.T) {
+	program := `{ y = $1 !~ /Get/ ~ /1/; z = $2 ~ /a/ !~ /[0-9]/; print y; print z }`
+	out, errb, code := runTool(t, "0 1 2\n", program)
+	if out != "1\n0\n" || errb != "" || code != 0 {
+		t.Fatalf("awk chained match operators = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, "1\n0\n")
+	}
+}
+
 func TestAwkEREConstantsDecodeControlCharacterEscapes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

@@ -656,19 +656,19 @@ func (p *parser) _in(higher func() ast.Expr) ast.Expr {
 	return expr
 }
 
-// Parse a ~ match expression:
+// Parse a left-associative ~ match expression:
 //
-//	compare [MATCH|NOT_MATCH compare]
+//	compare {[MATCH|NOT_MATCH compare]}
 func (p *parser) match() ast.Expr      { return p._match(p.compare) }
 func (p *parser) printMatch() ast.Expr { return p._match(p.printCompare) }
 
 func (p *parser) _match(higher func() ast.Expr) ast.Expr {
 	expr := higher()
-	if p.matches(lexer.MATCH, lexer.NOT_MATCH) {
+	for p.matches(lexer.MATCH, lexer.NOT_MATCH) {
 		op := p.tok
 		p.next()
-		right := p.regexStr(higher) // Not match() as these aren't associative
-		return &ast.BinaryExpr{Left: expr, Op: op, Right: right}
+		right := p.regexStr(higher)
+		expr = &ast.BinaryExpr{Left: expr, Op: op, Right: right}
 	}
 	return expr
 }

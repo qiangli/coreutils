@@ -503,13 +503,16 @@ func splitRegexp(s string, n int, findAll findAllFunc) ([]string, error) {
 	parts := make([]string, 0, len(matches)+1)
 	begin, end := 0, 0
 	for _, match := range matches {
+		// POSIX awk split() treats separators as non-empty matches. An ERE
+		// such as c{0} therefore does not split the input at every boundary.
+		if match[0] == match[1] {
+			continue
+		}
 		if n > 0 && len(parts) >= n-1 {
 			break
 		}
 		end = match[0]
-		if match[1] != 0 {
-			parts = append(parts, s[begin:end])
-		}
+		parts = append(parts, s[begin:end])
 		begin = match[1]
 	}
 	if end != len(s) {

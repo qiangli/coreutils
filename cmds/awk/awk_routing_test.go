@@ -81,6 +81,14 @@ func TestAwkRoutingIntervalCeiling(t *testing.T) {
 	}
 }
 
+// A separator ERE that matches only the empty string is ignored by POSIX awk
+// split(); it must not manufacture one field per character boundary.
+func TestAwkSplitIgnoresZeroLengthSeparatorMatches(t *testing.T) {
+	if got := progStdout(t, "", `BEGIN { n = split("abababccccccd", a, /c{0}/); print n; print a[1] }`); got != "1\nabababccccccd\n" {
+		t.Errorf("split with zero-length ERE = %q, want the input as one field", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Leading-zero counts through 255 in both paths
 // ---------------------------------------------------------------------------

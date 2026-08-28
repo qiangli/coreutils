@@ -8,5 +8,6 @@ behavior is reproducible without an unpublished module commit.
 Coreutils-specific changes add invocation-owned locale callbacks, locale
 numeric-string classification for command-line assignments and `FILENAME`,
 working-directory/environment routing for shell commands, dynamic record
-separator changes on open streams, and POSIX escape decoding in lexical ERE
-constants. The applet's integration regressions live in `cmds/awk`.
+separator changes on open streams, POSIX escape decoding in lexical ERE
+constants, and left-associative chains of the `~` and `!~` operators. The
+applet's integration regressions live in `cmds/awk`.
