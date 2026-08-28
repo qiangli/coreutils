@@ -5,6 +5,7 @@ package webconsole
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/filebrowser/filebrowser/v2/fbembed"
 )
@@ -24,6 +25,17 @@ import (
 // loopback and through outpost's direct tunnel; a download path that rides the
 // cloudbox relay would violate the fail-closed data-plane block.
 func filesPanel(scope string, allowWrite bool) (http.Handler, func() error, error) {
+	// Default to the user's home, NOT fbembed's own default of the working
+	// directory. A launcher is usually started from whatever directory the shell
+	// happened to be in, so a cwd default means the same command shows a
+	// different file tree each time — and one that silently narrows to a project
+	// checkout. Home is what outpost's `files` builtin uses, and it is the answer
+	// a person expects from a tile labelled "Files".
+	if scope == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			scope = home
+		}
+	}
 	return fbembed.New(fbembed.Options{
 		Scope:      scope,
 		AllowWrite: allowWrite,

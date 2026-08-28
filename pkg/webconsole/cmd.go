@@ -66,7 +66,7 @@ func newServeCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&port, "port", DefaultPort, "port to listen on")
 	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "address to bind")
-	cmd.Flags().StringVar(&scope, "scope", "", "filesystem root for the files panel (default: cwd)")
+	cmd.Flags().StringVar(&scope, "scope", "", "filesystem root for the files panel (default: your home directory)")
 	cmd.Flags().BoolVar(&write, "allow-write", false, "allow the files panel to modify files")
 	return cmd
 }
