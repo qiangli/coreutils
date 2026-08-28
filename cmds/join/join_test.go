@@ -261,6 +261,22 @@ func TestJoinPOSIXOperandArityAndStderr(t *testing.T) {
 	}
 }
 
+func TestJoinStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "left"), []byte("1 left\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"-t", "--"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("1 right\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, errb, code := runRaw(t, dir, "", "left", name)
+		if code != 0 || errb != "" || out != "1 left right\n" {
+			t.Errorf("post-operand filename %q: out=%q err=%q code=%d", name, out, errb, code)
+		}
+	}
+}
+
 func TestJoinHelpAndVersion(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := runRaw(t, dir, "", "--help")

@@ -119,7 +119,14 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 			rest = append(rest, args[idx:]...)
 			break
 		}
-		if len(a) < 2 || a[0] != '-' || strings.HasPrefix(a, "--") {
+		// POSIX Utility Syntax Guideline 9: option recognition ends at the
+		// first file operand. Preserve that operand and every later argument
+		// verbatim, including names such as "-t" and "--".
+		if len(a) < 2 || a[0] != '-' {
+			rest = append(rest, args[idx:]...)
+			break
+		}
+		if strings.HasPrefix(a, "--") {
 			rest = append(rest, a)
 			continue
 		}
@@ -162,7 +169,7 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 	header := fs.Bool("header", false, "treat the first line of each file as header lines")
 	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
 
-	operands, code := tool.Parse(rc, cmd, fs, rest)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
 	}
