@@ -726,9 +726,12 @@ func (l *lister) listDirWithAncestors(display, full string, header, commandLine 
 			ti, terr := os.Stat(p)
 			if terr != nil {
 				l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(terr))
-			} else {
-				fi = ti
+				// -L requires information about the referenced file.  If the
+				// target cannot be resolved, the requested entry cannot be
+				// listed from the link's own metadata instead.
+				continue
 			}
+			fi = ti
 		}
 		e := entry{name: name, path: p, info: fi}
 		if l.opt.long && l.opt.deref != dereferenceAll && fi.Mode()&os.ModeSymlink != 0 {
@@ -1393,8 +1396,12 @@ func extractShort(args []string, chars string, stopAtOperand bool, fs *pflag.Fla
 }
 
 // applyPOSIXOptionOrdering applies the ordered side effects of -f. Issue 7
-// requires -f to enable -a and disable -l, -t, -S, and -r at the point it is
-// encountered; a later mutually-exclusive option can select a new mode.
+// requires -f to enable -a at the point it is encountered (a later -A/-a can
+// still select a new mode), but its suppression of -t, -S, and -r is
+// unconditional: VSC-PCTS TP92 ("-ftSr" must match plain "-f") establishes
+// that a -t or -S appearing after -f on the same command line does not
+// reinstate sorting — matching this applet's existing non-POSIX-mode
+// behavior, where -f already wins regardless of position.
 func applyPOSIXOptionOrdering(args []string, fs *pflag.FlagSet, opt *options) {
 	args = posixOptionPrefix(args, fs)
 	f := lastFlag(args, fs, 'f', "")
@@ -1415,19 +1422,7 @@ func applyPOSIXOptionOrdering(args []string, fs *pflag.FlagSet, opt *options) {
 		opt.format, opt.long = fmtOnePerLine, false
 	}
 
-	t := lastFlag(args, fs, 't', "")
-	s := lastFlag(args, fs, 'S', "")
-	switch latest := max(f, t, s); latest {
-	case f:
-		opt.unsorted, opt.sortTime, opt.sortSize = true, false, false
-	case t:
-		opt.unsorted, opt.sortTime, opt.sortSize = false, true, false
-	case s:
-		opt.unsorted, opt.sortTime, opt.sortSize = false, false, true
-	}
-	if f > lastFlag(args, fs, 'r', "reverse") {
-		opt.reverse = false
-	}
+	opt.unsorted, opt.sortTime, opt.sortSize, opt.reverse = true, false, false, false
 }
 
 // posixOptionPrefix returns the option-and-option-argument prefix before the

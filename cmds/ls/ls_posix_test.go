@@ -139,7 +139,8 @@ func TestPOSIXFDisablesEarlierSortLongAndReverse(t *testing.T) {
 		t.Fatalf("-f did not disable earlier -l: %q", got)
 	}
 
-	// A later -t is significant and selects time sorting again.
+	// A later -t does not reinstate sorting: -f's suppression of -t, -S,
+	// and -r is unconditional (VSC-PCTS TP92), not positional.
 	old := filepath.Join(dir, "z")
 	past := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(old, past, past); err != nil {
@@ -151,9 +152,34 @@ func TestPOSIXFDisablesEarlierSortLongAndReverse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sorted, sortedErr, sortedCode := runToolEnv(t, dir, env, "-f", "-A", "-t")
-	if sortedCode != 0 || sortedErr != "" || sorted != "a\nm\nz\n" {
-		t.Fatalf("later -t did not replace -f sort mode: code=%d stderr=%q output=%q", sortedCode, sortedErr, sorted)
+	plainFA, plainFAErr, plainFACode := runToolEnv(t, dir, env, "-f", "-A")
+	stillUnsorted, stillUnsortedErr, stillUnsortedCode := runToolEnv(t, dir, env, "-f", "-A", "-t")
+	if plainFACode != 0 || stillUnsortedCode != 0 || plainFAErr != "" || stillUnsortedErr != "" || stillUnsorted != plainFA {
+		t.Fatalf("later -t reinstated -f sort mode: plain=(%d,%q,%q) with-t=(%d,%q,%q)",
+			plainFACode, plainFAErr, plainFA, stillUnsortedCode, stillUnsortedErr, stillUnsorted)
+	}
+}
+
+// TestPOSIXFIgnoresTrailingSortAndReverse reproduces VSC-PCTS ls TP92: "-f"
+// causes -t, -S, and -r to be ignored regardless of where they fall relative
+// to -f on the command line, not just when they precede it.
+func TestPOSIXFIgnoresTrailingSortAndReverse(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "z", "aaaaaaaaaa")
+	write(t, dir, "a", "b")
+	write(t, dir, "m", "ccc")
+	if err := os.Mkdir(filepath.Join(dir, ".hid92"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"POSIXLY_CORRECT=1"}
+	plain, plainErr, plainCode := runToolEnv(t, dir, env, "-f")
+	trailing, trailingErr, trailingCode := runToolEnv(t, dir, env, "-ftSr")
+	if plainCode != 0 || trailingCode != 0 || plainErr != "" || trailingErr != "" || trailing != plain {
+		t.Fatalf("-ftSr must match -f: plain=(%d,%q,%q) -ftSr=(%d,%q,%q)",
+			plainCode, plainErr, plain, trailingCode, trailingErr, trailing)
+	}
+	if !strings.Contains(plain, ".hid92") {
+		t.Fatalf("-f did not turn on -a: %q", plain)
 	}
 }
 
@@ -976,6 +1002,38 @@ func TestUnreadableTraversedDirectoryExitsOne(t *testing.T) {
 	// Traversal recovers and lists the readable sibling.
 	if !strings.Contains(out, "./sibling:\n") || !strings.Contains(out, "leaf") {
 		t.Errorf("stdout = %q, want the readable sibling still listed", out)
+	}
+}
+
+// TestRecursiveDereferenceSkipsDanglingEntryAndContinues reproduces the
+// second half of VSC-PCTS ls TP69 (GA53). With -L, a dangling link cannot be
+// listed using the link's own metadata: ls diagnoses and omits it, exits
+// nonzero, and still lists subsequent readable operands.
+func TestRecursiveDereferenceSkipsDanglingEntryAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"A", "B", "C"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(dir, "A"), "xxx", "")
+	write(t, filepath.Join(dir, "C"), "zzz", "")
+	if err := os.Symlink("nonexistingfile", filepath.Join(dir, "B", "yyy")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	out, errOut, code := runToolAt(t, dir, "-RLi", "A", "B", "C")
+	if code == 0 {
+		t.Errorf("ls -RLi A B C exit = 0, want nonzero for dangling B/yyy")
+	}
+	if !strings.Contains(out, "zzz") {
+		t.Errorf("stdout = %q, want readable sibling entry 'zzz'", out)
+	}
+	if strings.Contains(out, "yyy") {
+		t.Errorf("stdout = %q, must omit dangling entry 'yyy' under -L", out)
+	}
+	if !strings.Contains(errOut, "cannot access 'B/yyy'") {
+		t.Errorf("stderr = %q, want dangling-target diagnostic", errOut)
 	}
 }
 
