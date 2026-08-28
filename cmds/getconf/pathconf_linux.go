@@ -39,7 +39,7 @@ const (
 	pc2Symlinks           = 100
 	pcAllocSizeMin        = 101
 	pcAsyncIO             = pcUndefined
-	pcFilesizeBits        = pcUndefined
+	pcFilesizeBits        = 105
 	pcPrioIO              = pcUndefined
 	pcRecIncrXferSize     = pcUndefined
 	pcRecMaxXferSize      = pcUndefined
@@ -80,12 +80,32 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		if st.Bsize > 0 {
 			return strconv.FormatInt(int64(st.Bsize), 10), true, nil
 		}
+	case pcFilesizeBits:
+		if bits, ok := linuxFileSizeBits(int64(st.Type)); ok {
+			return bits, true, nil
+		}
 	case pcTimestampResolution:
 		if linuxNanosecondFilesystem(p) {
 			return "1", true, nil
 		}
 	}
 	return undefined, true, nil
+}
+
+// linuxFileSizeBits contains only filesystems for which the Linux ABI answer
+// has been independently checked. FILESIZEBITS describes
+// the maximum regular-file offset accepted for a pathname, so using the Go
+// integer width as a universal answer would silently overstate filesystems and
+// filesystems that have a smaller limit. Linux's ext-family mapping is
+// architecture-independent; unknown filesystems remain undefined until they
+// have their own oracle-backed entry.
+func linuxFileSizeBits(fsType int64) (string, bool) {
+	if fsType == unix.EXT4_SUPER_MAGIC {
+		// EXT2/3/4 share this Linux superblock magic. Linux pathconf reports
+		// a 64-bit regular-file offset for the family on every architecture.
+		return "64", true
+	}
+	return "", false
 }
 
 func linuxNanosecondFilesystem(path string) bool {
