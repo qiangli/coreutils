@@ -28,6 +28,7 @@ package atlas
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Execution tiers (locked vocabulary — dhnt docs/execution-tiers.md), plus
@@ -145,6 +146,11 @@ type Entry struct {
 	Caps     []string
 	Effects  []string // security effects (closed vocab); every entry has ≥1
 	AliasOf  string   // e.g. docker → podman, upgrade → self
+
+	// Web declares a browser UI, and is how `bashy web-console` discovers what
+	// to put on the start page without a hardcoded table. Nil = no web surface.
+	// See web.go.
+	Web *WebSurface
 }
 
 // Idiom is one curated composite: commands naturally used together.
@@ -368,6 +374,32 @@ func addVerb(name string, e Entry) {
 		panic(fmt.Sprintf("atlas: verb %q has no SDLC stage (one of %v). "+
 			"Which stage does it serve that nothing else already does? If the honest "+
 			"answer is 'none', it should not ship.", name, Stages()))
+	}
+	// A declared web surface is discovery data the console trusts at runtime, so
+	// its invariants are enforced where every other atlas invariant is: at init,
+	// loudly. A duplicate mount would silently shadow one surface with another,
+	// and a reserved mount would produce a tile that can never be published.
+	if e.Web != nil {
+		if !validWebMode(e.Web.Mode) {
+			panic(fmt.Sprintf("atlas: verb %q declares web mode %q (one of %v)",
+				name, e.Web.Mode, WebModes()))
+		}
+		if e.Web.Mode != WebSelf {
+			if e.Web.Mount == "" || strings.ContainsAny(e.Web.Mount, "/ \t") {
+				panic(fmt.Sprintf("atlas: verb %q web mount %q must be one path segment",
+					name, e.Web.Mount))
+			}
+			if reservedMounts[strings.ToLower(e.Web.Mount)] {
+				panic(fmt.Sprintf("atlas: verb %q claims reserved web mount %q (reserved: %v)",
+					name, e.Web.Mount, ReservedMounts()))
+			}
+			for other, oe := range verbs {
+				if oe.Web != nil && oe.Web.Mount == e.Web.Mount {
+					panic(fmt.Sprintf("atlas: verbs %q and %q both claim web mount %q",
+						other, name, e.Web.Mount))
+				}
+			}
+		}
 	}
 	verbs[name] = e
 }
@@ -629,7 +661,9 @@ func init() {
 	// orchestration
 	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON},
+		Web: &WebSurface{Label: "DAG", Mount: "dag", Mode: WebProxy, Port: 7717,
+			Start: []string{"dag", "--serve"}}})
 	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	// Chat began as a one-shot launcher and was temporarily renamed `invoke`.
 	// It now owns real governed interactive sessions and their control surface,
@@ -639,7 +673,11 @@ func init() {
 	addVerb("delegate", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
-	addVerb("relay", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("relay", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses},
+		Web: &WebSurface{Label: "Relay", Mount: "relay", Mode: WebInProcess, Port: 8637,
+			Start: []string{"relay", "serve"}, DefaultOn: true}})
+	// `meet` deliberately declares NO surface: relay owns the mount, and two verbs
+	// claiming "relay" would trip the duplicate-mount panic. They are one room.
 	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// leaderboard: the account of what the fleet actually did, where capability
@@ -770,10 +808,30 @@ func init() {
 	addVerb("git", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
 	addVerb("git-scm", staged(StageCross, provisioner(GroupForge, CapNeedsNetwork)))
 	addVerb("gh", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
-	addVerb("loom", staged(StageCross, managed(GroupForge, TierWorkspace, CapDaemon)))
+	loomEntry := staged(StageCross, managed(GroupForge, TierWorkspace, CapDaemon))
+	loomEntry.Web = &WebSurface{Label: "Loom", Mount: "loom", Mode: WebProxy, Port: 31880,
+		Start: []string{"loom", "start"}}
+	addVerb("loom", loomEntry)
 
 	// net
 	addVerb("web", Entry{Stage: StageCross, Group: GroupNet, Caps: []string{CapJSON}})
+
+	// The app launcher: one port, one nav, one auth, with every other web surface
+	// deep-linked beneath it — the shape docs/agent-interaction-surfaces-design.md
+	// settled on, where a verb's --web-ui is a MODIFIER that deep-links in here
+	// rather than standing up another server.
+	//
+	// StageCross because it renders whatever the operator is doing, at whatever
+	// stage — it takes no position on the spine itself, it is the window onto the
+	// ones that do.
+	//
+	// The name is the macOS register (Apps / Terminal / Files), chosen by the user
+	// over `web-console`. Note outpost serves an unrelated GET /apps (its
+	// cooperative-app advertisement); they share a word, not a namespace.
+	addVerb("apps", Entry{Stage: StageCross, Group: GroupPlatform,
+		Caps: []string{CapDaemon, CapJSON, CapSpawnsProcesses},
+		Web: &WebSurface{Label: "Apps", Mode: WebSelf, Port: 8639,
+			Start: []string{"apps"}, DefaultOn: true}})
 	addVerb("curl", staged(StageCross, provisioner(GroupNet, CapNeedsNetwork)))
 
 	// toolchains (self-provisioning, agent-mode shims)
@@ -914,6 +972,9 @@ func init() {
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
 		"doctor", "otel", "audit", "check", "sprint", "board",
+		// apps READS every store its panels render, and the Files panel reads the
+		// filesystem under its scope — the whole point of the tile.
+		"apps",
 		// steward READS the host's authority record (status/board/log/history/reconcile)
 		// and WRITES it (below). A privacy surface: the journal is a durable account of
 		// what agents did on this machine, and its transcripts can carry real
@@ -956,6 +1017,8 @@ func init() {
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
+		// apps WRITES through its terminal (a real shell) and its session key.
+		"apps",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
 		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
 		// anything but a torn final append, and quarantines the exact bytes it discards
@@ -974,7 +1037,7 @@ func init() {
 		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
-		"otel", "tessaro", "login",
+		"otel", "tessaro", "login", "apps",
 	)
 
 	// exec — spawns a process bashy no longer governs (the coreutils userland,
@@ -989,6 +1052,8 @@ func init() {
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
+		// apps spawns a bashy per browser terminal tab
+		"apps",
 		// herald runs the GATE — an operator-supplied command that decides
 		// whether a peer's returned work is good.
 		"herald",
@@ -1017,6 +1082,8 @@ func init() {
 		"at", "batch", "crontab", "nohup",
 		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
+		// an `apps` server outlives the shell that started it.
+		"apps",
 	)
 
 	// spend — incurs metered cost: paid inference the agent drives, pooled

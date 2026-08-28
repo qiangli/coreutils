@@ -148,8 +148,14 @@ var packages = map[string]Package{
 		"capabilities, one envelope, per-ring caps, never composing. It owned the top-level verb `bashy recall` "+
 		"until 2026-08-05; it is now `bashy kb recall`, because four days of telemetry caught the only agent that "+
 		"ever reached for it unprompted typing exactly that, and being told the verb did not exist"),
-	"lexicon":       cmdPkg("lexicon"),
-	"meet":          cmdPkg("meet"),
+	"lexicon":    cmdPkg("lexicon"),
+	"meet":       cmdPkg("meet"),
+	"webconsole": cmdPkg("apps"),
+	"webterm": libPkg("apps", "the browser terminal: one pty per websocket, running bashy itself. "+
+		"Separate from webconsole so the platform-conditional pty code is one small package — "+
+		"and so outpost's /shell can later collapse onto it instead of keeping a second implementation"),
+	"websession": libPkg("apps", "stateless HMAC session cookie + per-IP login throttle for a locally "+
+		"served web surface; copied from outpost's adminui, which is internal/ and so unimportable"),
 	"mirror":        cmdPkg("mirror"),
 	"pair":          cmdPkg("pair"),
 	"patch":         cmdPkg("patch"),

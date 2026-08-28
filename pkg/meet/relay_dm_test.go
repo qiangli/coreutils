@@ -21,7 +21,7 @@ func TestRelayDMHTTPUsesChatAndPersistsTranscript(t *testing.T) {
 	}
 	t.Cleanup(func() { invokeRelayDM = old })
 
-	h := newServeHandler(context.Background())
+	h := newServeHandler(context.Background(), MountOptions{})
 	post := httptest.NewRequest(http.MethodPost, "/api/dms", strings.NewReader(`{"Agent":"codex"}`))
 	post.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()

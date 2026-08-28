@@ -116,7 +116,7 @@ func runMeetServe(ctx context.Context, out io.Writer, surface, bind string, port
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newServeHandler(ctx),
+		Handler:           newServeHandler(ctx, MountOptions{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Fprintf(out, "%s serve → http://%s/  (Bashy Relay; channels + direct messages)\n", surface, addr)
@@ -142,9 +142,16 @@ func runMeetServe(ctx context.Context, out io.Writer, surface, bind string, port
 // ctx is the SERVER's lifetime, not a request's. Background jobs take their
 // context from here: a request context is cancelled the moment the 202 is
 // written, which would kill the very work the 202 promised.
-func newServeHandler(ctx context.Context) http.Handler {
+func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	mux := http.NewServeMux()
 	guard := serveGuard()
+
+	// An embedder that has already authenticated the caller injects its own gate.
+	// See MountOptions for why mounting under a path prefix makes this necessary.
+	roomGate := opts.Gate
+	if roomGate == nil {
+		roomGate = func(h http.Handler) http.Handler { return gate(guard, h.ServeHTTP) }
+	}
 
 	// /healthz is the only ungated route: it is the CI/CD liveness probe, it names
 	// no room, and a probe that needs an identity is a probe that cannot run.
@@ -161,7 +168,7 @@ func newServeHandler(ctx context.Context) http.Handler {
 	// the HTTP half of it open would fix one door and leave the other ajar. The
 	// gate costs a loopback caller nothing — see gate.
 	route := func(pattern string, h http.HandlerFunc) {
-		mux.Handle(pattern, gate(guard, h))
+		mux.Handle(pattern, roomGate(h))
 	}
 	route("/observe", handleObserveWS)
 	route("GET /api/rooms", handleRoomList)

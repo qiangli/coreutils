@@ -30,7 +30,7 @@ import (
 // isolated.
 func serveTest(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(newServeHandler(context.Background()))
+	srv := httptest.NewServer(newServeHandler(context.Background(), MountOptions{}))
 	t.Cleanup(srv.Close)
 	return srv
 }
