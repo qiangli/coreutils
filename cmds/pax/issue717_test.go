@@ -240,6 +240,26 @@ func TestPAXOptionsAcceptPhysicallyUSTARCompatiblePAXInput(t *testing.T) {
 	}
 }
 
+func TestPAXListDoesNotApplyDestinationNameLimits(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name := strings.Repeat("b", 256)
+	out, errOut, code := exec(t, d, "", "-w", "-x", "pax", "-o", "path:="+name, "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("write: code=%d stderr=%q", code, errOut)
+	}
+	arc := filepath.Join(d, "archive.pax")
+	if err := os.WriteFile(arc, []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = exec(t, d, "", "-f", "archive.pax")
+	if code != 0 || errOut != "" || !strings.Contains(out, name+"\n") {
+		t.Fatalf("list: out=%q stderr=%q code=%d", out, errOut, code)
+	}
+}
+
 func TestPAXArchiveGlobalPersistsAndEmptyRecordDeletes(t *testing.T) {
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)

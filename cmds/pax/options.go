@@ -405,11 +405,18 @@ func translatePAXHeaderToLocal(rc *tool.RunContext, h *tar.Header, action string
 			h.PAXRecords[key] = value
 		}
 	}
-	invalid.name = invalid.name || invalidPAXLocalDestinationName(h.Name) ||
-		!listMode && exceedsDestinationPathLimits(h.Name)
+	// List mode has no destination hierarchy. A PAX path can be valid archive
+	// data even when a local filesystem could not create one of its components;
+	// classify those limits only in modes that would materialize the pathname.
+	if !listMode {
+		invalid.name = invalid.name || invalidPAXLocalDestinationName(h.Name) ||
+			exceedsDestinationPathLimits(h.Name)
+	}
 	if h.Linkname != "" {
-		invalid.link = invalid.link || invalidPAXLocalDestinationName(h.Linkname) ||
-			!listMode && exceedsDestinationPathLimits(h.Linkname)
+		if !listMode {
+			invalid.link = invalid.link || invalidPAXLocalDestinationName(h.Linkname) ||
+				exceedsDestinationPathLimits(h.Linkname)
+		}
 	}
 	return invalid
 }
