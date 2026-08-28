@@ -126,6 +126,31 @@ body.has-bg #view {
 }
 .iconbtn:hover { background: var(--card); color: var(--primary); }
 
+/* ---- sections ----
+ * Periscope's section chrome: a small uppercase muted header, tight to its
+ * grid. These were lost in an earlier refactor of the layout block, which is
+ * why Overview rendered as a bare <h2> over an unstyled list.
+ */
+section.sect { margin: 1.5rem 0; }
+section.sect:first-child { margin-top: 0; }
+.sect-head { display: flex; align-items: center; gap: .625rem; margin-bottom: .625rem; }
+.sect-head h2 {
+  margin: 0; font-size: .78rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted-foreground);
+}
+
+/* Overview: one card, figures reading left to right. */
+.summary {
+  display: flex; flex-wrap: wrap; gap: 1.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: color-mix(in srgb, var(--card) 55%, transparent);
+  border-radius: .75rem; padding: .85rem 1.1rem;
+}
+.summary div { display: flex; flex-direction: column; gap: .1rem; }
+.summary b { font-size: 1.35rem; font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
+.summary span { font-size: .68rem; color: var(--muted-foreground);
+  text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+
 /* ---- tiles ---- */
 .grid { display: grid; row-gap: .85rem; column-gap: .55rem;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
@@ -152,13 +177,15 @@ body.has-bg #view {
 .tile[disabled] { cursor: default; opacity: .5; }
 .tile[disabled]:hover .icon { transform: none; }
 .badge {
-  position: absolute; right: -3px; bottom: -3px;
-  width: 18px; height: 18px; border-radius: 50%;
-  border: 2px solid var(--background); background: var(--off);
+  position: absolute; right: -1px; bottom: -1px;
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--card); background: var(--off);
 }
-.badge.ready { background: var(--ok); }
+/* A ready app is the normal case and needs no decoration; only the states that
+   want attention get a dot. */
+.badge.ready { display: none; }
 .badge.stopped { background: var(--warn); }
-.label { font-size: .82rem; font-weight: 500; letter-spacing: -.01em; text-align: center;
+.label { font-size: .8rem; font-weight: 500; letter-spacing: -.01em; text-align: center;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 .25rem; }
 .sublabel { font-size: .7rem; color: var(--muted-foreground); text-align: center; margin-top: -.2rem; }
 .star {

@@ -169,12 +169,6 @@ function tile(a, opts = {}) {
   label.textContent = a.label;
   btn.append(label);
 
-  if (a.status === "stopped" || a.status === "unavailable") {
-    const sub = document.createElement("span");
-    sub.className = "sublabel";
-    sub.textContent = a.status === "stopped" ? "not running" : (a.note ? "unavailable" : "unavailable");
-    btn.append(sub);
-  }
 
   btn.addEventListener("click", () => { if (open) recordVisit(a.name); });
   wrap.append(btn);
