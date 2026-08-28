@@ -391,3 +391,135 @@ body.standalone #bar { flex: none; }
 
 #mb-who { font-size: .75rem; color: var(--muted-foreground); }
 #mb-foot { flex: none; padding-top: .5rem; font-size: .72rem; color: var(--muted-foreground); }
+
+/* ---- the steward board (board.html) ----
+ *
+ * Same design vocabulary as the message board, one shape up: stat row, kanban
+ * lanes, collapsible panels. Three state colours and no more — needs-me, live,
+ * finished — because a steward scanning this is sorting for exactly that, and a
+ * palette per state would make the page a legend to be learned.
+ */
+#bd-page {
+  flex: 1; min-height: 0; overflow-y: auto;
+  width: min(78rem, 100%); margin: 0 auto; padding: 0 1rem 1rem;
+}
+
+#bd-verdict { font-size: .72rem; font-weight: 700; letter-spacing: .04em; color: var(--muted-foreground); }
+#bd-verdict.needs { color: var(--warn); }
+#bd-age { font-size: .72rem; color: var(--muted-foreground); margin-left: .6rem; }
+
+#bd-warnings {
+  margin: .75rem 0 0; padding: .5rem .7rem; font-size: .78rem;
+  background: var(--card); border: 1px solid var(--warn); border-radius: .5rem;
+  color: var(--muted-foreground);
+}
+#bd-warnings strong { color: var(--warn); display: block; margin-bottom: .25rem; }
+#bd-warnings .w { overflow-wrap: anywhere; }
+
+#bd-summary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: .5rem; padding: .75rem 0;
+}
+.bd-stat {
+  background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
+  padding: .5rem .6rem;
+}
+.bd-stat .v { font-size: 1.35rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.bd-stat .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+.bd-stat.needs .v { color: var(--warn); }
+.bd-stat.live .v { color: var(--ok); }
+
+#bd-controls {
+  display: flex; align-items: center; gap: .75rem; padding-bottom: .5rem;
+  font-size: .78rem; color: var(--muted-foreground);
+}
+#bd-controls .chk { display: inline-flex; align-items: center; gap: .3rem; }
+
+#bd-lanes {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: .5rem; align-items: start;
+}
+.bd-lane { background: var(--muted); border: 1px solid var(--border); border-radius: .5rem; padding: .4rem; }
+.bd-lane > header { display: flex; align-items: baseline; gap: .4rem; padding: .1rem .2rem .4rem; }
+.bd-lane > header .t { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.bd-lane > header .n { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.bd-lane .cards { display: flex; flex-direction: column; gap: .35rem; }
+.bd-lane .empty, .bd-lane .dropped { font-size: .72rem; color: var(--muted-foreground); padding: .2rem; }
+
+.bd-card {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .4rem; padding: .4rem .5rem;
+}
+.bd-card.needs { border-left-color: var(--warn); }
+.bd-card.live  { border-left-color: var(--ok); }
+.bd-card.past  { opacity: .62; }
+.bd-card header { display: flex; align-items: baseline; gap: .35rem; font-size: .68rem; color: var(--muted-foreground); }
+.bd-card .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.bd-card .st { font-weight: 700; }
+.bd-card .t { font-variant-numeric: tabular-nums; }
+.bd-card .label { margin: .2rem 0 0; font-size: .8rem; overflow-wrap: anywhere; }
+.bd-card .meta { margin-top: .2rem; font-size: .68rem; color: var(--muted-foreground); }
+
+#bd-panels { margin-top: .75rem; display: flex; flex-direction: column; gap: .4rem; }
+.bd-panel { background: var(--card); border: 1px solid var(--border); border-radius: .5rem; overflow: hidden; }
+.bd-panel-head {
+  display: flex; align-items: baseline; gap: .5rem; width: 100%; text-align: left;
+  font: inherit; font-size: .8rem; color: var(--foreground); cursor: pointer;
+  background: none; border: 0; padding: .5rem .7rem;
+}
+.bd-panel-head:hover { background: var(--muted); }
+.bd-panel-head .t { font-weight: 600; }
+.bd-panel-head .c, .bd-panel-head .n { font-size: .72rem; color: var(--muted-foreground); }
+.bd-panel-head .n { font-variant-numeric: tabular-nums; }
+.bd-panel-body { padding: 0 .7rem .6rem; }
+.bd-panel-body .empty { font-size: .75rem; color: var(--muted-foreground); }
+.bd-panel-body .dropped { font-size: .72rem; color: var(--muted-foreground); margin: .4rem 0 0; }
+.bd-panel-body .btn { margin-top: .5rem; }
+
+/* Wide tables scroll INSIDE their panel; the page body never scrolls sideways. */
+.tw { overflow-x: auto; }
+.tw table { border-collapse: collapse; width: 100%; font-size: .74rem; }
+.tw th, .tw td {
+  text-align: left; padding: .25rem .5rem .25rem 0; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+.tw th { font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
+.tw td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+#bd-foot { padding-top: .75rem; font-size: .72rem; color: var(--muted-foreground); }
+
+/* Sprints: the section this page exists for. A sprint is the time-boxed set a
+ * conductor drives; the lanes below it are RUNS, which are a different noun. */
+.bd-h { margin: 1rem 0 .4rem; font-size: .72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+#bd-sprints > header { display: flex; align-items: baseline; gap: .5rem; margin: 1rem 0 .4rem; }
+#bd-sprints > header .t { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
+#bd-sprints > header .n { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+#bd-sprints .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .5rem; }
+#bd-sprints .empty { font-size: .78rem; color: var(--muted-foreground); }
+
+.bd-sprint {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .5rem; padding: .5rem .7rem;
+}
+.bd-sprint.live { border-left-color: var(--ok); }
+.bd-sprint.needs { border-left-color: var(--warn); }
+.bd-sprint.past { opacity: .62; }
+.bd-sprint header { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; font-size: .7rem; color: var(--muted-foreground); }
+.bd-sprint .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.bd-sprint .st { font-weight: 700; }
+.bd-sprint .epic { background: var(--muted); border-radius: .3rem; padding: 0 .35rem; }
+.bd-sprint .gate { border-radius: .3rem; padding: 0 .35rem; border: 1px solid currentColor; }
+.bd-sprint .gate.needs { color: var(--warn); }
+.bd-sprint .gate.past { color: var(--ok); }
+.bd-sprint .label { margin: .25rem 0 0; font-size: .85rem; font-weight: 600; overflow-wrap: anywhere; }
+.bd-sprint .meta { margin-top: .2rem; font-size: .7rem; color: var(--muted-foreground); }
+.bd-sprint .more {
+  margin-top: .35rem; font: inherit; font-size: .7rem; cursor: pointer;
+  background: none; border: 0; padding: 0; color: var(--primary); text-decoration: underline;
+}
+.bd-sprint pre.continuity {
+  margin: .35rem 0 0; padding: .4rem .5rem; max-height: 16rem; overflow: auto;
+  background: var(--muted); border-radius: .4rem; font-size: .7rem;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}

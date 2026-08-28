@@ -72,6 +72,7 @@ type server struct {
 	requireLogin bool
 	panels       []Panel
 	probes       probeCache
+	boards       boardCache
 }
 
 // consoleGuard mirrors meet's: an SSO secret, when configured, makes the vouch
@@ -84,6 +85,14 @@ func consoleGuard() *coopauth.Guard {
 // had to start. It is the embedding seam: `apps serve` is a thin caller,
 // and outpost or a desktop shell is the same shape.
 func Handler(opts Options) (http.Handler, func() error, error) {
+	_, h, closer, err := newHandler(opts)
+	return h, closer, err
+}
+
+// newHandler is Handler plus the server it built. Tests use it to reach state
+// that has no HTTP surface — the board cache, which must be seedable so a test
+// never runs the real collector and its subprocess fan-out.
+func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
 	}
@@ -150,6 +159,15 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 	mux.HandleFunc("POST /api/mb", s.handleMBSend)
 	mux.HandleFunc("GET /api/mb/{seq}/viewers", s.handleMBViewers)
 
+	// The steward board, same shape again: the tile is an atlas declaration,
+	// the page is served at the launcher's root, and panelHandler claims
+	// nothing. Read-only by construction — `board` is the one work verb the
+	// atlas marks CapReadOnly, and the panel must not erode that.
+	mux.HandleFunc("GET /board/", s.handleBoardPage)
+	mux.Handle("GET /board", redirectTo("/board/"))
+	mux.HandleFunc("GET /api/board", s.handleBoardOverview)
+	mux.HandleFunc("GET /api/board/panel/{id}", s.handleBoardPanel)
+
 	closers := []func() error{}
 	for _, p := range s.panels {
 		if !p.Available {
@@ -191,14 +209,14 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 		}
 		return err
 	}
-	return h, closer, nil
+	return s, h, closer, nil
 }
 
 // panelHandler returns the handler for a panel plus any closer it needs, or nil
 // when the console has nothing to serve for it.
 func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	switch p.Name {
-	case "terminal", "mb":
+	case "terminal", "mb", "board":
 		// Served above, at the launcher's own root, not mounted here.
 		return nil, nil
 	case "files":

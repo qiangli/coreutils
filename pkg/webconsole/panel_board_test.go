@@ -1,0 +1,237 @@
+// Copyright (c) 2025 qiangli
+// See LICENSE for licensing information
+
+package webconsole
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/board"
+)
+
+// fakeBoard builds a board from an injected Source, the isolation pattern
+// pkg/board's own tests use — no HOME juggling, no real weave queues, and
+// crucially no `weave doctor` subprocess fan-out.
+func fakeBoard(t *testing.T) *board.Board {
+	t.Helper()
+	src := board.SourceFunc{SourceName: "fake", Func: func(_ context.Context, b *board.Board, _ board.Options) error {
+		b.Sprints = []board.Sprint{
+			{ID: 1, Title: "live sprint", Column: "doing"},
+			{ID: 2, Title: "finished sprint", Column: "done"},
+			{ID: 3, Title: "another finished", Column: "done"},
+		}
+		b.Runs = []board.Run{
+			{ID: 10, Label: "working run", State: "submitted"},
+			{ID: 11, Label: "old run", State: "done"},
+			{ID: 12, Label: "gone run", State: "abandoned"},
+		}
+		b.Warnings = []string{"fake: a source failed"}
+		return nil
+	}}
+	b, err := board.Collect(context.Background(), board.Options{All: true}, []board.Source{src}, nil)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	return b
+}
+
+// newBoardTestServer hands back both the handler and the server behind it, so a
+// test can seed the board cache and never run the real DefaultSources() — which
+// forks a `weave doctor` per queue root on the host it happens to run on.
+func newBoardTestServer(t *testing.T) (http.Handler, *server) {
+	t.Helper()
+	s, h, closer, err := newHandler(Options{Ctx: context.Background()})
+	if err != nil {
+		t.Fatalf("newHandler: %v", err)
+	}
+	t.Cleanup(func() { _ = closer() })
+	return h, s
+}
+
+func TestBoardOverviewHidesHistoryByDefault(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	d := getJSON(t, h, "/api/board")
+	if got := len(d["sprints"].([]any)); got != 1 {
+		t.Errorf("default view shows %d sprints, want 1 live (of 3)", got)
+	}
+	if got := len(d["runs"].([]any)); got != 1 {
+		t.Errorf("default view shows %d runs, want 1 non-terminal (of 3)", got)
+	}
+	// The totals must still be the UNFILTERED counts, or the page cannot say
+	// "1 of 3" and a filtered view reads as an empty machine.
+	if d["sprint_total"].(float64) != 3 || d["run_total"].(float64) != 3 {
+		t.Errorf("totals = %v/%v, want the unfiltered 3/3", d["sprint_total"], d["run_total"])
+	}
+
+	all := getJSON(t, h, "/api/board?all=1")
+	if got := len(all["sprints"].([]any)); got != 3 {
+		t.Errorf("?all=1 shows %d sprints, want all 3", got)
+	}
+	if got := len(all["runs"].([]any)); got != 3 {
+		t.Errorf("?all=1 shows %d runs, want all 3", got)
+	}
+}
+
+// The payload bound is a correctness property, not an optimization: the raw
+// envelope is 5.3 MB here (8,779 dag runs), and the data-plane block makes bulk
+// payloads over the relay fail-closed.
+func TestBoardOverviewCapsRowsAndDropsDagRuns(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	b.DagRuns = make([]board.DagRun, 5000)
+	for i := range b.DagRuns {
+		b.DagRuns[i] = board.DagRun{RunID: "r", File: "f"}
+	}
+	b.Panels = []board.PanelView{{ID: "big", Title: "Big", Collapsed: "5000 rows",
+		Columns: []string{"A"}, Rows: make([][]string, 5000)}}
+	for i := range b.Panels[0].Rows {
+		b.Panels[0].Rows[i] = []string{"x"}
+	}
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	w := do(h, "GET", "/api/board", "127.0.0.1:5555", nil)
+	if strings.Contains(w.Body.String(), "dag_runs") {
+		t.Error("overview carries dag_runs; it must never ship the raw pipeline log")
+	}
+	d := getJSON(t, h, "/api/board")
+	p := d["panels"].([]any)[0].(map[string]any)
+	if got := len(p["rows"].([]any)); got != boardPanelRows {
+		t.Errorf("panel carries %d rows, want the %d cap", got, boardPanelRows)
+	}
+	// The cap must not hide how much was capped, or the page silently claims a
+	// 5,000-row panel has 25 rows.
+	if p["row_total"].(float64) != 5000 {
+		t.Errorf("row_total = %v, want 5000", p["row_total"])
+	}
+
+	// The full set is reachable, deliberately, one request at a time.
+	full := getJSON(t, h, "/api/board/panel/big?limit=500")
+	if got := len(full["rows"].([]any)); got != 500 {
+		t.Errorf("panel fetch returned %d rows, want 500", got)
+	}
+	if full["row_total"].(float64) != 5000 {
+		t.Errorf("panel row_total = %v, want 5000", full["row_total"])
+	}
+	page2 := getJSON(t, h, "/api/board/panel/big?limit=10&offset=4995")
+	if got := len(page2["rows"].([]any)); got != 5 {
+		t.Errorf("offset past the end returned %d rows, want the remaining 5", got)
+	}
+	if got := do(h, "GET", "/api/board/panel/nope", "127.0.0.1:5555", nil).Code; got != http.StatusNotFound {
+		t.Errorf("unknown panel = %d, want 404", got)
+	}
+}
+
+// A 3s collect on the request path would make every poll a 3s hang.
+func TestBoardCacheServesStaleWhileRefreshing(t *testing.T) {
+	var calls atomic.Int32
+	var c boardCache
+	slow := func(ctx context.Context) (*board.Board, error) {
+		calls.Add(1)
+		return &board.Board{Title: "collected"}, nil
+	}
+	// Prime it the way Get's first-call path does.
+	first, _ := slow(context.Background())
+	c.mu.Lock()
+	c.board, c.at = first, time.Now().Add(-2*boardTTL)
+	c.mu.Unlock()
+
+	// Ten concurrent readers on a stale cache: every one is served immediately,
+	// and only ONE refresh is started.
+	origin := collectBoardFn
+	collectBoardFn = slow
+	t.Cleanup(func() { collectBoardFn = origin })
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b, _, err := c.Get(context.Background(), context.Background())
+			if err != nil || b == nil {
+				t.Errorf("stale read failed: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		done := !c.refreshing
+		c.mu.Unlock()
+		if done {
+			break
+		}
+	}
+	if n := calls.Load(); n > 2 {
+		t.Errorf("%d collects for one stale window; ten readers must coalesce into one refresh", n)
+	}
+}
+
+func TestBoardPageAndTile(t *testing.T) {
+	h, _ := newBoardTestServer(t)
+	w := do(h, "GET", "/board/", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "board.js") {
+		t.Fatalf("board page = %d, want 200 serving board.js", w.Code)
+	}
+
+	var found bool
+	for _, p := range Discover() {
+		if p.Name == "board" {
+			found = true
+			if p.Path != "/board/" || p.Source != "atlas" || !p.Available {
+				t.Fatalf("board panel = %+v, want an available atlas panel at /board/", p)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no board tile: the atlas WebSurface declaration is what Discover reads")
+	}
+	s := &server{}
+	if hh, _ := s.panelHandler(Panel{Name: "board", Path: "/board/"}); hh != nil {
+		t.Fatal("board must not also be mounted: coopauth.Mount would take the <base href> with it")
+	}
+}
+
+// The panel is a READER. `board` is the one work verb the atlas marks
+// CapReadOnly — "it reports across the machine but never starts, merges, or
+// kills work" — and a browser view must not erode that.
+//
+// The assertion is that no board handler answers a mutating method, NOT that
+// the server returns 405: the console's start page is a catch-all on "/", so an
+// unmatched method falls through to it and gets the launcher. That is
+// console-wide behaviour and not this panel's to change — but it does mean the
+// meaningful check is "no board payload came back", not the status code.
+func TestBoardServesNoMutatingMethod(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = fakeBoard(t), time.Now()
+	s.boards.mu.Unlock()
+
+	for _, path := range []string{"/api/board", "/api/board/panel/sprints", "/board/"} {
+		for _, m := range []string{"POST", "PUT", "DELETE", "PATCH"} {
+			body := do(h, m, path, "127.0.0.1:5555", nil).Body.String()
+			if strings.Contains(body, boardSchemaVersion) {
+				t.Errorf("%s %s was answered by a board handler; the panel must expose GET only", m, path)
+			}
+		}
+	}
+	// And the read path really is registered, so the check above is not passing
+	// merely because nothing is mounted.
+	if !strings.Contains(do(h, "GET", "/api/board", "127.0.0.1:5555", nil).Body.String(), boardSchemaVersion) {
+		t.Fatal("GET /api/board returned no board payload — the negative test above proves nothing")
+	}
+}
