@@ -38,9 +38,14 @@ Evidence: `TestLsDereferenceCommandLineSymlinks`,
 
 ## 3. `ls` — Sizing, Radix, and Columns
 
-Block sizes for `-s` default to 512-byte blocks when `POSIXLY_CORRECT` is set (as required by Issue 7), but use 1024-byte blocks by default or when `-k` is specified. The GNU-compatible `-h`, `--si`, and `-w` extensions are retained but are not evidence for the POSIX row. Column formatting uses `COLUMNS` when valid and otherwise falls back to 80 columns; it does not query terminal width.
+Block sizes for `-s` default to 512-byte blocks when `POSIXLY_CORRECT` is set,
+but use 1024-byte blocks by default or when `-k` is specified. The
+GNU-compatible `-h`, `--si`, and `-w` extensions are retained but are not
+evidence for the POSIX row. Column formatting uses `COLUMNS` when valid and
+otherwise falls back to 80 columns; it does not query terminal width.
 
-Evidence: `TestSizeBlocksPOSIX512ByteDefault`, `TestBlockSize`, `TestColumnsHonorsColumnsEnv`.
+Evidence: `TestSizeBlocksPOSIX512ByteDefault`, `TestBlockSize`,
+`TestColumnsHonorsColumnsEnv`.
 
 ## 4. `stty` — Options and Mutually Exclusive Styles
 

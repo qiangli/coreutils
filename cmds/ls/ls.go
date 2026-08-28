@@ -1,8 +1,9 @@
 // Package lscmd implements ls(1) per the GNU coreutils manual for the
 // flag subset -l -a -A -d -R -r -t -S -1 -h -i.
 //
-// Deterministic-output contract: names sort in C-locale byte order and
-// color is never emitted. This userland has no terminal, so the output
+// Locale contract: names sort in C/POSIX byte order or by the narrowly
+// supported invocation-owned LC_COLLATE provider, and color is never emitted.
+// This userland has no terminal, so the output
 // matches what GNU ls produces when writing to a non-tty: -1 is the
 // default format, and non-printable characters are written literally
 // unless -q asks otherwise. The multi-column (-C, -x) and stream (-m)
@@ -28,6 +29,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/spf13/pflag"
 )
@@ -65,6 +69,49 @@ type options struct {
 	timeSel                                  timeSel
 	posix                                    bool
 	hide, ignore                             []string
+	collator                                 *collatorAdapter
+	printable                                *[256]bool
+}
+
+type stringCollator interface {
+	Compare(a, b string) (int, error)
+	Close() error
+}
+
+type collatorOpener func(string) (stringCollator, error)
+
+type ctypeProvider interface {
+	IsPrint(byte) (bool, error)
+	Close() error
+}
+
+type ctypeOpener func(string) (ctypeProvider, error)
+
+// collatorAdapter retains the first provider failure because sort.Interface
+// cannot return errors. Callers check Err after each sort and suppress output
+// rather than silently falling back to byte order.
+type collatorAdapter struct {
+	provider stringCollator
+	err      error
+}
+
+func (c *collatorAdapter) Compare(a, b string) int {
+	if c == nil || c.err != nil {
+		return strings.Compare(a, b)
+	}
+	n, err := c.provider.Compare(a, b)
+	if err != nil {
+		c.err = err
+		return strings.Compare(a, b)
+	}
+	return n
+}
+
+func (c *collatorAdapter) Err() error {
+	if c == nil {
+		return nil
+	}
+	return c.err
 }
 
 // dereferenceMode is the effective member of POSIX's mutually exclusive
@@ -224,6 +271,15 @@ func GetFlagSet(name string) *pflag.FlagSet {
 }
 
 func run(rc *tool.RunContext, args []string) (code int) {
+	return runWithLocale(rc, args,
+		func(name string) (stringCollator, error) { return collate.Open(name) },
+		func(name string) (ctypeProvider, error) { return ctype.Open(name) })
+}
+
+// runWithLocale keeps both POSIX locale categories invocation-owned and gives
+// reducers deterministic provider seams. The production openers are the
+// repository's reviewed, narrowly-scoped providers.
+func runWithLocale(rc *tool.RunContext, args []string, openCollator collatorOpener, openCtype ctypeOpener) (code int) {
 	// Every output path, including framework-owned --help/--version output,
 	// goes through one sticky writer. Most formatting below deliberately uses
 	// small streaming writes; centralizing the check preserves that order while
@@ -502,6 +558,57 @@ func run(rc *tool.RunContext, args []string) (code int) {
 		applyPOSIXOptionOrdering(optionArgs, fs, &opt)
 	}
 
+	// LC_COLLATE owns pathname ordering, including the filename tie-breakers
+	// after -t/-S/-X. Unsorted modes do not consult it.
+	if !opt.unsorted {
+		name := locale.Resolve(rc.Env, locale.Collate)
+		if name != "C" && name != "POSIX" {
+			provider, err := openCollator(name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "ls: LC_COLLATE=%s: %v\n", name, err)
+				return 2
+			}
+			opt.collator = &collatorAdapter{provider: provider}
+			defer func() {
+				if err := provider.Close(); err != nil {
+					fmt.Fprintf(rc.Err, "ls: LC_COLLATE=%s: %v\n", name, err)
+					if code == 0 {
+						code = 1
+					}
+				}
+			}()
+		}
+	}
+	// -q is defined by LC_CTYPE's printable character class. Snapshot the
+	// byte-oriented provider once so rendering never mutates process locale.
+	if opt.hideControl {
+		name := locale.Resolve(rc.Env, locale.CType)
+		if name != "C" && name != "POSIX" {
+			provider, err := openCtype(name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "ls: LC_CTYPE=%s: %v\n", name, err)
+				return 2
+			}
+			var table [256]bool
+			for i := range table {
+				table[i], err = provider.IsPrint(byte(i))
+				if err != nil {
+					break
+				}
+			}
+			closeErr := provider.Close()
+			if err != nil {
+				fmt.Fprintf(rc.Err, "ls: LC_CTYPE=%s: %v\n", name, err)
+				return 2
+			}
+			if closeErr != nil {
+				fmt.Fprintf(rc.Err, "ls: LC_CTYPE=%s: %v\n", name, closeErr)
+				return 2
+			}
+			opt.printable = &table
+		}
+	}
+
 	if len(operands) == 0 {
 		operands = []string{"."}
 	}
@@ -553,6 +660,10 @@ func run(rc *tool.RunContext, args []string) (code int) {
 
 	sortEntries(files, opt)
 	sortEntries(dirs, opt)
+	if err := opt.collator.Err(); err != nil {
+		fmt.Fprintf(rc.Err, "ls: LC_COLLATE: %v\n", err)
+		return 2
+	}
 	if len(files) > 0 {
 		l.printBlock(files, false)
 		l.wrote = true
@@ -741,6 +852,10 @@ func (l *lister) listDirWithAncestors(display, full string, header, commandLine 
 		ents = append(ents, e)
 	}
 	sortEntries(ents, l.opt)
+	if err := l.opt.collator.Err(); err != nil {
+		l.fail(2, "LC_COLLATE: %v", err)
+		return
+	}
 	// GNU prints the total block count for a directory whenever block
 	// counts are shown, which -s does in every format.
 	l.printBlock(ents, l.opt.long || l.opt.sizeBlocks)
@@ -1005,8 +1120,8 @@ func printCommas(out io.Writer, cells []string, width int) {
 	}
 }
 
-// cellWidth is the printed width of a name. Names are byte strings in
-// this userland's C-locale contract, so one byte is one column.
+// cellWidth is the printed width of a name. The supported non-C campaign
+// locale is single-byte, so one byte is one column in every carried locale.
 func cellWidth(s string) int { return len(s) }
 
 // quoteControl applies -q: every non-printable byte becomes '?'. In
@@ -1018,7 +1133,11 @@ func quoteControl(s string, opt options) string {
 	}
 	b := []byte(s)
 	for i, c := range b {
-		if c < 0x20 || c >= 0x7f {
+		printable := c >= 0x20 && c < 0x7f
+		if opt.printable != nil {
+			printable = opt.printable[c]
+		}
+		if !printable {
 			b[i] = '?'
 		}
 	}
@@ -1244,14 +1363,21 @@ func compareEntries(a, b entry, opt options) int {
 		}
 	case opt.sortExtension:
 		if ae, be := extensionKey(a.name), extensionKey(b.name); ae != be {
-			return strings.Compare(ae, be)
+			return compareNames(ae, be, opt)
 		}
 	case opt.sortVersion:
 		if c := naturalCompare(a.name, b.name); c != 0 {
 			return c
 		}
 	}
-	return strings.Compare(a.name, b.name)
+	return compareNames(a.name, b.name, opt)
+}
+
+func compareNames(a, b string, opt options) int {
+	if opt.collator != nil {
+		return opt.collator.Compare(a, b)
+	}
+	return strings.Compare(a, b)
 }
 
 func naturalCompare(a, b string) int {
