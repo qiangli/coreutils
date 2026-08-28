@@ -20,6 +20,8 @@ import (
 type Options struct {
 	ExtendedRegex bool
 	LocaleTables  *bre.LocaleByteTables
+	CUTF8         bool
+	CByteTables   bool
 }
 
 // sedRegexp is the small regexp surface the engine needs.
@@ -95,7 +97,15 @@ func (r legacyRegexp) Expand(dst, template, src []byte, match []int) ([]byte, er
 func (opts Options) compileRE(pattern, flags string) (sedRegexp, error) {
 	pattern = bre.SedEscapes(pattern)
 	flags = sedFlags(flags)
-	if opts.LocaleTables != nil {
+	if opts.CUTF8 {
+		re, err := bre.CompileCUTF8WithFlags(pattern, flags, opts.ExtendedRegex, opts.LocaleTables)
+		if err != nil {
+			return nil, err
+		}
+		re.Longest()
+		return legacyRegexp{re}, nil
+	}
+	if opts.LocaleTables != nil && (!opts.CByteTables || cBytePatternNeedsTables(pattern, flags)) {
 		syntax := bre.ByteRegexpBRE
 		if opts.ExtendedRegex {
 			syntax = bre.ByteRegexpERE
@@ -123,6 +133,32 @@ func (opts Options) compileRE(pattern, flags string) (sedRegexp, error) {
 	}
 	re.Longest()
 	return legacyRegexp{re}, nil
+}
+
+// cBytePatternNeedsTables identifies the constructs for which RE2's rune
+// model cannot implement the C locale's byte semantics. Literal-only regular
+// expressions (including large intervals and back-references handled by the
+// bounded matcher) stay on the legacy path, which avoids reducing that
+// matcher's supported grammar merely to select byte-oriented dot/classes.
+func cBytePatternNeedsTables(pattern, flags string) bool {
+	if strings.Contains(flags, "i") {
+		return true
+	}
+	escaped := false
+	for i := 0; i < len(pattern); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if pattern[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if pattern[i] == '.' || pattern[i] == '[' {
+			return true
+		}
+	}
+	return false
 }
 
 // sedFlags finalizes the RE2 flag prefix for one sed pattern. POSIX has '.'

@@ -18,6 +18,34 @@ type Regexp struct {
 	bt *btProg
 }
 
+// CompileCUTF8WithFlags compiles a BRE or ERE using glibc C.UTF-8 character
+// classes.  collation may be nil for C collation, or a byte-table snapshot
+// whose equivalence data is layered onto the UTF-8 character model.
+func CompileCUTF8WithFlags(pattern, flags string, extended bool, collation *LocaleByteTables) (*Regexp, error) {
+	if (!extended && !needsBacktrack(pattern)) || (extended && !ERERequiresBacktracking(pattern)) {
+		var translated string
+		var err error
+		if extended {
+			translated, err = toGoERE(pattern, true, collation)
+		} else {
+			translated, err = toGo(pattern, true, collation)
+		}
+		if err != nil {
+			return nil, err
+		}
+		re, err := regexp.Compile(flags + translated)
+		if err != nil {
+			return nil, err
+		}
+		return &Regexp{re: re}, nil
+	}
+	bt, err := compileBackrefMode(pattern, flags, extended, true, collation)
+	if err != nil {
+		return nil, err
+	}
+	return &Regexp{bt: bt}, nil
+}
+
 // Compile compiles a POSIX basic regular expression.
 func Compile(pattern string) (*Regexp, error) {
 	if !needsBacktrack(pattern) {
@@ -315,6 +343,7 @@ type btProg struct {
 	anchored   bool
 	ignoreCase bool
 	longest    bool
+	cutf8      bool
 }
 
 type btState struct {
@@ -389,6 +418,7 @@ func (n literalNode) match(ctx *btCtx, st btState) []btState {
 // '.' matches them.
 type dotNode struct {
 	dotAll bool
+	cutf8  bool
 }
 
 func (n dotNode) match(ctx *btCtx, st btState) []btState {
@@ -396,7 +426,12 @@ func (n dotNode) match(ctx *btCtx, st btState) []btState {
 	if st.pos >= len(ctx.s) || (!n.dotAll && ctx.s[st.pos] == '\n') {
 		return nil
 	}
-	st.pos++
+	if n.cutf8 {
+		_, size := utf8.DecodeRuneInString(ctx.s[st.pos:])
+		st.pos += size
+	} else {
+		st.pos++
+	}
 	return []btState{st}
 }
 
@@ -474,7 +509,8 @@ func (n builtinClassNode) match(ctx *btCtx, st btState) []btState {
 }
 
 type classNode struct {
-	re *regexp.Regexp
+	re    *regexp.Regexp
+	cutf8 bool
 }
 
 func (n classNode) match(ctx *btCtx, st btState) []btState {
@@ -482,8 +518,12 @@ func (n classNode) match(ctx *btCtx, st btState) []btState {
 	if st.pos >= len(ctx.s) {
 		return nil
 	}
-	if n.re.MatchString(ctx.s[st.pos : st.pos+1]) {
-		st.pos++
+	size := 1
+	if n.cutf8 {
+		_, size = utf8.DecodeRuneInString(ctx.s[st.pos:])
+	}
+	if n.re.MatchString(ctx.s[st.pos : st.pos+size]) {
+		st.pos += size
 		return []btState{st}
 	}
 	return nil
@@ -579,22 +619,28 @@ func (n repeatNode) match(ctx *btCtx, st btState) []btState {
 }
 
 type parser struct {
-	p          string
-	i          int
-	groups     int
-	closed     [10]bool
-	ignoreCase bool
-	dotAll     bool
-	extended   bool
+	p            string
+	i            int
+	groups       int
+	closed       [10]bool
+	ignoreCase   bool
+	dotAll       bool
+	extended     bool
+	cutf8        bool
+	localeTables *LocaleByteTables
 }
 
 func compileBackref(pattern, flags string, extended bool) (*btProg, error) {
+	return compileBackrefMode(pattern, flags, extended, false, nil)
+}
+
+func compileBackrefMode(pattern, flags string, extended, cutf8 bool, tables *LocaleByteTables) (*btProg, error) {
 	// flags is an RE2 flag prefix ("", "(?i)", "(?is)", …) — the same string the
 	// RE2 path prepends to its translated pattern, read here for the engine's
 	// own nodes.
 	ignoreCase := strings.Contains(flags, "i")
 	dotAll := strings.Contains(flags, "s")
-	p := &parser{p: pattern, ignoreCase: ignoreCase, dotAll: dotAll, extended: extended}
+	p := &parser{p: pattern, ignoreCase: ignoreCase, dotAll: dotAll, extended: extended, cutf8: cutf8, localeTables: tables}
 	root, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -602,7 +648,7 @@ func compileBackref(pattern, flags string, extended bool) (*btProg, error) {
 	if p.i != len(pattern) {
 		return nil, fmt.Errorf("unsupported BRE syntax near %q", pattern[p.i:])
 	}
-	prog := &btProg{root: root, groups: p.groups, ignoreCase: ignoreCase}
+	prog := &btProg{root: root, groups: p.groups, ignoreCase: ignoreCase, cutf8: cutf8}
 	// Only a leading '^' lets find() stop after one attempt; a leading '$' is an
 	// anchorNode too, but it can still match at any offset (the empty string at
 	// end of subject), so it must not short-circuit the scan.
@@ -759,7 +805,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 		return literalNode{lit: ")", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	case '.':
 		p.i++
-		return dotNode{dotAll: p.dotAll}, posAtom, true, nil
+		return dotNode{dotAll: p.dotAll, cutf8: p.cutf8}, posAtom, true, nil
 	case '^':
 		p.i++
 		if state == posStart {
@@ -773,7 +819,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 		}
 		return literalNode{lit: "$", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	case '[':
-		cls, n, err := translateBracket(p.p[p.i:])
+		cls, n, err := translateBracketMode(p.p[p.i:], p.cutf8, p.localeTables)
 		if err != nil {
 			return nil, state, false, err
 		}
@@ -785,7 +831,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 			return nil, state, false, err
 		}
 		p.i += n
-		return classNode{re: re}, posAtom, true, nil
+		return classNode{re: re, cutf8: p.cutf8}, posAtom, true, nil
 	case '*':
 		p.i++
 		return literalNode{lit: "*", ignoreCase: p.ignoreCase}, posAtom, true, nil
@@ -916,7 +962,7 @@ func (p *btProg) find(s string, n int) [][]int {
 	// back-reference makes the rest of the match depend on both the group's text
 	// and its offset. It made \(a*\)b\1 skip the leftmost match "aba" in "aaba"
 	// and report "b" instead.)
-	for start := 0; start <= len(s); start++ {
+	for start := 0; start <= len(s); {
 		st, ok := p.pick(p.matchAt(s, start))
 		if ok {
 			match := make([]int, 2*(p.groups+1))
@@ -930,11 +976,21 @@ func (p *btProg) find(s string, n int) [][]int {
 				return out
 			}
 			if st.pos > start {
-				start = st.pos - 1
+				start = st.pos
+				continue
 			}
 		}
 		if p.anchored {
 			break
+		}
+		if start == len(s) {
+			break
+		}
+		if p.cutf8 {
+			_, size := utf8.DecodeRuneInString(s[start:])
+			start += size
+		} else {
+			start++
 		}
 	}
 	return out

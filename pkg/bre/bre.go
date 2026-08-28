@@ -40,6 +40,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/qiangli/coreutils/pkg/locale"
 )
 
 const (
@@ -51,6 +53,10 @@ const (
 // ToGo translates one POSIX basic regular expression (plus the GNU extensions
 // listed in the package comment) into Go RE2 syntax.
 func ToGo(p string) (string, error) {
+	return toGo(p, false, nil)
+}
+
+func toGo(p string, cutf8 bool, tables *LocaleByteTables) (string, error) {
 	var b strings.Builder
 	state := posStart
 	i := 0
@@ -149,7 +155,7 @@ func ToGo(p string) (string, error) {
 			}
 			i++
 		case '[':
-			cls, n, err := translateBracket(p[i:])
+			cls, n, err := translateBracketMode(p[i:], cutf8, tables)
 			if err != nil {
 				return "", err
 			}
@@ -342,6 +348,10 @@ func escapeClassRune(r rune) string {
 // RE2 class syntax, returning the translation and the number of input bytes
 // consumed.
 func translateBracket(s string) (string, int, error) {
+	return translateBracketMode(s, false, nil)
+}
+
+func translateBracketMode(s string, cutf8 bool, tables *LocaleByteTables) (string, int, error) {
 	var b strings.Builder
 	b.WriteByte('[')
 	i := 1
@@ -365,7 +375,16 @@ func translateBracket(s string) (string, int, error) {
 			if end < 0 {
 				return "", 0, fmt.Errorf("unmatched [: in bracket expression")
 			}
-			b.WriteString(s[i : i+end+2]) // RE2 supports [:class:] directly
+			name := s[i+2 : i+end]
+			if cutf8 {
+				content, ok := locale.CUTF8RE2ClassContent(name)
+				if !ok {
+					return "", 0, fmt.Errorf("unsupported named character class %q", name)
+				}
+				b.WriteString(content)
+			} else {
+				b.WriteString(s[i : i+end+2]) // RE2 supports C/POSIX [:class:] directly
+			}
 			i += end + 2
 		case s[i] == '[' && i+1 < len(s) && (s[i+1] == '.' || s[i+1] == '='):
 			// Collating symbol [.x.] / equivalence class [=x=]. Under LC_ALL=C
@@ -385,7 +404,15 @@ func translateBracket(s string) (string, int, error) {
 			if size != len(content) || (r == utf8.RuneError && size == 1) {
 				return "", 0, fmt.Errorf("invalid collating element %q in C locale", content)
 			}
-			b.WriteString(escapeClassRune(r))
+			if cutf8 && delim == '=' && tables != nil && r <= 0xff {
+				for value, member := range tables.tables.equivalent[byte(r)] {
+					if member {
+						b.WriteString(escapeClassRune(rune(value)))
+					}
+				}
+			} else {
+				b.WriteString(escapeClassRune(r))
+			}
 			i += 2 + end + 2
 		case s[i] == '\\':
 			// backslash is a literal member in POSIX bracket expressions
@@ -409,11 +436,15 @@ func translateBracket(s string) (string, int, error) {
 // cannot express them; CompileEREWithFlags routes those patterns through the
 // bounded backtracking matcher instead.
 func ToGoERE(p string) (string, error) {
+	return toGoERE(p, false, nil)
+}
+
+func toGoERE(p string, cutf8 bool, tables *LocaleByteTables) (string, error) {
 	var b strings.Builder
 	state := posStart
 	for i := 0; i < len(p); {
 		if p[i] == '[' {
-			cls, n, err := translateBracket(p[i:])
+			cls, n, err := translateBracketMode(p[i:], cutf8, tables)
 			if err != nil {
 				return "", err
 			}

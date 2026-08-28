@@ -124,7 +124,7 @@ func TestSedCollateCategoryOwnsEquivalenceClasses(t *testing.T) {
 		collate string
 		want    string
 	}{
-		{"C collation has no equivalents", "C.UTF-8", "E\xe9\n"},
+		{"C collation has no equivalents", "C.UTF-8", "Eé\n"},
 		{"provider collation supplies them", "de_DE.iso88591", "EE\n"},
 	}
 	for _, tc := range tests {
@@ -134,7 +134,7 @@ func TestSedCollateCategoryOwnsEquivalenceClasses(t *testing.T) {
 				Ctx:   context.Background(),
 				Dir:   t.TempDir(),
 				Env:   []string{"LANG=C", "LC_CTYPE=C.UTF-8", "LC_COLLATE=" + tc.collate},
-				Stdio: tool.Stdio{In: strings.NewReader("e\xe9\n"), Out: &out, Err: &errOut},
+				Stdio: tool.Stdio{In: strings.NewReader("eé\n"), Out: &out, Err: &errOut},
 			}
 			code := runCommandWithLocales(rc, []string{"s/[[=e=]]/E/g"},
 				func(string) (ctypeProvider, error) { return &fakeSedCType{}, nil },
@@ -144,6 +144,53 @@ func TestSedCollateCategoryOwnsEquivalenceClasses(t *testing.T) {
 					tc.collate, out.String(), errOut.String(), code, tc.want)
 			}
 		})
+	}
+}
+
+// TestSedCTypeAloneSelectsByteOrCharacterMatching is the mixed-category
+// regression at the matcher seam. A UTF-8 collation cannot make C LC_CTYPE's
+// dot consume a whole UTF-8 character, and a C collation cannot make a UTF-8
+// LC_CTYPE dot consume only its first byte.
+func TestSedCTypeAloneSelectsByteOrCharacterMatching(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"C ctype, UTF-8 collate", []string{"LC_CTYPE=C", "LC_COLLATE=C.UTF-8"}, "XX\n"},
+		{"UTF-8 ctype, C collate", []string{"LC_CTYPE=C.UTF-8", "LC_COLLATE=C"}, "X\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSedInDirEnv(t, t.TempDir(), tc.env, "é\n", "s/./X/g")
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("got (%q, %q, %d), want %q", out, errOut, code, tc.want)
+			}
+		})
+	}
+}
+
+// TestSedCUTF8MatchesGlibcClasses pins values where Go's Unicode classes are
+// not a substitute for glibc C.UTF-8.
+func TestSedCUTF8MatchesGlibcClasses(t *testing.T) {
+	input := "é٣\u00a0\n"
+	tests := []struct {
+		class, want string
+	}{
+		{"alpha", "XX\u00a0\n"},
+		{"alnum", "XX\u00a0\n"},
+		{"digit", input},
+		{"graph", "XXX\n"},
+		{"print", "XXX\n"},
+		{"punct", "é٣X\n"},
+		{"space", input},
+	}
+	for _, tc := range tests {
+		out, errOut, code := runSedInDirEnv(t, t.TempDir(), []string{"LC_ALL=C.UTF-8"}, input,
+			"s/[[:"+tc.class+":]]/X/g")
+		if code != 0 || errOut != "" || out != tc.want {
+			t.Errorf("class %s = (%q, %q, %d), want %q", tc.class, out, errOut, code, tc.want)
+		}
 	}
 }
 

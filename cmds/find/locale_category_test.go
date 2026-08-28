@@ -185,7 +185,8 @@ func TestFindUncarriedLocalesKeepTheByteModel(t *testing.T) {
 // says the codeset is (filesystems that reject such names — Darwin/APFS —
 // make this unreachable end to end). Each undecodable byte is its own
 // character, so it advances the scan by one byte and matches only the same
-// raw byte — never a class, a range or a case fold.
+// raw byte. glibc nevertheless gives raw bytes their byte collation value
+// when both endpoints of a range make that interpretation possible.
 func TestFnmatchUTF8HandlesInvalidSequences(t *testing.T) {
 	utf8Locale := findLocale{ctypeUTF8: true}
 	const raw = "\xe9"  // a lone Latin-1 e-acute: not a UTF-8 sequence
@@ -201,7 +202,7 @@ func TestFnmatchUTF8HandlesInvalidSequences(t *testing.T) {
 		{encoded, raw, false, false},
 		{raw, encoded, false, false},
 		{"[[:alpha:]]", raw, false, false},
-		{"[a-\xff]", raw, false, false},
+		{"[a-\xff]", raw, false, true},
 		{"[[:print:]]", raw, false, false},
 		{raw, raw, true, true},
 		{"\xe9\xe9", raw + raw, false, true},
@@ -264,12 +265,39 @@ func TestFindUTF8CTypeKeepsPOSIXDigitAndXdigitASCII(t *testing.T) {
 	for _, tc := range []struct{ pat, want string }{
 		{"[[:digit:]]", "./5\n"},
 		{"[[:xdigit:]]", "./5\n./e\n"},
-		{"[[:alpha:]]", "./e\n"},
+		{"[[:alpha:]]", "./e\n./٣\n"},
 	} {
 		out, errb, code := runFindEnv(t, dir, env,
 			".", "-maxdepth", "1", "-type", "f", "-name", tc.pat)
 		if out != tc.want || errb != "" || code != 0 {
 			t.Errorf("find . -name %s = (%q, %q, %d), want %q", tc.pat, out, errb, code, tc.want)
+		}
+	}
+}
+
+// TestFindCUTF8MatchesGlibcCounterexamples prevents replacing the target
+// locale with Go's superficially similar Unicode predicates. glibc C.UTF-8
+// classifies Arabic-Indic digits as alpha (but not digit), while NBSP is
+// graph/print/punct but not space.
+func TestFindCUTF8MatchesGlibcCounterexamples(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"٣", "\u00a0"} {
+		writeFile(t, dir, name, "")
+	}
+	wants := map[string]string{
+		"alpha": "./٣\n",
+		"alnum": "./٣\n",
+		"digit": "",
+		"graph": "./\u00a0\n./٣\n",
+		"print": "./\u00a0\n./٣\n",
+		"punct": "./\u00a0\n",
+		"space": "",
+	}
+	for class, want := range wants {
+		out, errb, code := runFindEnv(t, dir, []string{"LC_ALL=C.UTF-8"},
+			".", "-maxdepth", "1", "-type", "f", "-name", "[[:"+class+":]]")
+		if out != want || errb != "" || code != 0 {
+			t.Errorf("class %s = (%q, %q, %d), want %q", class, out, errb, code, want)
 		}
 	}
 }

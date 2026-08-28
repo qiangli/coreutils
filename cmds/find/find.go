@@ -71,6 +71,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/ignore"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -1724,26 +1725,18 @@ func eqRune(a, b rune, fold bool) bool {
 // character that is neither alnum nor space, which is why it is derived
 // rather than mapped onto a Unicode category.
 var utf8ClassFns = map[string]func(rune) bool{
-	"alpha":  unicode.IsLetter,
-	"digit":  func(r rune) bool { return r >= '0' && r <= '9' },
-	"alnum":  isAlnumUTF8,
-	"upper":  unicode.IsUpper,
-	"lower":  unicode.IsLower,
-	"space":  unicode.IsSpace,
-	"blank":  func(r rune) bool { return r == ' ' || r == '\t' },
-	"cntrl":  unicode.IsControl,
-	"graph":  isGraphUTF8,
-	"print":  func(r rune) bool { return isGraphUTF8(r) || r == ' ' },
-	"punct":  func(r rune) bool { return isGraphUTF8(r) && !isAlnumUTF8(r) },
-	"xdigit": func(r rune) bool { return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' },
-}
-
-func isAlnumUTF8(r rune) bool {
-	return unicode.IsLetter(r) || (r >= '0' && r <= '9')
-}
-
-func isGraphUTF8(r rune) bool {
-	return unicode.IsGraphic(r) && !unicode.IsSpace(r)
+	"alpha":  func(r rune) bool { return locale.CUTF8Class("alpha", r) },
+	"digit":  func(r rune) bool { return locale.CUTF8Class("digit", r) },
+	"alnum":  func(r rune) bool { return locale.CUTF8Class("alnum", r) },
+	"upper":  func(r rune) bool { return locale.CUTF8Class("upper", r) },
+	"lower":  func(r rune) bool { return locale.CUTF8Class("lower", r) },
+	"space":  func(r rune) bool { return locale.CUTF8Class("space", r) },
+	"blank":  func(r rune) bool { return locale.CUTF8Class("blank", r) },
+	"cntrl":  func(r rune) bool { return locale.CUTF8Class("cntrl", r) },
+	"graph":  func(r rune) bool { return locale.CUTF8Class("graph", r) },
+	"print":  func(r rune) bool { return locale.CUTF8Class("print", r) },
+	"punct":  func(r rune) bool { return locale.CUTF8Class("punct", r) },
+	"xdigit": func(r rune) bool { return locale.CUTF8Class("xdigit", r) },
 }
 
 // matchClassUTF8 is matchClassLocale over characters. The split between
@@ -1819,6 +1812,21 @@ func matchClassUTF8(p string, c rune, fold bool, loc findLocale) (matched bool, 
 		r := c
 		if fold {
 			r, lo, hi = unicode.ToLower(c), unicode.ToLower(lo), unicode.ToLower(hi)
+		}
+		if hi > utf8.MaxRune && r > utf8.MaxRune && lo <= 0xff {
+			// glibc treats an invalid high-byte endpoint and subject byte as
+			// raw collating values.  In particular [a-\xff] matches 0xe9
+			// under C.UTF-8 rather than dropping the byte from the range.
+			rawLo := lo
+			if lo > utf8.MaxRune {
+				rawLo = lo - invalidCharBase
+			}
+			rawHi := hi - invalidCharBase
+			raw := r - invalidCharBase
+			if rawLo <= raw && raw <= rawHi {
+				matched = true
+			}
+			continue
 		}
 		if r > utf8.MaxRune || lo > utf8.MaxRune || hi > utf8.MaxRune {
 			// An undecodable byte is not a collating element, so it has

@@ -237,13 +237,18 @@ func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOp
 			return 2
 		}
 	}
-	// The byte-table matcher describes a single-byte codeset, so it is
-	// selected only when a category actually names one. A UTF-8 LC_CTYPE
-	// keeps the character-oriented matcher; a UTF-8 LC_COLLATE contributes
-	// nothing to it, and neither may drag the other onto a substrate its
-	// own category did not ask for.
-	if ctypeModel == sedCTypeProvider || collateModel == sedCollateProvider {
+	// LC_CTYPE alone selects the character model.  C/POSIX and provider
+	// locales are byte-oriented; C.UTF-8 is character-oriented even when a
+	// provider supplies LC_COLLATE data.  Conversely a C.UTF-8 collation
+	// never turns a C LC_CTYPE invocation into a rune matcher.
+	if ctypeModel == sedCTypeUTF8 {
+		opts.CUTF8 = true
+		if collateModel == sedCollateProvider {
+			opts.LocaleTables = tables
+		}
+	} else {
 		opts.LocaleTables = tables
+		opts.CByteTables = ctypeModel == sedCTypeC && collateModel == sedCollateC
 	}
 
 	if err := validateProgram(program, *quiet, opts); err != nil {
