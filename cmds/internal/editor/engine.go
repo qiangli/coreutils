@@ -78,6 +78,9 @@ type Engine struct {
 	interactiveGlobal bool
 	globalQuit        bool
 	globalTargets     []int
+	globalSubCommand  int
+	globalSubAttempt  []bool
+	globalSubChanged  []bool
 	changeSeq         uint64
 }
 
@@ -544,15 +547,14 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		}
 		return false, err
 	case 'p', 'n', 'l':
-		style, err := printSuffix(arg)
+		_, err := printSuffix(arg)
 		if err != nil {
 			return false, err
 		}
-		// POSIX leaves a print suffix on a print command unspecified;
-		// historical ed writes the lines once, in the suffix's format.
-		if style != 0 {
-			cmd = style
-		}
+		// POSIX permits a print command carrying another print suffix to
+		// write once or twice.  In the one-write form it is still the base
+		// command's output; replacing l/n with the suffix loses information
+		// and is neither permitted form.
 		return false, e.printRange(addrs, 2, cmd)
 	case '=':
 		style, err := printSuffix(arg)
@@ -1160,10 +1162,15 @@ func (e *Engine) substitute(first, last int, arg string) error {
 		changed, lastChanged = true, n+len(pieces)-1
 	}
 	if !changed {
-		if e.interactiveGlobal {
-			// Within an interactive global command, a substitution is applied
-			// to one marked line at a time; a line without a match is simply
-			// left alone rather than aborting the whole interactive command.
+		if e.inGlobal {
+			// A global command applies its command list independently to each
+			// marked line.  A substitution which does not match this particular
+			// line must not abort the remaining marks.  The surrounding global
+			// command reports the error later if this substitution command did
+			// not match any of its addressed lines.
+			if !e.interactiveGlobal && e.globalSubCommand >= 0 {
+				e.globalSubAttempt[e.globalSubCommand] = true
+			}
 			return nil
 		}
 		e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
@@ -1172,6 +1179,10 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	e.Buffer.Current = lastChanged
 	e.Buffer.Dirty = true
 	e.changeSeq++
+	if e.inGlobal && !e.interactiveGlobal && e.globalSubCommand >= 0 {
+		e.globalSubAttempt[e.globalSubCommand] = true
+		e.globalSubChanged[e.globalSubCommand] = true
+	}
 	if style != 0 {
 		return e.printRange([]int{lastChanged}, 1, style)
 	}

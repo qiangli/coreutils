@@ -36,6 +36,14 @@ func TestPOSIXMarksMoveCopyJoinUndoAndSuffixes(t *testing.T) {
 	}
 }
 
+func TestPOSIXPrintCommandSuffixPreservesBaseFormat(t *testing.T) {
+	in := "a\ntext\n.\n1lp\n1nl\n1pn\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "text$\n1\ttext\ntext\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
 func TestPOSIXJoinSingleAddressUsesThatLineOnly(t *testing.T) {
 	code, out, errb := runEdIn(t, t.TempDir(), "a\none\ntwo\nthree\n.\n2j\n2p\nQ\n", "-s")
 	if code != 0 || errb != "" || out != "two\n" {
@@ -119,9 +127,20 @@ func TestPOSIXInteractiveGlobalNoMatchIsPerLineNoOpAndConsumesUndo(t *testing.T)
 	}
 }
 
-func TestPOSIXNonInteractiveGlobalNoMatchFailsAndPreservesUndo(t *testing.T) {
-	// A substitution failure in non-interactive global is a command error.
-	// Its failed no-op must leave the preceding append reachable by undo.
+func TestPOSIXNonInteractiveGlobalSubstituteNoMatchContinuesAndSetsDot(t *testing.T) {
+	// The global RE selects every line, while the substitution matches only
+	// two of them.  A per-line no-match does not terminate the global walk;
+	// dot is left at the last line changed by the command list.
+	in := "a\nx\ny\nx\n.\ng/./s/x/X/\n.=\n1,$p\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	if code != 0 || errb != "" || out != "3\nX\ny\nX\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestPOSIXNonInteractiveGlobalSubstituteNoMatchFailsAndPreservesUndo(t *testing.T) {
+	// A substitution that fails on every line selected by the global is a
+	// command error.  Its failed no-op leaves the preceding append undoable.
 	in := "a\nx\n.\ng/x/s/y/z/\nu\n=\nQ\n"
 	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
 	if code != 1 || errb != "" || out != "?\n0\n" {

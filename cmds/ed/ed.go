@@ -77,6 +77,12 @@ func writeBytes(w io.Writer, data []byte) error {
 }
 
 func runCore(rc *tool.RunContext, args []string) int {
+	// Install ed's POSIX signal actions before option parsing, locale setup, or
+	// an initial file read.  A signal delivered during that startup work is no
+	// less part of the utility invocation than one delivered in command mode.
+	signals := startEdSignals()
+	defer signals.stop()
+
 	fs := tool.NewFlags(cmd.Name)
 	fs.SetInterspersed(false)
 	prompt := fs.StringP("prompt", "p", "", "use STRING as the command prompt")
@@ -175,8 +181,6 @@ func runCore(rc *tool.RunContext, args []string) int {
 		}
 		return out.Bytes(), nil
 	}
-	signals := startEdSignals()
-	defer signals.stop()
 	eng.PollSignal = signals.poll
 	eng.Signals = signals.channel()
 	eng.Hangup = func(data []byte) error {

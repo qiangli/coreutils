@@ -14,9 +14,27 @@ type edSignals struct {
 	done   chan struct{}
 }
 
+// edSignalSet preserves dispositions which were ignored when ed was entered.
+// POSIX utility startup keeps inherited ignores in force; calling
+// signal.Notify for one of them would silently turn that ignore into ed's
+// command-mode action.  Signals with the default disposition get ed's
+// specified behavior: HUP saves, INT returns to command mode, and QUIT is
+// ignored for the duration of the invocation.
+func edSignalSet(ignored func(os.Signal) bool) []os.Signal {
+	set := make([]os.Signal, 0, 3)
+	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT} {
+		if !ignored(sig) {
+			set = append(set, sig)
+		}
+	}
+	return set
+}
+
 func startEdSignals() *edSignals {
 	s := &edSignals{raw: make(chan os.Signal, 4), events: make(chan string, 4), done: make(chan struct{})}
-	signal.Notify(s.raw, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
+	if set := edSignalSet(signal.Ignored); len(set) > 0 {
+		signal.Notify(s.raw, set...)
+	}
 	go func() {
 		for {
 			select {

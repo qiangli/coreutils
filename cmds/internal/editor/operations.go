@@ -313,10 +313,16 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	e.inGlobal = true
 	e.interactiveGlobal = interactive
 	e.globalTargets = targets
+	e.globalSubCommand = -1
+	e.globalSubAttempt = nil
+	e.globalSubChanged = nil
 	defer func() {
 		e.inGlobal = false
 		e.interactiveGlobal = previousInteractiveGlobal
 		e.globalTargets = nil
+		e.globalSubCommand = -1
+		e.globalSubAttempt = nil
+		e.globalSubChanged = nil
 		if beforeSeq == e.changeSeq {
 			if retErr != nil {
 				// A failed no-op global command must not hide the preceding
@@ -378,6 +384,11 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			return nil
 		}
 	}
+	for i := range e.globalSubAttempt {
+		if e.globalSubAttempt[i] && !e.globalSubChanged[i] {
+			return fmt.Errorf("no match")
+		}
+	}
 	return nil
 }
 
@@ -394,6 +405,7 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 	defer func() {
 		e.list = savedList
 	}()
+	subCommand := 0
 	for {
 		line, err := e.readCommandLine()
 		if err != nil && len(line) == 0 {
@@ -403,7 +415,8 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 			return false, err
 		}
 		line = strings.TrimSuffix(line, "\n")
-		if commandLetter(line) != 's' {
+		letter := commandLetter(line)
+		if letter != 's' {
 			line = stripContinuation(line)
 		}
 		_, p, _, parseErr := e.parseAddresses(line)
@@ -413,6 +426,16 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 		p = skipBlank(line, p)
 		if p < len(line) && strings.ContainsRune("gGvV", rune(line[p])) {
 			return false, fmt.Errorf("cannot nest global commands")
+		}
+		if letter == 's' && !e.interactiveGlobal {
+			e.globalSubCommand = subCommand
+			subCommand++
+			for len(e.globalSubAttempt) <= e.globalSubCommand {
+				e.globalSubAttempt = append(e.globalSubAttempt, false)
+				e.globalSubChanged = append(e.globalSubChanged, false)
+			}
+		} else {
+			e.globalSubCommand = -1
 		}
 		quit, execErr := e.execute(line)
 		if execErr != nil || quit {
