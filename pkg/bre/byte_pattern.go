@@ -145,9 +145,12 @@ func (p *localeBytePattern) findSubmatchIndex(raw []byte) ([]int, error) {
 func translateLocaleByteBRE(pattern []byte, codec byteTokenCodec, tables bytePatternTables, foldCase bool) (string, error) {
 	var out strings.Builder
 	state := posStart
+	leadingAnchor := false
 	groups := 0
 	for i := 0; i < len(pattern); {
 		value := pattern[i]
+		afterLeadingAnchor := leadingAnchor
+		leadingAnchor = false
 		switch value {
 		case '\\':
 			if i+1 >= len(pattern) {
@@ -243,6 +246,15 @@ func translateLocaleByteBRE(pattern []byte, codec byteTokenCodec, tables bytePat
 			state = posAtom
 			i++
 		case '*':
+			if state == posStart || afterLeadingAnchor {
+				// In a BRE, '*' is ordinary when it is the first character of
+				// the expression or a subexpression, including immediately after
+				// an initial '^'.
+				out.WriteString(literalByteAtom(codec, value, tables.fold, foldCase))
+				state = posAtom
+				i++
+				continue
+			}
 			if state != posAtom {
 				return "", fmt.Errorf("* with nothing to repeat")
 			}
@@ -256,6 +268,7 @@ func translateLocaleByteBRE(pattern []byte, codec byteTokenCodec, tables bytePat
 			} else {
 				out.WriteByte('^')
 				state = posAnchor
+				leadingAnchor = true
 			}
 			i++
 		case '$':

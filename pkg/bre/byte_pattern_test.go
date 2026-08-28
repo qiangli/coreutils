@@ -255,6 +255,24 @@ func TestLocaleBytePatternTablesAreSnapshot(t *testing.T) {
 	}
 }
 
+func TestLocaleByteBREOrdinaryAsterisks(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		input   string
+	}{
+		{`*lead$`, `*lead`},
+		{`^*lead$`, `*lead`},
+		{`^\(*lead\)$`, `*lead`},
+		{`^\(^*lead\)$`, `*lead`},
+	} {
+		p := compileSyntheticBytePattern(t, []byte(tc.pattern), false)
+		got, err := p.findSubmatchIndex([]byte(tc.input))
+		if err != nil || got == nil {
+			t.Errorf("%q on %q indices=%v err=%v, want match", tc.pattern, tc.input, got, err)
+		}
+	}
+}
+
 func TestLocaleBytePatternFailsClosed(t *testing.T) {
 	patterns := []string{
 		`\1`, `\b`, `\B`, `\<`, `\>`,

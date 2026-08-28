@@ -206,3 +206,22 @@ func TestRegisteredToolCTypeClassesUseByteLocale(t *testing.T) {
 		t.Fatalf("stdout=%q", out.String())
 	}
 }
+
+func TestRegisteredToolPOSIXLocaleAsterisksInAddressesAndGlobal(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), FS: tool.NewLocalFS(),
+		Env: []string{"LC_ALL=POSIX"},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("a\nplain\n*lead\n***lead\n.\n1\n/^*lead$/p\n/*lead/p\ng/^*lead$/s/lead/done/\n2p\nQ\n"),
+			Out: &out, Err: &errb,
+		},
+	}
+	code := tool.Lookup("ed").Run(rc, []string{"-s"})
+	if code != 0 || errb.String() != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+	if out.String() != "plain\n*lead\n***lead\n*done\n" {
+		t.Fatalf("stdout=%q", out.String())
+	}
+}
