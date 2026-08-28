@@ -120,7 +120,11 @@ func parseFloat(s string) (float64, error) {
 	if len(s) > 1 && (s[0] == '+' || s[0] == '-') {
 		if len(s) == 4 && hasNaNPrefix(s[1:]) {
 			// ParseFloat doesn't handle "nan" with sign prefix, so handle it here.
-			return math.NaN(), nil
+			n := math.NaN()
+			if s[0] == '-' {
+				n = math.Copysign(n, -1)
+			}
+			return n, nil
 		}
 		if len(s) > 3 && hasHexPrefix(s[1:]) && strings.IndexByte(s, 'p') < 0 && strings.IndexByte(s, 'P') < 0 {
 			s += "p0"
@@ -153,6 +157,9 @@ func (v value) str(floatFormat string) string {
 	if v.typ == typeNum {
 		switch {
 		case math.IsNaN(v.n):
+			if math.Signbit(v.n) {
+				return "-nan"
+			}
 			return "nan"
 		case math.IsInf(v.n, 0):
 			if v.n < 0 {
@@ -208,7 +215,11 @@ func parseFloatPrefix(s string) float64 {
 	}
 	if i+3 <= len(s) {
 		if hasNaNPrefix(s[i:]) {
-			return math.NaN()
+			n := math.NaN()
+			if i > start && s[start] == '-' {
+				n = math.Copysign(n, -1)
+			}
+			return n
 		}
 		if hasInfPrefix(s[i:]) {
 			if s[start] == '-' {

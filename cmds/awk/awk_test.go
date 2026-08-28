@@ -79,6 +79,33 @@ func TestAwkInfinityAndNaNSemantics(t *testing.T) {
 	}
 }
 
+func TestAwkPOSIXSpecialFloatFormatting(t *testing.T) {
+	program := `BEGIN {
+		posinf = "INF" + 0; neginf = "-INF" + 0
+		posnan = "NAN" + 0; negnan = "-NAN" + 0
+		printf "%e|%f|%g|%E|%G\n", posinf, posinf, posinf, posinf, posinf
+		printf "%e|%f|%g|%E|%G\n", neginf, neginf, neginf, neginf, neginf
+		printf "%a|%e|%f|%g|%A|%E|%F|%G\n", posnan, posnan, posnan, posnan, posnan, posnan, posnan, posnan
+		printf "%a|%e|%f|%g|%A|%E|%F|%G\n", negnan, negnan, negnan, negnan, negnan, negnan, negnan, negnan
+		printf "<%6a><%6A><%6F><%-06a><%-06A><%-06F>\n", negnan, negnan, negnan, negnan, negnan, negnan
+		printf "<%010e><%010f><%010g><%010E><%010G>\n", posinf, posinf, posinf, posinf, posinf
+		printf "<%010e><%010f><%010g><%010E><%010G>\n", neginf, neginf, neginf, neginf, neginf
+		print negnan
+	}`
+	want := "inf|inf|inf|INF|INF\n" +
+		"-inf|-inf|-inf|-INF|-INF\n" +
+		"nan|nan|nan|nan|NAN|NAN|NAN|NAN\n" +
+		"-nan|-nan|-nan|-nan|-NAN|-NAN|-NAN|-NAN\n" +
+		"<  -nan><  -NAN><  -NAN><-nan  ><-NAN  ><-NAN  >\n" +
+		"<       inf><       inf><       inf><       INF><       INF>\n" +
+		"<      -inf><      -inf><      -inf><      -INF><      -INF>\n" +
+		"-nan\n"
+	out, errb, code := runTool(t, "", program)
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk POSIX special float formatting = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
 func TestAwkDivisionByZeroIsADiagnosedError(t *testing.T) {
 	out, errb, code := runTool(t, "", `BEGIN { print 1/0 }`)
 	if code == 0 || !strings.Contains(errb, "division by zero") || out != "" {

@@ -564,14 +564,12 @@ func (p *interp) parseFmtTypes(s string) (format string, types []byte, err error
 			case 'i':
 				t = 'd'
 				out[i] = 'd'
-			case 'f', 'e', 'E', 'g', 'G':
-				t = 'f'
-			case 'a', 'A', 'F':
+			case 'a', 'A', 'e', 'E', 'f', 'F', 'g', 'G':
 				// Go's fmt package does not implement C/POSIX F and its
-				// x/X floating-point exponent and zero-padding differ from
-				// a/A. Preserve the verb and route it through awkFloat's
-				// fmt.Formatter implementation below. fmt still resolves
-				// flags and dynamic width/precision before calling it.
+				// special-value spelling, x/X floating-point exponent, and
+				// zero-padding differ from C printf. Preserve every floating
+				// verb and route it through awkFloat's Formatter below. fmt
+				// still resolves flags and dynamic width/precision for us.
 				t = s[i]
 			case 'u':
 				t = 'u'
@@ -615,13 +613,7 @@ func (p *interp) sprintf(format string, args []value) (string, error) {
 			v = p.toString(a)
 		case 'd':
 			v = int64(a.num())
-		case 'f':
-			if p.decimalPoint == 0 || p.decimalPoint == '.' {
-				v = a.num()
-			} else {
-				v = localizedFloat{a.num(), p.decimalPoint}
-			}
-		case 'a', 'A', 'F':
+		case 'a', 'A', 'e', 'E', 'f', 'F', 'g', 'G':
 			if p.decimalPoint == 0 || p.decimalPoint == '.' {
 				v = awkFloat(a.num())
 			} else {
@@ -679,18 +671,36 @@ func (v localizedAwkFloat) Format(state fmt.State, verb rune) {
 func formatAwkFloat(state fmt.State, verb rune, n float64, radix byte) {
 	upper := verb == 'A' || verb == 'F'
 	special := math.IsNaN(n) || math.IsInf(n, 0)
+	if !special && verb != 'a' && verb != 'A' && verb != 'F' {
+		var format strings.Builder
+		format.WriteByte('%')
+		for _, flag := range "#0+- " {
+			if state.Flag(int(flag)) {
+				format.WriteRune(flag)
+			}
+		}
+		if width, ok := state.Width(); ok {
+			format.WriteString(strconv.Itoa(width))
+		}
+		if precision, ok := state.Precision(); ok {
+			format.WriteByte('.')
+			format.WriteString(strconv.Itoa(precision))
+		}
+		format.WriteRune(verb)
+		_, _ = io.WriteString(state, localizeDecimal(fmt.Sprintf(format.String(), n), radix))
+		return
+	}
+	upper = upper || verb == 'E' || verb == 'G'
 
 	sign := ""
-	if !math.IsNaN(n) {
-		switch {
-		case math.Signbit(n):
-			sign = "-"
-			n = -n
-		case state.Flag('+'):
-			sign = "+"
-		case state.Flag(' '):
-			sign = " "
-		}
+	switch {
+	case math.Signbit(n):
+		sign = "-"
+		n = math.Abs(n)
+	case state.Flag('+'):
+		sign = "+"
+	case state.Flag(' '):
+		sign = " "
 	}
 
 	precision, hasPrecision := state.Precision()
@@ -700,7 +710,7 @@ func formatAwkFloat(state fmt.State, verb rune, n float64, radix byte) {
 		body = "nan"
 	case math.IsInf(n, 1):
 		body = "inf"
-	case verb == 'F':
+	case verb == 'f' || verb == 'F':
 		if !hasPrecision {
 			precision = 6
 		}
@@ -708,7 +718,7 @@ func formatAwkFloat(state fmt.State, verb rune, n float64, radix byte) {
 		if state.Flag('#') && precision == 0 {
 			body += "."
 		}
-	default:
+	case verb == 'a' || verb == 'A':
 		body = formatHexFloat(n, precision, hasPrecision)
 		body = trimHexExponentZeros(body)
 		if state.Flag('#') {
@@ -717,6 +727,8 @@ func formatAwkFloat(state fmt.State, verb rune, n float64, radix byte) {
 				body = body[:exponent] + "." + body[exponent:]
 			}
 		}
+	default:
+		panic("unreachable non-special awk float verb")
 	}
 	if upper {
 		body = strings.ToUpper(body)
@@ -750,30 +762,6 @@ func formatAwkFloat(state fmt.State, verb rune, n float64, radix byte) {
 	writePadding(state, ' ', padding)
 	_, _ = io.WriteString(state, sign)
 	_, _ = io.WriteString(state, body)
-}
-
-type localizedFloat struct {
-	n     float64
-	radix byte
-}
-
-func (v localizedFloat) Format(state fmt.State, verb rune) {
-	var format strings.Builder
-	format.WriteByte('%')
-	for _, flag := range "#0+- " {
-		if state.Flag(int(flag)) {
-			format.WriteRune(flag)
-		}
-	}
-	if width, ok := state.Width(); ok {
-		format.WriteString(strconv.Itoa(width))
-	}
-	if precision, ok := state.Precision(); ok {
-		format.WriteByte('.')
-		format.WriteString(strconv.Itoa(precision))
-	}
-	format.WriteRune(verb)
-	_, _ = io.WriteString(state, localizeDecimal(fmt.Sprintf(format.String(), v.n), v.radix))
 }
 
 func formatHexFloat(n float64, precision int, hasPrecision bool) string {
