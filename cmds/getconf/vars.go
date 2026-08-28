@@ -28,6 +28,8 @@ var sysVars = map[string]func() (string, bool){
 	// Runtime invariant values obtainable from the OS.
 	"ARG_MAX":           func() (string, bool) { return sysconfStr(scArgMax) },
 	"BC_BASE_MAX":       constVal(99),
+	"BC_DIM_MAX":        constVal(2048),
+	"BC_SCALE_MAX":      constVal(99),
 	"BC_STRING_MAX":     constVal(1000),
 	"CHILD_MAX":         func() (string, bool) { return sysconfStr(scChildMax) },
 	"CLK_TCK":           func() (string, bool) { return sysconfStr(scClkTck) },

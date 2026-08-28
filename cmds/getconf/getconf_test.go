@@ -294,11 +294,13 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 		t.Fatalf("getconf LINE_MAX = (%q, %q, %d), want (2048, empty, 0)", got, errs, code)
 	}
 
-	// BC_BASE_MAX and BC_STRING_MAX describe the calculator shipped in this
-	// same multicall binary, not an unknown host-libc implementation. Keep the
-	// queryable limits aligned with the bounds enforced by the bc engine.
+	// The BC_* limits describe the calculator shipped in this same multicall
+	// binary, not an unknown host-libc implementation. Keep the queryable limits
+	// aligned with the bounds enforced by the bc engine.
 	for name, want := range map[string]string{
 		"BC_BASE_MAX":   "99",
+		"BC_DIM_MAX":    "2048",
+		"BC_SCALE_MAX":  "99",
 		"BC_STRING_MAX": "1000",
 	} {
 		got, errs, code = runCmd(t, name)
