@@ -41,6 +41,10 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	if !posix {
+		args = tool.AliasHelpVersion(args)
+	}
 	count := fs.BoolP("count", "c", false, "prefix lines by the number of occurrences")
 	repeated := fs.BoolP("repeated", "d", false, "only print duplicate lines, one for each group")
 	unique := fs.BoolP("unique", "u", false, "only print unique lines")
@@ -53,12 +57,18 @@ func run(rc *tool.RunContext, args []string) int {
 	skipFields := fs.IntP("skip-fields", "f", 0, "avoid comparing the first N fields")
 	skipChars := fs.IntP("skip-chars", "s", 0, "avoid comparing the first N characters")
 	checkChars := fs.IntP("check-chars", "w", 0, "compare no more than N characters in lines")
-	operands, code := tool.Parse(rc, cmd, fs, normalizeArgs(tool.AliasHelpVersion(args)))
+	args = normalizeArgs(args, posix)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
 
-	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	if *skipFields < 0 || posix && fs.Changed("skip-fields") && *skipFields == 0 {
 		return tool.UsageError(rc, cmd, "invalid number of fields to skip: '%d'", *skipFields)
 	}
@@ -200,7 +210,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 // normalizeArgs supports GNU's -D[delimit-method] spelling and POSIX's
 // obsolescent -N/+N forms for skipping fields/chars.
-func normalizeArgs(args []string) []string {
+func normalizeArgs(args []string, posix bool) []string {
 	out := make([]string, 0, len(args))
 	rest := false
 	needsValue := false
@@ -219,6 +229,11 @@ func normalizeArgs(args []string) []string {
 		if needsValue {
 			out = append(out, arg)
 			needsValue = false
+			continue
+		}
+		if posix && (arg == "-" || !strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "+")) {
+			rest = true
+			out = append(out, arg)
 			continue
 		}
 		if len(arg) > 2 && arg[0] == '-' && arg[1] == 'D' && arg[2] != '=' {

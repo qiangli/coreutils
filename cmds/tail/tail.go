@@ -27,6 +27,7 @@ func run(rc *tool.RunContext, args []string) int {
 	args = rewriteObsoleteNum(args, "--lines=")
 
 	fs := tool.NewFlags(cmd.Name)
+	posix := tailPOSIXMode(rc.Env)
 	linesV := fs.StringP("lines", "n", "10", "output the last NUM lines, instead of the last 10; or use -n +NUM to output starting with line NUM")
 	bytesV := fs.StringP("bytes", "c", "", "output the last NUM bytes; or use -c +NUM to output starting with byte NUM of each file")
 	follow := fs.StringP("follow", "f", "", "output appended data as the file grows")
@@ -42,7 +43,16 @@ func run(rc *tool.RunContext, args []string) int {
 	maxUnchanged := fs.Int("max-unchanged-stats", 5, "with --follow=name, reopen a FILE which has not changed size after N iterations (default 5)")
 	usePolling := fs.Bool("use-polling", false, "use polling instead of inotify (polling is always used)")
 	debugV := fs.Bool("debug", false, "print diagnostic information")
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	if !posix {
+		args = tool.AliasHelpVersion(args)
+	}
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -58,7 +68,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	mode, hdr := scanOrder(args)
+	mode, hdr := scanOrder(args, posix)
 	bytesMode := fs.Changed("bytes")
 	if bytesMode && fs.Changed("lines") {
 		bytesMode = mode == 'c'
@@ -526,7 +536,7 @@ func rewriteObsoleteNum(args []string, flag string) []string {
 	return append([]string{flag + a[1:]}, args[1:]...)
 }
 
-func scanOrder(args []string) (mode, hdr byte) {
+func scanOrder(args []string, posix bool) (mode, hdr byte) {
 	skip := false
 	for _, a := range args {
 		if skip {
@@ -534,6 +544,9 @@ func scanOrder(args []string) (mode, hdr byte) {
 			continue
 		}
 		if a == "--" {
+			break
+		}
+		if posix && (a == "-" || !strings.HasPrefix(a, "-")) {
 			break
 		}
 		if strings.HasPrefix(a, "--") {
@@ -582,6 +595,15 @@ func scanOrder(args []string) (mode, hdr byte) {
 		}
 	}
 	return mode, hdr
+}
+
+func tailPOSIXMode(env []string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCount(s string) (val int64, neg, plus bool, err error) {

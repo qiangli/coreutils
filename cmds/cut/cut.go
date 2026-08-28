@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
@@ -55,6 +56,7 @@ type cutter struct {
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	posix := cutPOSIXMode(rc.Env)
 	bytesList := fs.StringP("bytes", "b", "", "select only these bytes")
 	charsList := fs.StringP("characters", "c", "", "select only these characters")
 	delimFlag := fs.StringP("delimiter", "d", "", "use DELIM instead of TAB for field delimiter")
@@ -66,7 +68,13 @@ func run(rc *tool.RunContext, args []string) int {
 	noSplit := fs.BoolP("ignored-n", "n", false, "do not split multi-byte characters")
 	whitespaceDelimited := fs.BoolP("whitespace-delimited", "w", false, "use any consecutive spaces and/or tabs as the field delimiter")
 
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -212,6 +220,15 @@ func run(rc *tool.RunContext, args []string) int {
 		status = 1
 	}
 	return status
+}
+
+func cutPOSIXMode(env []string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
+			return true
+		}
+	}
+	return false
 }
 
 // parseList is a port of the GNU set-fields.c state machine: a LIST is

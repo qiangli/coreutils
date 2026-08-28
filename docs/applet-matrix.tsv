@@ -29,7 +29,7 @@ cp	cmds/cp		GNU Coreutils	yes	yes	8	65
 crontab	cmds/crontab		POSIX/Unix utility	no	yes	4	27
 csplit	cmds/csplit		GNU Coreutils	yes	yes	1	23
 ctags	cmds/posixproviders		POSIX external provider	no	yes	4	23
-cut	cmds/cut		GNU Coreutils	yes	yes	3	22
+cut	cmds/cut		GNU Coreutils	yes	yes	4	23
 date	cmds/date		GNU Coreutils	yes	yes	1	16
 dd	cmds/dd		GNU Coreutils	yes	yes	6	80
 df	cmds/df		GNU Coreutils	yes	yes	2	30
@@ -48,7 +48,7 @@ expr	cmds/expr		GNU Coreutils	yes	yes	2	18
 factor	cmds/factor		GNU Coreutils	yes	no	1	3
 false	cmds/false		GNU Coreutils	yes	yes	1	2
 fetch	cmds/fetch		Bashy/other extension	no	no	1	6
-file	cmds/file		POSIX/Unix utility	no	yes	3	37
+file	cmds/file		POSIX/Unix utility	no	yes	4	39
 find	cmds/find		POSIX/Unix utility	no	yes	12	84
 fmt	cmds/fmt		GNU Coreutils	yes	no	1	18
 fold	cmds/fold		GNU Coreutils	yes	yes	2	28
@@ -98,7 +98,7 @@ nproc	cmds/nproc		GNU Coreutils	yes	no	1	2
 ntp	cmds/ntp		Bashy/other extension	no	no	1	4
 numfmt	cmds/numfmt		GNU Coreutils	yes	no	1	14
 od	cmds/od		GNU Coreutils	yes	yes	1	56
-paste	cmds/paste		GNU Coreutils	yes	yes	2	17
+paste	cmds/paste		GNU Coreutils	yes	yes	3	18
 patch	cmds/patch		POSIX/Unix utility	no	yes	3	65
 pathchk	cmds/pathchk		GNU Coreutils	yes	yes	5	24
 pax	cmds/pax		POSIX/Unix utility	no	yes	15	179
@@ -110,7 +110,7 @@ printenv	cmds/printenv		GNU Coreutils	yes	no	1	4
 printf	cmds/printf		GNU Coreutils	yes	yes	3	23
 ps	cmds/ps		POSIX/Unix utility	no	yes	4	31
 ptx	cmds/ptx		GNU Coreutils	yes	no	1	14
-pwd	cmds/pwd		GNU Coreutils	yes	yes	1	8
+pwd	cmds/pwd		GNU Coreutils	yes	yes	2	10
 readlink	cmds/readlink		GNU Coreutils	yes	no	1	8
 realpath	cmds/realpath		GNU Coreutils	yes	no	1	10
 renice	cmds/renice		POSIX/Unix utility	no	yes	4	32
@@ -128,7 +128,7 @@ shuf	cmds/shuf		GNU Coreutils	yes	no	1	12
 sleep	cmds/sleep		GNU Coreutils	yes	yes	2	15
 sntp	cmds/ntp	ntp	Bashy/other extension	no	no	1	4
 sort	cmds/sort		GNU Coreutils	yes	yes	5	32
-split	cmds/split		GNU Coreutils	yes	yes	3	22
+split	cmds/split		GNU Coreutils	yes	yes	4	23
 stat	cmds/stat		GNU Coreutils	yes	no	1	18
 stdbuf	cmds/stdbuf		GNU Coreutils	yes	no	1	5
 strings	cmds/strings		POSIX/Unix utility	no	yes	1	11
@@ -138,7 +138,7 @@ sum	cmds/sum		GNU Coreutils	yes	no	1	2
 sync	cmds/sync		GNU Coreutils	yes	no	1	5
 tabs	cmds/tabs		POSIX/Unix utility	no	yes	2	21
 tac	cmds/tac		GNU Coreutils	yes	no	1	6
-tail	cmds/tail		GNU Coreutils	yes	yes	3	28
+tail	cmds/tail		GNU Coreutils	yes	yes	4	30
 talk	cmds/talk		POSIX/Unix utility	no	yes	6	26
 tar	cmds/tar		Bashy/other extension	no	no	1	14
 tee	cmds/tee		GNU Coreutils	yes	yes	3	30
@@ -157,7 +157,7 @@ tty	cmds/tty		GNU Coreutils	yes	yes	3	14
 tz	cmds/tz		Bashy/other extension	no	no	1	2
 uname	cmds/uname		GNU Coreutils	yes	yes	3	14
 unexpand	cmds/unexpand		GNU Coreutils	yes	yes	2	26
-uniq	cmds/uniq		GNU Coreutils	yes	yes	2	13
+uniq	cmds/uniq		GNU Coreutils	yes	yes	3	14
 unlink	cmds/unlink		GNU Coreutils	yes	no	1	3
 uptime	cmds/uptime		GNU Coreutils	yes	no	1	5
 users	cmds/users		GNU Coreutils	yes	no	1	1
@@ -166,7 +166,7 @@ uuencode	cmds/uuencode		POSIX/Unix utility	no	yes	1	7
 vdir	cmds/vdir		GNU Coreutils	yes	no	1	4
 vi	cmds/posixproviders		POSIX external provider	no	yes	4	23
 watch	cmds/watch		Bashy/other extension	no	no	1	4
-wc	cmds/wc		GNU Coreutils	yes	yes	3	31
+wc	cmds/wc		GNU Coreutils	yes	yes	4	32
 which	cmds/which		Bashy/other extension	no	no	1	9
 who	cmds/who		GNU Coreutils	yes	yes	4	32
 whoami	cmds/whoami		GNU Coreutils	yes	no	1	3

@@ -36,10 +36,20 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	posix := pastePOSIXMode(rc.Env)
 	delims := fs.StringP("delimiters", "d", "\t", "reuse characters from LIST instead of TABs")
 	serial := fs.BoolP("serial", "s", false, "paste one file at a time instead of in parallel")
 	zero := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	if !posix {
+		args = tool.AliasHelpVersion(args)
+	}
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -95,6 +105,15 @@ func run(rc *tool.RunContext, args []string) int {
 		status = 1
 	}
 	return status
+}
+
+func pastePOSIXMode(env []string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
+			return true
+		}
+	}
+	return false
 }
 
 // parseDelims expands the -d LIST escapes the GNU manual defines:

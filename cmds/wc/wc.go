@@ -141,6 +141,10 @@ func envPresent(env []string, key string) bool {
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	if !posix {
+		args = tool.AliasHelpVersion(args)
+	}
 	cBytes := fs.BoolP("bytes", "c", false, "print the byte counts")
 	cChars := fs.BoolP("chars", "m", false, "print the character counts")
 	cLines := fs.BoolP("lines", "l", false, "print the newline counts")
@@ -148,7 +152,13 @@ func run(rc *tool.RunContext, args []string) int {
 	cWords := fs.BoolP("words", "w", false, "print the word counts")
 	files0From := fs.String("files0-from", "", "read input file names from F, terminated by NUL; if F is -, read names from standard input")
 	totalWhen := fs.String("total", "auto", "when to print a total line: auto, always, only, never")
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}

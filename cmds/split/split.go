@@ -32,6 +32,7 @@ func run(rc *tool.RunContext, args []string) int {
 	args = rewriteObsoleteNum(args)
 
 	fs := tool.NewFlags(cmd.Name)
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	suffixLen := fs.IntP("suffix-length", "a", 0, "generate suffixes of length N (default 2)")
 	bytesV := fs.StringP("bytes", "b", "", "put SIZE bytes per output file")
 	hexSuffixes := fs.StringP("hex-suffixes", "", "", "use hexadecimal suffixes, optionally starting at FROM")
@@ -47,7 +48,13 @@ func run(rc *tool.RunContext, args []string) int {
 	verbose := fs.BoolP("verbose", "", false, "print a diagnostic just before each output file is opened")
 	filter := fs.StringP("filter", "", "", "write to shell COMMAND; file name is $FILE")
 	hexSuffix := fs.BoolP("", "x", false, "use hexadecimal suffixes (shorthand for --hex-suffixes)")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}

@@ -24,6 +24,8 @@ var cmd = &tool.Tool{
 	Usage:    "pwd [OPTION]...",
 }
 
+var processGetwd = os.Getwd
+
 // Run is wired in init: a literal would create an initialization
 // cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -54,17 +56,23 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if lastLP(args, defaultMode) == 'L' {
 		if logical := logicalDir(rc); logical != "" {
-			fmt.Fprintln(rc.Out, logical)
-			return 0
+			return writeDirectory(rc, logical)
 		}
 	}
 
-	resolved, err := physicalDir(rc.Dir)
+	resolved, err := physicalDir(rc)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pwd: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(rc.Out, resolved)
+	return writeDirectory(rc, resolved)
+}
+
+func writeDirectory(rc *tool.RunContext, dir string) int {
+	if _, err := fmt.Fprintln(rc.Out, dir); err != nil {
+		_, _ = fmt.Fprintf(rc.Err, "pwd: write error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -74,6 +82,12 @@ func logicalDir(rc *tool.RunContext) string {
 	pwd := rc.Getenv("PWD")
 	if !filepath.IsAbs(pwd) || hasDotComponent(pwd) {
 		return ""
+	}
+	// When the caller guarantees that rc.Dir is the process cwd, identical
+	// logical metadata is already sufficient.  Avoid materializing a lookup
+	// longer than PATH_MAX merely to prove a pathname the host just supplied.
+	if rc.DirIsProcessCwd && pwd == rc.Dir {
+		return pwd
 	}
 	pwdInfo, err := os.Stat(pwd)
 	if err != nil {
@@ -95,13 +109,23 @@ func hasDotComponent(path string) bool {
 	return false
 }
 
-func physicalDir(dir string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(dir)
+func physicalDir(rc *tool.RunContext) (string, error) {
+	if rc.DirIsProcessCwd {
+		resolved, err := processGetwd()
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(resolved) {
+			return "", fmt.Errorf("cannot determine absolute path for %q", rc.Dir)
+		}
+		return resolved, nil
+	}
+	resolved, err := filepath.EvalSymlinks(rc.Dir)
 	if err != nil {
 		return "", err
 	}
 	if !filepath.IsAbs(resolved) {
-		return "", fmt.Errorf("cannot determine absolute path for %q", dir)
+		return "", fmt.Errorf("cannot determine absolute path for %q", rc.Dir)
 	}
 	return resolved, nil
 }

@@ -81,6 +81,10 @@ func run(rc *tool.RunContext, args []string) int { return runWithOpener(rc, args
 
 func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) int {
 	fs := tool.NewFlags(cmd.Name)
+	// POSIX Utility Syntax Guideline 9 requires option recognition to stop at
+	// the first operand.  Keep GNU's interspersed-option extension outside the
+	// certification mode.
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	brief := fs.BoolP("brief", "b", false, "do not prepend file names to output lines")
 	follow := fs.BoolP("dereference", "L", false, "follow symbolic links (the POSIX default)")
 	noFollow := fs.BoolP("no-dereference", "h", false, "identify symbolic links instead of following them")
@@ -89,7 +93,13 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 	addSourceFlag(fs, &sources, defaultTests, "default-tests", "d", "apply the default system tests at this position", true)
 	addSourceFlag(fs, &sources, replacementMagic, "replace-magic", "M", "apply position-sensitive tests from FILE without implicit defaults", false)
 	addSourceFlag(fs, &sources, additionalMagic, "magic-file", "m", "apply position-sensitive tests from FILE", false)
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -132,6 +142,16 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 		}
 	}
 	return status
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan testPlan, open regularFileOpener) (string, error) {
