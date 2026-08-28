@@ -164,3 +164,26 @@ func TestTruncatedContextPatchReturnsError(t *testing.T) {
 		t.Fatal("truncated copied-context patch unexpectedly parsed")
 	}
 }
+
+// diff -e always emits an address, so an address-less ed command is not
+// evidence of an ed script; neither is anything that follows a line
+// announcing a copied-context, unified, or normal difference listing.
+func TestExtractEdScriptRequiresAddressAndYieldsToDiffListings(t *testing.T) {
+	for _, in := range []string{
+		"--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n a\n-b\n+B\n",
+		"*** f.txt\n--- f.txt\n***************\n*** 1,2 ****\n  a\n! b\n--- 1,2 ----\n  a\n! B\n",
+		"Index: f.txt\n2c2\n< a\n---\n> A\n",
+		"a\n",
+		"i\n",
+		"Index: f.txt\nc\nreplacement\n.\n",
+	} {
+		if script, _, ok := ExtractEdScript([]byte(in)); ok {
+			t.Fatalf("input %q taken for an ed script (%q)", in, script)
+		}
+	}
+	for _, in := range []string{"2i\ninserted\n.\n", "Index: f\n1,2c\nx\n.\n", "  3a\n  tail\n  .\n"} {
+		if _, _, ok := ExtractEdScript([]byte(in)); !ok {
+			t.Fatalf("addressed ed script %q not detected", in)
+		}
+	}
+}

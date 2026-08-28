@@ -34,6 +34,19 @@ trips, path stripping, reverse application, creates/deletes, rejects, backups,
 multi-file patches, missing final newlines, drift/fuzz, and unsupported binary
 sections.
 
+## 2026-08-28 Profile D repair
+
+- Ed-script auto-detection requires an addressed command and yields to any
+  line that announces a copied-context, unified, or normal listing, so a bare
+  `a`/`c`/`d`/`i` line of context no longer turns a diff into an ed script.
+- `-p num` counts a leading `<slash>` run as exactly one component, an
+  interior run as one separator, and the default selection as the final
+  component.
+- The informational message names the stripped file actually patched and no
+  longer carries a trailing `<blank>`.
+
+See [`docs/posix-interface-audits/profile-d-mailx-patch-repair-2026-08-28.md`](posix-interface-audits/profile-d-mailx-patch-repair-2026-08-28.md).
+
 ## Outside the base Profile D surface
 
 - XSI-optional SCCS retrieval is not enabled; the GNU `-g` RCS/SCCS extension
@@ -54,6 +67,9 @@ sections.
 | stream and file write failures | `TestStreamAndFileWritesRejectShortWrites` |
 | default reversal, `-R`, `-N` | `TestDefaultReversalPromptsAndAppliesReverse`, `TestCreationPatchAgainstPostimagePromptsAndRemovesOnReverse`, `TestAcceptedReversePersistsAcrossFollowingFilePortions`, `TestApplyReverseFlag`, `TestAlreadyAppliedRequiresForwardFlag` |
 | `-o` concatenation/intermediate versions | `TestIndentedPatchAndMultiFileOutput`, `TestOutputConcatenatesIntermediateVersionsForSameFile`, `TestOutputCarriesNewlyCreatedFileIntoLaterPortion` |
+| input-format determination (a diff listing is never taken for an ed script) | `TestContextLineLikeEdCommandStaysAUnifiedDiff`, `TestNormalDiffWithEdLikeDataStaysANormalDiff`, `TestAddressedEdScriptStillAutoDetects`, `TestExtractEdScriptRequiresAddressAndYieldsToDiffListings` |
+| `-p num` component deletion, including leading `<slash>` runs | `TestStripTreatsLeadingSlashRunAsOneComponent`, `TestStripSkipsAdjacentInteriorSlashes`, `TestStripComponentsPOSIXExamples`, `TestApplyStripComponents`, `TestApplyDefaultUsesHeaderBasename` |
+| informational messages on standard error, standard output unused | `TestProgressUsesStandardError`, `TestProgressNamesTheStrippedTargetExactly` |
 | copied-context rejects for every input form | `TestRejectUsesCopiedContext`, `TestApplyConflictWritesRejectAndExitsOne`, `TestEdPlacementFailureWritesCopiedContextRejectAndContinues`, `TestReverseRejectSwapsHeadersAndHunk` |
 
 The source-level POSIX interface is implemented. The manifest evidence state

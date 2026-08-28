@@ -29,7 +29,8 @@ delivery mechanism unspecified.
 - Read system mail moves to MBOX; `hold`, `keepsave`, `append`, explicit save,
   delete, `mbox`, secondary-mailbox, and `exit` dispositions are separate.
 - Message selectors cover number, `+`, `-`, `.`, `^`, `$`, `*`, ranges,
-  sender, `/subject`, and `:d/:n/:o/:r/:u`.
+  sender, `/subject`, and `:d/:n/:o/:r/:u`. Only a fully numeric pair is the
+  `n-m` range form, so a hyphenated login is still matched as an address.
 
 ## Commands and composition
 
@@ -53,9 +54,12 @@ delivery are implemented.
 - Shell word expansion for filenames covers environment parameters, home
   expansion, and pathname matching. Exotic command-substitution and arithmetic
   expansion inside a filename are not yet claimed.
-- Terminal pagination and signal paths are implemented but require the Profile D
-  PTY suites for final certification evidence; ordinary unit tests cannot prove
-  terminal-driver timing.
+- Terminal pagination and signal paths are implemented, and their decisions are
+  proven in process (`TestPOSIXPaginationDecisionRequiresTerminalAndCrt`,
+  `TestPOSIXCompositionInterruptAndIgnore`); the pipe through `PAGER` itself
+  and terminal-driver timing still require the Profile D PTY suites, because
+  ordinary unit tests cannot drive a tty. `crt` set to null paginates at the
+  screenful size, the implementation-defined value Issue 7 permits.
 - Delivery to several different mailbox files is validated before writing, but
   the files are not a cross-filesystem atomic transaction. POSIX does not define
   crash atomicity for the underlying mail delivery system.

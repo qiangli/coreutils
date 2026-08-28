@@ -116,8 +116,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 3 | 64 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
-| `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 2 | 29 |
-| `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 2 | 29 |
+| `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 3 | 34 |
+| `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 3 | 34 |
 | `make` | `cmds/make` | — | POSIX/Unix utility | no | yes | 3 | 34 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
@@ -139,7 +139,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `numfmt` | `cmds/numfmt` | — | GNU Coreutils | yes | no | 1 | 14 |
 | `od` | `cmds/od` | — | GNU Coreutils | yes | yes | 1 | 54 |
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 2 | 17 |
-| `patch` | `cmds/patch` | — | POSIX/Unix utility | no | yes | 2 | 58 |
+| `patch` | `cmds/patch` | — | POSIX/Unix utility | no | yes | 3 | 65 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 24 |
 | `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 15 | 177 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |

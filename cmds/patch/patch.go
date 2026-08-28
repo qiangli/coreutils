@@ -334,10 +334,7 @@ func describeErr(err error) string {
 
 func runEdScript(rc *tool.RunContext, script []byte, origFile, indexName string, strip int, directory, output, rejectFile string, backup, dryRun bool, define string) int {
 	if origFile == "" && indexName != "" {
-		candidate := stripComponents(indexName, strip)
-		if strip == autoStripSentinel {
-			candidate = filepath.Base(filepath.ToSlash(indexName))
-		}
+		candidate := targetName(indexName, strip)
 		if candidate != "" {
 			path := resolveOperandPath(rc, directory, candidate)
 			if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
@@ -561,7 +558,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		} else if deleteMode {
 			verb = "removing file"
 		}
-		fmt.Fprintf(rc.Err, "%s %s %s\n", verb, displayName, dryRunSuffix(ro.dryRun))
+		fmt.Fprintf(rc.Err, "%s %s%s\n", verb, displayName, dryRunSuffix(ro.dryRun))
 	}
 	failed := 0
 	changed := false
@@ -743,7 +740,7 @@ func failedResult(oldLines []string, oldNoEOL bool, hunks []patch.Hunk) patch.Re
 
 func dryRunSuffix(dryRun bool) string {
 	if dryRun {
-		return "(dry run)"
+		return " (dry run)"
 	}
 	return ""
 }
@@ -775,35 +772,52 @@ func joinFileLines(lines []string, noFinalNewline bool) []byte {
 	return buf.Bytes()
 }
 
-// resolveTargetName applies POSIX's default basename selection when -p is
-// omitted. An explicit -p count preserves the requested leading components.
-func resolveTargetName(rc *tool.RunContext, dir, name string, strip int, wantExisting bool) string {
-	s := strip
-	if s < 0 {
-		s = strings.Count(filepath.ToSlash(name), "/")
+// targetName applies POSIX's default basename selection when -p is omitted.
+// An explicit -p count preserves the requested leading components. The result
+// is the name patch actually operates on, which is what its informational
+// messages must report.
+func targetName(name string, strip int) string {
+	slashed := filepath.ToSlash(name)
+	if strip < 0 {
+		return baseComponent(slashed)
 	}
-	return resolveOperandPath(rc, dir, stripComponents(name, s))
+	return stripComponents(slashed, strip)
 }
 
+// resolveTargetName is targetName resolved against the working directory (or
+// the -d directory). An empty result means the name was stripped away.
+func resolveTargetName(rc *tool.RunContext, dir, name string, strip int) string {
+	stripped := targetName(name, strip)
+	if stripped == "" {
+		return ""
+	}
+	return resolveOperandPath(rc, dir, stripped)
+}
+
+// resolveHeaderTarget performs POSIX filename determination: the old-side
+// header name, then the new-side header name, then an Index: name, each with
+// -p components deleted and each accepted only when it names an existing
+// file. The reported name is the stripped one, because that -- not the raw
+// header text -- is the file patch operates on.
 func resolveHeaderTarget(rc *tool.RunContext, dir, oldName, newName, indexName string, strip int, create bool, intermediate map[string][]byte) (string, string, bool) {
 	for _, name := range []string{oldName, newName, indexName} {
 		if name == "" || name == patch.DevNull {
 			continue
 		}
-		path := resolveTargetName(rc, dir, name, strip, true)
+		path := resolveTargetName(rc, dir, name, strip)
 		if path == "" {
 			continue
 		}
 		if _, ok := intermediate[path]; ok {
-			return path, name, true
+			return path, targetName(name, strip), true
 		}
 		if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
-			return path, name, true
+			return path, targetName(name, strip), true
 		}
 	}
 	if create {
-		path := resolveTargetName(rc, dir, newName, strip, false)
-		return path, newName, path != ""
+		path := resolveTargetName(rc, dir, newName, strip)
+		return path, targetName(newName, strip), path != ""
 	}
 	name := oldName
 	if name == "" || name == patch.DevNull {
@@ -815,7 +829,7 @@ func resolveHeaderTarget(rc *tool.RunContext, dir, oldName, newName, indexName s
 	if name == "" || name == patch.DevNull {
 		return "", "", false
 	}
-	path := resolveTargetName(rc, dir, name, strip, true)
+	path := resolveTargetName(rc, dir, name, strip)
 	return path, name, false
 }
 
@@ -826,15 +840,42 @@ func resolveOperandPath(rc *tool.RunContext, dir, name string) string {
 	return rc.Path(filepath.Join(dir, name))
 }
 
+// stripComponents deletes n leading pathname components as -p num requires.
+// Per POSIX, a leading run of <slash> characters counts as the first
+// component ("-p 1 shall remove the leading <slash> characters"), and an
+// interior run of <slash> characters separates one component from the next
+// rather than standing for empty components of its own.
 func stripComponents(name string, n int) string {
-	comps := strings.Split(name, "/")
 	if n <= 0 {
 		return name
 	}
-	if n >= len(comps) {
+	rest := name
+	if strings.HasPrefix(rest, "/") {
+		rest = strings.TrimLeft(rest, "/")
+		n--
+	}
+	for n > 0 {
+		i := strings.Index(rest, "/")
+		if i < 0 {
+			return ""
+		}
+		rest = strings.TrimLeft(rest[i:], "/")
+		n--
+	}
+	return rest
+}
+
+// baseComponent is the final pathname component, which POSIX makes the target
+// name when -p is not specified at all.
+func baseComponent(name string) string {
+	trimmed := strings.TrimRight(name, "/")
+	if trimmed == "" {
 		return ""
 	}
-	return strings.Join(comps[n:], "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		return trimmed[i+1:]
+	}
+	return trimmed
 }
 
 func backupFile(path string) error {

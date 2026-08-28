@@ -263,7 +263,13 @@ func (s *mailSession) readComposition(to, cc, bcc []string, subject string) ([]b
 			case 's':
 				subject = arg
 			case 'i':
+				// ~a and ~A are defined as ~i sign and ~i Sign, and the
+				// sign/Sign variables recognize \t and \n, so ~i has to
+				// expand them for those two variables as well.
 				if v := s.vars[arg]; v != "" {
+					if arg == "sign" || arg == "Sign" {
+						v = expandSignature(v)
+					}
 					body.WriteString(v)
 					body.WriteByte('\n')
 				}
@@ -621,10 +627,8 @@ func (s *mailSession) isMessageSpec(arg string) bool {
 	if _, err := strconv.Atoi(arg); err == nil {
 		return true
 	}
-	if lo, hi, ok := strings.Cut(arg, "-"); ok {
-		_, e1 := strconv.Atoi(lo)
-		_, e2 := strconv.Atoi(hi)
-		return e1 == nil && e2 == nil
+	if isMessageRange(arg) {
+		return true
 	}
 	for _, entry := range s.entries {
 		if s.senderMatches(firstHeader(entry.Message, "From", ""), arg) {

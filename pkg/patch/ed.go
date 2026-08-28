@@ -9,6 +9,36 @@ import (
 
 var edCommandRE = regexp.MustCompile(`^(?:(\d+)(?:,(\d+))?)?([acdi])$`)
 
+// edScriptStartRE recognizes the first command of a diff -e script. Unlike
+// edCommandRE it requires an address, because diff -e always emits one and a
+// bare "a", "c", "d", or "i" is an ordinary line of context in the other three
+// Issue 7 input forms. Without the address requirement a unified diff whose
+// context happens to contain such a line is taken for an ed script and the
+// whole patch is misapplied.
+var edScriptStartRE = regexp.MustCompile(`^\d+(?:,\d+)?[acdi]$`)
+
+// normalDiffCommandRE recognizes a normal-difference command ("2c2", "0a1",
+// "5,7d4"), which identifies the input as a normal diff rather than an ed
+// script.
+var normalDiffCommandRE = regexp.MustCompile(`^\d+(?:,\d+)?[acd]\d+(?:,\d+)?$`)
+
+// looksLikeDiffListing reports whether a line identifies the input as one of
+// the three textual diff forms. POSIX has patch determine the input type from
+// the format of the information it contains; once a copied-context, unified,
+// or normal listing has announced itself, later lines that resemble ed
+// commands are that listing's data, not a script.
+func looksLikeDiffListing(trimmed string) bool {
+	for _, marker := range []string{"--- ", "+++ ", "*** ", "@@ "} {
+		if strings.HasPrefix(trimmed, marker) {
+			return true
+		}
+	}
+	if trimmed == "***************" {
+		return true
+	}
+	return normalDiffCommandRE.MatchString(trimmed)
+}
+
 // EdRejectError reports syntactically valid diff -e portions whose addresses
 // could not be placed. Result bytes returned alongside this error include all
 // other portions that could be applied.
@@ -24,6 +54,11 @@ func (e *EdRejectError) Error() string {
 // ExtractEdScript finds the first command emitted by diff -e after optional
 // patch header material. It returns the script proper and the nearest Index:
 // pathname so the CLI can perform normal filename determination.
+//
+// Detection is deliberately conservative: an addressed ed command is required,
+// and any line that announces a copied-context, unified, or normal difference
+// listing ends the search with no match, so only real diff -e output is taken
+// for an ed script.
 func ExtractEdScript(data []byte) (script []byte, indexName string, ok bool) {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
@@ -36,7 +71,10 @@ func ExtractEdScript(data []byte) (script []byte, indexName string, ok bool) {
 		if trimmed == "" {
 			continue
 		}
-		if edCommandRE.MatchString(trimmed) || trimmed == "s/.//" {
+		if looksLikeDiffListing(trimmed) {
+			return nil, indexName, false
+		}
+		if edScriptStartRE.MatchString(trimmed) || trimmed == "s/.//" {
 			prefix := line[:len(line)-len(trimmed)]
 			scriptLines := append([]string(nil), lines[i:]...)
 			if prefix != "" {

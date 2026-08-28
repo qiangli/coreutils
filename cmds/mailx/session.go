@@ -461,9 +461,12 @@ func (s *mailSession) execute(line string, startup bool) (bool, error) {
 			s.printNameSet(s.ignore)
 			return false, nil
 		}
+		// The suppressed and retained lists are independent: whenever the
+		// retained list is non-empty, discard/ignore is disregarded entirely
+		// (see printFiltered), so a discard must not withdraw a retained
+		// header-field.
 		for _, a := range args {
 			s.ignore[strings.ToLower(a)] = true
-			delete(s.retain, strings.ToLower(a))
 		}
 		return false, nil
 	case "retain":
@@ -473,7 +476,6 @@ func (s *mailSession) execute(line string, startup bool) (bool, error) {
 		}
 		for _, a := range args {
 			s.retain[strings.ToLower(a)] = true
-			delete(s.ignore, strings.ToLower(a))
 		}
 		return false, nil
 	case "source":
@@ -827,13 +829,10 @@ func (s *mailSession) selectMessages(args []string, deletedOnly bool) ([]int, er
 					}
 				}
 			}
-		case strings.Contains(a, "-"):
-			lo, hi, ok := strings.Cut(a, "-")
-			x, e1 := strconv.Atoi(lo)
-			y, e2 := strconv.Atoi(hi)
-			if !ok || e1 != nil || e2 != nil {
-				return nil, fmt.Errorf("invalid message range %s", a)
-			}
+		case isMessageRange(a):
+			lo, hi, _ := strings.Cut(a, "-")
+			x, _ := strconv.Atoi(lo)
+			y, _ := strconv.Atoi(hi)
 			for i := x; i <= y; i++ {
 				add(i - 1)
 			}
@@ -854,6 +853,22 @@ func (s *mailSession) selectMessages(args []string, deletedOnly bool) ([]int, er
 	}
 	sort.Ints(out)
 	return out, nil
+}
+
+// isMessageRange reports whether a msglist word is the "n-m" inclusive range
+// form. Only a fully numeric pair is a range: POSIX also admits a plain
+// address as a selector, and login names may contain a <hyphen>, so anything
+// else falls through to address matching instead of being rejected.
+func isMessageRange(a string) bool {
+	lo, hi, ok := strings.Cut(a, "-")
+	if !ok {
+		return false
+	}
+	if _, err := strconv.Atoi(lo); err != nil {
+		return false
+	}
+	_, err := strconv.Atoi(hi)
+	return err == nil
 }
 
 func (s *mailSession) senderMatches(from, query string) bool {
@@ -919,6 +934,8 @@ func (s *mailSession) printFiltered(e mailxpkg.MboxEntry) {
 	fmt.Fprintln(&out, e.Envelope)
 	for _, h := range e.Message.Headers {
 		n := strings.ToLower(h.Name)
+		// retain overrides all discard/ignore commands: with a non-empty
+		// retained list every other header-field is dropped.
 		show := !s.ignore[n]
 		if len(s.retain) > 0 {
 			show = s.retain[n]
@@ -934,9 +951,37 @@ func (s *mailSession) printFiltered(e mailxpkg.MboxEntry) {
 	}
 	s.writePaged(out.Bytes())
 }
+
+// crtLines reports the pagination threshold and whether crt is set at all.
+// POSIX makes the value implementation-defined when crt is set to null --
+// and "set crt" with no value is the ordinary way to ask for pagination at
+// screen height -- so a null or unparsable value falls back to the screenful
+// size instead of disabling pagination.
+func (s *mailSession) crtLines() (int, bool) {
+	value, ok := s.vars["crt"]
+	if !ok {
+		return 0, false
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && n >= 0 {
+		return n, true
+	}
+	screen, _ := strconv.Atoi(s.vars["screen"])
+	if screen <= 0 {
+		screen = 20
+	}
+	return screen, true
+}
+
+// shouldPage decides whether message output of the given line count goes
+// through PAGER: standard output has to be a terminal device and crt has to be
+// set to a value less than the number of lines in the message.
+func (s *mailSession) shouldPage(lines int) bool {
+	crt, set := s.crtLines()
+	return set && mailxIsTerminal(s.rc.Out) && lines > crt
+}
+
 func (s *mailSession) writePaged(data []byte) {
-	crt, _ := strconv.Atoi(s.vars["crt"])
-	if crt > 0 && mailxIsTerminal(s.rc.Out) && bytes.Count(data, []byte{'\n'}) > crt {
+	if s.shouldPage(bytes.Count(data, []byte{'\n'})) {
 		paged, err := s.filter(s.vars["PAGER"], data)
 		if err == nil {
 			s.rc.Out.Write(paged)

@@ -20,9 +20,26 @@ external-provider definition, build recipe, cache entry, or fallback.
 - Invocation-wide output/error tracking plus checked local-file writes.
 - Refusal of symlink and non-regular mailbox targets.
 
+## 2026-08-28 Profile D repair
+
+- A msglist word containing a `<hyphen>` is only the `n-m` range form when
+  both sides are numeric; a hyphenated login is matched as an address, as
+  Issue 7 requires of any address shown in a header summary.
+- `retain` and `discard` keep independent lists, so a discard can no longer
+  withdraw a retained header-field and a non-empty retained list still wins
+  whole.
+- `crt` set to null keeps pagination enabled at the screenful size, the
+  implementation-defined value Issue 7 permits.
+- `~i` expands the `sign`/`Sign` escapes so it agrees with `~a`/`~A`.
+
+See [`docs/posix-interface-audits/profile-d-mailx-patch-repair-2026-08-28.md`](posix-interface-audits/profile-d-mailx-patch-repair-2026-08-28.md).
+
 ## Remaining certification lanes
 
-- Profile D PTY replay for terminal pagination and signal timing.
+- Profile D PTY replay for the actual pipe through `PAGER` and for
+  terminal-driver signal timing. The decisions those lanes drive are proven in
+  process (`TestPOSIXPaginationDecisionRequiresTerminalAndCrt`,
+  `TestPOSIXCompositionInterruptAndIgnore`); the terminal itself is not.
 - Integration evidence for identity/authorization and multiprocess lock
   recovery on the configured certification hosts.
 
