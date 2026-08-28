@@ -77,6 +77,39 @@ func TestFilesPrecedeStandardInputAndShareState(t *testing.T) {
 	}
 }
 
+// TestPOSIXOperandPathResolutionForms is the public reducer for the pathname
+// helper shape used by the conformance suite. Both repeated separators and a
+// parent-directory round trip still name the input operand, which is evaluated
+// before standard input.
+func TestPOSIXOperandPathResolutionForms(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "programs")
+	if err := os.Mkdir(subdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "input.bc"), []byte("1+2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, operand := range []string{
+		"programs//input.bc",
+		"programs/../programs/input.bc",
+	} {
+		t.Run(operand, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:   context.Background(),
+				Dir:   dir,
+				FS:    tool.NewLocalFS(),
+				Stdio: tool.Stdio{In: strings.NewReader("2+3\n"), Out: &out, Err: &errOut},
+			}
+			if code := run(rc, []string{operand}); code != 0 || errOut.String() != "" || out.String() != "3\n5\n" {
+				t.Fatalf("stdout=%q stderr=%q code=%d", out.String(), errOut.String(), code)
+			}
+		})
+	}
+}
+
 func TestDiagnosticsAndExitStatus(t *testing.T) {
 	_, errOut, code := runBC(t, "1/0\n")
 	if code == 0 || !strings.Contains(errOut, "divide by zero") {
