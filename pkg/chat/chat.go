@@ -24,6 +24,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
+	"github.com/qiangli/coreutils/pkg/procguard"
 	"github.com/qiangli/coreutils/pkg/recall"
 	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/secrets"
@@ -59,11 +60,14 @@ type Options struct {
 	// its job, which means it can be denied all of it.
 	ReadOnly bool
 
-	// KillOnParentExit makes an unattended one-shot's process group self-clean
-	// when the caller disappears. Meet turns opt into this mode because a
-	// participant is a bounded conversation, not a durable worker. It is
-	// deliberately opt-in: actions and login-backed sessions must survive the
-	// launcher/terminal going away.
+	// KillOnParentExit makes an unattended one-shot's inherited process group
+	// self-clean when the caller disappears. Meet turns opt into this mode
+	// because a participant is a bounded conversation, not a durable worker. A
+	// descendant that deliberately calls setpgid/setsid needs an OS containment
+	// backend and is outside the portable guarantee (procguard reports this
+	// boundary explicitly). It is deliberately opt-in: actions and login-backed
+	// sessions must survive the launcher/terminal going away. Unsupported
+	// platforms fail closed instead of silently launching without the guard.
 	KillOnParentExit bool
 
 	// Steer resolves the tool's INTERACTIVE launch (its `steer_exec:` template)
@@ -467,17 +471,25 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// waits for the grandchild instead. WaitDelay bounds that: after the context
 	// ends, Wait gives the pipes this long to drain, then closes them and returns.
 	cmd.WaitDelay = 5 * time.Second
-	if err := cmd.Start(); err != nil {
-		return "", 127, err
-	}
-	var parentWatch *parentDeathWatch
+	var parentGuard *procguard.Guard
 	if r.killOnParentExit {
-		parentWatch = startParentDeathWatch(cmd.Process.Pid)
+		var err error
+		parentGuard, err = procguard.Arm(cmd)
+		if err != nil {
+			return "", 127, err
+		}
 	}
-	if parentWatch != nil {
-		defer stopParentDeathWatch(parentWatch)
+	startErr := cmd.Start()
+	if parentGuard != nil {
+		parentGuard.Started(startErr)
+	}
+	if startErr != nil {
+		return "", 127, startErr
 	}
 	err := cmd.Wait()
+	if parentGuard != nil {
+		parentGuard.Disarm()
+	}
 	NoteCoach(coach, r.stream)
 	out := stdout.String()
 	if ctx.Err() != nil {

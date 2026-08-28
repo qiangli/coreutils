@@ -12,6 +12,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // TestParentExitKillsPTYTree covers the abrupt supervisor-death path used by
@@ -60,27 +63,54 @@ func TestParentExitKillsPTYTree(t *testing.T) {
 	}
 }
 
-func TestStopParentDeathWatchReapsWatcher(t *testing.T) {
-	child := exec.Command("sh", "-c", "sleep 30")
-	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := child.Start(); err != nil {
+func TestKillOnParentExitNormalPTYRun(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "printf normal-pty")
+	var out strings.Builder
+	exit, reason, err := Run(cmd, &out, Options{Capture: true, KillOnParentExit: true})
+	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		_ = syscall.Kill(-child.Process.Pid, syscall.SIGKILL)
-		_ = child.Wait()
-	}()
+	if exit != 0 || reason != "" {
+		t.Fatalf("exit=%d reason=%q", exit, reason)
+	}
+	if !strings.Contains(out.String(), "normal-pty") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
 
-	watch := startParentDeathWatch(child.Process.Pid)
-	if watch == nil {
-		t.Fatal("parent-death watcher did not start")
+func TestKillOnParentExitPreservesPTYControl(t *testing.T) {
+	if os.Getenv("BASHY_AGENTPTY_CONTROL_HELPER") == "1" {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			os.Exit(2)
+		}
+		fg, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+		if err != nil {
+			os.Exit(3)
+		}
+		if fg != syscall.Getpgrp() {
+			os.Exit(4)
+		}
+		return
 	}
-	stopParentDeathWatch(watch)
-	if watch.cmd.ProcessState == nil {
-		t.Fatal("normal teardown did not wait for the parent-death watcher")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestKillOnParentExitPreservesPTYControl$", "-test.v=false")
+	cmd.Env = append(os.Environ(), "BASHY_AGENTPTY_CONTROL_HELPER=1")
+	exit, reason, err := Run(cmd, io.Discard, Options{Capture: true, KillOnParentExit: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := watch.retain.Write([]byte("still open")); err == nil {
-		t.Fatal("normal teardown left the EOF-retention pipe open")
+	if exit != 0 || reason != "" {
+		t.Fatalf("exit=%d reason=%q", exit, reason)
+	}
+}
+
+func TestKillOnParentExitPTYSignalStatus(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "kill -TERM $$")
+	exit, reason, err := Run(cmd, io.Discard, Options{Capture: true, KillOnParentExit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit != 128+int(syscall.SIGTERM) || reason != "" {
+		t.Fatalf("exit=%d reason=%q, want signal-derived exit %d", exit, reason, 128+int(syscall.SIGTERM))
 	}
 }
 

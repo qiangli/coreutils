@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/creack/pty/v2"
+	"github.com/qiangli/coreutils/pkg/procguard"
 	"golang.org/x/term"
 )
 
@@ -146,17 +147,23 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 	}
 	cmd.SysProcAttr.Setsid = true
 	cmd.SysProcAttr.Setctty = true
-	if err := cmd.Start(); err != nil {
+	var parentGuard *procguard.Guard
+	if opts.KillOnParentExit {
+		parentGuard, err = procguard.Arm(cmd)
+		if err != nil {
+			_ = tty.Close()
+			_ = ptmx.Close()
+			return 127, "", err
+		}
+	}
+	startErr := cmd.Start()
+	if parentGuard != nil {
+		parentGuard.Started(startErr)
+	}
+	if startErr != nil {
 		_ = tty.Close()
 		_ = ptmx.Close()
-		return 127, "", fmt.Errorf("pty.Start: %w", err)
-	}
-	var parentWatch *parentDeathWatch
-	if opts.KillOnParentExit {
-		parentWatch = startParentDeathWatch(cmd.Process.Pid)
-	}
-	if parentWatch != nil {
-		defer stopParentDeathWatch(parentWatch)
+		return 127, "", fmt.Errorf("pty.Start: %w", startErr)
 	}
 	_ = tty.Close()
 	if opts.OnStart != nil {
@@ -164,6 +171,9 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 			killTree("pty registration failed", 2*time.Second)
 			_ = ptmx.Close()
 			_ = cmd.Wait()
+			if parentGuard != nil {
+				parentGuard.Disarm()
+			}
 			return 127, "pty registration failed", err
 		}
 	}
@@ -471,6 +481,9 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 	}
 
 	waitErr := cmd.Wait()
+	if parentGuard != nil {
+		parentGuard.Disarm()
+	}
 	restore()
 
 	reason, _ := killReason.Load().(string)

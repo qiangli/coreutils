@@ -49,8 +49,11 @@ import (
 // safe, and what a short interactive turn wants. A long unattended run wants all
 // of them.
 type Options struct {
-	// KillOnParentExit makes this supervised tree self-clean when its caller
-	// disappears. It is used by bounded meet turns, not durable worker sessions.
+	// KillOnParentExit makes this supervised process group self-clean when its
+	// caller disappears. Deliberate setpgid/setsid escape requires an OS
+	// containment backend and is outside the portable procguard guarantee.
+	// Unsupported platforms fail closed. Used by bounded Meet turns, not durable
+	// worker sessions.
 	KillOnParentExit bool
 
 	// IdleTimeout kills the process tree when it stops WRITING for this long.
