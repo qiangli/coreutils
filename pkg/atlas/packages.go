@@ -290,6 +290,7 @@ var packages = map[string]Package{
 	"ollm":      supPkg("Ollama API client wrapper, isolating the SDK from the rest of the tree"),
 	"pax":       supPkg("safe portable archive manifest and extraction-preflight kernel; deliberately has no command front door until the POSIX pax surface is complete"),
 	"pricing":   supPkg("local token price catalog consumed by pkg/llmbudget"),
+	"procguard": supPkg("parent-death process-group containment shared by agentpty and chat"),
 	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
 	"scope":     supPkg("the git-repo-aware store resolver shared by every store"),
 	"weavecli":  supPkg("the agent-friendly CLI conventions every front-door verb tree adopts"),
