@@ -10,30 +10,39 @@ import (
 	"syscall"
 )
 
-func startParentDeathWatch(childPID int) *exec.Cmd {
+type parentDeathWatch struct {
+	cmd    *exec.Cmd
+	retain *os.File
+}
+
+func startParentDeathWatch(childPID int) *parentDeathWatch {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil
+	}
 	watch := exec.Command("sh", "-c", `
-parent=$1
-group=$2
-while kill -0 "$parent" 2>/dev/null; do
-  state=$(ps -p "$parent" -o stat= 2>/dev/null)
-  case "$state" in ""|Z*) break ;; esac
-  sleep 0.05
-done
+IFS= read -r _ <&3 || true
+group=$1
 kill -KILL -"$group" 2>/dev/null || true
-`, "bashy-parent-watch", strconv.Itoa(os.Getpid()), strconv.Itoa(childPID))
+	`, "bashy-parent-watch", strconv.Itoa(childPID))
 	watch.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	watch.ExtraFiles = []*os.File{reader}
 	watch.Stdout = io.Discard
 	watch.Stderr = io.Discard
 	if err := watch.Start(); err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
 		return nil
 	}
-	return watch
+	_ = reader.Close()
+	return &parentDeathWatch{cmd: watch, retain: writer}
 }
 
-func stopParentDeathWatch(watch *exec.Cmd) {
-	if watch == nil || watch.Process == nil {
+func stopParentDeathWatch(watch *parentDeathWatch) {
+	if watch == nil || watch.cmd == nil || watch.cmd.Process == nil {
 		return
 	}
-	_ = watch.Process.Kill()
-	_ = watch.Wait()
+	_ = watch.cmd.Process.Kill()
+	_ = watch.retain.Close()
+	_ = watch.cmd.Wait()
 }

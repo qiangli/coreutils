@@ -151,7 +151,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		_ = ptmx.Close()
 		return 127, "", fmt.Errorf("pty.Start: %w", err)
 	}
-	parentWatch := (*exec.Cmd)(nil)
+	var parentWatch *parentDeathWatch
 	if opts.KillOnParentExit {
 		parentWatch = startParentDeathWatch(cmd.Process.Pid)
 	}

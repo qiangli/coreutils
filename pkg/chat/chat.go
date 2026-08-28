@@ -470,7 +470,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	if err := cmd.Start(); err != nil {
 		return "", 127, err
 	}
-	var parentWatch *exec.Cmd
+	var parentWatch *parentDeathWatch
 	if r.killOnParentExit {
 		parentWatch = startParentDeathWatch(cmd.Process.Pid)
 	}
