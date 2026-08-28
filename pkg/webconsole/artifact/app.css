@@ -125,6 +125,11 @@ body.has-bg #view {
   display: inline-flex; align-items: center; justify-content: center;
 }
 .iconbtn:hover { background: var(--card); color: var(--primary); }
+.iconbtn svg { width: 18px; height: 18px; }
+
+/* An SVG mark sits optically smaller than a glyph at the same box size. */
+.icon-svg svg { width: 30px; height: 30px; }
+.star svg { width: 12px; height: 12px; }
 
 /* ---- sections ----
  * Periscope's section chrome: a small uppercase muted header, tight to its
@@ -185,7 +190,7 @@ section.sect:first-child { margin-top: 0; }
    want attention get a dot. */
 .badge.ready { display: none; }
 .badge.stopped { background: var(--warn); }
-.label { font-size: .8rem; font-weight: 500; letter-spacing: -.01em; text-align: center;
+.label { font-size: .82rem; font-weight: 500; letter-spacing: -.025em; text-align: center;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 .25rem; }
 .sublabel { font-size: .7rem; color: var(--muted-foreground); text-align: center; margin-top: -.2rem; }
 .star {

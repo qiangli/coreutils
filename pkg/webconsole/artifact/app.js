@@ -88,11 +88,20 @@ function saveCfg(patch) {
   try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (_) {}
   applyChrome();
 }
+const THEME_ICON = { system: "auto", light: "sun", dark: "moon" };
+
 function applyChrome() {
   const bg = cfg.background || "none";
   bgEl.setAttribute("data-bashy-bg", bg);
   // The glass card and glassy header only make sense over a real background.
   document.body.classList.toggle("has-bg", bg !== "none");
+  const tb = document.getElementById("theme-btn");
+  if (tb) {
+    tb.replaceChildren(svgIcon(SVG[THEME_ICON[cfg.theme] || "auto"]));
+    tb.title = "Theme: " + cfg.theme;
+  }
+  const sb = document.getElementById("settings-btn");
+  if (sb && !sb.firstElementChild) sb.replaceChildren(svgIcon(SVG.settings));
   const root = document.documentElement;
   if (cfg.theme === "system") root.removeAttribute("data-theme");
   else root.setAttribute("data-theme", cfg.theme);
@@ -109,24 +118,73 @@ function recordVisit(name) {
 }
 
 // ------------------------------------------------------------------- icons --
-// A pinned glyph + colour for the apps bashy knows, and a deterministic hash
-// into a fixed palette for everything else, so an app keeps its identity across
-// restarts without anyone assigning one.
-const ICON_SPEC = {
-  ycode: { color: "#1f2328", glyph: "Y" },
-  shell: { color: "#0a0e1a", glyph: "$" },
-  terminal: { color: "#0a0e1a", glyph: "$" },
-  desktop: { color: "#af52de", glyph: "D" },
-  ssh: { color: "#0f766e", glyph: "⌥" },
-  files: { color: "#3478f6", glyph: "\u{1F5C0}" },
+// Crisp SVG marks rather than Unicode glyphs.
+//
+// A character like the folder or gear codepoint renders as whatever the host
+// font happens to have — a different weight, a different optical size, sometimes
+// a colour emoji — so a grid of them never looks like one set. These are drawn
+// on a 24 grid at a single stroke weight, which is what makes the row read as a
+// family. Unknown apps still fall back to their initial: a letter is honest
+// about being a placeholder, and inventing a picture for something we know
+// nothing about would not be.
+const SVG = {
+  terminal: "M5 8l4 4-4 4M13 16h6",
+  files:    "M4 8a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
+  relay:    "M4 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5L4.5 16.5zM18.5 10.5H19a2 2 0 0 1 2 2v5l-2.8-2H13",
+  // A DAG is nodes and edges; a single stroked path could only ever suggest it.
+  dag:      { paths: ["M7.6 8.4l3.2 6", "M16.4 8.4l-3.2 6"],
+              circles: [[6, 6.5, 2.1], [18, 6.5, 2.1], [12, 17.3, 2.1]] },
+  loom:     "M6 4.5v15M18 4.5v15M6 9.5h12M6 14.5h12",
+  settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
+  moon:     "M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
+  sun:      "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
+  auto:     "M12 3a9 9 0 1 0 0 18zM12 3a9 9 0 0 1 0 18",
+  star:     "M12 4.5l2.3 4.7 5.2.8-3.8 3.6.9 5.1-4.6-2.4-4.6 2.4.9-5.1L4.5 10l5.2-.8z",
+};
+
+// A pinned colour for the apps we know, and a deterministic hash into a fixed
+// palette for everything else, so an app keeps its identity across restarts
+// without anyone assigning one.
+const COLORS = {
+  ycode: "#1f2328", shell: "#0a0e1a", terminal: "#0a0e1a", desktop: "#af52de",
+  ssh: "#0f766e", files: "#3478f6", relay: "#f59e0b", dag: "#ef4444", loom: "#8b5cf6",
 };
 const ICON_PALETTE = ["#4f46e5","#3478f6","#ec4899","#f59e0b","#10b981","#8b5cf6",
   "#5ac8fa","#ef4444","#06b6d4","#22c55e","#0ea5e9","#a855f7","#84cc16"];
 function appIcon(name) {
-  if (ICON_SPEC[name]) return ICON_SPEC[name];
+  const color = COLORS[name] || ICON_PALETTE[Math.abs(hash(name)) % ICON_PALETTE.length];
+  return { color, path: SVG[name] || null, glyph: (name[0] || "?").toUpperCase() };
+}
+function hash(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
-  return { color: ICON_PALETTE[Math.abs(h) % ICON_PALETTE.length], glyph: (name[0] || "?").toUpperCase() };
+  return h;
+}
+
+// svgIcon builds one mark. strokeWidth is deliberately uniform across the set.
+function svgIcon(spec, cls, width) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", String(width || 1.9));
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  if (cls) svg.setAttribute("class", cls);
+
+  const shape = typeof spec === "string" ? { paths: [spec] } : spec;
+  for (const d of shape.paths || []) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", d);
+    svg.append(p);
+  }
+  for (const [cx, cy, r] of shape.circles || []) {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", cx); c.setAttribute("cy", cy); c.setAttribute("r", r);
+    svg.append(c);
+  }
+  return svg;
 }
 
 // ------------------------------------------------------------------- tiles --
@@ -156,9 +214,9 @@ function tile(a, opts = {}) {
   }
 
   const icon = document.createElement("span");
-  icon.className = "icon";
+  icon.className = "icon" + (ic.path ? " icon-svg" : "");
   icon.style.background = ic.color;
-  icon.append(document.createTextNode(ic.glyph));
+  icon.append(ic.path ? svgIcon(ic.path, null, 1.8) : document.createTextNode(ic.glyph));
   const badge = document.createElement("span");
   badge.className = "badge " + a.status;
   icon.append(badge);
@@ -177,7 +235,9 @@ function tile(a, opts = {}) {
     const star = document.createElement("button");
     star.type = "button";
     star.className = "star" + (isFav(a.name) ? " on" : "");
-    star.textContent = isFav(a.name) ? "★" : "☆";
+    const mark = svgIcon(SVG.star, null, 1.7);
+    if (isFav(a.name)) mark.setAttribute("fill", "currentColor");
+    star.replaceChildren(mark);
     star.title = isFav(a.name) ? "Remove from favorites" : "Add to favorites";
     star.setAttribute("aria-label", star.title);
     star.addEventListener("click", (e) => { e.stopPropagation(); toggleFav(a.name); });
