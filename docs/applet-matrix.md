@@ -80,7 +80,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 3 | 37 |
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
-| `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 37 |
+| `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 39 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 32 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 28 |
