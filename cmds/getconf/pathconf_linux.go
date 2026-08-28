@@ -3,7 +3,6 @@
 package getconfcmd
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,7 +60,7 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		p = filepath.Join(rc.Dir, p)
 	}
 	var st unix.Statfs_t
-	if err := linuxStatfsForPath(p, &st); err != nil {
+	if err := unix.Statfs(p, &st); err != nil {
 		return "", true, err
 	}
 	switch which {
@@ -93,28 +92,6 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		}
 	}
 	return undefined, true, nil
-}
-
-// pathconf applies to a pathname, including a pathname whose final components
-// do not exist or exceed NAME_MAX. Linux has no pathconf syscall, so obtain the
-// containing filesystem from the longest resolvable directory prefix instead
-// of making statfs of the full spelling an accidental precondition.
-func linuxStatfsForPath(path string, st *unix.Statfs_t) error {
-	p := filepath.Clean(path)
-	for {
-		err := unix.Statfs(p, st)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ENAMETOOLONG) {
-			return err
-		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return err
-		}
-		p = parent
-	}
 }
 
 // Linux libc implementations derive _PC_2_SYMLINKS from statfs(2). Keep this

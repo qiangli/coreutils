@@ -39,17 +39,6 @@ func TestLinuxDerivedValuesMatchHostGetconf(t *testing.T) {
 	}
 }
 
-func TestLinuxPathQueriesUseResolvablePrefix(t *testing.T) {
-	path := filepath.Join(t.TempDir(), strings.Repeat("x", 300), "missing")
-	var st unix.Statfs_t
-	if err := linuxStatfsForPath(path, &st); err != nil {
-		t.Fatalf("long unresolved pathname: %v", err)
-	}
-	if st.Bsize <= 0 {
-		t.Fatalf("invalid filesystem block size %d", st.Bsize)
-	}
-}
-
 func TestLinuxSymlinkCapabilityUsesFilesystemType(t *testing.T) {
 	for _, fsType := range []int64{unix.MSDOS_SUPER_MAGIC, unix.CRAMFS_MAGIC, unix.DEVPTS_SUPER_MAGIC} {
 		if got := linuxSymlinkSupport(fsType); got != undefined {
