@@ -497,7 +497,7 @@ func TestContextErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "invalid context length 'x'") {
 		t.Errorf("bad -C: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runIn(t, dir, "", "a", "a", "-C")
+	_, errb, code = runIn(t, dir, "", "-C")
 	if code != 2 || !strings.Contains(errb, "option requires an argument -- 'C'") {
 		t.Errorf("-C no arg: code=%d err=%q", code, errb)
 	}
@@ -907,7 +907,7 @@ func TestErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "invalid context length 'x'") {
 		t.Errorf("bad -U: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runIn(t, dir, "", "a", "a", "-U")
+	_, errb, code = runIn(t, dir, "", "-U")
 	if code != 2 || !strings.Contains(errb, "option requires an argument -- 'U'") {
 		t.Errorf("-U no arg: code=%d err=%q", code, errb)
 	}

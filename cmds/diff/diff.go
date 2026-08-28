@@ -89,7 +89,7 @@ func run(rc *tool.RunContext, args []string) int {
 	ignoreCase := flags.BoolP("ignore-case", "i", false, "ignore case differences in file contents")
 	ignoreSpaceChange := flags.BoolP("ignore-space-change", "b", false, "ignore changes in the amount of white space")
 	ignoreAllSpace := flags.BoolP("ignore-all-space", "w", false, "ignore all white space")
-	operands, code := tool.Parse(rc, cmd, flags, rest)
+	operands, code := tool.ParseRequireOrder(rc, cmd, flags, rest)
 	if code >= 0 {
 		return code
 	}
@@ -144,8 +144,12 @@ func prescan(args []string) ([]string, options, string) {
 			break
 		}
 		if tok == "-" || !strings.HasPrefix(tok, "-") {
-			rest = append(rest, tok)
-			continue
+			// POSIX Utility Syntax Guideline 9 ends option recognition at
+			// the first operand. Preserve every later token literally so a
+			// file named -u, --brief, or even -- is not consumed here or by
+			// the framework parser.
+			rest = append(rest, args[i:]...)
+			break
 		}
 		if strings.HasPrefix(tok, "--") {
 			if tok == "--ed" {

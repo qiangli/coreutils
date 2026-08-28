@@ -54,6 +54,20 @@ func TestIssue7OperandArityAndTroubleStatuses(t *testing.T) {
 	}
 }
 
+func TestIssue7StopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "first", "same\n")
+	for _, name := range []string{
+		"-u", "-U", "-C", "-q", "--unified", "--brief", "--help", "--",
+	} {
+		writeFile(t, dir, name, "same\n")
+		out, errb, code := runIn(t, dir, "", "first", name)
+		if code != 0 || out != "" || errb != "" {
+			t.Errorf("diff first %s = (%q, %q, %d), want identical operands", name, out, errb, code)
+		}
+	}
+}
+
 type issue7DiffErrorReader struct{}
 
 func (issue7DiffErrorReader) Read([]byte) (int, error) {
