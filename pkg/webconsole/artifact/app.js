@@ -389,8 +389,11 @@ dlg.addEventListener("close", render);
 // whole round trip to answer becomes a glance.
 function renderBuild(b) {
   if (!b) return;
-  const short = (b.version || "devel") + (b.commit ? " · " + b.commit : "") + (b.dirty ? "-dirty" : "");
-  verEl.textContent = b.commit ? b.commit.slice(0, 7) + (b.dirty ? "*" : "") : (b.version || "devel");
+  const short = (b.release || b.version || "devel") + (b.commit ? " · " + b.commit : "") + (b.dirty ? " · dirty tree" : "");
+  // The badge carries the RELEASE — the thing a person quotes in a bug report.
+  // The commit is one hover away and in the footer; showing a bare hash here
+  // answered a question almost nobody asks first.
+  verEl.textContent = (b.release || b.version || "devel") + (b.dirty ? "*" : "");
   verEl.title = [short, b.time, b.go, "assets " + (b.assets || "?")].filter(Boolean).join("\n");
   const foot = document.getElementById("foot-build");
   if (foot) {

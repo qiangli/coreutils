@@ -11,7 +11,8 @@ import (
 
 // Build identifies the binary serving this page.
 type Build struct {
-	Version string `json:"version"`          // module version, or "devel"
+	Release string `json:"release"`          // the release a human quotes, e.g. v0.19.4
+	Version string `json:"version"`          // full module version, or "devel"
 	Commit  string `json:"commit,omitempty"` // short vcs revision
 	Time    string `json:"time,omitempty"`   // vcs commit time
 	Dirty   bool   `json:"dirty,omitempty"`  // built from a modified tree
@@ -56,9 +57,28 @@ func BuildOf() Build {
 		// The asset hash answers the question the commit cannot: whether the
 		// PAGE you are looking at came from this binary or from a cache.
 		b.Assets = strings.Trim(etagFor("app.js"), `"`)
+		b.Release = releaseOf(b.Version)
 		buildInfo = b
 	})
 	return buildInfo
+}
+
+// releaseOf reduces a Go pseudo-version to the release a human would quote.
+//
+// A devel build reports v0.19.4-0.20260828123024-637ad0c9cf4c+dirty, whose only
+// legible part is the leading tag. The commit is carried separately, so keeping
+// the timestamp and hash here would just be the same data twice, badly.
+func releaseOf(v string) string {
+	if v == "" || v == "devel" {
+		return "devel"
+	}
+	if i := strings.Index(v, "-0."); i > 0 {
+		return v[:i]
+	}
+	if i := strings.Index(v, "+"); i > 0 {
+		return v[:i]
+	}
+	return v
 }
 
 // Short renders the glanceable form: what a user quotes in a bug report.
