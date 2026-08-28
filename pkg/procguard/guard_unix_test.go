@@ -92,7 +92,7 @@ func TestGuardPreservesRelativePathArgsAndEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := &exec.Cmd{
-		Path: "./custom-binary",
+		Path: "custom-binary",
 		Args: []string{"odd argv zero", "-test.run=^TestGuardPreservesRelativePathArgsAndEnvironment$", "-test.v=false", "--", "argument with spaces"},
 		Dir:  dir,
 		Env:  []string{"PATH=/usr/bin:/bin", helper + "=value with spaces"},
