@@ -3,6 +3,7 @@ module github.com/qiangli/coreutils
 go 1.26.5
 
 require (
+	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/a2aproject/a2a-go/v2 v2.3.1
 	github.com/atotto/clipboard v0.1.4

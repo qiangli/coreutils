@@ -12,11 +12,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/pkg/coopauth"
+	"github.com/qiangli/coreutils/pkg/hostauth"
 	"github.com/qiangli/coreutils/pkg/meet"
 	"github.com/qiangli/coreutils/pkg/websession"
 	"github.com/qiangli/coreutils/pkg/webterm"
@@ -51,6 +53,8 @@ type Options struct {
 	RequireLogin bool
 	// Sessions validates console cookies; nil disables cookie auth.
 	Sessions *websession.Store
+	// Auth verifies an OS password. nil means hostauth.DefaultAuthenticator().
+	Auth hostauth.Authenticator
 
 	// Terminal configures the shell behind the Terminal panel.
 	Terminal webterm.Options
@@ -63,6 +67,8 @@ type server struct {
 	opts         Options
 	guard        *coopauth.Guard
 	sessions     *websession.Store
+	auth         hostauth.Authenticator
+	limiter      *websession.Limiter
 	requireLogin bool
 	panels       []Panel
 	probes       probeCache
@@ -85,8 +91,19 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 		opts:         opts,
 		guard:        consoleGuard(),
 		sessions:     opts.Sessions,
+		auth:         opts.Auth,
 		requireLogin: opts.RequireLogin,
 		panels:       opts.Panels,
+	}
+	if s.requireLogin {
+		if s.sessions == nil {
+			// Ephemeral key: sessions do not survive a restart, which is the
+			// right default for a process started by hand. runServe persists one.
+			s.sessions = websession.NewStore(12*time.Hour, nil)
+		}
+		// Burst 5, then one attempt per 12s. PAM/dscl is already slow on the
+		// success path; this bounds a LAN brute-forcer on the failure path.
+		s.limiter = websession.NewLimiter(5, 12*time.Second)
 	}
 	if s.panels == nil {
 		s.panels = Discover()
@@ -98,6 +115,9 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/apps", s.handleApps)
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	mux.HandleFunc("GET /login", s.handleLoginPage)
+	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.handleLogout)
 
 	// Deep links from docs/agent-interaction-surfaces-design.md keep working.
 	mux.Handle("GET /shell", redirectTo("/term/"))

@@ -5,11 +5,14 @@ package webconsole
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -17,6 +20,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/coopauth"
+	"github.com/qiangli/coreutils/pkg/hostauth"
+	"github.com/qiangli/coreutils/pkg/websession"
 )
 
 // NewAppsCmd is the `bashy apps` tree.
@@ -43,6 +48,35 @@ func NewAppsCmd() *cobra.Command {
 		return serve.RunE(serve, args)
 	}
 	return cmd
+}
+
+// sessionKey returns the persistent HMAC key for console sessions, creating it
+// on first use with 0600 permissions.
+func sessionKey() ([]byte, error) {
+	dir := os.Getenv("BASHY_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		dir = filepath.Join(home, ".bashy")
+	}
+	dir = filepath.Join(dir, "console")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "session.key")
+	if b, err := os.ReadFile(path); err == nil && len(b) >= 32 {
+		return b, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 func newServeCmd() *cobra.Command {
@@ -103,15 +137,30 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 	}
 	addr := net.JoinHostPort(bind, strconv.Itoa(port))
 
+	// Binding off-loopback exposes this host's shell and files, so it requires a
+	// system login. The check is at BIND time, not per request: an operator who
+	// asks for something that cannot be made safe should learn at the point of
+	// the mistake, not from a 403 an hour later.
 	if !coopauth.IsLoopbackAddr(addr) {
-		// The terminal panel hands out a shell running as this user and the files
-		// panel reads this user's files. Off-loopback that needs a system login,
-		// which is not wired yet — so refuse rather than expose it.
-		return fmt.Errorf("apps: --bind %s would expose this host's shell and "+
-			"files off-loopback, which requires a system login that is not wired yet.\n"+
-			"Bind 127.0.0.1 (the default), or reach the console through outpost, which "+
-			"authenticates for it", bind)
+		auth := hostauth.DefaultAuthenticator()
+		// Probe with empty credentials: every backend reports "I work, and no,
+		// that is not a password" without needing a real secret.
+		if err := auth.Authenticate("", ""); !errors.Is(err, hostauth.ErrInvalidCredentials) {
+			return fmt.Errorf("apps: --bind %s exposes this host's shell and files "+
+				"off-loopback, which requires a system login, and host authentication "+
+				"is not available here (%w).\nBind 127.0.0.1, or reach it through outpost",
+				bind, err)
+		}
+		opts.RequireLogin = true
+
+		// Persist the signing key so a restart does not sign everyone out.
+		key, err := sessionKey()
+		if err != nil {
+			return fmt.Errorf("apps: session key: %w", err)
+		}
+		opts.Sessions = websession.NewStore(12*time.Hour, key)
 	}
+
 	opts.Ctx = ctx
 
 	h, closer, err := Handler(opts)

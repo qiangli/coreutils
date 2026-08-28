@@ -291,3 +291,19 @@ body.standalone #bar { flex: none; }
   border: 1px solid var(--border); border-radius: 9999px; padding: .05rem .4rem;
   align-self: center; margin-left: .15rem; }
 #foot-build { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem; }
+
+/* ---- sign-in ---- */
+.login { flex: 1; display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem; }
+.login form { width: 100%; max-width: 22rem; display: flex; flex-direction: column; gap: .7rem;
+  background: var(--card); border: 1px solid var(--border); border-radius: 1rem;
+  padding: 1.5rem 1.4rem; box-shadow: 0 12px 36px rgba(20,30,60,.18); }
+.login h1 { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -.02em; }
+.login h1 b { font-weight: 500; color: var(--muted-foreground); font-size: .8rem; margin-left: .3rem; }
+.login .sub { margin: -.25rem 0 .4rem; color: var(--muted-foreground); font-size: .82rem; }
+.login label { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem;
+  color: var(--muted-foreground); font-weight: 600; }
+.login input { font: inherit; font-size: .9rem; padding: .45rem .6rem; border-radius: .5rem;
+  border: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+.login input:focus { outline: none; box-shadow: 0 0 0 2px var(--primary); }
+.login .btn { margin-top: .4rem; padding: .5rem; font-size: .9rem; }
+.login .err { margin: 0; font-size: .82rem; color: #ef4444; }

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/qiangli/coreutils/pkg/hostauth"
+	"github.com/qiangli/coreutils/pkg/websession"
 	"github.com/qiangli/coreutils/pkg/webterm"
 )
 
@@ -332,4 +335,125 @@ func TestE2ETerminalRefusesCrossOrigin(t *testing.T) {
 	if resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403, got %v", resp)
 	}
+}
+
+// ------------------------------------------------------------------- login --
+
+// stubAuth accepts one password, so the e2e can exercise the real gate, cookie
+// and rate limiter without needing this machine's actual credentials.
+type stubAuth struct{ password string }
+
+func (s stubAuth) Authenticate(user, pass string) error {
+	if pass == s.password {
+		return nil
+	}
+	return hostauth.ErrInvalidCredentials
+}
+
+func TestE2ELoginGuardsAnExposedConsole(t *testing.T) {
+	base := serve(t, Options{
+		RequireLogin: true,
+		Auth:         stubAuth{password: "correct-horse"},
+		Sessions:     websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
+	})
+
+	// Unauthenticated: the launcher and every app must be closed, and a browser
+	// should be sent to the form rather than given a bare 403.
+	jar := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	for _, p := range []string{"/", "/api/apps", "/term/", "/files/", "/relay/"} {
+		req, _ := http.NewRequest("GET", base+p, nil)
+		req.Header.Set("Accept", "text/html")
+		resp, err := jar.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", p, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s is reachable without a session (%d)", p, resp.StatusCode)
+		}
+	}
+
+	// The form itself must be reachable, or there is no way in.
+	if code, body, _ := get(t, base+"/login"); code != http.StatusOK ||
+		!strings.Contains(body, `name="password"`) {
+		t.Fatalf("/login = %d, no form", code)
+	}
+
+	// A wrong password does not mint a session.
+	c := &http.Client{Jar: newJar(t), CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := c.PostForm(base+"/api/login", map[string][]string{
+		"user": {currentOSUser()}, "password": {"wrong"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusSeeOther {
+		t.Fatal("a wrong password was accepted")
+	}
+
+	// The right one does, and the session then opens the launcher and its apps.
+	resp, err = c.PostForm(base+"/api/login", map[string][]string{
+		"user": {currentOSUser()}, "password": {"correct-horse"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login returned %d, want 303", resp.StatusCode)
+	}
+
+	for _, p := range []string{"/", "/api/apps", "/files/", "/relay/api/rooms"} {
+		req, _ := http.NewRequest("GET", base+p, nil)
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", p, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s = %d after signing in", p, resp.StatusCode)
+		}
+	}
+}
+
+// The throttle is the only thing standing between a LAN peer and unlimited
+// password guesses.
+func TestE2ELoginIsRateLimited(t *testing.T) {
+	base := serve(t, Options{
+		RequireLogin: true,
+		Auth:         stubAuth{password: "correct-horse"},
+		Sessions:     websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
+	})
+
+	limited := false
+	for i := 0; i < 12; i++ {
+		resp, err := http.PostForm(base+"/api/login", map[string][]string{
+			"user": {currentOSUser()}, "password": {"wrong"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Error("unlimited password attempts accepted")
+	}
+}
+
+func newJar(t *testing.T) http.CookieJar {
+	t.Helper()
+	j, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j
 }
