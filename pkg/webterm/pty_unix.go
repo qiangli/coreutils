@@ -33,6 +33,13 @@ func start(opts Options, cols, rows uint16) (*session, error) {
 		// So the shell — and any agent running inside it — can tell it is being
 		// driven from the browser console rather than a real tty.
 		"BASHY_CONSOLE=1",
+		// The telemetry banner is deliberate ("a feature that is silently on is as
+		// hard to debug as one that is silently off") — but its audience is
+		// someone wondering why a collector is empty, not someone who just opened
+		// a terminal. Greeting every new shell with a diagnostic line trains the
+		// reader to ignore the top of the screen, which is where real startup
+		// errors appear. Telemetry still runs; it just stops announcing itself.
+		"BASHY_TELEMETRY_QUIET=1",
 	)
 	cmd.Env = append(cmd.Env, opts.Env...)
 

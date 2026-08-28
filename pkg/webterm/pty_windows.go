@@ -45,6 +45,13 @@ func start(opts Options, cols, rows uint16) (*session, error) {
 	c.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"BASHY_CONSOLE=1",
+		// The telemetry banner is deliberate ("a feature that is silently on is as
+		// hard to debug as one that is silently off") — but its audience is
+		// someone wondering why a collector is empty, not someone who just opened
+		// a terminal. Greeting every new shell with a diagnostic line trains the
+		// reader to ignore the top of the screen, which is where real startup
+		// errors appear. Telemetry still runs; it just stops announcing itself.
+		"BASHY_TELEMETRY_QUIET=1",
 	)
 	c.Env = append(c.Env, opts.Env...)
 
