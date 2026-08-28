@@ -63,8 +63,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 5 | 35 |
 | `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 2 | 14 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
-| `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 15 |
-| `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 18 |
+| `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 17 |
+| `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 8 | 65 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 4 | 27 |
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 23 |

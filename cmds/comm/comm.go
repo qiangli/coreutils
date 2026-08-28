@@ -62,10 +62,28 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 	// framework parser.
 	var suppress [4]bool
 	rest := make([]string, 0, len(args))
+	valuePending := false
 	for idx, a := range args {
+		if valuePending {
+			rest = append(rest, a)
+			valuePending = false
+			continue
+		}
 		if a == "--" {
 			rest = append(rest, args[idx:]...)
 			break
+		}
+		if a == "-" || !strings.HasPrefix(a, "-") {
+			rest = append(rest, args[idx:]...)
+			break
+		}
+		if strings.HasPrefix(a, "--") {
+			rest = append(rest, a)
+			name, _, hasValue := strings.Cut(a[2:], "=")
+			if !hasValue && strings.HasPrefix("output-delimiter", name) {
+				valuePending = true
+			}
+			continue
 		}
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
 			hasDigits := false
@@ -101,7 +119,7 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 	total := fs.Bool("total", false, "output a summary")
 	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
 
-	operands, code := tool.Parse(rc, cmd, fs, rest)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
 	}

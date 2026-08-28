@@ -107,6 +107,38 @@ func TestCommOperandCountAndOpenFailure(t *testing.T) {
 	}
 }
 
+func TestCommStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"first", "-1", "--check-order", "--output-delimiter", "--o", "--"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("same\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"-1", "--check-order", "--output-delimiter", "--o", "--"} {
+		out, errb, code := runRaw(t, dir, "", "first", name)
+		if code != 0 || out != "\t\tsame\n" || errb != "" {
+			t.Errorf("comm first %s = (%q, %q, %d)", name, out, errb, code)
+		}
+	}
+}
+
+func TestCommExplicitBoundaryAndOptionLikeDelimiterValue(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"-1", "second"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("same\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, errb, code := runRaw(t, dir, "", "--", "-1", "second")
+	if code != 0 || out != "\t\tsame\n" || errb != "" {
+		t.Fatalf("comm -- -1 second = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runRaw(t, dir, "", "--output-d", "-1", "--", "-1", "second")
+	if code != 0 || out != "-1-1same\n" || errb != "" {
+		t.Fatalf("option-looking delimiter value = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestCommStdin(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("b\n"), 0o644); err != nil {

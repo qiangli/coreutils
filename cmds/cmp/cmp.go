@@ -27,17 +27,23 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	printBytes := fs.BoolP("print-bytes", "b", false, "print differing bytes")
 	verbose := fs.BoolP("verbose", "l", false, "output byte numbers and differing byte values")
 	silent := fs.BoolP("silent", "s", false, "suppress all normal output")
 	quiet := fs.Bool("quiet", false, "same as -s/--silent")
 	ignoreInitial := fs.StringP("ignore-initial", "i", "", "skip the first SKIP1 bytes of FILE1 and SKIP2 bytes of FILE2")
 	bytesLimit := fs.StringP("bytes", "n", "", "compare at most LIMIT bytes")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
-	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 
 	listAll := *verbose
 	sil := *silent || *quiet

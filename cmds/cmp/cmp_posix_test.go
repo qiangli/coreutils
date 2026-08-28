@@ -87,6 +87,28 @@ func TestCmpPOSIXOperandGrammarAndOutputErrors(t *testing.T) {
 	}
 }
 
+func TestCmpPOSIXStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "first", "same\n")
+	for _, name := range []string{"-l", "--verbose", "--verb", "--"} {
+		writeFile(t, dir, name, "same\n")
+		out, errb, code := runToolEnv(t, dir, "", []string{"POSIXLY_CORRECT="}, "first", name)
+		if code != 0 || out != "" || errb != "" {
+			t.Errorf("cmp first %s = (%q, %q, %d)", name, out, errb, code)
+		}
+	}
+}
+
+func TestCmpGNUOptionsRemainInterspersed(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "first", "a")
+	writeFile(t, dir, "second", "b")
+	out, errb, code := runToolEnv(t, dir, "", nil, "first", "-s", "second")
+	if code != 1 || out != "" || errb != "" {
+		t.Fatalf("GNU interspersed -s = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 // Issue 7 STDOUT fixes -l output as exactly "%d %o %o": no offset-column
 // alignment and no octal padding. The GNU-diffutils aligned columns remain
 // the default outside POSIX mode.
