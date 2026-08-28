@@ -661,9 +661,12 @@ func init() {
 	// orchestration
 	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON},
-		Web: &WebSurface{Label: "DAG", Mount: "dag", Mode: WebProxy, Port: 7717,
-			Start: []string{"dag", "--serve"}}})
+	// `dag --serve` HAS a browser view, but proxying it through the launcher does
+	// not work properly yet, so it declares no WebSurface and gets no tile. The
+	// declaration is what the launcher discovers, so removing it is the whole
+	// change — re-add it when the surface is actually usable. A tile that opens
+	// something broken is worse than no tile: it costs a click to learn nothing.
+	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	// Chat began as a one-shot launcher and was temporarily renamed `invoke`.
 	// It now owns real governed interactive sessions and their control surface,
@@ -808,10 +811,8 @@ func init() {
 	addVerb("git", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
 	addVerb("git-scm", staged(StageCross, provisioner(GroupForge, CapNeedsNetwork)))
 	addVerb("gh", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
-	loomEntry := staged(StageCross, managed(GroupForge, TierWorkspace, CapDaemon))
-	loomEntry.Web = &WebSurface{Label: "Loom", Mount: "loom", Mode: WebProxy, Port: 31880,
-		Start: []string{"loom", "start"}}
-	addVerb("loom", loomEntry)
+	// Same as dag: loom serves a UI, but the proxied tile is not right yet.
+	addVerb("loom", staged(StageCross, managed(GroupForge, TierWorkspace, CapDaemon)))
 
 	// net
 	addVerb("web", Entry{Stage: StageCross, Group: GroupNet, Caps: []string{CapJSON}})
