@@ -45,8 +45,22 @@ func run(rc *tool.RunContext, args []string) int {
 	targetDir := fs.StringP("target-directory", "t", "", "specify the DIRECTORY in which to create the links")
 	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat LINK_NAME as a normal file always")
 	verbose := fs.BoolP("verbose", "v", false, "print name of each linked file")
-	replaceMode := replacementMode(args)
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	orderArgs := args
+	if posix {
+		orderArgs = posixOptionArgs(args)
+	}
+	replaceMode := replacementMode(orderArgs)
+	var operands []string
+	var code int
+	// POSIX option recognition ends at the first operand, so a later "-f" or
+	// "--" is a link name. GNU permits interspersed options; retain that
+	// extension unless POSIXLY_CORRECT is present.
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, tool.AliasHelpVersion(args))
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	}
 	if code >= 0 {
 		return code
 	}
@@ -78,7 +92,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if *logical && *physical {
-		if lastDereferenceMode(args) == "logical" {
+		if lastDereferenceMode(orderArgs) == "logical" {
 			*physical = false
 		} else {
 			*logical = false
@@ -375,6 +389,67 @@ func lastDereferenceMode(args []string) string {
 		}
 	}
 	return mode
+}
+
+// posixOptionArgs returns only the arguments ParseRequireOrder recognizes as
+// options. Required option values are skipped: they are neither options nor
+// the first operand boundary.
+func posixOptionArgs(args []string) []string {
+	options := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return append(options, arg)
+		}
+		if arg == "-" || !strings.HasPrefix(arg, "-") {
+			return options
+		}
+		options = append(options, arg)
+		if optionConsumesNext(arg) && i+1 < len(args) {
+			i++
+		}
+	}
+	return options
+}
+
+func optionConsumesNext(arg string) bool {
+	if strings.HasPrefix(arg, "--") {
+		if strings.Contains(arg, "=") {
+			return false
+		}
+		name := strings.TrimPrefix(arg, "--")
+		matches := 0
+		matched := ""
+		for _, candidate := range []string{
+			"symbolic", "force", "logical", "physical", "backup", "suffix",
+			"interactive", "no-dereference", "relative", "target-directory",
+			"no-target-directory", "verbose", "help", "version",
+		} {
+			if strings.HasPrefix(candidate, name) {
+				matches++
+				matched = candidate
+			}
+		}
+		return matches == 1 && (matched == "suffix" || matched == "target-directory")
+	}
+	for i := 1; i < len(arg); i++ {
+		if arg[i] == 'S' || arg[i] == 't' {
+			return i == len(arg)-1
+		}
+	}
+	return false
+}
+
+// envPresent reports whether key is assigned in the invocation environment,
+// even to an empty value; GNU's POSIXLY_CORRECT convention is presence-based.
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isDestDir(rc *tool.RunContext, operand string, noDeref bool) bool {

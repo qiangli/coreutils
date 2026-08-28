@@ -14,19 +14,88 @@ import (
 // runTool is the canonical test harness shape for cmds packages.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	return runToolIn(t, dir, "", args...)
+	return runToolInEnv(t, dir, "", nil, args...)
 }
 
 func runToolIn(t *testing.T, dir, input string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	return runToolInEnv(t, dir, input, nil, args...)
+}
+
+func runToolInEnv(t *testing.T, dir, input string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+func TestLnPOSIXStopsOptionParsingAtFirstOperand(t *testing.T) {
+	requireSymlinks(t)
+	for _, value := range []string{"", "1"} {
+		t.Run("POSIXLY_CORRECT="+value, func(t *testing.T) {
+			for _, linkName := range []string{"-f", "--"} {
+				t.Run(linkName, func(t *testing.T) {
+					dir := t.TempDir()
+					_, errOut, code := runToolInEnv(t, dir, "", []string{"POSIXLY_CORRECT=" + value}, "-s", "target", linkName)
+					if code != 0 || errOut != "" {
+						t.Fatalf("ln -s target %s = stderr %q code %d", linkName, errOut, code)
+					}
+					if target, err := os.Readlink(filepath.Join(dir, linkName)); err != nil || target != "target" {
+						t.Fatalf("post-operand %s link target = %q err=%v", linkName, target, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestLnPOSIXPostOperandForceNameDoesNotReplaceExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "-f"), "original")
+	_, errOut, code := runToolInEnv(t, dir, "", []string{"POSIXLY_CORRECT=1"}, "-s", "target", "-f")
+	if code == 0 || errOut == "" {
+		t.Fatalf("ln -s target -f with existing destination = stderr %q code %d", errOut, code)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "-f")); err != nil || string(got) != "original" {
+		t.Fatalf("literal -f destination was replaced: content=%q err=%v", got, err)
+	}
+}
+
+func TestLnPOSIXPostOperandPhysicalNameDoesNotChangeOptionOrder(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real"), "content")
+	if err := os.Symlink("real", filepath.Join(dir, "source")); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runToolInEnv(t, dir, "", []string{"POSIXLY_CORRECT=1"}, "-PL", "source", "-P")
+	if code != 0 || errOut != "" {
+		t.Fatalf("ln -PL source -P = stderr %q code %d", errOut, code)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "-P")); err == nil {
+		t.Fatalf("post-operand -P changed -PL ordering and linked the symlink (%q)", target)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "-P")); err != nil || string(got) != "content" {
+		t.Fatalf("logical hard link content=%q err=%v", got, err)
+	}
+}
+
+func TestLnGNUParsingRemainsInterspersed(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	_, errOut, code := runTool(t, dir, "target", "-s", "link")
+	if code != 0 || errOut != "" {
+		t.Fatalf("GNU interspersed -s = stderr %q code %d", errOut, code)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "link")); err != nil || target != "target" {
+		t.Fatalf("interspersed symbolic link target = %q err=%v", target, err)
+	}
 }
 
 // requireSymlinks skips on platforms where the test user cannot create
