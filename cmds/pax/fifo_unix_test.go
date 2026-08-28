@@ -41,7 +41,7 @@ func TestCPIORoundTripPreservesFIFO(t *testing.T) {
 	}
 }
 
-func TestFIFOExtractionStillRejectsEscapingPathBeforeMutation(t *testing.T) {
+func TestFIFOExtractionSkipsEscapingPath(t *testing.T) {
 	var archive bytes.Buffer
 	tw := tar.NewWriter(&archive)
 	if err := tw.WriteHeader(&tar.Header{Name: "../escape-pipe", Typeflag: tar.TypeFifo, Mode: 0o600}); err != nil {
@@ -52,7 +52,7 @@ func TestFIFOExtractionStillRejectsEscapingPathBeforeMutation(t *testing.T) {
 	}
 	destination := t.TempDir()
 	_, errOut, code := exec(t, destination, archive.String(), "-r")
-	if code == 0 || !strings.Contains(errOut, "nothing was extracted") {
+	if code == 0 || !strings.Contains(errOut, "escapes or names root") {
 		t.Fatalf("escaping FIFO: code=%d stderr=%q", code, errOut)
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "..", "escape-pipe")); !os.IsNotExist(err) {
@@ -96,7 +96,7 @@ func TestFIFOExtractionStillRejectsEscapingPathBeforeMutation(t *testing.T) {
 			}
 			destination := t.TempDir()
 			_, errOut, code := exec(t, destination, archive.String(), "-r")
-			if code == 0 || !strings.Contains(errOut, "duplicate destination") || !strings.Contains(errOut, "nothing was extracted") {
+			if code == 0 || !strings.Contains(errOut, "duplicate destination") {
 				t.Fatalf("mixed-kind duplicate: code=%d stderr=%q", code, errOut)
 			}
 			if _, err := os.Lstat(filepath.Join(destination, "same")); !os.IsNotExist(err) {
@@ -154,8 +154,8 @@ func TestFIFOExtractionStillRejectsEscapingPathBeforeMutation(t *testing.T) {
 		if code == 0 {
 			t.Fatal("unsupported nested FIFO unexpectedly succeeded")
 		}
-		if _, err := os.Lstat(filepath.Join(cleanDestination, "before")); !os.IsNotExist(err) {
-			t.Fatalf("unsupported FIFO archive extracted an earlier member: %v", err)
+		if got, err := os.ReadFile(filepath.Join(cleanDestination, "before")); err != nil || string(got) != "x" {
+			t.Fatalf("unsupported FIFO archive did not extract safe member: %q %v", got, err)
 		}
 		if _, err := os.Lstat(filepath.Join(cleanDestination, "new-parent")); !os.IsNotExist(err) {
 			t.Fatalf("unsupported FIFO created a parent directory: %v", err)

@@ -156,10 +156,7 @@ func TestSubstitutionToOverLongPathnameIsBypassed(t *testing.T) {
 	}
 }
 
-// The planner refuses the whole archive rather than extracting the safe prefix.
-// A member-by-member loop would already have written files before reaching the
-// escaping member, which is the bug this design exists to prevent.
-func TestEscapingMemberRejectsArchiveWithoutWritingAnything(t *testing.T) {
+func TestEscapingMemberIsDiagnosedAndSkipped(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, m := range []struct{ name, body string }{
@@ -179,11 +176,11 @@ func TestEscapingMemberRejectsArchiveWithoutWritingAnything(t *testing.T) {
 	if code == 0 {
 		t.Fatal("an escaping member must fail the run")
 	}
-	if !strings.Contains(errs, "refusing") && !strings.Contains(errs, "rejected") {
+	if !strings.Contains(errs, "refusing") {
 		t.Errorf("expected a refusal on stderr, got %q", errs)
 	}
-	if _, err := os.Lstat(filepath.Join(dest, "safe.txt")); err == nil {
-		t.Error("nothing may be written when the archive is rejected")
+	if got, err := os.ReadFile(filepath.Join(dest, "safe.txt")); err != nil || string(got) != "ok" {
+		t.Fatalf("safe member = (%q, %v), want extracted", got, err)
 	}
 	if _, err := os.Lstat(filepath.Join(filepath.Dir(dest), "escape.txt")); err == nil {
 		t.Error("a member escaped the extraction root")

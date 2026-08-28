@@ -227,8 +227,6 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		return 1
 	}
 
-	fatal := false
-	unsupportedFIFO := ""
 	// allow is keyed by ARCHIVE POSITION, not by name: an updated archive can
 	// carry the same name more than once, and only the occurrence the planner
 	// kept may be written. Keying by name would resurrect the stale copies.
@@ -238,30 +236,15 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			if o.noOverwrite {
 				continue // -k: silently keep what is already there
 			}
-			if rej.Kind == pax.KindFIFO && !fifoSupportedForExtraction() {
-				unsupportedFIFO = rej.Path
-			}
 			allow[rej.Index] = filepath.Join(root, filepath.FromSlash(rej.Path))
 			continue
 		}
 		fmt.Fprintf(rc.Err, "pax: refusing %s: %s\n", rej.Path, rej.Reason)
-		fatal = true
-	}
-	if fatal {
-		fmt.Fprintln(rc.Err, "pax: archive rejected; nothing was extracted")
-		return 1
+		status = 1
 	}
 
 	for _, m := range plan.Members {
-		if m.Kind == pax.KindFIFO && !fifoSupportedForExtraction() {
-			unsupportedFIFO = m.Path
-		}
 		allow[m.Index] = m.Target
-	}
-	if unsupportedFIFO != "" {
-		fmt.Fprintf(rc.Err, "pax: refusing %s: FIFO extraction is not supported on this platform\n", unsupportedFIFO)
-		fmt.Fprintln(rc.Err, "pax: archive rejected; nothing was extracted")
-		return 1
 	}
 
 	tr2 := newOptionTarReader(data, paxOptions{}, false)

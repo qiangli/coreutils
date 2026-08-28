@@ -352,7 +352,7 @@ func TestWriteUpdateCanMoveHardlinkDataCarrier(t *testing.T) {
 	}
 }
 
-func TestRegularHardlinkCompatibilityKeepsOtherTypeChangesAndUnsafeTargetsAtomic(t *testing.T) {
+func TestRegularHardlinkCompatibilitySkipsOtherTypeChangesAndUnsafeTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		headers []*tar.Header
@@ -395,11 +395,14 @@ func TestRegularHardlinkCompatibilityKeepsOtherTypeChangesAndUnsafeTargetsAtomic
 			}
 			dest := t.TempDir()
 			_, errs, code := exec(t, dest, string(archive.Bytes()), "-r")
-			if code == 0 || !strings.Contains(errs, tc.want) || !strings.Contains(errs, "nothing was extracted") {
-				t.Fatalf("extract: code=%d stderr=%q, want atomic %q rejection", code, errs, tc.want)
+			if code == 0 || !strings.Contains(errs, tc.want) {
+				t.Fatalf("extract: code=%d stderr=%q, want %q rejection", code, errs, tc.want)
 			}
-			if _, err := os.Lstat(filepath.Join(dest, "innocent")); !errors.Is(err, fs.ErrNotExist) {
-				t.Fatalf("rejected archive mutated destination: %v", err)
+			if got, err := os.ReadFile(filepath.Join(dest, "innocent")); err != nil || string(got) != "xx" {
+				t.Fatalf("safe member = (%q, %v), want extracted", got, err)
+			}
+			if _, err := os.Lstat(filepath.Join(dest, "changed")); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("rejected target mutated destination: %v", err)
 			}
 		})
 	}
@@ -1017,9 +1020,9 @@ func TestMalformedCPIOHeadersAreRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // A cpio archive reaches extraction through the same planner as tar, so a
-// symlink or hardlink that leaves the destination root must take the WHOLE
-// archive down without writing the innocent members that preceded it.
-func TestCPIOEscapeAttemptsAreRefusedAtomically(t *testing.T) {
+// symlink or hardlink that leaves the destination root is diagnosed and skipped
+// without preventing unrelated safe members from being extracted.
+func TestCPIOEscapeAttemptsAreDiagnosedAndSkipped(t *testing.T) {
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret")
 	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
@@ -1084,11 +1087,8 @@ func TestCPIOEscapeAttemptsAreRefusedAtomically(t *testing.T) {
 					if code == 0 || !strings.Contains(errs, tc.want) {
 						t.Fatalf("extract: code=%d stderr=%q, want %q", code, errs, tc.want)
 					}
-					if !strings.Contains(errs, "nothing was extracted") {
-						t.Fatalf("stderr=%q, want the archive-rejected diagnostic", errs)
-					}
-					if _, err := os.Lstat(filepath.Join(dest, "innocent")); err == nil {
-						t.Fatal("a rejected archive still wrote a member")
+					if got, err := os.ReadFile(filepath.Join(dest, "innocent")); err != nil || string(got) != "ok" {
+						t.Fatalf("safe cpio member = (%q, %v), want extracted", got, err)
 					}
 				})
 			}
