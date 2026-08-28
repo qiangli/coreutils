@@ -3,10 +3,15 @@
 package getconfcmd
 
 import (
+	"bytes"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,6 +36,79 @@ func TestLinuxDerivedValuesMatchHostGetconf(t *testing.T) {
 		got, stderr, code := runCmd(t, name)
 		if code != 0 || stderr != "" || got != want {
 			t.Errorf("%s = (%q, %q, %d), host getconf %q", name, got, stderr, code, want)
+		}
+	}
+}
+
+func TestLinuxPathQueriesUseResolvablePrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), strings.Repeat("x", 300), "missing")
+	var st unix.Statfs_t
+	if err := linuxStatfsForPath(path, &st); err != nil {
+		t.Fatalf("long unresolved pathname: %v", err)
+	}
+	if st.Bsize <= 0 {
+		t.Fatalf("invalid filesystem block size %d", st.Bsize)
+	}
+}
+
+func TestLinuxSymlinkCapabilityIsMeasured(t *testing.T) {
+	dir := t.TempDir()
+	if got := linuxSymlinkSupport(dir, os.Symlink); got != "1" {
+		t.Fatalf("symlink-capable directory = %q, want 1", got)
+	}
+	denied := errors.New("creation refused")
+	if got := linuxSymlinkSupport(dir, func(string, string) error { return denied }); got != undefined {
+		t.Fatalf("symlink-refusing directory = %q, want undefined", got)
+	}
+}
+
+func TestLinuxLP64ConfstrEnvironment(t *testing.T) {
+	if !linuxLP64Build() {
+		t.Skip("not an LP64 target")
+	}
+	for _, name := range []string{
+		"POSIX_V7_LP64_OFF64_CFLAGS", "POSIX_V7_LP64_OFF64_LDFLAGS", "POSIX_V7_LP64_OFF64_LIBS",
+	} {
+		if got, ok := platformConfstrValue(name); !ok || got != "" {
+			t.Errorf("%s = (%q, %v), want (empty, true)", name, got, ok)
+		}
+	}
+	got, ok := platformConfstrValue("POSIX_V7_WIDTH_RESTRICTED_ENVS")
+	if !ok || got != "POSIX_V7_LP64_OFF64" || !platformSpecification(got) {
+		t.Fatalf("width-restricted environments = (%q, %v), want a usable LP64 specification", got, ok)
+	}
+	if got, ok := platformConfstrValue("V7_ENV"); !ok || got != "" {
+		t.Fatalf("V7_ENV = (%q, %v), want a defined empty environment prefix", got, ok)
+	}
+}
+
+func TestLinuxV7EnvironmentCanPrefixEnv(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	if code := run(rc, []string{"V7_ENV"}); code != 0 || out.String() != "\n" || errb.String() != "" {
+		t.Fatalf("getconf V7_ENV = (%q, %q, %d), want a defined empty line", out.String(), errb.String(), code)
+	}
+	args := append([]string{"-i"}, strings.Fields(out.String())...)
+	args = append(args, "PATH=/bin:/usr/bin", "VAR1=visible", "sh", "-c", `test "$VAR1" = visible`)
+	if output, err := exec.Command("env", args...).CombinedOutput(); err != nil {
+		t.Fatalf("env -i $(getconf V7_ENV) PATH=... VAR1=...: %v: %s", err, output)
+	}
+}
+
+func TestLinuxPOSIXStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"-v", "--"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Dir: dir, Env: []string{"POSIXLY_CORRECT="},
+			Stdio: tool.Stdio{Out: &out, Err: &errb},
+		}
+		code := run(rc, []string{"PATH_MAX", name})
+		if code != 0 || strings.TrimSpace(out.String()) != "4096" || errb.String() != "" {
+			t.Errorf("getconf PATH_MAX %s = (%q, %q, %d)", name, out.String(), errb.String(), code)
 		}
 	}
 }

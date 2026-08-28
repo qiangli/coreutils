@@ -229,6 +229,52 @@ func TestFoldObsoleteWidthSyntax(t *testing.T) {
 	}
 }
 
+func TestFoldPOSIXStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"first":     "abc\n",
+		"-w":        "def\n",
+		"--width=1": "ghi\n",
+		"-3":        "jkl\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, name := range []string{"-w", "--width=1", "-3"} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: dir,
+			Env:   []string{"LC_ALL=C", "POSIXLY_CORRECT="},
+			Stdio: tool.Stdio{Out: &out, Err: &errb},
+		}
+		code := run(rc, []string{"first", name})
+		want := "abc\n" + map[string]string{
+			"-w": "def\n", "--width=1": "ghi\n", "-3": "jkl\n",
+		}[name]
+		if code != 0 || out.String() != want || errb.String() != "" {
+			t.Errorf("fold first %s = (%q, %q, %d), want (%q, empty, 0)", name, out.String(), errb.String(), code, want)
+		}
+	}
+}
+
+func TestFoldGNUOptionsRemainInterspersed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "input"), []byte("abcdef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: []string{"LC_ALL=C"},
+		Stdio: tool.Stdio{Out: &out, Err: &errb},
+	}
+	code := run(rc, []string{"input", "-3"})
+	if code != 0 || out.String() != "abc\ndef\n" || errb.String() != "" {
+		t.Fatalf("GNU interspersed obsolete width = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+}
+
 func TestFoldRejectsBadWidth(t *testing.T) {
 	_, stderr, code := runFold(t, "", "-w", "0")
 	if code != 2 || !strings.Contains(stderr, "invalid number of columns") {

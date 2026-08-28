@@ -3,6 +3,7 @@
 package getconfcmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,7 +61,7 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		p = filepath.Join(rc.Dir, p)
 	}
 	var st unix.Statfs_t
-	if err := unix.Statfs(p, &st); err != nil {
+	if err := linuxStatfsForPath(p, &st); err != nil {
 		return "", true, err
 	}
 	switch which {
@@ -72,8 +73,10 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		return "255", true, nil
 	case pcPathMax, pcPipeBuf:
 		return "4096", true, nil
-	case pcChownRestricted, pcNoTrunc, pc2Symlinks:
+	case pcChownRestricted, pcNoTrunc:
 		return "1", true, nil
+	case pc2Symlinks:
+		return linuxSymlinkSupport(p, os.Symlink), true, nil
 	case pcVdisable:
 		return "0", true, nil
 	case pcAllocSizeMin, pcRecMinXferSize, pcRecXferAlign:
@@ -90,6 +93,45 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		}
 	}
 	return undefined, true, nil
+}
+
+// pathconf applies to a pathname, including a pathname whose final components
+// do not exist or exceed NAME_MAX. Linux has no pathconf syscall, so obtain the
+// containing filesystem from the longest resolvable directory prefix instead
+// of making statfs of the full spelling an accidental precondition.
+func linuxStatfsForPath(path string, st *unix.Statfs_t) error {
+	p := filepath.Clean(path)
+	for {
+		err := unix.Statfs(p, st)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ENAMETOOLONG) {
+			return err
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return err
+		}
+		p = parent
+	}
+}
+
+func linuxSymlinkSupport(path string, symlink func(string, string) error) string {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return undefined
+	}
+	for i := 0; i < 10; i++ {
+		probe := filepath.Join(path, ".getconf-symlink-probe-"+strconv.Itoa(os.Getpid())+"-"+strconv.Itoa(i))
+		if err := symlink(".", probe); err == nil {
+			_ = os.Remove(probe)
+			return "1"
+		} else if !errors.Is(err, os.ErrExist) {
+			return undefined
+		}
+	}
+	return undefined
 }
 
 // linuxFileSizeBits contains only filesystems for which the Linux ABI answer

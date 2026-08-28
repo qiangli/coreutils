@@ -23,6 +23,7 @@ package getconfcmd
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -46,7 +47,13 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "print all known configuration variables")
 	spec := fs.StringP("specification", "v", "", "select a programming environment")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -114,4 +121,14 @@ func run(rc *tool.RunContext, args []string) int {
 	default:
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[2])
 	}
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }

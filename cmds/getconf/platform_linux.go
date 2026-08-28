@@ -95,6 +95,26 @@ func platformConfstrValue(name string) (string, bool) {
 	if name == "PATH" {
 		return standardUtilsPath, true
 	}
+	if linuxLP64Build() {
+		switch name {
+		case "POSIX_V6_LP64_OFF64_CFLAGS", "POSIX_V6_LP64_OFF64_LDFLAGS", "POSIX_V6_LP64_OFF64_LIBS",
+			"POSIX_V7_LP64_OFF64_CFLAGS", "POSIX_V7_LP64_OFF64_LDFLAGS", "POSIX_V7_LP64_OFF64_LIBS",
+			"POSIX_V7_THREADS_CFLAGS", "POSIX_V7_THREADS_LDFLAGS":
+			// No special compiler or linker options are required for the
+			// native LP64 environment. confstr represents that as an empty
+			// string, which is distinct from an undefined environment.
+			return "", true
+		case "POSIX_V6_WIDTH_RESTRICTED_ENVS":
+			return "POSIX_V6_LP64_OFF64", true
+		case "POSIX_V7_WIDTH_RESTRICTED_ENVS":
+			return "POSIX_V7_LP64_OFF64", true
+		case "V6_ENV", "V7_ENV":
+			// This product requires no extra environment assignments to
+			// select its conforming environment. An empty confstr value is
+			// defined and can safely be expanded before an env invocation.
+			return "", true
+		}
+	}
 	return undefined, isConfstrName(name)
 }
 

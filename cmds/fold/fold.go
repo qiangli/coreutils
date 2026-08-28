@@ -74,11 +74,19 @@ func normalizeCodeset(name string) string {
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
 	widthValue := fs.StringP("width", "w", "80", "use WIDTH columns instead of 80")
 	bytesMode := fs.BoolP("bytes", "b", false, "count bytes rather than columns")
 	characters := fs.BoolP("characters", "c", false, "count characters rather than columns")
 	spaces := fs.BoolP("spaces", "s", false, "break at spaces")
-	operands, code := tool.Parse(rc, cmd, fs, rewriteObsoleteWidth(args))
+	args = rewriteObsoleteWidth(args, posix)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -128,10 +136,17 @@ func run(rc *tool.RunContext, args []string) int {
 // rewriteObsoleteWidth implements the obsolete option syntax
 // (fold -72 == fold -w 72), which GNU fold accepts anywhere on the
 // command line; the last width given wins.
-func rewriteObsoleteWidth(args []string) []string {
+func rewriteObsoleteWidth(args []string, requireOrder bool) []string {
 	out := make([]string, 0, len(args))
 	for i, a := range args {
 		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if requireOrder && (a == "-" || !strings.HasPrefix(a, "-")) {
+			// POSIX Utility Syntax Guideline 9 ends option recognition at the
+			// first operand. In particular, a later filename such as -3 must
+			// not be rewritten into fold's obsolete width syntax.
 			out = append(out, args[i:]...)
 			break
 		}
@@ -142,6 +157,16 @@ func rewriteObsoleteWidth(args []string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func allDigits(s string) bool {
