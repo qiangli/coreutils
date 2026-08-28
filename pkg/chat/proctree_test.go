@@ -150,6 +150,36 @@ func TestCancelKillsDescendants(t *testing.T) {
 	}
 }
 
+// TestParentExitKillsDescendants proves the failure mode a context cannot
+// cover: SIGKILL of the meet process before it gets to cancel its turn.
+func TestParentExitKillsDescendants(t *testing.T) {
+	if os.Getenv("BASHY_PARENT_EXIT_HELPER") == "1" {
+		dir := os.Getenv("BASHY_PARENT_EXIT_DIR")
+		pidFile := filepath.Join(dir, "grandchild.pid")
+		_, _, _ = (execRunner{killOnParentExit: true}).Run(context.Background(), "sh", []string{"-c", hungTreeScript(pidFile)}, dir)
+		return
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on this host")
+	}
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=TestParentExitKillsDescendants", "-test.v=false")
+	cmd.Env = append(os.Environ(), "BASHY_PARENT_EXIT_HELPER=1", "BASHY_PARENT_EXIT_DIR="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	grandchild := readPID(t, filepath.Join(dir, "grandchild.pid"), 5*time.Second)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("helper should be killed")
+	}
+	if !waitGone(t, grandchild, 5*time.Second) {
+		t.Errorf("grandchild %d survived its meet parent dying", grandchild)
+	}
+}
+
 // The teardown must not change what a NORMAL turn returns. Putting the child in
 // its own process group is invisible to a command that simply runs and exits.
 func TestProcessGroupDoesNotChangeNormalRuns(t *testing.T) {

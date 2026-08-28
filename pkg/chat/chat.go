@@ -59,6 +59,13 @@ type Options struct {
 	// its job, which means it can be denied all of it.
 	ReadOnly bool
 
+	// KillOnParentExit makes an unattended one-shot's process group self-clean
+	// when the caller disappears. Meet turns opt into this mode because a
+	// participant is a bounded conversation, not a durable worker. It is
+	// deliberately opt-in: actions and login-backed sessions must survive the
+	// launcher/terminal going away.
+	KillOnParentExit bool
+
 	// Steer resolves the tool's INTERACTIVE launch (its `steer_exec:` template)
 	// instead of its headless one-shot, so the process stays alive and can be
 	// talked to mid-turn. Set by Start; a one-shot Invoke has nothing to steer.
@@ -266,9 +273,10 @@ type Runner interface {
 }
 
 type execRunner struct {
-	stream  io.Writer
-	pty     bool
-	ctlSock string
+	stream           io.Writer
+	pty              bool
+	ctlSock          string
+	killOnParentExit bool
 }
 
 // runPTY runs the agent attached to a pseudo-terminal.
@@ -458,7 +466,17 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// waits for the grandchild instead. WaitDelay bounds that: after the context
 	// ends, Wait gives the pipes this long to drain, then closes them and returns.
 	cmd.WaitDelay = 5 * time.Second
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return "", 127, err
+	}
+	var parentWatch *exec.Cmd
+	if r.killOnParentExit {
+		parentWatch = startParentDeathWatch(cmd.Process.Pid)
+	}
+	if parentWatch != nil {
+		defer stopParentDeathWatch(parentWatch)
+	}
+	err := cmd.Wait()
 	NoteCoach(coach, r.stream)
 	out := stdout.String()
 	if ctx.Err() != nil {
@@ -877,7 +895,7 @@ func stdinIsTTY(cmd *cobra.Command) bool {
 // Invoke resolves the agent, builds the prompt, and runs it.
 func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
-		runner = execRunner{stream: opt.Stream, pty: opt.PTY, ctlSock: opt.CtlSock}
+		runner = execRunner{stream: opt.Stream, pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit}
 	}
 	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {

@@ -241,7 +241,8 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		// them, so the guard passes BY CONSTRUCTION: there is nothing left to
 		// guard. Nobody has to set BASHY_ALLOW_UNSAFE_AGENT_LAUNCH to hold a
 		// meeting, and nobody has to weaken a host to watch one.
-		ReadOnly: true,
+		ReadOnly:         true,
+		KillOnParentExit: true,
 	}, runner)
 
 	ev := classifyTurn(st, name, question, res.Output, res.ExitCode, err, time.Since(start), budget)
@@ -769,7 +770,7 @@ func converge(ctx context.Context, st *State, runner chat.Runner) (*Synthesis, e
 	events, _ := readTranscript(st.ID)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent: st.Secretary, Role: string(RoleSecretary), Instruction: convergeInstruction(st.decisionMode()),
-		Context: []string{transcriptContext(events)}, Cwd: st.Cwd, Timeout: turnTimeout(st),
+		Context: []string{transcriptContext(events)}, Cwd: st.Cwd, Timeout: turnTimeout(st), KillOnParentExit: true,
 	}, runner)
 	if err != nil {
 		return nil, fmt.Errorf("meet: secretary %s failed: %w", st.Secretary, err)
