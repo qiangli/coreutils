@@ -42,8 +42,8 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, errMsg stri
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <base href="` + htmlEscape(coopauth.BaseHref(r)) + `">
 <title>Sign in &mdash; bashy apps</title>
-<link rel="stylesheet" href="app.css">
-</head><body class="standalone">
+<style>` + loginCSS + `</style>
+</head><body>
 <main class="login">
   <form method="post" action="api/login">
     <h1>bashy <b>apps</b></h1>
@@ -57,6 +57,36 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, errMsg stri
 </main>
 </body></html>`))
 }
+
+// loginCSS is inlined rather than linked.
+//
+// The gate closes everything except the login route itself, so a <link> to
+// app.css is redirected to /login and the form renders unstyled — which is
+// exactly what shipped the first time this was tried. Inlining also honours the
+// reason the page is server-rendered at all: signing in must not depend on
+// fetching anything else first.
+const loginCSS = `
+:root{--bg:#f2f2f5;--fg:#18181b;--card:#fff;--muted:#71717a;--line:#e4e4e7;--primary:#2563eb}
+@media (prefers-color-scheme:dark){:root{--bg:#09090b;--fg:#fafafa;--card:#18181b;--muted:#a1a1aa;--line:#27272a;--primary:#60a5fa}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100svh;display:flex;align-items:center;justify-content:center;
+ background:var(--bg);color:var(--fg);padding:2rem 1.25rem;
+ font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+form{width:100%;max-width:21rem;display:flex;flex-direction:column;gap:.7rem;
+ background:var(--card);border:1px solid var(--line);border-radius:1rem;
+ padding:1.6rem 1.5rem;box-shadow:0 12px 36px rgba(20,30,60,.18)}
+h1{margin:0;font-size:1.15rem;font-weight:800;letter-spacing:-.02em}
+h1 b{font-weight:500;color:var(--muted);font-size:.8rem;margin-left:.3rem}
+.sub{margin:-.3rem 0 .4rem;color:var(--muted);font-size:.82rem}
+label{display:flex;flex-direction:column;gap:.25rem;font-size:.75rem;color:var(--muted);
+ font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+input{font:inherit;font-size:.92rem;text-transform:none;letter-spacing:0;color:var(--fg);
+ padding:.5rem .65rem;border-radius:.5rem;border:1px solid var(--line);background:var(--bg)}
+input:focus{outline:none;box-shadow:0 0 0 2px var(--primary)}
+button{margin-top:.5rem;font:inherit;font-size:.92rem;font-weight:600;padding:.55rem;
+ border-radius:.5rem;border:0;background:var(--primary);color:#fff;cursor:pointer}
+.err{margin:0;font-size:.82rem;color:#ef4444}
+`
 
 // handleLogin verifies an OS password and mints a session.
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
