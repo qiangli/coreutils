@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/spf13/cobra"
@@ -887,7 +888,9 @@ func newTellCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tell <room>|<id> <text...>",
 		Short: "append a human contribution to a session",
-		Args:  cobra.MinimumNArgs(1),
+		Long: "Append a human contribution. One manually authored tell is limited to 1024 UTF-8 bytes and is never truncated or auto-split. " +
+			"Prefer a stable repo-relative commit/issue/room/artifact reference; without one, manually send numbered <=1024-byte parts with one correlation token and END, then report missing parts.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
 			if strings.TrimSpace(text) == "" {
@@ -896,6 +899,9 @@ func newTellCmd() *cobra.Command {
 					return err
 				}
 				text = string(b)
+			}
+			if err := bus.ValidateCoordinationBody(text); err != nil {
+				return fmt.Errorf("meet tell: %w", err)
 			}
 			ev, err := PostAs(args[0], as, to, text)
 			if err != nil {

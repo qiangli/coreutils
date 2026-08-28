@@ -275,6 +275,29 @@ func TestSelfSeatOnMatchingOpenInvite(t *testing.T) {
 	}
 }
 
+func TestOversizedFirstPostDoesNotSelfSeatOpenBoard(t *testing.T) {
+	st := boardRoom(t)
+	st.Participants = []string{"opencode"}
+	st.OpenTo = &OpenInvite{Tool: "codex"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	withAudienceMatch(t, func(agent string, inv OpenInvite) bool { return true })
+	if _, err := PostAs(st.ID, "codex", "", strings.Repeat("x", 1025)); err == nil {
+		t.Fatal("oversized first post was accepted")
+	}
+	reloaded, err := loadState(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if participantSeat(reloaded, "codex") {
+		t.Fatalf("rejected first post self-seated codex: %v", reloaded.Participants)
+	}
+	if events, err := readTranscript(st.ID); err != nil || len(events) != 0 {
+		t.Fatalf("rejected first post mutated transcript: events=%d err=%v", len(events), err)
+	}
+}
+
 // A non-matching agent is refused exactly as before — a declared audience is a
 // gate, not an open door.
 func TestSelfSeatRefusesNonMatch(t *testing.T) {

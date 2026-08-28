@@ -41,10 +41,19 @@ addressed by cannot be delivered to anyone:
 Every publish must carry an identity (who sent it). Supply --as, set
 $BASHY_PRINCIPAL, or $USER is used as the default. A publish with no identity is
 rejected — this is the REPORT/AUTHOR invariant: a notification nobody can be
-attributed to is not a notification.`,
+attributed to is not a notification.
+
+One authored quick-coordination body is limited to 1024 UTF-8 bytes and is
+never truncated or auto-split. Prefer a stable repo-relative commit/issue/room/
+artifact reference. If none exists, manually send numbered <=1024-byte parts
+with one correlation token and END; the receiver waits for END and reports
+missing parts.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			msg := strings.Join(args, " ")
+			if err := ValidateCoordinationBody(msg); err != nil {
+				return publishErr(cmd, jsonOut, err.Error(), topic, roomID, to, msg)
+			}
 
 			who := resolvePrincipal(as)
 			if who == "" {

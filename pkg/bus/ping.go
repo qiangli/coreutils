@@ -59,7 +59,9 @@ survives a handover. Addressing an AGENT reaches that agent.
 
 This is a front door, not a second system: everything here is ` + "`bashy mb`" + `, which
 has more than this exposes — receipts, claims, and selectors like --band and
---tool. Run ` + "`bashy mb --help`" + ` when you need them.`,
+--tool. A messaging body is limited to 1024 UTF-8 bytes and is never truncated
+or auto-split; prefer a stable reference or manually numbered correlated parts.
+ICMP arguments are unchanged. Run ` + "`bashy mb --help`" + ` for details.`,
 		SilenceUsage: true,
 		// FLAGS BELONG TO THE SYSTEM PING, so this command parses none of its
 		// own beyond --as, --to and --help.
@@ -147,6 +149,9 @@ func pingBareTarget(cmd *cobra.Command, target string) error {
 // confirmation that named a recipient the board has never heard of was
 // indistinguishable from a real delivery, which is the defect this closes.
 func pingSend(cmd *cobra.Command, as, target, body string) error {
+	if err := ValidateCoordinationBody(body); err != nil {
+		return fmt.Errorf("ping message: %w", err)
+	}
 	from, err := BoardIdentity(as)
 	if err != nil {
 		return err

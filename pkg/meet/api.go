@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/chat"
 )
 
@@ -389,6 +390,9 @@ func PostAs(ref, author, to, text string) (Event, error) {
 	}
 	who := strings.TrimSpace(author)
 	if st.board() {
+		if err := bus.ValidateCoordinationBody(text); err != nil {
+			return Event{}, fmt.Errorf("meet tell: %w", err)
+		}
 		if who == "" {
 			return Event{}, fmt.Errorf("meet: --as NAME is required on a board")
 		}

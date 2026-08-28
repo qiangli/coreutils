@@ -97,6 +97,29 @@ func TestPingSend_UnresolvableTargetWritesNothingAndFails(t *testing.T) {
 	}
 }
 
+func TestPingMessageCapRejectsBeforeBoardAppend(t *testing.T) {
+	boardInTempHome(t)
+	FleetNames = func() []string { return []string{"target-agent"} }
+	t.Cleanup(func() { FleetNames = nil })
+	cmd, _, _ := captureCmd()
+	body := strings.Repeat("x", 1024)
+	if err := pingSend(cmd, "sender", "target-agent", body); err != nil {
+		t.Fatalf("1024-byte ping message rejected: %v", err)
+	}
+	before, err := Posts()
+	if err != nil || len(before) != 1 || before[0].Body != body {
+		t.Fatalf("accepted ping body changed: posts=%d err=%v", len(before), err)
+	}
+	err = pingSend(cmd, "sender", "target-agent", strings.Repeat("x", 1025))
+	if err == nil || !strings.Contains(err.Error(), "1025 UTF-8 bytes") {
+		t.Fatalf("oversized ping message error = %v", err)
+	}
+	after, err := Posts()
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("rejected ping mutated board: before=%d after=%d err=%v", len(before), len(after), err)
+	}
+}
+
 // A ROLE address (steward) still resolves and posts — the fix must not refuse a
 // legitimate seat.
 func TestPingSend_RoleStillResolves(t *testing.T) {

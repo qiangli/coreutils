@@ -284,7 +284,13 @@ selectors read the same catalog, so who is "L4" here and there can never drift.
 
 Selectors are ANDed, not unioned. A union would make the wider blast radius the
 easier thing to type, and on a shared board the wide one is what turns messages
-into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
+into noise nobody reads. For genuinely everyone: 'bashy mb post'.
+
+One quick-coordination body is limited to 1024 UTF-8 bytes and is never
+truncated or auto-split. Prefer a short request/priority/owner plus a stable
+repo-relative commit/issue/room/artifact reference. With no shared reference,
+manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
+'[ref:abc 2/3]', '[ref:abc 3/3 END]'; the receiver waits for END and reports missing parts.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			aud := Audience{
@@ -298,6 +304,9 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 			}
 			body := strings.Join(args, " ")
 			if !aud.Empty() {
+				if err := ValidateCoordinationBody(body); err != nil {
+					return fmt.Errorf("mb send: %w", err)
+				}
 				// ONE post carrying the selector — not one per member. See
 				// Post.Audience: expanding made the board grow with the size of
 				// the audience.
@@ -335,6 +344,9 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 					return unresolvedTargetError(target)
 				}
 				body = strings.Join(args, " ")
+				if err := ValidateCoordinationBody(body); err != nil {
+					return fmt.Errorf("mb send: %w", err)
+				}
 				seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: topic, Body: body})
 				if err != nil {
 					return err
@@ -360,6 +372,9 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				return unresolvedTargetError(target)
 			}
 			body = strings.Join(args[1:], " ")
+			if err := ValidateCoordinationBody(body); err != nil {
+				return fmt.Errorf("mb send: %w", err)
+			}
 			// Board FIRST, steer second. The durable copy is the one that must
 			// not be optional: steering first would lose the message entirely
 			// if the post failed.
@@ -417,7 +432,13 @@ A broadcast can still scroll past a busy reader's cap. Tag it with a concern
 (--topic shared-baseline|posix-cert|harness) and everyone who DECLARED that
 concern sees it uncapped; --topic announce reaches every reader's uncapped
 view. Announce is the board's wall: tagging it to skip the cap on routine
-chatter is the same defection as marking every email urgent.`,
+chatter is the same defection as marking every email urgent.
+
+One quick-coordination body is limited to 1024 UTF-8 bytes and is never
+truncated or auto-split. Prefer a short request/priority/owner plus a stable
+repo-relative commit/issue/room/artifact reference. With no shared reference,
+manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
+'[ref:abc 2/3]', '[ref:abc 3/3 END]'; the receiver waits for END and reports missing parts.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			from, err := BoardIdentity(as)
@@ -425,6 +446,9 @@ chatter is the same defection as marking every email urgent.`,
 				return err
 			}
 			body := strings.Join(args, " ")
+			if err := ValidateCoordinationBody(body); err != nil {
+				return fmt.Errorf("mb post: %w", err)
+			}
 			seq, err := PostMessageSeq(Post{From: from, Topic: topic, Body: body})
 			if err != nil {
 				return err

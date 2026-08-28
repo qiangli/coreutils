@@ -1,6 +1,7 @@
 package meet
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -37,6 +38,40 @@ func TestMeetUnreadSplitsDirectedAndCapsOnlyOther(t *testing.T) {
 	}
 	if older != 3 {
 		t.Fatalf("older = %d, want 3", older)
+	}
+}
+
+func TestBoardPostRejectsOversizedCoordinationBeforeTranscriptAppend(t *testing.T) {
+	st := boardRoom(t)
+	if _, err := PostAs(st.ID, "codex", "", strings.Repeat("x", 1025)); err == nil ||
+		!strings.Contains(err.Error(), "1025 UTF-8 bytes") || !strings.Contains(err.Error(), "max 1024") {
+		t.Fatalf("oversized meet tell error = %v", err)
+	}
+	if events, err := readTranscript(st.ID); err != nil || len(events) != 0 {
+		t.Fatalf("rejected meet tell mutated transcript: events=%d err=%v", len(events), err)
+	}
+	if _, err := PostAs(st.ID, "codex", "", strings.Repeat("é", 512)); err != nil {
+		t.Fatalf("1024-byte multibyte meet tell rejected: %v", err)
+	}
+	if events, err := readTranscript(st.ID); err != nil || len(events) != 1 {
+		t.Fatalf("accepted meet tell transcript: events=%d err=%v", len(events), err)
+	} else if events[0].Text != strings.Repeat("é", 512) || len(events[0].Text) != 1024 {
+		t.Fatalf("accepted multibyte meet tell changed: bytes=%d", len(events[0].Text))
+	}
+}
+
+func TestManualTellRejectsOversizedOrdinaryMeetingBeforeTranscriptAppend(t *testing.T) {
+	st := newTestSession(t)
+	cmd := newTellCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{st.ID, strings.Repeat("x", 1025)})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "1025 UTF-8 bytes") {
+		t.Fatalf("oversized ordinary meet tell error = %v", err)
+	}
+	if events, rerr := readTranscript(st.ID); rerr != nil || len(events) != 0 {
+		t.Fatalf("rejected ordinary meet tell mutated transcript: events=%d err=%v", len(events), rerr)
 	}
 }
 
