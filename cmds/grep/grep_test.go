@@ -732,6 +732,30 @@ func TestGrepPOSIXRegexConformance(t *testing.T) {
 	}
 }
 
+// C/POSIX locale characters are bytes, not Unicode runes. In particular,
+// Unicode simple-case folding must not leak through Go regexp, and -o's dot
+// must select each byte of a multibyte UTF-8 sequence separately.
+func TestGrepCLocaleUsesByteRegexSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+		code  int
+	}{
+		{"case fold excludes Kelvin sign", "K\n", []string{"-i", "k"}, "", 1},
+		{"case fold excludes long s", "ſ\n", []string{"-i", "s"}, "", 1},
+		{"dot only consumes one byte", "π\n", []string{"-o", "."}, "\xcf\n\x80\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runGrep(t, "", tc.stdin, tc.args...)
+			if out != tc.want || errOut != "" || code != tc.code {
+				t.Fatalf("grep %v = (%x, %q, %d), want (%x, empty, %d)", tc.args, out, errOut, code, tc.want, tc.code)
+			}
+		})
+	}
+}
+
 func TestGrepOnlyMatching(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "f1.txt", "abc 123 def 456\nno digits here\n")

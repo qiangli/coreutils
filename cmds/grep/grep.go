@@ -218,12 +218,15 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	var re grepMatcher
-	if !locale.latin1Bytes() && patternsContainNonASCII(split) {
-		// C and POSIX are single-byte locales. Go's regexp package rejects an
-		// arbitrary byte such as 0xff in a pattern as invalid UTF-8, even though
-		// it is an ordinary (non-classified) byte in those locales. Keep the
-		// common ASCII lane on the existing engines, but route byte-bearing
-		// patterns through the shared POSIX byte-regexp implementation.
+	if !locale.latin1Bytes() && !patternsNeedPackageMatcher(split, *extended) {
+		// C and POSIX are single-byte locales. Match every ordinary pattern on
+		// the byte-regexp substrate, rather than only patterns which themselves
+		// contain a high byte. Go regexp otherwise treats UTF-8 input as Unicode:
+		// for example, its Unicode case folding makes C-locale `grep -i k` match
+		// the three bytes encoding U+212A (Kelvin sign), and `-o .` emits one
+		// Unicode rune instead of one locale character/byte. POSIX C has neither
+		// behavior. GNU-only word-edge syntax, backreferences, and intervals
+		// beyond RE2's repeat limit retain the bounded matcher path below.
 		re, err = compileCBytePattern(split, *fixed, *extended, *lineRe, *ignoreCase)
 	} else {
 		re, err = compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word || *onlyMatching)
@@ -446,6 +449,25 @@ func patternsContainNonASCII(patterns []string) bool {
 			if pattern[i] >= 0x80 {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// patternsNeedPackageMatcher preserves the pre-existing matcher for syntax the
+// byte substrate does not implement (GNU word edges and ERE backreferences),
+// and for intervals beyond RE2's repeat limit. The normal C/POSIX lane still
+// uses byte matching, including all POSIX BRE/ERE syntax.
+func patternsNeedPackageMatcher(patterns []string, extended bool) bool {
+	for _, pattern := range patterns {
+		if extended {
+			if bre.ERERequiresBacktracking(pattern) || strings.Contains(pattern, `\<`) || strings.Contains(pattern, `\>`) {
+				return true
+			}
+			continue
+		}
+		if breNeedsPackageMatcher(pattern) || strings.HasPrefix(pattern, "*") {
+			return true
 		}
 	}
 	return false
