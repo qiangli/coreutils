@@ -3,8 +3,10 @@ package awkcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -283,8 +285,32 @@ func TestAwkInvalidAssignmentAndPOSIXMissingInput(t *testing.T) {
 	if _, errb, code := runTool(t, "", "-v", "1bad=x", `BEGIN { print "bad" }`); code != 2 || !strings.Contains(errb, "invalid -v assignment") {
 		t.Fatalf("invalid -v assignment = (%q, %d), want usage error", errb, code)
 	}
-	if _, errb, code := runTool(t, "", `{ print }`, "missing-input"); code == 0 || !strings.Contains(errb, "missing-input") {
-		t.Fatalf("missing input = (%q, %d), want diagnostic and non-zero status", errb, code)
+	if out, errb, code := runTool(t, "", `END { print "must-not-run" }`, "missing-input"); code == 0 || !strings.Contains(errb, "missing-input") || out != "" {
+		t.Fatalf("missing input = (%q, %q, %d), want fatal diagnostic without END action", out, errb, code)
+	}
+}
+
+type awkErrorWriter struct{ err error }
+
+func (w awkErrorWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestAwkOutputErrorsAndExplicitExitStatus(t *testing.T) {
+	wantErr := errors.New("output failed")
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   []string{"LC_ALL=POSIX"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: awkErrorWriter{wantErr}, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{`BEGIN { print "data" }`})
+	if code != 2 || !strings.Contains(errb.String(), wantErr.Error()) {
+		t.Fatalf("output error = (%q,%d), want diagnostic and status 2", errb.String(), code)
+	}
+
+	out, stderr, code := runTool(t, "", `BEGIN { exit 7 }`)
+	if code != 7 || out != "" || stderr != "" {
+		t.Fatalf("explicit exit = (%q,%q,%d), want (empty,empty,7)", out, stderr, code)
 	}
 }
 
@@ -296,12 +322,105 @@ func TestResolveFilesPreservesStandaloneOperandSpelling(t *testing.T) {
 	}
 }
 
-func TestResolveFilesResolvesEmbeddedOperands(t *testing.T) {
+func TestResolveFilesPreservesEmbeddedOperandSpelling(t *testing.T) {
 	dir := filepath.Join(string(filepath.Separator), "virtual", "work")
 	rc := &tool.RunContext{Dir: dir}
 	files := []string{"input", "x=1", "-"}
-	want := []string{filepath.Join(dir, "input"), "x=1", "-"}
+	want := []string{"input", "x=1", "-"}
 	if got := resolveFiles(rc, files); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("embedded resolveFiles() = %q, want %q", got, want)
+		t.Fatalf("embedded resolveFiles() = %q, want POSIX-visible operands %q", got, want)
+	}
+}
+
+func TestAwkFilenameUsesLocaleNumericStringRules(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "4,5"), []byte("row\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:             context.Background(),
+		Dir:             dir,
+		DirIsProcessCwd: true,
+		Env:             []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"},
+		Stdio:           tool.Stdio{Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{`{ print (FILENAME == 4.5) }`, "4,5"})
+	if code != 0 || errb.String() != "" || out.String() != "1\n" {
+		t.Fatalf("numeric FILENAME = (%q,%q,%d), want (1,empty,0)", out.String(), errb.String(), code)
+	}
+}
+
+func TestAwkRedirectedIOUsesInvocationContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "input"), []byte("from-context\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:      context.Background(),
+		Dir:      dir,
+		Env:      []string{"LC_ALL=POSIX"},
+		Umask:    0o027,
+		UmaskSet: true,
+		Stdio:    tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	program := `BEGIN { if ((getline line < "input") != 1) exit 9; print line > "output"; close("output") }`
+	code := cmd.Run(rc, []string{program})
+	if code != 0 || errb.String() != "" || out.String() != "" {
+		t.Fatalf("context I/O = (%q,%q,%d)", out.String(), errb.String(), code)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "output"))
+	if err != nil || string(data) != "from-context\n" {
+		t.Fatalf("redirected output = (%q,%v)", data, err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("redirected output mode = %03o, want 640", got)
+	}
+}
+
+func TestAwkEmbeddedInputPreservesFilenameSpelling(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "input"), []byte("record\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"LC_ALL=POSIX"},
+		Stdio: tool.Stdio{Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{`{ print ARGV[1], FILENAME, $0 }`, "input"})
+	if code != 0 || errb.String() != "" || out.String() != "input input record\n" {
+		t.Fatalf("embedded input = (%q,%q,%d), want preserved visible filename", out.String(), errb.String(), code)
+	}
+}
+
+func TestAwkCommandsUseInvocationDirectoryAndEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell command semantics")
+	}
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"LC_ALL=POSIX", "MARK=from-context"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	program := `BEGIN { "pwd" | getline cwd; close("pwd"); "printf %s \"$MARK\"" | getline mark; close("printf %s \"$MARK\""); print cwd; print mark }`
+	code := cmd.Run(rc, []string{program})
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || errb.String() != "" || out.String() != wantDir+"\nfrom-context\n" {
+		t.Fatalf("command context = (%q,%q,%d), want cwd and environment", out.String(), errb.String(), code)
 	}
 }

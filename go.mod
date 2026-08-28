@@ -66,9 +66,12 @@ require (
 // convention as ycode/outpost/bashy.
 replace mvdan.cc/sh/v3 => ../sh
 
-// Fork pin adds POSIX awk float formats, invocation numeric radix, an error-bearing regex backend across all surfaces,
-// and the required side effect that a non-"in" reference creates an absent array element.
-replace github.com/benhoyt/goawk => github.com/qiangli/goawk v0.0.0-20260827083421-ab9c4869bc2d
+// Local MIT fork adds POSIX awk float formats, locale-aware data and string
+// semantics, an error-bearing regex backend across all surfaces, and the
+// required side effect that a non-"in" reference creates an absent array
+// element. Keeping the narrow fork here makes the conformance fixes build from
+// this repository rather than an unpublished dependency commit.
+replace github.com/benhoyt/goawk => ./third_party/goawk
 
 replace github.com/ollama/ollama => ./external/ollama/src
 

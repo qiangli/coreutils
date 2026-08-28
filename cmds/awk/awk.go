@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/benhoyt/goawk/interp"
@@ -19,6 +20,9 @@ import (
 	"github.com/qiangli/coreutils/pkg/ctype"
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
+	"golang.org/x/text/cases"
+	textcollate "golang.org/x/text/collate"
+	"golang.org/x/text/language"
 )
 
 // assignRegex matches a var=value operand or -v option-argument; the name
@@ -39,6 +43,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 type ctypeProvider interface {
 	bre.ByteCtype
+	ToUpper([]byte) ([]byte, error)
 	Close() error
 }
 
@@ -49,6 +54,7 @@ type collateProvider interface {
 	bre.ByteEquivalenceValidity
 	bre.ByteCollationWeights
 	bre.ByteCollatingElements
+	Compare(string, string) (int, error)
 	Close() error
 }
 
@@ -84,9 +90,10 @@ func (identityCollation) CollatingElements() ([]bool, error) {
 	}
 	return result, nil
 }
-func (identityCollation) Close() error { return nil }
+func (identityCollation) Compare(a, b string) (int, error) { return strings.Compare(a, b), nil }
+func (identityCollation) Close() error                     { return nil }
 
-func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
+func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) (status int) {
 	fs := tool.NewFlags(cmd.Name)
 	// Option processing ends at the first operand (the program text or,
 	// with -f, the first input file) — anything after it is a file operand
@@ -135,11 +142,13 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	lcNumeric := locale.Resolve(rc.Env, locale.Numeric)
 	decimalPoint, ok := awkNumericDecimalPoint(lcNumeric)
 	if !ok {
-		fmt.Fprintf(rc.Err, "awk: LC_NUMERIC %q: unsupported locale; only C, POSIX, de_DE.ISO-8859-1, and de_DE.iso88591 are accepted\n", lcNumeric)
+		fmt.Fprintf(rc.Err, "awk: LC_NUMERIC %q: unsupported locale; expected C/POSIX, a carried UTF-8 locale, or de_DE.ISO-8859-1\n", lcNumeric)
 		return 2
 	}
 	var tables *bre.LocaleByteTables
-	if lcCType != "C" && lcCType != "POSIX" {
+	ctypeTag, chars := awkUTF8Tag(lcCType)
+	lower, upper := asciiCaseMaps()
+	if !awkCLocale(lcCType) && !chars {
 		provider, err := ctypeOpen(lcCType)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, err)
@@ -147,6 +156,9 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		}
 		var snapshotErr error
 		tables, snapshotErr = bre.SnapshotLocaleByteCtypeTables(provider)
+		if snapshotErr == nil {
+			lower, upper, snapshotErr = snapshotCaseMaps(provider)
+		}
 		closeErr := provider.Close()
 		if snapshotErr != nil {
 			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
@@ -159,7 +171,12 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	} else {
 		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
 	}
-	if lcCollate != "C" && lcCollate != "POSIX" {
+	var stringCompare interp.StringCompareFunc
+	collateTag, collateUTF8 := awkUTF8Tag(lcCollate)
+	if collateUTF8 && !awkCUTF8Locale(lcCollate) {
+		collator := textcollate.New(collateTag)
+		stringCompare = func(a, b string) (int, error) { return collator.CompareString(a, b), nil }
+	} else if !awkCLocale(lcCollate) && !collateUTF8 {
 		provider, err := collateOpen(lcCollate)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, err)
@@ -167,19 +184,25 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		}
 		var snapshotErr error
 		tables, snapshotErr = tables.WithCollation(provider)
-		closeErr := provider.Close()
 		if snapshotErr != nil {
+			_ = provider.Close()
 			fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, snapshotErr)
 			return 2
 		}
-		if closeErr != nil {
-			fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, closeErr)
-			return 2
-		}
+		stringCompare = provider.Compare
+		defer func() {
+			if err := provider.Close(); err != nil {
+				fmt.Fprintf(rc.Err, "awk: LC_COLLATE %q: %v\n", lcCollate, err)
+				if status == 0 {
+					status = 2
+				}
+			}
+		}()
 	}
-	if lcCType != "C" && lcCType != "POSIX" || lcCollate != "C" && lcCollate != "POSIX" {
+	if !awkCLocale(lcCType) && !chars || !awkCLocale(lcCollate) && !collateUTF8 {
 		compiler.tables = tables
 	}
+	compiler.utf8 = chars
 	if len(progFiles) > 0 {
 		src, ok := readProgramFiles(rc, progFiles)
 		if !ok {
@@ -200,7 +223,13 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	if argv0 == "" {
 		argv0 = cmd.Name
 	}
-	status, err := interp.ExecProgram(prog, &interp.Config{
+	shellCommand := []string(nil)
+	if runtime.GOOS != "windows" {
+		if shell := rc.ResolveCommand("sh"); shell != "" {
+			shellCommand = []string{shell, "-c"}
+		}
+	}
+	status, err = interp.ExecProgram(prog, &interp.Config{
 		Stdin:  readerOrEmpty(rc.In),
 		Output: rc.Out,
 		// Deterministic LF output on every platform (GoAWK's default
@@ -209,10 +238,20 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 		NewlineOutput: interp.RawNewlineMode,
 		Error:         rc.Err,
 		DecimalPoint:  decimalPoint,
+		Chars:         chars,
+		StringCompare: stringCompare,
+		ToLower:       caseMapper(lower, ctypeTag, chars, false),
+		ToUpper:       caseMapper(upper, ctypeTag, chars, true),
 		Argv0:         argv0,
 		Args:          resolveFiles(rc, files),
 		Vars:          vars,
 		Environ:       environPairs(rc.Env),
+		OpenFile: func(name string, flag int, perm os.FileMode) (*os.File, error) {
+			return rc.OpenFile(rc.Path(name), flag, perm)
+		},
+		ShellCommand: shellCommand,
+		CommandDir:   rc.Dir,
+		CommandEnv:   append([]string{}, rc.Env...),
 	})
 	if err != nil {
 		fmt.Fprintf(rc.Err, "awk: %v\n", err)
@@ -222,15 +261,106 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 }
 
 func awkNumericDecimalPoint(name string) (byte, bool) {
-	switch name {
-	case "C", "POSIX":
+	if awkCLocale(name) || awkUTF8Locale(name) && !strings.EqualFold(awkLocaleBase(name), "de_DE") {
 		return '.', true
 	}
 	switch strings.ToLower(name) {
-	case "de_de.iso-8859-1", "de_de.iso88591":
+	case "de_de.iso-8859-1", "de_de.iso88591", "de_de.utf-8", "de_de.utf8":
 		return ',', true
 	default:
 		return 0, false
+	}
+}
+
+func awkCLocale(name string) bool { return name == "C" || name == "POSIX" }
+
+func awkUTF8Locale(name string) bool {
+	_, ok := awkUTF8Tag(name)
+	return ok
+}
+
+func awkUTF8Tag(name string) (language.Tag, bool) {
+	base, codeset := awkLocaleParts(name)
+	codeset = strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset))
+	if codeset != "UTF8" {
+		return language.Und, false
+	}
+	switch {
+	case base == "C" || base == "POSIX", strings.EqualFold(base, "en_US"):
+		return language.AmericanEnglish, true
+	case strings.EqualFold(base, "de_DE"):
+		return language.German, true
+	case strings.EqualFold(base, "ja_JP"):
+		return language.Japanese, true
+	default:
+		return language.Und, false
+	}
+}
+
+func awkCUTF8Locale(name string) bool {
+	base, _ := awkLocaleParts(name)
+	return (base == "C" || base == "POSIX") && awkUTF8Locale(name)
+}
+
+func awkLocaleBase(name string) string {
+	base, _ := awkLocaleParts(name)
+	return base
+}
+
+func awkLocaleParts(name string) (string, string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ := strings.Cut(name, ".")
+	return base, codeset
+}
+
+func asciiCaseMaps() (lower, upper [256]byte) {
+	for i := range 256 {
+		lower[i], upper[i] = byte(i), byte(i)
+	}
+	for b := byte('A'); b <= 'Z'; b++ {
+		lower[b] = b + ('a' - 'A')
+	}
+	for b := byte('a'); b <= 'z'; b++ {
+		upper[b] = b - ('a' - 'A')
+	}
+	return lower, upper
+}
+
+func snapshotCaseMaps(provider ctypeProvider) (lower, upper [256]byte, err error) {
+	all := make([]byte, 256)
+	for i := range all {
+		all[i] = byte(i)
+	}
+	lowerBytes, err := provider.ToLower(all)
+	if err != nil {
+		return lower, upper, err
+	}
+	upperBytes, err := provider.ToUpper(all)
+	if err != nil {
+		return lower, upper, err
+	}
+	if len(lowerBytes) != 256 || len(upperBytes) != 256 {
+		return lower, upper, fmt.Errorf("locale case map returned invalid table size")
+	}
+	copy(lower[:], lowerBytes)
+	copy(upper[:], upperBytes)
+	return lower, upper, nil
+}
+
+func caseMapper(table [256]byte, tag language.Tag, utf8Locale, upper bool) interp.CaseMapFunc {
+	if utf8Locale {
+		mapper := cases.Lower(tag)
+		if upper {
+			mapper = cases.Upper(tag)
+		}
+		return func(s string) (string, error) { return mapper.String(s), nil }
+	}
+	return func(s string) (string, error) {
+		mapped := []byte(s)
+		for i := range mapped {
+			mapped[i] = table[mapped[i]]
+		}
+		return string(mapped), nil
 	}
 }
 
@@ -241,6 +371,7 @@ func awkNumericDecimalPoint(name string) (byte, bool) {
 // String for stable diagnostics and disassembly.
 type awkERECompiler struct {
 	tables *bre.LocaleByteTables
+	utf8   bool
 }
 
 func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
@@ -253,6 +384,18 @@ func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
 		}
 		return &awkLocaleERERegexp{source: source, re: re}, nil
 	}
+	if c.utf8 {
+		translated, err := bre.ToGoERE(source)
+		if err != nil {
+			return nil, err
+		}
+		re, err := regexp.Compile("(?s)" + unicodeEREClasses(translated))
+		if err != nil {
+			return nil, err
+		}
+		re.Longest()
+		return &awkERERegexp{source: source, re: re}, nil
+	}
 	re, err := bre.CompileEREWithFlags(source, "(?s)")
 	if err != nil {
 		return nil, err
@@ -261,9 +404,34 @@ func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
 	return &awkERERegexp{source: source, re: re}, nil
 }
 
+// unicodeEREClasses expands POSIX character classes to the Unicode classes
+// carried by the UTF-8 locale model. The surrounding bracket expression is
+// left intact (for example, [[:alpha:]] becomes [\p{L}]).
+func unicodeEREClasses(source string) string {
+	return strings.NewReplacer(
+		"[:alnum:]", `\p{L}\p{N}`,
+		"[:alpha:]", `\p{L}`,
+		"[:blank:]", `\t\p{Zs}`,
+		"[:cntrl:]", `\p{Cc}`,
+		"[:digit:]", `\p{Nd}`,
+		"[:graph:]", `\p{L}\p{M}\p{N}\p{P}\p{S}`,
+		"[:lower:]", `\p{Ll}`,
+		"[:print:]", `\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}`,
+		"[:punct:]", `\p{P}\p{S}`,
+		"[:space:]", `\t\n\x0b\f\r\p{Z}`,
+		"[:upper:]", `\p{Lu}`,
+	).Replace(source)
+}
+
 type awkERERegexp struct {
 	source string
-	re     *bre.Regexp
+	re     awkEREBackend
+}
+
+type awkEREBackend interface {
+	MatchString(string) bool
+	FindStringIndex(string) []int
+	FindAllStringSubmatchIndex(string, int) [][]int
 }
 
 func (r *awkERERegexp) String() string                          { return r.source }
@@ -381,7 +549,14 @@ func readProgramFiles(rc *tool.RunContext, names []string) (string, bool) {
 		if name == "-" {
 			data, err = io.ReadAll(readerOrEmpty(rc.In))
 		} else {
-			data, err = os.ReadFile(rc.Path(name))
+			var f *os.File
+			f, err = rc.OpenFile(rc.Path(name), os.O_RDONLY, 0)
+			if err == nil {
+				data, err = io.ReadAll(f)
+				if closeErr := f.Close(); err == nil {
+					err = closeErr
+				}
+			}
 		}
 		if err != nil {
 			fmt.Fprintf(rc.Err, "awk: %s: %v\n", name, err)
@@ -395,27 +570,11 @@ func readProgramFiles(rc *tool.RunContext, names []string) (string, bool) {
 	return b.String(), true
 }
 
-func resolveFiles(rc *tool.RunContext, files []string) []string {
-	out := make([]string, len(files))
-	for i, name := range files {
-		switch {
-		case name == "" || name == "-" || assignRegex.MatchString(name):
-			// Not filenames: "" is skipped, "-" is stdin, and var=value
-			// operands are assignments GoAWK executes in ARGV order.
-			out[i] = name
-		case rc.DirIsProcessCwd:
-			// At the standalone process boundary the kernel already resolves
-			// relative names against rc.Dir. Keep the operand spelling because
-			// POSIX exposes it through both ARGV and FILENAME (and requires a
-			// numeric-string filename to retain its numeric value).
-			out[i] = name
-		default:
-			// Embedded callers have a virtual cwd that may differ from the
-			// process cwd, so GoAWK needs a resolved path to open the file.
-			out[i] = rc.Path(name)
-		}
-	}
-	return out
+func resolveFiles(_ *tool.RunContext, files []string) []string {
+	// POSIX exposes the operand spelling through ARGV and FILENAME. File opens
+	// are routed separately through RunContext.OpenFile, so embedded callers do
+	// not need to sacrifice that visible value to honor a virtual cwd.
+	return append([]string(nil), files...)
 }
 
 func unescape(s string) string {

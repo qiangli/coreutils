@@ -19,6 +19,16 @@ type fakeAwkCType struct {
 
 type fakeAwkCollate struct{ closeCalls int }
 
+func (p *fakeAwkCollate) Compare(a, b string) (int, error) {
+	if a == "z" && b == "a" {
+		return -1, nil
+	}
+	if a == "a" && b == "z" {
+		return 1, nil
+	}
+	return strings.Compare(a, b), nil
+}
+
 func (p *fakeAwkCollate) Equivalents(value byte) ([]byte, error) {
 	if value == 0 {
 		return nil, nil
@@ -93,6 +103,21 @@ func (p *fakeAwkCType) ToLower(in []byte) ([]byte, error) {
 		}
 		if b == 0xc9 {
 			out[i] = 0xe9
+		}
+	}
+	return out, nil
+}
+func (p *fakeAwkCType) ToUpper(in []byte) ([]byte, error) {
+	if p.classErr != nil {
+		return nil, p.classErr
+	}
+	out := append([]byte(nil), in...)
+	for i, b := range out {
+		if b >= 'a' && b <= 'z' {
+			out[i] = b - 32
+		}
+		if b == 0xe9 {
+			out[i] = 0xc9
 		}
 	}
 	return out, nil
@@ -195,9 +220,10 @@ func TestAwkLCNumericInputOutputAndPrecedence(t *testing.T) {
 	}{
 		{"input and print", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `{ print $1 + 1 }`, "4,5\n", nil, "5,5\n"},
 		{"printf keeps literal period", []string{"LANG=C", "LC_NUMERIC=de_DE.ISO-8859-1"}, `BEGIN { printf "v.=%0.2f\n", 1.5 }`, "", nil, "v.=1,50\n"},
-		{"source and assignment use period", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print 1.5 + x }`, "", []string{"-v", "x=4.5"}, "6\n"},
+		{"source uses period and assignment uses locale", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print 1.5 + x }`, "", []string{"-v", "x=4.5"}, "5,5\n"},
 		{"string conversion uses locale", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print "4,5" + 0 }`, "", nil, "4,5\n"},
-		{"assignment comma remains nonnumeric", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print x + 0 }`, "", []string{"-v", "x=4,5"}, "4\n"},
+		{"assignment comma is a numeric string", []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, `BEGIN { print x + 1 }`, "", []string{"-v", "x=4,5"}, "5,5\n"},
+		{"UTF-8 German numeric locale", []string{"LANG=C", "LC_NUMERIC=de_DE.UTF-8"}, `BEGIN { print x + 1 }`, "", []string{"-v", "x=4,5"}, "5,5\n"},
 		{"LC_ALL overrides numeric", []string{"LANG=de_DE.iso88591", "LC_NUMERIC=de_DE.iso88591", "LC_ALL=POSIX"}, `{ print $1 + 1 }`, "4.5\n", nil, "5.5\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -210,12 +236,59 @@ func TestAwkLCNumericInputOutputAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestAwkLCNumericOperandAssignment(t *testing.T) {
+	out, errOut, code := runAwkLocale([]string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"}, strings.NewReader(""), []string{`END { print x + 1 }`, "x=4,5"}, func(string) (ctypeProvider, error) { panic("C locale must not open provider") })
+	if code != 0 || errOut != "" || out != "5,5\n" {
+		t.Fatalf("got=(%q,%q,%d), want locale numeric operand assignment", out, errOut, code)
+	}
+}
+
 func TestAwkLCNumericUnsupportedFailsBeforeInput(t *testing.T) {
-	out, errOut, code := runAwkLocale([]string{"LANG=C", "LC_NUMERIC=de_DE.UTF-8"}, panicAwkReader{}, []string{`{ print }`}, func(string) (ctypeProvider, error) {
+	out, errOut, code := runAwkLocale([]string{"LANG=C", "LC_NUMERIC=fr_FR.ISO-8859-7"}, panicAwkReader{}, []string{`{ print }`}, func(string) (ctypeProvider, error) {
 		panic("unsupported LC_NUMERIC must fail before LC_CTYPE")
 	})
-	if code != 2 || out != "" || !strings.Contains(errOut, `LC_NUMERIC "de_DE.UTF-8"`) {
+	if code != 2 || out != "" || !strings.Contains(errOut, `LC_NUMERIC "fr_FR.ISO-8859-7"`) {
 		t.Fatalf("got=(%q,%q,%d), want fail-closed LC_NUMERIC diagnostic", out, errOut, code)
+	}
+}
+
+func TestAwkLocaleCaseMappingAndCollation(t *testing.T) {
+	for _, tc := range []struct {
+		name, localeName, program, want string
+	}{
+		{"C leaves high bytes unchanged", "POSIX", `BEGIN { print tolower("\311") toupper("\351"), tolower("A"), toupper("z") }`, string([]byte{0xc9, 0xe9}) + " a Z\n"},
+		{"locale maps high bytes", "de_DE.iso88591", `BEGIN { print tolower("\311") toupper("\351") }`, string([]byte{0xe9, 0xc9}) + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runAwkLocale([]string{"LC_ALL=" + tc.localeName}, strings.NewReader(""), []string{tc.program}, func(string) (ctypeProvider, error) { return &fakeAwkCType{}, nil })
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("got=(%q,%q,%d), want %q", out, errOut, code, tc.want)
+			}
+		})
+	}
+
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LANG=C", "LC_COLLATE=de_DE.iso88591"}, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}}
+	provider := &fakeAwkCollate{}
+	code := runWithLocales(rc, []string{`BEGIN { print ("z" < "a"); if ("z" >= "a") print "bad"; else print "ok" }`}, func(string) (ctypeProvider, error) { return &fakeAwkCType{}, nil }, func(string) (collateProvider, error) { return provider, nil })
+	if code != 0 || errOut.String() != "" || out.String() != "1\nok\n" || provider.closeCalls != 1 {
+		t.Fatalf("got=(%q,%q,%d), close=%d", out.String(), errOut.String(), code, provider.closeCalls)
+	}
+}
+
+func TestAwkUTF8CharacterModel(t *testing.T) {
+	program := `BEGIN { s="É日"; print length(s), index(s,"日"), substr(s,2,1), tolower(substr(s,1,1)); print (s ~ "^[[:alpha:]]+$") }`
+	out, errOut, code := runAwkLocale([]string{"LC_ALL=C.UTF-8"}, strings.NewReader(""), []string{program}, func(string) (ctypeProvider, error) { panic("UTF-8 must not open a single-byte provider") })
+	if code != 0 || errOut != "" || out != "2 2 日 é\n1\n" {
+		t.Fatalf("got=(%q,%q,%d), want UTF-8 character semantics", out, errOut, code)
+	}
+}
+
+func TestAwkUTF8LocaleCollation(t *testing.T) {
+	program := `BEGIN { print ("ä" < "b"), ("z" < "ä") }`
+	out, errOut, code := runAwkLocale([]string{"LC_ALL=de_DE.UTF-8"}, strings.NewReader(""), []string{program}, func(string) (ctypeProvider, error) { panic("UTF-8 must not open a single-byte provider") })
+	if code != 0 || errOut != "" || out != "1 0\n" {
+		t.Fatalf("got=(%q,%q,%d), want German UTF-8 collation", out, errOut, code)
 	}
 }
 
