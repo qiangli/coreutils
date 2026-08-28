@@ -101,7 +101,7 @@ od	cmds/od		GNU Coreutils	yes	yes	1	54
 paste	cmds/paste		GNU Coreutils	yes	yes	2	17
 patch	cmds/patch		POSIX/Unix utility	no	yes	3	65
 pathchk	cmds/pathchk		GNU Coreutils	yes	yes	5	24
-pax	cmds/pax		POSIX/Unix utility	no	yes	15	177
+pax	cmds/pax		POSIX/Unix utility	no	yes	15	178
 pinky	cmds/pinky		GNU Coreutils	yes	no	1	6
 posix-providers	cmds/posixproviders		Bashy/other extension	no	no	4	23
 posixgate	cmds/posixgate		Bashy/other extension	no	no	1	33
