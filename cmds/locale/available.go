@@ -24,17 +24,20 @@ var (
 // directory exists would report a host that cannot run a conforming program,
 // which is the opposite of the truth.
 func availableLocales() []string {
-	// This pure-Go implementation can fully answer every category only for
-	// the two mandatory public locales. Do not advertise arbitrary host
-	// locale-directory names that localeData cannot subsequently serve.
-	return []string{"C", "POSIX"}
+	// Do not advertise arbitrary host locale-directory names that localeData
+	// cannot subsequently serve. The German single-byte fixture is carried in
+	// full by the built-in database, so it is available on every host too.
+	return []string{"C", "POSIX", "de_DE.ISO-8859-1"}
 }
 
 // availableCharmaps lists the charmap names this host can offer. Charmap files
 // are conventionally stored gzipped, and the compression is not part of the
 // name.
 func availableCharmaps() []string {
-	seen := map[string]bool{}
+	seen := map[string]bool{
+		posixCharmap:    true,
+		iso88591Charmap: true,
+	}
 	for _, dir := range charmapDirs {
 		for _, e := range readDir(dir) {
 			name := e.Name()
@@ -43,12 +46,6 @@ func availableCharmaps() []string {
 			}
 			seen[strings.TrimSuffix(name, ".gz")] = true
 		}
-	}
-	if len(seen) == 0 {
-		// No charmap directory on this host. The POSIX locale's charmap still
-		// exists — it is built in, not installed — so reporting an empty list
-		// would deny a charmap the implementation demonstrably supports.
-		seen[posixCharmap] = true
 	}
 	return sortedKeys(seen)
 }

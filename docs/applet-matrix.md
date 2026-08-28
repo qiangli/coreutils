@@ -109,7 +109,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 6 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 33 |
-| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 22 |
+| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 24 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 3 | 32 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 9 |

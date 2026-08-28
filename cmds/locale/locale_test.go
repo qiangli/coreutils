@@ -321,10 +321,71 @@ func TestGermanISO88591TimeData(t *testing.T) {
 	if out != want {
 		t.Fatalf("German LC_TIME bytes = %q, want %q", out, want)
 	}
+}
 
-	_, errOut, code = runCmd(t, env, "decimal_point")
-	if code == 0 || !strings.Contains(errOut, "LC_NUMERIC") {
-		t.Fatalf("uncarried German LC_NUMERIC was not refused: (%q, %d)", errOut, code)
+func TestGermanISO88591CodesetAndNumericData(t *testing.T) {
+	for _, localeName := range []string{
+		"de_DE.iso88591",
+		"de_DE.ISO8859-1",
+		"de_DE.ISO-8859-1",
+	} {
+		t.Run(localeName, func(t *testing.T) {
+			env := []string{"LC_ALL=" + localeName}
+			out, errOut, code := runCmd(t, env, "-k", "charmap", "mb_cur_max", "LC_NUMERIC")
+			want := "charmap=\"ISO-8859-1\"\n" +
+				"mb_cur_max=1\n" +
+				"decimal_point=\",\"\n" +
+				"thousands_sep=\".\"\n" +
+				"grouping=\"3\"\n"
+			if code != 0 || errOut != "" || out != want {
+				t.Fatalf("German codeset/numeric query = (%q, %q, %d), want %q", out, errOut, code, want)
+			}
+
+			plain, plainErr, plainCode := runCmd(t, env, "charmap")
+			if plainCode != 0 || plainErr != "" || plain != iso88591Charmap+"\n" {
+				t.Fatalf("German charmap = (%q, %q, %d)", plain, plainErr, plainCode)
+			}
+		})
+	}
+}
+
+func TestGermanISO88591CategoryPrecedenceData(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		cat  string
+		want []string
+	}{
+		{
+			name: "LANG numeric",
+			env:  []string{"LANG=de_DE.iso88591"},
+			cat:  "LC_NUMERIC",
+			want: []string{`decimal_point=","`, `thousands_sep="."`, `grouping="3"`},
+		},
+		{
+			name: "LC_ALL monetary",
+			env:  []string{"LANG=C", "LC_MONETARY=C", "LC_ALL=de_DE.iso88591"},
+			cat:  "LC_MONETARY",
+			want: []string{`int_curr_symbol="EUR "`, `mon_decimal_point=","`, "frac_digits=2"},
+		},
+		{
+			name: "category numeric",
+			env:  []string{"LANG=C", "LC_NUMERIC=de_DE.iso88591"},
+			cat:  "LC_NUMERIC",
+			want: []string{`decimal_point=","`, `thousands_sep="."`, `grouping="3"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runCmd(t, tc.env, "-k", tc.cat)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%s query = (%q, %q, %d)", tc.cat, out, errOut, code)
+			}
+			for _, want := range tc.want {
+				if !containsLine(out, want) {
+					t.Errorf("%s output missing %q:\n%s", tc.cat, want, out)
+				}
+			}
+		})
 	}
 }
 
@@ -391,13 +452,15 @@ func TestAllLocales(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	got := lines(out)
-	want := []string{"C", "POSIX"}
+	want := []string{"C", "POSIX", "de_DE.ISO-8859-1"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("locale -a = %v, want exactly supported public locales %v", got, want)
 	}
 	for _, name := range got {
-		if _, errOut, code := runCmd(t, []string{"LC_ALL=" + name}, "-k", "decimal_point"); code != 0 {
-			t.Errorf("locale -a advertised unusable locale %q: stderr=%q code=%d", name, errOut, code)
+		for _, category := range categories {
+			if _, errOut, code := runCmd(t, []string{"LC_ALL=" + name}, "-k", category); code != 0 {
+				t.Errorf("locale -a advertised unusable locale %q for %s: stderr=%q code=%d", name, category, errOut, code)
+			}
 		}
 	}
 }
@@ -429,10 +492,10 @@ func TestCharmapsWithNoDirectory(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	// The POSIX charmap is built in, so an empty list would deny a charmap the
-	// implementation demonstrably supports.
-	if strings.Join(lines(out), ",") != posixCharmap {
-		t.Errorf("locale -m = %v, want the built-in POSIX charmap", lines(out))
+	// Both charmaps are built in, independent of host locale provisioning.
+	want := []string{posixCharmap, iso88591Charmap}
+	if strings.Join(lines(out), ",") != strings.Join(want, ",") {
+		t.Errorf("locale -m = %v, want built-in charmaps %v", lines(out), want)
 	}
 }
 

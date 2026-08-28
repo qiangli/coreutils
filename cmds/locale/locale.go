@@ -11,7 +11,7 @@
 // the currency symbol. That needs a compiled locale database, which a pure-Go
 // program running on a host with no libc bridge does not have. What it does
 // have is a small built-in database: the normative POSIX locale definition and
-// the complete LC_TIME category for the certification fixture's
+// the required scalar categories for the certification fixture's
 // de_DE.ISO-8859-1 locale. Every category not actually carried is refused by
 // name.
 //
@@ -278,8 +278,24 @@ func localeData(rc *tool.RunContext, cat string) (data, error) {
 		}
 	}
 	base, codeset := splitLocaleName(name)
-	if base == "de_DE" && isISO88591(codeset) && cat == "LC_TIME" {
-		return data{name: name, keywords: germanISO88591TimeKeywords}, nil
+	if base == "de_DE" && isISO88591(codeset) {
+		var keywords []keyword
+		switch cat {
+		case "LC_COLLATE":
+			// LC_COLLATE has rules rather than scalar locale(1) keywords.
+			keywords = []keyword{}
+		case "LC_CTYPE":
+			keywords = codesetKeywords(iso88591Charmap, 1)
+		case "LC_NUMERIC":
+			keywords = germanISO88591NumericKeywords
+		case "LC_MONETARY":
+			keywords = germanISO88591MonetaryKeywords
+		case "LC_TIME":
+			keywords = germanISO88591TimeKeywords
+		}
+		if keywords != nil {
+			return data{name: name, keywords: keywords}, nil
+		}
 	}
 	if base != "C" && base != "POSIX" {
 		return data{}, fmt.Errorf(
@@ -303,6 +319,10 @@ func localeData(rc *tool.RunContext, cat string) (data, error) {
 // posixCharmap is the charmap name of the bare POSIX locale: 7-bit US-ASCII
 // under its IANA-registered name, which is what a C-locale host reports.
 const posixCharmap = "ANSI_X3.4-1968"
+
+// Locale names admit several spellings of the codeset. The charmap keyword is
+// the canonical public name, not a copy of whichever alias selected it.
+const iso88591Charmap = "ISO-8859-1"
 
 // splitLocaleName separates "C.UTF-8@modifier" into its base name and codeset.
 // The modifier is discarded: no modifier is defined for the POSIX locale, and

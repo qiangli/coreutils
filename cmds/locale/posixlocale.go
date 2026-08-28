@@ -135,6 +135,39 @@ func messagesKeywords(d corelocale.MessagesData) []keyword {
 	}
 }
 
+// German ISO-8859-1 uses the same separators for ordinary and monetary
+// numbers. Currency placement follows the German suffix form. The euro sign is
+// not representable in ISO-8859-1, so the locale uses its ISO 4217 code.
+var germanISO88591NumericKeywords = []keyword{
+	str("LC_NUMERIC", "decimal_point", ","),
+	str("LC_NUMERIC", "thousands_sep", "."),
+	str("LC_NUMERIC", "grouping", "3"),
+}
+
+var germanISO88591MonetaryKeywords = []keyword{
+	str("LC_MONETARY", "int_curr_symbol", "EUR "),
+	str("LC_MONETARY", "currency_symbol", "EUR"),
+	str("LC_MONETARY", "mon_decimal_point", ","),
+	str("LC_MONETARY", "mon_thousands_sep", "."),
+	str("LC_MONETARY", "mon_grouping", "3"),
+	str("LC_MONETARY", "positive_sign", ""),
+	str("LC_MONETARY", "negative_sign", "-"),
+	num("LC_MONETARY", "int_frac_digits", "2"),
+	num("LC_MONETARY", "frac_digits", "2"),
+	num("LC_MONETARY", "p_cs_precedes", "0"),
+	num("LC_MONETARY", "p_sep_by_space", "1"),
+	num("LC_MONETARY", "n_cs_precedes", "0"),
+	num("LC_MONETARY", "n_sep_by_space", "1"),
+	num("LC_MONETARY", "p_sign_posn", "1"),
+	num("LC_MONETARY", "n_sign_posn", "1"),
+	num("LC_MONETARY", "int_p_cs_precedes", "0"),
+	num("LC_MONETARY", "int_p_sep_by_space", "1"),
+	num("LC_MONETARY", "int_n_cs_precedes", "0"),
+	num("LC_MONETARY", "int_n_sep_by_space", "1"),
+	num("LC_MONETARY", "int_p_sign_posn", "1"),
+	num("LC_MONETARY", "int_n_sign_posn", "1"),
+}
+
 // germanISO88591TimeKeywords is the complete POSIX LC_TIME keyword set for
 // de_DE in its ISO-8859-1 encoding. The non-ASCII byte is deliberately kept as
 // 0xe4 rather than converted to UTF-8: locale output is encoded in the active
