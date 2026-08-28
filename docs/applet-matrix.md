@@ -79,7 +79,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `dirname` | `cmds/dirname` | — | GNU Coreutils | yes | yes | 1 | 6 |
 | `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 3 | 37 |
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
-| `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
+| `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 4 |
 | `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 39 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 32 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
@@ -106,7 +106,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 3 | 22 |
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |
-| `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 5 |
+| `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 6 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 33 |
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 22 |
@@ -183,7 +183,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 30 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
-| `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 15 |
+| `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 16 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 4 | 29 |
@@ -212,7 +212,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
 | `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 5 | 84 |
-| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 4 | 51 |
+| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 4 | 52 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 
