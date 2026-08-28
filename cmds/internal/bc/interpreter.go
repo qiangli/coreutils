@@ -204,12 +204,14 @@ func (p *parser) statement() (stmt, error) {
 			p.take()
 			var e expr = numberExpr{fromInt64(0)}
 			if p.accept("(") {
-				var err error
-				e, err = p.expression()
-				if err != nil {
-					return nil, err
+				if p.cur().s != ")" {
+					var err error
+					e, err = p.expression()
+					if err != nil {
+						return nil, err
+					}
 				}
-				if err = p.want(")"); err != nil {
+				if err := p.want(")"); err != nil {
 					return nil, err
 				}
 			}
@@ -372,9 +374,6 @@ func (p *parser) parseFor() (stmt, error) {
 		return nil, err
 	}
 	p.skipNL()
-	if init == nil || cond == nil || post == nil {
-		return nil, fmt.Errorf("line %d: all three for expressions are required", p.cur().line)
-	}
 	s, err := p.statement()
 	return forStmt{init, cond, post, []stmt{s}}, err
 }

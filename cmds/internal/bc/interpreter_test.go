@@ -88,6 +88,24 @@ obase=99.9
 	if want := "1\n10\n 10 10\n"; got != want {
 		t.Fatalf("stdout=%q, want %q", got, want)
 	}
+	tests := []struct {
+		src  string
+		want string
+		err  error
+	}{
+		{`if(1) 3`, "3\n", nil},
+		{`for(;;) { 4; break }`, "4\n", nil},
+		{`define f() { return (); }; f()`, "0\n", nil},
+	}
+	for _, tc := range tests {
+		got, err := execute(t, tc.src, false)
+		if tc.err == nil && err != nil {
+			t.Fatalf("src=%q err=%v", tc.src, err)
+		}
+		if got != tc.want {
+			t.Fatalf("src=%q stdout=%q want %q", tc.src, got, tc.want)
+		}
+	}
 	for _, src := range []string{"scale=100\n", "ibase=1\n", "obase=100\n"} {
 		if _, err := execute(t, src, false); err == nil {
 			t.Fatalf("expected range error for %q", src)
