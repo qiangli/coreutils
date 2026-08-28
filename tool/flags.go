@@ -117,9 +117,21 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // --help/--version output, 2 after a usage error (unknown flag, bad
 // value) with the contract message already printed to rc.Err.
 func Parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string) ([]string, int) {
+	return parse(rc, t, fs, args, true)
+}
+
+// ParseRequireOrder parses a command whose option recognition ends at the
+// first operand. Its preprocessing follows the same boundary as pflag, so a
+// long-looking operand is never expanded as an option abbreviation.
+func ParseRequireOrder(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string) ([]string, int) {
+	fs.SetInterspersed(false)
+	return parse(rc, t, fs, args, false)
+}
+
+func parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspersed bool) ([]string, int) {
 	AddHelpVersionAliases(fs)
 	var code int
-	args, code = expandLongOptionPrefixes(rc, t, fs, args)
+	args, code = expandLongOptionPrefixes(rc, t, fs, args, interspersed)
 	if code != -1 {
 		return nil, code
 	}
@@ -143,11 +155,14 @@ func Parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string) ([]string,
 	return fs.Args(), -1
 }
 
-func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string) ([]string, int) {
+func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspersed bool) ([]string, int) {
 	out := append([]string(nil), args...)
 	for i := 0; i < len(out); i++ {
 		arg := out[i]
 		if arg == "--" {
+			break
+		}
+		if !interspersed && (arg == "-" || !strings.HasPrefix(arg, "-")) {
 			break
 		}
 		if strings.HasPrefix(arg, "--") && len(arg) > 2 {

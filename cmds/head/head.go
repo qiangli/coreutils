@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -48,13 +49,15 @@ func run(rc *tool.RunContext, args []string) int {
 	args = rewriteObsoleteNum(args, "--lines=")
 
 	fs := tool.NewFlags(cmd.Name)
+	// POSIX Utility Syntax Guideline 9: after the first file operand, an
+	// argument beginning with '-' is another file operand, not an option.
 	linesV := fs.StringP("lines", "n", "10", "print the first NUM lines instead of the first 10; with the leading '-', print all but the last NUM lines of each file")
 	bytesV := fs.StringP("bytes", "c", "", "print the first NUM bytes of each file; with the leading '-', print all but the last NUM bytes of each file")
 	quiet := fs.BoolP("quiet", "q", false, "never print headers giving file names")
 	silent := fs.Bool("silent", false, "same as --quiet")
 	verbose := fs.BoolP("verbose", "v", false, "always print headers giving file names")
 	zero := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -190,7 +193,7 @@ func headStream(r io.Reader, w io.Writer, bytesMode bool, n int64, fromEnd bool,
 				return err
 			}
 		}
-		return nil
+		return rewindBuffered(r, br)
 	default:
 		// All but the last n lines.
 		if n == 0 {
@@ -217,6 +220,27 @@ func headStream(r io.Reader, w io.Writer, bytesMode bool, n int64, fromEnd bool,
 			}
 		}
 	}
+}
+
+// rewindBuffered restores bytes that bufio read past the requested final
+// line. POSIX requires a seekable standard input's file offset to remain just
+// after the bytes head copied, so a following utility can consume the rest.
+func rewindBuffered(r io.Reader, br *bufio.Reader) error {
+	buffered := br.Buffered()
+	if buffered == 0 {
+		return nil
+	}
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		return nil
+	}
+	_, err := seeker.Seek(-int64(buffered), io.SeekCurrent)
+	if errors.Is(err, syscall.ESPIPE) {
+		// An *os.File for a pipe implements io.Seeker even though the
+		// underlying descriptor is not seekable.
+		return nil
+	}
+	return err
 }
 
 // --- shared helpers (duplicated per-package by design; cmds packages
@@ -292,6 +316,9 @@ func scanOrder(args []string) (mode, hdr byte) {
 			continue
 		}
 		if a == "--" {
+			break
+		}
+		if a == "-" || !strings.HasPrefix(a, "-") {
 			break
 		}
 		if strings.HasPrefix(a, "--") {

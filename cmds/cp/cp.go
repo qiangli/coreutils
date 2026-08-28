@@ -67,16 +67,11 @@ func run(rc *tool.RunContext, args []string) int {
 	args = foldRShorthand(args)
 	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
-	if envPresent(rc.Env, "POSIXLY_CORRECT") {
-		// POSIX Utility Syntax Guideline 9: once the operands begin, a later
-		// "-"-looking argument is itself an operand (e.g. a destination
-		// directory literally named "-p"), not a new option. GNU getopt
-		// applies this REQUIRE_ORDER rule
-		// exactly when POSIXLY_CORRECT is set; without it, GNU permits
-		// options anywhere (the tool.NewFlags default), so only disable
-		// permutation in POSIX mode.
-		fs.SetInterspersed(false)
-	}
+	// POSIX Utility Syntax Guideline 9: once the operands begin, a later
+	// "-"-looking argument is itself an operand (for example a destination
+	// directory literally named "-p"), not a new option. POSIX controls the
+	// command's required behavior, so do not make this depend on a GNU mode
+	// environment variable.
 	recursive := fs.BoolP("recursive", "r", false, "copy directories recursively (-R is identical to -r)")
 	recursiveUpper := fs.BoolP("recursive-uppercase", "R", false, "copy directories recursively")
 	archive := fs.BoolP("archive", "a", false, "same as -dR --preserve=all")
@@ -111,7 +106,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -414,23 +409,20 @@ func resolveDereferenceMode(args []string, recursive bool) dereferenceMode {
 	if recursive {
 		mode = dereferenceNone
 	}
-	for _, arg := range args {
-		if arg == "--" {
-			break
-		}
+	scanCPOptions(args, func(_ int, arg string) {
 		switch arg {
 		case "--dereference":
 			mode = dereferenceAll
-			continue
+			return
 		case "--dereference-command-line":
 			mode = dereferenceCommandLine
-			continue
+			return
 		case "--no-dereference", "--no-dereference-preserve-links", "--archive":
 			mode = dereferenceNone
-			continue
+			return
 		}
 		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
-			continue
+			return
 		}
 		for _, option := range arg[1:] {
 			switch option {
@@ -447,7 +439,7 @@ func resolveDereferenceMode(args []string, recursive bool) dereferenceMode {
 				break
 			}
 		}
-	}
+	})
 	return mode
 }
 
@@ -852,29 +844,31 @@ func (c *copier) debugf(format string, a ...any) {
 // (before any "--" terminator). GNU cp treats -R and -r identically;
 // pflag cannot attach two shorthands to one flag and inventing a
 // long name for -R is forbidden, so the alias is folded before Parse.
-// Safe because every cp short flag is a boolean (no cluster carries a
-// value that could contain an R).
+// Stop at a value-taking shorthand so an R in its attached value is data.
 func foldRShorthand(args []string) []string {
 	out := make([]string, len(args))
 	copy(out, args)
-	for i, a := range out {
-		if a == "--" {
-			break
-		}
+	scanCPOptions(args, func(i int, a string) {
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
-			out[i] = strings.ReplaceAll(a, "R", "r")
+			b := []byte(a)
+			for pos := 1; pos < len(b); pos++ {
+				if b[pos] == 'R' {
+					b[pos] = 'r'
+				}
+				if b[pos] == 't' || b[pos] == 'S' || b[pos] == 'Z' {
+					break
+				}
+			}
+			out[i] = string(b)
 		}
-	}
+	})
 	return out
 }
 
 func normalizeOptionalArgs(args []string) []string {
 	out := make([]string, len(args))
 	copy(out, args)
-	for i, a := range out {
-		if a == "--" {
-			break
-		}
+	scanCPOptions(args, func(i int, a string) {
 		switch {
 		case a == "-Z" || a == "--context":
 			out[i] = "--context="
@@ -893,8 +887,23 @@ func normalizeOptionalArgs(args []string) []string {
 		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":
 			out[i] = "--force"
 		}
-	}
+	})
 	return out
+}
+
+func scanCPOptions(args []string, visit func(int, string)) {
+	needValue := false
+	for i, a := range args {
+		if needValue {
+			needValue = false
+			continue
+		}
+		if a == "--" || a == "-" || !strings.HasPrefix(a, "-") {
+			break
+		}
+		visit(i, a)
+		needValue = a == "-t" || a == "-S" || a == "--target-directory" || a == "--suffix"
+	}
 }
 
 func maybeStripTrailingSlashes(args []string, enabled bool) []string {
@@ -982,10 +991,7 @@ func validChoice(flag, got string, allowed ...string) string {
 // final one takes effect"). Returns 'f', 'n', 'i', or 0.
 func lastOverride(args []string) byte {
 	var last byte
-	for _, a := range args {
-		if a == "--" {
-			break
-		}
+	scanCPOptions(args, func(_ int, a string) {
 		switch {
 		case a == "--force":
 			last = 'f'
@@ -1004,9 +1010,12 @@ func lastOverride(args []string) byte {
 				if ch == 'i' {
 					last = 'i'
 				}
+				if ch == 't' || ch == 'S' || ch == 'Z' {
+					break
+				}
 			}
 		}
-	}
+	})
 	return last
 }
 

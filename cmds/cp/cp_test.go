@@ -719,19 +719,64 @@ func TestCpHelpAndVersion(t *testing.T) {
 	}
 }
 
-func TestCpPosixStopsOptionParsingAtFirstOperand(t *testing.T) {
+func TestCpStopsOptionParsingAtFirstOperand(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "source"), "payload")
 	if err := os.Mkdir(filepath.Join(dir, "-p"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	_, errb, code := runToolWithInputEnv(t, dir, "", []string{"POSIXLY_CORRECT=1"}, "source", "-p")
+	_, errb, code := runTool(t, dir, "source", "-p")
 	if code != 0 || errb != "" {
-		t.Fatalf("cp source -p in POSIX mode: code=%d stderr=%q", code, errb)
+		t.Fatalf("cp source -p: code=%d stderr=%q", code, errb)
 	}
 	if got := read(t, filepath.Join(dir, "-p", "source")); got != "payload" {
 		t.Fatalf("copied data = %q, want payload", got)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "--pres"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, errb, code := runTool(t, dir, "source", "--pres"); code != 0 || errb != "" {
+		t.Fatalf("cp source --pres: code=%d stderr=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "--pres", "source")); got != "payload" {
+		t.Fatalf("long-looking operand data = %q, want payload", got)
+	}
+}
+
+func TestCpPreScansSkipTargetDirectoryValue(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "source"), "new")
+	if err := os.Mkdir(filepath.Join(dir, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "dest", "source"), "old")
+	if _, errb, code := runTool(t, dir, "-t", "dest", "-n", "-f", "source"); code != 0 || errb != "" {
+		t.Fatalf("cp -t dest -n -f source: code=%d stderr=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "dest", "source")); got != "new" {
+		t.Fatalf("last override after -t value produced %q, want new", got)
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "srcdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "referent"), "followed")
+	if err := os.Symlink(filepath.Join(dir, "referent"), filepath.Join(dir, "srcdir", "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "dest2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, errb, code := runTool(t, dir, "-R", "-t", "dest2", "-P", "-L", "srcdir"); code != 0 || errb != "" {
+		t.Fatalf("cp -R -t dest2 -P -L srcdir: code=%d stderr=%q", code, errb)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, "dest2", "srcdir", "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.Mode().IsRegular() || read(t, filepath.Join(dir, "dest2", "srcdir", "link")) != "followed" {
+		t.Fatalf("last dereference option after -t value did not win: mode=%v", fi.Mode())
 	}
 }
 

@@ -97,6 +97,8 @@ func run(rc *tool.RunContext, args []string) int {
 	args = protectPlusOperands(args)
 	args = scanColumnOption(args)
 	fs := tool.NewFlags(cmd.Name)
+	// POSIX Utility Syntax Guideline 9: once a file operand is seen, later
+	// option-looking arguments are file operands too.
 	pageLength := fs.IntP("length", "l", 66, "set page length to PAGE_LENGTH lines (<= 10 implies -t)")
 	width := fs.IntP("width", "w", 72, "set page width to PAGE_WIDTH columns for multi-column output")
 	omitHeader := fs.BoolP("omit-header", "t", false, "omit page headers and trailers, do not pad the last page")
@@ -130,7 +132,7 @@ func run(rc *tool.RunContext, args []string) int {
 	joinLines := fs.BoolP("join-lines", "J", false, "merge full-length lines (GNU compat, no-op in this subset)")
 	outputTabs := fs.StringP("output-tabs", "i", "", "replace spaces with tabs on output")
 	fs.Lookup("output-tabs").NoOptDefVal = "\t8"
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -264,12 +266,13 @@ func run(rc *tool.RunContext, args []string) int {
 
 	// The GNU/POSIX +FIRST[:LAST] operand is an alternative page range.
 	var files []string
+	seenFile := false
 	for _, op := range operands {
 		protectedPlus := strings.HasPrefix(op, plusOperandSentinel)
 		if protectedPlus {
 			op = strings.TrimPrefix(op, plusOperandSentinel)
 		}
-		if !protectedPlus && strings.HasPrefix(op, "+") {
+		if !seenFile && !protectedPlus && strings.HasPrefix(op, "+") {
 			start, end, err := parsePages(op[1:])
 			if err != nil || op == "+" {
 				return tool.UsageError(rc, cmd, "invalid page range: %q", op)
@@ -278,6 +281,7 @@ func run(rc *tool.RunContext, args []string) int {
 			continue
 		}
 		files = append(files, op)
+		seenFile = true
 	}
 	if len(files) == 0 {
 		files = []string{"-"}
@@ -438,6 +442,10 @@ func scanColumnOption(args []string) []string {
 		if i > 0 && needValue[args[i-1]] {
 			out = append(out, arg)
 			continue
+		}
+		if arg == "-" || (!strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "+")) {
+			out = append(out, args[i:]...)
+			break
 		}
 		if len(arg) > 1 && arg[0] == '-' && strings.Trim(arg[1:], "0123456789") == "" {
 			out = append(out, "--columns="+arg[1:])
@@ -1063,7 +1071,7 @@ func tabifyLine(line string, o options) string {
 	flushSpaces := func() {
 		for pending > 0 {
 			next := o.outputTabWidth - col%o.outputTabWidth
-			if pending >= next && next > 1 {
+			if pending >= next {
 				b.WriteRune(o.outputTabChar)
 				col += next
 				pending -= next
@@ -1081,7 +1089,11 @@ func tabifyLine(line string, o options) string {
 		}
 		flushSpaces()
 		b.WriteRune(r)
-		col++
+		if r == o.outputTabChar {
+			col += o.outputTabWidth - col%o.outputTabWidth
+		} else {
+			col++
+		}
 	}
 	flushSpaces()
 	if hasNL {

@@ -153,8 +153,11 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile) int {
+	args = normalizeTraditionalLeadingOffset(args)
 	args = expandFormatArgs(args)
 	fs := tool.NewFlags(cmd.Name)
+	// POSIX Utility Syntax Guideline 9: option recognition ends at the first
+	// file operand. A later "-x"-looking argument is a file name.
 	addrRadix := fs.StringP("address-radix", "A", "o", "select offset radix: d, o, x, or n")
 	formats := fs.StringArrayP("format", "t", nil, "select output format; repeat for multiple formats")
 	limitText := fs.StringP("read-bytes", "N", "", "limit dump to BYTES input bytes")
@@ -182,7 +185,7 @@ func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile)
 	signedInt := fs.BoolP("signed-int", "i", false, "same as -t dI")
 	signedLong := fs.BoolP("signed-long", "l", false, "same as -t dL")
 	signedShort := fs.BoolP("signed-short", "s", false, "same as -t d2")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -351,6 +354,50 @@ func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile)
 	return exit
 }
 
+// normalizeTraditionalLeadingOffset keeps GNU's explicit --traditional
+// extension compatible with POSIX require-order parsing. In that extension a
+// leading +offset is syntax, not the first file operand, so later options may
+// still be recognized.
+func normalizeTraditionalLeadingOffset(args []string) []string {
+	traditional := false
+	needValue := false
+	out := append([]string(nil), args...)
+	for i, arg := range out {
+		if needValue {
+			needValue = false
+			continue
+		}
+		if arg == "--" {
+			break
+		}
+		if arg == "--traditional" {
+			traditional = true
+			continue
+		}
+		if arg == "-" || !strings.HasPrefix(arg, "-") {
+			if traditional && strings.HasPrefix(arg, "+") {
+				off, err := parseTraditionalOffset(strings.TrimPrefix(arg, "+"))
+				if err == nil && off >= 0 {
+					out[i] = "--skip-bytes=" + strconv.FormatInt(off, 10)
+				}
+			}
+			break
+		}
+		needValue = odOptionNeedsSeparateValue(arg)
+	}
+	return out
+}
+
+func odOptionNeedsSeparateValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	if len(arg) == 2 && arg[0] == '-' && valueShorthands[arg[1]] {
+		return arg[1] != 'S'
+	}
+	return odLongOptionNeedsValue(arg)
+}
+
 // aliasMark prefixes -t values synthesized from format alias options so
 // run can tell them apart from a literal -t/--format (which closes the
 // XSI offset-operand gate). NUL cannot appear in a real argv string.
@@ -384,8 +431,18 @@ var valueShorthands = map[byte]bool{'A': true, 'j': true, 'N': true, 't': true, 
 
 func expandFormatArgs(args []string) []string {
 	out := make([]string, 0, len(args))
+	needValue := false
 	for idx, arg := range args {
+		if needValue {
+			out = append(out, arg)
+			needValue = false
+			continue
+		}
 		if arg == "--" {
+			out = append(out, args[idx:]...)
+			break
+		}
+		if arg == "-" || !strings.HasPrefix(arg, "-") {
 			out = append(out, args[idx:]...)
 			break
 		}
@@ -395,16 +452,31 @@ func expandFormatArgs(args []string) []string {
 		}
 		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
 			out = append(out, arg)
+			needValue = odLongOptionNeedsValue(arg)
 			continue
 		}
 		expanded, ok := expandShortBundle(arg)
 		if !ok {
 			out = append(out, arg)
+			needValue = len(arg) == 2 && valueShorthands[arg[1]] && arg[1] != 'S'
 			continue
 		}
 		out = append(out, expanded...)
+		needValue = len(arg) == 2 && valueShorthands[arg[1]] && arg[1] != 'S'
 	}
 	return out
+}
+
+func odLongOptionNeedsValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	switch arg {
+	case "--address-radix", "--format", "--read-bytes", "--skip-bytes", "--width", "--endian":
+		return true
+	default:
+		return false
+	}
 }
 
 // expandShortBundle splits a short-option bundle like -bcx or -vtx1 so

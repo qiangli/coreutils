@@ -249,6 +249,42 @@ func TestHeadStandardInputOperandAndReadError(t *testing.T) {
 	}
 }
 
+func TestHeadPreservesSeekableInputOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "input")
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\ne\nf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: f, Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-n", "3"}); code != 0 || errb.Len() != 0 || out.String() != "a\nb\nc\n" {
+		t.Fatalf("head seekable input = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+	rest, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rest) != "d\ne\nf\n" {
+		t.Fatalf("seekable input remainder = %q", rest)
+	}
+}
+
+func TestHeadStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "first", "one\n")
+	writeFile(t, dir, "-n", "two\n")
+	writeFile(t, dir, "--lin", "three\n")
+	out, errb, code := runTool(t, dir, "", "first", "-n", "--lin")
+	if code != 0 || errb != "" || !strings.Contains(out, "one\n") || !strings.Contains(out, "two\n") || !strings.Contains(out, "three\n") {
+		t.Fatalf("head option-looking operand = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestHeadHelpVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
 	if code != 0 || !strings.Contains(out, "Usage: head") {

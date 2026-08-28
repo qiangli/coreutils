@@ -1064,6 +1064,25 @@ func TestPRNewFlagAliases(t *testing.T) {
 	}
 }
 
+func TestPROutputTabsAtAdjacentStop(t *testing.T) {
+	o := options{outputTabs: true, outputTabChar: '\t', outputTabWidth: 8}
+	if got := tabifyLine("1234567 90\n", o); got != "1234567\t90\n" {
+		t.Fatalf("one-space tab-stop replacement = %q", got)
+	}
+}
+
+func TestPRStopsOptionAndPageParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "first", "one\n")
+	writeFixed(t, dir, "-x", "two\n")
+	writeFixed(t, dir, "+2", "three\n")
+	writeFixed(t, dir, "--wid", "four\n")
+	out, errb, code := runPR(t, dir, "", "-t", "first", "-x", "+2", "--wid")
+	if code != 0 || errb != "" || out != "one\ntwo\nthree\nfour\n" {
+		t.Fatalf("pr option-looking operands = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestPRPOSIXLYCorrectDifferentials(t *testing.T) {
 	if os.Getenv("COREUTILS_SYSTEM_DIFFERENTIALS") != "1" {
 		t.Skip("set COREUTILS_SYSTEM_DIFFERENTIALS=1 to compare with host pr")

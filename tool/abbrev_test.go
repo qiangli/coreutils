@@ -170,3 +170,27 @@ func TestParseLongOptionAbbreviationIgnoresUniversalAliasNames(t *testing.T) {
 		t.Fatalf("err = %q, want pflag unknown flag error", errb.String())
 	}
 }
+
+func TestParseRequireOrderExpansionStopsAtOperandAndSkipsOptionValues(t *testing.T) {
+	tl := &Tool{Name: "sample", Usage: "sample [OPTION]... FILE..."}
+	fs := NewFlags(tl.Name)
+	fs.String("label", "", "label")
+	fs.Bool("lines", false, "print line count")
+
+	var out, errb bytes.Buffer
+	rc := &RunContext{Ctx: context.Background(), Stdio: Stdio{Out: &out, Err: &errb}}
+	operands, code := ParseRequireOrder(rc, tl, fs, []string{"--lab", "--lin", "first", "--lin"})
+	if code != -1 || out.Len() != 0 || errb.Len() != 0 {
+		t.Fatalf("ParseRequireOrder code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	if got, _ := fs.GetString("label"); got != "--lin" {
+		t.Fatalf("label = %q, want --lin", got)
+	}
+	if got, _ := fs.GetBool("lines"); got {
+		t.Fatal("post-operand --lin was parsed as --lines")
+	}
+	want := []string{"first", "--lin"}
+	if !reflect.DeepEqual(operands, want) {
+		t.Fatalf("operands = %v, want %v", operands, want)
+	}
+}

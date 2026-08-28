@@ -1215,3 +1215,31 @@ func TestODMissingFileContinues(t *testing.T) {
 		t.Fatalf("od missing f2 stdout = %q, want %q", out, want)
 	}
 }
+
+func TestODStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "first"), []byte("A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "-x"), []byte("B"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "--for"), []byte("C"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runOD(t, dir, "", "-A", "n", "-t", "c", "first", "-x", "--for")
+	if code != 0 || errb != "" || out != "   A   B   C\n" {
+		t.Fatalf("od option-looking operand = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestNormalizeTraditionalOffsetStopsAtFirstOperand(t *testing.T) {
+	got := normalizeTraditionalLeadingOffset([]string{"--traditional", "first", "+2"})
+	if strings.Join(got, "\x00") != strings.Join([]string{"--traditional", "first", "+2"}, "\x00") {
+		t.Fatalf("post-operand +offset was rewritten: %q", got)
+	}
+	got = normalizeTraditionalLeadingOffset([]string{"--traditional", "-t", "o1", "+2", "first"})
+	if strings.Join(got, "\x00") != strings.Join([]string{"--traditional", "-t", "o1", "--skip-bytes=2", "first"}, "\x00") {
+		t.Fatalf("leading +offset rewrite = %q", got)
+	}
+}

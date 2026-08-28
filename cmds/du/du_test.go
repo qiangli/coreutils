@@ -624,3 +624,14 @@ func TestTimeWords(t *testing.T) {
 		t.Errorf("du --time=ctime = %q, want a status-change time distinct from atime/mtime", ctimeOut)
 	}
 }
+
+func TestDuStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"first", "-a", "--al", "--"} {
+		write(t, dir, name, "x")
+	}
+	out, errb, code := runToolAt(t, dir, "-A", "-b", "first", "-a", "--al", "--")
+	if code != 0 || errb != "" || out != "1 first\n1 -a\n1 --al\n1 --\n" {
+		t.Fatalf("du option-looking operands = (%q, %q, %d)", out, errb, code)
+	}
+}

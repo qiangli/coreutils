@@ -101,6 +101,9 @@ func run(rc *tool.RunContext, args []string) int {
 		if a == "--" {
 			break
 		}
+		if a == "-" || !strings.HasPrefix(a, "-") {
+			break
+		}
 		if w, ok := strings.CutPrefix(a, "--time="); ok {
 			switch w {
 			case "atime", "access", "use", "ctime", "status":
@@ -110,6 +113,8 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	fs := tool.NewFlags(cmd.Name)
+	// POSIX Utility Syntax Guideline 9 makes every argument after the first
+	// operand an operand, even when its spelling begins with '-'.
 	deref := derefNone
 	setDeref := func(mode derefMode) func(string) error {
 		return func(value string) error {
@@ -155,7 +160,7 @@ func run(rc *tool.RunContext, args []string) int {
 	excludeFrom := fs.StringArrayP("exclude-from", "X", nil, "read exclude patterns from FILE, one per line")
 	files0From := fs.String("files0-from", "", "read input file names from FILE, terminated by NUL; if FILE is -, read names from standard input")
 	summarize := fs.BoolP("summarize", "s", false, "display only a total for each argument")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -294,6 +299,10 @@ func normalizeBlockSizeArgs(args []string) []string {
 	var out []string
 	for i, a := range args {
 		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if a == "-" || !strings.HasPrefix(a, "-") {
 			out = append(out, args[i:]...)
 			break
 		}
