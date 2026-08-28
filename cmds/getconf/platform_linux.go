@@ -15,7 +15,7 @@ import (
 // Do not mistake Go's target ABI for a glibc (or musl) conformance statement.
 func platformValue(name string) (string, bool) {
 	switch name {
-	case "BC_BASE_MAX", "BC_STRING_MAX", "INT_MAX", "SYMLOOP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION":
+	case "INT_MAX", "SYMLOOP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION":
 		return undefined, true
 	case "SIGQUEUE_MAX":
 		return rlimitStr(unix.RLIMIT_SIGPENDING)

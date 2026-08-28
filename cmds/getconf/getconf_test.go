@@ -293,6 +293,19 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 	if code != 0 || errs != "" || got != "2048" {
 		t.Fatalf("getconf LINE_MAX = (%q, %q, %d), want (2048, empty, 0)", got, errs, code)
 	}
+
+	// BC_BASE_MAX and BC_STRING_MAX describe the calculator shipped in this
+	// same multicall binary, not an unknown host-libc implementation. Keep the
+	// queryable limits aligned with the bounds enforced by the bc engine.
+	for name, want := range map[string]string{
+		"BC_BASE_MAX":   "99",
+		"BC_STRING_MAX": "1000",
+	} {
+		got, errs, code = runCmd(t, name)
+		if code != 0 || errs != "" || got != want {
+			t.Errorf("getconf %s = (%q, %q, %d), want (%s, empty, 0)", name, got, errs, code, want)
+		}
+	}
 }
 
 func TestMandatoryTableInventoryAndCompatibilityAliases(t *testing.T) {
