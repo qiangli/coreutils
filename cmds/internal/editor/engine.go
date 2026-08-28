@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -15,6 +16,9 @@ import (
 
 // Files isolates the editor engine from a particular filesystem or working
 // directory. Names are resolved by the front end before these functions run.
+// Errors returned here are written verbatim to Err (when set) before the
+// POSIX "?" notification, so the adapter should format them as
+// "<name>: <reason>" the way historical ed does.
 type Files struct {
 	Read   func(name string) ([]byte, error)
 	Write  func(name string, data []byte) error
@@ -23,8 +27,11 @@ type Files struct {
 
 // Engine interprets the POSIX ed command language over a reusable Buffer.
 type Engine struct {
-	Buffer   Buffer
-	Out      io.Writer
+	Buffer Buffer
+	Out    io.Writer
+	// Err receives file diagnostics ("name: reason"). POSIX reserves standard
+	// error for diagnostics; the "?" notification itself goes to Out.
+	Err      io.Writer
 	Files    Files
 	Silent   bool
 	Prompt   string
@@ -37,23 +44,32 @@ type Engine struct {
 	PollSignal func() string
 	Signals    <-chan string
 	Hangup     func(data []byte) error
-	// ExitOnError selects the Issue 7 non-terminal-input rule.
+	// ExitOnError selects the Issue 7 CONSEQUENCES OF ERRORS rule for a
+	// regular-file standard input: the first command error terminates ed.
+	// Every other input (terminal, pipe, in-process reader) writes "?" and
+	// returns to command mode, exactly as GNU ed and BSD ed do.
 	ExitOnError bool
 	// ByteLocale selects the single-byte POSIX/C LC_CTYPE character model.
 	// It controls command delimiters and l output classification.
 	ByteLocale bool
+	// Tables, when set, compiles every BRE through the locale byte substrate
+	// so '.' and bracket expressions classify single bytes exactly as the
+	// selected single-byte locale does. Nil selects the UTF-8 matcher.
+	Tables *bre.LocaleByteTables
 
 	lastRE            string
 	lastReplacement   string
+	hasReplacement    bool
 	lastDiagnostic    string
 	lastShell         string
 	promptSetting     string
 	help              bool
 	hadError          bool
-	quitArmed         bool
-	editArmed         bool
+	hangupFailed      bool
+	warned            bool
 	reader            *bufio.Reader
-	lineInput         <-chan lineResult
+	list              *bufio.Reader
+	source            *lineSource
 	marks             map[byte]int
 	undoBuffer        Buffer
 	undoMarks         map[byte]int
@@ -64,6 +80,18 @@ type Engine struct {
 	globalTargets     []int
 	changeSeq         uint64
 }
+
+// errWarned is the modified-buffer warning raised by e and q. It is the one
+// command error that must not clear the armed warning: a repeated e or q with
+// no intervening error or buffer modification then takes effect.
+var errWarned = errors.New("warning: buffer modified")
+
+// hangupGrace bounds how long ed waits for a SIGHUP that accompanies a
+// terminal disconnect. The kernel delivers the hangup signal and the EIO/EOF
+// on the controlling terminal independently; when the read completes first,
+// treating it as a plain end-of-file would skip the ed.hup recovery write
+// that POSIX requires.
+const hangupGrace = 50 * time.Millisecond
 
 // Load replaces the buffer from name and remembers it as the default file.
 // It returns the input byte count, which the adapter can report for an initial
@@ -77,28 +105,23 @@ func (e *Engine) Load(name string) (int, error) {
 	e.marks = make(map[byte]int)
 	e.undoValid = false
 	e.Filename = name
-	e.quitArmed = false
+	e.warned = false
 	return len(data), nil
 }
 
 // Run consumes commands until q/Q or EOF. It returns non-zero if any command
-// diagnostic occurred. ExitOnError implements the POSIX non-terminal-input
-// rule that stops a command script after its first diagnostic.
+// diagnostic occurred. ExitOnError implements the POSIX regular-file rule
+// that stops a command script after its first diagnostic.
 func (e *Engine) Run(in io.Reader) int {
 	e.reader = bufio.NewReader(in)
-	e.lineInput = nil
+	e.list = nil
+	e.source = nil
+	defer e.stopSource()
 	for {
 		if e.PollSignal != nil {
-			switch e.PollSignal() {
-			case "hangup":
-				if e.Buffer.Dirty && e.Buffer.Last() > 0 && e.Hangup != nil {
-					_ = e.Hangup(joinLines(e.Buffer.Lines))
-				}
-				return 1
-			case "interrupt":
-				e.commandError("interrupt")
-				if e.ExitOnError {
-					return 1
+			if sig := e.PollSignal(); sig != "" {
+				if e.handleSignal(sig) {
+					return e.exitStatus()
 				}
 				continue
 			}
@@ -108,60 +131,101 @@ func (e *Engine) Run(in io.Reader) int {
 		}
 		line, err := e.readCommandLine()
 		if sig, ok := err.(signalError); ok {
-			if string(sig) == "hangup" {
-				if e.Buffer.Dirty && e.Buffer.Last() > 0 && e.Hangup != nil {
-					_ = e.Hangup(joinLines(e.Buffer.Lines))
-				}
-				return 1
-			}
-			e.commandError("interrupt")
-			if e.ExitOnError {
-				return 1
+			if e.handleSignal(string(sig)) {
+				return e.exitStatus()
 			}
 			continue
 		}
 		if err != nil && len(line) == 0 {
-			if errors.Is(err, io.EOF) {
-				if e.Buffer.Dirty && !e.quitArmed {
-					e.commandError("warning: buffer modified")
-				}
-				break
+			if !errors.Is(err, io.EOF) {
+				e.commandError(err.Error())
+				return 1
 			}
-			e.commandError(err.Error())
+			if sig := e.pendingHangup(); sig != "" {
+				if e.handleSignal(sig) {
+					return e.exitStatus()
+				}
+				continue
+			}
+			// End-of-file in command mode acts as a q command.
+			if e.Buffer.Dirty && !e.warned {
+				e.warned = true
+				e.commandError(errWarned.Error())
+				if e.ExitOnError {
+					return 1
+				}
+				continue
+			}
 			break
 		}
 		line = strings.TrimSuffix(line, "\n")
 		quit, cmdErr := e.execute(line)
 		if cmdErr != nil {
 			if sig, ok := cmdErr.(signalError); ok {
-				if string(sig) == "hangup" {
-					if e.Buffer.Dirty && e.Buffer.Last() > 0 && e.Hangup != nil {
-						_ = e.Hangup(joinLines(e.Buffer.Lines))
-					}
-					return 1
-				}
-				e.commandError("interrupt")
-				if e.ExitOnError {
-					return 1
+				if e.handleSignal(string(sig)) {
+					return e.exitStatus()
 				}
 				continue
 			}
 			e.commandError(cmdErr.Error())
 			if e.ExitOnError {
-				break
+				return 1
 			}
 		}
 		if quit {
 			break
 		}
-		if err != nil {
-			break
-		}
 	}
-	if e.hadError {
+	return e.exitStatus()
+}
+
+func (e *Engine) exitStatus() int {
+	if e.hadError || e.hangupFailed {
 		return 1
 	}
 	return 0
+}
+
+// handleSignal applies the ASYNCHRONOUS EVENTS rules. It reports whether ed
+// must exit.
+func (e *Engine) handleSignal(sig string) bool {
+	switch sig {
+	case "hangup":
+		e.hangupFailed = true
+		if e.Buffer.Dirty && e.Buffer.Last() > 0 {
+			if e.Hangup == nil || e.Hangup(joinLines(e.Buffer.Lines)) != nil {
+				e.hangupFailed = true
+			}
+		}
+		return true
+	case "interrupt":
+		// SIGINT interrupts the current activity and returns to command
+		// mode. It is not a command error: it neither terminates a script
+		// nor changes the exit status.
+		e.lastDiagnostic = "interrupt"
+		fmt.Fprintln(e.Out, "?")
+		if e.help {
+			fmt.Fprintln(e.Out, e.lastDiagnostic)
+		}
+	}
+	return false
+}
+
+// pendingHangup gives a hangup signal that raced with end-of-file on a
+// disconnected terminal a short window to arrive, but only when there is a
+// modified buffer that the signal would save.
+func (e *Engine) pendingHangup() string {
+	if e.Signals == nil || !e.Buffer.Dirty || e.Buffer.Last() == 0 {
+		return ""
+	}
+	timer := time.NewTimer(hangupGrace)
+	defer timer.Stop()
+	select {
+	case sig := <-e.Signals:
+		return sig
+	case <-timer.C:
+		return ""
+	}
 }
 
 type signalError string
@@ -173,30 +237,61 @@ type lineResult struct {
 	err  error
 }
 
+// lineSource reads standard input on demand from a helper goroutine so a
+// signal can interrupt a blocked read. Reads are request-driven: the helper
+// never reads ahead of the line the engine asked for, so an in-process host
+// sharing the descriptor does not lose input after ed quits, and a terminal
+// that returned end-of-file can be read again after the modified-buffer
+// warning.
+type lineSource struct {
+	req     chan struct{}
+	res     chan lineResult
+	stop    chan struct{}
+	pending bool
+}
+
+func (e *Engine) startSource() {
+	src := &lineSource{req: make(chan struct{}), res: make(chan lineResult, 1), stop: make(chan struct{})}
+	reader := e.reader
+	go func() {
+		for {
+			select {
+			case <-src.req:
+			case <-src.stop:
+				return
+			}
+			line, err := reader.ReadString('\n')
+			src.res <- lineResult{line: line, err: err}
+		}
+	}()
+	e.source = src
+}
+
+func (e *Engine) stopSource() {
+	if e.source != nil {
+		close(e.source.stop)
+		e.source = nil
+	}
+}
+
 func (e *Engine) readCommandLine() (string, error) {
+	if e.list != nil {
+		return e.list.ReadString('\n')
+	}
 	if e.Signals == nil {
 		return e.reader.ReadString('\n')
 	}
-	if e.lineInput == nil {
-		input := make(chan lineResult, 1)
-		reader := e.reader
-		e.lineInput = input
-		go func() {
-			defer close(input)
-			for {
-				line, err := reader.ReadString('\n')
-				input <- lineResult{line: line, err: err}
-				if err != nil {
-					return
-				}
-			}
-		}()
+	if e.source == nil {
+		e.startSource()
+	}
+	src := e.source
+	if !src.pending {
+		src.req <- struct{}{}
+		src.pending = true
 	}
 	select {
-	case r, ok := <-e.lineInput:
-		if !ok {
-			return "", io.EOF
-		}
+	case r := <-src.res:
+		src.pending = false
 		return r.line, r.err
 	case sig := <-e.Signals:
 		return "", signalError(sig)
@@ -290,15 +385,28 @@ func (e *Engine) commandError(detail string) {
 	}
 }
 
+// fileDiagnostic reports a file error the way historical ed does: the
+// "name: reason" line goes to standard error and the command then fails with
+// the ordinary "?" notification (explained by h/H).
+func (e *Engine) fileDiagnostic(err error) error {
+	if e.Err != nil {
+		fmt.Fprintln(e.Err, err.Error())
+	}
+	return err
+}
+
 func (e *Engine) execute(line string) (quit bool, execErr error) {
 	originalCurrent, originalSeq := e.Buffer.Current, e.changeSeq
 	defer func() {
 		if execErr != nil && e.changeSeq == originalSeq {
 			e.Buffer.Current = originalCurrent
 		}
+		// The armed e/q warning survives only until an error or a buffer
+		// modification intervenes.
+		if e.changeSeq != originalSeq || (execErr != nil && execErr != errWarned) {
+			e.warned = false
+		}
 	}()
-	wasQuitArmed, wasEditArmed := e.quitArmed, e.editArmed
-	e.quitArmed, e.editArmed = false, false
 	addrs, pos, explicit, err := e.parseAddresses(line)
 	if err != nil {
 		return false, err
@@ -346,6 +454,10 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			if err == nil && len(text) == 0 {
 				// Unlike append, an empty insert leaves dot at the addressed
 				// line, not at the insertion position immediately before it.
+				// An empty buffer has no line 1 to address, so dot stays 0.
+				if a > e.Buffer.Last() {
+					a = e.Buffer.Last()
+				}
 				e.Buffer.Current = a
 			}
 		default:
@@ -436,10 +548,12 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		if err != nil {
 			return false, err
 		}
-		if err = e.printRange(addrs, 2, cmd); err == nil && style != 0 {
-			err = e.printRange([]int{e.Buffer.Current}, 1, style)
+		// POSIX leaves a print suffix on a print command unspecified;
+		// historical ed writes the lines once, in the suffix's format.
+		if style != 0 {
+			cmd = style
 		}
-		return false, err
+		return false, e.printRange(addrs, 2, cmd)
 	case '=':
 		style, err := printSuffix(arg)
 		if err != nil {
@@ -496,7 +610,14 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			return false, fmt.Errorf("nothing to undo")
 		}
 		curB, curM := e.Buffer.Clone(), cloneMarks(e.marks)
-		e.Buffer, e.marks = e.undoBuffer.Clone(), cloneMarks(e.undoMarks)
+		restored := e.undoBuffer.Clone()
+		if !sameLines(restored.Lines, e.Buffer.Lines) {
+			// u is itself a buffer-modifying command: the buffer differs
+			// from what was last written even when it returns to the text
+			// the previous command started from.
+			restored.Dirty = true
+		}
+		e.Buffer, e.marks = restored, cloneMarks(e.undoMarks)
 		e.undoBuffer, e.undoMarks = curB, curM
 		e.changeSeq++
 		if e.inGlobal {
@@ -552,9 +673,9 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		if arg != "" && arg[0] != ' ' && arg[0] != '\t' {
 			return false, fmt.Errorf("file argument requires a separating blank")
 		}
-		if cmd == 'e' && e.Buffer.Dirty && !wasEditArmed {
-			e.editArmed = true
-			return false, fmt.Errorf("warning: buffer modified")
+		if cmd == 'e' && e.Buffer.Dirty && !e.warned {
+			e.warned = true
+			return false, errWarned
 		}
 		name := trimBlank(arg)
 		if name == "" {
@@ -582,9 +703,16 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			n = len(data)
 		} else {
 			n, err = e.Load(name)
-		}
-		if err != nil {
-			return false, err
+			if err != nil {
+				// The buffer was deleted before the read was attempted, and
+				// the name is remembered so a later w can create the file.
+				e.Buffer.Reset(nil, false)
+				e.marks = make(map[byte]int)
+				e.undoValid = false
+				e.Filename = name
+				e.changeSeq++
+				return false, e.fileDiagnostic(err)
+			}
 		}
 		e.changeSeq++
 		if e.inGlobal {
@@ -597,12 +725,12 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		}
 		return false, nil
 	case 'q', 'Q':
-		if explicit || trimBlank(arg) != "" {
+		if explicit || arg != "" {
 			return false, fmt.Errorf("unexpected address or argument")
 		}
-		if cmd == 'q' && e.Buffer.Dirty && !wasQuitArmed {
-			e.quitArmed = true
-			return false, fmt.Errorf("warning: buffer modified")
+		if cmd == 'q' && e.Buffer.Dirty && !e.warned {
+			e.warned = true
+			return false, errWarned
 		}
 		return true, nil
 	case 'f':
@@ -613,6 +741,9 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 			return false, fmt.Errorf("file argument requires a separating blank")
 		}
 		name := trimBlank(arg)
+		if strings.HasPrefix(name, "!") {
+			return false, fmt.Errorf("invalid filename")
+		}
 		if name != "" {
 			e.Filename = name
 		}
@@ -629,10 +760,10 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 		if err != nil {
 			return false, err
 		}
-		if e.lastDiagnostic == "" {
-			return false, fmt.Errorf("no previous error")
+		// Without a previous "?" there is nothing to explain; h is silent.
+		if e.lastDiagnostic != "" {
+			fmt.Fprintln(e.Out, e.lastDiagnostic)
 		}
-		fmt.Fprintln(e.Out, e.lastDiagnostic)
 		if style != 0 && e.Buffer.Current > 0 {
 			err = e.printRange([]int{e.Buffer.Current}, 1, style)
 		}
@@ -658,6 +789,18 @@ func (e *Engine) execute(line string) (quit bool, execErr error) {
 	}
 }
 
+func sameLines(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func printSuffix(arg string) (byte, error) {
 	if arg == "" {
 		return 0, nil
@@ -679,6 +822,11 @@ func (e *Engine) readInput() ([]string, error) {
 			return nil, err
 		}
 		line = strings.TrimSuffix(line, "\n")
+		if e.list != nil {
+			// Inside a global command list every line but the last carries
+			// the list-continuation backslash, which is not input text.
+			line = stripContinuation(line)
+		}
 		if line == "." {
 			return lines, nil
 		}
@@ -694,9 +842,6 @@ func (e *Engine) readInput() ([]string, error) {
 
 func (e *Engine) readSubstituteArgument(arg string) (string, error) {
 	for hasOddTrailingBackslashes(arg) {
-		if e.inGlobal {
-			return "", fmt.Errorf("newline substitution not permitted in global command list")
-		}
 		next, err := e.readCommandLine()
 		if err != nil && len(next) == 0 {
 			return "", fmt.Errorf("unterminated substitute replacement")
@@ -716,6 +861,15 @@ func hasOddTrailingBackslashes(s string) bool {
 		n++
 	}
 	return n%2 == 1
+}
+
+// stripContinuation removes the backslash that ended a line of a multi-line
+// global command list.
+func stripContinuation(s string) string {
+	if hasOddTrailingBackslashes(s) {
+		return s[:len(s)-1]
+	}
+	return s
 }
 
 func (e *Engine) oneAddress(addrs []int, explicit bool, def int, allowZero bool) (int, error) {
@@ -768,15 +922,30 @@ func (e *Engine) printRange(addrs []int, max int, style byte) error {
 	return nil
 }
 
+// listWidth is the column at which l output folds. POSIX leaves the length
+// unspecified; this is the width historical implementations use for a
+// non-terminal output device, and an escape sequence is never split across
+// the fold so the output stays visually unambiguous.
+const listWidth = 76
+
 func listLine(s string, byteMode bool) string {
-	var escaped strings.Builder
+	var out strings.Builder
+	col := 0
+	emit := func(unit string, width int) {
+		if col >= listWidth {
+			out.WriteString("\\\n")
+			col = 0
+		}
+		out.WriteString(unit)
+		col += width
+	}
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
 		if byteMode && s[0] >= utf8.RuneSelf {
 			r, size = utf8.RuneError, 1
 		}
 		if r == utf8.RuneError && size == 1 {
-			fmt.Fprintf(&escaped, "\\%03o", s[0])
+			emit(fmt.Sprintf("\\%03o", s[0]), 4)
 			s = s[1:]
 			continue
 		}
@@ -784,43 +953,34 @@ func listLine(s string, byteMode bool) string {
 		s = s[size:]
 		switch r {
 		case '\\':
-			escaped.WriteString("\\\\")
+			emit("\\\\", 2)
 		case '\a':
-			escaped.WriteString("\\a")
+			emit("\\a", 2)
 		case '\t':
-			escaped.WriteString("\\t")
+			emit("\\t", 2)
 		case '\b':
-			escaped.WriteString("\\b")
+			emit("\\b", 2)
 		case '\r':
-			escaped.WriteString("\\r")
+			emit("\\r", 2)
 		case '\f':
-			escaped.WriteString("\\f")
+			emit("\\f", 2)
 		case '\v':
-			escaped.WriteString("\\v")
+			emit("\\v", 2)
 		case '$':
-			escaped.WriteString("\\$")
+			emit("\\$", 2)
 		default:
 			if unicode.IsPrint(r) {
-				escaped.WriteRune(r)
+				emit(encoded, 1)
 			} else {
+				var b strings.Builder
 				for i := 0; i < len(encoded); i++ {
-					fmt.Fprintf(&escaped, "\\%03o", encoded[i])
+					fmt.Fprintf(&b, "\\%03o", encoded[i])
 				}
+				emit(b.String(), 4*len(encoded))
 			}
 		}
 	}
-	escaped.WriteByte('$')
-	text := escaped.String()
-	if len(text) <= 70 {
-		return text
-	}
-	var out strings.Builder
-	for len(text) > 70 {
-		out.WriteString(text[:69])
-		out.WriteString("\\\n")
-		text = text[69:]
-	}
-	out.WriteString(text)
+	out.WriteByte('$')
 	return out.String()
 }
 
@@ -873,10 +1033,10 @@ func (e *Engine) write(addrs []int, explicit bool, arg string, appendMode bool) 
 			return fmt.Errorf("append unavailable")
 		}
 		if err := e.Files.Append(name, data); err != nil {
-			return err
+			return e.fileDiagnostic(err)
 		}
 	} else if err := e.Files.Write(name, data); err != nil {
-		return err
+		return e.fileDiagnostic(err)
 	}
 	if !shellCommand && e.Filename == "" {
 		e.Filename = name
@@ -884,7 +1044,7 @@ func (e *Engine) write(addrs []int, explicit bool, arg string, appendMode bool) 
 	if !shellCommand && !appendMode && first == 1 && last == e.Buffer.Last() {
 		e.Buffer.Dirty = false
 	}
-	e.quitArmed = false
+	e.warned = false
 	if !e.Silent {
 		fmt.Fprintln(e.Out, len(data))
 	}
@@ -896,11 +1056,11 @@ func (e *Engine) substitute(first, last int, arg string) error {
 		return fmt.Errorf("missing substitute expression")
 	}
 	delim, delimLen := e.commandDelimiter(arg)
-	if delim == " " || delim == "\n" {
+	if delim == " " || delim == "\n" || delim == "\\" {
 		return fmt.Errorf("invalid substitute delimiter")
 	}
-	pattern, rest, closed, err := delimitedBy(arg[delimLen:], delim)
-	if err != nil || !closed {
+	pattern, rest, closed := scanRE(arg[delimLen:], delim)
+	if !closed {
 		return fmt.Errorf("unterminated regular expression")
 	}
 	replacement, flags, replacementClosed, err := delimitedBy(rest, delim)
@@ -914,16 +1074,15 @@ func (e *Engine) substitute(first, last int, arg string) error {
 		return fmt.Errorf("no previous regular expression")
 	}
 	if replacement == "%" {
-		if e.lastReplacement == "" {
+		if !e.hasReplacement {
 			return fmt.Errorf("no previous replacement")
 		}
 		replacement = e.lastReplacement
 	}
-	re, err := bre.Compile(pattern)
+	re, err := e.compileRE(pattern)
 	if err != nil {
 		return err
 	}
-	re.Longest()
 	global, count, style, err := parseSubFlags(flags)
 	if err != nil {
 		return err
@@ -931,7 +1090,7 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	if !replacementClosed {
 		style = 'p'
 	}
-	e.lastRE, e.lastReplacement = pattern, replacement
+	e.lastRE, e.lastReplacement, e.hasReplacement = pattern, replacement, true
 	oldUndo, oldUndoMarks, oldUndoValid := e.undoBuffer.Clone(), cloneMarks(e.undoMarks), e.undoValid
 	e.saveUndo()
 	changed, lastChanged := false, 0
@@ -939,7 +1098,10 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	for original := first; original <= last; original++ {
 		n := original + offset
 		line := e.Buffer.Lines[n-1]
-		matches := re.FindAllStringSubmatchIndex(line, -1)
+		matches, err := re.FindAllStringSubmatchIndex(line, -1)
+		if err != nil {
+			return err
+		}
 		if len(matches) == 0 {
 			continue
 		}
@@ -999,8 +1161,9 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	}
 	if !changed {
 		if e.interactiveGlobal {
-			// A substitution which finds no match on one selected line is a
-			// no-op for that line during an interactive global command.
+			// Within an interactive global command, a substitution is applied
+			// to one marked line at a time; a line without a match is simply
+			// left alone rather than aborting the whole interactive command.
 			return nil
 		}
 		e.undoBuffer, e.undoMarks, e.undoValid = oldUndo, oldUndoMarks, oldUndoValid
@@ -1009,11 +1172,42 @@ func (e *Engine) substitute(first, last int, arg string) error {
 	e.Buffer.Current = lastChanged
 	e.Buffer.Dirty = true
 	e.changeSeq++
-	e.quitArmed = false
 	if style != 0 {
 		return e.printRange([]int{lastChanged}, 1, style)
 	}
 	return nil
+}
+
+// matcher is the regular-expression surface the engine needs from either
+// the UTF-8 matcher or the locale byte substrate.
+type matcher interface {
+	MatchString(string) (bool, error)
+	FindAllStringSubmatchIndex(string, int) ([][]int, error)
+}
+
+type goMatcher struct{ re *bre.Regexp }
+
+func (m goMatcher) MatchString(s string) (bool, error) { return m.re.MatchString(s), nil }
+func (m goMatcher) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
+	return m.re.FindAllStringSubmatchIndex(s, n), nil
+}
+
+// compileRE compiles a POSIX BRE for the selected LC_CTYPE model. The match
+// extent follows the leftmost-longest rule in both models.
+func (e *Engine) compileRE(pattern string) (matcher, error) {
+	if e.Tables != nil {
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), e.Tables, bre.ByteRegexpOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return re, nil
+	}
+	re, err := bre.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	re.Longest()
+	return goMatcher{re}, nil
 }
 
 func (e *Engine) commandDelimiter(s string) (string, int) {
@@ -1079,29 +1273,70 @@ func expandReplacement(repl, src string, match []int) string {
 	return b.String()
 }
 
-// delimited returns text through the next unescaped delimiter. Escaped
-// delimiters are unescaped; other backslashes are preserved for BRE/replacement
-// interpretation. A missing replacement delimiter is accepted at end-of-line.
-func delimited(s string, delim byte) (text, rest string, closed bool, err error) {
+// scanRE returns the regular expression that runs through the next
+// unescaped delimiter. A backslash before the delimiter yields the literal
+// delimiter; every other backslash pair is preserved for BRE interpretation.
+// A delimiter inside a bracket expression is an ordinary member of the
+// expression, as in every historical ed and in sed. A missing closing
+// delimiter is accepted at end-of-line and reported through closed.
+func scanRE(s, delim string) (pattern, rest string, closed bool) {
 	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == delim {
-			return b.String(), s[i+1:], true, nil
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], delim) {
+			return b.String(), s[i+len(delim):], true
 		}
-		if s[i] == '\\' && i+1 < len(s) {
-			if s[i+1] == delim {
-				b.WriteByte(delim)
-				i++
-				continue
-			}
-			b.WriteByte('\\')
-			b.WriteByte(s[i+1])
-			i++
+		if s[i] == '\\' && strings.HasPrefix(s[i+1:], delim) {
+			b.WriteString(delim)
+			i += 1 + len(delim)
 			continue
 		}
+		if s[i] == '\\' && i+1 < len(s) {
+			b.WriteByte(s[i])
+			b.WriteByte(s[i+1])
+			i += 2
+			continue
+		}
+		if s[i] == '[' {
+			if end := bracketEnd(s, i); end > 0 {
+				b.WriteString(s[i:end])
+				i = end
+				continue
+			}
+		}
 		b.WriteByte(s[i])
+		i++
 	}
-	return b.String(), "", false, nil
+	return b.String(), "", false
+}
+
+// bracketEnd returns the index just past the bracket expression opening at
+// s[start], or 0 when the expression is not terminated. It honours the POSIX
+// rules that a ']' first in the list (after an optional '^') is literal and
+// that [:class:], [=equiv=], and [.coll.] members contain their own brackets.
+func bracketEnd(s string, start int) int {
+	i := start + 1
+	if i < len(s) && s[i] == '^' {
+		i++
+	}
+	if i < len(s) && s[i] == ']' {
+		i++
+	}
+	for i < len(s) {
+		switch {
+		case s[i] == ']':
+			return i + 1
+		case s[i] == '[' && i+1 < len(s) && (s[i+1] == ':' || s[i+1] == '=' || s[i+1] == '.'):
+			term := string(s[i+1]) + "]"
+			end := strings.Index(s[i+2:], term)
+			if end < 0 {
+				return 0
+			}
+			i += 2 + end + len(term)
+		default:
+			i++
+		}
+	}
+	return 0
 }
 
 func delimitedBy(s, delim string) (text, rest string, closed bool, err error) {

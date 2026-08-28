@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	"github.com/qiangli/coreutils/pkg/bre"
 )
 
 func (e *Engine) changeLines(first, last int, lines []string) error {
@@ -90,6 +88,8 @@ func (e *Engine) join(first, last int) error {
 	return nil
 }
 
+// addressAndSuffix parses the destination of m and t. Historical ed (and
+// GNU ed) default an omitted destination to the current line.
 func (e *Engine) addressAndSuffix(arg string) (int, byte, error) {
 	pos := skipBlank(arg, 0)
 	a, next, ok, err := e.parseAddress(arg, pos)
@@ -97,7 +97,7 @@ func (e *Engine) addressAndSuffix(arg string) (int, byte, error) {
 		return 0, 0, err
 	}
 	if !ok {
-		return 0, 0, fmt.Errorf("destination address required")
+		a, next = e.Buffer.Current, pos
 	}
 	style, err := printSuffix(arg[next:])
 	return a, style, err
@@ -112,7 +112,17 @@ func (e *Engine) copy(first, last, dest int) error {
 }
 
 func (e *Engine) move(first, last, dest int) error {
-	if dest < 0 || dest > e.Buffer.Last() || (dest >= first && dest <= last) {
+	if dest < 0 || dest > e.Buffer.Last() {
+		return fmt.Errorf("invalid address")
+	}
+	if dest == last || dest == first-1 {
+		// Moving a range after its own last line, or after the line that
+		// already precedes it, leaves the buffer unchanged. Historical ed
+		// accepts both and sets dot to the last line of the range.
+		e.Buffer.Current = last
+		return nil
+	}
+	if dest >= first && dest < last {
 		return fmt.Errorf("invalid destination")
 	}
 	e.saveUndo()
@@ -153,6 +163,9 @@ func (e *Engine) readFile(after int, arg string) error {
 			return fmt.Errorf("shell command required")
 		}
 		data, err = e.Shell(command, nil)
+		if err != nil {
+			return err
+		}
 	} else {
 		if name == "" {
 			name = e.Filename
@@ -161,9 +174,9 @@ func (e *Engine) readFile(after int, arg string) error {
 			return fmt.Errorf("no current filename")
 		}
 		data, err = e.Files.Read(name)
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return e.fileDiagnostic(err)
+		}
 	}
 	if err := e.appendLines(after, splitText(data)); err != nil {
 		return err
@@ -247,13 +260,10 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 		return fmt.Errorf("missing regular expression")
 	}
 	delim, delimLen := e.commandDelimiter(arg)
-	if delim == " " || delim == "\n" {
+	if delim == " " || delim == "\n" || delim == "\\" {
 		return fmt.Errorf("invalid regular expression delimiter")
 	}
-	pattern, rest, closed, err := delimitedBy(arg[delimLen:], delim)
-	if err != nil {
-		return fmt.Errorf("unterminated regular expression")
-	}
+	pattern, rest, closed := scanRE(arg[delimLen:], delim)
 	if !closed {
 		rest = ""
 	}
@@ -263,7 +273,7 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	if pattern == "" {
 		return fmt.Errorf("no previous regular expression")
 	}
-	re, err := bre.Compile(pattern)
+	re, err := e.compileRE(pattern)
 	if err != nil {
 		return err
 	}
@@ -275,8 +285,11 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	if command == "" && !interactive {
 		command = "p"
 	}
-	for !interactive && strings.HasSuffix(command, "\\") {
-		command = strings.TrimSuffix(command, "\\")
+	// A multi-line command list ends every line but the last with a
+	// backslash. The backslashes stay in the list: executeGlobalList strips
+	// the ones that only continue the list, while an s command keeps its
+	// escaped newline so the replacement can split the line.
+	for !interactive && hasOddTrailingBackslashes(lastLine(command)) {
 		next, readErr := e.readCommandLine()
 		if readErr != nil && len(next) == 0 {
 			return fmt.Errorf("unterminated command list")
@@ -285,7 +298,11 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	}
 	targets := make([]int, 0)
 	for n := first; n <= last; n++ {
-		if re.MatchString(e.Buffer.Lines[n-1]) == match {
+		ok, err := re.MatchString(e.Buffer.Lines[n-1])
+		if err != nil {
+			return err
+		}
+		if ok == match {
 			targets = append(targets, n)
 		}
 	}
@@ -364,12 +381,18 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	return nil
 }
 
+func lastLine(s string) string {
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
 func (e *Engine) executeGlobalList(commands string) (bool, error) {
-	savedReader, savedInput := e.reader, e.lineInput
-	e.reader = bufio.NewReader(strings.NewReader(commands + "\n"))
-	e.lineInput = nil
+	savedList := e.list
+	e.list = bufio.NewReader(strings.NewReader(commands + "\n"))
 	defer func() {
-		e.reader, e.lineInput = savedReader, savedInput
+		e.list = savedList
 	}()
 	for {
 		line, err := e.readCommandLine()
@@ -380,6 +403,9 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 			return false, err
 		}
 		line = strings.TrimSuffix(line, "\n")
+		if commandLetter(line) != 's' {
+			line = stripContinuation(line)
+		}
 		_, p, _, parseErr := e.parseAddresses(line)
 		if parseErr != nil {
 			return false, parseErr

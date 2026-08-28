@@ -166,3 +166,32 @@ func TestRegisteredToolRejectsOutputAndFileShortWrites(t *testing.T) {
 		t.Fatalf("diagnostic=%q", errOut.String())
 	}
 }
+
+func TestRegisteredToolFileCommandDiagnosticsUseStderr(t *testing.T) {
+	code, out, stderr, _ := runEd(t, "r missing\nQ\n", "-s")
+	if code != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if out != "?\n" {
+		t.Fatalf("stdout=%q", out)
+	}
+	if !strings.Contains(stderr, "missing") {
+		t.Fatalf("stderr=%q", stderr)
+	}
+}
+
+func TestRegisteredToolCTypeClassesUseByteLocale(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), FS: tool.NewLocalFS(),
+		Env:   []string{"LC_ALL=C"},
+		Stdio: tool.Stdio{In: strings.NewReader("a\nA\né\n.\n1,$g/[[:alpha:]]/p\nQ\n"), Out: &out, Err: &errb},
+	}
+	code := tool.Lookup("ed").Run(rc, []string{"-s"})
+	if code != 0 || errb.String() != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+	if out.String() != "A\n" {
+		t.Fatalf("stdout=%q", out.String())
+	}
+}

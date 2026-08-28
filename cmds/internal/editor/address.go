@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/qiangli/coreutils/pkg/bre"
 )
 
 func (e *Engine) parseAddresses(s string) ([]int, int, bool, error) {
@@ -59,7 +57,7 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 	if pos >= len(s) {
 		return 0, pos, false, nil
 	}
-	value, found := 0, true
+	value := 0
 	switch s[pos] {
 	case '\'':
 		if pos+1 >= len(s) || s[pos+1] < 'a' || s[pos+1] > 'z' {
@@ -80,10 +78,7 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 		value, pos = e.Buffer.Last(), pos+1
 	case '/', '?':
 		delim := s[pos]
-		pattern, rest, closed, err := delimited(s[pos+1:], delim)
-		if err != nil {
-			return 0, pos, false, err
-		}
+		pattern, rest, closed := scanRE(s[pos+1:], string(delim))
 		consumed := len(s[pos+1:]) - len(rest)
 		if closed {
 			pos += 1 + consumed
@@ -96,7 +91,7 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 		if pattern == "" {
 			return 0, pos, false, fmt.Errorf("no previous regular expression")
 		}
-		re, err := bre.Compile(pattern)
+		re, err := e.compileRE(pattern)
 		if err != nil {
 			return 0, pos, false, err
 		}
@@ -117,9 +112,10 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 		}
 		value, _ = strconv.Atoi(s[start:pos])
 	}
-	if !found {
-		return 0, pos, false, nil
-	}
+	// Address offsets: "+n"/"-n" add or subtract n, a bare "+"/"-" adds or
+	// subtracts 1, and a bare decimal number adds that many lines. Offsets
+	// may be blank-separated from each other, but a number binds to a sign
+	// only when it immediately follows it: "3 ---- 2" is line one.
 	for {
 		p := skipBlank(s, pos)
 		if p >= len(s) {
@@ -137,7 +133,6 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 			pos = p
 			break
 		}
-		p = skipBlank(s, p)
 		start := p
 		for p < len(s) && s[p] >= '0' && s[p] <= '9' {
 			p++
@@ -155,7 +150,7 @@ func (e *Engine) parseAddress(s string, pos int) (int, int, bool, error) {
 	return value, pos, true, nil
 }
 
-func (e *Engine) search(re *bre.Regexp, forward bool) (int, error) {
+func (e *Engine) search(re matcher, forward bool) (int, error) {
 	n := e.Buffer.Last()
 	if n == 0 {
 		return 0, fmt.Errorf("no match")
@@ -167,7 +162,11 @@ func (e *Engine) search(re *bre.Regexp, forward bool) (int, error) {
 		} else {
 			idx = (e.Buffer.Current - step - 1 + n*2) % n
 		}
-		if re.MatchString(e.Buffer.Lines[idx]) {
+		ok, err := re.MatchString(e.Buffer.Lines[idx])
+		if err != nil {
+			return 0, err
+		}
+		if ok {
 			return idx + 1, nil
 		}
 	}
@@ -182,3 +181,33 @@ func skipBlank(s string, p int) int {
 }
 
 func trimBlank(s string) string { return strings.Trim(s, " \t") }
+
+// commandLetter returns the command character of a command line after a
+// purely syntactic skip over its addresses. It exists so a global command
+// list can tell an s command, whose escaped newlines continue the
+// replacement, from the other commands, whose trailing backslash only
+// continues the list. It never evaluates a search or a mark.
+func commandLetter(line string) byte {
+	for i := 0; i < len(line); {
+		c := line[i]
+		switch {
+		case c == ' ' || c == '\t' || c == ',' || c == ';' || c == '+' || c == '-' ||
+			c == '.' || c == '$' || (c >= '0' && c <= '9'):
+			i++
+		case c == '\'':
+			i += 2
+		case c == '/' || c == '?':
+			j := i + 1
+			for j < len(line) && line[j] != c {
+				if line[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			i = j + 1
+		default:
+			return c
+		}
+	}
+	return 0
+}

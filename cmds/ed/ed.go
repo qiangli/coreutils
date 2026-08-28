@@ -14,6 +14,9 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/cmds/internal/editor"
+	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/ctype"
 	corelocale "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/term"
@@ -88,12 +91,21 @@ func runCore(rc *tool.RunContext, args []string) int {
 	if rc.FS == nil {
 		rc.FS = tool.NewLocalFS()
 	}
+	lcCType := corelocale.Resolve(rc.Env, corelocale.CType)
+	lcCollate := corelocale.Resolve(rc.Env, corelocale.Collate)
+	byteLocale := !isUTF8Locale(lcCType)
+	tables, code := localeTables(rc, lcCType, lcCollate, byteLocale)
+	if code != 0 {
+		return code
+	}
 
 	eng := &editor.Engine{
 		Out:        rc.Out,
+		Err:        rc.Err,
 		Silent:     *silent,
 		Prompt:     *prompt,
-		ByteLocale: !isUTF8Locale(corelocale.Resolve(rc.Env, corelocale.CType)),
+		ByteLocale: byteLocale,
+		Tables:     tables,
 		Files: editor.Files{
 			Read: func(name string) ([]byte, error) {
 				f, err := rc.FS.Open(rc.Path(name))
@@ -189,6 +201,57 @@ func runCore(rc *tool.RunContext, args []string) int {
 		}
 	}
 	return eng.Run(rc.In)
+}
+
+func localeTables(rc *tool.RunContext, lcCType, lcCollate string, byteLocale bool) (*bre.LocaleByteTables, int) {
+	if !byteLocale && (lcCollate == "C" || lcCollate == "POSIX" || isUTF8Locale(lcCollate)) {
+		return nil, 0
+	}
+	var tables *bre.LocaleByteTables
+	if byteLocale && lcCType != "C" && lcCType != "POSIX" {
+		provider, err := ctype.Open(lcCType)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_CTYPE %q: %v\n", lcCType, err)
+			return nil, 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = bre.SnapshotLocaleByteCtypeTables(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
+			return nil, 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_CTYPE %q: %v\n", lcCType, closeErr)
+			return nil, 2
+		}
+	} else {
+		var err error
+		tables, err = bre.SnapshotLocaleByteCtypeTables(nil)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_CTYPE %q: %v\n", lcCType, err)
+			return nil, 2
+		}
+	}
+	if lcCollate != "C" && lcCollate != "POSIX" {
+		provider, err := collate.Open(lcCollate)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_COLLATE %q: %v\n", lcCollate, err)
+			return nil, 2
+		}
+		var snapshotErr error
+		tables, snapshotErr = tables.WithCollation(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_COLLATE %q: %v\n", lcCollate, snapshotErr)
+			return nil, 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "ed: LC_COLLATE %q: %v\n", lcCollate, closeErr)
+			return nil, 2
+		}
+	}
+	return tables, 0
 }
 
 func isUTF8Locale(name string) bool {
