@@ -88,12 +88,13 @@ var (
 
 // Entry is one manifest row.
 type Entry struct {
-	Command   string
-	Version   string
-	License   string
-	Platforms []string // GOOS values, as declared
-	SHA256    string   // digest of the UPSTREAM SOURCE archive
-	URL       string   // upstream source URL
+	Command        string
+	Version        string
+	License        string
+	Platforms      []string // GOOS values, as declared
+	SHA256         string   // digest of the UPSTREAM SOURCE archive
+	URL            string   // upstream source URL
+	RecipeRevision string   // optional local build-recipe cache identity
 }
 
 // SupportsGOOS reports whether the manifest declares this provider for goos.
@@ -129,8 +130,10 @@ func init() {
 }
 
 // parseManifest reads the TSV form: comments start with '#', blank lines are
-// skipped, and every data row must carry all six columns with a full-length
-// sha256. An entry without a digest is REFUSED rather than silently trusted.
+// skipped, and every data row must carry six or seven columns with a full-length
+// sha256. The optional seventh column invalidates artifacts made by an older
+// local build recipe without changing the upstream version or source identity.
+// An entry without a digest is REFUSED rather than silently trusted.
 func parseManifest(text string) ([]Entry, error) {
 	var out []Entry
 	sc := bufio.NewScanner(strings.NewReader(text))
@@ -143,8 +146,8 @@ func parseManifest(text string) ([]Entry, error) {
 			continue
 		}
 		f := strings.Split(raw, "\t")
-		if len(f) != 6 {
-			return nil, fmt.Errorf("line %d: want 6 tab-separated columns, got %d", line, len(f))
+		if len(f) < 6 || len(f) > 7 {
+			return nil, fmt.Errorf("line %d: want 6 or 7 tab-separated columns, got %d", line, len(f))
 		}
 		e := Entry{
 			Command: strings.TrimSpace(f[0]),
@@ -152,6 +155,9 @@ func parseManifest(text string) ([]Entry, error) {
 			License: strings.TrimSpace(f[2]),
 			SHA256:  strings.ToLower(strings.TrimSpace(f[4])),
 			URL:     strings.TrimSpace(f[5]),
+		}
+		if len(f) == 7 {
+			e.RecipeRevision = strings.TrimSpace(f[6])
 		}
 		for _, p := range strings.Split(f[3], ",") {
 			if p = strings.TrimSpace(p); p != "" {
@@ -391,6 +397,9 @@ func (r Resolver) verifyProvenance(e Entry, path string) (string, error) {
 	}
 	if !strings.EqualFold(rec["source_sha256"], e.SHA256) {
 		return "", mismatch("source_sha256", rec["source_sha256"], e.SHA256)
+	}
+	if e.RecipeRevision != "" && rec["recipe_revision"] != e.RecipeRevision {
+		return "", mismatch("recipe_revision", rec["recipe_revision"], e.RecipeRevision)
 	}
 	want := strings.ToLower(strings.TrimSpace(rec["built_sha256"]))
 	if len(want) != 64 {

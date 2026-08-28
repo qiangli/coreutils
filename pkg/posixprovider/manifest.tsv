@@ -40,7 +40,7 @@
 # than an obscure configure failure. POSIX certification runs on Linux, so
 # windows/darwin support is a product concern, never a certification blocker.
 #
-# command	version	license	platforms	sha256	url
+# command	version	license	platforms	sha256	url	recipe_revision (optional)
 m4	1.4.19	GPL-3.0	linux,darwin,windows	63aede5c6d33b6d9b13511cd0be2cac046f2e70fd0a07aa9573a04a82783af96	https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz
 man	2.12.0	GPL-3.0	linux,darwin	415a6284a22764ad22ff0f66710d853be7790dd451cd71436e3d25c74d996a95	https://download-mirror.savannah.gnu.org/releases/man-db/man-db-2.12.0.tar.xz
 ctags	6.2.1	GPL-2.0	linux,darwin,windows	f56829e9a576025e98955597ee967099a871987b3476fbd8dbbc2b9dc921f824	https://github.com/universal-ctags/ctags/archive/refs/tags/v6.2.1.tar.gz
@@ -51,7 +51,7 @@ ex	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737
 vi	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737e9e8bfa4cc298dee061df	https://github.com/vim/vim/archive/refs/tags/v9.1.0016.tar.gz
 # pax: Debian sources 1:20201030 from a non-GNU upstream; pin pending source identification.
 lp	2.4.7	Apache-2.0	linux,darwin	dd54228dd903526428ce7e37961afaed230ad310788141da75cebaa08362cf6c	https://github.com/OpenPrinting/cups/releases/download/v2.4.7/cups-2.4.7-source.tar.gz
-localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926	https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz
+localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926	https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz	2
 #
 # lp: CUPS 2.4.7 is exactly what Ubuntu 24.04 ships (cups-client 2.4.7-1.2ubuntu7.14),
 # so the C arm and the GNU A arm run the same upstream release. Apache-2.0 read from

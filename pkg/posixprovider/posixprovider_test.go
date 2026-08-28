@@ -33,14 +33,15 @@ func provision(t *testing.T, root string, e Entry, body []byte) string {
 	}
 	sum := sha256.Sum256(body)
 	writeProvenance(t, dir, map[string]string{
-		"command":       e.Command,
-		"version":       e.Version,
-		"license":       e.License,
-		"source_url":    e.URL,
-		"source_sha256": e.SHA256,
-		"compiler":      "/usr/bin/cc",
-		"built_sha256":  hex.EncodeToString(sum[:]),
-		"distributed":   "no (built locally; copyleft binaries are never republished)",
+		"command":         e.Command,
+		"version":         e.Version,
+		"license":         e.License,
+		"source_url":      e.URL,
+		"source_sha256":   e.SHA256,
+		"recipe_revision": e.RecipeRevision,
+		"compiler":        "/usr/bin/cc",
+		"built_sha256":    hex.EncodeToString(sum[:]),
+		"distributed":     "no (built locally; copyleft binaries are never republished)",
 	})
 	return bin
 }
@@ -48,7 +49,7 @@ func provision(t *testing.T, root string, e Entry, body []byte) string {
 func writeProvenance(t *testing.T, dir string, rec map[string]string) {
 	t.Helper()
 	var b strings.Builder
-	for _, k := range []string{"command", "version", "license", "source_url", "source_sha256", "compiler", "built_sha256", "distributed"} {
+	for _, k := range []string{"command", "version", "license", "source_url", "source_sha256", "recipe_revision", "compiler", "built_sha256", "distributed"} {
 		if v, ok := rec[k]; ok {
 			b.WriteString(k + "\t" + v + "\n")
 		}
@@ -380,6 +381,25 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			t.Fatalf("an unattributable binary must be an error, not a warning: %v", err)
 		}
 	})
+}
+
+func TestResolveRejectsStaleLocaledefRecipe(t *testing.T) {
+	e := mustLookup(t, "localedef")
+	if e.RecipeRevision == "" {
+		t.Fatal("localedef has no build recipe revision")
+	}
+	root := t.TempDir()
+	bin := provision(t, root, e, []byte("original"))
+	rec, err := readProvenance(filepath.Join(filepath.Dir(bin), "provenance.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(rec, "recipe_revision")
+	writeProvenance(t, filepath.Dir(bin), rec)
+	r := Resolver{CacheRoot: root, GOOS: "linux"}
+	if _, err := r.Resolve("localedef"); !errors.Is(err, ErrProvenance) {
+		t.Fatalf("stale localedef recipe error = %v, want ErrProvenance", err)
+	}
 }
 
 func TestResolveNeverTouchesTheNetwork(t *testing.T) {

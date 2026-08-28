@@ -15,6 +15,11 @@ import (
 // Do not mistake Go's target ABI for a glibc (or musl) conformance statement.
 func platformValue(name string) (string, bool) {
 	switch name {
+	case "_POSIX2_LOCALEDEF":
+		// Bashy's Linux localedef provider compiles glibc locale definitions;
+		// advertise the capability the product supplies rather than libc's
+		// inaccessible sysconf table.
+		return strconv.FormatInt(posix2Version, 10), true
 	case "INT_MAX", "SYMLOOP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION":
 		return undefined, true
 	case "SIGQUEUE_MAX":

@@ -8,6 +8,34 @@ unset POSIX_PROVIDER_DOWNLOAD_LIBRARY_ONLY
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/posix-provider-download-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
+
+cat > "$tmp/localedef.Makefile" <<'EOF'
+DEFINES = -DNO_SYSCONF \
+	  -DNO_UNCOMPRESS \
+	  -DLOCALEDIR='"/usr/lib/locale"'
+EOF
+provider_prepare_localedef_makefile "$tmp/localedef.Makefile"
+if grep -q -- '-DNO_UNCOMPRESS' "$tmp/localedef.Makefile"; then
+  echo 'localedef harness still disables compressed charmaps' >&2
+  exit 1
+fi
+grep -q -- '-DNO_SYSCONF' "$tmp/localedef.Makefile" || {
+  echo 'localedef harness rewrite removed an adjacent define' >&2
+  exit 1
+}
+grep -q './configure --prefix=/usr --with-glibc=' "$here/build.sh" || {
+  echo 'localedef harness no longer targets the distribution locale tree' >&2
+  exit 1
+}
+
+printf 'recipe_revision\t1\n' > "$tmp/provenance.tsv"
+if provider_recipe_current "$tmp/provenance.tsv" 2; then
+  echo 'stale localedef recipe revision was accepted' >&2
+  exit 1
+fi
+printf 'recipe_revision\t2\n' > "$tmp/provenance.tsv"
+provider_recipe_current "$tmp/provenance.tsv" 2
+
 mkdir -p "$tmp/bin"
 printf 'verified provider source\n' > "$tmp/good"
 good_sha=$(provider_sha256 "$tmp/good")

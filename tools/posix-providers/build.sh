@@ -39,6 +39,38 @@ provider_positive_integer() {
   case "$1" in ''|*[!0-9]*|0) return 1 ;; esac
 }
 
+# The standalone localedef harness defaults to /usr/local and disables its
+# gzip/bzip2 charmap reader. Linux distributions install the locale source tree
+# below /usr/share/i18n and normally compress the charmaps there. Keep the
+# provider aligned with the glibc installation it is built to accompany.
+provider_prepare_localedef_makefile() {
+  _provider_makefile=$1
+  if ! grep -q '^[[:space:]]*-DNO_UNCOMPRESS' "$_provider_makefile"; then
+    printf 'posix-provider: localedef harness no longer has the expected NO_UNCOMPRESS define\n' >&2
+    return 1
+  fi
+  _provider_makefile_tmp=$_provider_makefile.tmp.$$
+  sed '/^[[:space:]]*-DNO_UNCOMPRESS/d' "$_provider_makefile" > "$_provider_makefile_tmp" || {
+    rm -f "$_provider_makefile_tmp"
+    return 1
+  }
+  mv "$_provider_makefile_tmp" "$_provider_makefile"
+}
+
+# provider_recipe_current PROVENANCE EXPECTED_REVISION
+# Empty revisions retain the legacy cache identity. A non-empty revision is a
+# product build-recipe identity and must match exactly before a cached provider
+# can be reused.
+provider_recipe_current() {
+  _provider_provenance=$1
+  _provider_expected_revision=$2
+  [ -z "$_provider_expected_revision" ] && return 0
+  [ -f "$_provider_provenance" ] || return 1
+  awk -F '\t' -v want="$_provider_expected_revision" \
+    '$1 == "recipe_revision" && $2 == want { found=1 } END { exit !found }' \
+    "$_provider_provenance"
+}
+
 # provider_download_verified URL SHA256 DEST
 #
 # Prints the URL that supplied the verified bytes. Every endpoint and attempt
@@ -146,6 +178,7 @@ license=$(printf '%s' "$row" | cut -f3)
 platforms=$(printf '%s' "$row" | cut -f4)
 sha=$(printf '%s' "$row" | cut -f5)
 url=$(printf '%s' "$row" | cut -f6)
+recipe_revision=$(printf '%s' "$row" | cut -f7)
 
 # Refuse an undeclared platform rather than attempting it: a clear refusal beats
 # an obscure configure failure three minutes in.
@@ -159,7 +192,10 @@ esac
 
 dest=$cache/$cmd/$version
 target=$dest/$cmd
-if [ -x "$target" ]; then say "cached: $target ($license)"; printf '%s\n' "$target"; exit 0; fi
+if [ -x "$target" ] && provider_recipe_current "$dest/provenance.tsv" "$recipe_revision"; then
+  say "cached: $target ($license)"; printf '%s\n' "$target"; exit 0
+fi
+[ ! -x "$target" ] || say "stale build recipe: $target ($license); rebuilding"
 [ "$check_only" != "--check" ] || fail "$cmd $version is not provisioned (cache miss)"
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "required build tool not found: $1"; }
@@ -365,7 +401,8 @@ PATCHES
     # are escaped because make hands this string to the shell, and the escaping
     # cannot move to configure time -- an unescaped define there fails the
     # compiler sanity check and configure exits 77.
-    (cd "$_h" && ./configure --with-glibc="$src" >/dev/null &&
+    (cd "$_h" && ./configure --prefix=/usr --with-glibc="$src" >/dev/null &&
+       provider_prepare_localedef_makefile Makefile &&
        make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
          CFLAGS='-O2 -fgnu89-inline -std=gnu99 -DIS_IN\(x\)=0' >/dev/null)
     found=$_h/localedef
@@ -453,6 +490,7 @@ install -m 0755 "$found" "$target"
   printf 'source_url\t%s\n' "$url"
   printf 'retrieved_url\t%s\n' "$retrieved_url"
   printf 'source_sha256\t%s\n' "$sha"
+  [ -z "$recipe_revision" ] || printf 'recipe_revision\t%s\n' "$recipe_revision"
   [ -f "$work/extra-$cmd.tsv" ] && cat "$work/extra-$cmd.tsv"
   printf 'compiler\t%s\n' "$CC_LABEL"
   printf 'built_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$target" | awk '{print $1}'; else shasum -a 256 "$target" | awk '{print $1}'; fi)"

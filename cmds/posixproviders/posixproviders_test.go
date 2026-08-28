@@ -127,8 +127,12 @@ func provision(t *testing.T, root, name, body string) string {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256([]byte(body))
-	prov := fmt.Sprintf("command\t%s\nversion\t%s\nlicense\t%s\nsource_url\t%s\nsource_sha256\t%s\ncompiler\ttest\nbuilt_sha256\t%s\n",
-		e.Command, e.Version, e.License, e.URL, e.SHA256, hex.EncodeToString(sum[:]))
+	prov := fmt.Sprintf("command\t%s\nversion\t%s\nlicense\t%s\nsource_url\t%s\nsource_sha256\t%s\n",
+		e.Command, e.Version, e.License, e.URL, e.SHA256)
+	if e.RecipeRevision != "" {
+		prov += "recipe_revision\t" + e.RecipeRevision + "\n"
+	}
+	prov += fmt.Sprintf("compiler\ttest\nbuilt_sha256\t%s\n", hex.EncodeToString(sum[:]))
 	if err := os.WriteFile(filepath.Join(dir, "provenance.tsv"), []byte(prov), 0o644); err != nil {
 		t.Fatal(err)
 	}
