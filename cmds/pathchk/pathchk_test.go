@@ -13,21 +13,7 @@ import (
 )
 
 func runPathchk(t *testing.T, dir string, args ...string) (int, string) {
-	t.Helper()
-	var out, err bytes.Buffer
-	code := run(&tool.RunContext{
-		Ctx: context.Background(),
-		Dir: dir,
-		Stdio: tool.Stdio{
-			Out: &out,
-			Err: &err,
-			In:  strings.NewReader(""),
-		},
-	}, args)
-	if out.Len() != 0 {
-		t.Fatalf("unexpected stdout %q", out.String())
-	}
-	return code, err.String()
+	return runPathchkEnv(t, dir, nil, args...)
 }
 
 func TestPathchkPortable(t *testing.T) {
@@ -44,6 +30,9 @@ func TestPathchkRejectsLeadingHyphen(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code=%d out=%s err=%s", code, out.String(), err.String())
 	}
+	if !strings.Contains(err.String(), "./-bad") {
+		t.Fatalf("diagnostic does not identify the pathname: %q", err.String())
+	}
 }
 
 func TestPathchkEmptyPathnameOptions(t *testing.T) {
@@ -54,7 +43,7 @@ func TestPathchkEmptyPathnameOptions(t *testing.T) {
 		code int
 	}{
 		{name: "default", args: []string{""}, code: 1},
-		{name: "posix portability", args: []string{"-p", ""}, code: 1},
+		{name: "posix portability", args: []string{"-p", ""}, code: 0},
 		{name: "special portability", args: []string{"-P", ""}, code: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +55,21 @@ func TestPathchkEmptyPathnameOptions(t *testing.T) {
 				t.Fatalf("code=%d stderr=%q", code, errText)
 			}
 		})
+	}
+}
+
+func TestPathchkPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	operand := "A/-testpath"
+
+	code, errText := runPathchkEnv(t, dir, []string{"POSIXLY_CORRECT=1"}, operand, "-P")
+	if code != 0 || errText != "" {
+		t.Fatalf("POSIX operand boundary: code=%d stderr=%q", code, errText)
+	}
+
+	code, errText = runPathchkEnv(t, dir, nil, operand, "-P")
+	if code != 1 || !strings.Contains(errText, operand) {
+		t.Fatalf("GNU interspersed option compatibility: code=%d stderr=%q", code, errText)
 	}
 }
 

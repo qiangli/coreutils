@@ -28,7 +28,13 @@ func run(rc *tool.RunContext, args []string) int {
 	posix := fs.BoolP("posix", "p", false, "check for most POSIX systems")
 	special := fs.BoolP("posix-special", "P", false, "check for empty names and leading hyphens")
 	portability := fs.Bool("portability", false, "check both POSIX and special portability")
-	paths, code := tool.Parse(rc, cmd, fs, args)
+	var paths []string
+	var code int
+	if pathchkPOSIXMode(rc.Env) {
+		paths, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		paths, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -168,8 +174,10 @@ func pathParts(rc *tool.RunContext, p string) (base string, components []string,
 
 func checkPOSIX(rc *tool.RunContext, p string) bool {
 	if p == "" {
-		fmt.Fprintln(rc.Err, "pathchk: empty file name")
-		return false
+		// -p checks only the portable pathname character set and the
+		// _POSIX_{PATH,NAME}_MAX limits. The separate -P option owns the
+		// empty-pathname rejection; an empty operand violates no -p rule.
+		return true
 	}
 	// _POSIX_PATH_MAX counts the terminating NUL byte, so a pathname of
 	// exactly posixPathMax characters needs posixPathMax+1 bytes of storage
@@ -198,11 +206,21 @@ func checkSpecial(rc *tool.RunContext, p string) bool {
 	}
 	for _, c := range strings.Split(p, "/") {
 		if strings.HasPrefix(c, "-") {
-			fmt.Fprintf(rc.Err, "pathchk: %q has leading hyphen\n", c)
+			fmt.Fprintf(rc.Err, "pathchk: %q has a component beginning with a hyphen\n", p)
 			return false
 		}
 	}
 	return true
+}
+
+// POSIXLY_CORRECT takes effect when present, including with an empty value.
+func pathchkPOSIXMode(env []string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
+			return true
+		}
+	}
+	return false
 }
 
 func portableChars(s string) bool {
