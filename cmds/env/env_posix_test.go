@@ -66,3 +66,13 @@ func TestEnvErrorStatusPartition(t *testing.T) {
 		t.Fatalf("missing --file diagnostic absent: %q", errb)
 	}
 }
+
+func TestEnvIgnoreEnvironmentMissingUtilityReturns127(t *testing.T) {
+	// -i changes the environment used for lookup; it does not turn a utility
+	// operand into data or suppress a failed lookup.  A name absent from the
+	// resulting search path has the POSIX command-not-found status.
+	out, errb, code := runTool(t, []string{"PATH=/inherited/path"}, "-i", "profile-d-public-missing-utility")
+	if code != 127 || out != "" || !strings.Contains(errb, "No such file or directory") {
+		t.Fatalf("env -i missing utility = (%q, %q, %d), want empty output, diagnostic, 127", out, errb, code)
+	}
+}

@@ -42,6 +42,14 @@ func TestExprRegexpAtAdvertisedLimit(t *testing.T) {
 	checkExpr(t, "", 2, "a", ":", `a\{256\}`)
 }
 
+func TestExprCapturedRegexpAtAdvertisedLimit(t *testing.T) {
+	// A subexpression repeated through RE_DUP_MAX participates in the match,
+	// so expr returns the captured text rather than the null string.  This
+	// complements the match-length boundary above by pinning capture output.
+	operand := strings.Repeat("a", 255)
+	checkExpr(t, operand+"\n", 0, operand, ":", `\(a\{1,255\}\)`)
+}
+
 func TestExprHelpVersionAliases(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"-h"}, {"--version"}, {"-V"}} {
 		var out, err bytes.Buffer
