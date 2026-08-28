@@ -151,6 +151,13 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		_ = ptmx.Close()
 		return 127, "", fmt.Errorf("pty.Start: %w", err)
 	}
+	parentWatch := (*exec.Cmd)(nil)
+	if opts.KillOnParentExit {
+		parentWatch = startParentDeathWatch(cmd.Process.Pid)
+	}
+	if parentWatch != nil {
+		defer stopParentDeathWatch(parentWatch)
+	}
 	_ = tty.Close()
 	if opts.OnStart != nil {
 		if err := opts.OnStart(ttyName); err != nil {

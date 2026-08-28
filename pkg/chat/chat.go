@@ -373,7 +373,8 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 		sink = io.MultiWriter(sink, coach)
 	}
 	exit, killReason, err := agentpty.Run(cmd, sink, agentpty.Options{
-		CtlSock: r.ctlSock,
+		CtlSock:          r.ctlSock,
+		KillOnParentExit: r.killOnParentExit,
 		// Always capture. The caller records this turn; the human, if there is
 		// one, is watching through an observer rather than typing at the agent.
 		Capture: true,

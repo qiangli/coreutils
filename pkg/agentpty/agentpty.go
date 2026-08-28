@@ -49,6 +49,10 @@ import (
 // safe, and what a short interactive turn wants. A long unattended run wants all
 // of them.
 type Options struct {
+	// KillOnParentExit makes this supervised tree self-clean when its caller
+	// disappears. It is used by bounded meet turns, not durable worker sessions.
+	KillOnParentExit bool
+
 	// IdleTimeout kills the process tree when it stops WRITING for this long.
 	// Useless against a runaway TUI whose spinner keeps emitting, which is what
 	// MaxRuntime is for.
