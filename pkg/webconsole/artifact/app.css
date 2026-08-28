@@ -307,3 +307,5 @@ body.standalone #bar { flex: none; }
 .login input:focus { outline: none; box-shadow: 0 0 0 2px var(--primary); }
 .login .btn { margin-top: .4rem; padding: .5rem; font-size: .9rem; }
 .login .err { margin: 0; font-size: .82rem; color: #ef4444; }
+
+#logout { display: inline-flex; margin: 0; }

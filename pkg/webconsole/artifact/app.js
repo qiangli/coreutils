@@ -140,6 +140,7 @@ const SVG = {
   sun:      "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
   auto:     "M12 3a9 9 0 1 0 0 18zM12 3a9 9 0 0 1 0 18",
   star:     "M12 4.5l2.3 4.7 5.2.8-3.8 3.6.9 5.1-4.6-2.4-4.6 2.4.9-5.1L4.5 10l5.2-.8z",
+  logout:   "M15 17l5-5-5-5M20 12H9M12 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6",
 };
 
 // A pinned colour for the apps we know, and a deterministic hash into a fixed
@@ -381,6 +382,22 @@ document.getElementById("clear-favs").addEventListener("click", () => { saveCfg(
 document.getElementById("clear-recents").addEventListener("click", () => { saveCfg({ recents: [] }); buildSettings(); render(); });
 dlg.addEventListener("close", render);
 
+// ----------------------------------------------------------------- session --
+// Sign-out appears only when there is a session to end.
+//
+// On loopback the gate admits the machine owner without one, so a sign-out
+// button there would be a control that does nothing — and the next thing a
+// reader concludes from a button that does nothing is that the page is broken.
+function renderSession(s) {
+  const form = document.getElementById("logout");
+  if (!form) return;
+  const signedIn = s.via === "session";
+  form.hidden = !signedIn;
+  if (signedIn && !form.querySelector("svg")) {
+    form.querySelector("button").append(svgIcon(SVG.logout));
+  }
+}
+
 // ------------------------------------------------------------------- build --
 // Which binary am I looking at, and is this page from it or from a cache?
 //
@@ -418,6 +435,7 @@ async function refresh() {
     if (s) {
       whoEl.textContent = s.user + " · " + s.via;
       renderBuild(s.build);
+      renderSession(s);
       const ready = apps.filter((x) => x.status === "ready").length;
       footLeft.textContent = `${ready}/${apps.length} ready · signed in as ${s.user} (${s.via})`;
     }

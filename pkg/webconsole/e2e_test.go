@@ -419,6 +419,41 @@ func TestE2ELoginGuardsAnExposedConsole(t *testing.T) {
 			t.Errorf("%s = %d after signing in", p, resp.StatusCode)
 		}
 	}
+
+	// The session must be visible to the page, since that is what decides whether
+	// a sign-out control is shown at all.
+	req, _ := http.NewRequest("GET", base+"/api/session", nil)
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sess struct{ User, Via string }
+	_ = json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+	if sess.Via != "session" {
+		t.Errorf("/api/session via = %q, want \"session\" — the header cannot know it is signed in", sess.Via)
+	}
+
+	// Signing out must actually revoke: a logout that only clears the cookie
+	// leaves a still-valid token in anything that captured it.
+	resp, err = c.PostForm(base+"/api/logout", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("logout = %d, want 303", resp.StatusCode)
+	}
+	req, _ = http.NewRequest("GET", base+"/api/apps", nil)
+	req.Header.Set("Accept", "text/html")
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Error("still authenticated after signing out")
+	}
 }
 
 // The throttle is the only thing standing between a LAN peer and unlimited
