@@ -240,6 +240,9 @@ var packages = map[string]Package{
 		"is meaningless without a question to carry."),
 	"fleet": libPkg("tools", "the declarative registry behind tools/models/agents/people/whois. Four "+
 		"verbs project one registry; the registry is not a fifth verb."),
+	"hostauth": libPkg("apps", "verifies web-console login credentials against the host OS. "+
+		"No verb of its own: authentication is a guard on the apps surface, not an independently "+
+		"invokable capability."),
 	"policy": libPkg("audit", "policy/audit is the tamper-evident record behind `bashy audit`; "+
 		"policy/coord is the same-project collision guard behind `bashy claim`. Two capabilities, "+
 		"two existing front doors, no `policy` verb — a verb here would be a settings surface, and "+
