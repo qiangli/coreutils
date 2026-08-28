@@ -1,6 +1,7 @@
 package bre
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ func TestLocaleByteEREFailsClosed(t *testing.T) {
 	patterns := []string{
 		`\1`, `\b`, `\B`, `\<`, `\>`, `\q`, `\`,
 		`[[=ab=]]`, `[[.ab.]]`, `[[:bogus:]]`, `[[:alpha:]`,
-		`*a`, `a**`, `a+?`, `{2}`, `a{2`, `a{2,1}`, `a{1001}`, `a}`,
+		`*a`, `a**`, `a+?`, `{2}`, `a{2`, `a{2,1}`, `a}`,
 		`(a`, `a)`, `()`, `a|`, `|a`, `(a|)`,
 	}
 	for _, pattern := range patterns {
@@ -104,6 +105,17 @@ func TestLocaleByteEREFailsClosed(t *testing.T) {
 				t.Fatalf("compileLocaleByteERE(%q) succeeded", pattern)
 			}
 		})
+	}
+}
+
+func TestLocaleByteERELargeInterval(t *testing.T) {
+	pattern := []byte(fmt.Sprintf(`^a{%d}$`, REDupMax))
+	re := compileSyntheticByteERE(t, pattern, false)
+	if got, err := re.findSubmatchIndex([]byte(strings.Repeat("a", REDupMax))); err != nil || got == nil {
+		t.Fatalf("advertised-limit interval match = %v, %v; want match, nil", got, err)
+	}
+	if _, err := compileLocaleByteERE([]byte(fmt.Sprintf(`a{%d}`, REDupMax+1)), syntheticBytePatternTables(), false); err == nil {
+		t.Fatal("interval above REDupMax compiled")
 	}
 }
 

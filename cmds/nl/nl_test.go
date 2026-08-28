@@ -48,6 +48,18 @@ func TestNLStylesAndFormatting(t *testing.T) {
 	}
 }
 
+func TestNLRegexpAtAdvertisedLimit(t *testing.T) {
+	line := strings.Repeat("a", 255)
+	out, errb, code := runNL(t, t.TempDir(), "short\n"+line+"\n", "-b", `p^a\{255\}$`)
+	want := "       short\n     1\t" + line + "\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("large BRE = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, want)
+	}
+	if _, errb, code := runNL(t, t.TempDir(), "a\n", "-b", `pa\{256\}`); code != 2 || errb == "" {
+		t.Fatalf("above-limit BRE: code=%d err=%q, want diagnostic exit 2", code, errb)
+	}
+}
+
 func TestNLStartIncrementAndNoRenumber(t *testing.T) {
 	out, _, code := runNL(t, t.TempDir(), "a\nb\n", "-b", "a", "-v", "10", "-i", "5", "-w", "2", "-s", ":")
 	if want := "10:a\n15:b\n"; out != want || code != 0 {

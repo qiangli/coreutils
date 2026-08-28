@@ -1,6 +1,7 @@
 package bre
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -9,6 +10,20 @@ import (
 )
 
 const maxBacktrackSteps = 200000
+
+// MatchLimitError reports that the bounded matcher exhausted its invocation
+// budget before it could determine whether a match exists.
+type MatchLimitError struct{ Limit int }
+
+func (e *MatchLimitError) Error() string {
+	return fmt.Sprintf("regular expression match exceeded resource limit (%d steps)", e.Limit)
+}
+
+// Is lets callers use errors.Is(err, ErrMatchLimit).
+func (e *MatchLimitError) Is(target error) bool { return target == ErrMatchLimit }
+
+// ErrMatchLimit classifies bounded-matcher resource exhaustion.
+var ErrMatchLimit = errors.New("regular expression match resource limit exceeded")
 
 // Regexp is a POSIX BRE matcher. Patterns without back-references or word-edge
 // anchors are backed by Go's RE2 engine; patterns with \1..\9 or \<...\> use
@@ -132,37 +147,66 @@ func (r *Regexp) Longest() {
 }
 
 func (r *Regexp) MatchString(s string) bool {
-	return r.FindStringIndex(s) != nil
+	matched, _ := r.MatchStringErr(s)
+	return matched
+}
+
+// MatchStringErr reports resource exhaustion instead of turning it into an
+// ordinary non-match.
+func (r *Regexp) MatchStringErr(s string) (bool, error) {
+	loc, err := r.FindStringIndexErr(s)
+	return loc != nil, err
 }
 
 func (r *Regexp) FindStringIndex(s string) []int {
+	loc, _ := r.FindStringIndexErr(s)
+	return loc
+}
+
+func (r *Regexp) FindStringIndexErr(s string) ([]int, error) {
 	if r.re != nil {
-		return r.re.FindStringIndex(s)
+		return r.re.FindStringIndex(s), nil
 	}
-	m := r.bt.find(s, 1)
+	m, err := r.bt.find(s, 1)
+	if err != nil {
+		return nil, err
+	}
 	if len(m) == 0 {
-		return nil
+		return nil, nil
 	}
-	return m[0][:2]
+	return m[0][:2], nil
 }
 
 func (r *Regexp) FindAllStringSubmatchIndex(s string, n int) [][]int {
+	matches, _ := r.FindAllStringSubmatchIndexErr(s, n)
+	return matches
+}
+
+func (r *Regexp) FindAllStringSubmatchIndexErr(s string, n int) ([][]int, error) {
 	if r.re != nil {
-		return r.re.FindAllStringSubmatchIndex(s, n)
+		return r.re.FindAllStringSubmatchIndex(s, n), nil
 	}
 	return r.bt.find(s, n)
 }
 
 // FindStringSubmatchIndex returns the leftmost match and its submatches.
 func (r *Regexp) FindStringSubmatchIndex(s string) []int {
+	matches, _ := r.FindStringSubmatchIndexErr(s)
+	return matches
+}
+
+func (r *Regexp) FindStringSubmatchIndexErr(s string) ([]int, error) {
 	if r.re != nil {
-		return r.re.FindStringSubmatchIndex(s)
+		return r.re.FindStringSubmatchIndex(s), nil
 	}
-	matches := r.bt.find(s, 1)
+	matches, err := r.bt.find(s, 1)
+	if err != nil {
+		return nil, err
+	}
 	if len(matches) == 0 {
-		return nil
+		return nil, nil
 	}
-	return matches[0]
+	return matches[0], nil
 }
 
 // NumSubexp returns the number of parenthesized subexpressions.
@@ -175,6 +219,10 @@ func (r *Regexp) NumSubexp() int {
 
 func (r *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
 	return r.FindAllStringSubmatchIndex(string(b), n)
+}
+
+func (r *Regexp) FindAllSubmatchIndexErr(b []byte, n int) ([][]int, error) {
+	return r.FindAllStringSubmatchIndexErr(string(b), n)
 }
 
 func (r *Regexp) ExpandString(dst []byte, template, src string, match []int) []byte {
@@ -191,12 +239,6 @@ func needsBacktrack(p string) bool {
 			n := p[i+1]
 			if (n >= '1' && n <= '9') || n == '<' || n == '>' {
 				return true
-			}
-			if n == '{' {
-				end := strings.Index(p[i+2:], `\}`)
-				if end >= 0 && intervalNeedsBacktrack(p[i+2:i+2+end]) {
-					return true
-				}
 			}
 			i++
 		}
@@ -274,9 +316,6 @@ func ERERequiresBacktracking(p string) bool {
 				return false // ToGoERE will return the syntax error.
 			}
 			inner := p[i+1 : i+1+end]
-			if intervalNeedsBacktrack(inner) {
-				return true
-			}
 			if _, ok := normalizeInterval(inner); !ok {
 				return false // ToGoERE will return the syntax error.
 			}
@@ -291,18 +330,6 @@ func ERERequiresBacktracking(p string) bool {
 		i++
 	}
 	return false
-}
-
-func intervalNeedsBacktrack(inner string) bool {
-	norm, ok := normalizeInterval(inner)
-	if !ok {
-		return false
-	}
-	min, max, err := parseInterval(norm)
-	if err != nil {
-		return false
-	}
-	return min > 1000 || max > 1000
 }
 
 func expandTemplate(dst []byte, template, src string, match []int) []byte {
@@ -951,9 +978,10 @@ func parseInterval(s string) (int, int, error) {
 	return n, n, nil
 }
 
-func (p *btProg) find(s string, n int) [][]int {
+func (p *btProg) find(s string, n int) ([][]int, error) {
 	var out [][]int
 	limit := n
+	ctx := &btCtx{s: s, limit: maxBacktrackSteps}
 	// Every offset is tried in turn: the first that matches is the leftmost
 	// match, as POSIX requires. (An earlier "skip past the leading repeat on
 	// failure" shortcut lived here. It is unsound on precisely the patterns
@@ -963,7 +991,10 @@ func (p *btProg) find(s string, n int) [][]int {
 	// and its offset. It made \(a*\)b\1 skip the leftmost match "aba" in "aaba"
 	// and report "b" instead.)
 	for start := 0; start <= len(s); {
-		st, ok := p.pick(p.matchAt(s, start))
+		st, ok := p.pick(p.matchAt(ctx, start))
+		if ctx.steps > ctx.limit {
+			return nil, &MatchLimitError{Limit: ctx.limit}
+		}
 		if ok {
 			match := make([]int, 2*(p.groups+1))
 			for i := range match {
@@ -973,7 +1004,7 @@ func (p *btProg) find(s string, n int) [][]int {
 			copy(match[2:], st.caps[2:2*(p.groups+1)])
 			out = append(out, match)
 			if limit > 0 && len(out) >= limit {
-				return out
+				return out, nil
 			}
 			if st.pos > start {
 				start = st.pos
@@ -993,7 +1024,7 @@ func (p *btProg) find(s string, n int) [][]int {
 			start++
 		}
 	}
-	return out
+	return out, nil
 }
 
 // pick chooses which of the states a successful match at one offset produced to
@@ -1016,13 +1047,12 @@ func (p *btProg) pick(sts []btState) (btState, bool) {
 	return best, true
 }
 
-func (p *btProg) matchAt(s string, start int) []btState {
+func (p *btProg) matchAt(ctx *btCtx, start int) []btState {
 	var st btState
 	st.pos = start
 	for i := range st.caps {
 		st.caps[i] = -1
 	}
-	ctx := &btCtx{s: s, limit: maxBacktrackSteps}
 	outs := p.root.match(ctx, st)
 	if ctx.steps > ctx.limit {
 		return nil

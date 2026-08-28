@@ -37,6 +37,11 @@ func TestExprMatch(t *testing.T) {
 	}
 }
 
+func TestExprRegexpAtAdvertisedLimit(t *testing.T) {
+	checkExpr(t, "255\n", 0, strings.Repeat("a", 255), ":", `a\{255\}`)
+	checkExpr(t, "", 2, "a", ":", `a\{256\}`)
+}
+
 func TestExprHelpVersionAliases(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"-h"}, {"--version"}, {"-V"}} {
 		var out, err bytes.Buffer

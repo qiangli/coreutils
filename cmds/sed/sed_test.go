@@ -206,17 +206,17 @@ func TestSedBREInterval(t *testing.T) {
 }
 
 func TestSedBREIntervalsThroughAdvertisedDupMax(t *testing.T) {
-	long := strings.Repeat("a", 2048)
+	long := strings.Repeat("a", 255)
 	cases := []struct {
 		name   string
 		input  string
 		script string
 		want   string
 	}{
-		{"exact address", long + "\nshort\n", `/^a\{2048\}$/p`, long + "\n"},
-		{"exact substitution", long + "\n", `s/^a\{2048\}$/MATCH/p`, "MATCH\n"},
-		{"bounded substitution", long + "\n", `s/^a\{1,2048\}$/MATCH/p`, "MATCH\n"},
-		{"open interval no match", strings.Repeat("a", 2047) + "\n", `/a\{2048,\}/p`, ""},
+		{"exact address", long + "\nshort\n", `/^a\{255\}$/p`, long + "\n"},
+		{"exact substitution", long + "\n", `s/^a\{255\}$/MATCH/p`, "MATCH\n"},
+		{"bounded substitution", long + "\n", `s/^a\{1,255\}$/MATCH/p`, "MATCH\n"},
+		{"open interval no match", strings.Repeat("a", 254) + "\n", `/a\{255,\}/p`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,6 +225,9 @@ func TestSedBREIntervalsThroughAdvertisedDupMax(t *testing.T) {
 				t.Errorf("sed -n %q = (%q, %q, %d), want (%q, empty, 0)", tc.script, out, errOut, code, tc.want)
 			}
 		})
+	}
+	if out, errOut, code := runSed(t, "a\n", `s/a\{256\}/x/`); code != 2 || out != "" || errOut == "" {
+		t.Errorf("above-limit BRE = (%q, %q, %d), want diagnostic exit 2", out, errOut, code)
 	}
 }
 

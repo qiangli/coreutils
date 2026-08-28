@@ -493,7 +493,11 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 			fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated\n", h.Name)
 			status = 1
 		}
-		subName := applySubstitutions(o.subst, h.Name, rc.Err)
+		subName, subErr := applySubstitutionsErr(o.subst, h.Name, rc.Err)
+		if subErr != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", subErr)
+			return 1
+		}
 		if subName == "" {
 			continue
 		}
@@ -517,7 +521,12 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		}
 		linkTarget := h.Linkname
 		if linkTarget != "" {
-			linkTarget = applySubstitutions(o.subst, linkTarget, nil)
+			var subErr error
+			linkTarget, subErr = applySubstitutionsErr(o.subst, linkTarget, nil)
+			if subErr != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", subErr)
+				return 1
+			}
 			if targetIndex, ok := listTargetOccurrence(index, h.Linkname, linkTarget,
 				originalOccurrences, substitutedOccurrences); ok {
 				if r, kept := effectiveNames[targetIndex]; kept {

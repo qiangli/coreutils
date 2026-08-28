@@ -34,9 +34,7 @@ type sedRegexp interface {
 	Expand([]byte, []byte, []byte, []int) ([]byte, error)
 }
 
-// legacyRegexp adapts pkg/bre's current infallible matching API to sed's
-// error-bearing matcher seam. Locale-aware matchers can use the same seam to
-// report run-time failures without changing the C/POSIX path.
+// legacyRegexp adapts pkg/bre to sed's error-bearing matcher seam.
 type legacyRegexp struct {
 	*bre.Regexp
 }
@@ -67,15 +65,15 @@ func (r localeRegexp) Expand(dst, template, src []byte, match []int) ([]byte, er
 }
 
 func (r legacyRegexp) MatchString(s string) (bool, error) {
-	return r.Regexp.MatchString(s), nil
+	return r.Regexp.MatchStringErr(s)
 }
 
 func (r legacyRegexp) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
-	return r.Regexp.FindAllStringSubmatchIndex(s, n), nil
+	return r.Regexp.FindAllStringSubmatchIndexErr(s, n)
 }
 
 func (r legacyRegexp) FindAllSubmatchIndex(s []byte, n int) ([][]int, error) {
-	return r.Regexp.FindAllSubmatchIndex(s, n), nil
+	return r.Regexp.FindAllSubmatchIndexErr(s, n)
 }
 
 func (r legacyRegexp) ExpandString(dst []byte, template, src string, match []int) ([]byte, error) {
@@ -138,8 +136,8 @@ func (opts Options) compileRE(pattern, flags string) (sedRegexp, error) {
 
 // cBytePatternNeedsTables identifies the constructs for which RE2's rune
 // model cannot implement the C locale's byte semantics. Literal-only regular
-// expressions (including large intervals and back-references handled by the
-// bounded matcher) stay on the legacy path, which avoids reducing that
+// expressions (including back-references handled by the bounded matcher) stay
+// on the legacy path, which avoids reducing that
 // matcher's supported grammar merely to select byte-oriented dot/classes.
 func cBytePatternNeedsTables(pattern, flags string) bool {
 	if strings.Contains(flags, "i") {

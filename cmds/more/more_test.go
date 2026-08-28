@@ -141,6 +141,19 @@ func TestMorePatternStartsAtMatch(t *testing.T) {
 	}
 }
 
+func TestMoreRegexpAtAdvertisedLimit(t *testing.T) {
+	matcher, err := compileMoreMatcher(options{charMode: charactersUTF8, ctypeName: "C"}, `^a\{255\}$`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := matcher(strings.Repeat("a", 255)); err != nil || !got {
+		t.Fatalf("large BRE match = %v, %v; want true, nil", got, err)
+	}
+	if _, err := compileMoreMatcher(options{charMode: charactersUTF8, ctypeName: "C"}, `a\{256\}`); err == nil {
+		t.Fatal("above-limit BRE compiled")
+	}
+}
+
 func TestMorePatternIsLiteral(t *testing.T) {
 	out, errb, code := runMore(t, t.TempDir(), "alpha\nx^bety\ngamma\n", "-P", "^bet")
 	if want := "x^bety\ngamma\n"; out != want || errb != "" || code != 0 {

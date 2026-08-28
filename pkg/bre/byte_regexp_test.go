@@ -315,6 +315,25 @@ func TestLocaleByteRegexpBREBackreferences(t *testing.T) {
 	}
 }
 
+func TestLocaleByteRegexpPropagatesBacktrackLimit(t *testing.T) {
+	re, err := CompileLocaleByteRegexp([]byte(`\(a*\)b\1`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpBRE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := strings.Repeat("a", 500) + "bb"
+	if matched, err := re.MatchString(input); matched || !errors.Is(err, ErrMatchLimit) {
+		t.Fatalf("MatchString = (%v, %v), want false and ErrMatchLimit", matched, err)
+	}
+	if matches, err := re.FindAllStringSubmatchIndex(input, -1); matches != nil || !errors.Is(err, ErrMatchLimit) {
+		t.Fatalf("FindAll = (%v, %v), want nil and ErrMatchLimit", matches, err)
+	}
+	var limitErr *MatchLimitError
+	_, err = re.FindSubmatchIndex([]byte(input))
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("FindSubmatchIndex error = %T %v, want *MatchLimitError", err, err)
+	}
+}
+
 func TestLocaleByteRegexpZeroLengthSingleMatch(t *testing.T) {
 	empty, err := CompileLocaleByteRegexp(nil, newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE})
 	if err != nil {

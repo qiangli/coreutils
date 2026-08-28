@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -36,7 +37,7 @@ func TestAgreesWithSystemGetconf(t *testing.T) {
 	}
 	for _, name := range []string{
 		"PAGESIZE", "OPEN_MAX", "NGROUPS_MAX", "ARG_MAX", "CLK_TCK",
-		"BC_BASE_MAX", "BC_STRING_MAX", "INT_MAX", "LINE_MAX", "RE_DUP_MAX",
+		"BC_BASE_MAX", "BC_STRING_MAX", "INT_MAX", "LINE_MAX",
 		"SYMLOOP_MAX", "_POSIX_VERSION",
 	} {
 		want, err := exec.Command(sys, name).Output()
@@ -248,11 +249,21 @@ func TestWindowsFailsClosed(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows only")
 	}
-	for _, name := range []string{"PATH", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "_POSIX_V6_LP64_OFF64", "_POSIX_SAVED_IDS"} {
+	for _, name := range []string{"PATH", "RE_DUP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "_POSIX_V6_LP64_OFF64", "_POSIX_SAVED_IDS"} {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != undefined {
 			t.Errorf("%s = %q (exit %d), want undefined", name, got, code)
 		}
+	}
+}
+
+func TestPOSIXPlatformREDupMaxMatchesProduct(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("POSIX platform adapter only")
+	}
+	got, errs, code := runCmd(t, "RE_DUP_MAX")
+	if want := strconv.Itoa(bre.REDupMax); code != 0 || errs != "" || got != want {
+		t.Fatalf("getconf RE_DUP_MAX = (%q, %q, %d), want (%q, empty, 0)", got, errs, code, want)
 	}
 }
 
@@ -263,18 +274,22 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 	// PATH is deliberately absent from this set: on Linux it reports the
 	// product's standard-utility search path (TestLinuxPathReportsStandardUtilityPath),
 	// not an undefined libc boundary.
-	for _, name := range []string{"_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "RE_DUP_MAX", "SYMLOOP_MAX"} {
+	for _, name := range []string{"_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION", "SYMLOOP_MAX"} {
 		got, _, code := runCmd(t, name)
 		if code != 0 || got != undefined {
 			t.Errorf("%s = %q (exit %d), want undefined without a libc adapter", name, got, code)
 		}
+	}
+	got, errs, code := runCmd(t, "RE_DUP_MAX")
+	if want := strconv.Itoa(bre.REDupMax); code != 0 || errs != "" || got != want {
+		t.Fatalf("getconf RE_DUP_MAX = (%q, %q, %d), want (%q, empty, 0)", got, errs, code, want)
 	}
 
 	// LINE_MAX is a POSIX utility input to more than getconf itself: the
 	// conformance tests for line-oriented utilities use it to size their test
 	// data. The portable Issue 7 value in sysVars must not be shadowed by the
 	// Linux platform adapter and reported as "undefined".
-	got, errs, code := runCmd(t, "LINE_MAX")
+	got, errs, code = runCmd(t, "LINE_MAX")
 	if code != 0 || errs != "" || got != "2048" {
 		t.Fatalf("getconf LINE_MAX = (%q, %q, %d), want (2048, empty, 0)", got, errs, code)
 	}

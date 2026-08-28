@@ -637,7 +637,7 @@ func (r exprRegexp) findAllStringSubmatchIndex(src string, n int) ([][]int, erro
 	if r.localeRe != nil {
 		return r.localeRe.FindAllStringSubmatchIndex(src, n)
 	}
-	return r.re.FindAllStringSubmatchIndex(src, n), nil
+	return r.re.FindAllStringSubmatchIndexErr(src, n)
 }
 
 func (p *parser) compileBRE(pattern string) (exprRegexp, bool, error) {

@@ -57,6 +57,17 @@ func TestRegisteredToolAddressesSearchAndList(t *testing.T) {
 	}
 }
 
+func TestEdRegexpAtAdvertisedLimit(t *testing.T) {
+	line := strings.Repeat("a", 255)
+	code, out, stderr, _ := runEd(t, "a\n"+line+"\n.\n/^a\\{255\\}$/p\nQ\n", "-s")
+	if code != 0 || stderr != "" || out != line+"\n" {
+		t.Fatalf("large BRE = (%d, %q, %q), want (0, line, empty)", code, out, stderr)
+	}
+	if code, out, _, _ := runEd(t, "a\na\n.\n/a\\{256\\}/p\nQ\n", "-s"); code == 0 || out != "?\n" {
+		t.Fatalf("above-limit BRE = (code %d, out %q), want failure", code, out)
+	}
+}
+
 func TestRegisteredToolBRESubstitution(t *testing.T) {
 	input := "a\nbook 12\nboot 34\n.\n1,$s/^b\\(oo\\)/B\\1/p\n1,$s/[[:digit:]][[:digit:]]/(&)/g\n1,$p\nQ\n"
 	code, out, stderr, _ := runEd(t, input, "-s")

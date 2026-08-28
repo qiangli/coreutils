@@ -67,7 +67,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 18 |
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 8 | 64 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 4 | 27 |
-| `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 21 |
+| `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 3 | 22 |
 | `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 16 |
@@ -80,11 +80,11 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `du` | `cmds/du` | — | GNU Coreutils | yes | yes | 3 | 37 |
 | `duration` | `cmds/duration` | — | Bashy/other extension | no | no | 1 | 2 |
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 4 |
-| `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 39 |
+| `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 2 | 40 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 32 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 28 |
-| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 2 | 17 |
+| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 2 | 18 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
@@ -92,8 +92,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 12 | 84 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
-| `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 2 | 24 |
-| `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 4 | 44 |
+| `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 2 | 25 |
+| `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 4 | 45 |
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 | `gzip` | `cmds/gzip` | — | Bashy/other extension | no | no | 1 | 10 |
@@ -126,12 +126,12 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
-| `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 4 | 66 |
+| `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 4 | 67 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 44 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
 | `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 57 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 6 | 25 |
-| `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
+| `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 13 |
 | `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 23 |
 | `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 3 | 23 |
 | `nproc` | `cmds/nproc` | — | GNU Coreutils | yes | no | 1 | 2 |
@@ -141,7 +141,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `patch` | `cmds/patch` | — | POSIX/Unix utility | no | yes | 3 | 65 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 24 |
-| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 15 | 178 |
+| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 15 | 179 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 4 | 23 |
 | `posixgate` | `cmds/posixgate` | — | Bashy/other extension | no | no | 1 | 33 |

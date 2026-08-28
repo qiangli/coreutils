@@ -303,17 +303,19 @@ func normalizeInterval(s string) (string, bool) {
 	return stripZeros(lo) + "," + hiN, true
 }
 
-// reDupMax is the RE_DUP_MAX exposed by the Linux/POSIX certification target.
-const reDupMax = 32767
+// REDupMax is the largest repetition bound accepted by the POSIX regular
+// expression implementation. getconf derives RE_DUP_MAX from this constant so
+// the advertised capability cannot drift from the matcher.
+const REDupMax = 255
 
 // withinDupMax reports whether an all-digit bound is <= RE_DUP_MAX, computed
-// without overflowing on a huge literal: more than five significant digits
-// already exceeds 32767, so it is rejected before atoi is called.
+// without overflowing on a huge literal: more than three significant digits
+// already exceeds 255, so it is rejected before atoi is called.
 func withinDupMax(x string) bool {
-	if len(strings.TrimLeft(x, "0")) > 5 {
+	if len(strings.TrimLeft(x, "0")) > 3 {
 		return false
 	}
-	return atoi(x) <= reDupMax
+	return atoi(x) <= REDupMax
 }
 
 // stripZeros removes leading zeros from an all-digit bound, leaving canonical

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -317,7 +316,7 @@ func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, star
 	found := -1
 	for i := start; i < len(lines); i++ {
 		if ok, err := matcher.match(strings.TrimSuffix(lines[i], "\n")); err != nil {
-			return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
+			return splitPoint{}, start, false, tool.UsageError(rc, cmd, "regular expression '%s': %v", spec.expr, err)
 		} else if ok {
 			found = i
 			break
@@ -338,7 +337,7 @@ func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, star
 }
 
 type lineMatcher struct {
-	re       *regexp.Regexp
+	re       *bre.Regexp
 	localeRe *bre.LocaleByteRegexp
 }
 
@@ -347,11 +346,7 @@ func compileMatcher(expr string, tables *bre.LocaleByteTables) (lineMatcher, err
 		re, err := bre.CompileLocaleByteRegexpTables([]byte(expr), tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpBRE})
 		return lineMatcher{localeRe: re}, err
 	}
-	translated, err := bre.ToGo(expr)
-	if err != nil {
-		return lineMatcher{}, err
-	}
-	re, err := regexp.Compile(translated)
+	re, err := bre.Compile(expr)
 	return lineMatcher{re: re}, err
 }
 
@@ -359,7 +354,7 @@ func (m lineMatcher) match(line string) (bool, error) {
 	if m.localeRe != nil {
 		return m.localeRe.MatchString(line)
 	}
-	return m.re.MatchString(line), nil
+	return m.re.MatchStringErr(line)
 }
 
 func parsePattern(rc *tool.RunContext, pattern string) (patternSpec, int) {

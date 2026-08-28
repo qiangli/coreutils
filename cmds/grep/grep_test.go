@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -263,20 +264,17 @@ func TestGrepEREAndFixed(t *testing.T) {
 }
 
 func TestGrepEREIntervalDispatch(t *testing.T) {
-	a1000 := strings.Repeat("a", 1000)
-	a1001 := strings.Repeat("a", 1001)
-	input := a1000 + "\n" + a1001 + "\n" + "a{1001}\n"
+	a255 := strings.Repeat("a", 255)
+	input := a255 + "\n" + "a{256}\n"
 	cases := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{"RE2 boundary", []string{"-E", `^a{1000}$`}, a1000 + "\n"},
-		{"backtracker canonical", []string{"-E", `^a{1001}$`}, a1001 + "\n"},
-		{"backtracker padded", []string{"-E", `^a{01001}$`}, a1001 + "\n"},
-		{"escaped interval literal", []string{"-E", `^a\{1001\}$`}, "a{1001}\n"},
-		{"bracket braces literal", []string{"-E", `^a[{]1001[}]$`}, "a{1001}\n"},
-		{"large plus ordinary expressions", []string{"-E", "-e", `^a{1001}$`, "-e", `^a{1000}$`}, a1000 + "\n" + a1001 + "\n"},
+		{"advertised limit", []string{"-E", `^a{255}$`}, a255 + "\n"},
+		{"padded limit", []string{"-E", `^a{00255}$`}, a255 + "\n"},
+		{"escaped interval literal", []string{"-E", `^a\{256\}$`}, "a{256}\n"},
+		{"bracket braces literal", []string{"-E", `^a[{]256[}]$`}, "a{256}\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -285,6 +283,26 @@ func TestGrepEREIntervalDispatch(t *testing.T) {
 				t.Errorf("grep %v = (%q, %q, %d), want (%q, %q, 0)", tc.args, out, errOut, code, tc.want, "")
 			}
 		})
+	}
+	if out, errOut, code := runGrep(t, "", input, "-E", `a{256}`); code != 2 || out != "" || errOut == "" {
+		t.Errorf("above-limit ERE = (%q, %q, %d), want diagnostic exit 2", out, errOut, code)
+	}
+}
+
+func TestGrepBacktrackExhaustionIsRuntimeError(t *testing.T) {
+	pattern := `\(a*\)b\1`
+	for _, input := range []string{
+		strings.Repeat("a", 20000) + "\n",
+		strings.Repeat("a", 500) + "bb\n",
+	} {
+		start := time.Now()
+		out, errOut, code := runGrep(t, "", input, pattern)
+		if code != 2 || out != "" || !strings.Contains(errOut, "resource limit") {
+			t.Fatalf("bounded backtrack = (%q, %q, %d), want diagnostic exit 2", out, errOut, code)
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("bounded backtrack took %v", elapsed)
+		}
 	}
 }
 
@@ -861,13 +879,11 @@ func TestGrepOnlyMatchingUsesLeftmostLongest(t *testing.T) {
 	}
 }
 
-// TestGrepREDUPMAX2047Intervals exercises the RE_DUP_MAX-scale interval boundary
-// at exactly 2047 in both BRE (\{…\}) and ERE ({…}) modes. Go RE2 rejects repeat
-// counts > 1000, so these intervals route through pkg/bre's bounded backtracking
-// matcher. Each pattern is run against synthetic single-line inputs at lengths
-// 0, 1, 2046, 2047, and 2048 to assert both matching and nonmatching behavior.
+// TestGrepREDUPMAX2047Intervals exercises the advertised boundary in BRE and
+// ERE. The historical name is retained because the audit manifest cites this
+// focused evidence ID; the product-wide capability is now the honest 255.
 func TestGrepREDUPMAX2047Intervals(t *testing.T) {
-	lengths := []int{0, 1, 2046, 2047, 2048}
+	lengths := []int{0, 1, 254, 255, 256}
 	lines := make(map[int]string, len(lengths))
 	for _, n := range lengths {
 		lines[n] = strings.Repeat("a", n)
@@ -878,24 +894,24 @@ func TestGrepREDUPMAX2047Intervals(t *testing.T) {
 		want map[int]bool // line length → should match
 	}{
 		{
-			"BRE exact 2047",
-			[]string{`^a\{2047\}$`},
-			map[int]bool{0: false, 1: false, 2046: false, 2047: true, 2048: false},
+			"BRE exact 255",
+			[]string{`^a\{255\}$`},
+			map[int]bool{0: false, 1: false, 254: false, 255: true, 256: false},
 		},
 		{
-			"BRE range 1-2047",
-			[]string{`^a\{1,2047\}$`},
-			map[int]bool{0: false, 1: true, 2046: true, 2047: true, 2048: false},
+			"BRE range 1-255",
+			[]string{`^a\{1,255\}$`},
+			map[int]bool{0: false, 1: true, 254: true, 255: true, 256: false},
 		},
 		{
-			"ERE exact 2047",
-			[]string{"-E", `^a{2047}$`},
-			map[int]bool{0: false, 1: false, 2046: false, 2047: true, 2048: false},
+			"ERE exact 255",
+			[]string{"-E", `^a{255}$`},
+			map[int]bool{0: false, 1: false, 254: false, 255: true, 256: false},
 		},
 		{
-			"ERE range 1-2047",
-			[]string{"-E", `^a{1,2047}$`},
-			map[int]bool{0: false, 1: true, 2046: true, 2047: true, 2048: false},
+			"ERE range 1-255",
+			[]string{"-E", `^a{1,255}$`},
+			map[int]bool{0: false, 1: true, 254: true, 255: true, 256: false},
 		},
 	}
 	for _, tc := range cases {

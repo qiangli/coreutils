@@ -106,7 +106,11 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		if !sel.keep(m.name, m.isDir) {
 			continue
 		}
-		subName := applySubstitutions(o.subst, m.name, rc.Err)
+		subName, subErr := applySubstitutionsErr(o.subst, m.name, rc.Err)
+		if subErr != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", subErr)
+			return 1
+		}
 		if subName == "" {
 			continue
 		}
@@ -187,7 +191,12 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 
 		h.Name = newName
 		if h.Typeflag == tar.TypeLink {
-			h.Linkname = applySubstitutions(o.subst, h.Linkname, nil)
+			var subErr error
+			h.Linkname, subErr = applySubstitutionsErr(o.subst, h.Linkname, nil)
+			if subErr != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", subErr)
+				return 1
+			}
 			if h.Linkname == "" {
 				continue
 			}
@@ -957,7 +966,10 @@ func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []strin
 
 func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, name string) (bool, error) {
 	return walkOperand(rc, o, name, func(e walkEntry) error {
-		out := applySubstitutions(o.subst, e.member, rc.Err)
+		out, err := applySubstitutionsErr(o.subst, e.member, rc.Err)
+		if err != nil {
+			return err
+		}
 		if out == "" {
 			return nil
 		}
@@ -1000,7 +1012,10 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 				return sourceTraversalErr(err)
 			}
 		}
-		out := applySubstitutions(o.subst, e.member, rc.Err)
+		out, err := applySubstitutionsErr(o.subst, e.member, rc.Err)
+		if err != nil {
+			return err
+		}
 		if out == "" {
 			return nil
 		}
@@ -1350,7 +1365,10 @@ func preflightCopyInvalidRenames(rc *tool.RunContext, o *options, files []string
 	for _, name := range files {
 		_, err := walkOperand(rc, o, name, func(e walkEntry) error {
 			plan := invalidCopyRename{}
-			out := applySubstitutions(o.subst, e.member, nil)
+			out, err := applySubstitutionsErr(o.subst, e.member, nil)
+			if err != nil {
+				return err
+			}
 			if value := o.paxOptions.global["path"]; value != "" {
 				out = value
 			}
@@ -1431,7 +1449,10 @@ func linkCopyNeedsInvalidRename(rc *tool.RunContext, o *options, files []string)
 	}
 	for _, name := range files {
 		_, err := walkOperand(rc, o, name, func(e walkEntry) error {
-			out := applySubstitutions(o.subst, e.member, nil)
+			out, err := applySubstitutionsErr(o.subst, e.member, nil)
+			if err != nil {
+				return err
+			}
 			if value := o.paxOptions.global["path"]; value != "" {
 				out = value
 			}
@@ -1502,7 +1523,10 @@ func linkCopyMode(rc *tool.RunContext, o *options, files []string, root string) 
 	var pendingDirs []pendingDirectoryAttributes
 	for _, name := range files {
 		diagnosed, err := walkOperand(rc, o, name, func(e walkEntry) error {
-			out := applySubstitutions(o.subst, e.member, rc.Err)
+			out, err := applySubstitutionsErr(o.subst, e.member, rc.Err)
+			if err != nil {
+				return err
+			}
 			if out == "" {
 				return nil
 			}

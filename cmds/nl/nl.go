@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/bre"
@@ -44,9 +43,9 @@ type options struct {
 	delimiter    string
 	sectionMatch bool
 	blankJoin    int
-	bodyRE       *regexp.Regexp
-	headerRE     *regexp.Regexp
-	footerRE     *regexp.Regexp
+	bodyRE       *bre.Regexp
+	headerRE     *bre.Regexp
+	footerRE     *bre.Regexp
 }
 
 // numberState carries the numbering state across all input files: GNU nl
@@ -142,17 +141,13 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-func validateStyle(section, style string) (*regexp.Regexp, error) {
+func validateStyle(section, style string) (*bre.Regexp, error) {
 	switch style {
 	case "a", "t", "n":
 		return nil, nil
 	}
 	if strings.HasPrefix(style, "p") && len(style) > 1 {
-		translated, err := bre.ToGo(style[1:])
-		if err != nil {
-			return nil, fmt.Errorf("invalid %s numbering regexp: %q", section, style[1:])
-		}
-		re, err := regexp.Compile(translated)
+		re, err := bre.Compile(style[1:])
 		if err != nil {
 			return nil, fmt.Errorf("invalid %s numbering regexp: %q", section, style[1:])
 		}
@@ -198,7 +193,11 @@ func number(r io.Reader, w *bufio.Writer, o options, st *numberState) error {
 				continue
 			}
 			style := o.styleFor(st.section)
-			if st.shouldNumber(style, o.regexpFor(st.section), line, o.blankJoin) {
+			should, matchErr := st.shouldNumber(style, o.regexpFor(st.section), line, o.blankJoin)
+			if matchErr != nil {
+				return matchErr
+			}
+			if should {
 				if _, werr := fmt.Fprint(w, formatNumber(st.lineNo, o)); werr != nil {
 					return werr
 				}
@@ -234,7 +233,7 @@ func (o options) styleFor(section string) string {
 	}
 }
 
-func (o options) regexpFor(section string) *regexp.Regexp {
+func (o options) regexpFor(section string) *bre.Regexp {
 	switch section {
 	case "header":
 		return o.headerRE
@@ -262,7 +261,7 @@ func sectionDelimiter(line string, o options) (string, bool) {
 	}
 }
 
-func (st *numberState) shouldNumber(style string, re *regexp.Regexp, line string, blankJoin int) bool {
+func (st *numberState) shouldNumber(style string, re *bre.Regexp, line string, blankJoin int) (bool, error) {
 	text := strings.TrimRight(line, "\n")
 	blank := text == ""
 	switch style {
@@ -270,22 +269,25 @@ func (st *numberState) shouldNumber(style string, re *regexp.Regexp, line string
 		if blankJoin > 1 {
 			if !blank {
 				st.blankRun = 0
-				return true
+				return true, nil
 			}
 			st.blankRun++
 			if st.blankRun == blankJoin {
 				st.blankRun = 0
-				return true
+				return true, nil
 			}
-			return false
+			return false, nil
 		}
-		return true
+		return true, nil
 	case "t":
-		return !blank
+		return !blank, nil
 	case "n":
-		return false
+		return false, nil
 	default: // p<re>
-		return re != nil && re.MatchString(text)
+		if re == nil {
+			return false, nil
+		}
+		return re.MatchStringErr(text)
 	}
 }
 

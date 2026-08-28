@@ -40,47 +40,43 @@ func progFails(t *testing.T, input, prog string) bool {
 // Backend routing proof: interval bound ceiling
 // ---------------------------------------------------------------------------
 
-// TestAwkRoutingIntervalCeiling proves the routing split with a pattern whose
-// bound exceeds 255 but not the custom ERE backend's ceiling. Every endpoint
-// accepts it through the unified backend.
+// TestAwkRoutingIntervalCeiling proves every endpoint accepts the advertised
+// ceiling and rejects the next value.
 func TestAwkRoutingIntervalCeiling(t *testing.T) {
-	long256 := strings.Repeat("a", 256)
-
-	// Expression regex endpoints: a{256} is valid (ceiling 32767).
+	long255 := strings.Repeat("a", 255)
 	exprOK := []struct{ name, prog, input string }{
-		{"tilde", `BEGIN { print ("` + long256 + `" ~ "a{256}") }`, ""},
-		{"not-tilde", `BEGIN { print ("` + long256 + `" !~ "a{257}") }`, ""},
-		{"match-builtin", `BEGIN { print match("` + long256 + `", "a{256}") }`, ""},
-		{"slash-literal", `/a{256}/ { print "hit" }`, long256 + "\n"},
+		{"tilde", `BEGIN { print ("` + long255 + `" ~ "a{255}") }`, ""},
+		{"not-tilde", `BEGIN { print ("" !~ "a{255}") }`, ""},
+		{"match-builtin", `BEGIN { print match("` + long255 + `", "a{255}") }`, ""},
+		{"slash-literal", `/a{255}/ { print "hit" }`, long255 + "\n"},
 	}
 	for _, c := range exprOK {
 		if !progOK(t, c.input, c.prog) {
-			t.Errorf("%s: expression regex a{256} should succeed (custom ERE backend)", c.name)
+			t.Errorf("%s: expression regex a{255} should succeed", c.name)
 		}
 	}
 
 	stdOK := []struct{ name, prog string }{
-		{"split", `BEGIN { n = split("` + long256 + `", a, "a{256}"); print n }`},
-		{"sub", `BEGIN { s = "` + long256 + `"; sub("a{256}", "x", s); print s }`},
-		{"gsub", `BEGIN { s = "` + long256 + `"; gsub("a{256}", "x", s); print s }`},
-		{"FS", `BEGIN { FS = "a{256}" } { print NF }`},
-		{"RS", `BEGIN { RS = "a{256}" } { print }`},
+		{"split", `BEGIN { n = split("` + long255 + `", a, "a{255}"); print n }`},
+		{"sub", `BEGIN { s = "` + long255 + `"; sub("a{255}", "x", s); print s }`},
+		{"gsub", `BEGIN { s = "` + long255 + `"; gsub("a{255}", "x", s); print s }`},
+		{"FS", `BEGIN { FS = "a{255}" } { print NF }`},
+		{"RS", `BEGIN { RS = "a{255}" } { print }`},
 	}
 	for _, c := range stdOK {
 		if !progOK(t, "aaa\n", c.prog) {
-			t.Errorf("%s: unified backend a{256} should succeed", c.name)
+			t.Errorf("%s: unified backend a{255} should succeed", c.name)
 		}
 	}
 
-	// a{255} is within both ceilings: all endpoints succeed.
-	allOK := []struct{ name, prog string }{
-		{"expr-255", `BEGIN { print ("` + strings.Repeat("a", 255) + `" ~ "a{255}") }`},
-		{"split-255", `BEGIN { print split("` + strings.Repeat("a", 255) + `", a, "a{255}") }`},
-		{"sub-255", `BEGIN { s = "` + strings.Repeat("a", 255) + `"; sub("a{255}", "x", s); print s }`},
-	}
-	for _, c := range allOK {
-		if !progOK(t, "", c.prog) {
-			t.Errorf("%s: a{255} should succeed on both paths", c.name)
+	for _, tc := range []struct{ name, prog string }{
+		{"tilde", `BEGIN { print ("" ~ "a{256}") }`},
+		{"match", `BEGIN { print match("", "a{256}") }`},
+		{"split", `BEGIN { print split("a", a, "a{256}") }`},
+		{"sub", `BEGIN { s=""; sub("a{256}", "x", s) }`},
+	} {
+		if !progFails(t, "", tc.prog) {
+			t.Errorf("%s: a{256} should fail", tc.name)
 		}
 	}
 }

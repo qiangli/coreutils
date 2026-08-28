@@ -1131,7 +1131,7 @@ func compileMoreMatcher(o options, pattern string) (func(string) (bool, error), 
 		if err != nil {
 			return nil, err
 		}
-		return func(s string) (bool, error) { return re.MatchString(s), nil }, nil
+		return re.MatchStringErr, nil
 	}
 
 	var ctypeProvider *ctype.Provider

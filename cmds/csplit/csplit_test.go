@@ -50,6 +50,20 @@ func TestCsplitRegexAndPrefix(t *testing.T) {
 	assertFile(t, dir, "part1", "two\nthree\n")
 }
 
+func TestCsplitRegexpAtAdvertisedLimit(t *testing.T) {
+	dir := t.TempDir()
+	line := strings.Repeat("a", 255)
+	_, errb, code := runTool(t, dir, "short\n"+line+"\n", "-s", "-", `/^a\{255\}$/`)
+	if code != 0 || errb != "" {
+		t.Fatalf("large BRE: code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir, "xx00", "short\n")
+	assertFile(t, dir, "xx01", line+"\n")
+	if _, errb, code := runTool(t, t.TempDir(), "a\n", "-s", "-", `/a\{256\}/`); code != 2 || errb == "" {
+		t.Fatalf("above-limit BRE: code=%d err=%q, want diagnostic exit 2", code, errb)
+	}
+}
+
 func TestCsplitRepeatedRegexAdvances(t *testing.T) {
 	dir := t.TempDir()
 	stdout, errb, code := runTool(t, dir, "a\nb\nb\nc\n", "-f", "p", "-n", "1", "-", "/b/", "/b/")
@@ -511,5 +525,17 @@ func TestCsplitLocaleInitFailsBeforeInputOpen(t *testing.T) {
 	)
 	if code != 2 || !strings.Contains(errb, want.Error()) || strings.Contains(errb, "missing-input") {
 		t.Fatalf("locale init failure = (%q,%d), want ctype diagnostic before input open", errb, code)
+	}
+}
+
+func TestCsplitCLocaleBacktrackLimitIsError(t *testing.T) {
+	input := strings.Repeat("a", 500) + "bb\n"
+	_, errb, code := runCsplitLocale(t,
+		[]string{"LC_ALL=C"}, input, []string{"-s", "-", `/\(a*\)b\1/`},
+		func(string) (ctypeProvider, error) { panic("C locale opened ctype provider") },
+		func(string) (collateProvider, error) { panic("C locale opened collate provider") },
+	)
+	if code != 2 || !strings.Contains(errb, "resource limit") {
+		t.Fatalf("csplit bounded matcher = (err %q, code %d), want resource-limit exit 2", errb, code)
 	}
 }

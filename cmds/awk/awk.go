@@ -385,11 +385,7 @@ func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
 		return &awkLocaleERERegexp{source: source, re: re}, nil
 	}
 	if c.utf8 {
-		translated, err := bre.ToGoERE(source)
-		if err != nil {
-			return nil, err
-		}
-		re, err := regexp.Compile("(?s)" + unicodeEREClasses(translated))
+		re, err := bre.CompileCUTF8WithFlags(source, "(?s)", true, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -404,25 +400,6 @@ func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
 	return &awkERERegexp{source: source, re: re}, nil
 }
 
-// unicodeEREClasses expands POSIX character classes to the Unicode classes
-// carried by the UTF-8 locale model. The surrounding bracket expression is
-// left intact (for example, [[:alpha:]] becomes [\p{L}]).
-func unicodeEREClasses(source string) string {
-	return strings.NewReplacer(
-		"[:alnum:]", `\p{L}\p{N}`,
-		"[:alpha:]", `\p{L}`,
-		"[:blank:]", `\t\p{Zs}`,
-		"[:cntrl:]", `\p{Cc}`,
-		"[:digit:]", `\p{Nd}`,
-		"[:graph:]", `\p{L}\p{M}\p{N}\p{P}\p{S}`,
-		"[:lower:]", `\p{Ll}`,
-		"[:print:]", `\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}`,
-		"[:punct:]", `\p{P}\p{S}`,
-		"[:space:]", `\t\n\x0b\f\r\p{Z}`,
-		"[:upper:]", `\p{Lu}`,
-	).Replace(source)
-}
-
 type awkERERegexp struct {
 	source string
 	re     awkEREBackend
@@ -434,11 +411,30 @@ type awkEREBackend interface {
 	FindAllStringSubmatchIndex(string, int) [][]int
 }
 
-func (r *awkERERegexp) String() string                          { return r.source }
-func (r *awkERERegexp) MatchString(s string) (bool, error)      { return r.re.MatchString(s), nil }
-func (r *awkERERegexp) FindStringIndex(s string) ([]int, error) { return r.re.FindStringIndex(s), nil }
+func (r *awkERERegexp) String() string { return r.source }
+func (r *awkERERegexp) MatchString(s string) (bool, error) {
+	if re, ok := r.re.(*bre.Regexp); ok {
+		return re.MatchStringErr(s)
+	}
+	return r.re.MatchString(s), nil
+}
+func (r *awkERERegexp) FindStringIndex(s string) ([]int, error) {
+	if re, ok := r.re.(*bre.Regexp); ok {
+		return re.FindStringIndexErr(s)
+	}
+	return r.re.FindStringIndex(s), nil
+}
 func (r *awkERERegexp) FindAllStringIndex(s string, n int) ([][]int, error) {
-	matches := r.re.FindAllStringSubmatchIndex(s, n)
+	var matches [][]int
+	if re, ok := r.re.(*bre.Regexp); ok {
+		var err error
+		matches, err = re.FindAllStringSubmatchIndexErr(s, n)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		matches = r.re.FindAllStringSubmatchIndex(s, n)
+	}
 	indices := make([][]int, len(matches))
 	for i, match := range matches {
 		indices[i] = match[:2]
@@ -446,7 +442,7 @@ func (r *awkERERegexp) FindAllStringIndex(s string, n int) ([][]int, error) {
 	return indices, nil
 }
 func (r *awkERERegexp) FindIndex(b []byte) ([]int, error) {
-	return r.re.FindStringIndex(string(b)), nil
+	return r.FindStringIndex(string(b))
 }
 func (r *awkERERegexp) Split(s string, n int) ([]string, error) {
 	return splitRegexp(s, n, r.FindAllStringIndex)

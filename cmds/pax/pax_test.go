@@ -255,6 +255,19 @@ func TestSubstitutionAcceptsAlternateDelimiters(t *testing.T) {
 	}
 }
 
+func TestSubstitutionRegexpAtAdvertisedLimit(t *testing.T) {
+	s, err := parseSubstitution(`/^a\{255\}$/x/`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applySubstitutions([]substitution{s}, strings.Repeat("a", 255), nil); got != "x" {
+		t.Fatalf("large BRE substitution = %q, want x", got)
+	}
+	if _, err := parseSubstitution(`/a\{256\}/x/`); err == nil {
+		t.Fatal("above-limit BRE compiled")
+	}
+}
+
 // An empty replacement means "drop this member" — that is how -s is used to
 // exclude, so it must not be confused with "leave the name unchanged".
 func TestSubstitutionToEmptyDropsTheMember(t *testing.T) {

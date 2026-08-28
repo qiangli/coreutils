@@ -43,7 +43,6 @@ func ngroupsMaxStr() (string, bool) {
 	return value, true
 }
 
-func reDupMaxStr() (string, bool)   { return undefined, true }
 func symloopMaxStr() (string, bool) { return undefined, true }
 func clockTicksStr() (string, bool) {
 	data, err := os.ReadFile("/proc/self/auxv")

@@ -312,7 +312,10 @@ func (r *LocaleByteRegexp) FindAllSubmatchIndex(src []byte, n int) ([][]int, err
 		return nil, nil
 	}
 	encoded := r.pattern.codec.encodeSubject(src)
-	matches := r.pattern.re.FindAllStringSubmatchIndex(encoded.text, -1)
+	matches, err := localeFindAllStringSubmatchIndex(r.pattern.re, encoded.text, -1)
+	if err != nil {
+		return nil, err
+	}
 	var decoded [][]int
 	for _, match := range matches {
 		if len(match) < 2 {

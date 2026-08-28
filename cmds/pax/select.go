@@ -107,8 +107,16 @@ func translateReplacement(r string) string {
 // how -s is used to drop members. When the matching substitution carries the
 // 'p' flag and report is non-nil, the "old >> new" rename is written to it.
 func applySubstitutions(subs []substitution, name string, report io.Writer) string {
+	out, _ := applySubstitutionsErr(subs, name, report)
+	return out
+}
+
+func applySubstitutionsErr(subs []substitution, name string, report io.Writer) (string, error) {
 	for _, s := range subs {
-		locs := s.re.FindAllStringSubmatchIndex(name, -1)
+		locs, err := s.re.FindAllStringSubmatchIndexErr(name, -1)
+		if err != nil {
+			return "", err
+		}
 		if len(locs) == 0 {
 			continue
 		}
@@ -128,9 +136,9 @@ func applySubstitutions(subs []substitution, name string, report io.Writer) stri
 		if s.print && report != nil {
 			fmt.Fprintf(report, "%s >> %s\n", name, out)
 		}
-		return out
+		return out, nil
 	}
-	return name
+	return name, nil
 }
 
 // selector applies the operand patterns to member names and records which

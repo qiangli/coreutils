@@ -3,6 +3,7 @@ package getconfcmd
 import (
 	"strconv"
 
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -36,7 +37,7 @@ var sysVars = map[string]func() (string, bool){
 	"OPEN_MAX":          func() (string, bool) { return sysconfStr(scOpenMax) },
 	"PAGESIZE":          func() (string, bool) { return sysconfStr(scPagesize) },
 	"PAGE_SIZE":         func() (string, bool) { return sysconfStr(scPagesize) },
-	"RE_DUP_MAX":        reDupMaxStr,
+	"RE_DUP_MAX":        productREDupMaxStr,
 	"STREAM_MAX":        func() (string, bool) { return sysconfStr(scOpenMax) },
 	"SYMLOOP_MAX":       symloopMaxStr,
 	"_NPROCESSORS_CONF": func() (string, bool) { return sysconfStr(scNprocessorsConf) },
@@ -69,6 +70,10 @@ var sysVars = map[string]func() (string, bool){
 	"_POSIX2_LINE_MAX":         constVal(2048),
 	"_POSIX2_RE_DUP_MAX":       constVal(255),
 	"_XOPEN_VERSION":           constVal(700),
+}
+
+func productREDupMaxStr() (string, bool) {
+	return strconv.Itoa(bre.REDupMax), true
 }
 
 // pathVars are the pathname configuration variables, resolved with pathconf(2)

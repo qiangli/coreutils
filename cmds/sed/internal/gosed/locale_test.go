@@ -201,7 +201,7 @@ func TestLocaleCompileSeamsRejectUnsupported(t *testing.T) {
 	if _, err := newSubstitution(opts, `[a-z]`, "x", "", "", "", nil); err != nil {
 		t.Errorf("substitution compile locale range: %v", err)
 	}
-	for _, pattern := range []string{`\b`, `\1`, `[[=ab=]]`, `[[.ab.]]`, `a\{1001\}`} {
+	for _, pattern := range []string{`\b`, `\1`, `[[=ab=]]`, `[[.ab.]]`} {
 		if _, err := opts.compileRE(pattern, ""); err == nil {
 			t.Errorf("compileRE(%q) succeeded", pattern)
 		}

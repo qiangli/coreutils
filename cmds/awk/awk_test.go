@@ -131,17 +131,17 @@ func TestAwkPOSIXOctalAlternateFormZeroPrecision(t *testing.T) {
 }
 
 func TestAwkPOSIXEREBackendExpressions(t *testing.T) {
-	input := strings.Repeat("a", 1001) + "\n" +
-		strings.Repeat("b", 1002) + "\n" +
-		strings.Repeat("c", 1003) + "\n" +
-		strings.Repeat("d", 1004) + "\n"
-	program := `/^a{1001}$/ { print "literal" }
-$0 ~ "^b{1002}$" { print "dynamic-match" }
-$0 !~ "^z{1003}$" && /^c/ { print "dynamic-not-match" }
-match($0, "d{1004}") { print "match", RSTART, RLENGTH }`
+	input := strings.Repeat("a", 252) + "\n" +
+		strings.Repeat("b", 253) + "\n" +
+		strings.Repeat("c", 254) + "\n" +
+		strings.Repeat("d", 255) + "\n"
+	program := `/^a{252}$/ { print "literal" }
+$0 ~ "^b{253}$" { print "dynamic-match" }
+$0 !~ "^z{254}$" && /^c/ { print "dynamic-not-match" }
+match($0, "d{255}") { print "match", RSTART, RLENGTH }`
 
 	out, errb, code := runTool(t, input, program)
-	want := "literal\ndynamic-match\ndynamic-not-match\nmatch 1 1004\n"
+	want := "literal\ndynamic-match\ndynamic-not-match\nmatch 1 255\n"
 	if out != want || errb != "" || code != 0 {
 		t.Fatalf("awk ERE expressions = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
 	}
@@ -172,11 +172,11 @@ func TestAwkPOSIXEREOpenIntervalMatches(t *testing.T) {
 	}
 }
 
-func TestAwkPOSIXEREOpenIntervalAtLineLimit(t *testing.T) {
-	program := `BEGIN { print match("` + strings.Repeat("c", 2047) + `", /c{2048,}/), RSTART, RLENGTH }`
-	out, errb, code := runTool(t, "", program)
-	if out != "0 0 -1\n" || errb != "" || code != 0 {
-		t.Fatalf("awk line-limit open interval = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, "0 0 -1\n", "")
+func TestAwkPOSIXERERejectsAboveAdvertisedLimit(t *testing.T) {
+	program := `BEGIN { print match("", /c{256,}/) }`
+	_, errb, code := runTool(t, "", program)
+	if code == 0 || errb == "" {
+		t.Fatalf("awk above-limit interval = (err %q, code %d), want diagnostic failure", errb, code)
 	}
 }
 
@@ -197,7 +197,7 @@ func TestAwkEREBackendLeavesRecordAndSubstitutionRegexesUnchanged(t *testing.T) 
 }
 
 func TestAwkEREAdapterPreservesPatternSource(t *testing.T) {
-	source := `^([[:alpha:]]|\\.){01001}$`
+	source := `^([[:alpha:]]|\\.){00255}$`
 	re, err := (awkERECompiler{}).Compile(source)
 	if err != nil {
 		t.Fatal(err)

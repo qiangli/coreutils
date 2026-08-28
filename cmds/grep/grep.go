@@ -517,6 +517,16 @@ func quoteByteBRE(pattern string) string {
 
 type multiMatcher []*bre.Regexp
 
+func (m multiMatcher) MatchStringErr(s string) (bool, error) {
+	for _, re := range m {
+		matched, err := re.MatchStringErr(s)
+		if err != nil || matched {
+			return matched, err
+		}
+	}
+	return false, nil
+}
+
 func (m multiMatcher) MatchString(s string) bool {
 	for _, re := range m {
 		if re.MatchString(s) {
@@ -527,9 +537,17 @@ func (m multiMatcher) MatchString(s string) bool {
 }
 
 func (m multiMatcher) FindStringIndex(s string) []int {
+	loc, _ := m.FindStringIndexErr(s)
+	return loc
+}
+
+func (m multiMatcher) FindStringIndexErr(s string) ([]int, error) {
 	var best []int
 	for _, re := range m {
-		loc := re.FindStringIndex(s)
+		loc, err := re.FindStringIndexErr(s)
+		if err != nil {
+			return nil, err
+		}
 		if loc == nil {
 			continue
 		}
@@ -537,7 +555,7 @@ func (m multiMatcher) FindStringIndex(s string) []int {
 			best = loc
 		}
 	}
-	return best
+	return best, nil
 }
 
 // compilePattern builds one matcher implementing the selected pattern list and
@@ -1006,7 +1024,16 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 		for sc.Scan() {
 			lineNo++
 			line := sc.Text()
-			matched := !stopMatching && g.matchLine(line) != g.invert
+			lineMatch, matchErr := false, error(nil)
+			if !stopMatching {
+				lineMatch, matchErr = g.matchLine(line)
+			}
+			if matchErr != nil {
+				fmt.Fprintf(g.rc.Err, "grep: %v\n", matchErr)
+				g.anyErr = true
+				return
+			}
+			matched := !stopMatching && lineMatch != g.invert
 			if matched {
 				selected++
 				g.anyMatch = true
@@ -1028,7 +1055,11 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 						g.printContextLine(name, lineNo, line, true, &lastPrinted)
 						afterRemaining = max(afterRemaining, g.after)
 					} else if g.onlyMatching && !g.invert {
-						g.printMatches(name, lineNo, line)
+						if err := g.printMatches(name, lineNo, line); err != nil {
+							fmt.Fprintf(g.rc.Err, "grep: %v\n", err)
+							g.anyErr = true
+							return
+						}
 					} else {
 						g.printLine(name, lineNo, line)
 					}
@@ -1106,25 +1137,37 @@ func (g *grepper) printContextLine(name string, n int, line string, matched bool
 	g.wroteGroup = true
 }
 
-func (g *grepper) matchLine(line string) bool {
+func (g *grepper) matchLine(line string) (bool, error) {
 	if !g.word {
-		return g.re.MatchString(line)
+		if re, ok := g.re.(interface{ MatchStringErr(string) (bool, error) }); ok {
+			return re.MatchStringErr(line)
+		}
+		return g.re.MatchString(line), nil
 	}
 	// -w: a line is selected if some complete match has non-word-constituent
 	// context immediately outside both sides (GNU word constituents are
 	// letters, digits, and underscore).
 	for i := 0; i <= len(line); {
-		loc := g.re.FindStringIndex(line[i:])
+		var loc []int
+		var err error
+		if re, ok := g.re.(interface{ FindStringIndexErr(string) ([]int, error) }); ok {
+			loc, err = re.FindStringIndexErr(line[i:])
+		} else {
+			loc = g.re.FindStringIndex(line[i:])
+		}
+		if err != nil {
+			return false, err
+		}
 		if loc == nil {
-			return false
+			return false, nil
 		}
 		s, e := i+loc[0], i+loc[1]
 		if wordBoundaryOK(line, s, e) {
-			return true
+			return true, nil
 		}
 		i = s + 1
 	}
-	return false
+	return false, nil
 }
 
 func wordBoundaryOK(line string, s, e int) bool {
@@ -1140,9 +1183,18 @@ func isWordByte(b byte) bool {
 	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-func (g *grepper) printMatches(name string, lineNo int, line string) {
+func (g *grepper) printMatches(name string, lineNo int, line string) error {
 	for i := 0; i <= len(line); {
-		loc := g.re.FindStringIndex(line[i:])
+		var loc []int
+		var err error
+		if re, ok := g.re.(interface{ FindStringIndexErr(string) ([]int, error) }); ok {
+			loc, err = re.FindStringIndexErr(line[i:])
+		} else {
+			loc = g.re.FindStringIndex(line[i:])
+		}
+		if err != nil {
+			return err
+		}
 		if loc == nil {
 			break
 		}
@@ -1157,6 +1209,7 @@ func (g *grepper) printMatches(name string, lineNo int, line string) {
 			i = s + 1
 		}
 	}
+	return nil
 }
 
 func (g *grepper) printLine(name string, n int, line string) {

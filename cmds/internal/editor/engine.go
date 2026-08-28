@@ -1187,9 +1187,9 @@ type matcher interface {
 
 type goMatcher struct{ re *bre.Regexp }
 
-func (m goMatcher) MatchString(s string) (bool, error) { return m.re.MatchString(s), nil }
+func (m goMatcher) MatchString(s string) (bool, error) { return m.re.MatchStringErr(s) }
 func (m goMatcher) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
-	return m.re.FindAllStringSubmatchIndex(s, n), nil
+	return m.re.FindAllStringSubmatchIndexErr(s, n)
 }
 
 // compileRE compiles a POSIX BRE for the selected LC_CTYPE model. The match

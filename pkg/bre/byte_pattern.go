@@ -31,6 +31,24 @@ type localeByteMatcher interface {
 	NumSubexp() int
 }
 
+func localeFindStringSubmatchIndex(re localeByteMatcher, text string) ([]int, error) {
+	if aware, ok := re.(interface {
+		FindStringSubmatchIndexErr(string) ([]int, error)
+	}); ok {
+		return aware.FindStringSubmatchIndexErr(text)
+	}
+	return re.FindStringSubmatchIndex(text), nil
+}
+
+func localeFindAllStringSubmatchIndex(re localeByteMatcher, text string, n int) ([][]int, error) {
+	if aware, ok := re.(interface {
+		FindAllStringSubmatchIndexErr(string, int) ([][]int, error)
+	}); ok {
+		return aware.FindAllStringSubmatchIndexErr(text, n)
+	}
+	return re.FindAllStringSubmatchIndex(text, n), nil
+}
+
 // snapshot returns a compile-owned copy of t. The class map is the only
 // reference type in bytePatternTables, so every other field copies with the
 // struct; duplicating this by hand in each grammar's compiler is what let the
@@ -104,7 +122,10 @@ func hasEREBackreference(pattern string) bool {
 // complete token boundary is rejected instead of being approximated.
 func (p *localeBytePattern) findSubmatchIndex(raw []byte) ([]int, error) {
 	encoded := p.codec.encodeSubject(raw)
-	indices := p.re.FindStringSubmatchIndex(encoded.text)
+	indices, err := localeFindStringSubmatchIndex(p.re, encoded.text)
+	if err != nil {
+		return nil, err
+	}
 	if indices == nil {
 		return nil, nil
 	}

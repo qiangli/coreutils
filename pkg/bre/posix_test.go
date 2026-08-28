@@ -1,9 +1,11 @@
 package bre
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The behaviors pinned here are the POSIX-specified ones (XBD 9.3 Basic
@@ -114,8 +116,8 @@ func TestPOSIXBackrefEmptyGroup(t *testing.T) {
 	}
 }
 
-// The certification target advertises RE_DUP_MAX=32767. Go's RE2 path stops
-// at 1000, so larger valid intervals route through the bounded matcher.
+// getconf advertises REDupMax, and every accepted interval is within the
+// product-wide capability proved below.
 func TestPOSIXIntervalBounds(t *testing.T) {
 	valid := []struct {
 		pattern string
@@ -126,8 +128,8 @@ func TestPOSIXIntervalBounds(t *testing.T) {
 		{`^a\{0002,0003\}$`, "aaa"},
 		{`^a\{,3\}$`, "aaa"},
 		{`^a\{2,\}$`, "aa"},
-		{`^a\{2048\}$`, strings.Repeat("a", 2048)},
-		{`^a\{1,2048\}$`, strings.Repeat("a", 2048)},
+		{`^a\{255\}$`, strings.Repeat("a", 255)},
+		{`^a\{1,255\}$`, strings.Repeat("a", 255)},
 	}
 	for _, c := range valid {
 		re, err := Compile(c.pattern)
@@ -139,13 +141,16 @@ func TestPOSIXIntervalBounds(t *testing.T) {
 			t.Errorf("%q did not match %q", c.pattern, c.in)
 		}
 	}
-	if _, err := Compile(`a\{32767\}`); err != nil {
+	maxRE, err := Compile(fmt.Sprintf(`^a\{%d\}$`, REDupMax))
+	if err != nil {
 		t.Errorf("Compile at advertised RE_DUP_MAX: %v", err)
+	} else if !maxRE.MatchString(strings.Repeat("a", REDupMax)) {
+		t.Errorf("pattern at advertised RE_DUP_MAX did not match")
 	}
 
 	for _, pattern := range []string{
-		`a\{32768\}`,
-		`a\{1,32768\}`,
+		fmt.Sprintf(`a\{%d\}`, REDupMax+1),
+		fmt.Sprintf(`a\{1,%d\}`, REDupMax+1),
 		`a\{999999999999999999999999999999\}`,
 		`a\{3,2\}`,
 	} {
@@ -267,21 +272,15 @@ func TestPOSIXEREInvalidIntervals(t *testing.T) {
 	}
 }
 
-func TestPOSIXERELargeIntervalDispatch(t *testing.T) {
-	for _, pattern := range []string{
-		`^a{1001}$`,
-		`^a{01001}$`,
-		`^a{0002,02048}$`,
-		`^a{32767}$`,
-		`^(a)\1$`,
-	} {
+func TestPOSIXEREBackreferenceDispatch(t *testing.T) {
+	for _, pattern := range []string{`^(a)\1$`} {
 		if !ERERequiresBacktracking(pattern) {
 			t.Errorf("ERERequiresBacktracking(%q) = false, want true", pattern)
 		}
 	}
 	for _, pattern := range []string{
-		`^a{1000}$`,
-		`^a{01000}$`,
+		`^a{255}$`,
+		`^a{00255}$`,
 		`^a\{1001\}$`,
 		`^[{]1001[}]$`,
 		`^[\1]$`,
@@ -293,20 +292,75 @@ func TestPOSIXERELargeIntervalDispatch(t *testing.T) {
 		}
 	}
 
-	for _, tc := range []struct {
-		pattern string
-		count   int
+}
+
+func TestAdvertisedIntervalComplexity(t *testing.T) {
+	cases := []struct {
+		pattern  string
+		input    string
+		extended bool
 	}{
-		{`^a{01001}$`, 1001},
-		{`^a{0002,02048}$`, 2048},
-	} {
-		re, err := CompileEREWithFlags(tc.pattern, "")
+		{`^[[:alpha:]]\{255\}$`, strings.Repeat("a", 255), false},
+		{`^\(a\|b\|c\|d\|e\|f\|g\)\{255\}$`, strings.Repeat("g", 255), false},
+		{`^\(a\{255\}\)\1$`, strings.Repeat("a", 510), false},
+		{`^[[:alpha:]]{255}$`, strings.Repeat("a", 255), true},
+		{`^(a|b|c|d|e|f|g){255}$`, strings.Repeat("g", 255), true},
+	}
+	for _, tc := range cases {
+		var re *Regexp
+		var err error
+		if tc.extended {
+			re, err = CompileEREWithFlags(tc.pattern, "")
+		} else {
+			re, err = Compile(tc.pattern)
+		}
 		if err != nil {
-			t.Fatalf("CompileEREWithFlags(%q): %v", tc.pattern, err)
+			t.Fatalf("Compile(%q): %v", tc.pattern, err)
 		}
-		if in := strings.Repeat("a", tc.count); !re.MatchString(in) {
-			t.Errorf("%q did not match length %d", tc.pattern, tc.count)
+		if !re.MatchString(tc.input) {
+			t.Errorf("%q did not match", tc.pattern)
 		}
+	}
+	for _, pattern := range []string{`a\{256\}`, `a{256}`} {
+		var err error
+		if strings.Contains(pattern, `\{`) {
+			_, err = Compile(pattern)
+		} else {
+			_, err = CompileEREWithFlags(pattern, "")
+		}
+		if err == nil {
+			t.Errorf("Compile(%q) succeeded above REDupMax", pattern)
+		}
+	}
+}
+
+func TestBacktrackBudgetCoversWholeUnanchoredSearch(t *testing.T) {
+	re, err := Compile(`\(a*\)b\1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if matched, err := re.MatchStringErr(strings.Repeat("a", 20000)); matched || !errors.Is(err, ErrMatchLimit) {
+		t.Fatalf("near-miss = (%v, %v), want false and ErrMatchLimit", matched, err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("unanchored near-miss took %v; search budget reset per candidate", elapsed)
+	}
+}
+
+func TestBacktrackExhaustionDoesNotHideLaterMatch(t *testing.T) {
+	re, err := Compile(`\(a*\)b\1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := strings.Repeat("a", 500) + "bb"
+	matched, err := re.MatchStringErr(input)
+	if matched || !errors.Is(err, ErrMatchLimit) {
+		t.Fatalf("later-match exhaustion = (%v, %v), want resource error, not no-match", matched, err)
+	}
+	var limitErr *MatchLimitError
+	if !errors.As(err, &limitErr) || limitErr.Limit != maxBacktrackSteps {
+		t.Fatalf("error type = %T %v, want *MatchLimitError at %d", err, err, maxBacktrackSteps)
 	}
 }
 

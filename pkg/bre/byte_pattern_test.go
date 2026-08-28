@@ -2,6 +2,7 @@ package bre
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -266,6 +267,20 @@ func TestLocaleBytePatternFailsClosed(t *testing.T) {
 				t.Fatalf("compileLocaleBytePattern(%q) succeeded", pattern)
 			}
 		})
+	}
+}
+
+func TestLocaleByteBRELargeInterval(t *testing.T) {
+	pattern := []byte(fmt.Sprintf(`^a\{%d\}$`, REDupMax))
+	re, err := compileLocaleBytePattern(pattern, syntheticBytePatternTables(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := re.findSubmatchIndex([]byte(strings.Repeat("a", REDupMax))); err != nil || got == nil {
+		t.Fatalf("advertised-limit interval match = %v, %v; want match, nil", got, err)
+	}
+	if _, err := compileLocaleBytePattern([]byte(fmt.Sprintf(`a\{%d\}`, REDupMax+1)), syntheticBytePatternTables(), false); err == nil {
+		t.Fatal("interval above REDupMax compiled")
 	}
 }
 
