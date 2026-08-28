@@ -11,9 +11,21 @@ import (
 	"strings"
 	"testing"
 
+	bcinterp "github.com/qiangli/coreutils/cmds/internal/bc"
 	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
+
+func TestBCBaseMaxMatchesBundledCalculator(t *testing.T) {
+	got, ok := systemValue("BC_BASE_MAX")
+	if want := strconv.Itoa(bcinterp.MaxBase); !ok || got != want {
+		t.Fatalf("BC_BASE_MAX = (%q, %v), want (%q, true)", got, ok, want)
+	}
+	got, ok = systemValue("_POSIX2_BC_BASE_MAX")
+	if !ok || got != "99" {
+		t.Fatalf("_POSIX2_BC_BASE_MAX = (%q, %v), want (99, true)", got, ok)
+	}
+}
 
 func runCmd(t *testing.T, args ...string) (string, string, int) {
 	t.Helper()
@@ -37,7 +49,9 @@ func TestAgreesWithSystemGetconf(t *testing.T) {
 	}
 	for _, name := range []string{
 		"PAGESIZE", "OPEN_MAX", "NGROUPS_MAX", "ARG_MAX", "CLK_TCK",
-		"BC_BASE_MAX", "BC_STRING_MAX", "INT_MAX", "LINE_MAX",
+		// BC_BASE_MAX is intentionally absent: it describes the bundled bc
+		// product, whose supported maximum can exceed the host libc value.
+		"BC_STRING_MAX", "INT_MAX", "LINE_MAX",
 		"SYMLOOP_MAX", "_POSIX_VERSION",
 	} {
 		want, err := exec.Command(sys, name).Output()
@@ -298,7 +312,7 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 	// binary, not an unknown host-libc implementation. Keep the queryable limits
 	// aligned with the bounds enforced by the bc engine.
 	for name, want := range map[string]string{
-		"BC_BASE_MAX":   "99",
+		"BC_BASE_MAX":   "999",
 		"BC_DIM_MAX":    "2048",
 		"BC_SCALE_MAX":  "99",
 		"BC_STRING_MAX": "1000",

@@ -3,6 +3,7 @@ package getconfcmd
 import (
 	"strconv"
 
+	bcinterp "github.com/qiangli/coreutils/cmds/internal/bc"
 	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -27,7 +28,7 @@ func knownSpecification(s string) bool {
 var sysVars = map[string]func() (string, bool){
 	// Runtime invariant values obtainable from the OS.
 	"ARG_MAX":           func() (string, bool) { return sysconfStr(scArgMax) },
-	"BC_BASE_MAX":       constVal(99),
+	"BC_BASE_MAX":       constVal(bcinterp.MaxBase),
 	"BC_DIM_MAX":        constVal(2048),
 	"BC_SCALE_MAX":      constVal(99),
 	"BC_STRING_MAX":     constVal(1000),

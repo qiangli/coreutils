@@ -124,14 +124,15 @@ func TestPOSIXParenthesizedAssignmentIsPrinted(t *testing.T) {
 }
 
 func TestReferenceOutputBasesAbovePOSIXMinimum(t *testing.T) {
-	got, err := execute(t, "obase=100\n257\n257.95\nobase=101\n1111111111111111\n1234567890123456\n105101005\n", false)
+	got, err := execute(t, "obase=100\n257\n257.95\nobase=101\n1111111111111111\n1234567890123456\n105101005\nobase=999\n999\n998\nobase=10\n10\n", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := " 02 57\n 02 57.95\n" +
 		" 010 036 072 041 038 070 044 000\n" +
 		" 011 052 001 090 077 010 026 089\n" +
-		" 001 001 001 001 001\n"
+		" 001 001 001 001 001\n" +
+		" 001 000\n 998\n10\n"
 	if got != want {
 		t.Fatalf("stdout=%q, want %q", got, want)
 	}
