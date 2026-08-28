@@ -159,6 +159,7 @@ func spaMissing(w http.ResponseWriter, r *http.Request) {
 		"  GET  /api/rooms\n"+
 		"  GET  /api/agents\n"+
 		"  GET  /observe?room=<ROOM|id>   (WebSocket)\n\n"+
-		"To include the UI, build the SPA into pkg/meet/web/dist and compile with\n"+
-		"  go build -tags meetspa ./...\n")
+		"The UI is normally compiled in. If it is missing, pkg/meet/artifact was\n"+
+		"empty at build time — rebuild the SPA and promote it:\n"+
+		"  scripts/build-meet-spa.sh\n")
 }

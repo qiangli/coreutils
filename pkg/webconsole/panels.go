@@ -61,7 +61,11 @@ func builtinPanels() []Panel {
 	if !term.Available {
 		term.Note = "this host has no pseudo-console"
 	}
-	return []Panel{term}
+	files := Panel{
+		Name: "files", Label: "Files", Path: "/files/",
+		Mode: atlas.WebInProcess, Source: "builtin", Available: true,
+	}
+	return []Panel{term, files}
 }
 
 // Discover returns the tile list: the console's own panels, plus every verb that

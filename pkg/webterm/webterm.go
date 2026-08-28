@@ -102,7 +102,7 @@ var upgrader = websocket.Upgrader{
 // protocol") instead of a terminal — a broken door at the exact URL the start
 // page advertises.
 func Handler(opts Options) http.Handler {
-	socket := socketHandler(opts)
+	socket := SocketHandler(opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if path.Base(r.URL.Path) == "ws" {
 			socket.ServeHTTP(w, r)
@@ -112,8 +112,10 @@ func Handler(opts Options) http.Handler {
 	})
 }
 
-// socketHandler is the WebSocket half.
-func socketHandler(opts Options) http.Handler {
+// SocketHandler is the WebSocket half on its own, for a host that serves the
+// terminal's PAGE itself — which the launcher does, so the terminal is a real
+// full-browser page rather than something framed inside another app.
+func SocketHandler(opts Options) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !Supported() {
 			http.Error(w, "terminal: no pseudo-console on this platform", http.StatusNotImplemented)

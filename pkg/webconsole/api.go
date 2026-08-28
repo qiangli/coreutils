@@ -59,5 +59,6 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 		"user":          user,
 		"via":           via,
 		"require_login": s.requireLogin,
+		"build":         BuildOf(),
 	})
 }

@@ -194,11 +194,15 @@ func TestEveryAvailablePanelIsMountedAtItsAdvertisedPath(t *testing.T) {
 			continue
 		}
 		w := do(h, "GET", p.Path, "127.0.0.1:5555", nil)
-		// An unmounted path does not 404 — it falls through to the console's own
+		// An unmounted path does not 404 — it falls through to the launcher's own
 		// SPA route and returns the START PAGE, which looks fine in a browser and
 		// is exactly how the terminal's /term/ mismatch hid. So assert on what
 		// came back, not on the status.
-		if strings.Contains(w.Body.String(), "data-bashy-console") {
+		//
+		// The marker is the start page's grid host, not the shared
+		// data-bashy-console build stamp: every page the launcher serves carries
+		// that stamp, the standalone terminal included.
+		if strings.Contains(w.Body.String(), `id="grid-host"`) {
 			t.Errorf("panel %q advertises %s but that path fell through to the console start page",
 				p.Name, p.Path)
 		}

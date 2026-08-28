@@ -6,16 +6,82 @@
 <base href="/">
 <title>bashy apps</title>
 <link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="backgrounds.css">
 <link rel="stylesheet" href="app.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2318181b'/><path d='M8 11l5 5-5 5M16 21h8' stroke='%23fafafa' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%230a0e1a'/><path d='M11 14l6 6-6 6' fill='none' stroke='%23fafafa' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/><path d='M21 27h9' fill='none' stroke='%233478f6' stroke-width='3.2' stroke-linecap='round'/></svg>">
 </head>
 <body>
-<header id="bar">
-  <button id="back" hidden aria-label="Back to apps">&#8249;</button>
-  <span id="title">Apps</span>
-  <span id="who"></span>
-</header>
-<main id="view"></main>
+<div data-bashy-bg="none" id="bg"></div>
+
+<div id="app">
+  <header id="bar">
+    <a id="brand" href="./" title="bashy apps">
+      <svg class='logo' viewBox='0 0 40 40' aria-hidden='true'><rect width='40' height='40' rx='10' fill='var(--logo-bg)'/><path d='M11 14l6 6-6 6' fill='none' stroke='var(--logo-fg)' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/><path d='M21 27h9' fill='none' stroke='var(--logo-accent)' stroke-width='3.2' stroke-linecap='round'/></svg>
+      <span id="wordmark">bashy<b>apps</b></span>
+      <span id="ver" title="build"></span>
+    </a>
+    <nav id="nav">
+      <span id="who"></span>
+      <button id="theme-btn" class="iconbtn" aria-label="Toggle theme" title="Toggle theme">&#9789;</button>
+      <button id="settings-btn" class="iconbtn" aria-label="Settings" title="Settings">&#9881;</button>
+    </nav>
+  </header>
+
+  <main id="view">
+    <div id="search-wrap">
+      <input id="search" type="search" placeholder="Search apps" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="grid-host"></div>
+  </main>
+
+  <footer id="foot">
+    <span id="foot-left"></span>
+    <span id="foot-build"></span>
+    <span id="foot-right">the same list in a terminal: <code>bashy commands --view web</code></span>
+  </footer>
+</div>
+
+<dialog id="settings">
+  <form method="dialog" class="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <p>Personalize the launcher and choose which sections appear.</p>
+    </div>
+
+    <section>
+      <h3>Appearance</h3>
+      <div class="seg" id="theme-seg" role="group" aria-label="Theme">
+        <button type="button" data-theme-val="system">System</button>
+        <button type="button" data-theme-val="light">Light</button>
+        <button type="button" data-theme-val="dark">Dark</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Background</h3>
+      <div class="swatches" id="bg-swatches"></div>
+    </section>
+
+    <section>
+      <h3>Sections</h3>
+      <div id="section-toggles"></div>
+      <label class="row">
+        <span>Recent items</span>
+        <input id="recent-limit" type="number" min="1" max="24" step="1">
+      </label>
+    </section>
+
+    <section>
+      <h3>Favorites</h3>
+      <p class="hint" id="fav-summary"></p>
+      <button type="button" class="btn" id="clear-favs">Clear favorites</button>
+      <button type="button" class="btn" id="clear-recents">Clear recents</button>
+    </section>
+
+    <div class="sheet-foot"><button class="btn primary" value="close">Done</button></div>
+  </form>
+</dialog>
+
 <script src="vendor/xterm.js"></script>
 <script src="vendor/xterm-addon-fit.js"></script>
 <script src="app.js"></script>

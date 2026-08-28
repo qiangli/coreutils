@@ -5,9 +5,11 @@ package webconsole
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
@@ -101,12 +103,31 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 	mux.Handle("GET /shell", redirectTo("/term/"))
 	mux.Handle("GET /meet", redirectTo("/relay/"))
 
+	// The terminal is served by the launcher itself rather than mounted, so it
+	// gets a full page of its own with the launcher's <base href> — every app
+	// opens as a real browser page, none of them framed inside another.
+	// One pattern, dispatched inside: net/http's mux rejects "GET /term/"
+	// alongside "/term/ws" as conflicting, and the socket must accept the
+	// upgrade on any method anyway.
+	termSocket := webterm.SocketHandler(s.opts.Terminal)
+	mux.HandleFunc("/term/", func(w http.ResponseWriter, r *http.Request) {
+		if path.Base(r.URL.Path) == "ws" {
+			termSocket.ServeHTTP(w, r)
+			return
+		}
+		s.handleTermPage(w, r)
+	})
+	mux.Handle("GET /term", redirectTo("/term/"))
+
 	closers := []func() error{}
 	for _, p := range s.panels {
 		if !p.Available {
 			continue
 		}
-		h := s.panelHandler(p)
+		h, closer := s.panelHandler(p)
+		if closer != nil {
+			closers = append(closers, closer)
+		}
 		if h == nil {
 			continue
 		}
@@ -142,22 +163,32 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 	return h, closer, nil
 }
 
-// panelHandler returns the handler for a panel, or nil when the console has
-// nothing to serve for it.
-func (s *server) panelHandler(p Panel) http.Handler {
+// panelHandler returns the handler for a panel plus any closer it needs, or nil
+// when the console has nothing to serve for it.
+func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	switch p.Name {
 	case "terminal":
-		return webterm.Handler(s.opts.Terminal)
+		// Served above, at the launcher's own root, not mounted here.
+		return nil, nil
+	case "files":
+		h, closer, err := filesPanel(s.opts.Scope, s.opts.AllowWrite)
+		if err != nil {
+			// An unmountable panel must not take the whole launcher down: the
+			// tile says why and everything else still works.
+			slog.Error("files panel", "err", err)
+			return nil, nil
+		}
+		return h, closer
 	case "relay":
 		// The room is MOUNTED, not proxied to a separate `relay serve`: one
 		// engine, one lease, one transcript. The pass-through gate is required —
 		// see meet.MountOptions.
-		return meet.HandlerWith(s.opts.Ctx, meet.MountOptions{Gate: passthrough})
+		return meet.HandlerWith(s.opts.Ctx, meet.MountOptions{Gate: passthrough}), nil
 	}
 	if p.Mode == atlas.WebProxy && p.Port > 0 {
-		return s.proxyTo(p)
+		return s.proxyTo(p), nil
 	}
-	return nil
+	return nil, nil
 }
 
 // proxyTo reverse-proxies a separately-supervised service, and says so plainly

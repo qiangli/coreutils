@@ -1,223 +1,355 @@
-// bashy apps — the launcher shell.
+// bashy apps — the launcher.
 //
-// No build step and no framework: the page loads two vendored UMD files
-// (xterm.js, addon-fit) and this script. That is deliberate — `go build` alone
-// has to produce a working launcher, so there must be nothing between a
-// checkout and a running binary.
+// A pill search, then Overview, Favorites, Recent and the app grid, each section
+// toggleable, with a settings sheet for background, theme, section visibility
+// and recent depth.
+//
+// Plain JS on purpose: the launcher ships inside a Go binary with no build step,
+// and it is bashy's own surface — free to evolve without reference to anything
+// else that happens to render tiles.
 //
 // EVERY url is built from document.baseURI. The server rewrites <base href> per
 // request, so the same bytes work at / on loopback and under outpost's
 // /matrix/h/<host>/app/<name>/ prefix without knowing which it is.
 const url = (p) => new URL(p, document.baseURI);
 
-const view = document.getElementById("view");
-const titleEl = document.getElementById("title");
-const backEl = document.getElementById("back");
+// A script error used to leave a blank card and no clue — the page simply
+// stopped painting. Surface it instead: a launcher that cannot render should say
+// so on the launcher.
+addEventListener("error", (e) => showFatal(e.message || String(e.error)));
+addEventListener("unhandledrejection", (e) => showFatal(String(e.reason)));
+function showFatal(msg) {
+  const host = document.getElementById("grid-host") || document.body;
+  if (document.getElementById("fatal")) return;
+  const box = document.createElement("div");
+  box.id = "fatal";
+  box.className = "fatal";
+  const h = document.createElement("strong");
+  h.textContent = "The launcher failed to render.";
+  const p = document.createElement("p");
+  p.textContent = msg;
+  box.append(h, p);
+  host.prepend(box);
+}
+
+const view = document.getElementById("grid-host");
 const whoEl = document.getElementById("who");
+const bgEl = document.getElementById("bg");
+const searchEl = document.getElementById("search");
+const footLeft = document.getElementById("foot-left");
+const verEl = document.getElementById("ver");
 
 let apps = [];
+let search = "";
 
-// ---------------------------------------------------------------- icons ----
-// Drawn as inline SVG paths rather than shipped as PNGs: they inherit the theme
-// colour, stay sharp at any density, and cost bytes in the hundreds.
-const ICONS = {
-  terminal: "M5 7l5 5-5 5M13 17h6",
-  files: "M4 8a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
-  relay: "M4 6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H8l-4 3zM18 9h2a2 2 0 0 1 2 2v5l-3-2",
-  dag: "M12 4v4M6 20v-3a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3M12 8v7",
-  loom: "M6 4v16M18 4v16M6 9h12M6 15h12",
-  _: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+// ------------------------------------------------------------------ config --
+// localStorage only: this is per-viewer chrome, not state anything else reads.
+// Every access is guarded — a private window or blocked site data throws on
+// access rather than returning null.
+const CFG_KEY = "bashy.apps.config";
+// Bump when a default changes in a way a previously-saved config would mask.
+const CFG_VERSION = 2;
+const DEFAULTS = {
+  v: CFG_VERSION,
+  // A real background by default. The glass card only engages over one (a
+  // translucent panel on a flat colour is just a muddier flat colour), so
+  // defaulting to "none" meant the launcher shipped looking like an unstyled
+  // page unless you went hunting in settings for the thing that styles it.
+  background: "sky",
+  theme: "system",
+  showSummary: true,
+  showFavorites: true,
+  showRecents: true,
+  recentLimit: 8,
+  favorites: [],
+  recents: [],
 };
-const dots = { terminal: 1, dag: 1, loom: 1 };
-
-function icon(name, status) {
-  const wrap = document.createElement("span");
-  wrap.className = "icon";
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", ICONS[name] || ICONS._);
-  svg.append(path);
-  if (dots[name]) {
-    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("cx", "12"); c.setAttribute("cy", "12"); c.setAttribute("r", "1.4");
-    c.setAttribute("fill", "currentColor"); c.setAttribute("stroke", "none");
-    if (name === "terminal") { c.setAttribute("cx", "12"); c.setAttribute("cy", "17"); }
-    if (name === "loom") { c.setAttribute("cx", "12"); c.setAttribute("cy", "12"); }
-    svg.append(c);
+function loadCfg() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(CFG_KEY) || "{}");
+  } catch (_) {
+    return { ...DEFAULTS };
   }
-  wrap.append(svg);
-  const b = document.createElement("span");
-  b.className = "badge " + status;
-  wrap.append(b);
+  // A saved config shadows every default, and the whole config is persisted on
+  // any tile click (see recordVisit) — so a single click under an older build
+  // pinned that build's defaults forever, and changing one later had no visible
+  // effect for anyone who had already used the page. Migrate the fields whose
+  // default actually moved rather than silently losing to a stale value.
+  if ((saved.v || 1) < 2) {
+    delete saved.background; // was "none"; the launcher now ships a real one
+    saved.v = CFG_VERSION;
+  }
+  return { ...DEFAULTS, ...saved };
+}
+let cfg = loadCfg();
+function saveCfg(patch) {
+  cfg = { ...cfg, ...patch };
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (_) {}
+  applyChrome();
+}
+function applyChrome() {
+  const bg = cfg.background || "none";
+  bgEl.setAttribute("data-bashy-bg", bg);
+  // The glass card and glassy header only make sense over a real background.
+  document.body.classList.toggle("has-bg", bg !== "none");
+  const root = document.documentElement;
+  if (cfg.theme === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", cfg.theme);
+}
+
+function isFav(name) { return cfg.favorites.includes(name); }
+function toggleFav(name) {
+  const f = isFav(name) ? cfg.favorites.filter((n) => n !== name) : [...cfg.favorites, name];
+  saveCfg({ favorites: f });
+  render();
+}
+function recordVisit(name) {
+  saveCfg({ recents: [name, ...cfg.recents.filter((n) => n !== name)].slice(0, 24) });
+}
+
+// ------------------------------------------------------------------- icons --
+// A pinned glyph + colour for the apps bashy knows, and a deterministic hash
+// into a fixed palette for everything else, so an app keeps its identity across
+// restarts without anyone assigning one.
+const ICON_SPEC = {
+  ycode: { color: "#1f2328", glyph: "Y" },
+  shell: { color: "#0a0e1a", glyph: "$" },
+  terminal: { color: "#0a0e1a", glyph: "$" },
+  desktop: { color: "#af52de", glyph: "D" },
+  ssh: { color: "#0f766e", glyph: "⌥" },
+  files: { color: "#3478f6", glyph: "\u{1F5C0}" },
+};
+const ICON_PALETTE = ["#4f46e5","#3478f6","#ec4899","#f59e0b","#10b981","#8b5cf6",
+  "#5ac8fa","#ef4444","#06b6d4","#22c55e","#0ea5e9","#a855f7","#84cc16"];
+function appIcon(name) {
+  if (ICON_SPEC[name]) return ICON_SPEC[name];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return { color: ICON_PALETTE[Math.abs(h) % ICON_PALETTE.length], glyph: (name[0] || "?").toUpperCase() };
+}
+
+// ------------------------------------------------------------------- tiles --
+function tile(a, opts = {}) {
+  const ic = appIcon(a.name);
+  const wrap = document.createElement("div");
+  wrap.className = "tile-wrap";
+
+  // A real link, opened in its own tab: every app gets the whole browser
+  // window, its own history and its own URL — nothing is framed inside the
+  // launcher. The launcher is a start page, not a container.
+  const open = a.status === "ready";
+  const btn = document.createElement(open ? "a" : "button");
+  btn.className = "tile";
+  if (open) {
+    btn.href = url(a.path.replace(/^\//, ""));
+    btn.target = "_blank";
+    btn.rel = "noopener";
+  } else {
+    btn.type = "button";
+  }
+  if (a.status === "unavailable") {
+    btn.disabled = true;
+    btn.title = a.note || "unavailable on this host";
+  } else if (a.status === "stopped") {
+    btn.title = a.start_hint ? "Not running. Start it with: " + a.start_hint : "not running";
+  }
+
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.style.background = ic.color;
+  icon.append(document.createTextNode(ic.glyph));
+  const badge = document.createElement("span");
+  badge.className = "badge " + a.status;
+  icon.append(badge);
+  btn.append(icon);
+
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = a.label;
+  btn.append(label);
+
+  if (a.status === "stopped" || a.status === "unavailable") {
+    const sub = document.createElement("span");
+    sub.className = "sublabel";
+    sub.textContent = a.status === "stopped" ? "not running" : (a.note ? "unavailable" : "unavailable");
+    btn.append(sub);
+  }
+
+  btn.addEventListener("click", () => { if (open) recordVisit(a.name); });
+  wrap.append(btn);
+
+  if (!opts.noStar) {
+    const star = document.createElement("button");
+    star.type = "button";
+    star.className = "star" + (isFav(a.name) ? " on" : "");
+    star.textContent = isFav(a.name) ? "★" : "☆";
+    star.title = isFav(a.name) ? "Remove from favorites" : "Add to favorites";
+    star.setAttribute("aria-label", star.title);
+    star.addEventListener("click", (e) => { e.stopPropagation(); toggleFav(a.name); });
+    wrap.append(star);
+  }
   return wrap;
 }
 
-// ------------------------------------------------------------------ home ----
-function renderHome() {
-  titleEl.textContent = "Apps";
-  backEl.hidden = true;
-
-  const pad = document.createElement("div");
-  pad.className = "pad";
+function sectionEl(title, nodes) {
+  const s = document.createElement("section");
+  s.className = "sect";
+  const head = document.createElement("div");
+  head.className = "sect-head";
+  const h = document.createElement("h2");
+  h.textContent = title;
+  head.append(h);
+  s.append(head);
   const grid = document.createElement("div");
   grid.className = "grid";
+  grid.append(...nodes);
+  s.append(grid);
+  return s;
+}
 
-  for (const a of apps) {
-    const btn = document.createElement("button");
-    btn.className = "app";
-    btn.type = "button";
-    btn.append(icon(a.name, a.status));
+// -------------------------------------------------------------------- home --
+// render is the single repaint entry point. Everything that changes what the
+// page shows — a search keystroke, a settings toggle, a liveness poll — calls
+// this rather than reaching into the DOM itself.
+function render() { renderHome(); }
 
-    const label = document.createElement("span");
-    label.className = "label";
-    label.textContent = a.label;
-    btn.append(label);
+function matches(a) {
+  const t = search.trim().toLowerCase();
+  if (!t) return true;
+  return a.name.toLowerCase().includes(t) || (a.label || "").toLowerCase().includes(t);
+}
 
-    if (a.status === "unavailable") {
-      btn.disabled = true;
-      btn.title = a.note || "unavailable on this host";
-      const h = document.createElement("span");
-      h.className = "hint";
-      h.textContent = a.note || "unavailable";
-      btn.append(h);
-    } else if (a.status === "stopped") {
-      const h = document.createElement("span");
-      h.className = "hint";
-      h.textContent = "not running";
-      btn.append(h);
-      btn.title = a.start_hint ? "Start it with: " + a.start_hint : "not running";
+function renderHome() {
+  const pad = document.createElement("div");
+  pad.className = "pad";
+  const shown = apps.filter(matches);
+  const byName = new Map(apps.map((a) => [a.name, a]));
+
+  if (cfg.showSummary) {
+    const ready = apps.filter((a) => a.status === "ready").length;
+    const stopped = apps.filter((a) => a.status === "stopped").length;
+    const na = apps.filter((a) => a.status === "unavailable").length;
+    const s = document.createElement("section");
+    s.className = "sect";
+    const head = document.createElement("div");
+    head.className = "sect-head";
+    const h = document.createElement("h2"); h.textContent = "Overview"; head.append(h);
+    s.append(head);
+    const card = document.createElement("div");
+    card.className = "summary";
+    for (const [n, l] of [[apps.length, "Apps"], [ready, "Ready"], [stopped, "Stopped"], [na, "Unavailable"]]) {
+      const d = document.createElement("div");
+      const b = document.createElement("b"); b.textContent = String(n);
+      const sp = document.createElement("span"); sp.textContent = l;
+      d.append(b, sp); card.append(d);
     }
-
-    btn.addEventListener("click", () => {
-      location.hash = a.name === "terminal" ? "#/terminal" : "#/app/" + a.name;
-    });
-    grid.append(btn);
+    s.append(card);
+    pad.append(s);
   }
 
-  pad.append(grid);
-  if (!apps.length) {
+  if (cfg.showFavorites) {
+    const favs = cfg.favorites.map((n) => byName.get(n)).filter(Boolean).filter(matches);
+    if (favs.length) pad.append(sectionEl("Favorites", favs.map((a) => tile(a))));
+  }
+
+  if (cfg.showRecents) {
+    const rec = cfg.recents.map((n) => byName.get(n)).filter(Boolean).filter(matches)
+      .slice(0, Math.max(1, cfg.recentLimit | 0));
+    if (rec.length) pad.append(sectionEl("Recent", rec.map((a) => tile(a, { noStar: true }))));
+  }
+
+  if (shown.length) {
+    pad.append(sectionEl("Apps", shown.map((a) => tile(a))));
+  } else {
+    const s = document.createElement("section");
+    s.className = "sect";
     const p = document.createElement("p");
-    p.className = "note";
-    p.textContent = "No surfaces declared.";
-    pad.append(p);
+    p.className = "empty";
+    p.textContent = apps.length ? "No app matches that search." : "No surfaces declared.";
+    s.append(p);
+    pad.append(s);
   }
+
   view.replaceChildren(pad);
 }
 
-// ----------------------------------------------------------------- panel ----
-function renderPanel(name) {
-  const app = apps.find((a) => a.name === name);
-  titleEl.textContent = app ? app.label : name;
-  backEl.hidden = false;
+// ---------------------------------------------------------------- settings --
+const BG_PRESETS = [
+  ["none", "None"], ["sky", "Sky"], ["ocean", "Ocean"], ["mountains", "Mountains"],
+  ["plateau", "Plateau"], ["lakes", "Lakes"], ["bamboo", "Bamboo"],
+];
+const SECTIONS = [["showSummary", "Overview"], ["showFavorites", "Favorites"], ["showRecents", "Recent"]];
+const dlg = document.getElementById("settings");
 
-  if (app && app.status === "stopped") {
-    const pad = document.createElement("div");
-    pad.className = "pad";
-    const p = document.createElement("p");
-    p.className = "note";
-    p.append(document.createTextNode(app.label + " is not running. Start it with "));
-    const c = document.createElement("code");
-    c.textContent = app.start_hint || "";
-    p.append(c, document.createTextNode(" — this page refreshes on its own."));
-    pad.append(p);
-    view.replaceChildren(pad);
-    return;
+function buildSettings() {
+  const sw = document.getElementById("bg-swatches");
+  sw.replaceChildren(...BG_PRESETS.map(([id, label]) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "swatch-btn";
+    b.setAttribute("aria-pressed", String((cfg.background || "none") === id));
+    const s = document.createElement("div");
+    s.className = "bg-swatch"; s.setAttribute("data-bg", id);
+    const t = document.createElement("span"); t.textContent = label;
+    b.append(s, t);
+    b.addEventListener("click", () => { saveCfg({ background: id }); buildSettings(); });
+    return b;
+  }));
+
+  for (const b of document.querySelectorAll("#theme-seg button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeVal === cfg.theme));
+    b.onclick = () => { saveCfg({ theme: b.dataset.themeVal }); buildSettings(); };
   }
 
-  const f = document.createElement("iframe");
-  // The panel keeps its own <base href>; the console only frames it, so one nav
-  // and one auth cover every app without each one re-implementing chrome.
-  f.src = url((app ? app.path : "/" + name + "/").replace(/^\//, ""));
-  f.title = app ? app.label : name;
-  view.replaceChildren(f);
+  const st = document.getElementById("section-toggles");
+  st.replaceChildren(...SECTIONS.map(([key, label]) => {
+    const row = document.createElement("label");
+    row.className = "row";
+    const s = document.createElement("span"); s.textContent = label;
+    const sw2 = document.createElement("span"); sw2.className = "switch";
+    const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!cfg[key];
+    const knob = document.createElement("i");
+    inp.addEventListener("change", () => { saveCfg({ [key]: inp.checked }); render(); });
+    sw2.append(inp, knob);
+    row.append(s, sw2);
+    return row;
+  }));
+
+  const rl = document.getElementById("recent-limit");
+  rl.value = cfg.recentLimit;
+  rl.onchange = () => { saveCfg({ recentLimit: Math.max(1, Math.min(24, +rl.value || 8)) }); render(); };
+
+  document.getElementById("fav-summary").textContent =
+    `${cfg.favorites.length} favorite${cfg.favorites.length === 1 ? "" : "s"}, ${cfg.recents.length} recent.`;
+}
+document.getElementById("settings-btn").addEventListener("click", () => { buildSettings(); dlg.showModal(); });
+document.getElementById("clear-favs").addEventListener("click", () => { saveCfg({ favorites: [] }); buildSettings(); render(); });
+document.getElementById("clear-recents").addEventListener("click", () => { saveCfg({ recents: [] }); buildSettings(); render(); });
+dlg.addEventListener("close", render);
+
+// ------------------------------------------------------------------- build --
+// Which binary am I looking at, and is this page from it or from a cache?
+//
+// `assets` is the content hash of this very script, so a stale cached copy shows
+// a different value from the one the server reports — the question that took a
+// whole round trip to answer becomes a glance.
+function renderBuild(b) {
+  if (!b) return;
+  const short = (b.version || "devel") + (b.commit ? " · " + b.commit : "") + (b.dirty ? "-dirty" : "");
+  verEl.textContent = b.commit ? b.commit.slice(0, 7) + (b.dirty ? "*" : "") : (b.version || "devel");
+  verEl.title = [short, b.time, b.go, "assets " + (b.assets || "?")].filter(Boolean).join("\n");
+  const foot = document.getElementById("foot-build");
+  if (foot) {
+    foot.textContent = short + (b.time ? " · " + b.time.slice(0, 10) : "") + (b.go ? " · " + b.go : "");
+  }
 }
 
-// -------------------------------------------------------------- terminal ----
-function renderTerminal() {
-  titleEl.textContent = "Terminal";
-  backEl.hidden = false;
-
-  const host = document.createElement("div");
-  host.id = "term";
-  view.replaceChildren(host);
-
-  const term = new Terminal({
-    cursorBlink: true,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, "Cascadia Mono", monospace',
-    fontSize: 13,
-    theme: matchMedia("(prefers-color-scheme: dark)").matches
-      ? { background: "#0b0b0d", foreground: "#fafafa", cursor: "#fafafa" }
-      : { background: "#1b1b1f", foreground: "#f4f4f5", cursor: "#f4f4f5" },
-  });
-  const fit = new FitAddon.FitAddon();
-  term.loadAddon(fit);
-  term.open(host);
-  fit.fit();
-
-  const ws = url("term/ws");
-  ws.protocol = ws.protocol === "https:" ? "wss:" : "ws:";
-  ws.searchParams.set("cols", term.cols);
-  ws.searchParams.set("rows", term.rows);
-
-  const sock = new WebSocket(ws);
-  sock.binaryType = "arraybuffer";
-  const enc = new TextEncoder();
-
-  sock.onopen = () => term.focus();
-  // Binary frames both ways: raw PTY bytes, never re-encoded. A text frame is
-  // reserved for control messages, which is why resize is JSON and input is not.
-  sock.onmessage = (e) => {
-    if (e.data instanceof ArrayBuffer) term.write(new Uint8Array(e.data));
-    else term.write(e.data);
-  };
-  term.onData((d) => {
-    if (sock.readyState === WebSocket.OPEN) sock.send(enc.encode(d));
-  });
-
-  const sendSize = () => {
-    if (sock.readyState !== WebSocket.OPEN) return;
-    sock.send(JSON.stringify({ type: "size", cols: term.cols, rows: term.rows }));
-  };
-  const ro = new ResizeObserver(() => { try { fit.fit(); sendSize(); } catch (_) {} });
-  ro.observe(host);
-
-  const ended = (why) => {
-    ro.disconnect();
-    if (document.getElementById("term-msg")) return;
-    const bar = document.createElement("div");
-    bar.className = "term-msg";
-    bar.id = "term-msg";
-    bar.append(document.createTextNode(why));
-    const again = document.createElement("button");
-    again.textContent = "New session";
-    again.addEventListener("click", () => renderTerminal());
-    bar.append(again);
-    view.append(bar);
-  };
-  // The server closes with a reason when it can (a shell that quit during its
-  // own startup is the common one); 1006 means the connection simply dropped.
-  sock.onclose = (e) => ended(e.reason || (e.code === 1006 ? "Connection lost." : "Session ended."));
-  sock.onerror = () => ended("Connection failed.");
-
-  // Leaving the view must not leave a shell running with nobody attached.
-  routeCleanup = () => { ro.disconnect(); sock.close(); term.dispose(); };
-}
-
-// ----------------------------------------------------------------- route ----
-let routeCleanup = null;
-
-function route() {
-  if (routeCleanup) { try { routeCleanup(); } catch (_) {} routeCleanup = null; }
-  const h = location.hash || "#/";
-  if (h === "#/terminal") return renderTerminal();
-  const m = h.match(/^#\/app\/([\w.-]+)$/);
-  if (m) return renderPanel(m[1]);
-  renderHome();
-}
-
-backEl.addEventListener("click", () => { location.hash = "#/"; });
-addEventListener("hashchange", route);
+// ------------------------------------------------------------------ wiring --
+searchEl.addEventListener("input", () => { search = searchEl.value; render(); });
+document.getElementById("theme-btn").addEventListener("click", () => {
+  const order = ["system", "light", "dark"];
+  saveCfg({ theme: order[(order.indexOf(cfg.theme) + 1) % order.length] });
+});
 
 async function refresh() {
   try {
@@ -226,15 +358,21 @@ async function refresh() {
       fetch(url("api/session")).then((r) => r.json()).catch(() => null),
     ]);
     apps = a.apps || [];
-    if (s) whoEl.textContent = s.user + " · " + s.via;
+    if (s) {
+      whoEl.textContent = s.user + " · " + s.via;
+      renderBuild(s.build);
+      const ready = apps.filter((x) => x.status === "ready").length;
+      footLeft.textContent = `${ready}/${apps.length} ready · signed in as ${s.user} (${s.via})`;
+    }
   } catch (e) {
     apps = [];
     whoEl.textContent = "offline";
   }
-  // Only the home grid and a stopped-panel notice reflect liveness; repainting
-  // under a live terminal would tear down the session every few seconds.
-  if (!location.hash || location.hash === "#/") renderHome();
+  // Only the home grid reflects liveness; repainting under a live terminal
+  // would tear down the session every few seconds.
+  render();
 }
 
-refresh().then(route);
+applyChrome();
+refresh();
 setInterval(refresh, 5000);
