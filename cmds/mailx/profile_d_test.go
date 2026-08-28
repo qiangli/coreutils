@@ -59,6 +59,34 @@ func TestPOSIXAddressSelectorAcceptsHyphenatedLogin(t *testing.T) {
 	}
 }
 
+func TestPOSIXNumericCommandLineImplicitlyPrints(t *testing.T) {
+	d, env := seedSenderMailbox(t, "first", "second", "third")
+	stdout, stderr, code := runMailxEnv(t, d, "3\nexit\n", env, "-N")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "body 3") || strings.Contains(stdout, "unknown command") {
+		t.Fatalf("implicit print output = %q", stdout)
+	}
+}
+
+func TestResolvePreservesNearPathMaxRelativeOperand(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Windows uses a different extended-path contract")
+	}
+	parts := []string{"maildir"}
+	for range 25 {
+		parts = append(parts, strings.Repeat("x", 200))
+	}
+	parts = append(parts, "record")
+	name := filepath.Join(parts...)
+	rc := &tool.RunContext{Dir: "/work", DirIsProcessCwd: true}
+	s := &mailSession{rc: rc}
+	if got := s.resolve(name); got != name {
+		t.Fatalf("resolved pathname was lengthened: got %d bytes, want %d", len(got), len(name))
+	}
+}
+
 // POSIX: "If both retain and discard commands are given, discard commands
 // shall be ignored" -- the retained list wins whole, and a later discard of a
 // retained header-field must not withdraw it.

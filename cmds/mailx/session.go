@@ -171,7 +171,15 @@ func (s *mailSession) resolve(name string) string {
 	if base == "" {
 		base = s.rc.Dir
 	}
-	p := s.rc.Path(filepath.Join(base, name))
+	operand := filepath.Join(base, name)
+	if rel, err := filepath.Rel(s.rc.Dir, base); err == nil {
+		// Keep the operand relative to RunContext.Dir. A standalone command
+		// whose Dir is the process cwd can then pass a near-PATH_MAX relative
+		// pathname to the kernel without first lengthening it into an invalid
+		// absolute pathname.
+		operand = filepath.Join(rel, name)
+	}
+	p := s.rc.Path(operand)
 	if matches, _ := filepath.Glob(p); len(matches) > 0 {
 		return matches[0]
 	}
@@ -381,9 +389,19 @@ func (s *mailSession) execute(line string, startup bool) (bool, error) {
 	if strings.HasPrefix(word, "#") {
 		return false, nil
 	}
-	cmd, err := mailCommand(word)
-	if err != nil {
-		return false, err
+	cmd := ""
+	if implicitPrintSelector(word) {
+		cmd = "print"
+		args = make([]string, len(fields))
+		for i := range fields {
+			args[i] = fields[i].text
+		}
+	} else {
+		var err error
+		cmd, err = mailCommand(word)
+		if err != nil {
+			return false, err
+		}
 	}
 	literalPlus := func(i int) {
 		if i >= 0 && i < len(args) && fields[i+1].protectedLeading && strings.HasPrefix(args[i], "+") {
@@ -1150,7 +1168,7 @@ func (s *mailSession) save(cmd string, args []string) error {
 	} else {
 		for _, i := range nums {
 			sender := firstHeader(s.entries[i].Message, "From", "unknown")
-			if e = mailxpkg.AppendMbox(path, sender, nowFn(), s.entries[i].Message); e != nil {
+			if e = mailxpkg.AppendMboxWithMode(path, sender, nowFn(), s.entries[i].Message, 0o666); e != nil {
 				return e
 			}
 		}
@@ -1169,6 +1187,18 @@ func (s *mailSession) save(cmd string, args []string) error {
 	}
 	s.current = nums[len(nums)-1]
 	return nil
+}
+
+func implicitPrintSelector(word string) bool {
+	if word == "" || word[0] < '0' || word[0] > '9' {
+		return false
+	}
+	for _, r := range word {
+		if (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 func authorFile(e mailxpkg.MboxEntry) string {
 	a := firstHeader(e.Message, "From", "unknown")

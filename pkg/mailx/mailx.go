@@ -3,6 +3,8 @@ package mailx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -360,10 +362,7 @@ func RewriteMbox(path string, entries []MboxEntry) error {
 	if path == "" {
 		return ErrMissingMailbox
 	}
-	if err := makeMailboxParent(path); err != nil {
-		return err
-	}
-	unlock, err := acquireLock(path + ".lock")
+	unlock, err := acquireMailboxLock(path)
 	if err != nil {
 		return err
 	}
@@ -377,10 +376,7 @@ func MergeMbox(path string, entries []MboxEntry, appendAtEnd bool) error {
 	if path == "" {
 		return ErrMissingMailbox
 	}
-	if err := makeMailboxParent(path); err != nil {
-		return err
-	}
-	unlock, err := acquireLock(path + ".lock")
+	unlock, err := acquireMailboxLock(path)
 	if err != nil {
 		return err
 	}
@@ -438,10 +434,7 @@ func CommitMboxChangesKeep(path string, snapshot, updated []MboxEntry, keep []bo
 	if len(snapshot) != len(updated) || len(snapshot) != len(keep) {
 		return fmt.Errorf("%w: snapshot, update, and retention sets differ in length", ErrMailboxChanged)
 	}
-	if err := makeMailboxParent(path); err != nil {
-		return err
-	}
-	unlock, err := acquireLock(path + ".lock")
+	unlock, err := acquireMailboxLock(path)
 	if err != nil {
 		return err
 	}
@@ -574,6 +567,14 @@ func (t LocalMboxTransport) Deliver(_ context.Context, msg *Message, _ []string)
 // in-process rollback, not crash-atomic transaction guarantees (e.g. system crashes
 // or power loss mid-write cannot be rolled back by process-level truncate).
 func AppendMbox(path, sender string, when time.Time, msg *Message) error {
+	return AppendMboxWithMode(path, sender, when, msg, 0o600)
+}
+
+// AppendMboxWithMode is AppendMbox with the creation mode used when path does
+// not exist. Existing mailboxes retain their mode. POSIX mailx uses 0666 for
+// user-requested output files (subject to the process umask), while delivery
+// spool files use AppendMbox's private 0600 default.
+func AppendMboxWithMode(path, sender string, when time.Time, msg *Message, mode os.FileMode) error {
 	if path == "" {
 		return ErrMissingMailbox
 	}
@@ -587,16 +588,11 @@ func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 		return err
 	}
 
-	// Directory creation happens after validation, so invalid arguments leave no directory artifact.
-	if err := makeMailboxParent(path); err != nil {
-		return err
-	}
-
 	// acquireLock never retries or breaks a stale lock: a lock file left
 	// behind by a crashed writer blocks all future delivery until an
 	// operator removes it by hand. That recovery path is explicitly not
 	// supported here.
-	unlock, err := acquireLock(path + ".lock")
+	unlock, err := acquireMailboxLock(path)
 	if err != nil {
 		return err
 	}
@@ -605,7 +601,7 @@ func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 	if _, _, err := mailboxTarget(path); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, mode.Perm())
 	if err != nil {
 		return fmt.Errorf("mailx: open mailbox: %w", err)
 	}
@@ -662,6 +658,34 @@ func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 		return fmt.Errorf("mailx: close mailbox: %w", err)
 	}
 	return nil
+}
+
+// mailboxLockPath keeps the lock in the mailbox's directory but does not add
+// bytes to a possibly NAME_MAX-length basename. The full digest retains a
+// deterministic one-to-one lock identity while staying below NAME_MAX on the
+// supported filesystems.
+func mailboxLockPath(path string) string {
+	canonical, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		canonical = filepath.Clean(path)
+	}
+	sum := sha256.Sum256([]byte(canonical))
+	return filepath.Join(filepath.Dir(path), ".mailx-lock-"+hex.EncodeToString(sum[:]))
+}
+
+func acquireMailboxLock(path string) (func(), error) {
+	unlock, err := acquireLock(mailboxLockPath(path))
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return unlock, err
+	}
+	// Only create parents after the lock open proves they are missing. Besides
+	// avoiding filesystem changes for invalid messages, this matters for a
+	// valid pathname at PATH_MAX: re-resolving its already-existing parent with
+	// MkdirAll can itself exceed the implementation's pathname limit.
+	if err := makeMailboxParent(path); err != nil {
+		return nil, err
+	}
+	return acquireLock(mailboxLockPath(path))
 }
 
 func fromLine(sender string, when time.Time) string {

@@ -327,7 +327,7 @@ func printMessage(w io.Writer, entry mailxpkg.MboxEntry) {
 }
 
 func saveMessages(path string, entries []mailxpkg.MboxEntry, nums []int, bodyOnly bool) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666)
 	if err != nil {
 		return err
 	}

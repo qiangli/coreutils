@@ -243,7 +243,7 @@ func TestParseMboxRejectsNonMboxData(t *testing.T) {
 func TestAppendMboxReturnsBusyWhenLockExists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "spool.mbox")
-	if err := os.WriteFile(path+".lock", []byte("held"), 0o600); err != nil {
+	if err := os.WriteFile(mailboxLockPath(path), []byte("held"), 0o600); err != nil {
 		t.Fatalf("WriteFile(lock): %v", err)
 	}
 	msg, err := ParseMessage([]byte("Subject: hi\n\nbody\n"))
@@ -266,7 +266,7 @@ func TestAppendMboxReturnsBusyWhenLockExists(t *testing.T) {
 func TestAppendMboxStaleLockNeverRecovers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "spool.mbox")
-	if err := os.WriteFile(path+".lock", []byte("stale"), 0o600); err != nil {
+	if err := os.WriteFile(mailboxLockPath(path), []byte("stale"), 0o600); err != nil {
 		t.Fatalf("WriteFile(lock): %v", err)
 	}
 	msg, err := ParseMessage([]byte("Subject: hi\n\nbody\n"))
@@ -470,12 +470,27 @@ func TestAppendMboxRejectsEnvelopeSenderInjection(t *testing.T) {
 		if _, statErr := os.Stat(filepath.Dir(path)); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("sender %q left directory behind", s)
 		}
-		if _, statErr := os.Stat(path + ".lock"); !errors.Is(statErr, os.ErrNotExist) {
+		if _, statErr := os.Stat(mailboxLockPath(path)); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("sender %q left lock file behind", s)
 		}
 		if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("sender %q left mailbox file behind", s)
 		}
+	}
+}
+
+func TestAppendMboxMaximumLengthBasename(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows path-component limits differ by filesystem and policy")
+	}
+	path := filepath.Join(t.TempDir(), strings.Repeat("x", 255))
+	msg := &Message{Headers: []Header{{Name: "Subject", Value: "long path"}}, Body: []byte("body\n")}
+	if err := AppendMbox(path, "alice", time.Unix(0, 0), msg); err != nil {
+		t.Fatalf("AppendMbox(maximum-length basename): %v", err)
+	}
+	entries, err := ReadMbox(path)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadMbox(maximum-length basename) = %d entries, %v", len(entries), err)
 	}
 }
 

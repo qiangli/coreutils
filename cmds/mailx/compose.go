@@ -159,7 +159,7 @@ func (s *mailSession) deliver(body []byte, to, cc, bcc []string, subject string,
 		if s.boolVar("outfolder", false) {
 			file = "+" + file
 		}
-		if e := mailxpkg.AppendMbox(s.resolve(file), sender, when, msg); e != nil {
+		if e := mailxpkg.AppendMboxWithMode(s.resolve(file), sender, when, msg, 0o666); e != nil {
 			return e
 		}
 	}
@@ -447,7 +447,7 @@ func (s *mailSession) promptField(label, current string, dead []byte) (string, b
 }
 
 func appendFile(path string, data []byte) error {
-	f, e := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, e := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666)
 	if e != nil {
 		return e
 	}
