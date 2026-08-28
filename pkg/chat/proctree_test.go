@@ -180,6 +180,30 @@ func TestParentExitKillsDescendants(t *testing.T) {
 	}
 }
 
+func TestStopParentDeathWatchReapsWatcher(t *testing.T) {
+	child := exec.Command("sh", "-c", "sleep 30")
+	setProcessGroup(child)
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = killProcessTree(child)
+		_ = child.Wait()
+	}()
+
+	watch := startParentDeathWatch(child.Process.Pid)
+	if watch == nil {
+		t.Fatal("parent-death watcher did not start")
+	}
+	stopParentDeathWatch(watch)
+	if watch.cmd.ProcessState == nil {
+		t.Fatal("normal teardown did not wait for the parent-death watcher")
+	}
+	if _, err := watch.retain.Write([]byte("still open")); err == nil {
+		t.Fatal("normal teardown left the EOF-retention pipe open")
+	}
+}
+
 // The teardown must not change what a NORMAL turn returns. Putting the child in
 // its own process group is invisible to a command that simply runs and exits.
 func TestProcessGroupDoesNotChangeNormalRuns(t *testing.T) {
