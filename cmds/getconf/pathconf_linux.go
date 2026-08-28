@@ -76,7 +76,7 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 	case pcChownRestricted, pcNoTrunc:
 		return "1", true, nil
 	case pc2Symlinks:
-		return linuxSymlinkSupport(p, os.Symlink), true, nil
+		return linuxSymlinkSupport(int64(st.Type)), true, nil
 	case pcVdisable:
 		return "0", true, nil
 	case pcAllocSizeMin, pcRecMinXferSize, pcRecXferAlign:
@@ -117,21 +117,27 @@ func linuxStatfsForPath(path string, st *unix.Statfs_t) error {
 	}
 }
 
-func linuxSymlinkSupport(path string, symlink func(string, string) error) string {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
+// Linux libc implementations derive _PC_2_SYMLINKS from statfs(2). Keep this
+// query side-effect-free and independent of the caller's write permission.
+// These are the Linux filesystem magic values whose on-disk formats do not
+// support symbolic links; unknown filesystems default to the normal Linux
+// capability.
+func linuxSymlinkSupport(fsType int64) string {
+	switch fsType {
+	case 0xadf5, // ADFS_SUPER_MAGIC
+		0x1badface, // BFS_MAGIC
+		0x28cd3d45, // CRAMFS_MAGIC
+		0x1cd1,     // DEVPTS_SUPER_MAGIC
+		0x414a53,   // EFS_SUPER_MAGIC
+		0x072959,   // EFS_MAGIC
+		0x4d44,     // MSDOS_SUPER_MAGIC (including vfat)
+		0x5346544e, // NTFS_SUPER_MAGIC
+		0x002f,     // QNX4_SUPER_MAGIC
+		0x7275:     // ROMFS_SUPER_MAGIC
 		return undefined
+	default:
+		return "1"
 	}
-	for i := 0; i < 10; i++ {
-		probe := filepath.Join(path, ".getconf-symlink-probe-"+strconv.Itoa(os.Getpid())+"-"+strconv.Itoa(i))
-		if err := symlink(".", probe); err == nil {
-			_ = os.Remove(probe)
-			return "1"
-		} else if !errors.Is(err, os.ErrExist) {
-			return undefined
-		}
-	}
-	return undefined
 }
 
 // linuxFileSizeBits contains only filesystems for which the Linux ABI answer

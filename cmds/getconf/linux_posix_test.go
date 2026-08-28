@@ -4,7 +4,6 @@ package getconfcmd
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,14 +50,14 @@ func TestLinuxPathQueriesUseResolvablePrefix(t *testing.T) {
 	}
 }
 
-func TestLinuxSymlinkCapabilityIsMeasured(t *testing.T) {
-	dir := t.TempDir()
-	if got := linuxSymlinkSupport(dir, os.Symlink); got != "1" {
-		t.Fatalf("symlink-capable directory = %q, want 1", got)
+func TestLinuxSymlinkCapabilityUsesFilesystemType(t *testing.T) {
+	for _, fsType := range []int64{unix.MSDOS_SUPER_MAGIC, unix.CRAMFS_MAGIC, unix.DEVPTS_SUPER_MAGIC} {
+		if got := linuxSymlinkSupport(fsType); got != undefined {
+			t.Errorf("no-symlink filesystem %#x = %q, want undefined", fsType, got)
+		}
 	}
-	denied := errors.New("creation refused")
-	if got := linuxSymlinkSupport(dir, func(string, string) error { return denied }); got != undefined {
-		t.Fatalf("symlink-refusing directory = %q, want undefined", got)
+	if got := linuxSymlinkSupport(unix.EXT4_SUPER_MAGIC); got != "1" {
+		t.Fatalf("symlink-capable ext filesystem = %q, want 1", got)
 	}
 }
 
@@ -77,12 +76,12 @@ func TestLinuxLP64ConfstrEnvironment(t *testing.T) {
 	if !ok || got != "POSIX_V7_LP64_OFF64" || !platformSpecification(got) {
 		t.Fatalf("width-restricted environments = (%q, %v), want a usable LP64 specification", got, ok)
 	}
-	if got, ok := platformConfstrValue("V7_ENV"); !ok || got != "" {
-		t.Fatalf("V7_ENV = (%q, %v), want a defined empty environment prefix", got, ok)
-	}
 }
 
 func TestLinuxV7EnvironmentCanPrefixEnv(t *testing.T) {
+	if got, ok := platformConfstrValue("V7_ENV"); !ok || got != "" {
+		t.Fatalf("V7_ENV = (%q, %v), want a defined empty environment prefix", got, ok)
+	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Stdio: tool.Stdio{Out: &out, Err: &errb}}
 	if code := run(rc, []string{"V7_ENV"}); code != 0 || out.String() != "\n" || errb.String() != "" {
