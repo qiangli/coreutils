@@ -141,6 +141,41 @@ func EnsureSubscription(subscriber string) (bool, error) {
 	})
 }
 
+// BindInstance attaches a subscriber's inbox to one Bashy-owned live room card
+// for control-socket turn delivery. The returned release restores the previous
+// value only while this binding still owns it, so an old session cannot clear a
+// newer one during teardown.
+func BindInstance(subscriber, instance string) (release func() error, err error) {
+	subscriber = strings.TrimSpace(subscriber)
+	instance = strings.TrimSpace(instance)
+	if subscriber == "" || instance == "" {
+		return nil, fmt.Errorf("bus: binding an inbox needs subscriber and instance")
+	}
+	if _, err := EnsureSubscription(subscriber); err != nil {
+		return nil, err
+	}
+	sub, err := LoadSubscription(subscriber)
+	if err != nil {
+		return nil, err
+	}
+	previous := sub.Instance
+	sub.Instance = instance
+	if err := SaveSubscription(sub); err != nil {
+		return nil, err
+	}
+	return func() error {
+		current, err := LoadSubscription(subscriber)
+		if err != nil {
+			return err
+		}
+		if current.Instance != instance {
+			return nil
+		}
+		current.Instance = previous
+		return SaveSubscription(current)
+	}, nil
+}
+
 // ReconcileSubscriptions ensures an inbox for every name, and reports which
 // ones it had to create.
 //

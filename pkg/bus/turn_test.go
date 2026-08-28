@@ -47,6 +47,45 @@ func TestTurnPreambleDeliversAndClears(t *testing.T) {
 	}
 }
 
+func TestTurnPreambleIncludesHostUnifiedInboxWithoutBusPending(t *testing.T) {
+	isolate(t)
+	joinLive(t, "dev-b-session", "/tmp/dev-b-unified.sock")
+	subscribe(t, Subscription{Subscriber: "dev-b", Instance: "dev-b-session"})
+	old := PrepareTurnInbox
+	PrepareTurnInbox = func(agent string) PreparedPreamble {
+		if agent != "dev-b" {
+			t.Fatalf("unified hook agent = %q", agent)
+		}
+		return NewPreparedPreamble("meet and board input", nil)
+	}
+	t.Cleanup(func() { PrepareTurnInbox = old })
+
+	if got := TurnPreamble("/tmp/dev-b-unified.sock"); !strings.Contains(got, "meet and board input") {
+		t.Fatalf("turn boundary omitted host unified inbox: %q", got)
+	}
+}
+
+func TestPreparedTurnDoesNotAcknowledgeBeforeSuccessfulInjection(t *testing.T) {
+	isolate(t)
+	joinLive(t, "prepared-session", "/tmp/prepared.sock")
+	subscribe(t, Subscription{Subscriber: "prepared", Topics: []string{"*"}, Instance: "prepared-session"})
+	publish(t, "--topic", "x", "--as", "sender", "do not lose me")
+
+	first := PrepareTurnPreamble("/tmp/prepared.sock")
+	if !strings.Contains(first.Text, "do not lose me") {
+		t.Fatalf("prepared turn omitted input: %q", first.Text)
+	}
+	if retry := PrepareTurnPreamble("/tmp/prepared.sock"); !strings.Contains(retry.Text, "do not lose me") {
+		t.Fatal("preparing without injection consumed the input")
+	}
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if after := PrepareTurnPreamble("/tmp/prepared.sock"); after.Text != "" {
+		t.Fatalf("committed turn remained unread: %q", after.Text)
+	}
+}
+
 // A session nobody subscribed for must get nothing. Subscription is opt-in per
 // agent — the design is explicit that auto-subscribing everything to everything
 // is how a bus makes a fleet worse.

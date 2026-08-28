@@ -52,6 +52,9 @@ type Session struct {
 	Agent   string // the canonical binding, as recorded
 	Nick    string // the name the caller used
 	CtlSock string // where a steer lands
+	// inboxAgent is used only by transports such as ACP that have an
+	// authenticated protocol session but no PTY control socket.
+	inboxAgent string
 
 	// events is the tool's structured channel, when it has one. Its presence is
 	// the difference between KNOWING a turn ended and guessing from silence.
@@ -216,8 +219,10 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	// whether it is appended at all), and inventing one to carry mail would
 	// change how the tool starts. Those sessions get their mail on the first
 	// Say instead, which already prepends.
+	var preparedInbox bus.PreparedPreamble
 	if strings.TrimSpace(opt.Prompt) != "" {
-		opt.Prompt = bus.PrependForAgent(name, opt.Prompt)
+		preparedInbox = bus.PrepareForAgent(name, opt.Prompt)
+		opt.Prompt = preparedInbox.Text
 	}
 	next, d, err := governLaunch(ctx, name, l, opt.Prompt, lo)
 	if err != nil {
@@ -281,6 +286,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		Agent:        l.Binding(),
 		Nick:         l.Nick,
 		CtlSock:      sock,
+		inboxAgent:   name,
 		events:       tail,
 		launch:       l,
 		allowPremium: opt.AllowPremium,
@@ -333,6 +339,11 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		}
 		return nil, err
 	}
+	releaseInbox, err := bus.BindInstance(name, card.ID)
+	if err != nil {
+		room.Leave(card.ID)
+		return nil, fmt.Errorf("chat: bind %s inbox to live session: %w", name, err)
+	}
 
 	started := make(chan error, 1)
 	var startedOnce sync.Once
@@ -343,6 +354,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	go func() {
 		defer close(s.done)
 		defer room.Leave(card.ID)
+		defer func() { _ = releaseInbox() }()
 		var login *whodb.Handle
 		var ptyLink string
 		defer func() {
@@ -399,6 +411,9 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		if err := s.openConversation(ctx, opt.Prompt); err != nil {
 			return s, err
 		}
+	}
+	if err := preparedInbox.Commit(); err != nil {
+		return s, fmt.Errorf("chat: opening prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
 	return s, nil
 }
@@ -535,7 +550,11 @@ func (s *Session) Say(text string) error {
 	// Before the budget gate, deliberately: the notification text is really sent,
 	// so it is really billed. Metering the caller's message alone would understate
 	// the turn.
-	text = bus.Prepend(s.CtlSock, text)
+	preparedInbox := bus.PreparePrepend(s.CtlSock, text)
+	if s.CtlSock == "" && s.inboxAgent != "" {
+		preparedInbox = bus.PrepareForAgent(s.inboxAgent, text)
+	}
+	text = preparedInbox.Text
 
 	if d := s.governTurn(text); !d.Allowed() {
 		if d.Action == llmbudget.Queue {
@@ -545,6 +564,9 @@ func (s *Session) Say(text string) error {
 	}
 	if err := s.say(text); err != nil {
 		return err
+	}
+	if err := preparedInbox.Commit(); err != nil {
+		return fmt.Errorf("chat: turn was delivered but its inbox acknowledgement failed: %w", err)
 	}
 	// Charged on SEND, not on reply: the turn is bought the moment the agent
 	// accepts it, and a session's reply text has no boundary we could bill

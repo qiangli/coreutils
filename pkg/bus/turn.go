@@ -6,6 +6,43 @@ import (
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
+// PreparedPreamble is a rendered inbox snapshot whose cursor acknowledgements
+// are deliberately deferred until the embedding host has injected Text into a
+// live agent successfully.
+type PreparedPreamble struct {
+	Text string
+	ack  []func() error
+}
+
+// NewPreparedPreamble creates a host-owned preamble without exposing the
+// acknowledgement list as mutable API.
+func NewPreparedPreamble(text string, ack func() error) PreparedPreamble {
+	p := PreparedPreamble{Text: strings.TrimSpace(text)}
+	if ack != nil {
+		p.ack = append(p.ack, ack)
+	}
+	return p
+}
+
+// Commit acknowledges the exact source snapshots represented by Text. Call it
+// only after successful delivery. Repeated calls are safe because every source
+// cursor is monotonic.
+func (p PreparedPreamble) Commit() error {
+	for _, ack := range p.ack {
+		if err := ack(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PrepareTurnInbox is the embedding host's read-through view of communication
+// stores that pkg/bus cannot import (for example Meet, which already imports
+// bus). It owns no storage and must acknowledge only records it successfully
+// rendered. Bashy wires it to its unified inbox; a bare coreutils embedding
+// leaves it nil and retains the bus-only behaviour.
+var PrepareTurnInbox func(agent string) PreparedPreamble
+
 // TurnPreamble returns the pending-notification block for the live session
 // reachable at ctlSock, and CLEARS what it returns.
 //
@@ -27,23 +64,37 @@ import (
 // a steer. The same discipline kb uses — a missing store costs nothing and stops
 // nothing.
 func TurnPreamble(ctlSock string) string {
+	p := PrepareTurnPreamble(ctlSock)
+	_ = p.Commit()
+	return p.Text
+}
+
+// PrepareTurnPreamble snapshots pending input for a verified live control
+// socket but does not advance any cursor. The caller commits after injection.
+func PrepareTurnPreamble(ctlSock string) PreparedPreamble {
 	if strings.TrimSpace(ctlSock) == "" {
-		return ""
+		return PreparedPreamble{}
 	}
 	sub, ok := subscriberForCtlSock(ctlSock)
 	if !ok {
-		return ""
+		return PreparedPreamble{}
 	}
-	items, err := UnreadPending(sub)
-	if err != nil || len(items) == 0 {
-		return ""
+	// A sidecar is an immediacy optimization, not a correctness prerequisite.
+	// Reconcile the timeline and pending view now so a Bashy-owned session still
+	// receives Bus input when no sidecar process is running.
+	snapshot, err := SnapshotInbox(sub)
+	if err != nil {
+		return PreparedPreamble{}
 	}
-	block := FormatPending(items)
-	// Mark only what was read, and only after it has been rendered: the sidecar
-	// may append while we are here, and truncating wholesale would discard a
-	// notification the agent never learns existed.
-	_ = MarkRead(sub, items[len(items)-1].Seq)
-	return block
+	p := PreparedPreamble{}
+	if len(snapshot.Items) > 0 {
+		p.Text = FormatPending(snapshot.Items)
+		p.ack = append(p.ack, snapshot.Commit)
+	}
+	if PrepareTurnInbox != nil {
+		p = mergePrepared(p, PrepareTurnInbox(sub))
+	}
+	return p
 }
 
 // subscriberForCtlSock finds the subscription whose instance is the live session
@@ -76,56 +127,87 @@ func subscriberForCtlSock(ctlSock string) (string, bool) {
 // changes how the agent should read "now fix Foo". Appending it after would have
 // the agent commit to an approach and only then learn the ground moved.
 func Prepend(ctlSock, text string) string {
-	block := TurnPreamble(ctlSock)
-	if block == "" {
-		return text
-	}
-	return block + "\n" + text
+	p := PreparePrepend(ctlSock, text)
+	_ = p.Commit()
+	return p.Text
 }
 
-// LaunchPreamble is the "unread on login" block: everything addressed to agent
-// that it has not yet been shown, rendered once and cleared.
-//
-// It exists because TurnPreamble cannot serve a LAUNCH. That one keys on the
-// control socket, and at launch there is no socket yet — it is created by the
-// very call that needs this. An agent is known by NAME before it is known by
-// address, so the launch path resolves by name.
-//
-// It RESOLVES before reading, so a cold agent — one that was not running when
-// the message was sent, and for which no sidecar was watching — picks up its
-// mail on the way in. That is the whole point: the common case on a real host
-// is that nobody was watching, and an agent that only ever learns of messages
-// sent while it happened to be up is not reachable in any useful sense.
-//
-// Empty when there is nothing, so the caller can concatenate unconditionally.
+// PreparePrepend is Prepend with deferred cursor acknowledgement.
+func PreparePrepend(ctlSock, text string) PreparedPreamble {
+	p := PrepareTurnPreamble(ctlSock)
+	if p.Text == "" {
+		p.Text = text
+		return p
+	}
+	p.Text = p.Text + "\n" + text
+	return p
+}
+
+// LaunchPreamble is the compatibility immediate-ack form. Bashy chat uses the
+// prepared form below so a refused launch cannot consume its mail.
 func LaunchPreamble(agent string) string {
+	p := PrepareLaunchPreamble(agent)
+	_ = p.Commit()
+	return p.Text
+}
+
+// PrepareLaunchPreamble snapshots everything addressed to agent without
+// advancing cursors. The caller commits after the launch accepts the prompt.
+func PrepareLaunchPreamble(agent string) PreparedPreamble {
 	agent = strings.TrimSpace(agent)
 	if agent == "" {
-		return ""
+		return PreparedPreamble{}
 	}
-	// Best-effort: a resolve failure still lets whatever is already buffered
-	// through. Delivering some mail beats delivering none because the timeline
-	// was briefly unreadable.
-	_, _ = ResolveFor(agent)
+	snapshot, err := SnapshotInbox(agent)
+	if err != nil {
+		return PreparedPreamble{}
+	}
+	p := PreparedPreamble{}
+	if len(snapshot.Items) > 0 {
+		p.Text = FormatPending(snapshot.Items)
+		p.ack = append(p.ack, snapshot.Commit)
+	}
+	if PrepareTurnInbox != nil {
+		p = mergePrepared(p, PrepareTurnInbox(agent))
+	}
+	return p
+}
 
-	items, err := UnreadPending(agent)
-	if err != nil || len(items) == 0 {
-		return ""
+func mergePrepared(a, b PreparedPreamble) PreparedPreamble {
+	a.Text = joinPreambles(a.Text, b.Text)
+	a.ack = append(a.ack, b.ack...)
+	return a
+}
+
+// PrepareForAgent puts a cold agent's unread mail ahead of its opening prompt
+// and defers acknowledgement until the prompt is accepted.
+func PrepareForAgent(agent, text string) PreparedPreamble {
+	p := PrepareLaunchPreamble(agent)
+	if p.Text == "" {
+		p.Text = text
+		return p
 	}
-	block := FormatPending(items)
-	// Mark only what was rendered, and only after rendering — the same ordering
-	// TurnPreamble uses, for the same reason: anything appended in between must
-	// survive to the next read rather than being truncated away unseen.
-	_ = MarkRead(agent, items[len(items)-1].Seq)
-	return block
+	p.Text = p.Text + "\n" + text
+	return p
+}
+
+func joinPreambles(a, b string) string {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n\n" + b
+	}
 }
 
 // PrependForAgent puts an agent's unread mail in front of the text it is about
 // to be given. Returns text unchanged when there is nothing.
 func PrependForAgent(agent, text string) string {
-	block := LaunchPreamble(agent)
-	if block == "" {
-		return text
-	}
-	return block + "\n" + text
+	p := PrepareForAgent(agent, text)
+	_ = p.Commit()
+	return p.Text
 }

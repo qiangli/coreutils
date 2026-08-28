@@ -55,6 +55,14 @@ func MarkSeen(id, reader string) error {
 	return markSeenSeq(id, reader, int64(len(events)))
 }
 
+// MarkSeenThrough advances a reader only through the supplied transcript
+// sequence. It is the acknowledgement half of UnreadThrough: callers render a
+// stable snapshot first, then acknowledge precisely that snapshot. New events
+// appended while output is being written remain unread.
+func MarkSeenThrough(id, reader string, seq int64) error {
+	return markSeenSeq(id, reader, seq)
+}
+
 // SeedCursor opens a new reader at HEAD. Unlike the public message board, a
 // meeting room must not hand a freshly invited participant the whole backlog.
 func SeedCursor(id, reader string) error {

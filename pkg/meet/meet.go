@@ -962,7 +962,7 @@ func newReadCmd() *cobra.Command {
 					return err
 				}
 			}
-			directed, other, older, err := Unread(st.ID, reader, limit)
+			directed, other, older, through, err := UnreadThrough(st.ID, reader, limit)
 			if err != nil {
 				return err
 			}
@@ -977,7 +977,7 @@ func newReadCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "%d older broadcast event(s) hidden by --limit\n", older)
 			}
 			if !peek {
-				if err := MarkSeen(st.ID, reader); err != nil {
+				if err := MarkSeenThrough(st.ID, reader, through); err != nil {
 					return err
 				}
 			}

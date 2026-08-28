@@ -156,3 +156,21 @@ func TestEnsureSubscription_OpensAtTheTimelineHead(t *testing.T) {
 		t.Fatal("a new inbox must open at the head, or the agent is handed the whole backlog as news")
 	}
 }
+
+func TestBindInstanceMakesDefaultInboxReachableByControlSocket(t *testing.T) {
+	isolate(t)
+	joinLive(t, "alice-session", "/tmp/alice-bound.sock")
+	release, err := BindInstance("alice", "alice-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub, ok := subscriberForCtlSock("/tmp/alice-bound.sock"); !ok || sub != "alice" {
+		t.Fatalf("bound socket resolved to %q ok=%v", sub, ok)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := subscriberForCtlSock("/tmp/alice-bound.sock"); ok {
+		t.Fatal("released live inbox binding still resolves")
+	}
+}

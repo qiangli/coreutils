@@ -51,6 +51,50 @@ func TestInboxReadsOnlyMineAndUsesTheBusCursor(t *testing.T) {
 	}
 }
 
+func TestUnreadNotificationsAcknowledgesOnlyTheRenderedSnapshot(t *testing.T) {
+	isolate(t)
+	notifyForInbox(t, "alice", "first")
+	events, through, err := UnreadNotifications("alice")
+	if err != nil || len(events) != 1 {
+		t.Fatalf("snapshot len=%d through=%d err=%v", len(events), through, err)
+	}
+	// Arrives after the snapshot but before its acknowledgement.
+	notifyForInbox(t, "alice", "second")
+	if err := MarkNotificationsRead("alice", through); err != nil {
+		t.Fatal(err)
+	}
+	remaining, _, err := UnreadNotifications("alice")
+	if err != nil || len(remaining) != 1 || remaining[0].Body != "second" {
+		t.Fatalf("concurrent arrival was consumed: %+v err=%v", remaining, err)
+	}
+}
+
+func TestSnapshotInboxReconcilesTimelineAndPendingByProvenanceOnly(t *testing.T) {
+	isolate(t)
+	if _, err := EnsureSubscription("alice"); err != nil {
+		t.Fatal(err)
+	}
+	notifyForInbox(t, "alice", "same body")
+	notifyForInbox(t, "alice", "same body")
+	snapshot, err := SnapshotInbox("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each timeline event exists in both the direct and materialized view, but
+	// only equal sequence+fields proves identity. Repeated text at a different
+	// sequence remains two genuine messages.
+	if len(snapshot.Items) != 2 || snapshot.Items[0].Seq == snapshot.Items[1].Seq {
+		t.Fatalf("snapshot collapsed genuine repeats or duplicated a view: %+v", snapshot.Items)
+	}
+	if err := snapshot.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := SnapshotInbox("alice")
+	if err != nil || len(again.Items) != 0 {
+		t.Fatalf("committed snapshot reappeared: %+v err=%v", again.Items, err)
+	}
+}
+
 func TestInboxPeekDoesNotAdvanceCursor(t *testing.T) {
 	isolate(t)
 	notifyForInbox(t, "alice", "gate finished")

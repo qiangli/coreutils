@@ -12,6 +12,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/acp"
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/room"
 )
@@ -110,6 +111,11 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	if !known || !agentlaunch.EffectiveRung(tool.CLI.Launch).IsACP() {
 		return nil, false, nil
 	}
+	var preparedInbox bus.PreparedPreamble
+	if strings.TrimSpace(opt.Prompt) != "" {
+		preparedInbox = bus.PrepareForAgent(name, opt.Prompt)
+		opt.Prompt = preparedInbox.Text
+	}
 
 	// From here we are committed, and errors are real errors: falling through to
 	// the pty path after governing would bill the turn twice.
@@ -133,6 +139,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	s := &Session{
 		Agent:        l.Binding(),
 		Nick:         l.Nick,
+		inboxAgent:   name,
 		launch:       l,
 		allowPremium: opt.AllowPremium,
 		done:         make(chan struct{}),
@@ -213,6 +220,10 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	// request is either answered or it is an error.
 	if strings.TrimSpace(opt.Prompt) != "" {
 		drv.prompt(opt.Prompt)
+	}
+	if err := preparedInbox.Commit(); err != nil {
+		s.closeACP()
+		return s, true, fmt.Errorf("chat: opening ACP prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
 	return s, true, nil
 }

@@ -64,3 +64,29 @@ func TestMeetSeedCursorStartsAtHead(t *testing.T) {
 		t.Fatalf("Unread after seed = other %+v older %d", other, older)
 	}
 }
+
+func TestUnreadRecordsAcknowledgesOnlyTheRenderedSnapshot(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"codex", "opencode"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "codex", To: "opencode", Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	records, _, _, through, err := UnreadRecords(st.ID, "opencode", 0)
+	if err != nil || len(records) != 1 || records[0].Seq != 1 {
+		t.Fatalf("snapshot=%+v through=%d err=%v", records, through, err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "codex", To: "opencode", Text: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkSeenThrough(st.ID, "opencode", through); err != nil {
+		t.Fatal(err)
+	}
+	left, _, _, _, err := UnreadRecords(st.ID, "opencode", 0)
+	if err != nil || len(left) != 1 || left[0].Event.Text != "second" {
+		t.Fatalf("concurrent arrival was consumed: %+v err=%v", left, err)
+	}
+}

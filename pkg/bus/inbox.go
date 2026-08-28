@@ -10,6 +10,8 @@ package bus
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -70,6 +72,121 @@ type inboxOptions struct {
 	peek    bool
 	limit   int
 	jsonOut bool
+}
+
+// InboxSnapshot is one non-destructive read across the bus timeline and its
+// materialized pending view. Items are deduplicated only when provenance proves
+// they are the same timeline event (same sequence and fields), never because
+// two senders happened to repeat text.
+type InboxSnapshot struct {
+	Items       []Pending
+	reader      string
+	through     int64
+	pendingHigh int64
+}
+
+// Commit acknowledges both bus views after Items were delivered successfully.
+func (s InboxSnapshot) Commit() error {
+	if s.pendingHigh > 0 {
+		if err := MarkRead(s.reader, s.pendingHigh); err != nil {
+			return err
+		}
+	}
+	if s.through > 0 {
+		return MarkNotificationsRead(s.reader, s.through)
+	}
+	return nil
+}
+
+// SnapshotInbox resolves without a sidecar, then reconciles the durable
+// timeline with the pending materialization. EnsureSubscription opens current
+// topic/room routing; the direct timeline scan preserves addressed backlog that
+// predates that subscription.
+func SnapshotInbox(reader string) (InboxSnapshot, error) {
+	reader = strings.TrimSpace(reader)
+	snap := InboxSnapshot{reader: reader}
+	if IsRoleName(reader) {
+		if _, err := EnsureRoleInbox(reader); err != nil {
+			return snap, err
+		}
+	} else {
+		if _, err := EnsureSubscription(reader); err != nil {
+			return snap, err
+		}
+	}
+	if _, err := ResolveFor(reader); err != nil {
+		return snap, err
+	}
+	pending, err := UnreadPending(reader)
+	if err != nil {
+		return snap, err
+	}
+	direct, through, err := UnreadNotifications(reader)
+	if err != nil {
+		return snap, err
+	}
+	snap.through = through
+	for _, p := range pending {
+		if p.Seq > snap.pendingHigh {
+			snap.pendingHigh = p.Seq
+		}
+		snap.Items = append(snap.Items, p)
+	}
+	for _, event := range direct {
+		candidate := Pending{SchemaVersion: SchemaVersion, Seq: event.Seq, TS: event.TS, Principal: event.Principal, Topic: event.Topic, To: event.To, Room: event.Room, Body: event.Body, Delivery: DeliveryQueued}
+		duplicate := false
+		for _, p := range snap.Items {
+			if sameNotification(p, candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			snap.Items = append(snap.Items, candidate)
+		}
+	}
+	sort.SliceStable(snap.Items, func(i, j int) bool { return snap.Items[i].Seq < snap.Items[j].Seq })
+	return snap, nil
+}
+
+func sameNotification(a, b Pending) bool {
+	return a.Seq == b.Seq && a.TS == b.TS && a.Principal == b.Principal &&
+		a.Topic == b.Topic && a.To == b.To && a.Room == b.Room && a.Body == b.Body
+}
+
+// UnreadNotifications returns the reader's addressed bus events and the exact
+// timeline high-water mark represented by the scan. It is the read-through API
+// used by Bashy's unified inbox; the bus remains the owner of both timeline and
+// cursor and no second delivery store is introduced.
+func UnreadNotifications(reader string) ([]room.Event, int64, error) {
+	from, err := readCursor(reader)
+	if err != nil {
+		return nil, 0, err
+	}
+	events, err := watchTimeline(0)
+	if err != nil {
+		return nil, 0, err
+	}
+	filter := eventFilter{to: reader}
+	matched := make([]room.Event, 0)
+	high := from
+	for _, e := range events {
+		if e.Seq <= from {
+			continue
+		}
+		if e.Seq > high {
+			high = e.Seq
+		}
+		if filter.match(e) {
+			matched = append(matched, e)
+		}
+	}
+	return matched, high, nil
+}
+
+// MarkNotificationsRead acknowledges a previously rendered bus snapshot.
+func MarkNotificationsRead(reader string, through int64) error {
+	return writeCursor(reader, through)
 }
 
 func runInbox(cmd *cobra.Command, opt inboxOptions) error {

@@ -30,27 +30,61 @@ const maxTranscriptLine = 4 * 1024 * 1024
 // Everything else is room broadcast history, trimmed to limit with older
 // reporting how many events were hidden.
 func Unread(id, reader string, limit int) (directed, other []Event, older int, err error) {
+	directed, other, older, _, err = UnreadThrough(id, reader, limit)
+	return directed, other, older, err
+}
+
+// UnreadThrough is Unread plus the exact transcript high-water mark represented
+// by the returned snapshot. A caller that renders the whole snapshot can pass
+// through to MarkSeenThrough afterwards without consuming an event appended
+// concurrently between the read and the acknowledgement.
+func UnreadThrough(id, reader string, limit int) (directed, other []Event, older int, through int64, err error) {
+	dr, or, older, through, err := UnreadRecords(id, reader, limit)
+	if err != nil {
+		return nil, nil, 0, 0, err
+	}
+	for _, record := range dr {
+		directed = append(directed, record.Event)
+	}
+	for _, record := range or {
+		other = append(other, record.Event)
+	}
+	return directed, other, older, through, nil
+}
+
+// UnreadRecord keeps a transcript event paired with its durable sequence.
+type UnreadRecord struct {
+	Seq   int64 `json:"seq"`
+	Event Event `json:"event"`
+}
+
+// UnreadRecords is the cursor-safe, sequence-preserving Meet snapshot used by
+// aggregate readers. It never marks the room; acknowledge through the returned
+// high-water mark only after every returned record was rendered.
+func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord, older int, through int64, err error) {
 	events, err := readRoomTranscript(id)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
+	through = int64(len(events))
 	at := SeenSeq(id, reader)
 	for i, e := range events {
 		seq := int64(i + 1)
 		if seq <= at {
 			continue
 		}
+		record := UnreadRecord{Seq: seq, Event: e}
 		if directedEvent(e, reader) {
-			directed = append(directed, e)
+			directed = append(directed, record)
 			continue
 		}
-		other = append(other, e)
+		other = append(other, record)
 	}
 	if limit > 0 && len(other) > limit {
 		older = len(other) - limit
 		other = other[len(other)-limit:]
 	}
-	return directed, other, older, nil
+	return directed, other, older, through, nil
 }
 
 func directedEvent(e Event, reader string) bool {
