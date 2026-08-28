@@ -59,7 +59,8 @@ func NewMeetCmd() *cobra.Command {
 		Long: "Run a turn-taking planning meeting across agentic CLIs and a human.\n" +
 			"A dedicated notes-only secretary keeps the minutes and files them to\n" +
 			"docs/meetings/ on close. Agents can convene a one-shot panel with\n" +
-			"`bashy meet consult`. Run `bashy meet reference` for the full guide.",
+			"`bashy meet consult`. Run `bashy meet reference` for the full guide.\n" +
+			"'meet observe' tails one transcript; 'bashy inbox --watch' follows actionable input across channels.",
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(

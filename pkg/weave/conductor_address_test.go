@@ -33,6 +33,9 @@ func TestConductorRoles_OnlyLiveLeasesGetAnAddress(t *testing.T) {
 	if got[0].Topic != sprintTopic(1) {
 		t.Errorf("topic = %q, want the sprint's stable address", got[0].Topic)
 	}
+	if got[0].Holder != "codex-gpt5.6-sol" {
+		t.Errorf("holder = %q, want the live lease holder", got[0].Holder)
+	}
 }
 
 // The address is the SPRINT, never the agent conducting it. A lease changes

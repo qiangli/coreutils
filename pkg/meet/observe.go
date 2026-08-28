@@ -64,7 +64,9 @@ func newObserveCmd() *cobra.Command {
 			"appearing all at once, minutes later, when the turn completes.\n\n" +
 			"Observing is read-only. It takes no seat, casts no vote, and writes\n" +
 			"nothing. Any number of observers may attach to one meeting, and\n" +
-			"attaching can never change what the meeting decides.",
+			"attaching can never change what the meeting decides. It is a transcript\n" +
+			"tail, not an actionable inbox; use 'bashy inbox --watch' to follow unread\n" +
+			"MB, Meet-board, Bus, and authorized role input across channels.",
 		Example: "  bashy meet observe 2\n" +
 			"  bashy meet observe\n" +
 			"  bashy meet observe --participant Sable\n" +

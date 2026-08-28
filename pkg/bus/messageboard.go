@@ -85,7 +85,11 @@ first, with a count of what was hidden. A CONCERN you have declared
 ('bashy bus subscribe --topic shared-baseline') lifts that cap for every post
 tagged with it — declaring one is an obligation to read it. Everyone is
 subscribed to 'announce', the board's wall. The documented concerns:
-shared-baseline, posix-cert, harness, announce.`,
+shared-baseline, posix-cert, harness, announce.
+
+MB remains the public send/history surface. In a Bashy host, use 'bashy inbox'
+to receive actionable unread MB, Meet-board, Bus, and authorized role input
+through one cursor-safe view.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

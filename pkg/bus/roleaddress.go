@@ -38,6 +38,10 @@ type HostRole struct {
 	Label string
 	// Topic is the stable address it resolves to: "steward.<scope>".
 	Topic string
+	// Holder is the only principal authorized to drain the retained legacy
+	// inbox for this role. Empty means vacant or unknown; the public board
+	// address remains valid, but no generic reader may advance role state.
+	Holder string
 }
 
 // HostRoles lists the addressable roles on this host, injected by whoever owns

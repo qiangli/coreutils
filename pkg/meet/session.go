@@ -59,6 +59,10 @@ type Event struct {
 	Text    string    `json:"text"`
 	File    string    `json:"file,omitempty"` // per-turn full-text file (context-offloading target)
 	TS      time.Time `json:"ts"`
+	// Origin identifies a record copied from another durable communication
+	// store. It is deliberately structured: consumers may correlate only this
+	// exact source identifier, never infer identity from rendered prose.
+	Origin *EventOrigin `json:"origin,omitempty"`
 
 	// Turn outcome, recorded so a reader can tell a timeout from an empty reply
 	// from a crash without re-reading logs. Absent on legacy events — statusOf()
@@ -76,6 +80,13 @@ type Event struct {
 	// Ledger is set on a `ledger` event: the chair's structured decision for
 	// that turn.
 	Ledger *Ledger `json:"ledger,omitempty"`
+}
+
+// EventOrigin is the durable identity of the source record copied into Meet.
+// Source and Seq form the correlation key; today SeedBoardFromMB emits "mb".
+type EventOrigin struct {
+	Source string `json:"source"`
+	Seq    int64  `json:"seq"`
 }
 
 // Ledger is one chair turn's structured decision. Speaker selection is not a

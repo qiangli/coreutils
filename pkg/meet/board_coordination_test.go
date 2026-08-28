@@ -92,6 +92,10 @@ func TestSeedBoardFromMBAttributesAndPointsBack(t *testing.T) {
 	if events[0].Speaker != "codex" || events[1].Speaker != "claude" {
 		t.Fatalf("seeded events must keep original authors, got %q and %q", events[0].Speaker, events[1].Speaker)
 	}
+	if events[0].Origin == nil || events[0].Origin.Source != "mb" || events[0].Origin.Seq != 3 ||
+		events[1].Origin == nil || events[1].Origin.Source != "mb" || events[1].Origin.Seq != 7 {
+		t.Fatalf("seeded events lost durable mb provenance: %+v", events)
+	}
 	if !strings.Contains(events[0].Text, "mb #3") || !strings.Contains(events[0].Text, "gate is red") {
 		t.Fatalf("seed text = %q", events[0].Text)
 	}

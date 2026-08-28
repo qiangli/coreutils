@@ -39,10 +39,16 @@ func init() {
 // unclaimed seat would drop exactly the message that says "nobody is stewarding
 // this host".
 func rolesForBoard() []bus.HostRole {
-	return []bus.HostRole{{
+	role := bus.HostRole{
 		Label: "steward",
 		Topic: stewardAssignment().Topic(),
-	}}
+	}
+	if st, err := Open(""); err == nil {
+		if view, err := st.Status(time.Now()); err == nil && !view.Authority.Vacant {
+			role.Holder = view.Authority.Holder.Name
+		}
+	}
+	return []bus.HostRole{role}
 }
 
 // seatsForLexicon reports this host's steward seat.

@@ -334,6 +334,7 @@ func SeedBoardFromMB(st *State, seqs []int64) (pointerPosted bool, err error) {
 		ev := Event{
 			Round: st.Round, Speaker: canonAgent(author), Role: string(RoleParticipant),
 			Kind: "message", Text: fmt.Sprintf("mb #%d — %s", p.Seq, sanitizeTurn(text)), TS: nowFn(),
+			Origin: &EventOrigin{Source: "mb", Seq: p.Seq},
 		}
 		if err := AppendEvent(st.ID, ev); err != nil {
 			return false, err

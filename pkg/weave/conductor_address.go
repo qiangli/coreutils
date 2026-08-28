@@ -70,8 +70,9 @@ func rolesFromQueue(q *weaveQueue, now time.Time) []bus.HostRole {
 			continue
 		}
 		out = append(out, bus.HostRole{
-			Label: "conductor:" + strconv.FormatInt(s.ID, 10),
-			Topic: sprintTopic(s.ID),
+			Label:  "conductor:" + strconv.FormatInt(s.ID, 10),
+			Topic:  sprintTopic(s.ID),
+			Holder: s.Lease.Holder,
 		})
 	}
 	return out
