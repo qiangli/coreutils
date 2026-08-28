@@ -13,7 +13,7 @@ base64	cmds/base64		GNU Coreutils	yes	no	2	9
 basename	cmds/basename		GNU Coreutils	yes	yes	1	8
 basenc	cmds/basenc		GNU Coreutils	yes	no	1	7
 batch	cmds/batch		POSIX/Unix utility	no	yes	4	14
-bc	cmds/bc		POSIX/Unix utility	no	yes	1	13
+bc	cmds/bc		POSIX/Unix utility	no	yes	1	14
 browser	cmds/browser		Bashy/other extension	no	no	1	9
 cal	cmds/cal		Bashy/other extension	no	no	1	6
 cat	cmds/cat		GNU Coreutils	yes	yes	4	14
