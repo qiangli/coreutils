@@ -12,6 +12,7 @@ package gosed
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/bre"
 )
@@ -146,6 +147,13 @@ func cBytePatternNeedsTables(pattern, flags string) bool {
 	}
 	escaped := false
 	for i := 0; i < len(pattern); i++ {
+		// In the C locale every non-ASCII byte is a separate character.
+		// Even an apparently literal UTF-8 rune therefore changes the
+		// grammar when repetition follows it: GNU reads é* as byte 0xc3
+		// followed by zero or more 0xa9 bytes, not as U+00E9 repeated.
+		if pattern[i] >= utf8.RuneSelf {
+			return true
+		}
 		if escaped {
 			escaped = false
 			continue

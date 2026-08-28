@@ -170,6 +170,18 @@ func TestSedCTypeAloneSelectsByteOrCharacterMatching(t *testing.T) {
 	}
 }
 
+// TestSedCNonASCIIRepetitionIsByteOriented pins the dispatch case where no
+// dot or bracket advertises the character model. In LC_CTYPE=C the UTF-8
+// spelling of é is two independent pattern bytes, so é* cannot match the
+// empty string: only its second byte is repeated. GNU therefore leaves x
+// unchanged rather than inserting X around it.
+func TestSedCNonASCIIRepetitionIsByteOriented(t *testing.T) {
+	out, errOut, code := runSedInDirEnv(t, t.TempDir(), []string{"LC_ALL=C"}, "x\n", "s/é*/X/g")
+	if code != 0 || errOut != "" || out != "x\n" {
+		t.Fatalf("got (%q, %q, %d), want (\"x\\n\", no diagnostic, 0)", out, errOut, code)
+	}
+}
+
 // TestSedCUTF8MatchesGlibcClasses pins values where Go's Unicode classes are
 // not a substitute for glibc C.UTF-8.
 func TestSedCUTF8MatchesGlibcClasses(t *testing.T) {
