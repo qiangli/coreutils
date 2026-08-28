@@ -139,6 +139,17 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 	})
 	mux.Handle("GET /term", redirectTo("/term/"))
 
+	// The board, served the same way and for the same reason: its own page at
+	// the launcher's root, so it inherits app.css and the header chrome. The
+	// atlas declares the TILE (Discover picks it up); panelHandler returns nil
+	// for it, exactly as it does for the terminal, so the panel loop below does
+	// not also mount it under coopauth.Mount and take the <base href> with it.
+	mux.HandleFunc("GET /mb/", s.handleMBPage)
+	mux.Handle("GET /mb", redirectTo("/mb/"))
+	mux.HandleFunc("GET /api/mb", s.handleMBList)
+	mux.HandleFunc("POST /api/mb", s.handleMBSend)
+	mux.HandleFunc("GET /api/mb/{seq}/viewers", s.handleMBViewers)
+
 	closers := []func() error{}
 	for _, p := range s.panels {
 		if !p.Available {
@@ -187,7 +198,7 @@ func Handler(opts Options) (http.Handler, func() error, error) {
 // when the console has nothing to serve for it.
 func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	switch p.Name {
-	case "terminal":
+	case "terminal", "mb":
 		// Served above, at the launcher's own root, not mounted here.
 		return nil, nil
 	case "files":

@@ -38,8 +38,25 @@ func (s *server) handleApps(w http.ResponseWriter, r *http.Request) {
 // handleSession tells the SPA who it is talking as, so it can render an identity
 // without guessing from the presence of a cookie.
 func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
-	user := ""
-	via := "loopback"
+	user, via := s.userOf(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user":          user,
+		"via":           via,
+		"require_login": s.requireLogin,
+		"build":         BuildOf(),
+	})
+}
+
+// userOf answers who this request is, by the console's own gate ladder: the
+// tunnel's vouched identity, else a console session cookie, else the OS user
+// this process runs as.
+//
+// It is one function because a SECOND surface now signs with it. The message
+// board's one guarantee is that a post names who sent it, so the name the header
+// shows and the name a post is signed with must be the same name, derived once —
+// a browser never gets to supply either.
+func (s *server) userOf(r *http.Request) (user, via string) {
+	via = "loopback"
 	if coopauth.ArrivedViaCloud(r) {
 		via = "cloud"
 		if id, ok := coopauth.IdentityOf(r); ok {
@@ -55,10 +72,5 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if user == "" {
 		user = coopauth.SystemUser()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"user":          user,
-		"via":           via,
-		"require_login": s.requireLogin,
-		"build":         BuildOf(),
-	})
+	return user, via
 }

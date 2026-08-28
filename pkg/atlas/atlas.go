@@ -691,7 +691,13 @@ func init() {
 	// CROSS, because you check the board at any stage. NOT named inbox/im: this
 	// is a shared append-only spool with per-reader cursors, so it is neither a
 	// private mailbox nor push-delivered chat; those words stay reserved.
-	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// The board earns a browser surface on the §2 test: stateful, long-lived,
+	// and read by a human far more often than written by one. The CLI is a
+	// CURSOR (capped at -n for anything not addressed to you); the panel is the
+	// scan across every lane, which is the one thing the CLI is not trying to
+	// be. No Port and no Start: nothing to supervise, the console serves it.
+	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON},
+		Web: &WebSurface{Label: "Messages", Mount: "mb", Mode: WebInProcess, DefaultOn: true}})
 	addVerb("messages", Entry{Stage: StageCross, Group: GroupOrch, AliasOf: "mb", Caps: []string{CapJSON}})
 	// ping is an arity-selected front door: board reads/sends share mb's durable
 	// local store, while a bare host or system-ping option execs the platform

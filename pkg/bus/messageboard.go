@@ -304,9 +304,6 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 			}
 			body := strings.Join(args, " ")
 			if !aud.Empty() {
-				if err := ValidateCoordinationBody(body); err != nil {
-					return fmt.Errorf("mb send: %w", err)
-				}
 				// ONE post carrying the selector — not one per member. See
 				// Post.Audience: expanding made the board grow with the size of
 				// the audience.
@@ -314,81 +311,39 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				if any {
 					mode = ModeAny
 				}
-				seq, err := PostMessageSeq(Post{
+				res, err := Send(SendRequest{
 					From: from, Audience: &aud, Mode: mode, Topic: topic, Body: body,
 				})
 				if err != nil {
-					return err
+					return verbError("mb send", err)
 				}
-				var ds []Delivery
-				if FleetSelect != nil {
-					if names, ferr := FleetSelect(aud); ferr == nil {
-						for _, n := range names {
-							d := SteerLive(n, steerNotice(from, body))
-							d.State = deliveryState(n, seq, d.Steered, true)
-							ds = append(ds, d)
-						}
-					}
-				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", aud.describe())
-				reportDelivery(cmd, ds)
+				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", res.Label)
+				reportDelivery(cmd, res.Deliveries)
 				return nil
 			}
+			target := strings.TrimSpace(to)
 			if to != "" {
-				target := strings.TrimSpace(to)
 				if target == "" {
 					return fmt.Errorf("mb send: --to requires a target")
 				}
-				addr, kind, ok := ResolveSendTarget(target)
-				if !ok {
-					return unresolvedTargetError(target)
+			} else {
+				if len(args) < 2 {
+					return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--band/--tool/--provider/--family/--version)")
 				}
-				body = strings.Join(args, " ")
-				if err := ValidateCoordinationBody(body); err != nil {
-					return fmt.Errorf("mb send: %w", err)
-				}
-				seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: topic, Body: body})
-				if err != nil {
-					return err
-				}
-				d := SteerLive(addr, steerNotice(from, body))
-				d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
-				d.To = RoleLabelFor(d.To)
-				reportDelivery(cmd, []Delivery{d})
-				return nil
+				target = strings.TrimSpace(args[0])
+				body = strings.Join(args[1:], " ")
 			}
-			if len(args) < 2 {
-				return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--band/--tool/--provider/--family/--version)")
-			}
-			// Resolve the target AT SEND TIME. A ROLE resolves to its seat's
-			// stable address, so the mail survives a handover; an AGENT to its
-			// roster name; an existing READER to itself. A target matching none
-			// of the three fails with choices and writes nothing — a post to a
+			// The target is resolved AT SEND TIME, inside Send. A ROLE resolves to
+			// its seat's stable address, so the mail survives a handover; an AGENT
+			// to its roster name; an existing READER to itself. A target matching
+			// none of the three fails with choices and writes nothing — a post to a
 			// name nobody answers was a receipt indistinguishable from a real
 			// delivery, which is exactly the defect being closed here.
-			target := strings.TrimSpace(args[0])
-			addr, kind, ok := ResolveSendTarget(target)
-			if !ok {
-				return unresolvedTargetError(target)
-			}
-			body = strings.Join(args[1:], " ")
-			if err := ValidateCoordinationBody(body); err != nil {
-				return fmt.Errorf("mb send: %w", err)
-			}
-			// Board FIRST, steer second. The durable copy is the one that must
-			// not be optional: steering first would lose the message entirely
-			// if the post failed.
-			seq, err := PostMessageSeq(Post{From: from, To: addr, Topic: topic, Body: body})
+			res, err := Send(SendRequest{From: from, To: target, Topic: topic, Body: body})
 			if err != nil {
-				return err
+				return verbError("mb send", err)
 			}
-			d := SteerLive(addr, steerNotice(from, body))
-			d.State = deliveryState(addr, seq, d.Steered, kind != TargetRole)
-			// Report the name the sender typed, not the routing address. A
-			// confirmation reading "steward.dragon-u501-b683b300b1" makes a
-			// successful send look like it went somewhere unintended.
-			d.To = RoleLabelFor(d.To)
-			reportDelivery(cmd, []Delivery{d})
+			reportDelivery(cmd, res.Deliveries)
 			return nil
 		},
 	}
@@ -445,24 +400,12 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 			if err != nil {
 				return err
 			}
-			body := strings.Join(args, " ")
-			if err := ValidateCoordinationBody(body); err != nil {
-				return fmt.Errorf("mb post: %w", err)
-			}
-			seq, err := PostMessageSeq(Post{From: from, Topic: topic, Body: body})
+			res, err := Send(SendRequest{From: from, Topic: topic, Body: strings.Join(args, " ")})
 			if err != nil {
-				return err
+				return verbError("mb post", err)
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "posted to the board")
-			if FleetNames != nil {
-				var ds []Delivery
-				for _, n := range FleetNames() {
-					d := SteerLive(n, steerNotice(from, body))
-					d.State = deliveryState(n, seq, d.Steered, true)
-					ds = append(ds, d)
-				}
-				reportDelivery(cmd, ds)
-			}
+			reportDelivery(cmd, res.Deliveries)
 			return nil
 		},
 	}
