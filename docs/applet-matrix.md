@@ -89,7 +89,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
 | `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 37 |
-| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 11 | 75 |
+| `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 12 | 84 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 2 | 24 |
@@ -156,7 +156,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 4 | 32 |
 | `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 29 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 2 | 33 |
-| `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 4 | 64 |
+| `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 5 | 71 |
 | `seq` | `cmds/seq` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `sha1sum` | `cmds/sha1sum` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `sha224sum` | `cmds/sha224sum` | — | GNU Coreutils | yes | no | 1 | 4 |
