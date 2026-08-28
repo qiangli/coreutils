@@ -2838,7 +2838,7 @@ logname
 
 **Standard error:** Used only for diagnostic messages; "logname: no login name" when no name can be determined.
 
-**Effects:** `The name comes from a getlogin()-equivalent source only, never the environment or the effective user: the kernel audit login uid mapped through the user database on Linux; every other platform currently always reports no login name.`.
+**Effects:** `The name comes from a getlogin()-equivalent source only, never the environment or the effective user: Linux first resolves the recorded terminal session and falls back to the kernel audit login uid; Darwin, DragonFly, and FreeBSD use getlogin(2); unsupported platforms report no login name.`.
 
 **Exit status:** 0 after writing the name; 1 when no login name can be determined; 2 usage.
 
@@ -2852,7 +2852,7 @@ logname
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/logname`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/logname/logname_test.go#TestLognameNoLoginName;cmds/logname/logname_test.go#TestLognameRejectsOperandsAndUnknownOptions;cmds/logname/logname_test.go#TestResolveLoginUID;cmds/logname/logname_test.go#TestLoginNameHasNoEffectiveUserFallback;cmds/logname/logname_test.go#TestLognameOutputErrorsAndRunContextIsolation`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:logname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/logname/logname_test.go#TestLognameNoLoginName;cmds/logname/logname_test.go#TestLognameRejectsOperandsAndUnknownOptions;cmds/logname/logname_test.go#TestResolveLoginUID;cmds/logname/logname_test.go#TestLoginNameHasNoEffectiveUserFallback;cmds/logname/logname_test.go#TestLognameOutputErrorsAndRunContextIsolation;cmds/logname/logname_linux_test.go#TestLoginNameFromRecordedTerminalSession`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:logname:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
