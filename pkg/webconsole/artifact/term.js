@@ -81,4 +81,11 @@ function start() {
   sock.onerror = () => ended("Connection failed.");
 }
 
+// A terminal is rarely wanted one at a time, and going back to the launcher to
+// get a second one is a detour through a page that exists to be left. The +
+// opens another in its own tab, which is what every app here does.
+document.getElementById("new-term").addEventListener("click", () => {
+  window.open(url("term/"), "_blank", "noopener");
+});
+
 start();
