@@ -559,7 +559,7 @@ func run(rc *tool.RunContext, args []string) (code int) {
 	}
 	withHeader := len(operands) > 1 || opt.recursive
 	for _, d := range dirs {
-		l.listDir(d.name, d.path, withHeader)
+		l.listDir(d.name, d.path, withHeader, true)
 	}
 	return l.exit
 }
@@ -633,15 +633,26 @@ func timeSelName(sel timeSel) string {
 	return "modification"
 }
 
-func (l *lister) listDir(display, full string, header bool) {
-	l.listDirWithAncestors(display, full, header, nil)
+func (l *lister) listDir(display, full string, header, commandLine bool) {
+	l.listDirWithAncestors(display, full, header, commandLine, nil)
 }
 
-func (l *lister) listDirWithAncestors(display, full string, header bool, ancestors []os.FileInfo) {
+// dirFailCode is the exit status ls uses for a directory-listing failure.
+// A failure on a command-line operand is "serious" (status 2); the same
+// failure on a directory reached during -R traversal is a "minor problem"
+// (status 1). GNU makes exactly this command_line_arg distinction.
+func dirFailCode(commandLine bool) int {
+	if commandLine {
+		return 2
+	}
+	return 1
+}
+
+func (l *lister) listDirWithAncestors(display, full string, header, commandLine bool, ancestors []os.FileInfo) {
 	if l.opt.recursive && l.opt.deref == dereferenceAll {
 		info, err := os.Stat(full)
 		if err != nil {
-			l.fail(1, "cannot access '%s': %s", display, errMsg(err))
+			l.fail(dirFailCode(commandLine), "cannot access '%s': %s", display, errMsg(err))
 			return
 		}
 		for _, ancestor := range ancestors {
@@ -652,30 +663,35 @@ func (l *lister) listDirWithAncestors(display, full string, header bool, ancesto
 		}
 		ancestors = append(append([]os.FileInfo(nil), ancestors...), info)
 	}
+	// Open and read the directory before writing anything to stdout. GNU
+	// prints the "name:" header (and the separating blank line) only after a
+	// successful opendir/readdir, so a directory that cannot be listed emits a
+	// diagnostic on stderr and no bogus header on stdout.
+	//
+	// os.ReadDir sorts by filename. GNU's unsorted modes (-U, -f, and
+	// --sort=none) preserve the directory enumeration order instead, so use
+	// Readdirnames and only sort when sortEntries is asked to do so.
+	dir, err := os.Open(full)
+	if err != nil {
+		l.fail(dirFailCode(commandLine), "cannot open directory '%s': %s", display, errMsg(err))
+		return
+	}
+	names, err := dir.Readdirnames(-1)
+	closeErr := dir.Close()
+	if err != nil {
+		l.fail(dirFailCode(commandLine), "cannot read directory '%s': %s", display, errMsg(err))
+		return
+	}
+	if closeErr != nil {
+		l.fail(dirFailCode(commandLine), "cannot close directory '%s': %s", display, errMsg(closeErr))
+		return
+	}
 	if l.wrote {
 		fmt.Fprintln(l.rc.Out)
 	}
 	l.wrote = true
 	if header {
 		fmt.Fprintf(l.rc.Out, "%s:\n", display)
-	}
-	// os.ReadDir sorts by filename. GNU's unsorted modes (-U, -f, and
-	// --sort=none) preserve the directory enumeration order instead, so use
-	// Readdirnames and only sort when sortEntries is asked to do so.
-	dir, err := os.Open(full)
-	if err != nil {
-		l.fail(1, "cannot open directory '%s': %s", display, errMsg(err))
-		return
-	}
-	names, err := dir.Readdirnames(-1)
-	closeErr := dir.Close()
-	if err != nil {
-		l.fail(1, "cannot read directory '%s': %s", display, errMsg(err))
-		return
-	}
-	if closeErr != nil {
-		l.fail(1, "cannot close directory '%s': %s", display, errMsg(closeErr))
-		return
 	}
 	var ents []entry
 	if l.opt.all {
@@ -731,7 +747,7 @@ func (l *lister) listDirWithAncestors(display, full string, header bool, ancesto
 				continue
 			}
 			if e.info.IsDir() {
-				l.listDirWithAncestors(joinDisplay(display, e.name), e.path, true, ancestors)
+				l.listDirWithAncestors(joinDisplay(display, e.name), e.path, true, false, ancestors)
 			}
 		}
 	}

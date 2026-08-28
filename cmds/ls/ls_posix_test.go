@@ -888,6 +888,97 @@ func TestLsRecursiveLogicalWalkDetectsAncestorCycleAndRecovers(t *testing.T) {
 	}
 }
 
+// mkUnreadableDir creates a directory that cannot be opened for reading and
+// returns its path, skipping the test when the platform or effective user makes
+// the permission unenforceable (Windows has no POSIX mode; root bypasses it).
+func mkUnreadableDir(t *testing.T, parent, name string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions are not enforced on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory read permissions")
+	}
+	p := filepath.Join(parent, name)
+	if err := os.Mkdir(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o755) })
+	return p
+}
+
+// POSIX requires ls to exit with a nonzero status when it cannot access an
+// operand. Following GNU's command_line_arg distinction, a failure to open a
+// directory named on the command line is "serious" (status 2), while the same
+// failure on a directory reached during -R traversal is a "minor problem"
+// (status 1). A directory that cannot be opened must also produce no stdout
+// header — only a stderr diagnostic.
+func TestUnreadableCommandLineDirectoryExitsTwoWithoutHeader(t *testing.T) {
+	dir := t.TempDir()
+	mkUnreadableDir(t, dir, "sealed")
+	out, errOut, code := runToolAt(t, dir, "sealed")
+	if code != 2 {
+		t.Errorf("ls sealed exit = %d, want 2 (command-line access failure)", code)
+	}
+	if out != "" {
+		t.Errorf("ls sealed stdout = %q, want no header for an unopenable directory", out)
+	}
+	if !strings.Contains(errOut, "cannot open directory 'sealed'") {
+		t.Errorf("ls sealed stderr = %q, want a cannot-open diagnostic", errOut)
+	}
+}
+
+// When an unopenable directory is one of several operands, its failure must not
+// print a header, must still exit 2, and must not stop the readable operands
+// from being listed.
+func TestUnreadableCommandLineDirectoryAmongOperands(t *testing.T) {
+	dir := t.TempDir()
+	mkUnreadableDir(t, dir, "sealed")
+	good := filepath.Join(dir, "open")
+	if err := os.Mkdir(good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, good, "inside", "")
+	out, errOut, code := runToolAt(t, dir, "sealed", "open")
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "cannot open directory 'sealed'") {
+		t.Errorf("stderr = %q, want a cannot-open diagnostic", errOut)
+	}
+	// The readable operand is still listed with its header; the failed operand
+	// contributes no "sealed:" header to stdout.
+	if strings.Contains(out, "sealed:") {
+		t.Errorf("stdout = %q, want no header for the unopenable operand", out)
+	}
+	if !strings.Contains(out, "open:\n") || !strings.Contains(out, "inside") {
+		t.Errorf("stdout = %q, want the readable operand listed", out)
+	}
+}
+
+// A directory reached during -R traversal that cannot be opened is a minor
+// problem: ls reports it and exits 1, not 2, and keeps traversing siblings.
+func TestUnreadableTraversedDirectoryExitsOne(t *testing.T) {
+	dir := t.TempDir()
+	mkUnreadableDir(t, dir, "sealed")
+	sib := filepath.Join(dir, "sibling")
+	if err := os.Mkdir(sib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, sib, "leaf", "")
+	out, errOut, code := runToolAt(t, dir, "-R", ".")
+	if code != 1 {
+		t.Errorf("ls -R . exit = %d, want 1 (traversal access failure)", code)
+	}
+	if !strings.Contains(errOut, "cannot open directory './sealed'") {
+		t.Errorf("stderr = %q, want a cannot-open diagnostic for the subdirectory", errOut)
+	}
+	// Traversal recovers and lists the readable sibling.
+	if !strings.Contains(out, "./sibling:\n") || !strings.Contains(out, "leaf") {
+		t.Errorf("stdout = %q, want the readable sibling still listed", out)
+	}
+}
+
 func containsLine(lines []string, target string) bool {
 	for _, l := range lines {
 		if l == target {
