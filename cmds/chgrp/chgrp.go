@@ -84,7 +84,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fromRef := fs.String("from", "", "change only if current owner:group matches FROM")
 	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
 	fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of their referents")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}

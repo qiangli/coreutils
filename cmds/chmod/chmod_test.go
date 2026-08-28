@@ -92,12 +92,20 @@ func TestParseModeInvalid(t *testing.T) {
 
 func TestExtractDashMode(t *testing.T) {
 	mode, rest := extractDashMode([]string{"-w", "f"})
-	if mode != "-w" || len(rest) != 1 || rest[0] != "f" {
+	if mode != "-w" || strings.Join(rest, " ") != "-- f" {
 		t.Errorf("-w: mode=%q rest=%v", mode, rest)
 	}
 	mode, rest = extractDashMode([]string{"-R", "-rx", "f"})
-	if mode != "-rx" || len(rest) != 2 || rest[0] != "-R" {
+	if mode != "-rx" || strings.Join(rest, " ") != "-R -- f" {
 		t.Errorf("-R -rx: mode=%q rest=%v", mode, rest)
+	}
+	mode, rest = extractDashMode([]string{"-w", "--", "file"})
+	if mode != "-w" || strings.Join(rest, " ") != "-- file" {
+		t.Errorf("-w --: mode=%q rest=%v", mode, rest)
+	}
+	mode, rest = extractDashMode([]string{"-R", "-w", "--", "file"})
+	if mode != "-w" || strings.Join(rest, " ") != "-R -- file" {
+		t.Errorf("-R -w --: mode=%q rest=%v", mode, rest)
 	}
 	mode, rest = extractDashMode([]string{"--", "-w"})
 	if mode != "" || len(rest) != 2 {

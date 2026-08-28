@@ -95,7 +95,6 @@ func (t *trackingWriter) Flush() error {
 
 func run(rc *tool.RunContext, args []string) int {
 	args, optE, optT, optU := extractShortOnly(args)
-	args = tool.AliasHelpVersion(args)
 	_ = optU // -u is ignored, per the GNU manual
 
 	fs := tool.NewFlags(cmd.Name)
@@ -106,7 +105,7 @@ func run(rc *tool.RunContext, args []string) int {
 	squeeze := fs.BoolP("squeeze-blank", "s", false, "suppress repeated empty output lines")
 	showTabs := fs.BoolP("show-tabs", "T", false, "display TAB characters as ^I")
 	showNP := fs.BoolP("show-nonprinting", "v", false, "use ^ and M- notation, except for LFD and TAB")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -242,6 +241,8 @@ func extractShortOnly(args []string) (out []string, e, t, u bool) {
 	for _, a := range args {
 		if rest || a == "--" || a == "-" || !strings.HasPrefix(a, "-") || strings.HasPrefix(a, "--") {
 			if a == "--" {
+				rest = true
+			} else if a == "-" || !strings.HasPrefix(a, "-") {
 				rest = true
 			}
 			out = append(out, a)

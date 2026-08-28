@@ -107,7 +107,7 @@ func run(rc *tool.RunContext, args []string) int {
 	ignoreMissing := fs.Bool("ignore-missing", false, "don't fail or report status for missing files")
 	zero := fs.BoolP("zero", "z", false, "end each output line with NUL, not newline")
 	debug := fs.Bool("debug", false, "indicate which implementation used")
-	operands, code := tool.Parse(rc, cmd, fs, rewriteLegacyAlgorithmAliases(args))
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, rewriteLegacyAlgorithmAliases(args))
 	if code >= 0 {
 		return code
 	}
@@ -251,14 +251,31 @@ func run(rc *tool.RunContext, args []string) int {
 func rewriteLegacyAlgorithmAliases(args []string) []string {
 	out := make([]string, 0, len(args))
 	rest := false
+	needsValue := false
 	for _, arg := range args {
 		if rest {
 			out = append(out, arg)
 			continue
 		}
+		if needsValue {
+			out = append(out, arg)
+			needsValue = false
+			continue
+		}
 		if arg == "--" {
 			rest = true
 			out = append(out, arg)
+			continue
+		}
+		if arg == "-" || !strings.HasPrefix(arg, "-") {
+			rest = true
+			out = append(out, arg)
+			continue
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if !hasValue && name != "" && (strings.HasPrefix("algorithm", name) || strings.HasPrefix("length", name)) {
+			out = append(out, arg)
+			needsValue = true
 			continue
 		}
 		if len(arg) <= 1 || arg[0] != '-' || arg[1] == '-' {
@@ -281,6 +298,7 @@ func rewriteLegacyAlgorithmAliases(args []string) []string {
 		}
 		if kept != "-" {
 			out = append(out, kept)
+			needsValue = kept == "-a" || kept == "-l"
 		}
 	}
 	return out

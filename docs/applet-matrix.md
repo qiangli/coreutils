@@ -56,12 +56,12 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `bc` | `cmds/bc` | — | POSIX/Unix utility | no | yes | 1 | 14 |
 | `browser` | `cmds/browser` | — | Bashy/other extension | no | no | 1 | 9 |
 | `cal` | `cmds/cal` | — | Bashy/other extension | no | no | 1 | 6 |
-| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 4 | 14 |
+| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 5 | 15 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
-| `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 4 | 38 |
-| `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 5 | 36 |
-| `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 4 | 34 |
-| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 12 |
+| `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 5 | 39 |
+| `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 6 | 38 |
+| `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 5 | 35 |
+| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 2 | 14 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 15 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 18 |

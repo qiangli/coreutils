@@ -112,6 +112,16 @@ func TestScanStopsAtEndOfOptions(t *testing.T) {
 	}
 }
 
+func TestScanStopsAtFirstOperand(t *testing.T) {
+	rest, res := Scan([]string{"-P", "owner", "-L", "--dereference"}, traversal, valueFlags)
+	if got := strings.Join(rest, " "); got != "owner -L --dereference" {
+		t.Fatalf("rest = %q", got)
+	}
+	if res.Mode != hierwalk.Physical || !res.ModeSet || res.Deref != DerefUnset {
+		t.Fatalf("post-operand options changed scan result: %+v", res)
+	}
+}
+
 // An option value attached with "=" is data even when it is spelled
 // like a traversal option.
 func TestScanAttachedOptionValueIsNotAnOption(t *testing.T) {

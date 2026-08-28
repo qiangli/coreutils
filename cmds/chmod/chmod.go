@@ -77,7 +77,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
 	fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
 	fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
-	operands, code := tool.Parse(rc, cmd, fs, rest)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
 	}
@@ -165,10 +165,19 @@ func extractDashMode(args []string) (mode string, rest []string) {
 		if !sawOperand && mode == "" && len(a) > 1 && a[0] == '-' && a[1] != '-' && isModeBody(a[1:]) {
 			mode = a
 			sawOperand = true
-			continue
+			// Removing a dash-prefixed mode would otherwise expose later
+			// file names to the option parser. Retain its operand boundary.
+			rest = append(rest, "--")
+			if i+1 < len(args) && args[i+1] == "--" {
+				rest = append(rest, args[i+2:]...)
+			} else {
+				rest = append(rest, args[i+1:]...)
+			}
+			break
 		}
 		if a == "-" || !strings.HasPrefix(a, "-") {
-			sawOperand = true
+			rest = append(rest, args[i:]...)
+			break
 		}
 		rest = append(rest, a)
 	}
@@ -204,6 +213,8 @@ func derefFlags(args []string, recursive bool) derefMode {
 		a := args[i]
 		switch {
 		case a == "--":
+			return mode
+		case a == "-" || !strings.HasPrefix(a, "-"):
 			return mode
 		case strings.HasPrefix(a, "--") && len(a) > 2:
 			name, _, hasValue := strings.Cut(a[2:], "=")

@@ -106,7 +106,11 @@ func Scan(args []string, traversal, valueFlags []string) ([]string, Resolved) {
 			}
 			continue
 		}
-		rest = append(rest, arg)
+		// POSIX Utility Syntax Guideline 9: the owner/group operand ends
+		// option recognition. Preserve it and every following argument
+		// literally, including names such as -L and --dereference.
+		rest = append(rest, args[i:]...)
+		break
 	}
 	return rest, res
 }
