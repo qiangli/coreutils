@@ -822,6 +822,7 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	// the lock, so concurrent children don't interleave-corrupt the shared
 	// writers (and a non-concurrent-safe writer like a buffer is never raced).
 	var stopped bool
+	var reportedWriteErr bool
 	sem := make(chan struct{}, procs)
 	var wg sync.WaitGroup
 	for _, argv := range batches {
@@ -848,13 +849,34 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 			var ob, eb bytes.Buffer
 			stop := runOne(a, &ob, &eb)
 
+			// A failed flush is an error (exit 1, like a write failure in
+			// any other applet) and stops scheduling further invocations.
+			// note() itself takes mu, so it must NOT be called while mu is
+			// held: doing so self-deadlocks every worker (the weave #39
+			// regression). Record the failure under the lock, report the
+			// shared diagnostic once, and call note() only after releasing.
+			var writeErr error
 			mu.Lock()
-			rc.Out.Write(ob.Bytes())
-			rc.Err.Write(eb.Bytes())
+			if _, err := rc.Out.Write(ob.Bytes()); err != nil {
+				writeErr = err
+			}
+			if _, err := rc.Err.Write(eb.Bytes()); err != nil && writeErr == nil {
+				writeErr = err
+			}
+			if writeErr != nil {
+				stopped = true
+				if !reportedWriteErr {
+					reportedWriteErr = true
+					fmt.Fprintf(rc.Err, "xargs: write error: %v\n", tool.SysErr(writeErr))
+				}
+			}
 			if stop {
 				stopped = true
 			}
 			mu.Unlock()
+			if writeErr != nil {
+				note(1)
+			}
 		}(argv)
 	}
 	wg.Wait()

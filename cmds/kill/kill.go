@@ -3,6 +3,7 @@ package killcmd
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -102,14 +103,15 @@ func run(rc *tool.RunContext, args []string) int {
 
 func listSignals(rc *tool.RunContext, args []string) int {
 	if len(args) == 0 {
+		var b strings.Builder
 		for i, name := range signalNames() {
 			if i > 0 {
-				fmt.Fprint(rc.Out, " ")
+				b.WriteByte(' ')
 			}
-			fmt.Fprint(rc.Out, name)
+			b.WriteString(name)
 		}
-		fmt.Fprintln(rc.Out)
-		return 0
+		b.WriteByte('\n')
+		return writeOut(rc, b.String())
 	}
 	if len(args) != 1 {
 		return usage(rc, "too many operands for -l")
@@ -119,8 +121,7 @@ func listSignals(rc *tool.RunContext, args []string) int {
 			n -= 128
 		}
 		if name, ok := signalName(n); ok {
-			fmt.Fprintln(rc.Out, name)
-			return 0
+			return writeOut(rc, name+"\n")
 		}
 		return badSignal(rc, args[0])
 	}
@@ -128,7 +129,16 @@ func listSignals(rc *tool.RunContext, args []string) int {
 	if !ok {
 		return badSignal(rc, args[0])
 	}
-	fmt.Fprintln(rc.Out, signalNumber(sig))
+	return writeOut(rc, strconv.Itoa(signalNumber(sig))+"\n")
+}
+
+// writeOut emits one -l result and reports write failures as errors (POSIX:
+// a nonzero exit status follows "an error occurred").
+func writeOut(rc *tool.RunContext, s string) int {
+	if _, err := io.WriteString(rc.Out, s); err != nil {
+		fmt.Fprintf(rc.Err, "kill: write error: %v\n", tool.SysErr(err))
+		return 1
+	}
 	return 0
 }
 

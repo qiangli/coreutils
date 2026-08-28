@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,5 +73,18 @@ func TestTimeAgenticBudgetTodo(t *testing.T) {
 	_, errOut2, _ := runTime(t, os.Environ(), "true")
 	if strings.Contains(errOut2, "todo") {
 		t.Errorf("no budget should produce no TODO: %q", errOut2)
+	}
+}
+
+// TestTimeOutputFileOpenError: an unopenable -o file is fatal (exit 1, path
+// named), never a silent fallback to stderr.
+func TestTimeOutputFileOpenError(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "no-such-dir", "out")
+	_, errOut, code := runTime(t, os.Environ(), "-o", bad, "true")
+	if code != 1 {
+		t.Fatalf("time -o unopenable: exit=%d, want 1", code)
+	}
+	if !strings.Contains(errOut, bad) {
+		t.Fatalf("stderr=%q, want the failing -o path named", errOut)
 	}
 }

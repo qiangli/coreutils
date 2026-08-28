@@ -3,6 +3,7 @@ package echocmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -121,5 +122,29 @@ func TestEchoPOSIXLYCORRECT(t *testing.T) {
 		if out.String() != c.want || errb.Len() != 0 || code != 0 {
 			t.Errorf("POSIXLY_CORRECT echo %q = (%q, %q, %d), want (%q, \"\", 0)", c.args, out.String(), errb.String(), code, c.want)
 		}
+	}
+}
+
+// errNoSpaceWriter fails every write, like a full device.
+type errNoSpaceWriter struct{}
+
+var errNoSpace = errors.New("no space left on device")
+
+func (errNoSpaceWriter) Write(p []byte) (int, error) { return 0, errNoSpace }
+
+// TestEchoWriteError: GNU echo reports stdout write errors and exits 1
+// instead of silently succeeding.
+func TestEchoWriteError(t *testing.T) {
+	var e bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: errNoSpaceWriter{}, Err: &e},
+	}
+	if code := cmd.Run(rc, []string{"hello"}); code != 1 {
+		t.Fatalf("exit=%d, want 1 on write error", code)
+	}
+	if !strings.Contains(e.String(), "echo: write error:") {
+		t.Fatalf("stderr=%q, want a write-error diagnostic", e.String())
 	}
 }

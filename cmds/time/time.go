@@ -17,6 +17,7 @@ package timecmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -108,6 +109,23 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "missing command")
 	}
 
+	// -o FILE is opened before the command runs, as the GNU binary does; an
+	// unopenable file is fatal, never a silent fallback to stderr.
+	w := io.Writer(rc.Err)
+	if o.outfile != "" {
+		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		if o.appendF {
+			flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		}
+		f, ferr := os.OpenFile(rc.Path(o.outfile), flags, 0o644)
+		if ferr != nil {
+			fmt.Fprintf(rc.Err, "time: %s: %v\n", o.outfile, tool.SysErr(ferr))
+			return 1
+		}
+		defer f.Close()
+		w = f
+	}
+
 	// Resolve + run the program (external, like the GNU binary), searching the
 	// invocation's PATH (rc.Env), not the host process's.
 	path := rc.ResolveCommand(command[0])
@@ -133,18 +151,7 @@ func run(rc *tool.RunContext, args []string) int {
 	maxRSS, haveRSS := maxRSSKB(ps) // platform helper
 	status := exitStatus(ps)        // 128+signum for signal-terminated commands
 
-	// Report to -o FILE or stderr (GNU writes the report to stderr by default).
-	w := rc.Err
-	if o.outfile != "" {
-		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		if o.appendF {
-			flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
-		}
-		if f, ferr := os.OpenFile(rc.Path(o.outfile), flags, 0o644); ferr == nil {
-			defer f.Close()
-			w = f
-		}
-	}
+	// Report to the -o FILE (opened above) or stderr.
 	if !o.quiet {
 		fmt.Fprint(w, report(o, command, elapsed, userT, sysT, maxRSS, haveRSS, status))
 	}

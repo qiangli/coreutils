@@ -3,6 +3,7 @@ package killcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,5 +56,28 @@ func TestKillErrors(t *testing.T) {
 		if code == 0 || errOut == "" {
 			t.Fatalf("kill %v: code=%d err=%q", args, code, errOut)
 		}
+	}
+}
+
+// errOutWriter fails every write, like a full device.
+type errOutWriter struct{}
+
+var errNoSpace = errors.New("no space left on device")
+
+func (errOutWriter) Write(p []byte) (int, error) { return 0, errNoSpace }
+
+// TestKillListWriteError: a failing stdout makes kill -l exit 1 with a
+// write-error diagnostic (POSIX: an error occurred).
+func TestKillListWriteError(t *testing.T) {
+	var e bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: errOutWriter{}, Err: &e}}
+	if code := run(rc, []string{"-l"}); code != 1 {
+		t.Fatalf("kill -l write error: exit=%d, want 1", code)
+	}
+	if !strings.Contains(e.String(), "kill: write error:") {
+		t.Fatalf("stderr=%q, want a write-error diagnostic", e.String())
+	}
+	if code := run(rc, []string{"-l", "TERM"}); code != 1 {
+		t.Fatalf("kill -l TERM write error: exit=%d, want 1", code)
 	}
 }

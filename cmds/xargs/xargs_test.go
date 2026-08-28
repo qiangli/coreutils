@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -476,5 +477,44 @@ func TestXargsReplaceHonorsForcedExactSize(t *testing.T) {
 	_, errOut, code := runXargsEnv(t, t.TempDir(), nil, "abcd\n", "-s8", "-I{}", "echo", "{}")
 	if code == 0 || !strings.Contains(errOut, "size") {
 		t.Fatalf("oversized -I command: code=%d stderr=%q", code, errOut)
+	}
+}
+
+// errWriter fails every write, like a full or broken output device.
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// TestXargsParallelFlushWriteErrorNoDeadlock is the timeout-safe regression
+// for the weave #39 deadlock: the parallel flush path handled write errors by
+// calling note() while still holding mu — and note() locks mu itself, so the
+// first failing stdout flush hung every worker forever. A write error must
+// instead surface promptly as a diagnostic and exit status 1.
+func TestXargsParallelFlushWriteErrorNoDeadlock(t *testing.T) {
+	var e bytes.Buffer
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
+			env = append(env, entry)
+		}
+	}
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader("1\n2\n3\n4\n5\n6\n"), Out: errWriter{}, Err: &e},
+	}
+	done := make(chan int, 1)
+	go func() { done <- cmd.Run(rc, []string{"-P2", "-n1", "echo"}) }()
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("exit=%d stderr=%q, want 1 after a flush write error", code, e.String())
+		}
+		if !strings.Contains(e.String(), "xargs: write error:") {
+			t.Fatalf("stderr=%q, want a write-error diagnostic", e.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("xargs deadlocked reporting a parallel flush write error (note() must not run under mu)")
 	}
 }

@@ -112,7 +112,11 @@ func writeOperands(rc *tool.RunContext, operands []string, escapes, noNewline bo
 	if !stopped && !noNewline {
 		buf.WriteByte('\n')
 	}
-	rc.Out.Write(buf.Bytes())
+	if _, err := rc.Out.Write(buf.Bytes()); err != nil {
+		// GNU echo reports write errors and exits 1.
+		fmt.Fprintf(rc.Err, "echo: write error: %v\n", tool.SysErr(err))
+		return 1
+	}
 	return 0
 }
 
