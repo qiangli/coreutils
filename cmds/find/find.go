@@ -67,6 +67,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/ignore"
 	"github.com/qiangli/coreutils/tool"
@@ -1530,18 +1532,35 @@ func pathErrMsg(err error) string {
 // Unlike path.Match, '*' and '?' also match '/' (GNU -path rule),
 // backslash escapes the next character, and [!...] negation is accepted.
 //
-// Matching is byte-oriented because that is what the C/POSIX locale
-// means: a character is a byte, so '?' matches one byte of a multi-byte
-// sequence, ranges compare byte values, and [[:alpha:]] and friends are
-// the C locale's ASCII sets. The result is therefore the same whatever
-// LC_ALL, LC_CTYPE, LC_COLLATE or LANG say — the determinism the agent
-// contract requires, and what GNU find does in the POSIX locale.
+// Two locale categories, and only two, reach this matcher, exactly as
+// POSIX XBD 7.3 splits them:
+//
+//   - LC_CTYPE selects the CHARACTER MODEL — how the pattern and the
+//     filename are divided into characters, which characters the
+//     [:class:] names denote, and which characters -iname folds
+//     together. In C/POSIX a character is a byte, so '?' matches one
+//     byte of a multi-byte sequence and [[:alpha:]] is the ASCII set;
+//     under a carried UTF-8 locale a character is one UTF-8 sequence and
+//     the classes are the Unicode sets ([fnmatchUTF8]).
+//   - LC_COLLATE selects the COLLATION — what [=equivalence=] and
+//     [.collating-symbol.] denote and how a range's endpoints order.
+//
+// Neither category may stand in for the other. In particular a UTF-8
+// LC_COLLATE is NOT permission to decode characters: GNU find with
+// LC_CTYPE=C LC_COLLATE=C.UTF-8 still matches '?' against one byte, and
+// with LC_CTYPE=C.UTF-8 LC_COLLATE=C still matches it against one
+// character. Locales outside the carried inventory (see findLocaleFromEnv)
+// keep the C locale's byte model, which is what every other find
+// predicate already does.
 
 func fnmatch(pattern, name string, fold bool) bool {
 	return fnmatchLocale(pattern, name, fold, findLocale{})
 }
 
 func fnmatchLocale(pattern, name string, fold bool, loc findLocale) bool {
+	if loc.ctypeUTF8 {
+		return fnmatchUTF8(pattern, name, fold, loc)
+	}
 	for len(pattern) > 0 {
 		switch pattern[0] {
 		case '*':
@@ -1595,6 +1614,237 @@ func fnmatchLocale(pattern, name string, fold bool, loc findLocale) bool {
 		}
 	}
 	return len(name) == 0
+}
+
+// fnmatchUTF8 is fnmatchLocale's character-oriented twin, selected only
+// when LC_CTYPE names a carried UTF-8 locale. '?' consumes one character,
+// '*' advances by characters, and the [:class:] names denote the Unicode
+// sets. loc is threaded through unchanged because the collation half of
+// a bracket expression — [=equivalence=], [.collating-symbol.] and a
+// range's endpoints — still belongs to LC_COLLATE.
+func fnmatchUTF8(pattern, name string, fold bool, loc findLocale) bool {
+	for len(pattern) > 0 {
+		switch pattern[0] {
+		case '*':
+			for len(pattern) > 0 && pattern[0] == '*' {
+				pattern = pattern[1:]
+			}
+			if len(pattern) == 0 {
+				return true
+			}
+			for rest := name; ; {
+				if fnmatchUTF8(pattern, rest, fold, loc) {
+					return true
+				}
+				if rest == "" {
+					return false
+				}
+				_, n := decodeChar(rest)
+				rest = rest[n:]
+			}
+		case '?':
+			if name == "" {
+				return false
+			}
+			_, n := decodeChar(name)
+			pattern, name = pattern[1:], name[n:]
+		case '[':
+			if name == "" {
+				return false
+			}
+			c, n := decodeChar(name)
+			matched, rest, valid := matchClassUTF8(pattern, c, fold, loc)
+			if !valid {
+				// unmatched '[' is a literal
+				if !eqRune('[', c, fold) {
+					return false
+				}
+				pattern, name = pattern[1:], name[n:]
+				continue
+			}
+			if !matched {
+				return false
+			}
+			pattern, name = rest, name[n:]
+		case '\\':
+			if len(pattern) >= 2 {
+				pattern = pattern[1:]
+			}
+			fallthrough
+		default:
+			if name == "" {
+				return false
+			}
+			pc, pn := decodeChar(pattern)
+			nc, nn := decodeChar(name)
+			if !eqRune(pc, nc, fold) {
+				return false
+			}
+			pattern, name = pattern[pn:], name[nn:]
+		}
+	}
+	return name == ""
+}
+
+// invalidCharBase encodes a byte that begins no valid UTF-8 sequence as a
+// code point above utf8.MaxRune. Filenames are byte strings, so a name the
+// filesystem accepted may not be valid UTF-8 even under a UTF-8 LC_CTYPE.
+// Keeping such a byte out of the Unicode range means it advances the scan
+// one byte at a time and compares equal only to the same raw byte in the
+// pattern — never to a decoded character, a class, a range or a case fold.
+const invalidCharBase = utf8.MaxRune + 1
+
+// decodeChar returns the first character of s and its length in bytes.
+func decodeChar(s string) (rune, int) {
+	r, n := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError && n == 1 {
+		return invalidCharBase + rune(s[0]), 1
+	}
+	return r, n
+}
+
+// eqRune compares one character, folding case for -iname. Unlike eqByte
+// the fold is the full Unicode case mapping, which is what a UTF-8
+// LC_CTYPE carries: -iname É matches é.
+func eqRune(a, b rune, fold bool) bool {
+	if a == b {
+		return true
+	}
+	if !fold || a > utf8.MaxRune || b > utf8.MaxRune {
+		return false
+	}
+	return unicode.ToLower(a) == unicode.ToLower(b) ||
+		unicode.ToUpper(a) == unicode.ToUpper(b)
+}
+
+// utf8ClassFns are the POSIX character classes over Unicode code points,
+// as POSIX.1 Issue 7 XBD 7.3.1 defines them. Two deserve their exact
+// wording: digit is "the digits 0 through 9 only" and xdigit is built on
+// it, so both stay ASCII in every locale; punct is every printable
+// character that is neither alnum nor space, which is why it is derived
+// rather than mapped onto a Unicode category.
+var utf8ClassFns = map[string]func(rune) bool{
+	"alpha":  unicode.IsLetter,
+	"digit":  func(r rune) bool { return r >= '0' && r <= '9' },
+	"alnum":  isAlnumUTF8,
+	"upper":  unicode.IsUpper,
+	"lower":  unicode.IsLower,
+	"space":  unicode.IsSpace,
+	"blank":  func(r rune) bool { return r == ' ' || r == '\t' },
+	"cntrl":  unicode.IsControl,
+	"graph":  isGraphUTF8,
+	"print":  func(r rune) bool { return isGraphUTF8(r) || r == ' ' },
+	"punct":  func(r rune) bool { return isGraphUTF8(r) && !isAlnumUTF8(r) },
+	"xdigit": func(r rune) bool { return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' },
+}
+
+func isAlnumUTF8(r rune) bool {
+	return unicode.IsLetter(r) || (r >= '0' && r <= '9')
+}
+
+func isGraphUTF8(r rune) bool {
+	return unicode.IsGraphic(r) && !unicode.IsSpace(r)
+}
+
+// matchClassUTF8 is matchClassLocale over characters. The split between
+// the categories is the point: [:class:] answers from utf8ClassFns
+// (LC_CTYPE), while [=equivalence=] and the range endpoints answer from
+// loc's collation half (LC_COLLATE).
+func matchClassUTF8(p string, c rune, fold bool, loc findLocale) (matched bool, rest string, valid bool) {
+	i := 1
+	neg := false
+	if i < len(p) && (p[i] == '!' || p[i] == '^') {
+		neg = true
+		i++
+	}
+	first := true
+	for i < len(p) {
+		if p[i] == ']' && !first {
+			return matched != neg, p[i+1:], true
+		}
+		first = false
+		if p[i] == '[' && i+1 < len(p) && (p[i+1] == ':' || p[i+1] == '=' || p[i+1] == '.') {
+			kind := p[i+1]
+			j := i + 2
+			for j+1 < len(p) && !(p[j] == kind && p[j+1] == ']') {
+				j++
+			}
+			if j+1 >= len(p) {
+				return false, "", false
+			}
+			element := p[i+2 : j]
+			switch kind {
+			case ':':
+				if fn, ok := utf8ClassFns[element]; ok {
+					// -iname: either case of the character satisfying
+					// the class is a match, so [[:upper:]] finds a
+					// lowercase name.
+					if fn(c) || (fold && (fn(unicode.ToUpper(c)) || fn(unicode.ToLower(c)))) {
+						matched = true
+					}
+				}
+			case '=', '.':
+				er, n := decodeChar(element)
+				if n != len(element) {
+					break // more than one character is not a carried element
+				}
+				if eqRune(er, c, fold) ||
+					(kind == '=' && loc.collateGerman && germanEquivalentRune(er, c)) {
+					matched = true
+				}
+			}
+			i = j + 2
+			continue
+		}
+		lo, n := decodeChar(p[i:])
+		if lo == '\\' && i+n < len(p) {
+			i += n
+			lo, n = decodeChar(p[i:])
+		}
+		i += n
+		hi := lo
+		if i+1 < len(p) && p[i] == '-' && p[i+1] != ']' {
+			i++
+			hi, n = decodeChar(p[i:])
+			if hi == '\\' && i+n < len(p) {
+				i += n
+				hi, n = decodeChar(p[i:])
+			}
+			i += n
+		}
+		// The C/POSIX collation this implementation carries orders the
+		// collating elements by character value, so the range test is a
+		// code-point comparison. A UTF-8 LC_CTYPE does not change it:
+		// the endpoints came from LC_COLLATE.
+		r := c
+		if fold {
+			r, lo, hi = unicode.ToLower(c), unicode.ToLower(lo), unicode.ToLower(hi)
+		}
+		if r > utf8.MaxRune || lo > utf8.MaxRune || hi > utf8.MaxRune {
+			// An undecodable byte is not a collating element, so it has
+			// no place in an ordering: it matches only as a literal
+			// member, never by falling inside a range.
+			if r == lo || r == hi {
+				matched = true
+			}
+			continue
+		}
+		if lo <= r && r <= hi {
+			matched = true
+		}
+	}
+	return false, "", false
+}
+
+// germanEquivalentRune is germanEquivalent over characters. The carried
+// de_DE collation's equivalence classes are Latin-1 characters, so a
+// character outside that repertoire has no equivalents whatever LC_CTYPE
+// says the encoding is.
+func germanEquivalentRune(pattern, candidate rune) bool {
+	if pattern > 0xff || candidate > 0xff {
+		return false
+	}
+	return germanEquivalent(byte(pattern), byte(candidate))
 }
 
 // eqByte compares one byte, folding case for -iname. Folding is ASCII
@@ -1728,15 +1978,29 @@ func matchClassLocale(p string, c byte, fold bool, loc findLocale) (matched bool
 	return false, "", false
 }
 
+// findLocale is the resolved locale, one field per category. Nothing here
+// is derived from more than one category: that separation is the contract
+// (see the fnmatch comment above).
 type findLocale struct {
-	ctypeGerman    bool
-	collateGerman  bool
+	// ctypeUTF8 and ctypeGerman come from LC_CTYPE alone. They are the
+	// character model: encoding, character boundaries, [:class:]
+	// membership and -iname case folding.
+	ctypeUTF8   bool
+	ctypeGerman bool
+	// collateGerman comes from LC_COLLATE alone: [=equivalence=] and
+	// [.collating-symbol.] membership and range ordering.
+	collateGerman bool
+	// messagesGerman comes from LC_MESSAGES alone: the -ok affirmative
+	// response expression.
 	messagesGerman bool
 }
 
 func findLocaleFromEnv(env []string) findLocale {
+	ctype := localeCategory(env, "LC_CTYPE")
+	ctypeUTF8 := isCarriedUTF8Locale(ctype)
 	return findLocale{
-		ctypeGerman:    isGermanLocale(localeCategory(env, "LC_CTYPE")),
+		ctypeUTF8:      ctypeUTF8,
+		ctypeGerman:    isGermanLocale(ctype),
 		collateGerman:  isGermanLocale(localeCategory(env, "LC_COLLATE")),
 		messagesGerman: isGermanLocale(localeCategory(env, "LC_MESSAGES")),
 	}
@@ -1753,6 +2017,26 @@ func localeCategory(env []string, category string) string {
 
 func isGermanLocale(name string) bool {
 	return strings.HasPrefix(strings.ToLower(name), "de_de")
+}
+
+// isCarriedUTF8Locale reports whether name is a UTF-8 locale this
+// repository carries a character model for: the C/POSIX UTF-8 aliases
+// ("C.UTF-8", "POSIX.utf8", "C.utf8@euro", …). The inventory is
+// deliberately the same one cmds/sed resolves, so one locale name means
+// one thing across the userland.
+//
+// Every other name — "en_US.UTF-8", "de_DE.UTF-8" — is not carried and
+// keeps the byte model it already had rather than being approximated by
+// a nearby one. That is the long-standing find behavior; cmds/sed
+// refuses those same names outright, because unlike find it has a
+// provider to refuse from.
+func isCarriedUTF8Locale(name string) bool {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ := strings.Cut(name, ".")
+	if base != "C" && base != "POSIX" {
+		return false
+	}
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset)) == "UTF8"
 }
 
 func germanClassMatch(class string, c byte, fold bool) bool {

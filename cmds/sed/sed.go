@@ -196,8 +196,10 @@ func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOp
 	opts := gosed.Options{ExtendedRegex: *ereE || *ereR}
 	lcCType := locale.Resolve(rc.Env, locale.CType)
 	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	ctypeModel := resolveSedCType(lcCType)
+	collateModel := resolveSedCollate(lcCollate)
 	var tables *bre.LocaleByteTables
-	if lcCType != "C" && lcCType != "POSIX" {
+	if ctypeModel == sedCTypeProvider {
 		provider, err := ctypeOpen(lcCType)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, err)
@@ -217,7 +219,7 @@ func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOp
 	} else {
 		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
 	}
-	if lcCollate != "C" && lcCollate != "POSIX" {
+	if collateModel == sedCollateProvider {
 		provider, err := collateOpen(lcCollate)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "sed: LC_COLLATE %q: %v\n", lcCollate, err)
@@ -235,7 +237,12 @@ func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOp
 			return 2
 		}
 	}
-	if lcCType != "C" && lcCType != "POSIX" || lcCollate != "C" && lcCollate != "POSIX" {
+	// The byte-table matcher describes a single-byte codeset, so it is
+	// selected only when a category actually names one. A UTF-8 LC_CTYPE
+	// keeps the character-oriented matcher; a UTF-8 LC_COLLATE contributes
+	// nothing to it, and neither may drag the other onto a substrate its
+	// own category did not ask for.
+	if ctypeModel == sedCTypeProvider || collateModel == sedCollateProvider {
 		opts.LocaleTables = tables
 	}
 
