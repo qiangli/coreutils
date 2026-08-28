@@ -20,7 +20,7 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWith(rc, args, loginName)
+	return runWith(rc, args, func() string { return platformLoginName(rc.Env) })
 }
 
 // runWith is the testable core of run: resolve the login name via resolve
@@ -67,7 +67,7 @@ func runWith(rc *tool.RunContext, args []string, resolve func() string) int {
 // getlogin system call without cgo. Other platforms fail explicitly instead
 // of substituting the effective account.
 func loginName() string {
-	return platformLoginName()
+	return platformLoginName(os.Environ())
 }
 
 // loginNameFromLoginUID resolves the session login user on Linux from

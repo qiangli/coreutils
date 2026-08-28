@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/user"
 	"runtime"
 	"strings"
@@ -139,12 +140,12 @@ func TestResolveLoginUID(t *testing.T) {
 func TestLoginNameHasNoEffectiveUserFallback(t *testing.T) {
 	// loginName must be exactly the getlogin()-equivalent with no substitute
 	// drawn from the effective account.
-	if got, want := loginName(), platformLoginName(); got != want {
+	if got, want := loginName(), platformLoginName(os.Environ()); got != want {
 		t.Fatalf("loginName()=%q, want %q (no effective-user fallback)", got, want)
 	}
 	// Where the getlogin()-equivalent yields nothing, logname must fail with an
 	// empty stdout rather than leak the effective user's name.
-	if platformLoginName() != "" {
+	if platformLoginName(os.Environ()) != "" {
 		return
 	}
 	var out, err bytes.Buffer

@@ -2,6 +2,6 @@
 
 package lognamecmd
 
-func platformLoginName() string {
+func platformLoginName(_ []string) string {
 	return ""
 }
