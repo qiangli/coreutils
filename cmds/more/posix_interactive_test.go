@@ -461,8 +461,34 @@ func TestPOSIXEOFDispatch(t *testing.T) {
 		t.Fatalf("non-advancing EOF command file=%d top=%d", p.fileIndex, p.top)
 	}
 	p.fileIndex = 1
-	if p.execute(moreCommand{key: 'b'}, true) || !p.quit {
-		t.Fatalf("last-file EOF non-advance returned true or did not quit")
+	p.top = 2
+	if !p.execute(moreCommand{key: 'b'}, true) || p.quit || p.top != 0 {
+		t.Fatalf("last-file EOF non-advance ended pager or failed: quit=%v top=%d", p.quit, p.top)
+	}
+}
+
+func TestPOSIXEditorRemainsAvailableAtLastFileEOF(t *testing.T) {
+	p, _, errb := memoryPager("one\ntwo\n", 2)
+	p.files, p.fileIndex, p.top, p.next = []string{"fixture"}, 0, 0, 2
+	dir := t.TempDir()
+	editor := filepath.Join(dir, "vi")
+	if err := os.WriteFile(editor, []byte("editor fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.rc.Dir = dir
+	p.rc.Env = []string{"EDITOR=vi", "PATH=" + dir}
+	p.tty = &ttyChannel{}
+
+	orig := runEditor
+	called := false
+	runEditor = func(_ context.Context, _ *tool.RunContext, _ *ttyChannel, gotEditor string, line int, name string) error {
+		called = gotEditor == editor && line == 1 && strings.HasSuffix(name, "fixture")
+		return nil
+	}
+	t.Cleanup(func() { runEditor = orig })
+
+	if !p.execute(moreCommand{key: 'v'}, true) || p.quit || !called {
+		t.Fatalf("last-file EOF editor: quit=%v called=%v stderr=%q", p.quit, called, errb.String())
 	}
 }
 

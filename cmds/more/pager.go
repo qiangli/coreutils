@@ -797,15 +797,16 @@ func (p *pager) execute(c moreCommand, eof bool) bool {
 }
 
 func (p *pager) executeCommand(c moreCommand, eof bool) bool {
-	if eof {
-		advance := advancesAtEOF(c)
+	// Reaching the last screen is not itself an exit request; -e is the
+	// explicit exit-at-EOF option.  A forward command advances to the next file
+	// (or exits after the last one), while commands such as v, b, h, and search
+	// remain available at the END prompt.
+	if eof && advancesAtEOF(c) {
 		if p.fileIndex == len(p.files)-1 {
 			p.quit = true
 			return false
 		}
-		if advance {
-			return p.openReachable(p.fileIndex+1, 1, true)
-		}
+		return p.openReachable(p.fileIndex+1, 1, true)
 	}
 	n := count(c, 1)
 	switch c.key {
