@@ -49,6 +49,25 @@ var cmd = &tool.Tool{
 // cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+type stickyWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *stickyWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
 // mountEntry is one mounted file system, sizes in bytes. Filled by
 // the per-platform listMounts (mounts_linux.go / mounts_darwin.go /
 // mounts_windows.go).
@@ -65,9 +84,22 @@ type mountEntry struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	args = normalizeBlockSizeArgs(args)
+	out := &stickyWriter{writer: rc.Out}
+	child := *rc
+	child.Out = out
+	code := runCore(&child, args)
+	if out.err != nil {
+		fmt.Fprintf(rc.Err, "df: write error: %v\n", out.err)
+		return 1
+	}
+	return code
+}
+
+func runCore(rc *tool.RunContext, args []string) int {
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	args = normalizeBlockSizeArgs(args, posix)
 	// -k has no GNU long form; -V is a uutils alias for --version.
-	rest, seenShort := extractShort(args, "ktV")
+	rest, seenShort := extractShort(args, "ktV", posix)
 	if seenShort['V'] {
 		rest = append([]string{"--version"}, rest...)
 	}
@@ -94,6 +126,9 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.Lookup("output").NoOptDefVal = defaultOutputFields
 	xsiTotal := fs.BoolP("xsi-total-space", "t", false, "include total allocated-space in each record (POSIX XSI)")
 	gnuTotal := fs.Bool("total", false, "produce a grand total (GNU extension)")
+	if posix {
+		fs.SetInterspersed(false)
+	}
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -411,9 +446,13 @@ func divCeil(n, d uint64) uint64 {
 	return 1 + (n-1)/d
 }
 
-func normalizeBlockSizeArgs(args []string) []string {
+func normalizeBlockSizeArgs(args []string, requireOrder bool) []string {
 	var out []string
 	for i, a := range args {
+		if requireOrder && (a == "-" || !strings.HasPrefix(a, "-")) {
+			out = append(out, args[i:]...)
+			break
+		}
 		if a == "--" {
 			out = append(out, args[i:]...)
 			break
@@ -461,11 +500,15 @@ func normalizeBlockSizeArgs(args []string) []string {
 // args and the set of letters seen. Scanning stops at "--", and within
 // a cluster at an argument-taking shorthand (-B, -x), whose in-word
 // argument must not be mistaken for more flags.
-func extractShort(args []string, chars string) ([]string, map[byte]bool) {
+func extractShort(args []string, chars string, requireOrder bool) ([]string, map[byte]bool) {
 	found := map[byte]bool{}
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if requireOrder && (a == "-" || !strings.HasPrefix(a, "-")) {
+			rest = append(rest, args[i:]...)
+			break
+		}
 		if a == "--" {
 			rest = append(rest, args[i:]...)
 			break
@@ -491,6 +534,16 @@ func extractShort(args []string, chars string) ([]string, map[byte]bool) {
 		rest = append(rest, a)
 	}
 	return rest, found
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func errMsg(err error) string {

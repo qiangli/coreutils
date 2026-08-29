@@ -3,12 +3,19 @@ package dfcmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 // runToolAt is the canonical test harness shape for cmds packages,
 // with an explicit working directory.
@@ -447,6 +454,36 @@ func TestMixedOperandsPreserveSuccessfulOutput(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if len(lines) != 2 {
 		t.Errorf("df mixed operands stdout = %q, want header + successful operand", out)
+	}
+}
+
+func TestPOSIXStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"plain", "-k"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"plain", "-k"})
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if code != 0 || errb.String() != "" || len(lines) != 3 || !strings.Contains(lines[0], "512-blocks") {
+		t.Fatalf("post-operand -k: code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+}
+
+func TestStandardOutputFailureIsDiagnosed(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: failingWriter{}, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"-P", "."}); code == 0 || !strings.Contains(errb.String(), "write error") {
+		t.Fatalf("code=%d stderr=%q", code, errb.String())
 	}
 }
 
