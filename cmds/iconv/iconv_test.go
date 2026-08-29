@@ -64,6 +64,47 @@ func TestFilesResolveAgainstRunContextDir(t *testing.T) {
 	}
 }
 
+func TestOptionPermutationModes(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"first": "café\n",
+		"-s":    "café\n",
+		"-h":    "café\n",
+	} {
+		if err := os.WriteFile(dir+"/"+name, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"GNU default permutes post-operand option", []string{"LC_ALL=C"}, "café\n"},
+		{"POSIX treats post-operand option spelling as pathname", []string{"LC_ALL=C", "POSIXLY_CORRECT=1"}, "café\ncafé\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: dir, Env: tc.env,
+				Stdio: tool.Stdio{Out: &out, Err: &errout},
+			}
+			code := run(rc, []string{"-f", "UTF-8", "-t", "UTF-8", "first", "-s"})
+			if code != 0 || errout.String() != "" || out.String() != tc.want {
+				t.Fatalf("result=(%d, %q, %q), want=(0, %q, empty stderr)", code, out.String(), errout.String(), tc.want)
+			}
+		})
+	}
+	var out, errout bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: []string{"LC_ALL=C", "POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{Out: &out, Err: &errout},
+	}
+	if code := run(rc, []string{"-f", "UTF-8", "-t", "UTF-8", "first", "-h"}); code != 0 || errout.Len() != 0 || out.String() != "café\ncafé\n" {
+		t.Fatalf("post-operand -h pathname result=(%d, %q, %q), want both files", code, out.String(), errout.String())
+	}
+}
+
 func TestMalformedInputFailsAndSilentOnlySuppressesConversionMessage(t *testing.T) {
 	for _, args := range [][]string{
 		{"-f", "UTF-8", "-t", "ISO-8859-1"},

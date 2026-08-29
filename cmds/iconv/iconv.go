@@ -115,7 +115,19 @@ func run(rc *tool.RunContext, args []string) int {
 	silent := fs.BoolP("silent", "s", false, "suppress messages about invalid characters")
 	discardInvalid := fs.BoolP("discard-invalid", "c", false, "discard invalid input characters")
 	list := fs.BoolP("list", "l", false, "list all known coded character sets")
-	files, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	var files []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		// POSIX Utility Syntax Guideline 9 makes every argument after the
+		// first operand an operand, even when it is spelled like an option.
+		// Parse the original spellings so post-operand -h/-V pathnames are not
+		// rewritten to their long aliases before the boundary is known.
+		files, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		// Preserve the established GNU-style option permutation extension
+		// outside POSIX mode.
+		files, code = tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	}
 	if code >= 0 {
 		return code
 	}
@@ -284,6 +296,16 @@ func run(rc *tool.RunContext, args []string) int {
 		status = 1
 	}
 	return status
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // localeCodeset returns the codeset iconv uses for an omitted -f/-t, per the
