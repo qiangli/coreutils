@@ -69,7 +69,17 @@ func run(rc *tool.RunContext, args []string) int {
 	// SELinux context), as well as --context[=CTX].  Keep the value-bearing
 	// form for --context=CTX while allowing the short option by itself.
 	fs.Lookup("context").NoOptDefVal = "default"
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		// POSIX Utility Syntax Guideline 9 ends option recognition at the
+		// first operand.  Consequently later -p and -- spellings are directory
+		// pathnames, not options or an option terminator.
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		// Preserve GNU option permutation outside POSIX mode.
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -99,6 +109,16 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseMode accepts octal MODE arguments (including setuid/setgid/

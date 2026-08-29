@@ -345,6 +345,20 @@ func TestMkdirDashOperandIsPathname(t *testing.T) {
 	}
 }
 
+func TestMkdirPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"}}
+	_, errb, code := runToolWithContext(t, rc, "first", "-p", "--")
+	if code != 0 || errb != "" {
+		t.Fatalf("mkdir first -p --: code=%d err=%q", code, errb)
+	}
+	for _, name := range []string{"first", "-p", "--"} {
+		if fi, err := os.Stat(filepath.Join(dir, name)); err != nil || !fi.IsDir() {
+			t.Errorf("POSIX operand %q was not created as a directory: %v", name, err)
+		}
+	}
+}
+
 func TestMkdirEmptyOperandFailsAndContinues(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "", "ok")

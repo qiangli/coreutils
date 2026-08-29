@@ -122,7 +122,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 30 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
 | `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 10 |
-| `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 3 | 33 |
+| `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 3 | 34 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
