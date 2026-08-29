@@ -475,6 +475,73 @@ func TestGrepStandalonePreservesLexicalOperands(t *testing.T) {
 	}
 }
 
+func TestGrepReadsLexicallyRedundantFileOperands(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	data := filepath.Join(root, "data")
+	patterns := filepath.Join(root, "patterns")
+	for _, dir := range []string{work, data, patterns} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, data, "input", "needle\nother\n")
+	writeFile(t, patterns, "expressions", "needle\n")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"parent-relative input", []string{"needle", "../data/input"}},
+		{"dotdot and double-slash input", []string{"needle", "../data/../data//input"}},
+		{"dotdot and double-slash pattern", []string{"-f", "../patterns/../patterns//expressions", "../data/input"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runGrep(t, work, "", tc.args...)
+			if code != 0 || errOut != "" || out != "needle\n" {
+				t.Errorf("grep %v = (%q, %q, %d), want (%q, empty, 0)",
+					tc.args, out, errOut, code, "needle\n")
+			}
+		})
+	}
+}
+
+func TestGrepIntervalNoMatchAcrossPatternSources(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		extended bool
+		pattern  string
+		input    string
+	}{
+		{"BRE unbounded", false, `z\{8,\}`, "zzzzzzz\n"},
+		{"ERE exact", true, `q{8}`, "qqqqqqq\n"},
+		{"ERE unbounded", true, `q{8,}`, "qqqqqqq\n"},
+	} {
+		for _, source := range []string{"argument", "-e", "-f"} {
+			t.Run(tc.name+"/"+source, func(t *testing.T) {
+				dir := t.TempDir()
+				args := make([]string, 0, 3)
+				if tc.extended {
+					args = append(args, "-E")
+				}
+				switch source {
+				case "argument":
+					args = append(args, tc.pattern)
+				case "-e":
+					args = append(args, "-e", tc.pattern)
+				case "-f":
+					writeFile(t, dir, "patterns", tc.pattern+"\n")
+					args = append(args, "-f", "patterns")
+				}
+				out, errOut, code := runGrep(t, dir, tc.input, args...)
+				if code != 1 || out != "" || errOut != "" {
+					t.Errorf("grep %v = (%q, %q, %d), want (empty, empty, 1)", args, out, errOut, code)
+				}
+			})
+		}
+	}
+}
+
 type grepFailWriter struct {
 	err   error
 	short bool
