@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const meta = `{
@@ -23,7 +24,7 @@ const meta = `{
   "mount": "fixture",
   "mode":  "proxy",
   "auth":  "public",
-  "start": ["apps"]
+  "start": ["fixtureapp", "serve"]
 }
 `
 
@@ -32,7 +33,20 @@ func main() {
 		// Deliberately noisy on stderr: a harness banner must not corrupt the
 		// contract, so the probe reads stdout only.
 		fmt.Fprintln(os.Stderr, "fixtureapp: telemetry on → /dev/null")
-		fmt.Print(meta)
+		switch os.Getenv("FIXTURE_META_MODE") {
+		case "exact-limit":
+			fmt.Print(meta)
+			fmt.Print(strings.Repeat(" ", (64<<10)-len(meta)))
+		case "oversize":
+			fmt.Print(strings.Repeat("x", (64<<10)+1))
+		case "sleep":
+			time.Sleep(5 * time.Second)
+			fmt.Print(meta)
+		case "exit":
+			os.Exit(7)
+		default:
+			fmt.Print(meta)
+		}
 		return
 	}
 	port := flag.String("port", "9911", "listen port")

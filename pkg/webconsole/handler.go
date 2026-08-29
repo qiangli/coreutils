@@ -69,6 +69,9 @@ type Options struct {
 	// ProbeApp is the exec seam. Nil means ProbeApp; tests inject a stub so a
 	// unit test never spawns a process.
 	ProbeApp ProbeFunc
+	// AppAuth is explicit operator policy keyed by third-party mount. Metadata
+	// may request presentation facts but cannot open a LAN-facing route itself.
+	AppAuth map[string]string
 
 	// Panels overrides discovery. Nil means Discover().
 	Panels []Panel
@@ -149,7 +152,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	if s.panels == nil {
 		s.panels = Discover()
 		if len(opts.Apps) > 0 {
-			apps, errs := discoverApps(opts.Ctx, opts.Apps, opts.ProbeApp, TakenMounts(s.panels))
+			apps, errs := discoverApps(opts.Ctx, opts.Apps, opts.ProbeApp, TakenMounts(s.panels), opts.AppAuth)
 			for _, err := range errs {
 				// Reported, never silent: a tile that quietly vanished looks
 				// exactly like one nobody asked for.

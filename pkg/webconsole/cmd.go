@@ -87,6 +87,7 @@ func newServeCmd() *cobra.Command {
 		write   bool
 		disable []string
 		apps    []string
+		appAuth []string
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -94,11 +95,16 @@ func newServeCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			auth, err := ParseAppAuth(appAuth)
+			if err != nil {
+				return err
+			}
 			return runServe(c.Context(), c.OutOrStdout(), Options{
 				Scope:      scope,
 				AllowWrite: write,
 				Disable:    disable,
 				Apps:       apps,
+				AppAuth:    auth,
 			}, bind, port)
 		},
 	}
@@ -111,21 +117,27 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&apps, "app", nil,
 		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable "+
 			"(described by `<bin> meta --json`)")
+	cmd.Flags().StringArrayVar(&appAuth, "app-auth", nil,
+		"operator-authorized auth tier for a third-party mount: <mount>=public|system|custom, repeatable")
 	return cmd
 }
 
 func newListCmd() *cobra.Command {
-	var apps []string
+	var apps, appAuth []string
 	cmd := &cobra.Command{
 		Use:           "list",
 		Short:         "list the apps and whether each one is up",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			auth, err := ParseAppAuth(appAuth)
+			if err != nil {
+				return err
+			}
 			var pc probeCache
 			panels := Discover()
 			if len(apps) > 0 {
-				extra, errs := discoverApps(c.Context(), apps, nil, TakenMounts(panels))
+				extra, errs := discoverApps(c.Context(), apps, nil, TakenMounts(panels), auth)
 				for _, err := range errs {
 					fmt.Fprintf(c.ErrOrStderr(), "apps: skipping --app: %v\n", err)
 				}
@@ -150,6 +162,8 @@ func newListCmd() *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&apps, "app", nil,
 		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable")
+	cmd.Flags().StringArrayVar(&appAuth, "app-auth", nil,
+		"operator-authorized auth tier for a third-party mount: <mount>=public|system|custom, repeatable")
 	return cmd
 }
 

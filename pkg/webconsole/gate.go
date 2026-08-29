@@ -26,7 +26,13 @@ func isOpenPath(p string) bool {
 	case "/healthz", "/login", "/api/login", "/api/logout", "/meta":
 		return true
 	}
-	return strings.HasPrefix(p, "/login/") || strings.HasPrefix(p, "/meta/")
+	if strings.HasPrefix(p, "/login/") {
+		return true
+	}
+	if rest := strings.TrimPrefix(p, "/meta/"); rest != p {
+		return rest != "" && !strings.ContainsRune(rest, '/')
+	}
+	return false
 }
 
 // firstSegment returns the leading path segment ("/relay/api/x" -> "relay").

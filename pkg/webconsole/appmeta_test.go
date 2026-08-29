@@ -4,9 +4,13 @@
 package webconsole
 
 import (
+	"context"
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/atlas"
 )
@@ -132,6 +136,13 @@ func TestValidate(t *testing.T) {
 	bad("no port", func(m *AppMeta) { m.Port = 0 }, nil)
 	bad("bad auth", func(m *AppMeta) { m.Auth = "root" }, nil)
 	bad("relative login_path", func(m *AppMeta) { m.Auth = AuthCustom; m.LoginPath = "login" }, nil)
+	for _, mount := range []string{".", "..", "{app}", "{app...}", "%2f", "a?b", "a#b", "a\tb", "-leading"} {
+		bad("unsafe mount "+mount, func(m *AppMeta) { m.Mount = mount }, nil)
+	}
+	bad("label control", func(m *AppMeta) { m.Label = "safe\x1b[2J" }, nil)
+	bad("tip control", func(m *AppMeta) { m.Tip = "line\nbreak" }, nil)
+	bad("start control", func(m *AppMeta) { m.Start = []string{"app", "x\nnext"} }, nil)
+	bad("start oversized", func(m *AppMeta) { m.Start = []string{"app", strings.Repeat("x", 1025)} }, nil)
 
 	// The icon is interpolated into an SVG d= attribute, so it must never be
 	// able to close one.
@@ -148,6 +159,61 @@ func TestValidate(t *testing.T) {
 		if err := m.Validate(map[string]bool{}); err != nil {
 			t.Errorf("icon %q rejected: %v", icon, err)
 		}
+	}
+}
+
+func TestParseAppAuthRequiresExplicitValidOperatorPolicy(t *testing.T) {
+	got, err := ParseAppAuth([]string{"fixture=public", "private=system", "login=custom"})
+	if err != nil || got["fixture"] != AuthPublic || got["login"] != AuthCustom {
+		t.Fatalf("ParseAppAuth = %#v, %v", got, err)
+	}
+	for _, values := range [][]string{{"fixture"}, {"fixture=root"}, {"{x}=public"}, {"fixture=public", "fixture=custom"}} {
+		if _, err := ParseAppAuth(values); err == nil {
+			t.Errorf("ParseAppAuth(%q) succeeded", values)
+		}
+	}
+}
+
+func buildFixtureApp(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fixtureapp")
+	if err := exec.Command("go", "build", "-o", bin, "./testdata/fixtureapp").Run(); err != nil {
+		t.Fatalf("build fixtureapp: %v", err)
+	}
+	return bin
+}
+
+func TestProbeAppIsExecutableStdoutOnlyAndStrictlyBounded(t *testing.T) {
+	bin := buildFixtureApp(t)
+	t.Setenv("FIXTURE_META_MODE", "")
+	m, err := ProbeApp(context.Background(), bin)
+	if err != nil || m.SchemaVersion != MetaSchema || m.Name != "fixture" {
+		t.Fatalf("normal probe = %+v, %v", m, err)
+	}
+
+	t.Setenv("FIXTURE_META_MODE", "exact-limit")
+	if _, err := ProbeApp(context.Background(), bin); err != nil {
+		t.Fatalf("exact-limit probe: %v", err)
+	}
+
+	t.Setenv("FIXTURE_META_MODE", "oversize")
+	if _, err := ProbeApp(context.Background(), bin); !errors.Is(err, errMetaOutputTooLarge) {
+		t.Fatalf("oversize probe = %v, want errMetaOutputTooLarge", err)
+	}
+}
+
+func TestProbeAppTimeoutIsBounded(t *testing.T) {
+	bin := buildFixtureApp(t)
+	t.Setenv("FIXTURE_META_MODE", "sleep")
+	prior := metaProbeTimeout
+	metaProbeTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { metaProbeTimeout = prior })
+	started := time.Now()
+	if _, err := ProbeApp(context.Background(), bin); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("timeout probe = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("timeout took %s", elapsed)
 	}
 }
 

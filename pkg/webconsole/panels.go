@@ -5,6 +5,7 @@ package webconsole
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -31,6 +32,9 @@ type Panel struct {
 	// answer a stopped tile shows, so the reader never has to go find the
 	// command that would fix it.
 	Start []string `json:"start,omitempty"`
+	// StartIsFull distinguishes third-party metadata's complete argv from the
+	// atlas convention, whose Start is argv after `bashy`.
+	StartIsFull bool `json:"-"`
 
 	// Icon is SVG path data on a 24 grid, or one emoji. Empty means the
 	// launcher falls back to its own mark for a known name, then to the
@@ -59,12 +63,24 @@ type Panel struct {
 	handler http.Handler
 }
 
-// StartHint renders Start as the command a human would type.
+// StartHint renders the complete argv as a command a human can safely copy.
 func (p Panel) StartHint() string {
 	if len(p.Start) == 0 {
 		return ""
 	}
-	return "bashy " + strings.Join(p.Start, " ")
+	parts := make([]string, len(p.Start))
+	for i, arg := range p.Start {
+		if arg != "" && !strings.ContainsAny(arg, " \t\r\n\"'\\$`;&|<>*?()[]{}!") {
+			parts[i] = arg
+		} else {
+			parts[i] = strconv.Quote(arg)
+		}
+	}
+	hint := strings.Join(parts, " ")
+	if !p.StartIsFull {
+		hint = "bashy " + hint
+	}
+	return hint
 }
 
 // builtinPanels are the console's OWN panels. They are not declared in the atlas
@@ -220,12 +236,13 @@ func TakenMounts(panels []Panel) map[string]bool {
 // unmountable files panel. A spec that fails is REPORTED and dropped, never
 // silently ignored — a tile that quietly vanished is indistinguishable from one
 // that was never asked for.
-func discoverApps(ctx context.Context, specs []string, probe ProbeFunc, taken map[string]bool) ([]Panel, []error) {
+func discoverApps(ctx context.Context, specs []string, probe ProbeFunc, taken map[string]bool, authOverrides map[string]string) ([]Panel, []error) {
 	if probe == nil {
 		probe = ProbeApp
 	}
 	var out []Panel
 	var errs []error
+	usedAuth := map[string]bool{}
 	for _, spec := range specs {
 		bin, port, err := ParseAppSpec(spec)
 		if err != nil {
@@ -238,6 +255,10 @@ func discoverApps(ctx context.Context, specs []string, probe ProbeFunc, taken ma
 			// gets a tile when the operator supplied the one fact we cannot
 			// guess. Without a port there is nothing to proxy, so that IS fatal
 			// for this spec.
+			if !errors.Is(perr, ErrNotAnApp) {
+				errs = append(errs, fmt.Errorf("%s: metadata probe failed: %w", bin, perr))
+				continue
+			}
 			if port == 0 {
 				errs = append(errs, fmt.Errorf("%s: %w, and no port given (use --app %s@<port>)", bin, perr, bin))
 				continue
@@ -245,25 +266,64 @@ func discoverApps(ctx context.Context, specs []string, probe ProbeFunc, taken ma
 			meta = AppMeta{}
 		}
 		meta.Normalize(filepath.Base(bin), port)
+		if auth, ok := authOverrides[meta.Mount]; ok {
+			meta.Auth = auth
+			usedAuth[meta.Mount] = true
+		}
+		if meta.Auth != AuthCustom {
+			meta.LoginPath = ""
+		}
 		if err := meta.Validate(taken); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", bin, err))
 			continue
 		}
 		taken[meta.Mount] = true
 		out = append(out, Panel{
-			Name:      meta.Mount,
-			Label:     meta.Label,
-			Path:      "/" + meta.Mount + "/",
-			Mode:      atlas.WebProxy,
-			Port:      meta.Port,
-			Start:     meta.Start,
-			Icon:      meta.Icon,
-			Tip:       meta.Tip,
-			Auth:      meta.Auth,
-			LoginPath: meta.LoginPath,
-			Source:    "app",
-			Available: true,
+			Name:        meta.Mount,
+			Label:       meta.Label,
+			Path:        "/" + meta.Mount + "/",
+			Mode:        atlas.WebProxy,
+			Port:        meta.Port,
+			Start:       meta.Start,
+			StartIsFull: true,
+			Icon:        meta.Icon,
+			Tip:         meta.Tip,
+			Auth:        meta.Auth,
+			LoginPath:   meta.LoginPath,
+			Source:      "app",
+			Available:   true,
 		})
 	}
+	for mount := range authOverrides {
+		if !usedAuth[mount] {
+			errs = append(errs, fmt.Errorf("--app-auth %s has no accepted --app mount", mount))
+		}
+	}
 	return out, errs
+}
+
+// ParseAppAuth turns explicit operator policy (`mount=tier`) into the only
+// source allowed to weaken a third-party panel below system authentication.
+func ParseAppAuth(values []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, value := range values {
+		mount, auth, ok := strings.Cut(value, "=")
+		mount, auth = strings.TrimSpace(mount), strings.TrimSpace(auth)
+		if !ok || mount == "" || auth == "" {
+			return nil, fmt.Errorf("--app-auth %q: want <mount>=public|system|custom", value)
+		}
+		if err := validMount(mount); err != nil {
+			return nil, fmt.Errorf("--app-auth %q: %w", value, err)
+		}
+		switch auth {
+		case AuthPublic, AuthSystem, AuthCustom:
+		default:
+			return nil, fmt.Errorf("--app-auth %q: unknown tier %q", value, auth)
+		}
+		if _, exists := out[mount]; exists {
+			return nil, fmt.Errorf("--app-auth %q: mount %q is repeated", value, mount)
+		}
+		out[mount] = auth
+	}
+	return out, nil
 }

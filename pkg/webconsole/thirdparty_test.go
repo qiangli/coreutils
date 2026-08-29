@@ -6,6 +6,7 @@ package webconsole
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -164,6 +165,9 @@ func TestMetaIsReachableWithoutIdentity(t *testing.T) {
 	if got := do(h, "GET", "/meta/shown", lan, nil).Code; got != http.StatusOK {
 		t.Errorf("/meta/shown = %d, want 200", got)
 	}
+	if got := do(h, "GET", "/meta/shown/deeper", lan, nil).Code; got != http.StatusForbidden {
+		t.Errorf("unmatched deep /meta path = %d, want gated 403", got)
+	}
 }
 
 // The projection must not leak host internals, and must stay cacheable.
@@ -239,7 +243,7 @@ func TestDiscoverAppsFallbackAndErrors(t *testing.T) {
 	}
 
 	// No meta, but a port: still a tile, named for the binary.
-	got, errs := discoverApps(context.Background(), []string{"/bin/classgo@8080"}, notAnApp, map[string]bool{})
+	got, errs := discoverApps(context.Background(), []string{"/bin/classgo@8080"}, notAnApp, map[string]bool{}, nil)
 	if len(errs) != 0 || len(got) != 1 {
 		t.Fatalf("fallback rung: panels=%d errs=%v", len(got), errs)
 	}
@@ -248,20 +252,57 @@ func TestDiscoverAppsFallbackAndErrors(t *testing.T) {
 	}
 
 	// No meta and no port: nothing to proxy, so report it.
-	got, errs = discoverApps(context.Background(), []string{"/bin/classgo"}, notAnApp, map[string]bool{})
+	got, errs = discoverApps(context.Background(), []string{"/bin/classgo"}, notAnApp, map[string]bool{}, nil)
 	if len(got) != 0 || len(errs) != 1 {
 		t.Fatalf("portless spec: panels=%d errs=%v", len(got), errs)
 	}
 
 	// A declared app keeps its own label and tip.
-	got, _ = discoverApps(context.Background(), []string{"/bin/classgo"}, speaks, map[string]bool{})
+	got, _ = discoverApps(context.Background(), []string{"/bin/classgo"}, speaks, map[string]bool{}, nil)
 	if len(got) != 1 || got[0].Label != "Declared" || got[0].Tip != "hi" || got[0].Port != 7777 {
 		t.Fatalf("declared panel = %+v", got)
 	}
 
 	// A mount already claimed by a builtin is refused, with a reason.
-	_, errs = discoverApps(context.Background(), []string{"/bin/relay@1"}, notAnApp, map[string]bool{"relay": true})
+	_, errs = discoverApps(context.Background(), []string{"/bin/relay@1"}, notAnApp, map[string]bool{"relay": true}, nil)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "already claimed") {
 		t.Fatalf("duplicate mount: errs=%v", errs)
+	}
+}
+
+func TestDiscoverAppsFallsBackOnlyForANonContractBinary(t *testing.T) {
+	operational := errors.New("permission denied")
+	probe := func(context.Context, string) (AppMeta, error) { return AppMeta{}, operational }
+	got, errs := discoverApps(context.Background(), []string{"/bin/classgo@8080"}, probe, map[string]bool{}, nil)
+	if len(got) != 0 || len(errs) != 1 || !errors.Is(errs[0], operational) {
+		t.Fatalf("operational failure published a panel: got=%#v errs=%v", got, errs)
+	}
+}
+
+func TestThirdPartyCannotSelfDowngradeAuth(t *testing.T) {
+	probe := func(context.Context, string) (AppMeta, error) {
+		return AppMeta{SchemaVersion: MetaSchema, Mount: "fixture", Port: 8080, Auth: AuthPublic}, nil
+	}
+	got, errs := discoverApps(context.Background(), []string{"fixture"}, probe, map[string]bool{}, nil)
+	if len(errs) != 0 || len(got) != 1 || got[0].Auth != AuthSystem {
+		t.Fatalf("metadata self-downgrade = %#v errs=%v", got, errs)
+	}
+
+	got, errs = discoverApps(context.Background(), []string{"fixture"}, probe, map[string]bool{}, map[string]string{"fixture": AuthPublic})
+	if len(errs) != 0 || len(got) != 1 || got[0].Auth != AuthPublic {
+		t.Fatalf("operator public override = %#v errs=%v", got, errs)
+	}
+}
+
+func TestThirdPartyStartHintUsesCompleteArgv(t *testing.T) {
+	probe := func(context.Context, string) (AppMeta, error) {
+		return AppMeta{SchemaVersion: MetaSchema, Mount: "fixture", Port: 8080, Start: []string{"/opt/My App/bin", "serve", "--label=x y"}}, nil
+	}
+	got, errs := discoverApps(context.Background(), []string{"fixture"}, probe, map[string]bool{}, nil)
+	if len(errs) != 0 || len(got) != 1 {
+		t.Fatalf("discover = %#v errs=%v", got, errs)
+	}
+	if hint := got[0].StartHint(); hint != `"/opt/My App/bin" serve "--label=x y"` {
+		t.Fatalf("StartHint = %q", hint)
 	}
 }

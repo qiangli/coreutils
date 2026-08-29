@@ -4,6 +4,7 @@
 package webconsole
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,10 +53,19 @@ var ErrNotAnApp = errors.New("does not speak " + MetaSchema)
 
 // metaProbeTimeout bounds the exec. A program that cannot describe itself in
 // three seconds is not one the launcher should block its start page on.
-const metaProbeTimeout = 3 * time.Second
+var metaProbeTimeout = 3 * time.Second
 
 // metaProbeLimit caps what we read from a probed binary's stdout.
 const metaProbeLimit = 64 << 10
+
+const (
+	metaNameLimit  = 64
+	metaLabelLimit = 128
+	metaTipLimit   = 512
+	metaStartLimit = 4 << 10
+)
+
+var errMetaOutputTooLarge = errors.New("meta output exceeds 64 KiB")
 
 // AppMeta is one self-description. Everything but the transport facts is
 // optional: a program that answers nothing but a port still gets a usable tile.
@@ -70,9 +80,9 @@ type AppMeta struct {
 	Mount string   `json:"mount,omitempty"` // default: Name. ONE path segment
 	Mode  string   `json:"mode,omitempty"`  // proxy — the only mode a third party can be
 	Port  int      `json:"port,omitempty"`
-	Start []string `json:"start,omitempty"` // the stopped-tile start hint
+	Start []string `json:"start,omitempty"` // complete argv for the stopped-tile start hint
 
-	Auth      string `json:"auth,omitempty"`       // public | system | custom
+	Auth      string `json:"auth,omitempty"`       // request only; operator --app-auth is authoritative
 	LoginPath string `json:"login_path,omitempty"` // custom only, app-relative
 }
 
@@ -137,18 +147,52 @@ func ProbeApp(ctx context.Context, bin string) (AppMeta, error) {
 
 	cmd := exec.CommandContext(ctx, path, "meta", "--json")
 	cmd.Stdin = nil
-	out, err := cmd.Output() // stdout only — see the doc comment
+	cmd.WaitDelay = 500 * time.Millisecond
+	out := &cappedMetaOutput{limit: metaProbeLimit}
+	cmd.Stdout = out // stdout only — see the doc comment
+	err = cmd.Run()
+	if out.tooLarge {
+		return AppMeta{}, fmt.Errorf("%s meta: %w", bin, errMetaOutputTooLarge)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return AppMeta{}, fmt.Errorf("%s meta: timed out after %s", bin, metaProbeTimeout)
 		}
-		return AppMeta{}, fmt.Errorf("%s meta: %w", bin, ErrNotAnApp)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return AppMeta{}, fmt.Errorf("%s meta: %w", bin, ErrNotAnApp)
+		}
+		return AppMeta{}, fmt.Errorf("%s meta: %w", bin, err)
 	}
-	if len(out) > metaProbeLimit {
-		out = out[:metaProbeLimit]
-	}
-	return ParseMeta(out)
+	return ParseMeta(out.Bytes())
 }
+
+// cappedMetaOutput bounds memory while the child is still writing. Returning
+// an error closes os/exec's reader side of the pipe, so a producer cannot block
+// us by continuing forever after the cap binds.
+type cappedMetaOutput struct {
+	buf      bytes.Buffer
+	limit    int
+	tooLarge bool
+}
+
+func (w *cappedMetaOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := w.limit + 1 - w.buf.Len()
+	if remaining > 0 {
+		if remaining < len(p) {
+			p = p[:remaining]
+		}
+		_, _ = w.buf.Write(p)
+	}
+	if w.buf.Len() > w.limit {
+		w.tooLarge = true
+		return n, errMetaOutputTooLarge
+	}
+	return n, nil
+}
+
+func (w *cappedMetaOutput) Bytes() []byte { return w.buf.Bytes() }
 
 // ParseMeta decodes a probe result, demanding a positive identification.
 func ParseMeta(b []byte) (AppMeta, error) {
@@ -194,9 +238,9 @@ func (m *AppMeta) Normalize(binName string, specPort int) {
 	if m.Mode == "" {
 		m.Mode = atlas.WebProxy
 	}
-	if m.Auth == "" {
-		m.Auth = AuthSystem
-	}
+	// Metadata reports presentation and transport facts; it does not author
+	// access policy. discoverApps applies an explicit operator override later.
+	m.Auth = AuthSystem
 	// An explicit --app <bin>@<port> wins: the operator is looking at this host
 	// and the binary is describing itself in the abstract.
 	if specPort != 0 {
@@ -215,8 +259,8 @@ func (m AppMeta) Validate(taken map[string]bool) error {
 	if m.Mount == "" {
 		return errors.New("no mount and no name to derive one from")
 	}
-	if strings.ContainsAny(m.Mount, "/\\") || m.Mount != strings.TrimSpace(m.Mount) {
-		return fmt.Errorf("mount %q must be one path segment", m.Mount)
+	if err := validMount(m.Mount); err != nil {
+		return err
 	}
 	if consoleReserved[m.Mount] {
 		return fmt.Errorf("mount %q is reserved by the console", m.Mount)
@@ -246,8 +290,74 @@ func (m AppMeta) Validate(taken map[string]bool) error {
 	if err := validIcon(m.Icon); err != nil {
 		return err
 	}
-	if m.LoginPath != "" && !strings.HasPrefix(m.LoginPath, "/") {
-		return fmt.Errorf("login_path %q must be app-relative and start with '/'", m.LoginPath)
+	if err := validDisplay("name", m.Name, metaNameLimit); err != nil {
+		return err
+	}
+	if err := validDisplay("label", m.Label, metaLabelLimit); err != nil {
+		return err
+	}
+	if err := validDisplay("tip", m.Tip, metaTipLimit); err != nil {
+		return err
+	}
+	if err := validStart(m.Start); err != nil {
+		return err
+	}
+	if m.LoginPath != "" {
+		if m.Auth != AuthCustom {
+			return errors.New("login_path is valid only with operator-selected custom auth")
+		}
+		if !strings.HasPrefix(m.LoginPath, "/") || strings.HasPrefix(m.LoginPath, "//") || hasControl(m.LoginPath) {
+			return fmt.Errorf("login_path %q must be an app-relative absolute path", m.LoginPath)
+		}
+	}
+	return nil
+}
+
+func validMount(mount string) error {
+	if mount == "." || mount == ".." || len(mount) > metaNameLimit {
+		return fmt.Errorf("mount %q must be a safe one-segment slug", mount)
+	}
+	for i, r := range mount {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || (i > 0 && (r == '.' || r == '_' || r == '-')) {
+			continue
+		}
+		return fmt.Errorf("mount %q must be a safe one-segment slug", mount)
+	}
+	return nil
+}
+
+func hasControl(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func validDisplay(field, value string, limit int) error {
+	if len(value) > limit {
+		return fmt.Errorf("%s exceeds %d UTF-8 bytes", field, limit)
+	}
+	if hasControl(value) {
+		return fmt.Errorf("%s contains terminal control characters", field)
+	}
+	return nil
+}
+
+func validStart(argv []string) error {
+	if len(argv) > 32 {
+		return errors.New("start exceeds 32 arguments")
+	}
+	total := 0
+	for i, arg := range argv {
+		total += len(arg)
+		if (i == 0 && arg == "") || len(arg) > 1024 || hasControl(arg) {
+			return errors.New("start contains an empty program, oversized argument, or terminal control")
+		}
+	}
+	if total > metaStartLimit {
+		return fmt.Errorf("start exceeds %d UTF-8 bytes", metaStartLimit)
 	}
 	return nil
 }
@@ -271,6 +381,10 @@ func validIcon(icon string) error {
 // app speaks. This is what `bashy <verb> meta` prints, and what keeps the two
 // halves from drifting into two schemas.
 func FromSurface(name string, w atlas.WebSurface) AppMeta {
+	start := []string(nil)
+	if len(w.Start) > 0 {
+		start = append([]string{"bashy"}, w.Start...)
+	}
 	m := AppMeta{
 		SchemaVersion: MetaSchema,
 		Name:          name,
@@ -280,7 +394,7 @@ func FromSurface(name string, w atlas.WebSurface) AppMeta {
 		Mount:         w.Mount,
 		Mode:          w.Mode,
 		Port:          w.Port,
-		Start:         w.Start,
+		Start:         start,
 		Auth:          AuthSystem,
 	}
 	if m.Label == "" {
