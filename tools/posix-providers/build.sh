@@ -57,6 +57,38 @@ provider_prepare_localedef_makefile() {
   mv "$_provider_makefile_tmp" "$_provider_makefile"
 }
 
+# CUPS 2.4.7's libcups initialization changes SIGPIPE to SIG_IGN process-wide
+# on platforms without SO_NOSIGPIPE. POSIX lp declares ASYNCHRONOUS EVENTS as
+# Default, so a utility invocation must preserve the inherited disposition.
+# Apply the small, pinned source correction before building the client and
+# record its identity beside the upstream source identity.
+provider_prepare_lp_source() {
+  _provider_lp_src=$1
+  _provider_lp_record=$2
+  _provider_lp_patch=$here/patches/cups-2.4.7-posix-sigpipe.patch
+  _provider_lp_patch_sha=4846fba634296d6ec4cc642637bb4ee3d33d43bec7ad7e3ba9ba56762d3cff71
+  [ -f "$_provider_lp_patch" ] || {
+    printf 'posix-provider: lp source correction is missing: %s\n' "$_provider_lp_patch" >&2
+    return 1
+  }
+  _provider_lp_actual=$(provider_sha256 "$_provider_lp_patch")
+  [ "$_provider_lp_actual" = "$_provider_lp_patch_sha" ] || {
+    printf 'posix-provider: lp source correction digest mismatch: got %s want %s\n' \
+      "$_provider_lp_actual" "$_provider_lp_patch_sha" >&2
+    return 1
+  }
+  command -v patch >/dev/null 2>&1 || {
+    printf 'posix-provider: patch is required to prepare lp\n' >&2
+    return 1
+  }
+  (cd "$_provider_lp_src" && patch -f -p1 < "$_provider_lp_patch") || {
+    printf 'posix-provider: lp POSIX SIGPIPE correction did not apply cleanly\n' >&2
+    return 1
+  }
+  printf 'recipe_patch\t%s\t%s\n' \
+    "patches/cups-2.4.7-posix-sigpipe.patch" "$_provider_lp_patch_sha" >> "$_provider_lp_record"
+}
+
 # provider_recipe_current PROVENANCE EXPECTED_REVISION
 # Empty revisions retain the legacy cache identity. A non-empty revision is a
 # product build-recipe identity and must match exactly before a cached provider
@@ -325,6 +357,8 @@ case "$cmd" in
           fail "lp needs a TLS library's headers (CUPS 2.4.7 cannot build without one, even with --with-tls=no): install libssl-dev or libgnutls28-dev"
       }
     fi
+    provider_prepare_lp_source "$src" "$work/extra-$cmd.tsv" ||
+      fail "cannot prepare lp $version for POSIX signal inheritance"
     (cd "$src" && ./configure --disable-shared --disable-dbus --disable-pam \
        --disable-libusb --without-rcdir --without-systemd >/dev/null &&
        make -C cups libcups.a >/dev/null &&

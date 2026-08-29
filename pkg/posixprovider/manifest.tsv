@@ -50,7 +50,7 @@ strip	2.42	GPL-3.0	linux,darwin,windows	f6e4d41fd5fc778b06b7891457b3620da5ecea10
 ex	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737e9e8bfa4cc298dee061df	https://github.com/vim/vim/archive/refs/tags/v9.1.0016.tar.gz
 vi	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737e9e8bfa4cc298dee061df	https://github.com/vim/vim/archive/refs/tags/v9.1.0016.tar.gz
 # pax: Debian sources 1:20201030 from a non-GNU upstream; pin pending source identification.
-lp	2.4.7	Apache-2.0	linux,darwin	dd54228dd903526428ce7e37961afaed230ad310788141da75cebaa08362cf6c	https://github.com/OpenPrinting/cups/releases/download/v2.4.7/cups-2.4.7-source.tar.gz
+lp	2.4.7	Apache-2.0	linux,darwin	dd54228dd903526428ce7e37961afaed230ad310788141da75cebaa08362cf6c	https://github.com/OpenPrinting/cups/releases/download/v2.4.7/cups-2.4.7-source.tar.gz	posix-sigpipe-v1
 localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926	https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz	2
 #
 # lp: CUPS 2.4.7 is exactly what Ubuntu 24.04 ships (cups-client 2.4.7-1.2ubuntu7.14),

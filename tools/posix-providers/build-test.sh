@@ -28,6 +28,54 @@ grep -q './configure --prefix=/usr --with-glibc=' "$here/build.sh" || {
   exit 1
 }
 
+# The lp recipe must remove CUPS' process-wide SIGPIPE override, fail closed if
+# the pinned source shape drifts, and record the exact local correction digest.
+mkdir -p "$tmp/cups/cups"
+: > "$tmp/cups/cups/http.c"
+_lp_line=1
+while [ "$_lp_line" -le 1528 ]; do
+  printf '/* fixture padding */\n' >> "$tmp/cups/cups/http.c"
+  _lp_line=$((_lp_line + 1))
+done
+cat >> "$tmp/cups/cups/http.c" <<'EOF'
+void
+httpInitialize(void)
+{
+#ifdef _WIN32
+  WSAStartup(MAKEWORD(2,2), &winsockdata);
+
+#elif !defined(SO_NOSIGPIPE)
+ /*
+  * Ignore SIGPIPE signals...
+  */
+
+#  ifdef HAVE_SIGSET
+  sigset(SIGPIPE, SIG_IGN);
+
+#  elif defined(HAVE_SIGACTION)
+  struct sigaction	action;		/* POSIX sigaction data */
+
+
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &action, NULL);
+
+#  else
+  signal(SIGPIPE, SIG_IGN);
+#  endif /* !SO_NOSIGPIPE */
+#endif /* _WIN32 */
+
+#  ifdef HAVE_TLS
+EOF
+provider_prepare_lp_source "$tmp/cups" "$tmp/lp-extra.tsv"
+! grep -q 'SIGPIPE, SIG_IGN' "$tmp/cups/cups/http.c"
+grep -q '^recipe_patch	patches/cups-2.4.7-posix-sigpipe.patch	4846fba634296d6ec4cc642637bb4ee3d33d43bec7ad7e3ba9ba56762d3cff71$' \
+  "$tmp/lp-extra.tsv"
+if provider_prepare_lp_source "$tmp/cups" "$tmp/lp-extra-2.tsv" >/dev/null 2>&1; then
+  echo 'lp source correction unexpectedly applied twice' >&2
+  exit 1
+fi
+
 printf 'recipe_revision\t1\n' > "$tmp/provenance.tsv"
 if provider_recipe_current "$tmp/provenance.tsv" 2; then
   echo 'stale localedef recipe revision was accepted' >&2

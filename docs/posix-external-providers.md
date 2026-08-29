@@ -155,6 +155,12 @@ Never mirror or republish the built binaries. The full posture is in the header
 of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 `docs/posix-provider-distribution-policy.md`.
 
+The pinned CUPS 2.4.7 `lp` build carries one repository-pinned Apache-2.0
+source correction: libcups must not replace the inherited SIGPIPE disposition
+with `SIG_IGN`, because POSIX specifies the utility's asynchronous-event
+behavior as Default. The recipe verifies and records the correction's digest,
+and its manifest recipe revision prevents reuse of an older uncorrected cache.
+
 ## Files
 
 | Path | Role |
@@ -163,5 +169,6 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
 | `cmds/posixproviders/` | the ten registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
+| `tools/posix-providers/patches/` | pinned, digest-verified provider source corrections recorded in provenance |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
 | `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |
