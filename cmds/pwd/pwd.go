@@ -9,11 +9,13 @@
 package pwdcmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -83,11 +85,25 @@ func logicalDir(rc *tool.RunContext) string {
 	if !filepath.IsAbs(pwd) || hasDotComponent(pwd) {
 		return ""
 	}
-	// When the caller guarantees that rc.Dir is the process cwd, identical
-	// logical metadata is already sufficient.  Avoid materializing a lookup
-	// longer than PATH_MAX merely to prove a pathname the host just supplied.
-	if rc.DirIsProcessCwd && pwd == rc.Dir {
-		return pwd
+	if rc.DirIsProcessCwd {
+		// PWD is only authoritative while it still names the process cwd. It
+		// may have been removed or repointed after a logical cd; comparing it
+		// with "." detects both cases without trusting rc.Dir's spelling.
+		pwdInfo, err := os.Stat(pwd)
+		if err == nil {
+			cwdInfo, cwdErr := os.Stat(".")
+			if cwdErr == nil && os.SameFile(pwdInfo, cwdInfo) {
+				return pwd
+			}
+			return ""
+		}
+		// A kernel-owned current directory can have a valid logical name whose
+		// absolute spelling exceeds PATH_MAX. Preserve that established case;
+		// shorter missing or inaccessible names must fall back to physical pwd.
+		if pwd == rc.Dir && errors.Is(err, syscall.ENAMETOOLONG) {
+			return pwd
+		}
+		return ""
 	}
 	pwdInfo, err := os.Stat(pwd)
 	if err != nil {

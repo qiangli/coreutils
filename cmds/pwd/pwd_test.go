@@ -194,6 +194,39 @@ func TestPwdLogicalRejectsInvalidPWD(t *testing.T) {
 	}
 }
 
+func TestPwdLogicalRejectsRepointedPWD(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realOne := t.TempDir()
+	realTwo := t.TempDir()
+	link := filepath.Join(t.TempDir(), "logical")
+	if err := os.Symlink(realOne, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation not permitted: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if err := os.Chdir(realOne); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	rc := &tool.RunContext{Dir: link, DirIsProcessCwd: true, Env: []string{"PWD=" + link}}
+	if got := logicalDir(rc); got != link {
+		t.Fatalf("valid logical PWD = %q, want %q", got, link)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realTwo, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := logicalDir(rc); got != "" {
+		t.Fatalf("repointed logical PWD was accepted: %q", got)
+	}
+}
+
 func TestPwdIgnoresOperands(t *testing.T) {
 	dir := t.TempDir()
 	physical, err := filepath.EvalSymlinks(dir)
