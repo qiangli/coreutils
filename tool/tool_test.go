@@ -762,3 +762,13 @@ func TestPathNativeProcessCwd(t *testing.T) {
 		t.Errorf("absolute operand never consults Dir: Path(%q) = %q", abs, got)
 	}
 }
+
+func TestPathPreservesTrailingDirectorySeparator(t *testing.T) {
+	sep := string(filepath.Separator)
+	rc := &RunContext{Dir: sep + "work"}
+	operand := "link" + sep
+	want := filepath.Join(sep+"work", "link") + sep
+	if got := rc.Path(operand); got != want {
+		t.Fatalf("Path(%q) = %q, want terminating directory separator in %q", operand, got, want)
+	}
+}

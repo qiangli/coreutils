@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -129,10 +130,22 @@ func (rc *RunContext) Path(operand string) string {
 		return normalizePath(operand)
 	}
 	joined := normalizePath(filepath.Join(rc.Dir, operand))
+	// A terminating separator is semantic, not cosmetic: POSIX pathname
+	// resolution requires the preceding component to resolve as a directory.
+	// filepath.Join cleans it away, which can turn "symlink/" back into the
+	// symlink itself and let an applet's no-follow policy observe the wrong
+	// object. Preserve one native separator after joining.
+	if hasTrailingPathSeparator(operand) && !hasTrailingPathSeparator(joined) {
+		joined += string(filepath.Separator)
+	}
 	if rc.DirIsProcessCwd && len(joined) > pathLengthLimit {
 		return normalizePath(operand)
 	}
 	return joined
+}
+
+func hasTrailingPathSeparator(path string) bool {
+	return len(path) > 0 && os.IsPathSeparator(path[len(path)-1])
 }
 
 // ResolveExecutable resolves name as an executable file against the

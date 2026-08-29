@@ -490,6 +490,7 @@ func TestFindGeneralPathnameResolution(t *testing.T) {
 		{"ga500-h", []string{"-H", "relative/nested", "-print"}, "relative/nested\nrelative/nested/file\n"},
 		{"ga500-l", []string{"-L", "relative/nested", "-print"}, "relative/nested\nrelative/nested/file\n"},
 		{"ga501", []string{"absolute/nested", "-print"}, "absolute/nested\nabsolute/nested/file\n"},
+		{"ga502-default", []string{"relative/", "-print"}, "relative/\nrelative/nested\nrelative/nested/file\n"},
 		{"ga502-h", []string{"-H", "relative/", "-print"}, "relative/\nrelative/nested\nrelative/nested/file\n"},
 		{"ga502-l", []string{"-L", "relative/", "-print"}, "relative/\nrelative/nested\nrelative/nested/file\n"},
 		{"ga503-h", []string{"-H", "relative", "-print"}, "relative\nrelative/nested\nrelative/nested/file\n"},
