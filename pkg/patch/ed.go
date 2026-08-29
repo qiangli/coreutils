@@ -110,6 +110,9 @@ func ApplyEdIfdef(content, script []byte, define string) ([]byte, error) {
 }
 
 func applyEd(content, script []byte, define string) ([]byte, error) {
+	// Keep diff -e conditional output byte-for-byte consistent with the
+	// POSIX -D form used for the other supported difference listings.
+	endif := "#endif /* " + define + " */"
 	if len(script) == 0 {
 		return append([]byte(nil), content...), nil
 	}
@@ -191,7 +194,7 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 			replacement := []string(nil)
 			if define != "" {
 				replacement = append([]string{"#ifndef " + define}, lines[first-1:last]...)
-				replacement = append(replacement, "#endif")
+				replacement = append(replacement, endif)
 			}
 			lines = spliceLines(lines, first-1, last, replacement)
 			current = min(first, len(lines))
@@ -212,7 +215,7 @@ func applyEd(content, script []byte, define string) ([]byte, error) {
 				replacement = append([]string{"#ifndef " + define}, lines[first-1:last]...)
 				replacement = append(replacement, "#else")
 				replacement = append(replacement, text...)
-				replacement = append(replacement, "#endif")
+				replacement = append(replacement, endif)
 			}
 			lines = spliceLines(lines, first-1, last, replacement)
 			current = first - 1 + len(replacement)
@@ -276,7 +279,7 @@ func conditionalAddition(text []string, define string) []string {
 	out := make([]string, 0, len(text)+2)
 	out = append(out, "#ifdef "+define)
 	out = append(out, text...)
-	out = append(out, "#endif")
+	out = append(out, "#endif /* "+define+" */")
 	return out
 }
 

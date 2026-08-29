@@ -69,7 +69,7 @@ func TestApplyEdIfdefAndDotProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#ifndef FEATURE\nold\n#else\n.\n#endif\n"
+	want := "#ifndef FEATURE\nold\n#else\n.\n#endif /* FEATURE */\n"
 	if string(got) != want {
 		t.Fatalf("ifdef ed=%q want=%q", got, want)
 	}
@@ -97,7 +97,7 @@ func TestApplyIfdefInsertionDeletionAndReplacement(t *testing.T) {
 	if !res.AllApplied() {
 		t.Fatalf("reports=%+v", res.Reports)
 	}
-	want := []string{"#ifndef FEATURE", "gone", "#endif", "same", "#ifndef FEATURE", "old", "#else", "new", "added", "#endif"}
+	want := []string{"#ifndef FEATURE", "gone", "#endif /* FEATURE */", "same", "#ifndef FEATURE", "old", "#else", "new", "added", "#endif /* FEATURE */"}
 	if strings.Join(res.Lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines=%q want=%q", res.Lines, want)
 	}

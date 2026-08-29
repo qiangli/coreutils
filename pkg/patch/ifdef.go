@@ -4,6 +4,9 @@ package patch
 // conditionals named by define. It uses the same exact/fuzz/whitespace matcher
 // as ordinary application, so -D never guesses at a location.
 func ApplyIfdef(oldLines []string, oldNoFinalNewline bool, hunks []Hunk, opts ApplyOptions, define string) Result {
+	// POSIX specifies the closing control line in this exact form; the
+	// identifying comment is observable output, not optional decoration.
+	endif := "#endif /* " + define + " */"
 	work := make([]Hunk, len(hunks))
 	for i, h := range hunks {
 		if opts.Reverse {
@@ -48,15 +51,15 @@ func ApplyIfdef(oldLines []string, oldNoFinalNewline bool, hunks []Hunk, opts Ap
 				out = append(out, oldPart...)
 				out = append(out, "#else")
 				out = append(out, newPart...)
-				out = append(out, "#endif")
+				out = append(out, endif)
 			case len(oldPart) > 0:
 				out = append(out, "#ifndef "+define)
 				out = append(out, oldPart...)
-				out = append(out, "#endif")
+				out = append(out, endif)
 			case len(newPart) > 0:
 				out = append(out, "#ifdef "+define)
 				out = append(out, newPart...)
-				out = append(out, "#endif")
+				out = append(out, endif)
 			}
 		}
 		cur = at + h.OldCount

@@ -562,6 +562,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 	}
 	failed := 0
 	changed := false
+	ignoredAlready := false
 	for _, r := range res.Reports {
 		switch r.Outcome {
 		case patch.HunkApplied:
@@ -572,6 +573,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 				fmt.Fprintf(rc.Err, "Hunk #%d succeeded at %d with fuzz %d.\n", r.Index, r.At+1, r.FuzzUsed)
 			}
 		case patch.HunkAlreadyApplied:
+			ignoredAlready = true
 			if !ro.quiet {
 				fmt.Fprintf(rc.Err, "Hunk #%d ignored -- already applied.\n", r.Index)
 			}
@@ -581,12 +583,16 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		}
 	}
 	allApplied := res.AllApplied()
+	// -N suppresses reversal and leaves an already-applied difference alone,
+	// but that difference was not applied by this invocation. POSIX therefore
+	// requires the ordinary one-or-more-differences-not-applied status.
+	success := allApplied && !ignoredAlready
 	if allApplied && ro.reverseProbe != nil {
 		*ro.reverseProbe = false
 	}
 
 	if ro.dryRun {
-		return allApplied
+		return success
 	}
 
 	finalEmpty := len(res.Lines) == 0
@@ -668,7 +674,7 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		ro.rejectStarted[rejPath] = true
 		fmt.Fprintf(rc.Err, "%d out of %d hunks failed -- saving rejects to file %s\n", failed, len(fp.Hunks), rejPath)
 	}
-	return allApplied
+	return success
 }
 
 func applyWithPolicy(rc *tool.RunContext, oldLines []string, oldNoEOL bool, fp patch.FilePatch, ro runOptions, creationConflict bool) (patch.Result, bool) {

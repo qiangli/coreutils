@@ -215,8 +215,8 @@ func TestAlreadyAppliedRequiresForwardFlag(t *testing.T) {
 		t.Fatalf("default exit=%d, want 1", code)
 	}
 	_, stderr, code := runIn(t, dir, diff, "-N", "f.txt")
-	if code != 0 {
-		t.Fatalf("-N exit=%d stderr=%s", code, stderr)
+	if code != 1 {
+		t.Fatalf("-N exit=%d, want 1; stderr=%s", code, stderr)
 	}
 	if got := readFile(t, dir, "f.txt"); got != "one\nTWO\n" {
 		t.Fatalf("already-applied hunk must not change content, got %q", got)
@@ -438,7 +438,7 @@ func TestIfdefMergeRetainsBothVersions(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr)
 	}
-	want := "one\n#ifndef FEATURE\nold\n#else\nnew\n#endif\nthree\n"
+	want := "one\n#ifndef FEATURE\nold\n#else\nnew\n#endif /* FEATURE */\nthree\n"
 	if got := readFile(t, dir, "f.c"); got != want {
 		t.Fatalf("ifdef result=%q want=%q", got, want)
 	}
@@ -491,8 +491,8 @@ func TestForwardIgnoresAlreadyAppliedCreationPatch(t *testing.T) {
 	writeFile(t, dir, "new.txt", "hello\n")
 	diff := "--- /dev/null\n+++ new.txt\n@@ -0,0 +1 @@\n+hello\n"
 	_, stderr, code := runIn(t, dir, diff, "-N")
-	if code != 0 {
-		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	if code != 1 {
+		t.Fatalf("exit=%d, want 1; stderr=%s", code, stderr)
 	}
 	if got := readFile(t, dir, "new.txt"); got != "hello\n" {
 		t.Fatalf("-N changed an already-applied creation patch: %q", got)
@@ -736,7 +736,7 @@ func TestEdIfdefCombination(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr)
 	}
-	want := "#ifndef FEATURE\nold\n#else\nnew\n#endif\n"
+	want := "#ifndef FEATURE\nold\n#else\nnew\n#endif /* FEATURE */\n"
 	if got := readFile(t, dir, "f"); got != want {
 		t.Fatalf("ed -D=%q want=%q", got, want)
 	}
