@@ -3,6 +3,7 @@
 package uudecodecmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,25 +31,66 @@ func TestHeaderModeIgnoresUmask(t *testing.T) {
 	}
 }
 
-func TestOverwriteFIFODoesNotBlock(t *testing.T) {
+func TestDecodeExistingFIFOPreservesFileObject(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipe")
+	path := filepath.Join(dir, "output.fifo")
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() { _, _, _ = runTool(t, dir, "begin 600 pipe\n \nend\n"); close(done) }()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readerStarted := make(chan struct{})
+	readDone := make(chan readResult, 1)
+	go func() {
+		close(readerStarted)
+		file, err := os.Open(path)
+		if err != nil {
+			readDone <- readResult{err: err}
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		readDone <- readResult{data: data, err: err}
+	}()
+	<-readerStarted
+
+	decodeDone := make(chan struct {
+		errb string
+		code int
+	}, 1)
+	go func() {
+		_, errb, code := runTool(t, dir, "begin-base64 640 output.fifo\nRG9uZQ==\n====\n")
+		decodeDone <- struct {
+			errb string
+			code int
+		}{errb, code}
+	}()
+
 	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("uudecode blocked while checking FIFO overwrite")
+	case got := <-decodeDone:
+		if got.code != 0 || got.errb != "" {
+			t.Fatalf("decode through FIFO: err=%q code=%d", got.errb, got.code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("decode through FIFO blocked")
+	}
+	select {
+	case got := <-readDone:
+		if got.err != nil || string(got.data) != "Done" {
+			t.Fatalf("FIFO reader got %q, %v", got.data, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("FIFO reader blocked")
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode()&os.ModeNamedPipe != 0 {
-		t.Fatalf("FIFO was not atomically replaced: mode=%v", info.Mode())
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("decoded output stopped being a FIFO: mode=%v", info.Mode())
 	}
 }
 

@@ -190,6 +190,9 @@ func decodeOutput(path string, mode os.FileMode, decode func(io.Writer) error) (
 	if statErr == nil && info.Mode().IsRegular() {
 		return decodeExistingRegular(path, mode, decode)
 	}
+	if statErr == nil && info.Mode()&os.ModeNamedPipe != 0 {
+		return decodeExistingFIFO(path, mode, decode)
+	}
 	if statErr != nil && !os.IsNotExist(statErr) {
 		return nil, statErr
 	}
@@ -202,6 +205,54 @@ func decodeOutput(path string, mode os.FileMode, decode func(io.Writer) error) (
 		}
 	}
 	return decodeNewAtomically(path, mode, decode)
+}
+
+// decodeExistingFIFO writes through an existing FIFO instead of replacing its
+// directory entry. POSIX uudecode's overwrite rule applies to the file reached
+// by the output pathname; consumers may therefore arrange a FIFO reader and
+// expect the decoded bytes to flow through that file object. Decode to staging
+// storage first so malformed input is diagnosed before opening the FIFO.
+func decodeExistingFIFO(path string, mode os.FileMode, decode func(io.Writer) error) (chmodErr, err error) {
+	staged, err := os.CreateTemp("", "uudecode-*")
+	if err != nil {
+		return nil, err
+	}
+	stagedName := staged.Name()
+	defer func() {
+		_ = staged.Close()
+		_ = os.Remove(stagedName)
+	}()
+	if err := decode(staged); err != nil {
+		return nil, err
+	}
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	// Opening a FIFO for writing intentionally waits for a reader, matching
+	// normal pathname semantics. Recheck the held descriptor so a concurrent
+	// pathname replacement cannot turn this operation into a regular-file
+	// overwrite.
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		return nil, fmt.Errorf("output changed while opening and is not a FIFO")
+	}
+	if _, err := io.Copy(file, staged); err != nil {
+		return nil, err
+	}
+	chmodErr = chmodDecodedFile(file, mode.Perm())
+	if err := file.Close(); err != nil {
+		return chmodErr, err
+	}
+	return chmodErr, nil
 }
 
 // decodeExistingRegular overwrites the existing file object rather than its
