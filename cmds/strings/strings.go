@@ -34,7 +34,13 @@ func run(rc *tool.RunContext, args []string) int {
 	minLen := fs.IntP("bytes", "n", 4, "locate and print any sequence of at least NUMBER printable characters")
 	radix := fs.StringP("radix", "t", "", "print the offset within the file before each string; RADIX is o (octal), d (decimal) or x (hexadecimal)")
 	_ = fs.BoolP("all", "a", false, "scan the entire file, not just the default sections (always true in this implementation)")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
