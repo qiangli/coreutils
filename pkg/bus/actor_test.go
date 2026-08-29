@@ -20,13 +20,15 @@ func isolateAuthoredActor(t *testing.T) string {
 	t.Setenv("BASHY_PRINCIPAL", "")
 	t.Setenv("USER", "tester")
 	priorNames, priorResolve, priorDetect, priorSession := FleetNames, FleetResolveName, DetectHarness, CurrentSessionClaim
-	FleetNames = func() []string { return []string{"agent-x", "agent-y", "target"} }
+	FleetNames = func() []string { return []string{"agent-x", "agent-y", "agent.x", "target"} }
 	FleetResolveName = func(name string) string {
 		switch strings.ToLower(strings.TrimSpace(name)) {
 		case "agent-x", "x-alias":
 			return "agent-x"
 		case "agent-y", "y-alias":
 			return "agent-y"
+		case "agent.x", "dot-alias":
+			return "agent.x"
 		case "target":
 			return "target"
 		default:
@@ -39,6 +41,37 @@ func isolateAuthoredActor(t *testing.T) string {
 		CurrentSessionClaim = priorSession
 	})
 	return mb
+}
+
+func TestResolveAuthoredActorUsesCanonicalDottedAgentClaim(t *testing.T) {
+	isolateAuthoredActor(t)
+	const raw = "dotted-session"
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID("agent.x"), Nick: "agent.x", Tool: "codex", Binding: "codex:test",
+		Mode: "interactive", PID: os.Getpid(), OwnerPID: 2147483000,
+		SessionClaim: HashSessionClaim(raw), Principal: "operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	CurrentSessionClaim = func(string) string { return raw }
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/agent.x")
+	if got, err := ResolveAuthoredActor(""); err != nil || got != "agent.x" {
+		t.Fatalf("dotted agent claim = %q, %v", got, err)
+	}
+}
+
+func TestResolveAuthoredActorAcceptsLiveLegacyRawDottedClaim(t *testing.T) {
+	isolateAuthoredActor(t)
+	if err := room.Join(room.Card{
+		ID: "agent.x", Nick: "agent.x", Tool: "codex", Binding: "codex:test",
+		Mode: "inbox", PID: os.Getpid(), OwnerPID: os.Getpid(), Principal: "operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/agent.x")
+	if got, err := ResolveAuthoredActor(""); err != nil || got != "agent.x" {
+		t.Fatalf("legacy dotted claim = %q, %v", got, err)
+	}
 }
 
 func TestResolveAuthoredActorAcceptsMatchingHashedSessionClaim(t *testing.T) {

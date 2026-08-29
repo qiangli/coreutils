@@ -104,6 +104,31 @@ func TestCloneContextRefusesALiveParent(t *testing.T) {
 	}
 }
 
+func TestCloneContextRefusesDottedParentUnderCanonicalAndLegacyClaimKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name, cardID string
+	}{
+		{name: "canonical", cardID: room.AgentClaimID("elif.agent")},
+		{name: "legacy raw", cardID: "elif.agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+			parent := fleet.Agent{Name: "elif.agent", Tool: "ycode", Model: "glm-5.2"}
+			seedStore(t, parent, map[string]string{"sessions/a.json": "{}"})
+			if err := room.Join(room.Card{
+				ID: tc.cardID, Nick: parent.Name, Binding: "ycode:glm-5.2", Tool: "ycode",
+				Mode: "interactive", PID: os.Getpid(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := CloneAgentContext(parent, fleet.Agent{Name: "elif2", Tool: "ycode", Model: "glm-5.2"}); err == nil || !strings.Contains(err.Error(), "--fresh") {
+				t.Fatalf("live dotted parent clone error = %v", err)
+			}
+		})
+	}
+}
+
 // TestCloneContextIsFreshForAToolWeDoNotHostAStoreFor — bashy relocates only
 // ycode's store. Every other harness keeps its history in its own home under its
 // own naming, and reporting a branch we did not perform would be a lie in the

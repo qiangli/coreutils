@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
@@ -42,8 +41,6 @@ import (
 // agent recognises you in a second repo instead of starting over. An agent that
 // SHOULD start over is a different agent: `bashy agents clone`.
 
-var idSanitize = regexp.MustCompile(`[^a-zA-Z0-9]+`)
-
 // agentID is the agent's identity on this host, and the id a human types:
 // `bashy chat steer elif "..."`.
 //
@@ -55,11 +52,7 @@ func agentID(l Launch) string {
 	if label == "" {
 		label = l.Binding()
 	}
-	label = strings.Trim(idSanitize.ReplaceAllString(label, "-"), "-")
-	if label == "" {
-		label = "agent"
-	}
-	return label
+	return room.AgentClaimID(label)
 }
 
 func shortHash(s string) string {

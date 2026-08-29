@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -117,6 +118,24 @@ const (
 )
 
 var appendMu sync.Mutex
+
+var agentClaimUnsafe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+
+// AgentClaimID maps a registered fleet agent name to the room key used by
+// every singleton session surface. It deliberately preserves chat's original
+// host identity spelling so existing conversation stores, sockets, and command
+// targets do not move when the shared claim contract is adopted.
+//
+// Keep the public fleet name in Card.Nick. This value is the collision-safe
+// room/storage key, not a replacement for the human-facing identity.
+func AgentClaimID(name string) string {
+	claim := strings.TrimSpace(name)
+	claim = strings.Trim(agentClaimUnsafe.ReplaceAllString(claim, "-"), "-")
+	if claim == "" {
+		return "agent"
+	}
+	return claim
+}
 
 // Dir is the room root (~/.bashy/room), overridable with $BASHY_ROOM_DIR so a test
 // gets an isolated room.

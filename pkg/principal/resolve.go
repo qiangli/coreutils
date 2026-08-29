@@ -138,7 +138,14 @@ func (r *Resolver) resolveAgent(name string) (Resolution, bool) {
 	if a.Ledger != nil && a.Ledger.Reliability != "" {
 		res.Facts = append(res.Facts, [2]string{"reliability", a.Ledger.Reliability})
 	}
-	if card, live, _ := room.Find(a.Name); live {
+	claimID := room.AgentClaimID(a.Name)
+	card, live, _ := room.Find(claimID)
+	// Preserve visibility of a live watcher created before agent claim keys were
+	// unified. New cards use claimID; the raw fallback expires with that process.
+	if !live && claimID != a.Name {
+		card, live, _ = room.Find(a.Name)
+	}
+	if live {
 		res.Claim = &LiveClaim{State: "TAKEN", ID: card.ID, Mode: card.Mode, PID: card.PID}
 		res.Facts = append(res.Facts, [2]string{"claim", fmt.Sprintf("TAKEN id=%s mode=%s pid=%d", card.ID, card.Mode, card.PID)})
 	}

@@ -50,7 +50,14 @@ func CloneAgentContext(parent, clone fleet.Agent) (string, error) {
 
 	// The liveness check is deliberately on the parent's IDENTITY, which is what
 	// holds the store — not on any particular process.
-	if card, ok, _ := room.Find(parent.Name); ok && card.ID == parent.Name {
+	claimID := room.AgentClaimID(parent.Name)
+	card, live, _ := room.Find(claimID)
+	if !live && claimID != parent.Name {
+		// A pre-contract watcher may still hold the raw fleet name. It remains a
+		// real writer until it exits, so cloning must not take a torn snapshot.
+		card, live, _ = room.Find(parent.Name)
+	}
+	if live && (card.ID == claimID || card.ID == parent.Name) {
 		return "", fmt.Errorf("%s is live (pid %d): its store is being written, and a copy taken "+
 			"mid-write is a torn transcript — stop it, or clone --fresh", parent.Name, card.PID)
 	}

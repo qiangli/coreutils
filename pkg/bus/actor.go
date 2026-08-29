@@ -78,7 +78,14 @@ func resolveRegisteredActorClaim(actor, claimant string) (string, error) {
 	if !registered {
 		return "", fmt.Errorf("authored communication: actor %q is not a registered Bashy agent", actor)
 	}
-	card, live, err := room.Find(canonical)
+	claimID := room.AgentClaimID(canonical)
+	card, live, err := room.Find(claimID)
+	// A pre-contract inbox watcher used the raw fleet name as its room ID.
+	// Keep that already-live claim authoritative until the process exits; every
+	// new singleton card uses claimID, so the fallback naturally disappears.
+	if err == nil && !live && claimID != canonical {
+		card, live, err = room.Find(canonical)
+	}
 	if err != nil {
 		return "", fmt.Errorf("authored communication: inspect session claim for %q: %w", canonical, err)
 	}

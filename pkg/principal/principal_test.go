@@ -125,6 +125,30 @@ func TestResolveAgentProjectsLiveTakenClaim(t *testing.T) {
 	}
 }
 
+func TestResolveDottedAgentProjectsCanonicalAndLegacyTakenClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name, cardID string
+	}{
+		{name: "canonical", cardID: room.AgentClaimID("claimed.agent")},
+		{name: "legacy raw", cardID: "claimed.agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+			r, cat := testResolver(t, testEnv(t))
+			if err := cat.SaveAgent(fleet.Agent{Name: "claimed.agent", Tool: "claude", Model: "fable"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := room.Join(room.Card{ID: tc.cardID, Nick: "claimed.agent", Mode: "inbox", PID: os.Getpid(), Binding: "claude:fable"}); err != nil {
+				t.Fatal(err)
+			}
+			ans := r.Resolve("agent:claimed.agent")
+			if !ans.Resolved || len(ans.Matches) != 1 || ans.Matches[0].Claim == nil || ans.Matches[0].Claim.State != "TAKEN" || ans.Matches[0].Claim.ID != tc.cardID {
+				t.Fatalf("dotted claim resolution = %+v", ans)
+			}
+		})
+	}
+}
+
 func TestResolveUnknownName(t *testing.T) {
 	r, _ := testResolver(t, testEnv(t))
 	if ans := r.Resolve("nobody-here"); ans.Resolved {
