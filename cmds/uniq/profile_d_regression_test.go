@@ -31,3 +31,36 @@ func TestPOSIXStopsOptionAndLegacyParsingAtFirstOperand(t *testing.T) {
 		})
 	}
 }
+
+func TestPOSIXInputPathResolution(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(root, "input")
+	if err := os.WriteFile(input, []byte("a\na\nb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		operand string
+	}{
+		{name: "absolute", operand: input},
+		{name: "parent", operand: filepath.Join("..", "input")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: work,
+				Env:   []string{"POSIXLY_CORRECT=1"},
+				Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut},
+			}
+			code := cmd.Run(rc, []string{tc.operand})
+			if code != 0 || errOut.Len() != 0 || out.String() != "a\nb\n" {
+				t.Fatalf("uniq %s input = (stdout %q, stderr %q, status %d)", tc.name, out.String(), errOut.String(), code)
+			}
+		})
+	}
+}

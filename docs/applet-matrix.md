@@ -197,7 +197,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tz` | `cmds/tz` | — | Bashy/other extension | no | no | 1 | 2 |
 | `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 14 |
 | `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 2 | 26 |
-| `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 3 | 14 |
+| `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 3 | 15 |
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `uptime` | `cmds/uptime` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `users` | `cmds/users` | — | GNU Coreutils | yes | no | 1 | 1 |
