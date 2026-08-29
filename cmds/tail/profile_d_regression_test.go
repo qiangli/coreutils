@@ -52,6 +52,33 @@ func TestPOSIXDoubleDashKeepsFollowingFileOperand(t *testing.T) {
 	}
 }
 
+// TestPOSIXDoubleDashAfterHistoricalByteCount pins the complete argv shape
+// used by the certification boundary: the retained historical first-argument
+// byte-count spelling is normalized before -- is consumed, and the pathname
+// following the delimiter remains the FILE operand.
+func TestPOSIXDoubleDashAfterHistoricalByteCount(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "input.txt", "prefix\nlast-7\n")
+
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: dir,
+		Env: []string{"POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: &out,
+			Err: &errOut,
+		},
+	}
+	if code := cmd.Run(rc, []string{"-7c", "--", "input.txt"}); code != 0 {
+		t.Fatalf("tail historical-byte-count -- input.txt: code=%d stderr=%q", code, errOut.String())
+	}
+	if out.String() != "last-7\n" || errOut.Len() != 0 {
+		t.Fatalf("tail historical-byte-count -- input.txt = (%q, %q), want (%q, empty stderr)", out.String(), errOut.String(), "last-7\n")
+	}
+}
+
 // TestPOSIXParentDirectoryOperand pins ordinary pathname resolution when the
 // applet's logical working directory differs from the process working
 // directory, as it does after an embedded shell performs cd.  The operand must

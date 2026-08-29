@@ -530,10 +530,26 @@ func rewriteObsoleteNum(args []string, flag string) []string {
 	if len(a) < 2 || a[0] != '-' || a[1] < '0' || a[1] > '9' {
 		return args
 	}
-	if _, _, _, err := parseCount(a[1:]); err != nil {
+	count := a[1:]
+	// The historical tail form permits the unit letter to follow the count:
+	// -NUMc selects bytes and -NUMl selects lines. Keep accepting that form as
+	// an extension because certification's Guideline 10 check combines it with
+	// an explicit -- delimiter. Normalize only the complete first argument;
+	// option parsing still owns -- and every following pathname.
+	if len(count) > 1 {
+		switch count[len(count)-1] {
+		case 'c':
+			count = count[:len(count)-1]
+			flag = "--bytes="
+		case 'l':
+			count = count[:len(count)-1]
+			flag = "--lines="
+		}
+	}
+	if _, _, _, err := parseCount(count); err != nil {
 		return args
 	}
-	return append([]string{flag + a[1:]}, args[1:]...)
+	return append([]string{flag + count}, args[1:]...)
 }
 
 func scanOrder(args []string, posix bool) (mode, hdr byte) {
