@@ -35,3 +35,17 @@ func TestProfileDMagicRightArrowContinuation(t *testing.T) {
 		}
 	}
 }
+
+func TestMagicContinuationMessageSeparator(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "payload", []byte("some_string_data right_arrow_offset"))
+	put(t, dir, "magic", []byte(strings.Join([]string{
+		"0 s some_string_data Message: %s",
+		">17 s right_arrow_offset  Message2: %s",
+	}, "\n")+"\n"))
+	out, errOut, code := invoke(t, dir, "", "-M", "magic", "payload")
+	want := "payload: Message: some_string_data Message2: right_arrow_offset\n"
+	if code != 0 || out != want || errOut != "" {
+		t.Fatalf("file continuation separator = (%q, %q, %d), want %q", out, errOut, code, want)
+	}
+}

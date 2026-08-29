@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -268,7 +269,14 @@ func splitMagicFields(line string) (offset, typ, value, message string, ok bool)
 	if !ok {
 		return "", "", "", "", false
 	}
-	return offset, typ, value, strings.TrimLeftFunc(message, unicode.IsSpace), true
+	// magicField leaves the separator before the remainder. Consume exactly
+	// one separator character; additional whitespace is message data and is
+	// significant when continuation descriptions are concatenated.
+	_, size := utf8.DecodeRuneInString(message)
+	if size > 0 {
+		message = message[size:]
+	}
+	return offset, typ, value, message, true
 }
 
 // magicField consumes one whitespace-delimited field. A backslash quotes the
