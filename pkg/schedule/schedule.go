@@ -299,7 +299,7 @@ func NewScheduleCmd() *cobra.Command {
 	root.PersistentFlags().Bool("json", false, "machine-readable JSON envelope")
 	root.PersistentFlags().Bool("plain", false, "plain-text output (overrides $BASHY_AGENTIC)")
 	root.PersistentFlags().Bool("quiet", false, "minimal output")
-	root.AddCommand(addCmd(), listCmd(), rmCmd(), runCmd(), tickCmd(), daemonCmd(), startCmd(), statusCmd(), stopServiceCmd())
+	root.AddCommand(addCmd(), listCmd(), rmCmd(), enableCmd(), disableCmd(), runCmd(), tickCmd(), daemonCmd(), startCmd(), statusCmd(), stopServiceCmd())
 	return root
 }
 
@@ -408,6 +408,60 @@ func publicJobs(jobs []*Job) []*Job {
 		out = append(out, &clone)
 	}
 	return out
+}
+
+// enableCmd / disableCmd flip a job's `enabled` flag without destroying it.
+//
+// The field has always existed in the store and `list` has always printed
+// [on]/[off], but nothing exposed it — so the only way to stop a job was `rm`,
+// which throws away its schedule, its history and the exact command line.
+//
+// That matters because unattended and driven are TWO MODES OF THE SAME
+// PIPELINE, not a migration. A standing poller and an on-demand
+// `dag qa-lanes` run the identical lane; which one you want depends on whether
+// anyone is watching. Switching modes should not require re-deriving the job.
+func setEnabled(cmd *cobra.Command, ref string, on bool) error {
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range s.Jobs {
+		if s.Jobs[i].ID == ref || s.Jobs[i].Name == ref {
+			s.Jobs[i].Enabled = on
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("no such job %q", ref)
+	}
+	if err := s.save(); err != nil {
+		return err
+	}
+	state := "disabled"
+	if on {
+		state = "enabled"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", state, ref)
+	return nil
+}
+
+func enableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable <id>",
+		Short: "Enable a scheduled job (unattended mode)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return setEnabled(cmd, args[0], true) },
+	}
+}
+
+func disableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable <id>",
+		Short: "Disable a scheduled job, keeping its definition (driven mode)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return setEnabled(cmd, args[0], false) },
+	}
 }
 
 func rmCmd() *cobra.Command {
