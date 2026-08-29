@@ -303,6 +303,18 @@ func TestODFormatsAndOffsets(t *testing.T) {
 	}
 }
 
+func TestODPOSIXNoAddressStartsWithFirstItem(t *testing.T) {
+	for _, value := range []string{"1", ""} {
+		for _, args := range [][]string{{"-A", "n", "-o"}, {"-An", "-o"}} {
+			out, errb, code := runODProfileEnv(t, runtimeProfile(), []string{"POSIXLY_CORRECT=" + value}, t.TempDir(), "12345678912345678912345678912\n", args...)
+			want := "031061 032063 033065 034067 030471 031462 032464 033466\n034470 031061 032063 033065 034067 030471 005062\n"
+			if out != want || errb != "" || code != 0 {
+				t.Errorf("POSIX od %v = (%q, %q, %d), want (%q, empty, 0)", args, out, errb, code, want)
+			}
+		}
+	}
+}
+
 func TestODTypeAliases(t *testing.T) {
 	out, _, code := runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "xC")
 	if want := " 41 42\n"; out != want || code != 0 {

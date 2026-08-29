@@ -43,6 +43,7 @@ type options struct {
 	skip      int64
 	width     int
 	showAll   bool
+	posix     bool
 	ctype     ctypeModel
 	radix     byte
 }
@@ -307,7 +308,7 @@ func runWithProfile(rc *tool.RunContext, args []string, profile platformProfile)
 			minString = n
 		}
 	}
-	o := options{addrRadix: *addrRadix, formats: parsedFormats, endian: byteOrder, strings: minString, limit: limit, skip: skip, width: *width, showAll: *showAll, radix: '.'}
+	o := options{addrRadix: *addrRadix, formats: parsedFormats, endian: byteOrder, strings: minString, limit: limit, skip: skip, width: *width, showAll: *showAll, posix: envPresent(rc.Env, "POSIXLY_CORRECT"), radix: '.'}
 	if o.addrRadix != "d" && o.addrRadix != "o" && o.addrRadix != "x" && o.addrRadix != "n" {
 		return tool.UsageError(rc, cmd, "invalid address radix: %q", o.addrRadix)
 	}
@@ -626,7 +627,23 @@ func writeLine(w *bufio.Writer, offset int64, b []byte, cFields []string, o opti
 				return err
 			}
 		}
-		if err := writeFormat(w, b, cFields, format, o.endian, o.radix); err != nil {
+		if o.posix && o.addrRadix == "n" {
+			// With no address POSIX output starts with the first transformed
+			// item. The spaces emitted by writeFormat are separators from an
+			// address or preceding item, so remove only the first one. Keep the
+			// historical leading padding outside POSIX mode for GNU parity.
+			var formatted bytes.Buffer
+			fw := bufio.NewWriter(&formatted)
+			if err := writeFormat(fw, b, cFields, format, o.endian, o.radix); err != nil {
+				return err
+			}
+			if err := fw.Flush(); err != nil {
+				return err
+			}
+			if _, err := w.WriteString(strings.TrimPrefix(formatted.String(), " ")); err != nil {
+				return err
+			}
+		} else if err := writeFormat(w, b, cFields, format, o.endian, o.radix); err != nil {
 			return err
 		}
 		if _, err := w.WriteString("\n"); err != nil {
@@ -634,6 +651,16 @@ func writeLine(w *bufio.Writer, offset int64, b []byte, cFields []string, o opti
 		}
 	}
 	return nil
+}
+
+func envPresent(env []string, name string) bool {
+	prefix := name + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeFormat(w *bufio.Writer, b []byte, cFields []string, format dumpFormat, order binary.ByteOrder, radix byte) error {
