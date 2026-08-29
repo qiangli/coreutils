@@ -825,6 +825,49 @@ func TestLsDereferenceCommandLineSymlinks(t *testing.T) {
 	}
 }
 
+func TestLsDereferencePathResolutionForms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	nested := filepath.Join(realDir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, nested, "entry", "")
+	if err := os.Symlink("real", filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	work := filepath.Join(root, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		dir     string
+		operand string
+		want    string
+	}{
+		{name: "intermediate-relative", dir: root, operand: filepath.Join("link", "nested"), want: "entry\n"},
+		{name: "intermediate-parent", dir: work, operand: filepath.Join("..", "link", "nested"), want: "entry\n"},
+		{name: "intermediate-absolute", dir: work, operand: filepath.Join(root, "link", "nested"), want: "entry\n"},
+		{name: "trailing-slash", dir: root, operand: "link" + string(os.PathSeparator), want: "nested\n"},
+		{name: "absolute-link", dir: work, operand: filepath.Join(root, "link"), want: "nested\n"},
+	}
+	for _, tc := range tests {
+		for _, mode := range []string{"-H", "-L"} {
+			t.Run(tc.name+mode, func(t *testing.T) {
+				out, errOut, code := runToolEnv(t, tc.dir, []string{"POSIXLY_CORRECT=1"}, mode, tc.operand)
+				if code != 0 || errOut != "" || out != tc.want {
+					t.Fatalf("ls %s %s = (%q, %q, %d), want (%q, empty, 0)", mode, tc.operand, out, errOut, code, tc.want)
+				}
+			})
+		}
+	}
+}
+
 func TestLsDereferenceModeLastOptionWins(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs privileges on Windows")
