@@ -272,6 +272,23 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 		return 127
 	}
 
+	// POSIX env overlays itself with COMMAND.  Preserve that process identity
+	// whenever this invocation owns a disposable standalone process: a signal
+	// sent to env must reach COMMAND itself, not kill a waiting wrapper and
+	// strand a child which can keep writing to the now-closed standard output.
+	// Embedded callers cannot replace their host, so they retain the safe
+	// fork/wait path below.
+	if replaced, err := replaceCommand(rc, path, argv, env, argv0, signals); replaced {
+		if err != nil {
+			fmt.Fprintf(rc.Err, "env: %s: %v\n", argv[0], err)
+			if errors.Is(err, exec.ErrNotFound) || os.IsNotExist(err) {
+				return 127
+			}
+			return 126
+		}
+		panic("env: successful process replacement returned")
+	}
+
 	newCmd := func(name string, args []string) *exec.Cmd {
 		c := exec.CommandContext(commandContext(rc), name, args...)
 		c.Dir = rc.Dir

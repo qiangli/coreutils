@@ -3,11 +3,13 @@
 package envcmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,6 +17,98 @@ import (
 	"github.com/qiangli/coreutils/multicall"
 	"github.com/qiangli/coreutils/tool"
 )
+
+// A standalone env is an exec utility: COMMAND must retain env's PID. This is
+// the process boundary GA42 measures when it signals `env ... COMMAND`; a
+// fork-and-wait wrapper can die while COMMAND remains alive and writes a
+// spurious broken-pipe diagnostic into the signal-status stream.
+func TestEnvDedicatedProcessExecReplacesPID(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable unavailable: %v", err)
+	}
+	c := exec.Command(exe, "-test.run=^TestEnvHelperProcess$", "--", "dedicated")
+	c.Env = append(os.Environ(), helperEnvKey+"=1")
+	c.Dir = t.TempDir()
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Process.Kill() }()
+
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read COMMAND pid: %v; stderr=%q", err, stderr.String())
+	}
+	gotPID, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		t.Fatalf("COMMAND pid %q: %v", line, err)
+	}
+	if gotPID != c.Process.Pid {
+		_ = syscall.Kill(gotPID, syscall.SIGKILL)
+		t.Fatalf("COMMAND pid=%d, env pid=%d: dedicated env left a wrapper process", gotPID, c.Process.Pid)
+	}
+	if err := c.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	err = c.Wait()
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("wait err=%v (%T), want signal death; stderr=%q", err, err, stderr.String())
+	}
+	ws, ok := ee.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGTERM {
+		t.Fatalf("wait status=%v, want SIGTERM; stderr=%q", ee.ProcessState.Sys(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("dedicated env/COMMAND wrote stderr after signal: %q", stderr.String())
+	}
+}
+
+// DedicatedProcess is necessary but not sufficient authority to overlay the
+// current process. Virtual cwd semantics or non-process stdio require the
+// ordinary fork/wait path so RunContext remains meaningful to the caller.
+func TestEnvDedicatedProcessExecRequiresFullProcessContract(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable unavailable: %v", err)
+	}
+	for _, mode := range []string{"virtual-cwd", "buffered"} {
+		t.Run(mode, func(t *testing.T) {
+			c := exec.Command(exe, "-test.run=^TestEnvHelperProcess$", "--", "dedicated-guard", mode)
+			c.Env = append(os.Environ(), helperEnvKey+"=1")
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("guard helper: %v; output=%q", err, out)
+			}
+			if got, want := string(out), "guard-returned=0\n"; got != want {
+				t.Fatalf("guard output=%q, want %q (process was unexpectedly replaced)", got, want)
+			}
+		})
+	}
+}
+
+func TestEnvDedicatedProcessExecPreservesCommandSpellingAsArgv0(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable unavailable: %v", err)
+	}
+	c := exec.Command(exe, "-test.run=^TestEnvHelperProcess$", "--", "dedicated-argv0")
+	c.Env = append(os.Environ(), helperEnvKey+"=1")
+	c.Dir = t.TempDir()
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("argv0 helper: %v; output=%q", err, out)
+	}
+	if got, want := string(out), "env-command-alias\n"; got != want {
+		t.Fatalf("COMMAND argv0=%q, want original spelling %q", got, want)
+	}
+}
 
 // signalByName resolves a signal name to its number through the same table env
 // parses, so the helpers and the assertions agree without a second constant

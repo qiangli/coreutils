@@ -70,6 +70,77 @@ func helperMain(args []string) int {
 	case "sleep":
 		d, _ := strconv.Atoi(args[1])
 		time.Sleep(time.Duration(d) * time.Second)
+	case "pid-sleep":
+		// Flush a process-identity handshake before blocking so a parent can
+		// prove whether a dedicated env overlaid itself or left a wrapper PID.
+		fmt.Println(os.Getpid())
+		_ = os.Stdout.Sync()
+		time.Sleep(30 * time.Second)
+	case "print-argv0":
+		fmt.Println(os.Args[0])
+	case "dedicated":
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		target := []string{exe, "-test.run=^TestEnvHelperProcess$", "--", "pid-sleep"}
+		rc := &tool.RunContext{
+			Ctx:              context.Background(),
+			Dir:              mustWorkingDir(),
+			DirIsProcessCwd:  true,
+			DedicatedProcess: true,
+			Env:              []string{helperEnvKey + "=1"},
+			FS:               tool.NewLocalFS(),
+			Stdio:            tool.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
+		}
+		return cmd.Run(rc, target)
+	case "dedicated-guard":
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		target := []string{exe, "-test.run=^TestEnvHelperProcess$", "--", "quiet"}
+		rc := &tool.RunContext{
+			Ctx:              context.Background(),
+			Dir:              mustWorkingDir(),
+			DedicatedProcess: true,
+			Env:              []string{helperEnvKey + "=1"},
+			FS:               tool.NewLocalFS(),
+			Stdio:            tool.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
+		}
+		if len(args) == 2 && args[1] == "buffered" {
+			rc.DirIsProcessCwd = true
+			var out, errOut bytes.Buffer
+			rc.Out, rc.Err = &out, &errOut
+		}
+		code := cmd.Run(rc, target)
+		fmt.Printf("guard-returned=%d\n", code)
+		return code
+	case "dedicated-argv0":
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		dir := mustWorkingDir()
+		const spelling = "env-command-alias"
+		if err := os.Symlink(exe, filepath.Join(dir, spelling)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		target := []string{spelling, "-test.run=^TestEnvHelperProcess$", "--", "print-argv0"}
+		rc := &tool.RunContext{
+			Ctx:              context.Background(),
+			Dir:              dir,
+			DirIsProcessCwd:  true,
+			DedicatedProcess: true,
+			Env:              []string{helperEnvKey + "=1", "PATH=" + dir},
+			FS:               tool.NewLocalFS(),
+			Stdio:            tool.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
+		}
+		return cmd.Run(rc, target)
 	case "exit":
 		n, _ := strconv.Atoi(args[1])
 		return n
@@ -90,6 +161,14 @@ func helperMain(args []string) int {
 		return 2
 	}
 	return 0
+}
+
+func mustWorkingDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
 }
 
 // helperArgv is the leading argv that re-enters this binary as the helper.
