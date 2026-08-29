@@ -67,6 +67,14 @@ func TestAwkMatchOperatorsAreLeftAssociative(t *testing.T) {
 	}
 }
 
+func TestAwkMatchUpdatesLengthForNaNSpelling(t *testing.T) {
+	program := `BEGIN { print match("banana", "nan"), RSTART, RLENGTH }`
+	out, errb, code := runTool(t, "", program)
+	if out != "3 3 3\n" || errb != "" || code != 0 {
+		t.Fatalf("awk match NaN spelling = (%q, %q, %d), want (%q, empty, 0)", out, errb, code, "3 3 3\n")
+	}
+}
+
 func TestAwkEREConstantsDecodeControlCharacterEscapes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

@@ -20,7 +20,13 @@ func platformValue(name string) (string, bool) {
 		// advertise the capability the product supplies rather than libc's
 		// inaccessible sysconf table.
 		return strconv.FormatInt(posix2Version, 10), true
-	case "INT_MAX", "SYMLOOP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION":
+	case "INT_MAX":
+		// Every Linux userspace ABI supported by this Go build uses a 32-bit
+		// C int. This is an ABI constant, not an inferred libc capability.
+		return "2147483647", true
+	case "UINT_MAX":
+		return "4294967295", true
+	case "SYMLOOP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION":
 		return undefined, true
 	case "SIGQUEUE_MAX":
 		return rlimitStr(unix.RLIMIT_SIGPENDING)

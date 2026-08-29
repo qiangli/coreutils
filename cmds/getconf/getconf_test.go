@@ -308,6 +308,19 @@ func TestLinuxReportsOnlyDerivedRuntimeValues(t *testing.T) {
 		t.Fatalf("getconf LINE_MAX = (%q, %q, %d), want (2048, empty, 0)", got, errs, code)
 	}
 
+	// Linux's supported userspace ABIs use 32-bit C int and unsigned int.
+	// These are exact ABI constants, and other POSIX utilities legitimately
+	// use the queryable bounds to size their conformance inputs.
+	for name, want := range map[string]string{
+		"INT_MAX":  "2147483647",
+		"UINT_MAX": "4294967295",
+	} {
+		got, errs, code = runCmd(t, name)
+		if code != 0 || errs != "" || got != want {
+			t.Errorf("getconf %s = (%q, %q, %d), want (%s, empty, 0)", name, got, errs, code, want)
+		}
+	}
+
 	// The BC_* limits describe the calculator shipped in this same multicall
 	// binary, not an unknown host-libc implementation. Keep the queryable limits
 	// aligned with the bounds enforced by the bc engine.
