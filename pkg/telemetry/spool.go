@@ -51,6 +51,14 @@ type spoolExporter struct {
 }
 
 func newSpoolExporter(path string) (*spoolExporter, error) {
+	// Bashy is a shell, so its working directory changes routinely. Anchor an
+	// operator's relative override once; rotation must never reinterpret it
+	// against a later directory and touch an unrelated file.
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve spool path: %w", err)
+	}
+	path = absPath
 	if err := secureSpoolDir(path); err != nil {
 		return nil, fmt.Errorf("spool dir: %w", err)
 	}
@@ -88,11 +96,13 @@ func secureSpoolDir(path string) error {
 		return fmt.Errorf("not a directory")
 	}
 
-	// The canonical leaf names identify the directory Bashy owns for this
-	// purpose. Never chmod a sticky directory even if it happens to share those
-	// names: sticky directories conventionally serve multiple principals.
-	if filepath.Base(dir) == "spool" && filepath.Base(path) == "spans.jsonl" && fi.Mode()&os.ModeSticky == 0 {
-		return os.Chmod(dir, 0o700)
+	// Only the exact default home path is Bashy-owned. Basenames are not proof:
+	// /var/spool and an operator's group-shared spool/ are not ours to chmod.
+	if canonical, ownsDir := defaultSpoolPath(); ownsDir {
+		canonical, err = filepath.Abs(canonical)
+		if err == nil && filepath.Clean(path) == filepath.Clean(canonical) {
+			return os.Chmod(dir, 0o700)
+		}
 	}
 	return nil
 }
@@ -205,11 +215,19 @@ func SpoolPath() string {
 	if p := strings.TrimSpace(os.Getenv("BASHY_OTEL_SPOOL")); p != "" {
 		return p
 	}
+	p, _ := defaultSpoolPath()
+	return p
+}
+
+// defaultSpoolPath also says whether Bashy owns the containing directory. The
+// fallback is a file in the shared temporary directory, so only the file is
+// ours there; the user's home-local spool directory is dedicated to Bashy.
+func defaultSpoolPath() (path string, ownsDir bool) {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "bashy-otel-spool.jsonl")
+	if err != nil || strings.TrimSpace(home) == "" {
+		return filepath.Join(os.TempDir(), "bashy-otel-spool.jsonl"), false
 	}
-	return filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl")
+	return filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl"), true
 }
 
 // isFileExporter reports whether the file sink is selected.

@@ -231,7 +231,22 @@ func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
 	if os.Getenv("BASHY_TELEMETRY_QUIET") != "" {
 		return false
 	}
-	return stderrIsTerminal || os.Getenv("BASHY_TELEMETRY_NOTICE") != "" || os.Getenv("BASHY_TELEMETRY_DEBUG") != ""
+	if os.Getenv("BASHY_TELEMETRY_NOTICE") != "" || os.Getenv("BASHY_TELEMETRY_DEBUG") != "" {
+		return true
+	}
+	return stderrIsTerminal && !telemetryAutomation()
+}
+
+// telemetryAutomation recognizes positive evidence that a terminal belongs to
+// a harness rather than a watching human. Agent runners allocate PTYs to obtain
+// correct CLI behavior, so term.IsTerminal alone cannot establish attendance.
+func telemetryAutomation() bool {
+	for _, name := range []string{"CI", "CODEX_CI", "WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_PRINCIPAL"} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true
+		}
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb")
 }
 
 func isTerminal(f *os.File) bool {

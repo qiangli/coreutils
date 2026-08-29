@@ -22,6 +22,9 @@ func TestShouldReportTelemetryStatus(t *testing.T) {
 		{"quiet wins over notice", false, "1", "1", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"CI", "CODEX_CI", "WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_PRINCIPAL", "TERM"} {
+				t.Setenv(name, "")
+			}
 			t.Setenv("BASHY_TELEMETRY_QUIET", tc.quiet)
 			t.Setenv("BASHY_TELEMETRY_NOTICE", tc.notice)
 			t.Setenv("BASHY_TELEMETRY_DEBUG", tc.debug)

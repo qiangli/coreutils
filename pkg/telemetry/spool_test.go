@@ -82,7 +82,13 @@ func TestSpoolExporterAppends(t *testing.T) {
 }
 
 func TestSpoolExporterHardensExistingPaths(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "spool")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_OTEL_SPOOL", "")
+	dir := filepath.Join(home, ".agents", "otel", "spool")
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
