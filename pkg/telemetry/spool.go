@@ -48,17 +48,123 @@ type spoolExporter struct {
 	mu   sync.Mutex
 	path string
 	f    *os.File
+	mode os.FileMode
 }
 
 func newSpoolExporter(path string) (*spoolExporter, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// Bashy is a shell, so its working directory changes routinely. Anchor an
+	// operator's relative override once; rotation must never reinterpret it
+	// against a later directory and touch an unrelated file.
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve spool path: %w", err)
+	}
+	path = absPath
+	if err := secureSpoolDir(path); err != nil {
 		return nil, fmt.Errorf("spool dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openPrivateSpool(path)
 	if err != nil {
 		return nil, fmt.Errorf("open spool: %w", err)
 	}
-	return &spoolExporter{path: path, f: f}, nil
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat spool: %w", err)
+	}
+	return &spoolExporter{path: path, f: f, mode: fi.Mode().Perm()}, nil
+}
+
+// secureSpoolDir makes a directory created for the spool owner-only. It also
+// hardens Bashy's canonical .../spool/spans.jsonl directory from older
+// versions. An arbitrary operator override may name an existing project or a
+// shared temporary directory; changing that directory's mode would be a much
+// larger privilege boundary than protecting the spool file itself.
+func secureSpoolDir(path string) error {
+	dir := filepath.Dir(path)
+	lfi, err := os.Lstat(dir)
+	switch {
+	case os.IsNotExist(err):
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		fi, err := os.Stat(dir)
+		if err != nil {
+			return err
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("not a directory")
+		}
+		return os.Chmod(dir, 0o700)
+	case err != nil:
+		return err
+	}
+	fi, err := os.Stat(dir) // a symlink to a directory is a valid relocation
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("not a directory")
+	}
+
+	// Only the exact default home path is Bashy-owned. Basenames are not proof:
+	// /var/spool and an operator's group-shared or symlinked spool are not ours
+	// to chmod.
+	if lfi.Mode()&os.ModeSymlink == 0 && isCanonicalSpoolPath(path) {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+// openPrivateSpool opens a regular spool file with owner-only permissions.
+// Chmod is necessary for an existing file, since OpenFile's create mode is not
+// applied when the file is already present.
+func openPrivateSpool(path string) (*os.File, error) {
+	existed := false
+	if fi, err := os.Lstat(path); err == nil {
+		existed = true
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("not a regular file")
+		}
+		if !fi.Mode().IsRegular() {
+			if isNullDevice(path, fi) {
+				return os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			}
+			return nil, fmt.Errorf("not a regular file")
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fi, statErr := f.Stat()
+	if statErr != nil || !fi.Mode().IsRegular() {
+		_ = f.Close()
+		if statErr != nil {
+			return nil, statErr
+		}
+		return nil, fmt.Errorf("not a regular file")
+	}
+	// A file we created and Bashy's canonical file must be owner-only. An
+	// existing operator override may deliberately be a shared append target;
+	// changing its mode is outside the authority granted by naming it.
+	if !existed || isDefaultSpoolPath(path) {
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+	}
+	return f, nil
+}
+
+// isNullDevice preserves the historical explicit discard override without
+// treating arbitrary devices as spool files. OTEL_TRACES_EXPORTER=none is the
+// preferred opt-out, but existing profiles may still name /dev/null.
+func isNullDevice(path string, fi os.FileInfo) bool {
+	nullInfo, err := os.Stat(os.DevNull)
+	return err == nil && os.SameFile(fi, nullInfo)
 }
 
 // ExportSpans writes each span as one jsonline record.
@@ -139,11 +245,37 @@ func SpoolPath() string {
 	if p := strings.TrimSpace(os.Getenv("BASHY_OTEL_SPOOL")); p != "" {
 		return p
 	}
+	p, _ := defaultSpoolPath()
+	return p
+}
+
+// defaultSpoolPath also says whether Bashy owns the containing directory. The
+// fallback is a file in the shared temporary directory, so only the file is
+// ours there; the user's home-local spool directory is dedicated to Bashy.
+func defaultSpoolPath() (path string, ownsDir bool) {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "bashy-otel-spool.jsonl")
+	if err != nil || strings.TrimSpace(home) == "" {
+		return filepath.Join(os.TempDir(), "bashy-otel-spool.jsonl"), false
 	}
-	return filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl")
+	return filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl"), true
+}
+
+func isCanonicalSpoolPath(path string) bool {
+	canonical, ownsDir := defaultSpoolPath()
+	if !ownsDir {
+		return false
+	}
+	return sameSpoolPath(path, canonical)
+}
+
+func isDefaultSpoolPath(path string) bool {
+	canonical, _ := defaultSpoolPath()
+	return sameSpoolPath(path, canonical)
+}
+
+func sameSpoolPath(path, canonical string) bool {
+	absCanonical, err := filepath.Abs(canonical)
+	return err == nil && filepath.Clean(path) == filepath.Clean(absCanonical)
 }
 
 // isFileExporter reports whether the file sink is selected.
@@ -189,7 +321,26 @@ func isFileExporter() bool {
 // for the network path, and quietly spooling to a file instead would be its own
 // silent surprise.
 func hasOTLPEndpoint() bool {
-	return strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != ""
+	return strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")) != "" ||
+		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != ""
+}
+
+func networkEndpoint(exporter string) string {
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	switch exporter {
+	case "otlp", "grpc", "http", "http/protobuf":
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")), "grpc") || exporter == "grpc" {
+			return "http://localhost:4317"
+		}
+		return "http://localhost:4318"
+	default:
+		return ""
+	}
 }
 
 // maxSpoolBytes bounds the spool so telemetry cannot fill a disk when nothing
@@ -225,18 +376,33 @@ func (e *spoolExporter) rotateIfLarge() {
 	if i := indexByte(keep, '\n'); i >= 0 {
 		keep = keep[i+1:]
 	}
-	tmp := e.path + ".rotating"
-	if err := os.WriteFile(tmp, keep, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(e.path), ".spans-*.rotating")
+	if err != nil {
+		return
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(keep); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := tmp.Chmod(e.mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
 		return
 	}
 	if err := e.f.Close(); err != nil {
-		_ = os.Remove(tmp)
+		_ = os.Remove(tmpPath)
 		return
 	}
-	if err := os.Rename(tmp, e.path); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(tmpPath, e.path); err != nil {
+		_ = os.Remove(tmpPath)
 	}
-	f, err := os.OpenFile(e.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openPrivateSpool(e.path)
 	if err != nil {
 		e.f = nil // writes become no-ops rather than panicking
 		return

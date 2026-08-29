@@ -37,8 +37,9 @@
 // Configuration is pure standard OTEL env vars (OTEL_EXPORTER_OTLP_ENDPOINT,
 // OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES, OTEL_TRACES_SAMPLER). With no endpoint
 // configured, spans default to the bounded local file spool; set
-// OTEL_TRACES_EXPORTER=none for a complete no-op. The global propagator is installed
-// even in no-op mode, so the wire-format contract survives without a collector.
+// OTEL_TRACES_EXPORTER=none for a complete no-op. Network export remains opt-in: set
+// an OTLP endpoint or exporter explicitly. The global propagator is installed even in
+// no-op mode, so the wire-format contract survives without a collector.
 package telemetry
 
 import (
@@ -60,6 +61,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/term"
 )
 
 // ServiceName is bashy's identity on the OTel plane. It joins the umbrella's existing
@@ -97,6 +99,13 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			propagation.TraceContext{},
 			propagation.Baggage{},
 		))
+		exporter := strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_TRACES_EXPORTER")))
+		switch exporter {
+		case "", "file", "console", "none", "otlp", "grpc", "http", "http/protobuf":
+		default:
+			os.Stderr.WriteString("bashy: telemetry disabled — unsupported OTEL_TRACES_EXPORTER=" + exporter + "\n")
+			return
+		}
 
 		// File sink, chosen by the standard OTEL_TRACES_EXPORTER=file.
 		//
@@ -128,8 +137,8 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			)
 			otel.SetTracerProvider(provider)
 			enabled = true
-			if os.Getenv("BASHY_TELEMETRY_QUIET") == "" {
-				os.Stderr.WriteString("bashy: telemetry on → " + spoolPath + " (service=" + svc + ")\n")
+			if shouldReportTelemetryStatus(isTerminal(os.Stderr)) {
+				os.Stderr.WriteString("bashy: telemetry on → " + sexp.path + " (service=" + svc + ")\n")
 			}
 			shutdown = func(ctx context.Context) error {
 				ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -139,7 +148,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			return
 		}
 
-		endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+		endpoint := networkEndpoint(exporter)
 		if endpoint == "" {
 			return // no-op mode. Deliberately, and completely.
 		}
@@ -159,7 +168,11 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 		// The spec's default is http/protobuf, and so is ours.
 		var exp sdktrace.SpanExporter
 		var err error
-		switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))) {
+		protocol := strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")))
+		if protocol == "" && exporter == "grpc" {
+			protocol = "grpc"
+		}
+		switch protocol {
 		case "grpc":
 			exp, err = otlptracegrpc.New(ctx)
 		default:
@@ -188,7 +201,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 		)
 		otel.SetTracerProvider(provider)
 		var mexp sdkmetric.Exporter
-		switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))) {
+		switch protocol {
 		case "grpc":
 			mexp, _ = otlpmetricgrpc.New(ctx)
 		default:
@@ -204,10 +217,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 
 		enabled = true
 
-		// SAY SO. A feature that is silently on is as hard to debug as one that is
-		// silently off — and "is telemetry actually running?" is the first question
-		// anyone asks when the collector is empty. One line, to stderr, once.
-		if os.Getenv("BASHY_TELEMETRY_QUIET") == "" {
+		if shouldReportTelemetryStatus(isTerminal(os.Stderr)) {
 			os.Stderr.WriteString("bashy: telemetry on → " + endpoint + " (service=" + svc + ")\n")
 		}
 
@@ -222,6 +232,45 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 	})
 
 	return shutdown
+}
+
+// shouldReportTelemetryStatus keeps routine startup chatter out of captured agent
+// stderr. Interactive users still see the selected destination; noninteractive
+// callers may request it with BASHY_TELEMETRY_NOTICE or BASHY_TELEMETRY_DEBUG.
+// BASHY_TELEMETRY_QUIET remains a compatibility override for every mode.
+func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
+	if automationMarker(os.Getenv("BASHY_TELEMETRY_QUIET")) {
+		return false
+	}
+	if automationMarker(os.Getenv("BASHY_TELEMETRY_NOTICE")) || automationMarker(os.Getenv("BASHY_TELEMETRY_DEBUG")) {
+		return true
+	}
+	return stderrIsTerminal && !telemetryAutomation()
+}
+
+// telemetryAutomation recognizes positive evidence that a terminal belongs to
+// a harness rather than a watching human. Agent runners allocate PTYs to obtain
+// correct CLI behavior, so term.IsTerminal alone cannot establish attendance.
+func telemetryAutomation() bool {
+	for _, name := range []string{"CI", "CODEX_CI", "WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_PRINCIPAL"} {
+		if automationMarker(os.Getenv(name)) {
+			return true
+		}
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb")
+}
+
+func automationMarker(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+func isTerminal(f *os.File) bool {
+	return f != nil && term.IsTerminal(int(f.Fd()))
 }
 
 // Tracer returns bashy's tracer. Safe before Init: the global provider is a no-op until

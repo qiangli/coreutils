@@ -38,7 +38,7 @@ Provide a unified, single-trace view of an entire agent run by establishing a "t
    A histogram metric `fleet.run.turns` is emitted upon completion, tagged by `agent` and `band`. This enables fleet-level visibility into agent efficiency and loops.
 
 6. **Configuration & No-Op**
-   Telemetry relies on standard OpenTelemetry environment variables. With no OTLP endpoint, spans go to the bounded local spool; `OTEL_TRACES_EXPORTER=none` selects the pure no-op path. The global propagator remains installed in either mode so wire context survives hops.
+   Telemetry relies on standard OpenTelemetry environment variables. With no OTLP endpoint, spans go to the bounded owner-only local spool; `OTEL_TRACES_EXPORTER=none` selects the pure no-op path. Network export is opt-in through an endpoint or explicit exporter. Routine startup status appears on an interactive stderr only (or with `BASHY_TELEMETRY_NOTICE=1` / `BASHY_TELEMETRY_DEBUG=1`); `BASHY_TELEMETRY_QUIET` suppresses it in every mode. Initialization failures always remain visible. The global propagator remains installed in either mode so wire context survives hops.
 
 ## GenAI Tier 1 coverage
 
@@ -74,4 +74,4 @@ writes `bashy.execution.venue=UNKNOWN`; it never invents a tier.
 - `weaveChildEnv` remains the child environment choke point for `weave start`; the active span context is injected into that environment as standard W3C `TRACEPARENT`/`TRACESTATE` entries.
 - The `weave.run` span carries `agent`, `nick`, `band`, `tool:model`, `issue`, `outcome`, `converged`, `gate_result`, `turns`, and `duration`.
 - `fleet.run.turns` is recorded as a histogram with `agent` and `band` attributes when the launched tool reports `num_turns`.
-- Tests verify that a traceparent-aware mock agent creates an `agent.turn` span under the same trace and parent span, and that unset `OTEL_EXPORTER_OTLP_ENDPOINT` leaves telemetry disabled.
+- Tests verify that a traceparent-aware mock agent creates an `agent.turn` span under the same trace and parent span, and that `OTEL_TRACES_EXPORTER=none` selects the pure no-op path.
