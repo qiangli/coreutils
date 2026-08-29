@@ -47,7 +47,10 @@ func runWithOpen(rc *tool.RunContext, args []string, openOutput openOutputFunc) 
 	ignorePipeErrors := fs.BoolP("ignore-pipe-errors", "p", false, "diagnose errors writing to non pipe outputs")
 	outputError := fs.String("output-error", "", "set behavior on write error: warn, warn-nopipe, exit, or exit-nopipe")
 	fs.Lookup("output-error").NoOptDefVal = "warn-nopipe"
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	// Issue 7's utility-syntax contract ends option recognition at the
+	// first operand. In particular, a lone "-" is an ordinary output-file
+	// operand; later option-shaped arguments are therefore pathnames too.
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}

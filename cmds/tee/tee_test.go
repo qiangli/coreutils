@@ -201,6 +201,22 @@ func TestTeeDashIsLiteralFileName(t *testing.T) {
 	}
 }
 
+func TestTeeIssue7FirstOperandEndsOptionRecognition(t *testing.T) {
+	// A lone "-" is the first file operand, not an option. Under the
+	// Issue 7 utility-syntax rules, every following argument is therefore
+	// an operand as well, even when it looks like an option or delimiter.
+	dir := t.TempDir()
+	out, errb, code := runToolDir(t, dir, "payload\n", "-", "-i", "-h", "--")
+	if code != 0 || errb != "" || out != "payload\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	for _, name := range []string{"-", "-i", "-h", "--"} {
+		if got := readFile(t, filepath.Join(dir, name)); got != "payload\n" {
+			t.Errorf("operand %q contains %q, want payload", name, got)
+		}
+	}
+}
+
 func TestTeeUnknownFlag(t *testing.T) {
 	_, errb, code := runToolDir(t, t.TempDir(), "", "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
