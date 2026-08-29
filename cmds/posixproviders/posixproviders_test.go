@@ -75,16 +75,43 @@ func requireManSupported(t *testing.T) {
 // would come up in vi mode and hang a scripted edit.
 func TestArgvPassthrough(t *testing.T) {
 	root := t.TempDir()
-	provisionSelf(t, root, "m4")
+	provisionSelf(t, root, "ar")
 
 	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "m4", rc, out, errb, "-l", "--", "a b", "-x")
+	code, stdout, stderr := run(t, "ar", rc, out, errb, "-l", "--", "a b", "-x")
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}
-	want := "argv0:m4\narg:-l\narg:--\narg:a b\narg:-x\n"
+	want := "argv0:ar\narg:-l\narg:--\narg:a b\narg:-x\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestM4ProviderSelectsPOSIXSemantics(t *testing.T) {
+	root := t.TempDir()
+	provisionSelf(t, root, "m4")
+
+	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
+	code, stdout, stderr := run(t, "m4", rc, out, errb, "-Dname=value", "input.m4")
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr)
+	}
+	want := "argv0:m4\narg:--traditional\narg:--fatal-warnings\narg:-Dname=value\narg:input.m4\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestM4ProviderArgsDoNotMutateCaller(t *testing.T) {
+	in := []string{"-s", "input.m4"}
+	got := m4ProviderArgs(in)
+	want := []string{"--traditional", "--fatal-warnings", "-s", "input.m4"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("m4ProviderArgs(%q) = %q, want %q", in, got, want)
+	}
+	if !slices.Equal(in, []string{"-s", "input.m4"}) {
+		t.Fatalf("m4ProviderArgs mutated caller argv: %q", in)
 	}
 }
 
@@ -513,6 +540,46 @@ func TestManBuildRecipeProducesStandaloneCacheArtifact(t *testing.T) {
 	}
 	if got := strings.Count(manRecipe, `--with-config-file="$_man_config"`); got != 2 {
 		t.Fatalf("man configure fallbacks select the provisioned host configuration %d times, want 2", got)
+	}
+}
+
+func TestM4BuildRecipePinsPOSIXCorrection(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate test source")
+	}
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	patchPath := filepath.Join(root, "tools", "posix-providers", "patches", "m4-1.4.19-posix-semantics.patch")
+	patchBody, err := os.ReadFile(patchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchSum := sha256.Sum256(patchBody)
+	wantDigest := hex.EncodeToString(patchSum[:])
+
+	buildBody, err := os.ReadFile(filepath.Join(root, "tools", "posix-providers", "build.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(buildBody)
+	for _, want := range []string{
+		"provider_prepare_m4_source",
+		"patches/m4-1.4.19-posix-semantics.patch",
+		"_provider_m4_patch_sha=" + wantDigest,
+		"recipe_patch\\t%s\\t%s",
+		`"$here/m4-semantic-test.sh" "$found"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("m4 build recipe does not contain %q", want)
+		}
+	}
+
+	e, ok := posixprovider.Lookup("m4")
+	if !ok {
+		t.Fatal("m4 is absent from provider manifest")
+	}
+	if e.RecipeRevision != "posix-semantics-1" {
+		t.Fatalf("m4 recipe revision = %q, want posix-semantics-1", e.RecipeRevision)
 	}
 }
 

@@ -40,8 +40,9 @@ measured evidence, and risking a hang that costs the whole arm.
 
 ## The ctags FIFO semantic adapter
 
-Provider arguments normally pass through unchanged. There is one narrow
-POSIX-correctness exception: Universal Ctags opens an existing output FIFO as
+Provider arguments normally pass through unchanged. Narrow, documented
+POSIX-correctness adapters exist where an upstream dialect differs. Universal
+Ctags opens an existing output FIFO as
 a reader before it writes, so it deadlocks with the consumer that is already
 waiting to read that FIFO. POSIX `ctags -f tagsfile` requires writing the object
 locator list to that file, and a POSIX file can be a FIFO.
@@ -171,6 +172,22 @@ Explicit `--verbose` is unchanged. The dispatcher also maps option-arguments
 `-f -` and `-i -` to the literal pathname `./-`, because Issue 7 defines both
 as pathnames while glibc reserves `-` as an input sentinel. The patch digest is
 recorded in provenance and the recipe revision invalidates older cached builds.
+
+The pinned GNU m4 1.4.19 provider is invoked in its documented traditional
+dialect, with warnings reflected in final status because POSIX requires a
+non-zero status after a continued error such as failed `mkstemp`. Its local
+source build carries a digest-pinned correction for the remaining upstream
+differences: uppercase `eval` digits above nine, FIFO processing of repeated
+`m4wrap` calls, `changequote()` default restoration, POSIX macro-name
+validation for `-D`/`-U`, and default signal actions without replacing
+inherited `SIG_IGN`. It explicitly preserves the upstream provider's effective
+unlimited nesting setting while removing only the conflicting fault handlers.
+The binary remains a locally built GPL external provider; no upstream source
+is linked into the Go multicall. The build verifies the patch digest before
+applying it, executes a public semantic gate against the uninstalled candidate,
+and records the patch identity in provenance. At runtime the resolver enforces
+the recipe revision and built-binary digest, so an older uncorrected cache is
+rejected; it does not re-hash the repository patch on every invocation.
 
 ## Files
 

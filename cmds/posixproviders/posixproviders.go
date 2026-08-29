@@ -120,6 +120,9 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 	if e.Command == "localedef" {
 		providerArgs = localedefProviderArgs(args)
 	}
+	if e.Command == "m4" {
+		providerArgs = m4ProviderArgs(args)
+	}
 
 	r, err := resolverFor(rc)
 	if err != nil {
@@ -148,6 +151,22 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 		return code
 	}
 	return execProviderFn(rc, providerName, path, providerArgs)
+}
+
+// m4ProviderArgs selects the standards dialect of the pinned GNU provider.
+// GNU m4 defaults to extensions whose observable behavior differs from POSIX,
+// including defn rescanning and the order of repeated m4wrap calls. -G is GNU
+// m4's documented traditional mode. -E makes diagnostics affect the final
+// status: POSIX requires a non-zero status after an error even when m4
+// continues processing input (for example, a failed mkstemp call).
+//
+// Keep these controls before the caller's arguments. In a POSIX environment,
+// option processing stops at the first operand, so appending them could leave
+// the provider in its extension dialect for the common `m4 file` form.
+func m4ProviderArgs(args []string) []string {
+	out := make([]string, 0, len(args)+2)
+	out = append(out, "--traditional", "--fatal-warnings")
+	return append(out, args...)
 }
 
 // localedefProviderArgs adapts the pinned GNU provider to the POSIX pathname

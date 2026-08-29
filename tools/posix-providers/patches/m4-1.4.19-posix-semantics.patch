@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Upstream: GNU m4 1.4.19 (https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz)
+# Upstream license: GNU General Public License, version 3 or later
+# Provenance: source-derived changes to GNU m4 src/builtin.c, src/input.c,
+# and src/m4.c for the separately built Bashy POSIX provider. The upstream
+# source copyright and license notices remain in the source tree when applied.
+# This patch is tracked source under GPL-3.0-or-later; it is not linked into
+# or compiled as part of the Go multicall binary.
+
+diff --git a/src/builtin.c b/src/builtin.c
+index 5e36ab3..5fe7545 100644
+--- a/src/builtin.c
++++ b/src/builtin.c
+@@ -447 +447 @@ numeric_arg (token_data *macro, const char *arg, int *valuep)
+-static char const digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
++static char const digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+@@ -1302,0 +1303,7 @@ m4_changequote (struct obstack *obs MAYBE_UNUSED, int argc,
++  /* POSIX changequote() has no arguments and restores the defaults.  GNU's
++     parser represents the empty parentheses as one empty argument.  */
++  if (no_gnu_extensions && argc == 2 && *ARG (1) == '\0')
++    {
++      set_quotes (NULL, NULL);
++      return;
++    }
+diff --git a/src/input.c b/src/input.c
+index 727ac7f..f1c6676 100644
+--- a/src/input.c
++++ b/src/input.c
+@@ -412,0 +413,16 @@ pop_wrapup (void)
++  /* POSIX requires repeated m4wrap calls to be processed in call order.
++     GNU mode deliberately retains its historical stack order.  */
++  if (no_gnu_extensions)
++    {
++      input_block *previous = NULL;
++      input_block *current = wsp;
++      while (current != NULL)
++        {
++          input_block *following = current->prev;
++          current->prev = previous;
++          previous = current;
++          current = following;
++        }
++      wsp = previous;
++    }
++
+diff --git a/src/m4.c b/src/m4.c
+index 2bd5775..eb6df17 100644
+--- a/src/m4.c
++++ b/src/m4.c
+@@ -390,0 +391,18 @@ process_file (const char *name)
++/* Return true when ARG names a POSIX macro.  A definition may contain an
++   equals sign followed by its value; an undefinition may not.  Keep this
++   byte-oriented, like the default input lexer in input.c.  */
++static bool
++valid_posix_macro_name (const char *arg, bool definition)
++{
++  const unsigned char *p = (const unsigned char *) arg;
++
++  if (!(('A' <= *p && *p <= 'Z') || ('a' <= *p && *p <= 'z') || *p == '_'))
++    return false;
++  p++;
++  while (('A' <= *p && *p <= 'Z') || ('a' <= *p && *p <= 'z')
++         || ('0' <= *p && *p <= '9') || *p == '_')
++    p++;
++
++  return *p == '\0' || (definition && *p == '=');
++}
++
+@@ -405 +422,0 @@ main (int argc, char *const *argv)
+-  struct sigaction act;
+@@ -429,27 +446,4 @@ main (int argc, char *const *argv)
+-  /* Stack overflow and program error handling.  Ignore failure to
+-     install a handler, since this is merely for improved output on
+-     crash, and we should never crash ;).  We install SIGBUS and
+-     SIGSEGV handlers prior to using the c-stack module; depending on
+-     the platform, c-stack will then override none, SIGSEGV, or both
+-     handlers.  */
+-  program_error_message
+-    = xasprintf (_("internal error detected; please report this bug to <%s>"),
+-                 PACKAGE_BUGREPORT);
+-  signal_message[SIGSEGV] = xstrdup (strsignal (SIGSEGV));
+-  signal_message[SIGABRT] = xstrdup (strsignal (SIGABRT));
+-  signal_message[SIGILL] = xstrdup (strsignal (SIGILL));
+-  signal_message[SIGFPE] = xstrdup (strsignal (SIGFPE));
+-  if (SIGBUS != SIGILL && SIGBUS != SIGSEGV)
+-    signal_message[SIGBUS] = xstrdup (strsignal (SIGBUS));
+-  sigemptyset (&act.sa_mask);
+-  /* One-shot - if we fault while handling a fault, we want to revert
+-     to default signal behavior.  */
+-  act.sa_flags = SA_NODEFER | SA_RESETHAND;
+-  act.sa_handler = fault_handler;
+-  sigaction (SIGSEGV, &act, NULL);
+-  sigaction (SIGABRT, &act, NULL);
+-  sigaction (SIGILL, &act, NULL);
+-  sigaction (SIGFPE, &act, NULL);
+-  sigaction (SIGBUS, &act, NULL);
+-  if (c_stack_action (fault_handler) == 0)
+-    nesting_limit = 0;
++  /* This binary is built solely as Bashy's POSIX provider.  Preserve every
++     inherited signal disposition and leave default actions to the kernel, as
++     required by the utility's ASYNCHRONOUS EVENTS contract.  */
++  nesting_limit = 0;
+@@ -659,0 +653,8 @@ main (int argc, char *const *argv)
++            if (no_gnu_extensions
++                && !valid_posix_macro_name (defines->arg, true))
++              {
++                M4ERROR ((warning_status, 0,
++                          _("invalid macro name `%s'"), defines->arg));
++                retcode = EXIT_FAILURE;
++                break;
++              }
+@@ -670 +671,9 @@ main (int argc, char *const *argv)
+-          lookup_symbol (defines->arg, SYMBOL_DELETE);
++          if (no_gnu_extensions
++              && !valid_posix_macro_name (defines->arg, false))
++            {
++              M4ERROR ((warning_status, 0,
++                        _("invalid macro name `%s'"), defines->arg));
++              retcode = EXIT_FAILURE;
++            }
++          else
++            lookup_symbol (defines->arg, SYMBOL_DELETE);

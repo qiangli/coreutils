@@ -124,6 +124,46 @@ provider_prepare_lp_source() {
     "patches/cups-2.4.7-posix-sigpipe.patch" "$_provider_lp_patch_sha" >> "$_provider_lp_record"
 }
 
+# GNU m4 1.4.19's traditional switch disables extensions but retains several
+# historical GNU behaviors that conflict with the POSIX interface: lower-case
+# eval digits above nine, LIFO repeated m4wrap calls, changequote() disabling
+# quotes, and unrestricted -D/-U names. It also replaces default fatal-signal dispositions with diagnostic
+# handlers. Apply the reviewed correction to the unpacked upstream tree. The GPL
+# source remains an external, local build input. The tracked source-derived
+# patch is GPL-3.0-or-later; its path and digest are also recorded in the
+# provider provenance sidecar. Neither it nor GNU m4 is linked into the Go
+# multicall binary.
+provider_prepare_m4_source() {
+  _provider_m4_src=$1
+  _provider_m4_record=$2
+  _provider_m4_patch=$here/patches/m4-1.4.19-posix-semantics.patch
+  _provider_m4_patch_sha=f91247bf25d7c66f2a6888c35ff5a2200df7979826b327f554a31d4d4939e3ac
+  [ -f "$_provider_m4_patch" ] || {
+    printf 'posix-provider: m4 POSIX correction is missing: %s\n' \
+      "$_provider_m4_patch" >&2
+    return 1
+  }
+  _provider_m4_actual=$(provider_sha256 "$_provider_m4_patch")
+  [ "$_provider_m4_actual" = "$_provider_m4_patch_sha" ] || {
+    printf 'posix-provider: m4 POSIX correction digest mismatch: got %s want %s\n' \
+      "$_provider_m4_actual" "$_provider_m4_patch_sha" >&2
+    return 1
+  }
+  command -v git >/dev/null 2>&1 || {
+    printf 'posix-provider: git is required to prepare m4\n' >&2
+    return 1
+  }
+  (cd "$_provider_m4_src" &&
+     git apply --unidiff-zero --check "$_provider_m4_patch" &&
+     git apply --unidiff-zero "$_provider_m4_patch") || {
+    printf 'posix-provider: m4 POSIX correction did not apply cleanly\n' >&2
+    return 1
+  }
+  printf 'recipe_patch\t%s\t%s\n' \
+    "patches/m4-1.4.19-posix-semantics.patch" "$_provider_m4_patch_sha" \
+    >> "$_provider_m4_record"
+}
+
 # provider_recipe_current PROVENANCE EXPECTED_REVISION
 # Empty revisions retain the legacy cache identity. A non-empty revision is a
 # product build-recipe identity and must match exactly before a cached provider
@@ -479,6 +519,20 @@ PATCHES
          CFLAGS='-O2 -fgnu89-inline -std=gnu99 -DIS_IN\(x\)=0' >/dev/null)
     found=$_h/localedef
     ;;
+  m4)
+    need git
+    provider_prepare_m4_source "$src" "$work/extra-$cmd.tsv" ||
+      fail "cannot prepare m4 $version for POSIX semantics"
+    (cd "$build_dir" && "$src/configure" --disable-nls >/dev/null 2>&1 ||
+       "$src/configure" >/dev/null)
+    # Building the top-level `all` target regenerates m4.1 whenever the
+    # corrected executable is newer than the shipped page, needlessly adding
+    # help2man to the runtime provider toolchain. The provider installs only
+    # the executable, so build its two actual dependency directories.
+    (cd "$build_dir/lib" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null)
+    (cd "$build_dir/src" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" m4 >/dev/null)
+    found=$build_dir/src/m4
+    ;;
   ctags)
     # The pin is a git-tag archive (archive/refs/tags/), which ships no
     # generated configure -- Universal Ctags produces it with autogen.sh, so the
@@ -556,6 +610,11 @@ PATCHES
     ;;
 esac
 [ -n "${found:-}" ] && [ -f "$found" ] || fail "$cmd build produced no executable"
+
+if [ "$cmd" = m4 ]; then
+  [ -x "$here/m4-semantic-test.sh" ] || fail 'm4 executable semantic gate is missing'
+  "$here/m4-semantic-test.sh" "$found" || fail 'm4 executable semantic gate failed'
+fi
 
 install -m 0755 "$found" "$target"
 if [ "$cmd" = man ]; then
