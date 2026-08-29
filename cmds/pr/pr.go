@@ -443,6 +443,17 @@ func scanColumnOption(args []string) []string {
 			out = append(out, arg)
 			continue
 		}
+		// +FIRST[:LAST] is pr's historical page-selection option even though
+		// its spelling does not begin with '-'.  Canonicalize it while it is
+		// still in the option region so later options remain options.  The
+		// early breaks above preserve a +name after -- or the first file as a
+		// pathname.
+		if strings.HasPrefix(arg, "+") && len(arg) > 1 {
+			if _, _, err := parsePages(arg[1:]); err == nil {
+				out = append(out, "--pages="+arg[1:])
+				continue
+			}
+		}
 		if arg == "-" || (!strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "+")) {
 			out = append(out, args[i:]...)
 			break

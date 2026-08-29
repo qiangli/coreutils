@@ -265,6 +265,14 @@ func TestPRPlusOperandPageRange(t *testing.T) {
 	}
 }
 
+func TestPRPlusPageRangeDoesNotEndOptionRecognition(t *testing.T) {
+	input := strings.Repeat("line\n", 20)
+	out, errb, code := runPR(t, t.TempDir(), input, "+2", "-l", "13", "-t")
+	if code != 0 || errb != "" || out == "" {
+		t.Fatalf("pr +2 -l 13 -t = (%q, %q, %d), want page-two output", out, errb, code)
+	}
+}
+
 func TestPRDoubleDashProtectsPlusOperand(t *testing.T) {
 	dir := t.TempDir()
 	writeFixed(t, dir, "+2", "protected\n")
