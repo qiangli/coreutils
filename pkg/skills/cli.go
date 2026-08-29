@@ -181,7 +181,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
 	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
 	// what running it accumulates into.
-	root.AddCommand(list, probe, show, add, verify, run, learn, promote, export)
+	root.AddCommand(list, probe, show, add, verify, run, learn, promote, export, newSyncCmd())
 	return root
 }
 
