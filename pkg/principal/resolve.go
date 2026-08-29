@@ -1,11 +1,13 @@
 package principal
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/spacetime"
 )
 
@@ -135,6 +137,10 @@ func (r *Resolver) resolveAgent(name string) (Resolution, bool) {
 	}
 	if a.Ledger != nil && a.Ledger.Reliability != "" {
 		res.Facts = append(res.Facts, [2]string{"reliability", a.Ledger.Reliability})
+	}
+	if card, live, _ := room.Find(a.Name); live {
+		res.Claim = &LiveClaim{State: "TAKEN", ID: card.ID, Mode: card.Mode, PID: card.PID}
+		res.Facts = append(res.Facts, [2]string{"claim", fmt.Sprintf("TAKEN id=%s mode=%s pid=%d", card.ID, card.Mode, card.PID)})
 	}
 
 	chk := r.cat.VerifyAgent(a.Name, r.probe)

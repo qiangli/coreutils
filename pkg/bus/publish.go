@@ -55,7 +55,18 @@ missing parts.`,
 				return publishErr(cmd, jsonOut, err.Error(), topic, roomID, to, msg)
 			}
 
-			who := resolvePrincipal(as)
+			// Preserve publish's pre-existing no-login refusal. BoardIdentity also
+			// supports anonymous/public readers, but an authored Bus event has
+			// always required an asserted principal.
+			if strings.TrimSpace(resolvePrincipal(as)) == "" {
+				return publishErr(cmd, jsonOut,
+					"identity is required (REPORT/AUTHOR invariant): set --as or $BASHY_PRINCIPAL",
+					topic, roomID, to, msg)
+			}
+			who, actorErr := ResolveAuthoredActor(as)
+			if actorErr != nil {
+				return publishErr(cmd, jsonOut, actorErr.Error(), topic, roomID, to, msg)
+			}
 			if who == "" {
 				return publishErr(cmd, jsonOut,
 					"identity is required (REPORT/AUTHOR invariant): set --as or $BASHY_PRINCIPAL",

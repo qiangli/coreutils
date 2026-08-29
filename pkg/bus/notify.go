@@ -120,7 +120,7 @@ deliberately absent.`,
 			if err := validateNotifySubject(subject); err != nil {
 				return notifyFailure(cmd, jsonOut, "", target, subject, err)
 			}
-			principal, err := BoardIdentity(as)
+			principal, err := ResolveAuthoredActor(as)
 			if err != nil {
 				return notifyFailure(cmd, jsonOut, "", target, subject, err)
 			}

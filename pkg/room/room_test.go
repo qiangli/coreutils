@@ -3,7 +3,11 @@ package room
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 func isolate(t *testing.T) {
@@ -129,6 +133,38 @@ func TestJoinRefusesLiveDuplicate(t *testing.T) {
 	got, ok, _ := Find("elif")
 	if !ok || got.PID != os.Getpid() {
 		t.Fatalf("incumbent card = %+v (%v), want the original pid %d", got, ok, os.Getpid())
+	}
+}
+
+func TestJoinSerializesClaimReadCheckWrite(t *testing.T) {
+	isolate(t)
+	dir, err := membersDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockfile.Acquire(filepath.Join(dir, "claims.lock"), lockfile.Holder{Intent: "test hold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- Join(Card{ID: "serialized", Binding: "codex:test", PID: os.Getpid()})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Join crossed a held cross-process claim lock: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Join did not resume after claim lock release")
 	}
 }
 

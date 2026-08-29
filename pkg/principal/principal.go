@@ -201,6 +201,16 @@ type Resolution struct {
 	Confidence Confidence  `json:"confidence,omitempty"`
 	Facts      [][2]string `json:"facts,omitempty"` // ordered key/value detail
 	Contacts   []Contact   `json:"contacts,omitempty"`
+	Claim      *LiveClaim  `json:"claim,omitempty"`
+}
+
+// LiveClaim is the process-backed singleton currently occupying an agent name.
+// It intentionally exposes no session digest or vendor identifier.
+type LiveClaim struct {
+	State string `json:"state"`
+	ID    string `json:"id"`
+	Mode  string `json:"mode,omitempty"`
+	PID   int    `json:"pid"`
 }
 
 // Ref returns a structured reference to this principal.

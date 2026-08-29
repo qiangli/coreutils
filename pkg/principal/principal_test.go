@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/room"
 )
 
 // testEnv is a fully hermetic host: no DNS, no ssh_config, no pairing.
@@ -93,6 +94,34 @@ func TestResolveAgentByNicknameAndAlias(t *testing.T) {
 		if ans.Matches[0].Summary != "claude:fable5" {
 			t.Fatalf("Resolve(%q) summary = %q", q, ans.Matches[0].Summary)
 		}
+	}
+}
+
+func TestResolveAgentProjectsLiveTakenClaim(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	r, cat := testResolver(t, testEnv(t))
+	if err := cat.SaveAgent(fleet.Agent{Name: "claimed", Tool: "claude", Model: "fable"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Join(room.Card{ID: "claimed", Nick: "claimed", Mode: "inbox", PID: os.Getpid(), Binding: "claude:fable"}); err != nil {
+		t.Fatal(err)
+	}
+	ans := r.Resolve("agent:claimed")
+	if !ans.Resolved || len(ans.Matches) != 1 {
+		t.Fatalf("resolution = %+v", ans)
+	}
+	claim := ans.Matches[0].Claim
+	if claim == nil || claim.State != "TAKEN" || claim.ID != "claimed" || claim.Mode != "inbox" || claim.PID != os.Getpid() {
+		t.Fatalf("claim = %+v", claim)
+	}
+	found := false
+	for _, fact := range ans.Matches[0].Facts {
+		if fact[0] == "claim" && strings.Contains(fact[1], "TAKEN id=claimed mode=inbox") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("human claim fact missing: %+v", ans.Matches[0].Facts)
 	}
 }
 

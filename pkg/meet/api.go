@@ -396,6 +396,10 @@ func PostAs(ref, author, to, text string) (Event, error) {
 		if who == "" {
 			return Event{}, fmt.Errorf("meet: --as NAME is required on a board")
 		}
+		who, err = bus.ResolveAuthoredActor(who)
+		if err != nil {
+			return Event{}, err
+		}
 		who = canonAgent(who)
 		if !participantSeat(st, who) {
 			// An open board delegates seating to a declared audience: a matching

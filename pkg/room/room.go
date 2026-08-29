@@ -61,11 +61,20 @@ type Card struct {
 	EventsPath string `json:"events_path,omitempty"`
 	// PID is the process whose liveness the membership tracks — the room prunes a
 	// card whose pid is gone on read, so it never asserts a dead member is live.
-	PID    int    `json:"pid"`
-	Cwd    string `json:"cwd,omitempty"`
-	Native bool   `json:"native,omitempty"` // self-governing harness (ycode)
-	Events bool   `json:"events,omitempty"` // speaks a structured event channel
-	Joined string `json:"joined"`
+	PID int `json:"pid"`
+	// OwnerPID is the stable agent-harness process that owns this session.
+	// Short-lived Bashy commands are descendants of it even when a shell or
+	// watcher process sits between them and the harness. It is an attribution
+	// claim within the host OS trust boundary, not a cryptographic credential.
+	OwnerPID int `json:"owner_pid,omitempty"`
+	// SessionClaim is a one-way digest of the stable tool-session identifier
+	// inherited by the agent and its command subprocesses. The raw vendor
+	// session identifier must never enter this public room card.
+	SessionClaim string `json:"session_claim,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	Native       bool   `json:"native,omitempty"` // self-governing harness (ycode)
+	Events       bool   `json:"events,omitempty"` // speaks a structured event channel
+	Joined       string `json:"joined"`
 	// Updated is the last publisher heartbeat. Joined is the assignment start
 	// and must not be rewritten by a heartbeat; consumers need both elapsed
 	// work time and liveness freshness.
@@ -182,6 +191,13 @@ func Join(c Card) error {
 	if err != nil {
 		return err
 	}
+	claimLock, err := lockfile.Acquire(filepath.Join(dir, "claims.lock"), lockfile.Holder{
+		Name: c.ID, PID: c.PID, Intent: "claim room member identity",
+	})
+	if err != nil {
+		return fmt.Errorf("room: serialize member claim: %w", err)
+	}
+	defer claimLock.Release()
 	path := memberPath(dir, c.ID)
 	prior, ok := readCard(path)
 	legacy := ""

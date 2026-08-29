@@ -298,7 +298,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				Provider: strings.TrimSpace(provider),
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
 			}
-			from, err := BoardIdentity(as)
+			from, err := ResolveAuthoredActor(as)
 			if err != nil {
 				return err
 			}
@@ -396,7 +396,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 '[ref:abc 2/3]', '[ref:abc 3/3 END]'; the receiver waits for END and reports missing parts.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			from, err := BoardIdentity(as)
+			from, err := ResolveAuthoredActor(as)
 			if err != nil {
 				return err
 			}

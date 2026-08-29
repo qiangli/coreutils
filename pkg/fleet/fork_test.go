@@ -65,7 +65,7 @@ func TestNoForkTemplateMeansNoFork(t *testing.T) {
 
 // The shipped claude tool must declare a real fork; codex must not.
 func TestBaselineClaudeForksCodexDoesNot(t *testing.T) {
-	cat := New()
+	cat := New(WithoutLocalStore())
 	claude, ok := cat.Tool("claude")
 	if !ok {
 		t.Fatal("baseline claude tool missing")
@@ -79,5 +79,22 @@ func TestBaselineClaudeForksCodexDoesNot(t *testing.T) {
 	}
 	if codex, ok := cat.Tool("codex"); ok && codex.CanFork() {
 		t.Fatal("codex must NOT declare a fork — its headless resume mutates the parent thread")
+	}
+}
+
+func TestBaselineCodexDeclaresCurrentSessionEnvironment(t *testing.T) {
+	cat := New(WithoutLocalStore())
+	codex, ok := cat.Tool("codex")
+	if !ok {
+		t.Fatal("baseline codex tool missing")
+	}
+	t.Setenv("CODEX_SESSION_ID", "session-id")
+	t.Setenv("CODEX_THREAD_ID", "thread-id")
+	if got := codex.CurrentSession(); got != "session-id" {
+		t.Fatalf("CurrentSession = %q, want first declared session id", got)
+	}
+	t.Setenv("CODEX_SESSION_ID", "")
+	if got := codex.CurrentSession(); got != "thread-id" {
+		t.Fatalf("CurrentSession fallback = %q, want thread id", got)
 	}
 }

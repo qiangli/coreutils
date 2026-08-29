@@ -60,6 +60,19 @@ func TestBoardPostRejectsOversizedCoordinationBeforeTranscriptAppend(t *testing.
 	}
 }
 
+func TestBoardPostRejectsAuthenticatedCrossIdentityBeforeTranscriptAppend(t *testing.T) {
+	st := boardRoom(t)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/codex")
+	if _, err := PostAs(st.ID, "opencode", "", "REJECTED-MEET-BODY"); err == nil ||
+		!strings.Contains(err.Error(), "cannot author as") {
+		t.Fatalf("cross-identity meet tell error = %v", err)
+	}
+	if events, err := readTranscript(st.ID); err != nil || len(events) != 0 {
+		t.Fatalf("rejected meet tell mutated transcript: events=%d err=%v", len(events), err)
+	}
+}
+
 func TestManualTellRejectsOversizedOrdinaryMeetingBeforeTranscriptAppend(t *testing.T) {
 	st := newTestSession(t)
 	cmd := newTellCmd()

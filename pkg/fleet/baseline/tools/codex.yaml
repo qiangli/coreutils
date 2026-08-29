@@ -4,6 +4,9 @@ display: Codex
 cli:
   binary: codex
   launch:
+    session_env:
+      - CODEX_SESSION_ID
+      - CODEX_THREAD_ID
     # RUNG 2 via stdout. Measured on the wire 2026-07-31:
     #
     #   $ codex exec --json "say ok"

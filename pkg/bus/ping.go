@@ -152,7 +152,7 @@ func pingSend(cmd *cobra.Command, as, target, body string) error {
 	if err := ValidateCoordinationBody(body); err != nil {
 		return fmt.Errorf("ping message: %w", err)
 	}
-	from, err := BoardIdentity(as)
+	from, err := ResolveAuthoredActor(as)
 	if err != nil {
 		return err
 	}
