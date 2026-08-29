@@ -513,7 +513,7 @@ func TestMagicGrammarComparisonsContinuationsAndFormatting(t *testing.T) {
 	}, "\n")+"\n"))
 
 	out, errb, code := invoke(t, dir, "", "-M", "magic", "strings", "numeric", "high", "signed", "low", "allbits", "missingbit", "continued", "tabbed")
-	want := "strings: string=hi there\nnumeric: masked=160\nhigh: high=201\nsigned: signed=-1\nlow: low=9\nallbits: allbits=7\nmissingbit: missingbit=1\ncontinued: root; byte=7\ntabbed:  leading message\n"
+	want := "strings: string=hi there\nnumeric: masked=160\nhigh: high=201\nsigned: signed=-1\nlow: low=9\nallbits: allbits=7\nmissingbit: missingbit=1\ncontinued: root ; byte=7\ntabbed:  leading message\n"
 	if out != want || errb != "" || code != 0 {
 		t.Fatalf("portable magic = (%q, %q, %d), want %q", out, errb, code, want)
 	}

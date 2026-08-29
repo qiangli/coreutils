@@ -25,7 +25,7 @@ func TestProfileDMagicRightArrowContinuation(t *testing.T) {
 	put(t, dir, "file_1_right_arrow_offset.tmp", []byte("some_string_data right_arrow_offset"))
 	put(t, dir, "magic", []byte(strings.Join([]string{
 		"0\ts\tsome_string_data\tMessage: %s",
-		">17\ts\tright_arrow_offset\t Message2: %s",
+		">17\ts\tright_arrow_offset\tMessage2: %s",
 	}, "\n")+"\n"))
 	for _, flag := range []string{"-m", "-M"} {
 		out, errOut, code := invoke(t, dir, "", flag, "magic", "file_1_right_arrow_offset.tmp")
@@ -37,15 +37,43 @@ func TestProfileDMagicRightArrowContinuation(t *testing.T) {
 }
 
 func TestMagicContinuationMessageSeparator(t *testing.T) {
-	dir := t.TempDir()
-	put(t, dir, "payload", []byte("some_string_data right_arrow_offset"))
-	put(t, dir, "magic", []byte(strings.Join([]string{
-		"0 s some_string_data Message: %s",
-		">17 s right_arrow_offset  Message2: %s",
-	}, "\n")+"\n"))
-	out, errOut, code := invoke(t, dir, "", "-M", "magic", "payload")
-	want := "payload: Message: some_string_data Message2: right_arrow_offset\n"
-	if code != 0 || out != want || errOut != "" {
-		t.Fatalf("file continuation separator = (%q, %q, %d), want %q", out, errOut, code, want)
+	for _, tc := range []struct {
+		name, primary, continuation, want string
+	}{
+		{
+			name:         "space-delimited-extra-separator",
+			primary:      "0 s some_string_data Message: %s",
+			continuation: ">17 s right_arrow_offset  Message2: %s",
+			want:         "Message: some_string_data Message2: right_arrow_offset",
+		},
+		{
+			name:         "unicode-leading-whitespace",
+			primary:      "0\ts\tsome_string_data\tMessage: %s",
+			continuation: ">17\ts\tright_arrow_offset\t\u2003Message2: %s",
+			want:         "Message: some_string_data\u2003Message2: right_arrow_offset",
+		},
+		{
+			name:         "unicode-trailing-whitespace",
+			primary:      "0\ts\tsome_string_data\tMessage: %s\u2003",
+			continuation: ">17\ts\tright_arrow_offset\tMessage2: %s",
+			want:         "Message: some_string_data\u2003Message2: right_arrow_offset",
+		},
+		{
+			name:         "backspace-suppresses-separator",
+			primary:      "0\ts\tsome_string_data\tMessage: %s",
+			continuation: ">17\ts\tright_arrow_offset\t\\b; Message2: %s",
+			want:         "Message: some_string_data; Message2: right_arrow_offset",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			put(t, dir, "payload", []byte("some_string_data right_arrow_offset"))
+			put(t, dir, "magic", []byte(tc.primary+"\n"+tc.continuation+"\n"))
+			out, errOut, code := invoke(t, dir, "", "-M", "magic", "payload")
+			want := "payload: " + tc.want + "\n"
+			if code != 0 || out != want || errOut != "" {
+				t.Fatalf("file continuation separator = (%q, %q, %d), want %q", out, errOut, code, want)
+			}
+		})
 	}
 }

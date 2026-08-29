@@ -476,9 +476,30 @@ func applyMagicInspected(data inspectedData, tests []magicTest) (string, bool, e
 			child := tests[i]
 			i++
 			if childValue, ok := child.match(data); ok {
-				part, err := renderMagicMessage(child.message, child.messageArg(childValue))
+				rawPart := child.message
+				suppressSeparator := strings.HasPrefix(rawPart, `\b`)
+				if suppressSeparator {
+					// Historical magic syntax gives a leading \b in a
+					// continuation description special meaning: suppress the
+					// usual inter-description blank. Decide this from the raw
+					// description so the marker is not rendered as a backspace.
+					rawPart = rawPart[2:]
+				}
+				part, err := renderMagicMessage(rawPart, child.messageArg(childValue))
 				if err != nil {
 					return message + part, true, err
+				}
+				// Matching continuation descriptions are separate message
+				// fields. Insert their historical separator unless either field
+				// explicitly supplies whitespace at the boundary. This also
+				// covers tab-delimited portable magic files, where the field
+				// delimiter itself is not part of the description.
+				if message != "" && part != "" && !suppressSeparator {
+					last, _ := utf8.DecodeLastRuneInString(message)
+					first, _ := utf8.DecodeRuneInString(part)
+					if !unicode.IsSpace(last) && !unicode.IsSpace(first) {
+						message += " "
+					}
 				}
 				message += part
 			}
