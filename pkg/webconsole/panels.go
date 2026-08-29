@@ -5,8 +5,10 @@ package webconsole
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +32,22 @@ type Panel struct {
 	// command that would fix it.
 	Start []string `json:"start,omitempty"`
 
-	// Source records where the declaration came from: builtin | atlas.
+	// Icon is SVG path data on a 24 grid, or one emoji. Empty means the
+	// launcher falls back to its own mark for a known name, then to the
+	// initial — "a letter is honest about being a placeholder".
+	Icon string `json:"icon,omitempty"`
+	// Tip is the tile's title= tooltip. Empty means no tooltip.
+	Tip string `json:"tip,omitempty"`
+
+	// Auth is this panel's gate tier: public | system | custom. Empty is
+	// treated as system. See consoleGate — the tier is resolved per panel, so
+	// a public app opens ITS MOUNT and nothing else.
+	Auth string `json:"auth,omitempty"`
+	// LoginPath is the app's own sign-in path, custom tier only. Advisory: the
+	// console never redirects there itself, it just does not intercept.
+	LoginPath string `json:"login_path,omitempty"`
+
+	// Source records where the declaration came from: builtin | atlas | app.
 	Source string `json:"source"`
 
 	// Available is false when the panel structurally cannot run here (no
@@ -57,6 +74,7 @@ func builtinPanels() []Panel {
 	term := Panel{
 		Name: "terminal", Label: "Terminal", Path: "/term/",
 		Mode: atlas.WebInProcess, Source: "builtin", Available: webterm.Supported(),
+		Auth: AuthSystem,
 	}
 	if !term.Available {
 		term.Note = "this host has no pseudo-console"
@@ -64,6 +82,7 @@ func builtinPanels() []Panel {
 	files := Panel{
 		Name: "files", Label: "Files", Path: "/files/",
 		Mode: atlas.WebInProcess, Source: "builtin", Available: true,
+		Auth: AuthSystem,
 	}
 	return []Panel{term, files}
 }
@@ -98,6 +117,9 @@ func Discover() []Panel {
 			Mode:      w.Mode,
 			Port:      w.Port,
 			Start:     w.Start,
+			Icon:      w.Icon,
+			Tip:       w.Tip,
+			Auth:      AuthSystem,
 			Source:    "atlas",
 			Available: true,
 		})
@@ -176,4 +198,72 @@ func (c *probeCache) Probe(ctx context.Context, panels []Panel) []Status {
 
 	c.at, c.last = time.Now(), out
 	return out
+}
+
+// TakenMounts returns the mount names already claimed, so a third-party app
+// cannot shadow a builtin or an atlas-declared surface.
+func TakenMounts(panels []Panel) map[string]bool {
+	taken := map[string]bool{}
+	for _, p := range panels {
+		taken[p.Name] = true
+		if m := strings.Trim(p.Path, "/"); m != "" {
+			taken[m] = true
+		}
+	}
+	return taken
+}
+
+// discoverApps turns --app specs into panels.
+//
+// It collects per-spec errors instead of aborting: one misdeclared app must not
+// take the launcher down, the same judgement panelHandler already makes for an
+// unmountable files panel. A spec that fails is REPORTED and dropped, never
+// silently ignored — a tile that quietly vanished is indistinguishable from one
+// that was never asked for.
+func discoverApps(ctx context.Context, specs []string, probe ProbeFunc, taken map[string]bool) ([]Panel, []error) {
+	if probe == nil {
+		probe = ProbeApp
+	}
+	var out []Panel
+	var errs []error
+	for _, spec := range specs {
+		bin, port, err := ParseAppSpec(spec)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		meta, perr := probe(ctx, bin)
+		if perr != nil {
+			// The fallback rung: a binary that does not speak the contract still
+			// gets a tile when the operator supplied the one fact we cannot
+			// guess. Without a port there is nothing to proxy, so that IS fatal
+			// for this spec.
+			if port == 0 {
+				errs = append(errs, fmt.Errorf("%s: %w, and no port given (use --app %s@<port>)", bin, perr, bin))
+				continue
+			}
+			meta = AppMeta{}
+		}
+		meta.Normalize(filepath.Base(bin), port)
+		if err := meta.Validate(taken); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", bin, err))
+			continue
+		}
+		taken[meta.Mount] = true
+		out = append(out, Panel{
+			Name:      meta.Mount,
+			Label:     meta.Label,
+			Path:      "/" + meta.Mount + "/",
+			Mode:      atlas.WebProxy,
+			Port:      meta.Port,
+			Start:     meta.Start,
+			Icon:      meta.Icon,
+			Tip:       meta.Tip,
+			Auth:      meta.Auth,
+			LoginPath: meta.LoginPath,
+			Source:    "app",
+			Available: true,
+		})
+	}
+	return out, errs
 }

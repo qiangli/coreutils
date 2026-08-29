@@ -86,6 +86,7 @@ func newServeCmd() *cobra.Command {
 		scope   string
 		write   bool
 		disable []string
+		apps    []string
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -97,6 +98,7 @@ func newServeCmd() *cobra.Command {
 				Scope:      scope,
 				AllowWrite: write,
 				Disable:    disable,
+				Apps:       apps,
 			}, bind, port)
 		},
 	}
@@ -106,30 +108,49 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&write, "allow-write", false, "allow the files panel to modify files")
 	cmd.Flags().StringSliceVar(&disable, "disable", nil,
 		"panels to leave out entirely — neither listed nor routed (terminal,files,relay,mb,board)")
+	cmd.Flags().StringArrayVar(&apps, "app", nil,
+		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable "+
+			"(described by `<bin> meta --json`)")
 	return cmd
 }
 
 func newListCmd() *cobra.Command {
-	return &cobra.Command{
+	var apps []string
+	cmd := &cobra.Command{
 		Use:           "list",
 		Short:         "list the apps and whether each one is up",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
 			var pc probeCache
+			panels := Discover()
+			if len(apps) > 0 {
+				extra, errs := discoverApps(c.Context(), apps, nil, TakenMounts(panels))
+				for _, err := range errs {
+					fmt.Fprintf(c.ErrOrStderr(), "apps: skipping --app: %v\n", err)
+				}
+				panels = append(panels, extra...)
+			}
 			w := tabwriter.NewWriter(c.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "SURFACE\tPATH\tMODE\tSTATUS\tSTART")
-			for _, st := range pc.Probe(c.Context(), Discover()) {
+			fmt.Fprintln(w, "SURFACE\tPATH\tMODE\tAUTH\tSOURCE\tSTATUS\tSTART")
+			for _, st := range pc.Probe(c.Context(), panels) {
 				note := st.StartHint
 				if st.Status == StatusUnavailable {
 					note = st.Note
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					st.Name, st.Path, st.Mode, st.Status, note)
+				auth := st.Auth
+				if auth == "" {
+					auth = AuthSystem
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					st.Name, st.Path, st.Mode, auth, st.Source, st.Status, note)
 			}
 			return w.Flush()
 		},
 	}
+	cmd.Flags().StringArrayVar(&apps, "app", nil,
+		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable")
+	return cmd
 }
 
 // runServe binds and serves. The bind precondition is checked BEFORE listening,

@@ -25,12 +25,22 @@ const (
 // flag: two places to say the same thing is two places to drift, and the
 // console needs the path and port anyway, which a bare flag cannot carry.
 type WebSurface struct {
-	Label     string   `json:"label"`           // tile title: "Relay", "Loom"
-	Mount     string   `json:"mount"`           // ONE path segment, no slashes; "" for WebSelf
-	Mode      string   `json:"mode"`            // WebSelf | WebInProcess | WebProxy
-	Port      int      `json:"port,omitempty"`  // the service's loopback port
-	Start     []string `json:"start,omitempty"` // argv AFTER `bashy` — the start hint
-	DefaultOn bool     `json:"default_on,omitempty"`
+	Label string   `json:"label"`           // tile title: "Relay", "Loom"
+	Mount string   `json:"mount"`           // ONE path segment, no slashes; "" for WebSelf
+	Mode  string   `json:"mode"`            // WebSelf | WebInProcess | WebProxy
+	Port  int      `json:"port,omitempty"`  // the service's loopback port
+	Start []string `json:"start,omitempty"` // argv AFTER `bashy` — the start hint
+
+	// Icon is SVG path data on a 24 grid, or a single emoji. Optional: the
+	// launcher falls back to its own mark for a known name, then to the
+	// initial. It lives here rather than only in the launcher's script so a
+	// built-in surface and a third-party app describe themselves through ONE
+	// struct — see pkg/webconsole's AppMeta, which this round-trips through.
+	Icon string `json:"icon,omitempty"`
+	// Tip is the tile's title= tooltip. Optional; absent means no tooltip.
+	Tip string `json:"tip,omitempty"`
+
+	DefaultOn bool `json:"default_on,omitempty"`
 }
 
 // WebModes returns the closed mode vocabulary, sorted.

@@ -157,8 +157,20 @@ const COLORS = {
 };
 const ICON_PALETTE = ["#4f46e5","#3478f6","#ec4899","#f59e0b","#10b981","#8b5cf6",
   "#5ac8fa","#ef4444","#06b6d4","#22c55e","#0ea5e9","#a855f7","#84cc16"];
-function appIcon(name) {
+// A panel may describe its own mark (dhnt-app-meta-v1 `icon`): SVG path data on
+// the same 24 grid, or a single emoji. Server-supplied wins, then our own mark
+// for a name we know, then the initial. The fallback chain is the point — a
+// third-party app is never REQUIRED to ship art, and the letter stays honest
+// about being a placeholder.
+function appIcon(name, icon) {
   const color = COLORS[name] || ICON_PALETTE[Math.abs(hash(name)) % ICON_PALETTE.length];
+  if (icon) {
+    // Path data is drawn; anything else is treated as a text glyph (emoji).
+    if (/^[MmLlHhVvCcSsQqTtAaZz0-9eE.,+\-\s]+$/.test(icon)) {
+      return { color, path: icon, glyph: (name[0] || "?").toUpperCase() };
+    }
+    return { color, path: null, glyph: icon };
+  }
   return { color, path: SVG[name] || null, glyph: (name[0] || "?").toUpperCase() };
 }
 function hash(name) {
@@ -195,7 +207,7 @@ function svgIcon(spec, cls, width) {
 
 // ------------------------------------------------------------------- tiles --
 function tile(a, opts = {}) {
-  const ic = appIcon(a.name);
+  const ic = appIcon(a.name, a.icon);
   const wrap = document.createElement("div");
   wrap.className = "tile-wrap";
 
@@ -217,6 +229,8 @@ function tile(a, opts = {}) {
     btn.title = a.note || "unavailable on this host";
   } else if (a.status === "stopped") {
     btn.title = a.start_hint ? "Not running. Start it with: " + a.start_hint : "not running";
+  } else if (a.tip) {
+    btn.title = a.tip;
   }
 
   const icon = document.createElement("span");

@@ -59,6 +59,17 @@ type Options struct {
 	// Terminal configures the shell behind the Terminal panel.
 	Terminal webterm.Options
 
+	// Apps are --app specs (`<bin>` or `<bin>@<port>`) naming third-party
+	// programs to publish as tiles. Each is probed with `<bin> meta --json`.
+	//
+	// This is OPERATOR ARGV, exactly like Disable. bashy never scans a
+	// directory for binaries and never takes an app list off the network,
+	// because probing one means EXEC'ing it.
+	Apps []string
+	// ProbeApp is the exec seam. Nil means ProbeApp; tests inject a stub so a
+	// unit test never spawns a process.
+	ProbeApp ProbeFunc
+
 	// Panels overrides discovery. Nil means Discover().
 	Panels []Panel
 
@@ -91,6 +102,7 @@ type server struct {
 	limiter      *websession.Limiter
 	requireLogin bool
 	panels       []Panel
+	panelAuth    map[string]string // mount segment -> auth tier
 	probes       probeCache
 	boards       boardCache
 }
@@ -136,6 +148,15 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	}
 	if s.panels == nil {
 		s.panels = Discover()
+		if len(opts.Apps) > 0 {
+			apps, errs := discoverApps(opts.Ctx, opts.Apps, opts.ProbeApp, TakenMounts(s.panels))
+			for _, err := range errs {
+				// Reported, never silent: a tile that quietly vanished looks
+				// exactly like one nobody asked for.
+				slog.Error("apps: skipping --app", "err", err)
+			}
+			s.panels = append(s.panels, apps...)
+		}
 	}
 	if len(opts.Disable) > 0 {
 		kept := s.panels[:0]
@@ -150,8 +171,19 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// either. Dropping it from the tile list alone would leave the surface
 	// reachable to anyone who typed the path.
 	on := map[string]bool{}
+	s.panelAuth = map[string]string{}
 	for _, p := range s.panels {
 		on[p.Name] = true
+		tier := p.Auth
+		if tier == "" {
+			tier = AuthSystem
+		}
+		// Key on the mount SEGMENT, not the name: they are allowed to differ
+		// (the terminal is "terminal" at /term/), and keying on the name would
+		// leave the served path resolving to no tier at all.
+		if seg := strings.Trim(p.Path, "/"); seg != "" {
+			s.panelAuth[seg] = tier
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -160,6 +192,10 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/apps", s.handleApps)
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	// The external self-description. Ungated (see isOpenPath) and deliberately
+	// a projection, not the internal Panel.
+	mux.HandleFunc("GET /meta", s.handleMeta)
+	mux.HandleFunc("GET /meta/{app}", s.handleMetaApp)
 	mux.HandleFunc("GET /login", s.handleLoginPage)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
@@ -291,6 +327,45 @@ func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 func (s *server) proxyTo(p Panel) http.Handler {
 	target := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(p.Port)}
 	rp := httputil.NewSingleHostReverseProxy(target)
+
+	// The app must be able to build correct absolute URLs and correct redirects
+	// from BEHIND two hops (cloudbox -> outpost -> console -> app). coopauth.Mount
+	// has already stamped X-Forwarded-Prefix; these are the other two thirds of
+	// the contract app authors are told to read instead of Host/r.TLS.
+	inner := rp.Director
+	rp.Director = func(req *http.Request) {
+		prefix := coopauth.BasePrefix(req)
+		host, proto := forwardedHostProto(req)
+		inner(req)
+		if prefix != "" {
+			req.Header.Set(coopauth.HdrForwardedPrefix, prefix)
+		}
+		if host != "" {
+			req.Header.Set(coopauth.HdrForwardedHost, host)
+		}
+		if proto != "" {
+			req.Header.Set(coopauth.HdrForwardedProto, proto)
+		}
+	}
+
+	// Rewrite a root-relative Location into the mount. This is what outpost
+	// already does for cooperative apps, and without it the `custom` auth tier
+	// cannot work at all: an app answering a login POST with `302 /home` would
+	// send the browser to the console's launcher instead of back into the app.
+	//
+	// Only root-relative values are touched — an absolute URL is the app's
+	// deliberate choice (an external IdP, say) and rewriting it would break a
+	// redirect that was already correct.
+	rp.ModifyResponse = func(resp *http.Response) error {
+		loc := resp.Header.Get("Location")
+		if loc == "" || !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") {
+			return nil
+		}
+		if resp.Request != nil {
+			resp.Header.Set("Location", coopauth.PrefixPath(resp.Request, loc))
+		}
+		return nil
+	}
 	// FlushInterval -1 streams: these panels carry SSE and WebSockets, and any
 	// buffering turns a live view into a hang.
 	rp.FlushInterval = -1
@@ -310,4 +385,19 @@ func redirectTo(path string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, coopauth.PrefixPath(r, path), http.StatusFound)
 	})
+}
+
+// forwardedHostProto reports the host and scheme as the BROWSER sees them,
+// derived from coopauth.ExternalBase so the answer is identical to the one the
+// console's own pages compute.
+func forwardedHostProto(r *http.Request) (host, proto string) {
+	base := coopauth.ExternalBase(r)
+	if base == "" {
+		return "", ""
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", ""
+	}
+	return u.Host, u.Scheme
 }

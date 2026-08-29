@@ -4,8 +4,11 @@
 package webconsole
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/qiangli/coreutils/pkg/coopauth"
 )
@@ -73,4 +76,92 @@ func (s *server) userOf(r *http.Request) (user, via string) {
 		user = coopauth.SystemUser()
 	}
 	return user, via
+}
+
+// MetaView is the EXTERNAL projection of a panel — the third surface of the
+// dhnt-app-meta-v1 contract, beside `<bin> meta` and `bashy <verb> meta`.
+//
+// It deliberately omits port, start and status. The port and the start argv are
+// this host's internals and mean nothing to a remote renderer; liveness changes
+// constantly and is exactly what would make the response uncacheable. Liveness
+// stays on /api/apps, which the launcher already polls behind a 3s TTL.
+type MetaView struct {
+	SchemaVersion string `json:"schema_version"`
+	Name          string `json:"name"`
+	Label         string `json:"label"`
+	Icon          string `json:"icon,omitempty"`
+	Tip           string `json:"tip,omitempty"`
+	Mount         string `json:"mount"`
+	Path          string `json:"path"`
+	Auth          string `json:"auth"`
+	Source        string `json:"source"`
+}
+
+func metaViewOf(p Panel) MetaView {
+	auth := p.Auth
+	if auth == "" {
+		auth = AuthSystem
+	}
+	return MetaView{
+		SchemaVersion: MetaSchema,
+		Name:          p.Name,
+		Label:         p.Label,
+		Icon:          p.Icon,
+		Tip:           p.Tip,
+		Mount:         strings.Trim(p.Path, "/"),
+		Path:          p.Path,
+		Auth:          auth,
+		Source:        p.Source,
+	}
+}
+
+// writeMetaJSON serves a body with a strong content-derived ETag and honours
+// If-None-Match. The point of this endpoint is that outpost or cloudbox can poll
+// it cheaply and cache until the bytes actually change, so the validator is
+// keyed on content — the same choice embed.go's etagFor makes for assets, and
+// for the same reason.
+func writeMetaJSON(w http.ResponseWriter, r *http.Request, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, "meta: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	_, _ = w.Write(body)
+}
+
+// handleMeta lists every panel this console serves.
+func (s *server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	views := make([]MetaView, 0, len(s.panels))
+	for _, p := range s.panels {
+		views = append(views, metaViewOf(p))
+	}
+	writeMetaJSON(w, r, map[string]any{
+		"schema_version": MetaSchema,
+		"apps":           views,
+	})
+}
+
+// handleMetaApp answers for one panel.
+//
+// A panel removed by --disable is 404 here, exactly as it is absent from
+// /api/apps and unrouted. Reporting it would leak the existence of a surface
+// that --disable exists to remove.
+func (s *server) handleMetaApp(w http.ResponseWriter, r *http.Request) {
+	want := r.PathValue("app")
+	for _, p := range s.panels {
+		if p.Name == want || strings.Trim(p.Path, "/") == want {
+			writeMetaJSON(w, r, metaViewOf(p))
+			return
+		}
+	}
+	http.Error(w, "no such app: "+want, http.StatusNotFound)
 }
