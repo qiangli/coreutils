@@ -1,0 +1,133 @@
+.TH MAILX 1 "August 2026" "Bashy" "POSIX Commands"
+.SH NAME
+mailx, mail \- process a local mailbox and send local messages
+.SH SYNOPSIS
+.B mailx
+.RB [ -eHiNn ]
+.RB [ -F ]
+.RB [ -u
+.IR user ]
+.RB [ -f
+.RI [ file ]]
+.RB [ -b
+.IR address ]
+.RB [ -c
+.IR address ]
+.RB [ -r
+.IR address ]
+.RB [ -s
+.IR subject ]
+.RB [ -t ]
+.RI [ address ...]
+.br
+.B mail
+.RI [ options ]
+.RI [ address ...]
+.SH DESCRIPTION
+.B mailx
+reads messages from a local mbox or composes a message for local operating-system
+accounts.  The Bashy implementation intentionally provides the POSIX local-mail
+interface only: it neither contacts SMTP nor invokes an external mail transfer
+agent.  Delivery appends a locked, escaped mbox record to the recipient's local
+spool file.
+.PP
+With one or more address operands, standard input is the message body.  With no
+address operands,
+.B mailx
+enters command mode on the selected mailbox.  Message numbers and the special
+current-message selectors are accepted by commands that operate on messages.
+.SH OPTIONS
+.TP
+.B -e
+Test for mail.  Exit successfully when the selected mailbox contains at least
+one message, without starting command mode.
+.TP
+.B -f [file]
+Read the named mbox instead of the system mailbox.  If
+.I file
+is omitted, use the user's secondary mbox.
+.TP
+.B -F
+Record sent mail in a file named for the first recipient.
+.TP
+.BI -b " address"
+Send a blind copy to each named local address.  Multiple addresses may be
+separated by commas or shell whitespace.
+.TP
+.BI -c " address"
+Send a copy to each named local address.
+.TP
+.B -H
+Write header summaries and exit.
+.TP
+.B -i
+Ignore interrupts while reading a message body.
+.TP
+.B -N
+Do not write the initial header summary in command mode.
+.TP
+.B -n
+Do not read the system startup file.
+.TP
+.BI -r " address"
+Set the return address for a composed local message.
+.TP
+.BI -s " subject"
+Set the Subject header.
+.TP
+.B -t
+Read recipients from the To, Cc, and Bcc fields of the message headers in
+standard input.  Any address operands are combined with those header recipients.
+.TP
+.BI -u " user"
+Read the local system mailbox of
+.IR user .
+.SH COMMAND MODE
+The POSIX command language includes message display and navigation; header
+listing; deletion and undelete; save, copy, and write; reply and Reply; mail;
+preserve; folder selection; variable set and unset; shell escape; source;
+version; help; and quit or exit.  Commands accept message lists where specified.
+On normal quit, deleted messages are removed and retained messages are written
+back atomically; exit abandons mailbox changes.
+.SH FILES
+.TP
+.I /var/mail/user
+Default local system mailbox.  The root may be changed with
+.BR MAILX_SPOOL .
+.TP
+.I $HOME/mbox
+Default secondary mailbox.
+.TP
+.I $HOME/.mailrc
+Per-user startup commands.
+.SH ENVIRONMENT
+.BR DEAD ,
+.BR EDITOR ,
+.BR HOME ,
+.BR LISTER ,
+.BR MAIL ,
+.BR MAILRC ,
+.BR MBOX ,
+.BR PAGER ,
+.BR SHELL ,
+.BR TMPDIR ,
+and
+.B VISUAL
+select POSIX mailx files and helpers.  Locale variables affect character
+handling and diagnostics.  Bashy's
+.B MAILX_SPOOL
+extension selects the root of the local-only spool.
+.SH EXIT STATUS
+Zero indicates successful delivery or mailbox processing.  Greater than zero
+indicates invalid syntax, an unavailable local account or mailbox, a lock or
+I/O failure, rejected message data, or another error.
+.SH SECURITY
+Mailbox updates use advisory locking and atomic replacement where required.
+Recipient names are local account names, not network addresses.  Header input
+is validated to prevent injection and mbox body lines are escaped on delivery.
+.SH SEE ALSO
+.BR ed (1),
+.BR sh (1)
+.SH STANDARDS
+POSIX.1-2008, 2016 Edition (Issue 7).  Remote transport is outside the required
+POSIX interface and is deliberately absent.

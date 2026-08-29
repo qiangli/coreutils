@@ -1,0 +1,75 @@
+.TH TALK 1 "August 2026" "Bashy" "POSIX Commands"
+.SH NAME
+talk \- exchange text with another logged-in user on the local host
+.SH SYNOPSIS
+.B talk
+.I address
+.RI [ terminal ]
+.SH DESCRIPTION
+.B talk
+opens an interactive, screen-oriented conversation with another operating-system
+account logged in on the same host.  The recipient must have an eligible terminal
+and must permit terminal messages.  If more than one eligible terminal exists,
+the optional
+.I terminal
+operand selects one.
+.PP
+Bashy implements the host-local behavior required by POSIX.  Host-qualified and
+remote addresses are rejected.  No talk daemon is contacted.  Invitations are
+written to the recipient terminal and conversation events travel over private,
+authenticated, ephemeral local-domain sockets; no transcript is retained.
+.SH OPERANDS
+.TP
+.I address
+The name of a local operating-system account with an active terminal session.
+.TP
+.I terminal
+An optional terminal name, with or without the
+.I /dev/
+prefix, belonging to that account.
+.SH TERMINAL OPERATION
+Both standard input and standard output must be terminals.  The terminal type
+must provide clear-screen, cursor-addressing, and erase-line capabilities and a
+display of at least 20 columns by 6 rows.  During the conversation the terminal
+is placed temporarily into non-canonical, no-echo mode; its original settings
+are restored on every normal and error exit.
+.PP
+The display maintains separately labelled local and peer regions.  The
+configured erase, kill, interrupt, and end-of-file characters keep their terminal
+meanings.  An alert event rings the terminal bell.  Peer closure does not discard
+local input; the local participant chooses when to exit.
+.SH ENVIRONMENT
+.B TERM
+selects terminal capabilities.  Locale variables affect character decoding,
+display width, and diagnostics.  The Bashy-specific
+.B BASHY_TALK_DIR
+may select the root-owned sticky directory used for local session endpoints.
+.SH FILES
+.TP
+.I /var/run/bashy/talk
+Default shared endpoint directory when available.  It must be root-owned and
+have sticky world-searchable semantics; unsafe ownership or mode is rejected.
+.TP
+.I /var/run/utmp
+Login-session data used to locate the recipient terminal on systems that provide
+it.
+.SH EXIT STATUS
+Zero indicates a conversation terminated normally, including the configured EOF
+or interrupt character or SIGINT.  Greater than zero indicates invalid syntax,
+an unknown or unavailable recipient, denied terminal messages, inadequate
+terminal capabilities, unsafe local IPC state, authentication failure, or an
+input/output or cleanup error.
+.SH SECURITY
+Endpoint metadata is short-lived and owner-checked.  Conversation datagrams are
+authenticated and encrypted; malformed, legacy, injected, or over-sized events
+are rejected.  The implementation never contacts another host.
+.SH SEE ALSO
+.BR mesg (1),
+.BR who (1),
+.BR write (1)
+.SH HISTORY
+The talk command appeared in 4.2BSD.  Bashy's local-to-local behavior follows the
+loopback-safe model used by later BSD systems while replacing talkd with private
+local IPC.
+.SH STANDARDS
+POSIX.1-2008, 2016 Edition (Issue 7).
