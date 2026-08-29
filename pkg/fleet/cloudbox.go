@@ -180,7 +180,11 @@ func (c CloudClient) Sync(cacheRoot, noun string) (SyncResult, error) {
 		return res, err
 	}
 	for name, body := range docs {
-		if err := writeEntry(dir, name, body); err != nil {
+		write := writeEntry
+		if noun == dirSkills {
+			write = writeSkillEntry
+		}
+		if err := write(dir, name, body); err != nil {
 			return res, err
 		}
 	}
@@ -258,6 +262,26 @@ func (c CloudClient) fetchModels() (map[string][]byte, error) {
 // dirSkills is accepted by Sync even though this package does not read skills;
 // pkg/skills owns that ring. Pulling them here keeps one `sync` verb.
 const dirSkills = "skills"
+
+// writeSkillEntry writes one synced skill as <dir>/<name>/SKILL.md.
+//
+// Skills are FOLDER-shaped — pkg/skills reads them with a folder ring keyed on
+// a SKILL.md marker — while tools, models and agents are single YAML documents
+// that writeEntry spells <name>.yaml. Using the flat writer for skills pulled
+// them into a layout the reader ignores: `sync` reported "1 pulled" and
+// `skills list` showed nothing, which reads as an empty org catalog rather
+// than a layout mismatch. The pull and the read must agree on shape, not just
+// on path.
+func writeSkillEntry(dir, name string, data []byte) error {
+	if err := validName(name); err != nil {
+		return err
+	}
+	folder := filepath.Join(dir, name)
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(folder, "SKILL.md"), data, 0o644)
+}
 
 // CloudCacheRoot is where a pulled overlay lives.
 func CloudCacheRoot(root string) string { return filepath.Join(root, "fleet", "cloud-cache") }
