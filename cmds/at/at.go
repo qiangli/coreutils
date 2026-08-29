@@ -208,42 +208,55 @@ func listJobs(rc *tool.RunContext, ids []string, queue string) int {
 		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	listed := make(map[string]bool, len(ids))
-	for _, j := range jobs {
+	eligible := func(j *schedule.Job) bool {
 		if j.Kind != "at" || !j.Enabled || j.OwnerUID != identity.UID {
-			continue
+			return false
 		}
 		if queue != "" && queueOrDefault(j.Queue) != queue {
-			continue
+			return false
 		}
-		if len(ids) > 0 {
-			matched := false
-			for _, candidate := range ids {
-				if candidate == j.ID || candidate == j.Name {
-					listed[candidate] = true
-					matched = true
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
+		return true
+	}
+	writeJob := func(j *schedule.Job) bool {
 		formatted, err := formatJobTime(rc, j.NextRun)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
-			return 1
+			return false
 		}
 		if _, err := fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatted); err != nil {
-			return 1
+			fmt.Fprintf(rc.Err, "%s: write failed: %v\n", cmd.Name, err)
+			return false
 		}
+		return true
 	}
+
+	if len(ids) == 0 {
+		for _, j := range jobs {
+			if eligible(j) && !writeJob(j) {
+				return 1
+			}
+		}
+		return 0
+	}
+
 	// POSIX reports success only when the utility "listed a job or jobs". A
 	// requested at_job_id that names no job of the caller's is an error, the
 	// same as for -r; foreign and non-at jobs are indistinguishable from
-	// missing ones.
+	// missing ones. Process the operands in command-line order rather than the
+	// schedule store's order; repeated operands therefore produce repeated
+	// rows, just as repeated pathname operands do for other utilities.
 	missing := false
 	for _, id := range ids {
-		if !listed[id] {
+		found := false
+		for _, j := range jobs {
+			if eligible(j) && (id == j.ID || id == j.Name) {
+				found = true
+				if !writeJob(j) {
+					return 1
+				}
+			}
+		}
+		if !found {
 			fmt.Fprintf(rc.Err, "%s: no job %q\n", cmd.Name, id)
 			missing = true
 		}

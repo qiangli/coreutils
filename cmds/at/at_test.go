@@ -437,9 +437,34 @@ func TestAtOutputWriteErrorsFail(t *testing.T) {
 	if err := schedule.SaveJobs([]*schedule.Job{{ID: "listed", Kind: "at", OwnerUID: identity.UID, Enabled: true, NextRun: time.Now().Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}
-	rc.Stdio = tool.Stdio{In: strings.NewReader(""), Out: failingWriter{}, Err: &bytes.Buffer{}}
+	var listErr bytes.Buffer
+	rc.Stdio = tool.Stdio{In: strings.NewReader(""), Out: failingWriter{}, Err: &listErr}
 	if code := cmd.Run(rc, []string{"-l"}); code == 0 {
 		t.Fatal("listing succeeded despite failed stdout write")
+	}
+	if !strings.Contains(listErr.String(), "at: write failed: write failed") {
+		t.Fatalf("listing write diagnostic = %q", listErr.String())
+	}
+}
+
+func TestAtListProcessesJobIDOperandsInOrder(t *testing.T) {
+	setupATState(t)
+	identity := testIdentity(t)
+	now := time.Now().Add(time.Hour)
+	if err := schedule.SaveJobs([]*schedule.Job{
+		{ID: "first", Kind: "at", OwnerUID: identity.UID, Enabled: true, NextRun: now},
+		{ID: "second", Kind: "at", OwnerUID: identity.UID, Enabled: true, NextRun: now.Add(time.Hour)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, stderr, code := runATNoStdin(t, context.Background(), "-l", "second", "first", "second")
+	if code != 0 || stderr != "" {
+		t.Fatalf("ordered list = (%q, %q, %d)", out, stderr, code)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "second\t") || !strings.HasPrefix(lines[1], "first\t") || !strings.HasPrefix(lines[2], "second\t") {
+		t.Fatalf("ordered list rows = %q", lines)
 	}
 }
 

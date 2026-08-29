@@ -43,7 +43,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `ar` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 24 |
 | `arch` | `cmds/arch` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `ast` | `cmds/ast` | — | Bashy/other extension | no | no | 1 | 6 |
-| `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 8 | 38 |
+| `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 8 | 39 |
 | `atq` | `cmds/atq` | — | Bashy/other extension | no | no | 1 | 2 |
 | `atrm` | `cmds/atrm` | — | Bashy/other extension | no | no | 1 | 3 |
 | `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 48 |
