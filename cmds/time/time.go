@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -108,6 +109,15 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(command) == 0 {
 		return tool.UsageError(rc, cmd, "missing command")
 	}
+	radix := byte('.')
+	if !o.quiet {
+		var err error
+		radix, err = numericRadix(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "time: %v\n", err)
+			return 1
+		}
+	}
 
 	// -o FILE is opened before the command runs, as the GNU binary does; an
 	// unopenable file is fatal, never a silent fallback to stderr.
@@ -153,7 +163,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	// Report to the -o FILE (opened above) or stderr.
 	if !o.quiet {
-		fmt.Fprint(w, report(o, command, elapsed, userT, sysT, maxRSS, haveRSS, status))
+		fmt.Fprint(w, report(o, command, elapsed, userT, sysT, maxRSS, haveRSS, status, radix))
 	}
 
 	// Agentic soft-deadline: over budget ⇒ surface the TODO.
@@ -166,26 +176,26 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 // report renders the resource line(s) in the selected GNU time format.
-func report(o opts, command []string, real, user, sys time.Duration, rss int64, haveRSS bool, status int) string {
+func report(o opts, command []string, real, user, sys time.Duration, rss int64, haveRSS bool, status int, radix byte) string {
 	switch {
 	case o.format != "":
-		return expandFormat(o.format, command, real, user, sys, rss, status) + "\n"
+		return expandFormat(o.format, command, real, user, sys, rss, status, radix) + "\n"
 	case o.posix: // -p: POSIX three-line form
-		return fmt.Sprintf("real %.2f\nuser %.2f\nsys %.2f\n", real.Seconds(), user.Seconds(), sys.Seconds())
+		return fmt.Sprintf("real %s\nuser %s\nsys %s\n", formatSeconds(real, radix), formatSeconds(user, radix), formatSeconds(sys, radix))
 	case o.verbose:
 		var b strings.Builder
 		fmt.Fprintf(&b, "\tCommand being timed: %q\n", strings.Join(command, " "))
-		fmt.Fprintf(&b, "\tUser time (seconds): %.2f\n", user.Seconds())
-		fmt.Fprintf(&b, "\tSystem time (seconds): %.2f\n", sys.Seconds())
+		fmt.Fprintf(&b, "\tUser time (seconds): %s\n", formatSeconds(user, radix))
+		fmt.Fprintf(&b, "\tSystem time (seconds): %s\n", formatSeconds(sys, radix))
 		fmt.Fprintf(&b, "\tPercent of CPU this job got: %d%%\n", cpuPct(user, sys, real))
-		fmt.Fprintf(&b, "\tElapsed (wall clock) time: %s\n", elapsedHMS(real))
+		fmt.Fprintf(&b, "\tElapsed (wall clock) time: %s\n", localizeNumber(elapsedHMS(real), radix))
 		if haveRSS {
 			fmt.Fprintf(&b, "\tMaximum resident set size (kbytes): %d\n", rss)
 		}
 		fmt.Fprintf(&b, "\tExit status: %d\n", status)
 		return b.String()
 	default: // GNU default one-liner
-		s := fmt.Sprintf("%.2fuser %.2fsystem %selapsed %d%%CPU", user.Seconds(), sys.Seconds(), elapsedHMS(real), cpuPct(user, sys, real))
+		s := fmt.Sprintf("%suser %ssystem %selapsed %d%%CPU", formatSeconds(user, radix), formatSeconds(sys, radix), localizeNumber(elapsedHMS(real), radix), cpuPct(user, sys, real))
 		if haveRSS {
 			s += fmt.Sprintf(" (%dmaxresident)k", rss)
 		}
@@ -194,11 +204,11 @@ func report(o opts, command []string, real, user, sys time.Duration, rss int64, 
 }
 
 // expandFormat supports the common GNU -f specifiers; unknown ones pass through.
-func expandFormat(f string, command []string, real, user, sys time.Duration, rss int64, status int) string {
+func expandFormat(f string, command []string, real, user, sys time.Duration, rss int64, status int, radix byte) string {
 	r := strings.NewReplacer(
-		"%e", fmt.Sprintf("%.2f", real.Seconds()),
-		"%U", fmt.Sprintf("%.2f", user.Seconds()),
-		"%S", fmt.Sprintf("%.2f", sys.Seconds()),
+		"%e", formatSeconds(real, radix),
+		"%U", formatSeconds(user, radix),
+		"%S", formatSeconds(sys, radix),
 		"%P", fmt.Sprintf("%d%%", cpuPct(user, sys, real)),
 		"%M", strconv.FormatInt(rss, 10),
 		"%x", strconv.Itoa(status),
@@ -207,6 +217,34 @@ func expandFormat(f string, command []string, real, user, sys time.Duration, rss
 		"\\t", "\t",
 	)
 	return r.Replace(f)
+}
+
+func numericRadix(env []string) (byte, error) {
+	name := locale.Resolve(env, locale.Numeric)
+	withoutModifier, _, _ := strings.Cut(name, "@")
+	base, codeset, _ := strings.Cut(withoutModifier, ".")
+	normalizedCodeset := strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(codeset))
+	switch {
+	case (base == "C" || base == "POSIX") && (normalizedCodeset == "" || normalizedCodeset == "UTF8"):
+		return '.', nil
+	case strings.EqualFold(base, "de_DE"):
+		switch normalizedCodeset {
+		case "", "UTF8", "ISO88591", "ISO885915":
+			return ',', nil
+		}
+	}
+	return 0, fmt.Errorf("LC_NUMERIC %q is unavailable; supported locales are C/POSIX and de_DE", name)
+}
+
+func formatSeconds(d time.Duration, radix byte) string {
+	return localizeNumber(strconv.FormatFloat(d.Seconds(), 'f', 2, 64), radix)
+}
+
+func localizeNumber(s string, radix byte) string {
+	if radix == '.' {
+		return s
+	}
+	return strings.Replace(s, ".", string(radix), 1)
 }
 
 func cpuPct(user, sys, real time.Duration) int {

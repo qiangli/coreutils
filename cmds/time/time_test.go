@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -59,6 +60,41 @@ func TestTimeFormatSpecifiers(t *testing.T) {
 	_ = out
 	if !strings.Contains(errOut, "CMD=true") || !strings.Contains(errOut, "EXIT=0") {
 		t.Errorf("-f specifiers not expanded: %q", errOut)
+	}
+}
+
+func TestTimeNumericLocalePrecedenceAndFormatting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"LANG", []string{"LANG=de_DE.iso88591"}, "real 1,25\nuser 0,50\nsys 0,25\n"},
+		{"LC_NUMERIC", []string{"LANG=POSIX", "LC_NUMERIC=de_DE.UTF-8"}, "real 1,25\nuser 0,50\nsys 0,25\n"},
+		{"LC_ALL", []string{"LANG=POSIX", "LC_NUMERIC=POSIX", "LC_ALL=de_DE.iso88591"}, "real 1,25\nuser 0,50\nsys 0,25\n"},
+		{"POSIX override", []string{"LANG=de_DE.iso88591", "LC_NUMERIC=de_DE.iso88591", "LC_ALL=POSIX"}, "real 1.25\nuser 0.50\nsys 0.25\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			radix, err := numericRadix(tc.env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := report(opts{posix: true}, []string{"true"}, 1250*time.Millisecond, 500*time.Millisecond, 250*time.Millisecond, 0, false, 0, radix)
+			if got != tc.want {
+				t.Fatalf("report=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTimeCustomFormatLocalizesOnlyNumericConversions(t *testing.T) {
+	radix, err := numericRadix([]string{"LC_NUMERIC=de_DE.iso88591"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := report(opts{format: "literal. %e %U %S %C"}, []string{"a.b"}, 1250*time.Millisecond, 500*time.Millisecond, 250*time.Millisecond, 0, false, 0, radix)
+	if got != "literal. 1,25 0,50 0,25 a.b\n" {
+		t.Fatalf("custom report=%q", got)
 	}
 }
 
