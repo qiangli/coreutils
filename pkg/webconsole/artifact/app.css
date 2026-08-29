@@ -518,8 +518,38 @@ body.standalone #bar { flex: none; }
   margin-top: .35rem; font: inherit; font-size: .7rem; cursor: pointer;
   background: none; border: 0; padding: 0; color: var(--primary); text-decoration: underline;
 }
-.bd-sprint pre.continuity {
-  margin: .35rem 0 0; padding: .4rem .5rem; max-height: 16rem; overflow: auto;
-  background: var(--muted); border-radius: .4rem; font-size: .7rem;
-  white-space: pre-wrap; overflow-wrap: anywhere;
+.bd-sprint .more.open { color: var(--muted-foreground); }
+
+/* The continuity brief, as the labelled sections a conductor wrote — not a
+ * <pre> wall. Prose wraps; only the label is monospaced, because the label is
+ * the thing you scan for. */
+.bd-sprint .continuity {
+  margin: .35rem 0 0; padding: .4rem .5rem; max-height: 28rem; overflow: auto;
+  background: var(--muted); border-radius: .4rem;
+}
+.bd-sprint .sec { display: flex; gap: .5rem; padding: .3rem 0; align-items: baseline; }
+.bd-sprint .sec + .sec { border-top: 1px solid var(--border); }
+.bd-sprint .sec-k {
+  flex: 0 0 9.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .64rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--primary); overflow-wrap: anywhere;
+}
+.bd-sprint .sec-v { flex: 1; font-size: .74rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Run refs: the sprint's items, as chips rather than a count. */
+.bd-sprint .refs { margin-top: .3rem; display: flex; flex-wrap: wrap; gap: .25rem; align-items: baseline; }
+.bd-sprint .refs .k {
+  font-size: .64rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted-foreground); margin-right: .15rem;
+}
+.bd-sprint .refs .ref {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .66rem;
+  background: var(--muted); border: 1px solid var(--border); border-radius: .3rem; padding: 0 .3rem;
+}
+.bd-sprint .refs .more { font-size: .66rem; color: var(--muted-foreground); }
+
+/* Narrow screens: the label column would squeeze the prose to a ribbon. */
+@media (max-width: 46rem) {
+  .bd-sprint .sec { display: block; }
+  .bd-sprint .sec-k { margin-bottom: .15rem; }
 }
