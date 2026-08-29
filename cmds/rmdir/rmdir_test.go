@@ -39,6 +39,25 @@ func TestRmdirEmpty(t *testing.T) {
 	}
 }
 
+func TestRmdirStopsOptionRecognitionAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"ordinary", "-p", "--"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, errb, code := runTool(t, dir, "ordinary", "-p", "--")
+	if code != 0 || errb != "" {
+		t.Fatalf("rmdir operand -p --: code=%d err=%q", code, errb)
+	}
+	for _, name := range []string{"ordinary", "-p", "--"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("operand %q was not removed: %v", name, err)
+		}
+	}
+}
+
 func TestRmdirNonEmpty(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "d", "sub"), 0o755); err != nil {

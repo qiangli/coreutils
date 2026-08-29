@@ -54,6 +54,25 @@ func TestRmFile(t *testing.T) {
 	}
 }
 
+func TestRmStopsOptionRecognitionAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"ordinary", "-r", "--", "-i"} {
+		write(t, filepath.Join(dir, name), "x")
+	}
+
+	// Arguments beginning with '-' after the first operand are pathnames,
+	// including "--"; -i must not turn prompting back on in this position.
+	_, errb, code := runToolIn(t, dir, "", "ordinary", "-r", "--", "-i")
+	if code != 0 || errb != "" {
+		t.Fatalf("rm operand -r -- -i: code=%d err=%q", code, errb)
+	}
+	for _, name := range []string{"ordinary", "-r", "--", "-i"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("operand %q was not removed: %v", name, err)
+		}
+	}
+}
+
 func TestRmVerbose(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "x")
@@ -393,7 +412,7 @@ func TestRmAllowsDotComponentsBeforeFinalName(t *testing.T) {
 	write(t, filepath.Join(dir, "d", "victim"), "inside")
 
 	for _, operand := range []string{"d/./victim", "d/../victim"} {
-		_, errb, code := runTool(t, dir, "", "-f", operand)
+		_, errb, code := runTool(t, dir, "-f", operand)
 		if code != 0 || errb != "" {
 			t.Fatalf("rm -f %q = (_, %q, %d), want success", operand, errb, code)
 		}

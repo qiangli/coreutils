@@ -68,7 +68,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolP("one-file-system", "o", false, "accepted for compatibility; filesystem boundary pruning is a no-op")
 	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -269,7 +269,7 @@ func foldRShorthand(args []string) []string {
 	out := make([]string, len(args))
 	copy(out, args)
 	for i, a := range out {
-		if a == "--" {
+		if optionRecognitionEnds(a) {
 			break
 		}
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
@@ -283,7 +283,7 @@ func normalizeOptionalArgs(args []string) []string {
 	out := make([]string, len(args))
 	copy(out, args)
 	for i, a := range out {
-		if a == "--" {
+		if optionRecognitionEnds(a) {
 			break
 		}
 		switch {
@@ -313,7 +313,7 @@ const (
 func lastPromptOption(args []string) promptOption {
 	last := promptNone
 	for _, arg := range args {
-		if arg == "--" {
+		if optionRecognitionEnds(arg) {
 			break
 		}
 		switch arg {
@@ -335,6 +335,15 @@ func lastPromptOption(args []string) promptOption {
 		}
 	}
 	return last
+}
+
+// optionRecognitionEnds implements POSIX Utility Syntax Guideline 9 for rm:
+// once the first operand is encountered, every following argument is an
+// operand, even if it begins with '-' or is spelled "--".  Keep rm's option
+// normalizers and the -f/-i precedence scan on the same boundary as
+// ParseRequireOrder so they cannot reinterpret a pathname as an option.
+func optionRecognitionEnds(arg string) bool {
+	return arg == "--" || arg == "-" || !strings.HasPrefix(arg, "-")
 }
 
 // reason unwraps err to its root cause and capitalizes the first

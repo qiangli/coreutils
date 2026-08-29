@@ -41,7 +41,7 @@ func run(rc *tool.RunContext, args []string) int {
 	parents := fs.BoolP("parents", "p", false, "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b' is similar to 'rmdir a/b a'")
 	ignoreNonEmpty := fs.Bool("ignore-fail-on-non-empty", false, "ignore each failure that is solely because a directory is non-empty")
 	verbose := fs.BoolP("verbose", "v", false, "output a diagnostic for every directory processed")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
