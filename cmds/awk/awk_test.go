@@ -57,6 +57,32 @@ func TestAwkAbsentArrayReferenceCreatesElement(t *testing.T) {
 	}
 }
 
+// POSIX permits hexadecimal NUMBER constants as an implementation extension.
+// This applet does not advertise that extension: in source, 0x... is the
+// decimal NUMBER 0 concatenated with a variable beginning with x (or X).
+// Runtime string-to-number conversion is a separate POSIX atof operation and
+// still accepts hexadecimal strings; keep both paths covered together.
+func TestAwkHexNumberTokenRemainsDecimalOnly(t *testing.T) {
+	program := `BEGIN {
+		x1 = "value-of-x1"
+		a = 0x1
+		print a
+		x2cp3 = "value-of-x2cp3"
+		a = 0+0x2cp3
+		print a
+		X0P12 = "value-of-X0P12"
+		print 0X0P12
+		XAF4 = "value-of-XAF4"
+		printf("%s\n", 0XAF4)
+		print "0x1" + 0
+	}`
+	want := "0value-of-x1\n0value-of-x2cp3\n0value-of-X0P12\n0value-of-XAF4\n1\n"
+	out, errb, code := runTool(t, "", program)
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk hexadecimal NUMBER token = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
 // POSIX gives ~ and !~ the same precedence and left associativity. A chain
 // therefore feeds each match result (0 or 1) into the next match operation.
 func TestAwkMatchOperatorsAreLeftAssociative(t *testing.T) {

@@ -129,6 +129,16 @@ func (l *Lexer) scan() (Position, Token, string) {
 	case '@':
 		tok = AT
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
+		// This fork deliberately keeps NUMBER decimal-only. POSIX permits
+		// hexadecimal NUMBER constants as an implementation extension, but
+		// when that extension is not enabled, a word such as 0x1 must
+		// tokenize as the NUMBER 0 followed by the NAME x1 (implicit
+		// concatenation), not as a hexadecimal number. The explicit fast path
+		// makes that contract visible and prevents a future decimal-scanner
+		// change from silently enabling the extension.
+		if ch == '0' && (l.ch == 'x' || l.ch == 'X') {
+			return pos, NUMBER, "0"
+		}
 		// Avoid make/append and use l.offset directly for performance
 		start := l.offset - 2
 		gotDigit := false
