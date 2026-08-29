@@ -415,6 +415,27 @@ func (r Resolver) verifyProvenance(e Entry, path string) (string, error) {
 			"  the cached binary is not the one that was built; rebuild it:  bashy posix-providers build %s",
 			e.Command, e.Version, ErrProvenance, path, got, want, e.Command)
 	}
+	if e.Command == "man" {
+		companion := filepath.Join(filepath.Dir(path), "apropos")
+		companionWant := strings.ToLower(strings.TrimSpace(rec["companion_apropos_sha256"]))
+		if len(companionWant) != 64 {
+			return "", fmt.Errorf("%s %s has a %w: provenance records no companion_apropos_sha256 (%s)\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, provPath, e.Command)
+		}
+		if !isExecutableFile(companion, r.GOOS) {
+			return "", fmt.Errorf("%s %s has a %w: apropos companion is not an executable regular file\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, e.Command)
+		}
+		companionGot, err := fileSHA256(companion)
+		if err != nil {
+			return "", fmt.Errorf("%s %s has a %w: apropos companion: %v\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, err, e.Command)
+		}
+		if companionGot != companionWant {
+			return "", fmt.Errorf("%s %s has a %w: apropos companion hash differs from provenance\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, e.Command)
+		}
+	}
 	return want, nil
 }
 
@@ -461,7 +482,7 @@ func fileSHA256(path string) (string, error) {
 
 func isExecutableFile(path, goos string) bool {
 	fi, err := os.Stat(path)
-	if err != nil || fi.IsDir() {
+	if err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
 	if goos == "windows" {

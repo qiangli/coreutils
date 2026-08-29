@@ -455,6 +455,11 @@ PATCHES
     esac
     [ -r "$_man_config" ] ||
       fail "man needs the host manpath configuration: $_man_config"
+    # `man -k` is specified by POSIX.  man-db implements it by execing its
+    # separately-built `apropos` program, using the configure-time bindir.
+    # Keep that companion beside the cached provider. The Go dispatch boundary
+    # resolves it relative to the verified man binary at run time; embedding
+    # $dest here would make an otherwise valid cache impossible to relocate.
     (cd "$build_dir" && "$src/configure" --disable-nls --disable-shared \
        --with-config-file="$_man_config" >/dev/null 2>&1 ||
        "$src/configure" --disable-shared \
@@ -465,6 +470,7 @@ PATCHES
         fail "man build failed in $_d"
     done
     found=$build_dir/src/man
+    companion=$build_dir/src/apropos
     ;;
   ex|vi)
     (cd "$src" && ./configure --with-features=normal --disable-gui --without-x \
@@ -480,6 +486,10 @@ esac
 [ -n "${found:-}" ] && [ -f "$found" ] || fail "$cmd build produced no executable"
 
 install -m 0755 "$found" "$target"
+if [ "$cmd" = man ]; then
+  [ -x "${companion:-}" ] || fail 'man build produced no apropos companion'
+  install -m 0755 "$companion" "$dest/apropos"
+fi
 
 # Provenance sidecar: what was built, from which pinned bytes, by which
 # compiler. Without the compiler line a provider is unattributable.
@@ -494,6 +504,9 @@ install -m 0755 "$found" "$target"
   [ -f "$work/extra-$cmd.tsv" ] && cat "$work/extra-$cmd.tsv"
   printf 'compiler\t%s\n' "$CC_LABEL"
   printf 'built_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$target" | awk '{print $1}'; else shasum -a 256 "$target" | awk '{print $1}'; fi)"
+  if [ "$cmd" = man ]; then
+    printf 'companion_apropos_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$dest/apropos" | awk '{print $1}'; else shasum -a 256 "$dest/apropos" | awk '{print $1}'; fi)"
+  fi
   printf 'distributed\tno (built locally; provider binaries are never republished)\n'
 } > "$dest/provenance.tsv"
 

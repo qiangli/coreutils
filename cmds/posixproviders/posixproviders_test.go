@@ -56,6 +56,17 @@ func provisionSelf(t *testing.T, root, name string) {
 	provision(t, root, name, string(body))
 }
 
+func requireManSupported(t *testing.T) {
+	t.Helper()
+	e, ok := posixprovider.Lookup("man")
+	if !ok {
+		t.Fatal("man is absent from the provider manifest")
+	}
+	if !e.SupportsGOOS(runtime.GOOS) {
+		t.Skipf("man provider is intentionally unsupported on %s", runtime.GOOS)
+	}
+}
+
 // TestArgvPassthrough pins the two things a certification arm depends on: every
 // operand reaches the provider unchanged, and argv[0] is the plain COMMAND NAME
 // rather than the cache path. The second is not cosmetic — GNU make and binutils
@@ -133,10 +144,88 @@ func provision(t *testing.T, root, name, body string) string {
 		prov += "recipe_revision\t" + e.RecipeRevision + "\n"
 	}
 	prov += fmt.Sprintf("compiler\ttest\nbuilt_sha256\t%s\n", hex.EncodeToString(sum[:]))
+	if name == "man" {
+		companion := filepath.Join(dir, "apropos")
+		if err := os.WriteFile(companion, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		prov += fmt.Sprintf("companion_apropos_sha256\t%s\n", hex.EncodeToString(sum[:]))
+	}
 	if err := os.WriteFile(filepath.Join(dir, "provenance.tsv"), []byte(prov), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return bin
+}
+
+func TestManRejectsNonPOSIXOptionBeforeDispatch(t *testing.T) {
+	root := t.TempDir()
+	provisionSelf(t, root, "man")
+	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
+	code, stdout, stderr := run(t, "man", rc, out, errb, "-h", "ls")
+	if code == 0 || stdout != "" || !strings.Contains(stderr, "unknown option -h") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestManTreatsPostOperandOptionsAsOperands(t *testing.T) {
+	requireManSupported(t)
+	root := t.TempDir()
+	provisionSelf(t, root, "man")
+	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
+	code, stdout, stderr := run(t, "man", rc, out, errb, "ls", "-h", "-k")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if stdout != "argv0:man\narg:--\narg:ls\narg:-h\narg:-k\n" {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestManAllowsPOSIXKeywordOption(t *testing.T) {
+	requireManSupported(t)
+	root := t.TempDir()
+	provisionSelf(t, root, "man")
+	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
+	code, stdout, stderr := run(t, "man", rc, out, errb, "-k", "ls")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if stdout != "argv0:apropos\narg:--\narg:ls\n" {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestManKeywordTreatsPostOperandOptionAsKeywordOperand(t *testing.T) {
+	requireManSupported(t)
+	root := t.TempDir()
+	provisionSelf(t, root, "man")
+	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
+	code, stdout, stderr := run(t, "man", rc, out, errb, "-k", "name", "-h")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if stdout != "argv0:apropos\narg:--\narg:name\narg:-h\n" {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestManKeywordDispatchSurvivesCacheRelocation(t *testing.T) {
+	requireManSupported(t)
+	parent := t.TempDir()
+	original := filepath.Join(parent, "built-cache")
+	provisionSelf(t, original, "man")
+	moved := filepath.Join(parent, "reused-cache")
+	if err := os.Rename(original, moved); err != nil {
+		t.Fatal(err)
+	}
+	rc, out, errb := newRC(t, moved, fakeProviderEnv+"=1")
+	code, stdout, stderr := run(t, "man", rc, out, errb, "-k", "basename")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if stdout != "argv0:apropos\narg:--\narg:basename\n" {
+		t.Fatalf("stdout=%q", stdout)
+	}
 }
 
 // ---------------------------------------------------------------------------

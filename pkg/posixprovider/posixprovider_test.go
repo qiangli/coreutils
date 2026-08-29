@@ -49,7 +49,7 @@ func provision(t *testing.T, root string, e Entry, body []byte) string {
 func writeProvenance(t *testing.T, dir string, rec map[string]string) {
 	t.Helper()
 	var b strings.Builder
-	for _, k := range []string{"command", "version", "license", "source_url", "source_sha256", "recipe_revision", "compiler", "built_sha256", "distributed"} {
+	for _, k := range []string{"command", "version", "license", "source_url", "source_sha256", "recipe_revision", "compiler", "built_sha256", "companion_apropos_sha256", "distributed"} {
 		if v, ok := rec[k]; ok {
 			b.WriteString(k + "\t" + v + "\n")
 		}
@@ -399,6 +399,73 @@ func TestResolveRejectsStaleLocaledefRecipe(t *testing.T) {
 	r := Resolver{CacheRoot: root, GOOS: "linux"}
 	if _, err := r.Resolve("localedef"); !errors.Is(err, ErrProvenance) {
 		t.Fatalf("stale localedef recipe error = %v, want ErrProvenance", err)
+	}
+}
+
+func TestResolveManRequiresVerifiedAproposCompanion(t *testing.T) {
+	e := mustLookup(t, "man")
+	if !e.SupportsGOOS(runtime.GOOS) {
+		t.Skipf("man provider is intentionally unsupported on %s", runtime.GOOS)
+	}
+	setup := func(t *testing.T) (Resolver, string) {
+		t.Helper()
+		root := t.TempDir()
+		bin := provision(t, root, e, []byte("man"))
+		dir := filepath.Dir(bin)
+		rec, err := readProvenance(filepath.Join(dir, "provenance.tsv"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		companion := filepath.Join(dir, "apropos")
+		body := []byte("apropos")
+		if err := os.WriteFile(companion, body, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(body)
+		rec["companion_apropos_sha256"] = hex.EncodeToString(sum[:])
+		writeProvenance(t, dir, rec)
+		return Resolver{CacheRoot: root, GOOS: runtime.GOOS}, companion
+	}
+	t.Run("valid", func(t *testing.T) {
+		r, _ := setup(t)
+		if _, err := r.Resolve("man"); err != nil {
+			t.Fatalf("verified man provider rejected: %v", err)
+		}
+	})
+	for _, tc := range []struct {
+		name           string
+		unixOnly       bool
+		breakCompanion func(*testing.T, string)
+	}{
+		{"chmod", true, func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"missing", false, func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"tamper", false, func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte("changed"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.unixOnly && runtime.GOOS == "windows" {
+				t.Skip("executable mode-bit semantics are Unix-specific")
+			}
+			r, companion := setup(t)
+			tc.breakCompanion(t, companion)
+			if _, err := r.Resolve("man"); !errors.Is(err, ErrProvenance) {
+				t.Fatalf("broken companion error=%v, want ErrProvenance", err)
+			}
+		})
 	}
 }
 

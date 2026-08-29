@@ -107,6 +107,16 @@ func resolverFor(rc *tool.RunContext) (posixprovider.Resolver, error) {
 
 func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int {
 	rc.ExitSignal = 0
+	providerArgs := args
+	manKeyword := false
+	if e.Command == "man" {
+		var bad string
+		manKeyword, providerArgs, bad = parseManArgs(args)
+		if bad != "" {
+			fmt.Fprintf(rc.Err, "man: unknown option %s\n", bad)
+			return 2
+		}
+	}
 
 	r, err := resolverFor(rc)
 	if err != nil {
@@ -123,10 +133,51 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 	if e.Command == "ctags" {
 		return ctagsfifo.Run(rc, e.Command, path, args, execProviderFn)
 	}
-	if attempted, code := execProviderDedicated(rc, e.Command, path, args); attempted {
+	providerName := e.Command
+	if manKeyword {
+		// Resolver verification for man includes this sibling's provenance and
+		// digest. Derive it from the verified runtime path so a cache remains
+		// valid after relocation; never search PATH or use an unverified helper.
+		path = filepath.Join(filepath.Dir(path), "apropos")
+		providerName = "apropos"
+	}
+	if attempted, code := execProviderDedicated(rc, providerName, path, providerArgs); attempted {
 		return code
 	}
-	return execProviderFn(rc, e.Command, path, args)
+	return execProviderFn(rc, providerName, path, providerArgs)
+}
+
+// parseManArgs keeps the certification-facing provider on the POSIX
+// man surface. Upstream man-db accepts many extensions (notably -h); accepting
+// one changes a required invalid-option error into successful help output.
+// POSIX specifies only -k, plus the Utility Syntax Guidelines' -- terminator.
+// The returned argv has -k removed for direct dispatch to the verified apropos
+// companion and inserts -- before every operand. That canonical boundary keeps
+// extension-rich upstream programs from reinterpreting a post-operand -h/-k.
+func parseManArgs(args []string) (keyword bool, providerArgs []string, bad string) {
+	providerArgs = make([]string, 1, len(args)+1)
+	providerArgs[0] = "--"
+	options := true
+	for _, arg := range args {
+		if !options {
+			providerArgs = append(providerArgs, arg)
+			continue
+		}
+		if arg == "--" {
+			options = false
+			continue
+		}
+		if arg == "-k" {
+			keyword = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			return false, nil, arg
+		}
+		options = false
+		providerArgs = append(providerArgs, arg)
+	}
+	return keyword, providerArgs, ""
 }
 
 // execProviderFn is a seam so the exec path can be exercised without a real
