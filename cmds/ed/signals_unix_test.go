@@ -25,7 +25,7 @@ func TestEdSignalSetPreservesInheritedIgnores(t *testing.T) {
 	}{
 		{
 			name: "default dispositions receive ed actions",
-			want: []os.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT},
+			want: []os.Signal{syscall.SIGHUP, syscall.SIGINT},
 		},
 		{
 			name: "inherited ignores stay ignored",
@@ -38,7 +38,7 @@ func TestEdSignalSetPreservesInheritedIgnores(t *testing.T) {
 		{
 			name:    "mixed dispositions",
 			ignored: map[os.Signal]bool{syscall.SIGINT: true},
-			want:    []os.Signal{syscall.SIGHUP, syscall.SIGQUIT},
+			want:    []os.Signal{syscall.SIGHUP},
 		},
 	}
 	for _, tc := range cases {

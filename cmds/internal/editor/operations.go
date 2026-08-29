@@ -279,8 +279,17 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 	}
 	e.lastRE = pattern
 	command := trimBlank(rest)
-	if interactive && command != "" {
-		return fmt.Errorf("unexpected interactive global command")
+	var interactiveSuffix byte
+	if interactive {
+		// G and V take no command list on their command line, but like every
+		// ed command except the documented exclusions they may carry one of
+		// the l, n, or p print suffixes.  The lines following the command are
+		// still consumed once per selected line as the interactive commands.
+		interactiveSuffix, err = printSuffix(rest)
+		if err != nil {
+			return err
+		}
+		command = ""
 	}
 	if command == "" && !interactive {
 		command = "p"
@@ -389,6 +398,9 @@ func (e *Engine) global(addrs []int, explicit bool, arg string, match, interacti
 			return fmt.Errorf("no match")
 		}
 	}
+	if interactiveSuffix != 0 && e.Buffer.Current > 0 {
+		return e.printRange([]int{e.Buffer.Current}, 1, interactiveSuffix)
+	}
 	return nil
 }
 
@@ -415,15 +427,15 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 			return false, err
 		}
 		line = strings.TrimSuffix(line, "\n")
-		letter := commandLetter(line)
-		if letter != 's' {
-			line = stripContinuation(line)
-		}
 		_, p, _, parseErr := e.parseAddresses(line)
 		if parseErr != nil {
 			return false, parseErr
 		}
 		p = skipBlank(line, p)
+		letter := commandLetter(line)
+		if letter != 's' || e.closedSubstitutionAt(line, p) {
+			line = stripContinuation(line)
+		}
 		if p < len(line) && strings.ContainsRune("gGvV", rune(line[p])) {
 			return false, fmt.Errorf("cannot nest global commands")
 		}
@@ -445,4 +457,26 @@ func (e *Engine) executeGlobalList(commands string) (bool, error) {
 			return false, nil
 		}
 	}
+}
+
+// closedSubstitutionAt reports whether the replacement delimiter of the s
+// command at p is present.  In a global command list, a backslash following a
+// complete substitute expression continues the command list.  A backslash
+// before that delimiter instead escapes a newline into the replacement and
+// must reach readSubstituteArgument unchanged.
+func (e *Engine) closedSubstitutionAt(line string, p int) bool {
+	if p >= len(line) || line[p] != 's' || p+1 >= len(line) {
+		return false
+	}
+	arg := line[p+1:]
+	delim, delimLen := e.commandDelimiter(arg)
+	if delim == "" || delim == " " || delim == "\n" || delim == "\\" {
+		return false
+	}
+	_, rest, patternClosed := scanRE(arg[delimLen:], delim)
+	if !patternClosed {
+		return false
+	}
+	_, _, replacementClosed, err := delimitedBy(rest, delim)
+	return err == nil && replacementClosed
 }

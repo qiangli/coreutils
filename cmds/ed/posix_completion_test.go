@@ -100,6 +100,35 @@ func TestPOSIXGlobalInputModeAndInteractiveRecall(t *testing.T) {
 	}
 }
 
+func TestPOSIXGlobalSubstituteThenContinuesCommandList(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "in")
+	if err := os.WriteFile(name, []byte("the one\nnext\nthe three\nafter\nthe five\nlast\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := "g/the/s/the/THE/g\\\n.+1p\n.=\np\nw\nQ\n"
+	code, out, errb := runEdIn(t, dir, in, "-s", name)
+	if code != 0 || errb != "" || out != "next\nafter\nlast\n6\nlast\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+	got, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "THE one\nnext\nTHE three\nafter\nTHE five\nlast\n"; string(got) != want {
+		t.Fatalf("file=%q want %q", got, want)
+	}
+}
+
+func TestPOSIXInteractiveGlobalAcceptsPrintSuffix(t *testing.T) {
+	in := "a\nhe one\nhe two\n.\nG/he/l\n.=\n.=\nQ\n"
+	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+	want := "he one\n1\nhe two\n2\nhe two$\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("code=%d out=%q want=%q err=%q", code, out, want, errb)
+	}
+}
+
 func TestPOSIXGlobalCommandListCanQuit(t *testing.T) {
 	code, out, errb := runEdIn(t, t.TempDir(), "a\nx\n.\ng/x/Q\nthis-is-not-a-command\n", "-s")
 	if code != 0 || out != "" || errb != "" {
