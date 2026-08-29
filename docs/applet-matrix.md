@@ -183,7 +183,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 31 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
-| `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 16 |
+| `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 18 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 4 | 29 |
