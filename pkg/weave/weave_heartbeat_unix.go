@@ -34,7 +34,7 @@ func weaveHeartbeatDaemonize(cmd *cobra.Command, opts weaveHeartbeatOptions, que
 		args = append(args, arg)
 	}
 
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := weaveAppendFile(logFile, 0o644)
 	if err != nil {
 		return false, err
 	}

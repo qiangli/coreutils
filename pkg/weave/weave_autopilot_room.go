@@ -72,7 +72,7 @@ func openAutopilotRoom(dir, holder string) (*role.Contact, error) {
 	if err != nil {
 		return c, err
 	}
-	if err := os.WriteFile(autopilotRoomPath(dir), b, 0o600); err != nil {
+	if err := weaveWriteFile(autopilotRoomPath(dir), b, 0o600); err != nil {
 		return c, err
 	}
 	return c, nil

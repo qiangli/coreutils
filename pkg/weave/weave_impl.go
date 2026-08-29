@@ -520,6 +520,19 @@ func weaveWorkspaceOwner(home, repoRoot string) (string, bool) {
 	return "", false
 }
 
+// weaveQueueDir RESOLVES the queue dir for a repo. It does not create it.
+//
+// Resolving is what every READ does — `weave list`, `bashy board`, and the
+// conductor-address lookup behind `bashy mb` all land here — so a mkdir on this
+// path means merely LOOKING at a repo mints permanent state for it. It did, and
+// the result was a litter of empty ~/.bashy/weave/<repo>-<hash> tags: one per
+// working directory anyone ever ran a read from, indistinguishable at a glance
+// from a real workspace and alarming to find.
+//
+// Creation belongs to the WRITE, next to the bytes being written — see
+// weaveWriteFile / weaveAppendFile / weaveEnsureQueueDir. loadWeaveQueue already
+// treats an absent dir as an empty queue, which is the correct answer for a repo
+// that has never had a run, so no read path needs the dir to exist.
 func weaveQueueDir(repoRoot string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -560,10 +573,34 @@ func weaveQueueDir(repoRoot string) (string, error) {
 			}
 		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
 	return dir, nil
+}
+
+// weaveEnsureQueueDir creates a queue dir on behalf of a caller that is about to
+// write into it. Read paths must never call this — see weaveQueueDir.
+func weaveEnsureQueueDir(dir string) error {
+	return os.MkdirAll(dir, 0o755)
+}
+
+// weaveWriteFile writes a file under the queue dir, creating the dir first.
+//
+// Ensuring the parent HERE rather than at every call site is what makes the
+// invariant hold: a writer cannot forget, and a reader cannot accidentally
+// inherit the mkdir just by resolving a path.
+func weaveWriteFile(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, perm)
+}
+
+// weaveAppendFile opens a log under the queue dir for append, creating the dir
+// first. The append counterpart of weaveWriteFile.
+func weaveAppendFile(path string, perm os.FileMode) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, perm)
 }
 
 func loadWeaveQueue(dir string) (*weaveQueue, error) {
@@ -610,7 +647,7 @@ func saveWeaveQueue(dir string, q *weaveQueue) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := weaveWriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

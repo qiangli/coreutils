@@ -44,7 +44,7 @@ func WriteSessionPointer(repoRoot string, p *SessionPointer) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := weaveWriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

@@ -68,7 +68,7 @@ func saveConductorLock(queueDir string, l *ConductorLock) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(conductorLockPath(queueDir), b, 0o644)
+	return weaveWriteFile(conductorLockPath(queueDir), b, 0o644)
 }
 
 func (l *ConductorLock) stale(now time.Time) bool {
@@ -133,7 +133,7 @@ func saveBaton(queueDir string, bt *Baton) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(batonPath(queueDir), b, 0o644)
+	return weaveWriteFile(batonPath(queueDir), b, 0o644)
 }
 
 // renderBaton formats the baton as a self-contained markdown handoff brief — the

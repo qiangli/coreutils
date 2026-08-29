@@ -517,6 +517,6 @@ func loadFleetProbeCache(dir string) map[string]fleetProbeEntry {
 
 func saveFleetProbeCache(dir string, m map[string]fleetProbeEntry) {
 	if b, err := json.MarshalIndent(m, "", "  "); err == nil {
-		_ = os.WriteFile(fleetProbeCachePath(dir), b, 0o644)
+		_ = weaveWriteFile(fleetProbeCachePath(dir), b, 0o644)
 	}
 }
