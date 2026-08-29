@@ -133,6 +133,78 @@ func TestLinuxDerivedPathValuesMatchHostGetconf(t *testing.T) {
 	}
 }
 
+// POSIX GA67 supplies a valid relative pathname near PATH_MAX. When the
+// invocation directory is also absolute, concatenating the two creates an
+// invalid overlong pathname even though the kernel can resolve the original
+// relative operand from the process cwd. Exercise that exact process-cwd
+// contract for every pathname variable queried by the assertion.
+func TestLinuxPathValuesAcceptNearPathMaxRelativeOperand(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+
+	const componentSize = 40
+	target := unix.PathMax - 2 // leave room for the terminating NUL
+	var parts []string
+	relLen := 0
+	addDir := func(name string) {
+		t.Helper()
+		if err := os.Mkdir(name, 0o755); err != nil {
+			t.Fatalf("mkdir component: %v", err)
+		}
+		if err := os.Chdir(name); err != nil {
+			t.Fatalf("chdir component: %v", err)
+		}
+		if len(parts) > 0 {
+			relLen++
+		}
+		parts = append(parts, name)
+		relLen += len(name)
+	}
+	component := strings.Repeat("x", componentSize)
+	for relLen+len(component)+1 <= target {
+		addDir(component)
+	}
+	if remaining := target - relLen; remaining > 1 {
+		addDir(strings.Repeat("x", remaining-1))
+	}
+	relative := strings.Join(parts, string(filepath.Separator))
+	if len(relative)+1 > unix.PathMax {
+		t.Fatalf("setup: relative operand length %d exceeds PATH_MAX %d", len(relative), unix.PathMax)
+	}
+	if len(filepath.Join(base, relative))+1 <= unix.PathMax {
+		t.Fatal("setup: materialized absolute pathname does not exceed PATH_MAX")
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{
+		"LINK_MAX", "NAME_MAX", "PATH_MAX", "PIPE_BUF",
+		"_POSIX_CHOWN_RESTRICTED", "_POSIX_NO_TRUNC", "FILESIZEBITS",
+		"SYMLINK_MAX", "POSIX2_SYMLINKS",
+	} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Dir: base, DirIsProcessCwd: true,
+			Stdio: tool.Stdio{Out: &out, Err: &errb},
+		}
+		if code := run(rc, []string{name, relative}); code != 0 || out.Len() == 0 || errb.Len() != 0 {
+			t.Errorf("%s on %d-byte relative path = (stdout %q, stderr %q, exit %d)",
+				name, len(relative), out.String(), errb.String(), code)
+		}
+	}
+}
+
 func TestLinuxFileSizeBitsMapping(t *testing.T) {
 	tests := []struct {
 		name   string

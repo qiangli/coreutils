@@ -3,7 +3,6 @@
 package getconfcmd
 
 import (
-	"path/filepath"
 	"strconv"
 
 	"github.com/qiangli/coreutils/tool"
@@ -50,8 +49,8 @@ const (
 // error is POSIX's "no limit", which must print as "undefined" rather than -1.
 func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, error) {
 	p := path
-	if !filepath.IsAbs(p) && rc != nil && rc.Dir != "" {
-		p = filepath.Join(rc.Dir, p)
+	if rc != nil {
+		p = rc.Path(path)
 	}
 	v, err := unix.Pathconf(p, which)
 	if err != nil {

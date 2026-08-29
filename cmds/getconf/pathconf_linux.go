@@ -56,8 +56,8 @@ const (
 // undefined rather than a POSIX minimum or a guessed glibc default.
 func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, error) {
 	p := path
-	if !filepath.IsAbs(p) && rc != nil && rc.Dir != "" {
-		p = filepath.Join(rc.Dir, p)
+	if rc != nil {
+		p = rc.Path(path)
 	}
 	var st unix.Statfs_t
 	if err := unix.Statfs(p, &st); err != nil {
