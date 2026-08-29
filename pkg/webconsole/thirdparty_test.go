@@ -168,6 +168,11 @@ func TestMetaIsReachableWithoutIdentity(t *testing.T) {
 	if got := do(h, "GET", "/meta/shown/deeper", lan, nil).Code; got != http.StatusForbidden {
 		t.Errorf("unmatched deep /meta path = %d, want gated 403", got)
 	}
+	for _, path := range []string{"/meta/.", "/meta/..", "/meta/{shown}", "/meta/%7Bshown%7D"} {
+		if got := do(h, "GET", path, lan, nil).Code; got != http.StatusForbidden {
+			t.Errorf("%s = %d, want gated 403", path, got)
+		}
+	}
 }
 
 // The projection must not leak host internals, and must stay cacheable.

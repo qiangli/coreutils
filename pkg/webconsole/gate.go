@@ -30,7 +30,7 @@ func isOpenPath(p string) bool {
 		return true
 	}
 	if rest := strings.TrimPrefix(p, "/meta/"); rest != p {
-		return rest != "" && !strings.ContainsRune(rest, '/')
+		return !strings.ContainsRune(rest, '/') && validMount(rest) == nil
 	}
 	return false
 }
