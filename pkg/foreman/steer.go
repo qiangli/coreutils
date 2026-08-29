@@ -98,13 +98,13 @@ func (s *Session) TrySteer(msg string) (bool, error) {
 }
 
 // noteSteer records a mid-turn steer in the history, WITHOUT taking s.mu — the
-// turn it interrupted is holding that lock. The history is guarded by its own
-// small lock so an operator's correction is never lost just because it landed
-// while the agent was busy, which is the only time a correction ever lands.
-func (s *Session) noteSteer(msg string) {
-	s.liveMu.Lock()
-	s.steers = append(s.steers, "human (mid-turn): "+msg)
-	s.liveMu.Unlock()
+// turn it interrupted is holding that lock. The continuity projection is
+// guarded by its own small lock so an operator's correction is never lost just
+// because it landed while the agent was busy, which is the only time a
+// correction ever lands. It goes to the artifact and into the checkpoint's
+// accepted decisions like any other operator instruction.
+func (s *Session) noteSteer(msg string) error {
+	return s.record(RoleMidTurn, "", msg)
 }
 
 // Keystroke names TrySendKey accepts. These are the keys that mean something to
@@ -228,7 +228,9 @@ func (s *Session) steer(ctx context.Context, msg string) error {
 	_ = live.WaitIdle(ctx, quietPeriod)
 
 	if out := strings.TrimSpace(chat.SanitizeTurn(live.Turn())); out != "" {
-		s.history = append(s.history, "agent: "+out)
+		if err := s.record(RoleAgent, "", out); err != nil {
+			return err
+		}
 	}
 	if !live.Live() {
 		// It left. Say so rather than letting the next tell silently start a fresh

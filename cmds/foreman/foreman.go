@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "foreman",
 	Synopsis: "Drive a persistent, steerable agent session.",
-	Usage:    "foreman start [--detach] [--max-runtime 30m] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
+	Usage:    "foreman start [--detach] [--max-runtime 30m] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status [--wait DURATION] [--after SEQ] [--watch] [--json] <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
 }
 
 const defaultForemanMaxRuntime = 30 * time.Minute
@@ -68,7 +69,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case "tell":
 		return runTell(rc, subArgs, jsonOut)
 	case "status":
-		return runStatus(rc, subArgs, jsonOut)
+		return runStatus(rc, subFlags, subArgs, jsonOut)
 	case "log":
 		return runLog(rc, subFlags, subArgs)
 	case "interrupt":
@@ -270,19 +271,114 @@ func runKeyNamed(rc *tool.RunContext, args []string, jsonOut bool) int {
 	return runKey(rc, args[:1], args[1], jsonOut)
 }
 
-func runStatus(rc *tool.RunContext, args []string, jsonOut bool) int {
+// runStatus is the supervision read.
+//
+// Plain `status <id>` is one bounded snapshot: the state row, which now carries
+// `seq` and `digest` in JSON so the caller has a cursor. The waiting forms are
+// the state-change contract (foreman.Store.Changes / WaitChanges):
+//
+//	--after SEQ      every transition after the cursor, immediately — a
+//	                 restarted supervisor catches up on what it missed instead
+//	                 of reading the latest state and guessing
+//	--wait DURATION  block until a transition lands after the cursor (default
+//	                 cursor: the current seq, i.e. the NEXT change) or the bound
+//	                 elapses; a timeout prints nothing and exits 0, the same
+//	                 convention as `inbox --wait`, so an unchanged healthy
+//	                 session is no payload at all
+//	--watch          stream transitions until the context ends; with --json
+//	                 that is NDJSON, one record per change
+//
+// Human rows are `id  seq  prev->status  step  blocker`; JSON is one
+// bashy-foreman-transition-v1 object per line and nothing else on stdout.
+func runStatus(rc *tool.RunContext, flags map[string]string, args []string, jsonOut bool) int {
 	if len(args) != 1 {
 		return usage(rc, "status requires id")
 	}
-	st, err := foreman.NewStore("", args[0]).LoadState()
-	if err != nil {
-		return fail(rc, jsonOut, err)
+	store := foreman.NewStore("", args[0])
+	_, waiting := flags["wait"]
+	_, hasAfter := flags["after"]
+	watch := flags["watch"] == "true"
+	if !waiting && !hasAfter && !watch {
+		st, err := store.LoadState()
+		if err != nil {
+			return fail(rc, jsonOut, err)
+		}
+		if jsonOut {
+			return emitJSON(rc, st)
+		}
+		fmt.Fprintf(rc.Out, "%s\t%s\t%s\n", st.ID, st.Status, st.Goal)
+		return 0
 	}
-	if jsonOut {
-		return emitJSON(rc, st)
+	var bound time.Duration
+	if waiting {
+		d, err := time.ParseDuration(strings.TrimSpace(flags["wait"]))
+		if err != nil || d < 0 {
+			return usage(rc, "--wait must be a non-negative duration (for example 30s)")
+		}
+		bound = d
 	}
-	fmt.Fprintf(rc.Out, "%s\t%s\t%s\n", st.ID, st.Status, st.Goal)
-	return 0
+	var after int64
+	if hasAfter {
+		n, err := strconv.ParseInt(strings.TrimSpace(flags["after"]), 10, 64)
+		if err != nil || n < 0 {
+			return usage(rc, "--after must be a non-negative sequence number")
+		}
+		after = n
+	} else {
+		// No cursor: the caller wants the NEXT change, not a replay of the
+		// session's whole life.
+		st, err := store.LoadState()
+		if err != nil {
+			return fail(rc, jsonOut, err)
+		}
+		after = st.Seq
+	}
+	emit := func(trs []foreman.Transition) {
+		for _, tr := range trs {
+			if jsonOut {
+				emitJSON(rc, tr)
+				continue
+			}
+			prev := tr.PreviousStatus
+			if prev == "" {
+				prev = "-"
+			}
+			fmt.Fprintf(rc.Out, "%s\t%d\t%s->%s\t%s\t%s\n", tr.ID, tr.Seq, prev, tr.Status, tr.CurrentStep, tr.Blocker)
+		}
+	}
+	if !watch {
+		trs, err := store.WaitChanges(rc.Ctx, after, bound)
+		if err != nil {
+			if rc.Ctx.Err() != nil {
+				return 0
+			}
+			return fail(rc, jsonOut, err)
+		}
+		emit(trs)
+		return 0
+	}
+	// --watch: a stream. The bound, when given, is how long one quiet stretch
+	// may last before we re-arm; without one, wait in long slices forever.
+	slice := bound
+	if slice <= 0 {
+		slice = time.Hour
+	}
+	for {
+		trs, err := store.WaitChanges(rc.Ctx, after, slice)
+		if err != nil {
+			if rc.Ctx.Err() != nil {
+				return 0
+			}
+			return fail(rc, jsonOut, err)
+		}
+		emit(trs)
+		if n := len(trs); n > 0 {
+			after = trs[n-1].Seq
+		}
+		if rc.Ctx.Err() != nil {
+			return 0
+		}
+	}
 }
 
 func runList(rc *tool.RunContext, jsonOut bool) int {
@@ -417,7 +513,7 @@ func parseKVFlags(args []string) (map[string]string, []string) {
 			continue
 		}
 		switch name {
-		case "json", "once", "detach":
+		case "json", "once", "detach", "watch":
 			flags[name] = "true"
 		default:
 			if i+1 >= len(args) {

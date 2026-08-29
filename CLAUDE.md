@@ -357,7 +357,9 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   only into its importers): `pkg/dag` (agent-first task runner — the
   Makefile replacement behind `bashy dag`; this repo's own `DAG.md` +
   `dag-p*.md` are its task files), `pkg/foreman` (process manager over
-  dag), `pkg/resources` (live host resource telemetry behind
+  dag; its prompts carry a bounded checkpoint + recent window, never the whole
+  history, and its state changes are sequenced + digested for `status --wait` —
+  see docs/foreman-context-contract.md), `pkg/resources` (live host resource telemetry behind
   `bashy resources system` + the board's `resources` panel — CPU/memory/
   disk/network/GPU read straight from /proc, sysctl, and the Win32 entry
   points, pure Go, sample-and-diff for rates; see docs/resources.md),
