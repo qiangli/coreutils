@@ -138,11 +138,7 @@ func TestJoinRefusesLiveDuplicate(t *testing.T) {
 
 func TestJoinSerializesClaimReadCheckWrite(t *testing.T) {
 	isolate(t)
-	dir, err := membersDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	lock, err := lockfile.Acquire(filepath.Join(dir, "claims.lock"), lockfile.Holder{Intent: "test hold"})
+	lock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{Intent: "test hold"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +161,27 @@ func TestJoinSerializesClaimReadCheckWrite(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Join did not resume after claim lock release")
+	}
+}
+
+func TestJoinKeepsSynchronizationMetadataOutsideMembershipSet(t *testing.T) {
+	isolate(t)
+	if err := Join(Card{ID: "only-card", Binding: "codex:test", PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := membersDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].IsDir() || filepath.Ext(entries[0].Name()) != ".json" {
+		t.Fatalf("membership set contains non-card synchronization metadata: %#v", entries)
+	}
+	if _, err := os.Stat(memberClaimsLockPath()); err != nil {
+		t.Fatalf("member claim lock was not created beside membership set: %v", err)
 	}
 }
 

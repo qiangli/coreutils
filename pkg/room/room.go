@@ -155,6 +155,12 @@ func membersDir() (string, error) {
 	return d, os.MkdirAll(d, 0o700)
 }
 
+// memberClaimsLockPath stays outside members/: that directory is the public
+// membership set, and consumers are entitled to treat every regular entry in
+// it as a card. Synchronization metadata beside the set preserves that
+// invariant while still coordinating every Join process on the host.
+func memberClaimsLockPath() string { return filepath.Join(Dir(), "member-claims.lock") }
+
 func timelinePath() (string, error) {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return "", err
@@ -210,7 +216,7 @@ func Join(c Card) error {
 	if err != nil {
 		return err
 	}
-	claimLock, err := lockfile.Acquire(filepath.Join(dir, "claims.lock"), lockfile.Holder{
+	claimLock, err := lockfile.Acquire(memberClaimsLockPath(), lockfile.Holder{
 		Name: c.ID, PID: c.PID, Intent: "claim room member identity",
 	})
 	if err != nil {
