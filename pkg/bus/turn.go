@@ -1,17 +1,27 @@
 package bus
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/admission"
 	"github.com/qiangli/coreutils/pkg/room"
 )
+
+// DefaultTurnAdmissionBytes is the combined automatic Bus and host-inbox
+// ceiling. It aliases the store-neutral primitive's default for discoverability
+// at the integration boundary.
+const DefaultTurnAdmissionBytes = admission.DefaultTurnBytes
 
 // PreparedPreamble is a rendered inbox snapshot whose cursor acknowledgements
 // are deliberately deferred until the embedding host has injected Text into a
 // live agent successfully.
 type PreparedPreamble struct {
-	Text string
-	ack  []func() error
+	Text   string
+	ack    []func() error
+	report admission.Report
+	err    error
 }
 
 // NewPreparedPreamble creates a host-owned preamble without exposing the
@@ -28,6 +38,9 @@ func NewPreparedPreamble(text string, ack func() error) PreparedPreamble {
 // only after successful delivery. Repeated calls are safe because every source
 // cursor is monotonic.
 func (p PreparedPreamble) Commit() error {
+	if p.err != nil {
+		return p.err
+	}
 	for _, ack := range p.ack {
 		if err := ack(); err != nil {
 			return err
@@ -36,12 +49,25 @@ func (p PreparedPreamble) Commit() error {
 	return nil
 }
 
+// Err reports a preparation/rendering failure before a host attempts delivery.
+func (p PreparedPreamble) Err() error { return p.err }
+
+// AdmissionReport returns body-free byte/item accounting and digests suitable
+// for telemetry.
+func (p PreparedPreamble) AdmissionReport() admission.Report { return p.report }
+
 // PrepareTurnInbox is the embedding host's read-through view of communication
 // stores that pkg/bus cannot import (for example Meet, which already imports
 // bus). It owns no storage and must acknowledge only records it successfully
 // rendered. Bashy wires it to its unified inbox; a bare coreutils embedding
 // leaves it nil and retains the bus-only behaviour.
 var PrepareTurnInbox func(agent string) PreparedPreamble
+
+// PrepareTurnItems is the lossless Bashy unified-inbox adapter. The host maps
+// its existing stores to neutral records with stable retrieval references and
+// exact per-record acknowledgements. pkg/bus deliberately does not import those
+// stores. PrepareTurnInbox remains as a compatibility bridge for older hosts.
+var PrepareTurnItems func(agent string) ([]admission.Item, error)
 
 // TurnPreamble returns the pending-notification block for the live session
 // reachable at ctlSock, and CLEARS what it returns.
@@ -86,15 +112,7 @@ func PrepareTurnPreamble(ctlSock string) PreparedPreamble {
 	if err != nil {
 		return PreparedPreamble{}
 	}
-	p := PreparedPreamble{}
-	if len(snapshot.Items) > 0 {
-		p.Text = FormatPending(snapshot.Items)
-		p.ack = append(p.ack, snapshot.Commit)
-	}
-	if PrepareTurnInbox != nil {
-		p = mergePrepared(p, PrepareTurnInbox(sub))
-	}
-	return p
+	return prepareAdmission(sub, snapshot)
 }
 
 // subscriberForCtlSock finds the subscription whose instance is the live session
@@ -162,15 +180,83 @@ func PrepareLaunchPreamble(agent string) PreparedPreamble {
 	if err != nil {
 		return PreparedPreamble{}
 	}
-	p := PreparedPreamble{}
-	if len(snapshot.Items) > 0 {
-		p.Text = FormatPending(snapshot.Items)
-		p.ack = append(p.ack, snapshot.Commit)
+	return prepareAdmission(agent, snapshot)
+}
+
+func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
+	items := make([]admission.Item, 0, len(snapshot.Items)+1)
+	for _, pending := range snapshot.Items {
+		p := pending
+		items = append(items, admission.Item{
+			Source: "bus", ID: strconv.FormatInt(p.Seq, 10), Sequence: p.Seq,
+			From: p.Principal, To: p.To, Topic: p.Topic,
+			Priority: classifyPending(agent, p), Body: p.Body,
+			ArtifactRef: fmt.Sprintf("bashy inbox --as %s --id bus:%d --peek", strconv.Quote(agent), p.Seq),
+			OverflowRef: "bashy inbox --as " + strconv.Quote(agent) + " --peek",
+			Acknowledge: func() error { return snapshot.CommitItem(p.Seq) },
+		})
 	}
-	if PrepareTurnInbox != nil {
-		p = mergePrepared(p, PrepareTurnInbox(agent))
+	if PrepareTurnItems != nil {
+		host, err := PrepareTurnItems(agent)
+		if err != nil {
+			return PreparedPreamble{err: err}
+		}
+		items = append(items, host...)
 	}
-	return p
+	rendered, err := admission.Render(items, admission.Options{BudgetBytes: DefaultTurnAdmissionBytes})
+	if err != nil {
+		return PreparedPreamble{err: err}
+	}
+	prepared := PreparedPreamble{Text: rendered.Text, ack: []func() error{rendered.Commit}, report: rendered.Report}
+	// The legacy callback represents a whole host-owned snapshot with one
+	// acknowledgement. It cannot safely participate in record-scoped admission:
+	// reducing it to one header and then committing would consume bodies that the
+	// delivered retrieval command may no longer show as unread. Preserve the old
+	// exact delivery contract until the host wires PrepareTurnItems. When the item
+	// adapter is present it is authoritative, so do not also invoke the legacy
+	// callback and duplicate the same messages.
+	if PrepareTurnItems == nil && PrepareTurnInbox != nil {
+		legacy := PrepareTurnInbox(agent)
+		if legacy.err != nil {
+			return PreparedPreamble{err: legacy.err}
+		}
+		prepared = mergePrepared(prepared, legacy)
+	}
+	return prepared
+}
+
+func classifyPending(agent string, p Pending) admission.Priority {
+	directed := strings.TrimSpace(p.To) != "" && strings.EqualFold(strings.TrimSpace(p.To), strings.TrimSpace(agent))
+	header := strings.ToUpper(strings.Join([]string{p.Topic, firstLine(p.Body)}, " "))
+	if directed && headerHasAnyWord(header, "BLOCKED", "CONFLICT", "STOP", "SECURITY", "OWNERSHIP") {
+		return admission.PriorityUrgent
+	}
+	if directed && (headerHasAnyWord(header, "REQUEST", "REPLY", "ACK") || strings.Contains(p.Body, "?")) {
+		return admission.PriorityResponse
+	}
+	if headerHasAnyWord(header, "DECISION", "BASELINE", "FAILED", "FAILURE") {
+		return admission.PriorityDecision
+	}
+	if directed || p.Topic != "" {
+		return admission.PriorityDirected
+	}
+	return admission.PriorityInformational
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
+}
+
+func headerHasAnyWord(s string, wants ...string) bool {
+	for _, word := range strings.FieldsFunc(s, func(r rune) bool { return !(r >= 'A' && r <= 'Z') }) {
+		for _, want := range wants {
+			if word == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func mergePrepared(a, b PreparedPreamble) PreparedPreamble {

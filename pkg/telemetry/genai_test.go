@@ -82,6 +82,34 @@ func TestGenAISpansNeverCapturePromptCompletionOrErrorContent(t *testing.T) {
 	}
 }
 
+func TestCoordinationAdmissionTelemetryContainsOnlyCountsAndDigest(t *testing.T) {
+	sr := withRecorder(t)
+	CoordinationAdmission(context.Background(), "sha256:abc", 7, 9000, 3, 4096, 4, 6000)
+
+	spans := sr.Ended()
+	if len(spans) != 1 || len(spans[0].Events()) != 1 {
+		t.Fatalf("spans/events = %d/%d", len(spans), len(spans[0].Events()))
+	}
+	got := spanAttributes(spans[0].Events()[0].Attributes)
+	want := map[string]string{
+		"coordination.content_digest": "sha256:abc",
+		"coordination.input_items":    "7",
+		"coordination.input_bytes":    "9000",
+		"coordination.admitted_items": "3",
+		"coordination.rendered_bytes": "4096",
+		"coordination.omitted_items":  "4",
+		"coordination.omitted_bytes":  "6000",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("telemetry attributes = %v", got)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
 func TestGenAIUnknownCostIsNotSerializedAsZero(t *testing.T) {
 	sr := withRecorder(t)
 	ctx, endTurn := StartGenAITurn(context.Background(), GenAITurn{})

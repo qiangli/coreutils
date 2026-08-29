@@ -18,3 +18,4 @@
 {"op":"add","slug":"pax-cpio-append-and-update-require-trailer-preserving-rewrite","tool":"codex-gpt5.6-luna-u","host":"dragon","episode":"weave-issue-21","at":"2026-08-27T17:36:32.01022Z"}
 {"op":"add","slug":"mailx-header-recipient-mode-must-include-bcc-and-record-from-all","tool":"codex-gpt5.4-mini-w","host":"dragon","episode":"weave-issue-23","at":"2026-08-27T18:03:22.135577Z"}
 {"op":"add","slug":"patch-input-format-auto-detection-must-require-an-addressed-ed-c","tool":"claude-opus5-h","host":"dragon","episode":"weave-issue-34","at":"2026-08-28T12:53:02.030091Z"}
+{"op":"add","slug":"priority-admission-must-not-encode-gaps-in-a-monotonic-cursor","tool":"codex-gpt5.6-sol-b","host":"dragon","episode":"weave-issue-2","at":"2026-08-29T21:03:10.784592Z"}
