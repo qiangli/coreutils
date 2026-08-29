@@ -205,6 +205,64 @@ func TestBatchIsAtQueueBWithCompletionMailAndLoadMarker(t *testing.T) {
 	}
 }
 
+func TestBatchSubmissionContextSurvivesSchedulerExecution(t *testing.T) {
+	state := setupBatchState(t)
+	dir := t.TempDir()
+	spool := filepath.Join(dir, "spool")
+	identity, err := schedule.AuthenticatedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := "printf '%s\\n' \"$BATCH_CONTEXT\" > environment\npwd > cwd\numask > mask\n: > created\n"
+	env := []string{
+		"BASHY_SCHEDULE_STATE=" + state,
+		"BATCH_CONTEXT=retained",
+		"HOME=" + dir,
+		"LOGNAME=" + identity.Name,
+		"MAIL=" + filepath.Join(spool, identity.Name),
+		"MAILX_SPOOL=" + spool,
+		"PATH=/usr/bin:/bin",
+		"SHELL=sh",
+	}
+	var stdout, stderr bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: env,
+		Umask: 0o027, UmaskSet: true,
+		Stdio: tool.Stdio{In: strings.NewReader(program), Out: &stdout, Err: &stderr},
+	}
+	if code := cmd.Run(rc, nil); code != 0 {
+		t.Fatalf("batch: code=%d stderr=%q", code, stderr.String())
+	}
+	fired, err := schedule.TickOnceWithProviders(time.Now().Add(time.Second), os.Stderr, nil, func() (float64, error) { return 0, nil })
+	if err != nil || len(fired) != 1 {
+		t.Fatalf("scheduler tick=(%v,%v)", fired, err)
+	}
+	assert := func(name, want string) {
+		t.Helper()
+		got, readErr := os.ReadFile(filepath.Join(dir, name))
+		if readErr != nil || string(got) != want {
+			t.Fatalf("%s=%q err=%v, want %q", name, got, readErr, want)
+		}
+	}
+	assert("environment", "retained\n")
+	physicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert("cwd", physicalDir+"\n")
+	mask, err := os.ReadFile(filepath.Join(dir, "mask"))
+	if err != nil || strings.TrimLeft(strings.TrimSpace(string(mask)), "0") != "27" {
+		t.Fatalf("mask=%q err=%v, want 0027", mask, err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "created"))
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("created mode=%v err=%v, want 0640", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(spool, identity.Name)); err != nil {
+		t.Fatalf("completion mail was not delivered locally: %v", err)
+	}
+}
+
 func mustOneBatchJob(t *testing.T) *schedule.Job {
 	t.Helper()
 	jobs, err := schedule.LoadJobs()

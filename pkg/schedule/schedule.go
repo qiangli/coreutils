@@ -225,8 +225,10 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 	if err := validateJobPlatform(j); err != nil {
 		return fmt.Errorf("job %s: %w", j.ID, err)
 	}
-	if j.MailCompletion && deliver == nil {
-		return fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
+	if deliver == nil && j.Kind == "at" && j.EnvSet {
+		// POSIX at/batch jobs retain the submission environment.  Reuse its
+		// explicit local-mail destination before declaring mail unavailable.
+		deliver, _ = DiscoverLocalMailDelivery(j.Env)
 	}
 	c := commandWithUmask(j.Command, j.Umask, j.UmaskSet)
 	applyJobProcAttrs(c)
@@ -248,14 +250,14 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 	if j.StdinSet {
 		c.Stdin = strings.NewReader(j.Stdin)
 	}
-	if !j.MailOutput {
-		c.Stdout, c.Stderr = w, w
-		return c.Run()
-	}
 	var output bytes.Buffer
-	c.Stdout, c.Stderr = &output, &output
+	if j.MailOutput {
+		c.Stdout, c.Stderr = &output, &output
+	} else {
+		c.Stdout, c.Stderr = w, w
+	}
 	runErr := c.Run()
-	if output.Len() > 0 {
+	if j.MailOutput && output.Len() > 0 {
 		if deliver == nil {
 			return errors.Join(runErr, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))
 		}
@@ -263,6 +265,9 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 			return fmt.Errorf("job %s: cannot deliver output mail: %w", j.ID, err)
 		}
 	} else if j.MailCompletion {
+		if deliver == nil {
+			return errors.Join(runErr, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))
+		}
 		status := "completed successfully"
 		if runErr != nil {
 			status = "completed with error: " + runErr.Error()
@@ -511,10 +516,6 @@ func tickOnceWithProviders(now time.Time, w io.Writer, deliver MailDelivery, loa
 			}
 			if err := validateJobPlatform(j); err != nil {
 				selectionErrs = append(selectionErrs, fmt.Errorf("job %s: %w", j.ID, err))
-				continue
-			}
-			if j.MailCompletion && deliver == nil {
-				selectionErrs = append(selectionErrs, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))
 				continue
 			}
 			if j.BatchLoad {

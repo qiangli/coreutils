@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	mailxpkg "github.com/qiangli/coreutils/pkg/mailx"
 )
 
 func TestUpdateJobsConcurrentWritersDoNotLoseEntries(t *testing.T) {
@@ -304,19 +306,19 @@ func TestCronFireWithoutMailProviderReportsUndeliverableOutput(t *testing.T) {
 	}
 }
 
-func TestAtCompletionMailWithoutProviderFailsClosedBeforeExecution(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "must-not-exist")
+func TestAtCompletionMailWithoutProviderExecutesBeforeReportingDeliveryFailure(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "executed")
 	j := &Job{ID: "at-no-mail", Kind: "at", Command: []string{"/bin/sh", "-c", "touch " + marker}, MailOutput: true, MailCompletion: true, MailTo: "recipient"}
 	err := j.fire(io.Discard)
 	if !errors.Is(err, ErrMailDeliveryUnsupported) {
 		t.Fatalf("error=%v", err)
 	}
-	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
-		t.Fatalf("job executed: %v", statErr)
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("job did not execute: %v", statErr)
 	}
 }
 
-func TestTickWithoutMailProviderDoesNotClaimCronJob(t *testing.T) {
+func TestTickWithoutMailProviderClaimsExecutedCronJob(t *testing.T) {
 	withState(t)
 	now := time.Now()
 	j := &Job{ID: "due-cron", Kind: "cron", POSIXCron: true, Spec: "* * * * *", Command: []string{"/bin/sh", "-c", "true"}, Enabled: true, NextRun: now.Add(-time.Minute), MailCompletion: true, MailTo: "recipient"}
@@ -324,11 +326,11 @@ func TestTickWithoutMailProviderDoesNotClaimCronJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	fired, err := tickOnce(now, os.Stdout)
-	if !errors.Is(err, ErrMailDeliveryUnsupported) || len(fired) != 0 {
+	if !errors.Is(err, ErrMailDeliveryUnsupported) || !reflect.DeepEqual(fired, []string{"due-cron"}) {
 		t.Fatalf("tick=(%v,%v)", fired, err)
 	}
 	jobs, loadErr := LoadJobs()
-	if loadErr != nil || len(jobs) != 1 || !jobs[0].LastRun.IsZero() || !jobs[0].NextRun.Equal(j.NextRun) {
+	if loadErr != nil || len(jobs) != 1 || jobs[0].LastRun.IsZero() || !jobs[0].NextRun.After(now) {
 		t.Fatalf("job mutated: %+v err=%v", jobs, loadErr)
 	}
 }
@@ -378,15 +380,38 @@ func TestUnavailableMailDoesNotStarveUnrelatedDueJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	fired, err := TickOnceWithProviders(now, io.Discard, nil, func() (float64, error) { return 0, nil })
-	if !errors.Is(err, ErrMailDeliveryUnsupported) || !reflect.DeepEqual(fired, []string{"normal"}) {
+	if !errors.Is(err, ErrMailDeliveryUnsupported) || !reflect.DeepEqual(fired, []string{"needs-mail", "normal"}) {
 		t.Fatalf("tick=(%v,%v)", fired, err)
 	}
 	if _, statErr := os.Stat(marker); statErr != nil {
 		t.Fatalf("unrelated job was starved: %v", statErr)
 	}
 	loaded, _ := LoadJobs()
-	if mail := loaded[0]; !mail.Enabled || !mail.LastRun.IsZero() {
-		t.Fatalf("undeliverable job was claimed: %+v", mail)
+	if mail := loaded[0]; mail.Enabled || mail.LastRun.IsZero() {
+		t.Fatalf("executed undeliverable job was not claimed: %+v", mail)
+	}
+}
+
+func TestLocalMailDeliveryUsesSubmittedSpool(t *testing.T) {
+	dir := t.TempDir()
+	spool := filepath.Join(dir, "spool")
+	deliver, err := DiscoverLocalMailDelivery([]string{
+		"LOGNAME=alice",
+		"MAILX_SPOOL=" + spool,
+		"MAIL=" + filepath.Join(spool, "alice"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deliver("alice", []byte("completed\n")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := mailxpkg.ReadMbox(filepath.Join(spool, "alice"))
+	if err != nil || len(entries) != 1 || entries[0].Message == nil || !bytes.Contains(entries[0].Message.Body, []byte("completed")) {
+		t.Fatalf("local completion mail entries=%v err=%v", entries, err)
+	}
+	if err := deliver("../escape", []byte("bad")); err == nil {
+		t.Fatal("unsafe local recipient accepted")
 	}
 }
 
