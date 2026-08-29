@@ -131,7 +131,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			otel.SetTracerProvider(provider)
 			enabled = true
 			if shouldReportTelemetryStatus(isTerminal(os.Stderr)) {
-				os.Stderr.WriteString("bashy: telemetry on → " + spoolPath + " (service=" + svc + ")\n")
+				os.Stderr.WriteString("bashy: telemetry on → " + sexp.path + " (service=" + svc + ")\n")
 			}
 			shutdown = func(ctx context.Context) error {
 				ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -228,7 +228,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 // callers may request it with BASHY_TELEMETRY_NOTICE or BASHY_TELEMETRY_DEBUG.
 // BASHY_TELEMETRY_QUIET remains a compatibility override for every mode.
 func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
-	if os.Getenv("BASHY_TELEMETRY_QUIET") != "" {
+	if automationMarker(os.Getenv("BASHY_TELEMETRY_QUIET")) {
 		return false
 	}
 	if automationMarker(os.Getenv("BASHY_TELEMETRY_NOTICE")) || automationMarker(os.Getenv("BASHY_TELEMETRY_DEBUG")) {

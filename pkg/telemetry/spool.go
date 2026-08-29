@@ -104,15 +104,8 @@ func secureSpoolDir(path string) error {
 	// Only the exact default home path is Bashy-owned. Basenames are not proof:
 	// /var/spool and an operator's group-shared or symlinked spool are not ours
 	// to chmod.
-	if lfi.Mode()&os.ModeSymlink == 0 {
-		canonical, ownsDir := defaultSpoolPath()
-		if !ownsDir {
-			return nil
-		}
-		canonical, err = filepath.Abs(canonical)
-		if err == nil && filepath.Clean(path) == filepath.Clean(canonical) {
-			return os.Chmod(dir, 0o700)
-		}
+	if lfi.Mode()&os.ModeSymlink == 0 && isCanonicalSpoolPath(path) {
+		return os.Chmod(dir, 0o700)
 	}
 	return nil
 }
@@ -121,7 +114,9 @@ func secureSpoolDir(path string) error {
 // Chmod is necessary for an existing file, since OpenFile's create mode is not
 // applied when the file is already present.
 func openPrivateSpool(path string) (*os.File, error) {
+	existed := false
 	if fi, err := os.Lstat(path); err == nil {
+		existed = true
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("not a regular file")
 		}
@@ -146,9 +141,14 @@ func openPrivateSpool(path string) (*os.File, error) {
 		}
 		return nil, fmt.Errorf("not a regular file")
 	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return nil, err
+	// A file we created and Bashy's canonical file must be owner-only. An
+	// existing operator override may deliberately be a shared append target;
+	// changing its mode is outside the authority granted by naming it.
+	if !existed || isCanonicalSpoolPath(path) {
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 	return f, nil
 }
@@ -252,6 +252,15 @@ func defaultSpoolPath() (path string, ownsDir bool) {
 		return filepath.Join(os.TempDir(), "bashy-otel-spool.jsonl"), false
 	}
 	return filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl"), true
+}
+
+func isCanonicalSpoolPath(path string) bool {
+	canonical, ownsDir := defaultSpoolPath()
+	if !ownsDir {
+		return false
+	}
+	absCanonical, err := filepath.Abs(canonical)
+	return err == nil && filepath.Clean(path) == filepath.Clean(absCanonical)
 }
 
 // isFileExporter reports whether the file sink is selected.
