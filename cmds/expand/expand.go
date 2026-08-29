@@ -68,7 +68,16 @@ func run(rc *tool.RunContext, args []string) int {
 	tabsValue := fs.StringArrayP("tabs", "t", []string{"8"}, "have tabs N characters apart, not 8; or use comma- or blank-separated LIST of explicit tab positions (repeatable; the last position may be prefixed with '/' for multiples or '+' for an increment)")
 	initial := fs.BoolP("initial", "i", false, "do not convert tabs after non blanks")
 	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input bytes as columns instead of UTF-8 characters")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		// POSIX Utility Syntax Guideline 9 makes every argument after the first
+		// operand an operand, even when its spelling is otherwise an option.
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		// Preserve GNU's default option permutation extension.
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}

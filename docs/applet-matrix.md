@@ -83,7 +83,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 3 | 45 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 5 | 33 |
 | `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 24 |
-| `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 28 |
+| `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 29 |
 | `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 2 | 19 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |

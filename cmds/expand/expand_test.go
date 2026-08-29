@@ -62,6 +62,39 @@ func TestExpandCustomTabsAndFile(t *testing.T) {
 	}
 }
 
+func TestExpandOptionPermutationModes(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []struct{ name, content string }{
+		{"input", "a\tb\n"},
+		{"-t", "middle\n"},
+		{"4", "tail\n"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"GNU default permutes options", []string{"LC_ALL=C"}, "a   b\n"},
+		{"POSIX stops at operand", []string{"LC_ALL=C", "POSIXLY_CORRECT=1"}, "a       b\nmiddle\ntail\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: dir, Env: tc.env,
+				Stdio: tool.Stdio{Out: &out, Err: &stderr},
+			}
+			code := run(rc, []string{"input", "-t", "4"})
+			if code != 0 || stderr.String() != "" || out.String() != tc.want {
+				t.Fatalf("option parsing mode = (%q, %q, %d), want %q", out.String(), stderr.String(), code, tc.want)
+			}
+		})
+	}
+}
+
 func TestExpandInitialOnly(t *testing.T) {
 	out, stderr, code := runExpand(t, "\t x\t y\n", "-i", "-t", "4")
 	if code != 0 || stderr != "" {
