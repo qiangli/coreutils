@@ -58,18 +58,23 @@ func TestPathchkEmptyPathnameOptions(t *testing.T) {
 	}
 }
 
-func TestPathchkPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
+func TestPathchkStopsOptionsAtFirstOperand(t *testing.T) {
 	dir := t.TempDir()
 	operand := "A/-testpath"
 
-	code, errText := runPathchkEnv(t, dir, []string{"POSIXLY_CORRECT=1"}, operand, "-P")
+	code, errText := runPathchk(t, dir, operand, "-P")
 	if code != 0 || errText != "" {
-		t.Fatalf("POSIX operand boundary: code=%d stderr=%q", code, errText)
+		t.Fatalf("operand boundary: code=%d stderr=%q", code, errText)
 	}
 
-	code, errText = runPathchkEnv(t, dir, nil, operand, "-P")
-	if code != 1 || !strings.Contains(errText, operand) {
-		t.Fatalf("GNU interspersed option compatibility: code=%d stderr=%q", code, errText)
+	code, errText = runPathchk(t, dir, "-p", "", "-P", "")
+	if code != 0 || errText != "" {
+		t.Fatalf("empty operand boundary: code=%d stderr=%q", code, errText)
+	}
+
+	code, errText = runPathchk(t, dir, "-P", "/", "--")
+	if code != 1 || !strings.Contains(errText, `"--"`) {
+		t.Fatalf("trailing double-dash operand: code=%d stderr=%q", code, errText)
 	}
 }
 

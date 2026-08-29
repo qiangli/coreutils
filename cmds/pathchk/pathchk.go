@@ -28,13 +28,7 @@ func run(rc *tool.RunContext, args []string) int {
 	posix := fs.BoolP("posix", "p", false, "check for most POSIX systems")
 	special := fs.BoolP("posix-special", "P", false, "check for empty names and leading hyphens")
 	portability := fs.Bool("portability", false, "check both POSIX and special portability")
-	var paths []string
-	var code int
-	if pathchkPOSIXMode(rc.Env) {
-		paths, code = tool.ParseRequireOrder(rc, cmd, fs, args)
-	} else {
-		paths, code = tool.Parse(rc, cmd, fs, args)
-	}
+	paths, code := tool.ParseRequireOrder(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
@@ -211,16 +205,6 @@ func checkSpecial(rc *tool.RunContext, p string) bool {
 		}
 	}
 	return true
-}
-
-// POSIXLY_CORRECT takes effect when present, including with an empty value.
-func pathchkPOSIXMode(env []string) bool {
-	for _, entry := range env {
-		if strings.HasPrefix(entry, "POSIXLY_CORRECT=") {
-			return true
-		}
-	}
-	return false
 }
 
 func portableChars(s string) bool {
