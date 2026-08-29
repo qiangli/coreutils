@@ -72,6 +72,29 @@ func TestMvRenameFile(t *testing.T) {
 	}
 }
 
+func TestMvPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"first", "-f", "--"} {
+		write(t, filepath.Join(dir, name), name)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"first", "-f", "--", "dest"}); code != 0 || errb.Len() != 0 {
+		t.Fatalf("mv first -f -- dest: code=%d err=%q", code, errb.String())
+	}
+	for _, name := range []string{"first", "-f", "--"} {
+		if got := read(t, filepath.Join(dir, "dest", name)); got != name {
+			t.Errorf("moved POSIX operand %q content=%q", name, got)
+		}
+	}
+}
+
 func TestMvIntoDir(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "x")

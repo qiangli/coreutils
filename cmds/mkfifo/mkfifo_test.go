@@ -331,6 +331,27 @@ func TestMkfifoDoubleDashEndsOptions(t *testing.T) {
 	}
 }
 
+func TestMkfifoPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"first", "-m", "--"}); code != 0 || errb.Len() != 0 {
+		t.Fatalf("mkfifo first -m --: code=%d err=%q", code, errb.String())
+	}
+	for _, name := range []string{"first", "-m", "--"} {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+			t.Errorf("POSIX operand %q was not created as a FIFO: mode=%v err=%v", name, fi, err)
+		}
+	}
+}
+
 // POSIX Issue 7 STDIN: "The standard input shall not be used." mkfifo must
 // create its FIFOs without reading a single byte of standard input.
 func TestMkfifoDoesNotConsumeStdin(t *testing.T) {

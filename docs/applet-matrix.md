@@ -123,11 +123,11 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
 | `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 10 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 3 | 34 |
-| `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 16 |
+| `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 4 | 67 |
-| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 44 |
+| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 45 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
 | `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 57 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 6 | 25 |

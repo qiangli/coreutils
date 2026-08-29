@@ -27,7 +27,13 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	modeStr := fs.StringP("mode", "m", "", "set file mode (octal, as in chmod), not a=rw - umask")
 	contextStr := fs.StringP("context", "Z", "", "set SELinux security context (no-op without SELinux)")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -68,6 +74,16 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	return status
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseMode(rc *tool.RunContext, s string) (uint32, int) {

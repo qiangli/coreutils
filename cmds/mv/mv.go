@@ -117,7 +117,10 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
-	args = normalizeOptionalArgs(args)
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	if !posix {
+		args = normalizeOptionalArgs(args)
+	}
 	fs := tool.NewFlags(cmd.Name)
 	overwrite := overwriteDefault
 	forceValue := overwriteValue{mode: &overwrite, set: overwriteForce}
@@ -140,7 +143,13 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if posix {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -231,6 +240,16 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 		return 1
 	}
 	return 0
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mover) move(src, dst string) {
