@@ -252,6 +252,52 @@ func TestCsplitKeepFilesRetainsOutputOnError(t *testing.T) {
 	}
 }
 
+func TestCsplitKeepFilesRetainsPiecesBeforeOperandError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("1\n2\n3\n4\n5\n6\n7\n8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "-k", "-s", "in", "3", "5", "7", "99")
+	if code == 0 || !strings.Contains(errb, "line number out of range") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	for name, want := range map[string]string{
+		"xx00": "1\n2\n",
+		"xx01": "3\n4\n",
+		"xx02": "5\n6\n",
+		"xx03": "7\n8\n",
+	} {
+		assertFile(t, dir, name, want)
+	}
+}
+
+func TestCsplitResolvesAbsoluteAndParentInputOperands(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "input"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		operand func(string) string
+	}{
+		{name: "absolute", operand: func(string) string { return filepath.Join(root, "input") }},
+		{name: "parent-relative", operand: func(string) string { return filepath.Join("..", "input") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(root, tc.name)
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_, errb, code := runTool(t, dir, "", "-s", tc.operand(dir), "2")
+			if code != 0 || errb != "" {
+				t.Fatalf("code=%d err=%q", code, errb)
+			}
+			assertFile(t, dir, "xx00", "one\n")
+			assertFile(t, dir, "xx01", "two\n")
+		})
+	}
+}
+
 func assertFile(t *testing.T, dir, name, want string) {
 	t.Helper()
 	got, err := os.ReadFile(filepath.Join(dir, name))

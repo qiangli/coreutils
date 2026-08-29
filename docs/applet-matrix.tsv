@@ -27,7 +27,7 @@ cmp	cmds/cmp		POSIX/Unix utility	no	yes	2	17
 comm	cmds/comm		GNU Coreutils	yes	yes	1	20
 cp	cmds/cp		GNU Coreutils	yes	yes	8	65
 crontab	cmds/crontab		POSIX/Unix utility	no	yes	4	27
-csplit	cmds/csplit		GNU Coreutils	yes	yes	1	23
+csplit	cmds/csplit		GNU Coreutils	yes	yes	1	25
 ctags	cmds/posixproviders		POSIX external provider	no	yes	4	24
 cut	cmds/cut		GNU Coreutils	yes	yes	4	23
 date	cmds/date		GNU Coreutils	yes	yes	1	16

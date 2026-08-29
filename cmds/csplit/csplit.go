@@ -100,6 +100,16 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	}
 	points, code := resolvePatterns(rc, lines, operands[1:], *suppressMatched, tables)
 	if code >= 0 {
+		// csplit creates pieces as it processes operands.  Resolution is kept
+		// separate from I/O here, but -k must still preserve the pieces that
+		// precede a later bad operand.  Materialize the successfully resolved
+		// prefix, including its current trailing piece, before returning the
+		// original diagnostic status.
+		if *keep && len(points) > 0 {
+			if _, err := writePieces(rc, lines, points, *prefix, format, *silent || *quiet, *elideEmpty); err != nil {
+				fmt.Fprintf(rc.Err, "csplit: %v\n", err)
+			}
+		}
 		return code
 	}
 	created, err := writePieces(rc, lines, points, *prefix, format, *silent || *quiet, *elideEmpty)
@@ -200,11 +210,11 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 	for _, pattern := range patterns {
 		repeats, repeatToEOF, isRepeat, code := parseRepeat(rc, pattern)
 		if code >= 0 {
-			return nil, code
+			return points, code
 		}
 		if isRepeat {
 			if last == "" {
-				return nil, tool.UsageError(rc, cmd, "missing pattern before repeat count")
+				return points, tool.UsageError(rc, cmd, "missing pattern before repeat count")
 			}
 			if lastNum > 0 {
 				// POSIX: a repeated line-number pattern advances by N
@@ -212,7 +222,7 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 				for i := 0; repeatToEOF || i < repeats; i++ {
 					next := lastLine + lastNum
 					if next > len(lines) {
-						return nil, tool.UsageError(rc, cmd, "'%d': line number out of range", next)
+						return points, tool.UsageError(rc, cmd, "'%d': line number out of range", next)
 					}
 					idx := next - 1
 					point := splitPoint{line: idx, nextStart: idx}
@@ -229,7 +239,7 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 				for {
 					point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched, tables)
 					if code >= 0 {
-						return nil, code
+						return points, code
 					}
 					if !found {
 						break
@@ -242,10 +252,10 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 			for i := 0; i < repeats; i++ {
 				point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched, tables)
 				if code >= 0 {
-					return nil, code
+					return points, code
 				}
 				if !found {
-					return nil, tool.UsageError(rc, cmd, "match not found: '%s'", last)
+					return points, tool.UsageError(rc, cmd, "match not found: '%s'", last)
 				}
 				points = append(points, point)
 				start = nextSearch
@@ -254,10 +264,10 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 		}
 		point, nextSearch, found, code := resolveOnePattern(rc, lines, pattern, start, suppressMatched, tables)
 		if code >= 0 {
-			return nil, code
+			return points, code
 		}
 		if !found {
-			return nil, tool.UsageError(rc, cmd, "match not found: '%s'", pattern)
+			return points, tool.UsageError(rc, cmd, "match not found: '%s'", pattern)
 		}
 		points = append(points, point)
 		start = nextSearch
