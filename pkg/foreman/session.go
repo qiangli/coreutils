@@ -24,12 +24,16 @@ type Options struct {
 }
 
 type Session struct {
-	store   Store
-	state   State
-	runner  chat.Runner
-	history []string
-	kbNote  *string    // cached host-kb preamble for the session goal
-	mu      sync.Mutex // guards state/history; HELD FOR THE WHOLE TURN
+	store  Store
+	state  State
+	runner chat.Runner
+	kbNote *string    // cached host-kb preamble for the session goal
+	mu     sync.Mutex // guards state; HELD FOR THE WHOLE TURN
+
+	// hist is the bounded continuity projection over the history artifact. It
+	// carries its own lock (see history.go): a mid-turn steer must be recorded
+	// while a turn holds s.mu.
+	hist continuity
 
 	// live is guarded by its OWN lock, deliberately.
 	//
@@ -40,7 +44,6 @@ type Session struct {
 	// the turn to end is not a steer, it is a note left on the desk.
 	liveMu  sync.Mutex
 	live    *chat.Session
-	steers  []string // mid-turn corrections, appended under liveMu
 	logFile *os.File // the live agent's output, tee'd for `foreman log`
 
 	// stopCh is independent of s.mu on purpose. A turn holds s.mu until the
@@ -77,20 +80,32 @@ func Start(ctx context.Context, opt Options) (*Session, error) {
 		st.MaxRuntime = opt.MaxRuntime.String()
 		st.Deadline = now.Add(opt.MaxRuntime)
 	}
-	if err := store.SaveState(st); err != nil {
+	st, err := store.Commit(st)
+	if err != nil {
 		return nil, err
 	}
 	s := &Session{store: store, state: st, runner: opt.Runner, stopCh: make(chan string, 1)}
+	if err := s.hist.replay(store); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
+// Open resumes a session from its directory. Continuity is rebuilt from the
+// history artifact, so the first prompt after a restart carries the same
+// checkpoint — same decisions, same last result, same references — that the
+// process which wrote it would have composed.
 func Open(root, id string, runner chat.Runner) (*Session, error) {
 	store := NewStore(root, id)
 	st, err := store.LoadState()
 	if err != nil {
 		return nil, err
 	}
-	return &Session{store: store, state: st, runner: runner, stopCh: make(chan string, 1)}, nil
+	s := &Session{store: store, state: st, runner: runner, stopCh: make(chan string, 1)}
+	if err := s.hist.replay(store); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Session) requestStop(reason string) {
@@ -127,7 +142,7 @@ func (s *Session) ProcessPending(ctx context.Context) error {
 			return err
 		}
 	}
-	return s.store.SaveState(s.state)
+	return s.saveState()
 }
 
 // persistLocked writes state.json. The caller must ALREADY hold s.mu — it reads
@@ -140,7 +155,19 @@ func (s *Session) ProcessPending(ctx context.Context) error {
 // described a session that was doing nothing, while an agent burned tokens. An
 // operator cannot supervise a run whose status only becomes true once there is
 // nothing left to supervise.
-func (s *Session) persistLocked() { _ = s.store.SaveState(s.state) }
+func (s *Session) persistLocked() { _ = s.commitLocked() }
+
+// commitLocked writes state.json through Store.Commit and adopts the committed
+// record (seq/digest) so State() reports the sequence a supervisor will see.
+// Identical content is a no-op by contract. The caller holds s.mu.
+func (s *Session) commitLocked() error {
+	st, err := s.store.Commit(s.state)
+	if err != nil {
+		return err
+	}
+	s.state = st
+	return nil
+}
 
 // saveState snapshots and writes state while holding the same lock used by
 // lifecycle transitions. State()+SaveState() is not equivalent: a stop can
@@ -149,7 +176,31 @@ func (s *Session) persistLocked() { _ = s.store.SaveState(s.state) }
 func (s *Session) saveState() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.store.SaveState(s.state)
+	return s.commitLocked()
+}
+
+// setStatus moves the session out of (or between) non-blocked states; the
+// blocker is cleared because it described a state the session has left.
+func (s *Session) setStatus(status string) {
+	s.state.Status = status
+	if status != StatusBlocked {
+		s.state.Blocker = ""
+	}
+}
+
+// block records WHY the session is blocked alongside the status, so a
+// supervisor reading a transition never has to open the log to learn it.
+func (s *Session) block(reason string) {
+	s.state.Status = StatusBlocked
+	s.state.Blocker = strings.TrimSpace(reason)
+}
+
+// record appends one verbatim turn to the history artifact. A failed write is
+// a blocker: the prompt's references would otherwise point at an entry that
+// was never written.
+func (s *Session) record(role, target, text string) error {
+	_, err := s.hist.record(s.store, role, target, text)
+	return err
 }
 
 func (s *Session) Apply(ctx context.Context, cmd Command) error {
@@ -161,16 +212,18 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			return errors.New("foreman: tell message required")
 		}
 		if s.state.Paused {
-			s.state.Status = StatusBlocked
-			s.history = append(s.history, "human: "+cmd.Message)
-			return nil
+			s.block("paused by operator")
+			return s.record(RoleHuman, "", cmd.Message)
 		}
-		s.state.Status = StatusWorking
+		if err := s.record(RoleHuman, "", cmd.Message); err != nil {
+			s.block("history artifact: " + err.Error())
+			return err
+		}
+		s.setStatus(StatusWorking)
 		s.state.CurrentStep = cmd.Message
-		s.history = append(s.history, "human: "+cmd.Message)
 		s.persistLocked() // the turn has STARTED; say so now, not when it ends
 		if s.runner == nil && strings.TrimSpace(s.state.Agent) == "" && strings.TrimSpace(s.state.Role) == "" {
-			s.state.Status = StatusIdle
+			s.setStatus(StatusIdle)
 			return nil
 		}
 
@@ -182,12 +235,12 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 				// Falling through to the replay path would be the wrong kindness: it
 				// would produce a plausible answer from a fresh agent and hide the fact
 				// that the live one is gone.
-				s.state.Status = StatusBlocked
+				s.block("live agent: " + err.Error())
 				s.state.Steering = false
 				s.state.SteerWhyNot = err.Error()
 				return err
 			}
-			s.state.Status = StatusIdle
+			s.setStatus(StatusIdle)
 			break
 		} else {
 			// Not steerable. The replay path below still works — it is just a
@@ -202,30 +255,35 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			Instruction: s.composePrompt(cmd.Message),
 			Cwd:         s.state.Cwd,
 		}, s.runner)
-		if res.Output != "" {
-			s.history = append(s.history, "agent: "+strings.TrimSpace(res.Output))
+		if out := strings.TrimSpace(res.Output); out != "" {
+			if rerr := s.record(RoleAgent, "", out); rerr != nil {
+				s.block("history artifact: " + rerr.Error())
+				return rerr
+			}
 		}
 		if err != nil || res.ExitCode != 0 {
-			s.state.Status = StatusBlocked
 			if err != nil {
+				s.block("runner: " + err.Error())
 				return err
 			}
-			return fmt.Errorf("foreman: runner exited %d", res.ExitCode)
+			err = fmt.Errorf("foreman: runner exited %d", res.ExitCode)
+			s.block(err.Error())
+			return err
 		}
-		s.state.Status = StatusIdle
+		s.setStatus(StatusIdle)
 	case CommandPause:
 		s.state.Paused = true
-		s.state.Status = StatusBlocked
+		s.block("paused by operator")
 	case CommandResume:
 		s.state.Paused = false
-		s.state.Status = StatusIdle
+		s.setStatus(StatusIdle)
 	case CommandSkip:
 		if strings.TrimSpace(cmd.Target) != "" {
 			s.state.CurrentStep = "skip:" + strings.TrimSpace(cmd.Target)
 		} else {
 			s.state.CurrentStep = ""
 		}
-		s.state.Status = StatusIdle
+		s.setStatus(StatusIdle)
 	case CommandPrio:
 		if strings.TrimSpace(cmd.Target) != "" {
 			s.state.DriveLease = strings.TrimSpace(cmd.Target) + ":" + strings.TrimSpace(cmd.Priority)
@@ -238,7 +296,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		return nil
 	case CommandStop:
 		s.state.Stopped = true
-		s.state.Status = StatusDone
+		s.setStatus(StatusDone)
 		s.state.StopReason = "stopped by operator"
 	default:
 		return fmt.Errorf("foreman: unknown command %q", cmd.Verb)
@@ -246,6 +304,13 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 	return nil
 }
 
+// composePrompt is the opening prompt of a live session and the whole prompt
+// of a non-steerable (replay) turn.
+//
+// It carries the goal, the host-kb preamble, the bounded checkpoint + recent
+// window (checkpoint.go) and the new message — and NOT the session history.
+// The history is the artifact the checkpoint references. Its size is therefore
+// goal + kb + message + at most ContinuationBudget, on turn 3 and on turn 300.
 func (s *Session) composePrompt(msg string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal:\n%s\n\n", s.state.Goal)
@@ -253,16 +318,18 @@ func (s *Session) composePrompt(msg string) string {
 		b.WriteString(note)
 		b.WriteByte('\n')
 	}
-	if len(s.history) > 0 {
-		b.WriteString("Session history:\n")
-		for _, h := range s.history {
-			b.WriteString(h)
-			b.WriteByte('\n')
-		}
+	if cont := s.continuationLocked(); cont != "" {
+		b.WriteString(cont)
 		b.WriteByte('\n')
 	}
 	fmt.Fprintf(&b, "Steering message:\n%s", msg)
 	return b.String()
+}
+
+// continuationLocked renders the checkpoint for the state the caller (holding
+// s.mu) is looking at. It reads the continuity projection under its own lock.
+func (s *Session) continuationLocked() string {
+	return buildCheckpoint(s.state, s.store, s.hist.snapshot()).render()
 }
 
 func newID() string {

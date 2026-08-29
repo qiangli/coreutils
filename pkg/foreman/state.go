@@ -65,6 +65,24 @@ type State struct {
 	// not, has been lied to by silence.
 	Steering    bool   `json:"steering"`
 	SteerWhyNot string `json:"steer_why_not,omitempty"`
+
+	// Blocker is WHY the session is blocked, when it is: a paused operator, a
+	// runner that exited non-zero, a live agent that could not be reached, a
+	// runtime that expired. It is cleared by any transition out of blocked. The
+	// checkpoint renders it, and `status --wait` carries it, so a supervisor never
+	// has to open the log to learn what a `blocked` row means.
+	Blocker string `json:"blocker,omitempty"`
+
+	// Seq and Digest are the state-change contract (see Store.Commit).
+	//
+	// Seq is a per-session monotonic sequence that advances ONLY when the
+	// canonical content of the state changes; Digest is the canonical digest of
+	// that content. A poller that remembers the seq it last saw can ask for
+	// "everything after N" and get exactly the transitions it missed and nothing
+	// when nothing happened — which is the difference between supervision and a
+	// heartbeat the model has to read.
+	Seq    int64  `json:"seq,omitempty"`
+	Digest string `json:"digest,omitempty"`
 }
 
 type Command struct {
@@ -149,11 +167,78 @@ func (s Store) LoadState() (State, error) {
 	return st, nil
 }
 
+// SaveState persists st, advancing the session sequence if — and only if — its
+// canonical content changed. See Commit for the contract; SaveState is the
+// fire-and-forget form for callers that do not need the committed record back.
 func (s Store) SaveState(st State) error {
+	_, err := s.Commit(st)
+	return err
+}
+
+// Commit is the ONE write path for state.json, and it is where the state-change
+// contract lives.
+//
+// It compares the canonical digest of st (everything except the volatile
+// UpdatedAt/Seq/Digest fields) with what is already on disk:
+//
+//   - identical: nothing is written, no transition is journaled, and the
+//     on-disk seq/digest are returned. A healthy session that persists the same
+//     state every tick therefore produces NO observable change — no mtime bump,
+//     no journal line, no payload for a waiting supervisor.
+//   - different: seq advances by exactly one, state.json is replaced
+//     atomically, and one Transition is appended to the journal. The journal is
+//     a delta view over state.json (the truth), never a second truth: a reader
+//     that finds state.json ahead of the journal synthesizes the missing head
+//     record (see Changes), so a crash between the two writes loses nothing.
+//
+// The next seq is max(on-disk seq, journal tail seq)+1, so a session restarted
+// from disk continues the sequence it had, and a reader's cursor stays valid
+// across restarts. A legacy state.json without a seq counts as seq 1 — the same
+// number Changes synthesizes for it — so a cursor taken before this contract
+// existed never collides with the first real transition.
+func (s Store) Commit(st State) (State, error) {
 	if err := s.Ensure(); err != nil {
-		return err
+		return st, err
 	}
+	digest := CanonicalDigest(st)
+	prev, prevErr := s.LoadState()
+	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
+		return st, prevErr
+	}
+	havePrev := prevErr == nil
+	if havePrev && prev.Digest == digest && prev.Seq > 0 {
+		st.Seq, st.Digest, st.UpdatedAt = prev.Seq, prev.Digest, prev.UpdatedAt
+		return st, nil
+	}
+	var last int64
+	if havePrev {
+		last = prev.Seq
+		if last == 0 {
+			last = 1 // legacy record: Changes synthesizes it as seq 1
+		}
+	}
+	if tail, err := s.lastTransitionSeq(); err != nil {
+		return st, err
+	} else if tail > last {
+		last = tail
+	}
+	st.Seq = last + 1
+	st.Digest = digest
 	st.UpdatedAt = time.Now().UTC()
+	if err := s.writeState(st); err != nil {
+		return st, err
+	}
+	tr := transitionOf(st)
+	if havePrev {
+		tr.PreviousStatus = prev.Status
+	}
+	if err := s.appendTransition(tr); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+func (s Store) writeState(st State) error {
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err

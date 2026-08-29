@@ -70,7 +70,7 @@ func (s *Session) RunDAG(ctx context.Context, opt DAGOptions) (DAGReport, error)
 			}
 		}
 	}
-	return report, s.store.SaveState(s.State())
+	return report, s.saveState()
 }
 
 func (s *Session) shouldSkip(target string) bool {
@@ -82,8 +82,9 @@ func (s *Session) shouldSkip(target string) bool {
 func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Status = StatusWorking
+	s.setStatus(StatusWorking)
 	s.state.CurrentStep = task.Name
+	s.persistLocked() // idle → working is a transition a supervisor must see
 	prompt := s.composeDAGPrompt(task)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       s.state.Agent,
@@ -91,20 +92,29 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 		Instruction: prompt,
 		Cwd:         firstNonEmpty(s.state.Cwd, dir),
 	}, s.runner)
-	if res.Output != "" {
-		s.history = append(s.history, "agent: "+strings.TrimSpace(res.Output))
+	if out := strings.TrimSpace(res.Output); out != "" {
+		if rerr := s.record(RoleAgent, task.Name, out); rerr != nil {
+			s.block("history artifact: " + rerr.Error())
+			return rerr
+		}
 	}
 	if err != nil || res.ExitCode != 0 {
-		s.state.Status = StatusBlocked
 		if err != nil {
+			s.block("runner: " + err.Error())
 			return err
 		}
-		return fmt.Errorf("foreman: runner exited %d", res.ExitCode)
+		err = fmt.Errorf("foreman: runner exited %d", res.ExitCode)
+		s.block(err.Error())
+		return err
 	}
-	s.state.Status = StatusIdle
-	return s.store.SaveState(s.state)
+	s.setStatus(StatusIdle)
+	return s.commitLocked()
 }
 
+// composeDAGPrompt is the bounded task packet for one DAG target: goal, kb
+// preamble, the session checkpoint, the outputs of the target's dependencies
+// BY REFERENCE (a preview plus the history seq of the verbatim result), and
+// the target itself. It never concatenates predecessor conversations.
 func (s *Session) composeDAGPrompt(task *dag.Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal:\n%s\n\n", s.state.Goal)
@@ -112,11 +122,19 @@ func (s *Session) composeDAGPrompt(task *dag.Task) string {
 		b.WriteString(note)
 		b.WriteByte('\n')
 	}
-	if len(s.history) > 0 {
-		b.WriteString("Session history:\n")
-		for _, h := range s.history {
-			b.WriteString(h)
-			b.WriteByte('\n')
+	snap := s.hist.snapshot()
+	if cont := buildCheckpoint(s.state, s.store, snap).render(); cont != "" {
+		b.WriteString(cont)
+		b.WriteByte('\n')
+	}
+	if len(task.Requires) > 0 {
+		fmt.Fprintf(&b, "Dependency outputs (by reference; verbatim results are in %s by seq):\n", s.store.HistoryPath())
+		for _, dep := range task.Requires {
+			if e, ok := snap.targets[dep]; ok {
+				fmt.Fprintf(&b, "- %s: [seq %d, %d bytes] %s\n", dep, e.Seq, e.Bytes, oneLine(e.Text))
+			} else {
+				fmt.Fprintf(&b, "- %s: no recorded output\n", dep)
+			}
 		}
 		b.WriteByte('\n')
 	}
