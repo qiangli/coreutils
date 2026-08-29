@@ -16,7 +16,7 @@ import (
 )
 
 func writeGlobalPAXHeader(rc *tool.RunContext, o *options, tw *tar.Writer) (bool, error) {
-	if len(o.paxOptions.global) == 0 {
+	if len(o.paxOptions.global) == 0 && o.paxOptions.globalName == "" {
 		return false, nil
 	}
 	pattern := o.paxOptions.globalName
@@ -47,7 +47,10 @@ func writeGlobalPAXHeader(rc *tool.RunContext, o *options, tw *tar.Writer) (bool
 		}
 	}
 	if len(records) == 0 {
-		return nameErr != nil || binaryValue, nil
+		// globexthdr.name alone still requests a global extended header. A
+		// private format marker gives archive/tar a record to materialize while
+		// remaining harmless to other readers.
+		records["COREUTILS.format"] = "pax"
 	}
 	if o.paxOptions.invalid == "binary" {
 		probe := &tar.Header{Name: name, PAXRecords: records}
@@ -285,6 +288,66 @@ func setRawTarChecksum(header []byte) {
 		sum += int64(b)
 	}
 	copy(header[148:156], fmt.Sprintf("%06o\x00 ", sum))
+}
+
+// patchRawMemberNames restores the ustar name/prefix pair for ordinary pax
+// members. archive/tar deliberately truncates the physical name field when it
+// writes a PAX header; POSIX instead requires a representable pathname to use
+// the ustar prefix split, and a command-line path:= override belongs only in
+// the preceding extended header.
+func patchRawMemberNames(data []byte, names []string) ([]byte, error) {
+	out := append([]byte(nil), data...)
+	index := 0
+	for off := 0; off+512 <= len(out); {
+		header := out[off : off+512]
+		if allZero(header) {
+			if index != len(names) {
+				return nil, fmt.Errorf("tar member/name count mismatch")
+			}
+			return out, nil
+		}
+		size, err := rawTarSize(header)
+		if err != nil {
+			return nil, err
+		}
+		next := off + 512 + int((size+511)&^511)
+		if next > len(out) {
+			return nil, fmt.Errorf("truncated tar member")
+		}
+		if header[156] != tar.TypeXHeader && header[156] != tar.TypeXGlobalHeader {
+			if index >= len(names) {
+				return nil, fmt.Errorf("tar member/name count mismatch")
+			}
+			name := filepath.ToSlash(names[index])
+			index++
+			for i := 0; i < 100; i++ {
+				header[i] = 0
+			}
+			for i := 345; i < 500; i++ {
+				header[i] = 0
+			}
+			prefix, suffix := "", name
+			if len(name) > 100 {
+				cut := -1
+				for i := len(name) - 1; i >= 0; i-- {
+					if name[i] == '/' && i <= 155 && len(name)-i-1 <= 100 {
+						cut = i
+						break
+					}
+				}
+				if cut >= 0 {
+					prefix, suffix = name[:cut], name[cut+1:]
+				} else {
+					suffix = name[:min(len(name), 100)]
+				}
+			}
+			copy(header[:100], suffix)
+			copy(header[345:500], prefix)
+			setRawTarChecksum(header)
+		}
+		off = next
+	}
+	return nil, fmt.Errorf("invalid tar archive: missing end markers")
 }
 
 func parseRawPAXRecords(data []byte) (map[string]string, error) {

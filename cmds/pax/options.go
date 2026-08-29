@@ -57,9 +57,17 @@ func applyWritePAXOptions(rc *tool.RunContext, h *tar.Header, options paxOptions
 		return false, err
 	}
 	for key, value := range localValues {
-		h.PAXRecords[key] = value
+		if !deletedPAXKeyword(options, key) {
+			h.PAXRecords[key] = value
+		}
 	}
-	if err := applyPAXValues(h, localValues); err != nil {
+	effectiveLocal := make(map[string]string, len(localValues))
+	for key, value := range localValues {
+		if !deletedPAXKeyword(options, key) {
+			effectiveLocal[key] = value
+		}
+	}
+	if err := applyPAXValues(h, effectiveLocal); err != nil {
 		return false, err
 	}
 	headerBinary := paxHeaderNeedsBinary(rc, h)
@@ -405,13 +413,9 @@ func translatePAXHeaderToLocal(rc *tool.RunContext, h *tar.Header, action string
 			h.PAXRecords[key] = value
 		}
 	}
-	// List mode has no destination hierarchy. A PAX path can be valid archive
-	// data even when a local filesystem could not create one of its components;
-	// classify those limits only in modes that would materialize the pathname.
-	if !listMode {
-		invalid.name = invalid.name || invalidPAXLocalDestinationName(h.Name) ||
-			exceedsDestinationPathLimits(h.Name)
-	}
+	// Destination length limits are handled by the extraction planner after
+	// translation. They are not character-encoding failures and invalid=bypass
+	// omits them without changing the command's status.
 	if h.Linkname != "" {
 		if !listMode {
 			invalid.link = invalid.link || invalidPAXLocalDestinationName(h.Linkname) ||

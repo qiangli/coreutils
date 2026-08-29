@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -60,6 +61,10 @@ type options struct {
 	// starts, so a terminal failure cannot leave a partially copied tree.
 	invalidRenamePlans map[string][]invalidCopyRename
 	invalidRenameUsed  map[string]int
+	// rawMemberNames records each name after -s/-i processing but before an
+	// extended-header path override. POSIX pax keeps that name in the ustar
+	// header and carries the override in the adjacent extended header.
+	rawMemberNames []string
 }
 
 type invalidCopyRename struct {
@@ -168,6 +173,13 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
 	o.paxOptions = parsedOptions
+	if mode == paxRead || mode == paxCopy {
+		for _, values := range []map[string]string{o.paxOptions.global, o.paxOptions.local} {
+			if values["uid"] != "" || values["gid"] != "" || values["uname"] != "" || values["gname"] != "" {
+				o.preservation.owner = true
+			}
+		}
+	}
 	if mode == paxList {
 		usesTime := false
 		if o.verbose && o.paxOptions.listSet {
@@ -679,6 +691,14 @@ func headerFor(path string, fi os.FileInfo, link string) (*tar.Header, error) {
 		return nil, err
 	}
 	h.Name = filepath.ToSlash(path)
+	if id := identityOf(fi); id.ok {
+		if account, err := user.LookupId(strconv.FormatUint(id.uid, 10)); err == nil {
+			h.Uname = account.Username
+		}
+		if group, err := user.LookupGroupId(strconv.FormatUint(id.gid, 10)); err == nil {
+			h.Gname = group.Name
+		}
+	}
 	if fi.IsDir() && !strings.HasSuffix(h.Name, "/") {
 		h.Name += "/"
 	}

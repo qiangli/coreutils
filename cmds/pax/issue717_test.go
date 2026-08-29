@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -115,6 +116,112 @@ func TestPAXWriteGlobalLocalTimesAndHeaderNames(t *testing.T) {
 	}
 	if got := firstRawHeaderNameByType(t, []byte(out), tar.TypeXHeader); got != "meta/file" {
 		t.Fatalf("extended header name=%q", got)
+	}
+}
+
+func TestPAXEmptyGlobalHeaderAndPhysicalUSTARName(t *testing.T) {
+	d := t.TempDir()
+	long := strings.Repeat("directory/", 12) + "member"
+	if err := os.MkdirAll(filepath.Join(d, filepath.Dir(long)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, long), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	arc := filepath.Join(d, "archive.pax")
+	_, errOut, code := exec(t, d, "", "-w", "-x", "pax", "-f", arc,
+		"-o", "globexthdr.name=global", "-o", "path:=effective", long)
+	if code != 0 || errOut != "" {
+		t.Fatalf("write code=%d stderr=%q", code, errOut)
+	}
+	raw := mustRead(t, arc)
+	if len(raw) < 512 || raw[156] != tar.TypeXGlobalHeader {
+		t.Fatalf("first typeflag=%q, want global extended header", raw[156])
+	}
+	fields := scanRawUSTARFields(raw)
+	if len(fields) != 1 || fields[0].prefix+"/"+fields[0].name != long {
+		t.Fatalf("physical ustar path=%q/%q, want original path", fields[0].prefix, fields[0].name)
+	}
+	tr := tar.NewReader(bytes.NewReader(raw))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			t.Fatal("ordinary member missing")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag != tar.TypeXGlobalHeader {
+			if h.Name != "effective" {
+				t.Fatalf("effective path=%q", h.Name)
+			}
+			break
+		}
+	}
+}
+
+func TestPAXReadIdentityOverrideAppliesWithoutPreserveOption(t *testing.T) {
+	raw := makeAttributeArchive(t, archiveFixture{name: "file", body: "x", mode: 0o600, uid: 1, gid: 2})
+	oldChown := chownExtractedFn
+	defer func() { chownExtractedFn = oldChown }()
+	var gotUID, gotGID int
+	chownExtractedFn = func(_ string, uid, gid int, _ bool) error {
+		gotUID, gotGID = uid, gid
+		return nil
+	}
+	d := t.TempDir()
+	_, errOut, code := exec(t, d, raw, "-r", "-o", "uid:=123,gid:=456")
+	if code != 0 || errOut != "" || gotUID != 123 || gotGID != 456 {
+		t.Fatalf("identity override = code %d stderr %q uid %d gid %d", code, errOut, gotUID, gotGID)
+	}
+}
+
+func TestUSTARHeaderCarriesOwnerNames(t *testing.T) {
+	d := t.TempDir()
+	path := filepath.Join(d, "file")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := identityOf(fi)
+	if !id.ok {
+		t.Skip("platform does not expose numeric file identity")
+	}
+	u, uerr := user.LookupId(strconv.FormatUint(id.uid, 10))
+	g, gerr := user.LookupGroupId(strconv.FormatUint(id.gid, 10))
+	if uerr != nil || gerr != nil {
+		t.Skipf("account names unavailable: %v %v", uerr, gerr)
+	}
+	out, errOut, code := exec(t, d, "", "-w", "-x", "ustar", "file")
+	if code != 0 || errOut != "" {
+		t.Fatalf("write = (%d, %q)", code, errOut)
+	}
+	h, err := tar.NewReader(strings.NewReader(out)).Next()
+	if err != nil || h.Uname != u.Username || h.Gname != g.Name {
+		t.Fatalf("header identity = (%q, %q, %v), want (%q, %q)", h.Uname, h.Gname, err, u.Username, g.Name)
+	}
+}
+
+func TestUSTARChecksumUsesPOSIXOctalAndTerminator(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := exec(t, d, "", "-w", "-x", "ustar", "file")
+	if code != 0 || errOut != "" || len(out) < 512 {
+		t.Fatalf("write = (%d, %q, %d bytes)", code, errOut, len(out))
+	}
+	field := []byte(out[148:156])
+	for _, b := range field[:6] {
+		if b < '0' || b > '7' {
+			t.Fatalf("checksum field=%q", field)
+		}
+	}
+	if field[6] != 0 || field[7] != ' ' {
+		t.Fatalf("checksum terminator=%q, want NUL space", field[6:])
 	}
 }
 

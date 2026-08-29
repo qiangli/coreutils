@@ -105,6 +105,12 @@ type walker struct {
 func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry) error) (bool, error) {
 	full := resolve(rc, name)
 	fi, err := os.Lstat(full)
+	if err != nil && safeRootRelative(name) {
+		if rooted, rootErr := openRunRoot(rc); rootErr == nil {
+			fi, err = rooted.Lstat(filepath.FromSlash(name))
+			_ = rooted.Close()
+		}
+	}
 	if err != nil {
 		return false, sourceTraversalErr(err)
 	}
@@ -126,6 +132,41 @@ func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry
 	}
 	err = w.walk(archiveMemberRoot(name, full), full, fi, followed)
 	return w.diagnosed, err
+}
+
+func safeRootRelative(name string) bool {
+	clean := path.Clean(filepath.ToSlash(name))
+	return !filepath.IsAbs(name) && filepath.VolumeName(name) == "" &&
+		clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func openRunRoot(rc *tool.RunContext) (*os.Root, error) {
+	base := rc.Dir
+	if base == "" {
+		var err error
+		base, err = os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenRoot(base)
+}
+
+func openSourceFile(rc *tool.RunContext, member, full string) (*os.File, error) {
+	f, err := os.Open(full)
+	if err == nil || !safeRootRelative(member) {
+		return f, err
+	}
+	root, rootErr := openRunRoot(rc)
+	if rootErr != nil {
+		return nil, err
+	}
+	f, rootErr = root.Open(filepath.FromSlash(member))
+	_ = root.Close()
+	if rootErr != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 // archiveMemberRoot preserves safe relative operand spelling (including a

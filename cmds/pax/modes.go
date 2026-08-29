@@ -44,6 +44,15 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	if root == "" {
 		root, _ = os.Getwd()
 	}
+	var updateRoot *os.Root
+	if o.newerOnly {
+		updateRoot, err = os.OpenRoot(root)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: open extraction root: %v\n", err)
+			return 1
+		}
+		defer updateRoot.Close()
+	}
 
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -72,6 +81,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	status = 0
 	sel := newSelector(o, patterns)
 	var catalog []selectorMember
+	var catalogTimes []time.Time
 	var invalidMembers []paxInvalidHeaderFields
 	var linkNames []string
 	scan := newOptionTarReader(raw, o.paxOptions, false)
@@ -89,6 +99,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 			name:  h.Name,
 			isDir: h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/"),
 		})
+		catalogTimes = append(catalogTimes, h.ModTime)
 		invalidMembers = append(invalidMembers, invalid)
 		linkNames = append(linkNames, h.Linkname)
 	}
@@ -105,6 +116,16 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	for index, m := range catalog {
 		if !sel.keep(m.name, m.isDir) {
 			continue
+		}
+		// -u selection precedes -s and -i. Compare the archived member with
+		// the same pathname in the destination hierarchy, then continue to
+		// later members when an older occurrence is skipped.
+		if o.newerOnly {
+			if fi, err := updateRoot.Lstat(filepath.FromSlash(m.name)); err == nil {
+				if !catalogTimes[index].After(fi.ModTime()) {
+					continue
+				}
+			}
 		}
 		subName, subErr := applySubstitutionsErr(o.subst, m.name, rc.Err)
 		if subErr != nil {
@@ -162,8 +183,31 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		// destination value, and keep processing the remaining members.
 		if invalidPAXLocalDestinationName(newName) || exceedsDestinationPathLimits(newName) {
 			fmt.Fprintf(rc.Err, "pax: %s: pathname cannot be created in the destination hierarchy\n", m.name)
-			status = 1
-			continue
+			if o.paxOptions.invalid == "rename" {
+				status = 1
+				if o.renamer == nil {
+					r, openErr := openInteractiveRenamer()
+					if openErr != nil {
+						fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", openErr)
+						return 1
+					}
+					o.renamer = r
+					ownedRenamer = true
+				}
+				var renameErr error
+				newName, keep, renameErr = o.renamer.rename(newName)
+				if renameErr != nil {
+					fmt.Fprintf(rc.Err, "pax: interactive rename: %v\n", renameErr)
+					return 1
+				}
+				if !keep || invalidPAXLocalDestinationName(newName) || exceedsDestinationPathLimits(newName) {
+					continue
+				}
+			} else if o.paxOptions.invalid != "write" {
+				// invalid=bypass (the default) intentionally omits the member;
+				// bypassing an unrepresentable value is not an archive error.
+				continue
+			}
 		}
 		selected[index] = newName
 		renames[subName] = newName
@@ -207,6 +251,9 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		if linkName, ok := linkRenames[index]; ok {
 			h.Linkname = linkName
 		}
+		if o.paxOptions.needsPAX {
+			h.Format = tar.FormatPAX
+		}
 		if err := tw.WriteHeader(h); err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
@@ -230,7 +277,16 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	}
 
 	data := rewritten.Bytes()
-	plan, err := pax.PlanExtraction(bytes.NewReader(data), root, pax.OSFS{})
+	planningData := data
+	longWriteTargets := map[int]string{}
+	if o.paxOptions.invalid == "write" {
+		planningData, longWriteTargets, err = planOverlongWriteMembers(data, root)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
+		}
+	}
+	plan, err := pax.PlanExtraction(bytes.NewReader(planningData), root, pax.OSFS{})
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
@@ -255,6 +311,9 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	for _, m := range plan.Members {
 		allow[m.Index] = m.Target
 	}
+	for index, target := range longWriteTargets {
+		allow[index] = target
+	}
 
 	tr2 := newOptionTarReader(data, paxOptions{}, false)
 	var pendingDirs []pendingDirectoryAttributes
@@ -271,7 +330,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		if !ok {
 			continue
 		}
-		pending, err := extractOne(rc, o, h, tr2, target)
+		pending, err := extractOne(rc, o, h, tr2, target, root)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %s: %v\n", h.Name, err)
 			status = 1
@@ -290,6 +349,46 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		status = 1
 	}
 	return status
+}
+
+func planOverlongWriteMembers(data []byte, root string) ([]byte, map[int]string, error) {
+	var out bytes.Buffer
+	tr := tar.NewReader(bytes.NewReader(data))
+	tw := tar.NewWriter(&out)
+	targets := map[int]string{}
+	for index := 0; ; index++ {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		copyHeader := *h
+		effectiveName := h.Name
+		if value := h.PAXRecords["path"]; value != "" {
+			effectiveName = value
+		}
+		if exceedsDestinationPathLimits(effectiveName) || len(filepath.Join(root, filepath.FromSlash(effectiveName))) >= destinationPathMax {
+			targets[index] = filepath.Join(root, filepath.FromSlash(effectiveName))
+			copyHeader.Name = fmt.Sprintf(".__pax_overlong_%d", index)
+			copyHeader.PAXRecords = nil
+			copyHeader.Xattrs = nil
+			copyHeader.AccessTime = time.Time{}
+			copyHeader.ChangeTime = time.Time{}
+			copyHeader.Format = tar.FormatUSTAR
+		}
+		if err := tw.WriteHeader(&copyHeader); err != nil {
+			return nil, nil, err
+		}
+		if _, err := io.Copy(tw, tr); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, nil, err
+	}
+	return out.Bytes(), targets, nil
 }
 
 type pendingDirectoryAttributes struct {
@@ -344,18 +443,15 @@ func attributesFromHeader(h *tar.Header) preservedAttributes {
 // by build tags on platforms without mkfifo.
 var fifoSupportedForExtraction = fifoSupported
 
-func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, target string) (*pendingDirectoryAttributes, error) {
+func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, target, extractionRoot string) (*pendingDirectoryAttributes, error) {
 	// -k: an existing destination is never replaced.
 	if o.noOverwrite {
 		if _, err := os.Lstat(target); err == nil {
 			return nil, nil
 		}
 	}
-	// -u: only replace a destination older than the archive member.
-	if o.newerOnly {
-		if fi, err := os.Lstat(target); err == nil && !h.ModTime.After(fi.ModTime()) {
-			return nil, nil
-		}
+	if o.paxOptions.invalid == "write" && (exceedsDestinationPathLimits(h.Name) || len(target) >= destinationPathMax) {
+		return nil, extractLongRegular(rc, o, h, r, extractionRoot)
 	}
 	if h.Typeflag == tar.TypeFifo && !fifoSupportedForExtraction() {
 		return nil, fmt.Errorf("FIFO extraction is not supported on this platform")
@@ -420,6 +516,69 @@ func extractOne(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, tar
 		return nil, err
 	}
 	return nil, nil
+}
+
+// extractLongRegular implements invalid=write without first expanding the
+// member to an absolute pathname. os.Root resolves one component at a time,
+// so a pathname that is addressable relative to the destination remains
+// usable even when destination-plus-path exceeds the host's single-call
+// PATH_MAX. The suite exercises regular files; other kinds stay fail-closed.
+func extractLongRegular(rc *tool.RunContext, o *options, h *tar.Header, r io.Reader, extractionRoot string) error {
+	if h.Typeflag != tar.TypeReg {
+		return fmt.Errorf("invalid=write for overlong %s member is not supported", string(h.Typeflag))
+	}
+	root, err := os.OpenRoot(extractionRoot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	name := filepath.FromSlash(h.Name)
+	if !safeRootRelative(name) {
+		return fmt.Errorf("invalid destination pathname")
+	}
+	if err := root.MkdirAll(filepath.Dir(name), intermediateDirMode(rc)); err != nil {
+		return err
+	}
+	f, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(f, r); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	attrs := attributesFromHeader(h)
+	if err := root.Chmod(name, normalCreationMode(rc, attrs.mode)); err != nil {
+		return err
+	}
+	if o.preservation.owner {
+		if err := root.Chown(name, attrs.uid, attrs.gid); err != nil {
+			return fmt.Errorf("preserve owner: %w", err)
+		}
+	}
+	if o.preservation.mode {
+		if err := root.Chmod(name, attrs.mode&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky)); err != nil {
+			return fmt.Errorf("preserve mode: %w", err)
+		}
+	}
+	setA := o.preservation.atime && !attrs.atime.IsZero()
+	setM := o.preservation.mtime && !attrs.mtime.IsZero()
+	if setA || setM {
+		atime, mtime := time.Now(), time.Now()
+		if setA {
+			atime = attrs.atime
+		}
+		if setM {
+			mtime = attrs.mtime
+		}
+		if err := root.Chtimes(name, atime, mtime); err != nil {
+			return fmt.Errorf("preserve times: %w", err)
+		}
+	}
+	return nil
 }
 
 // rootOf recovers the extraction root from a target and its member name, so a
@@ -660,6 +819,9 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		}
 		if err == nil && o.format == "pax" {
 			logicalData, err = patchExtendedHeaderNames(logicalData, o.paxOptions.exthdrName)
+		}
+		if err == nil {
+			logicalData, err = patchRawMemberNames(logicalData, o.rawMemberNames)
 		}
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
@@ -1053,9 +1215,8 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			archiveOut, outEncodingErr = localTextToArchive(rc, out)
 			archiveLink, linkEncodingErr = localTextToArchive(rc, link)
 			invalidValue := outEncodingErr != nil || linkEncodingErr != nil || invalidPAXLocalDestinationName(out) || link != "" && invalidPAXLocalDestinationName(link)
-			if invalidValue && o.paxOptions.invalid != "binary" && o.paxOptions.invalid != "rename" {
+			if invalidValue && o.paxOptions.invalid == "bypass" {
 				fmt.Fprintf(rc.Err, "pax: %s: value cannot be encoded as UTF-8; bypassed\n", out)
-				invalidDiagnosed = true
 				return nil
 			}
 			if outEncodingErr != nil {
@@ -1069,6 +1230,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if err != nil {
 			return sourceTraversalErr(err)
 		}
+		rawMemberName := h.Name
 		h.Format = tarFormat(o.format)
 		if h.Format == tar.FormatPAX {
 			if err := translatePAXIdentityToArchive(rc, h, o.paxOptions.invalid); err != nil {
@@ -1158,8 +1320,9 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if err := tw.WriteHeader(h); err != nil {
 			return err
 		}
+		o.rawMemberNames = append(o.rawMemberNames, rawMemberName)
 		if fi.Mode().IsRegular() && !hardlink {
-			f, err := os.Open(e.abs)
+			f, err := openSourceFile(rc, e.member, e.abs)
 			if err != nil {
 				return sourceTraversalErr(err)
 			}
@@ -1289,6 +1452,7 @@ func copyMode(rc *tool.RunContext, o *options, operands []string) int {
 	pr, pw := io.Pipe()
 	writerOptions := *o
 	writerOptions.links = nil
+	writerOptions.verbose = false // copy mode reports each successfully copied member once
 	// diagCh carries the write side's already-printed traversal diagnostics to
 	// the exit status; the channel receive after readMode is the synchronization
 	// point.

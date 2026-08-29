@@ -3,6 +3,7 @@ package paxcmd
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,249 @@ func TestWriteThenListThenExtractRoundTrips(t *testing.T) {
 	}
 }
 
+func TestCopyVerboseReportsEachMemberOnce(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "source"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(d, "destination"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := exec(t, d, "", "-r", "-w", "-v", "source", "destination")
+	if code != 0 || errOut != "source\n" {
+		t.Fatalf("copy verbose = (%d, %q), want one member report", code, errOut)
+	}
+}
+
+func TestReadUpdateUsesPreSubstitutionNameAndContinues(t *testing.T) {
+	source := t.TempDir()
+	for name, body := range map[string]string{"older": "archive-old", "newer": "archive-new"} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldTime := time.Unix(100, 0)
+	newTime := time.Unix(300, 0)
+	if err := os.Chtimes(filepath.Join(source, "older"), oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(source, "newer"), newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+	arc := filepath.Join(source, "archive.pax")
+	if _, errOut, code := exec(t, source, "", "-w", "-f", arc, "older", "newer"); code != 0 || errOut != "" {
+		t.Fatalf("write = (%d, %q)", code, errOut)
+	}
+	dest := t.TempDir()
+	for _, name := range []string{"older", "newer"} {
+		if err := os.WriteFile(filepath.Join(dest, name), []byte("current"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		middle := time.Unix(200, 0)
+		if err := os.Chtimes(filepath.Join(dest, name), middle, middle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, errOut, code := exec(t, dest, "", "-r", "-u", "-f", arc, "-s", ",^,renamed-,")
+	if code != 0 || errOut != "" {
+		t.Fatalf("read update = (%d, %q)", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "renamed-older")); !os.IsNotExist(err) {
+		t.Fatalf("older member was selected: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "renamed-newer"))
+	if err != nil || string(got) != "archive-new" {
+		t.Fatalf("later newer member = (%q, %v)", got, err)
+	}
+}
+
+func TestReadUpdateProbeCannotEscapeExtractionRoot(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	archiveTime := time.Unix(100, 0)
+	for _, name := range []string{"../traversal-probe", "link/symlink-probe"} {
+		h := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o600, Size: 1, ModTime: archiveTime}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox := t.TempDir()
+	destination := filepath.Join(sandbox, "destination")
+	outsideDir := filepath.Join(sandbox, "outside")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outsideDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{filepath.Join(sandbox, "traversal-probe"), filepath.Join(outsideDir, "symlink-probe")} {
+		if err := os.WriteFile(name, []byte("outside"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		newer := time.Unix(300, 0)
+		if err := os.Chtimes(name, newer, newer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("../outside", filepath.Join(destination, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, code := exec(t, destination, archive.String(), "-r", "-u",
+		"-s", ",../traversal-probe,traversal-safe,",
+		"-s", ",link/symlink-probe,symlink-safe,")
+	if code != 0 || errOut != "" {
+		t.Fatalf("confined update extraction = (%d, %q)", code, errOut)
+	}
+	for _, name := range []string{"traversal-safe", "symlink-safe"} {
+		got, err := os.ReadFile(filepath.Join(destination, name))
+		if err != nil || string(got) != "x" {
+			t.Fatalf("%s = (%q, %v), lookup escaped extraction root", name, got, err)
+		}
+	}
+}
+
+func TestSourcePathNearPathMaxUsesRelativeResolution(t *testing.T) {
+	d := t.TempDir()
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Skipf("root-relative operations unavailable: %v", err)
+	}
+	defer root.Close()
+	component := strings.Repeat("p", 200)
+	rel := component
+	for len(rel)+len(component)+2 < 4000 {
+		rel += "/" + component
+	}
+	name := rel + "/file"
+	if err := root.MkdirAll(rel, 0o700); err != nil {
+		t.Skipf("host cannot construct near-PATH_MAX fixture: %v", err)
+	}
+	if err := root.WriteFile(name, []byte("x"), 0o600); err != nil {
+		t.Skipf("host cannot construct near-PATH_MAX fixture: %v", err)
+	}
+	_, errOut, code := exec(t, d, "", "-w", "-f", "archive.pax", name)
+	if code != 0 || errOut != "" {
+		t.Fatalf("near-PATH_MAX operand = (%d, %q)", code, errOut)
+	}
+}
+
+func TestInvalidWriteCreatesOverPathMaxRelativeDestination(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "source", Typeflag: tar.TypeReg, Mode: 0o600, Size: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d := t.TempDir()
+	component := strings.Repeat("q", 200)
+	name := "prefix/" + component
+	for len(name)+len(component)+2 < destinationPathMax+100 {
+		name += "/" + component
+	}
+	name += "/file"
+	_, errOut, code := exec(t, d, archive.String(), "-r", "-o", "path:="+name, "-o", "invalid=write")
+	if code != 0 || errOut != "" {
+		t.Fatalf("invalid=write = (%d, %q)", code, errOut)
+	}
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got, err := root.ReadFile(name)
+	if err != nil || string(got) != "x" {
+		t.Fatalf("long destination = (%q, %v)", got, err)
+	}
+}
+
+func TestInvalidWriteLongPathUsesSelectedExtractionRoot(t *testing.T) {
+	d := t.TempDir()
+	destination := filepath.Join(d, "destination")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	component := strings.Repeat("q", 200)
+	name := "prefix/" + component
+	for len(name)+len(component)+2 < destinationPathMax+100 {
+		name += "/" + component
+	}
+	name += "/file"
+	h := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o600, Size: 1}
+	rc := &tool.RunContext{Dir: d}
+	o := &options{paxOptions: paxOptions{invalid: "write"}}
+	if _, err := extractOne(rc, o, h, strings.NewReader("x"), filepath.Join(destination, filepath.FromSlash(name)), destination); err != nil {
+		t.Fatalf("extract overlong member: %v", err)
+	}
+	destinationRoot, err := os.OpenRoot(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destinationRoot.Close()
+	got, err := destinationRoot.ReadFile(name)
+	if err != nil || string(got) != "x" {
+		t.Fatalf("selected destination = (%q, %v)", got, err)
+	}
+	runRoot, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	if _, err := runRoot.ReadFile(name); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("member leaked into run directory: %v", err)
+	}
+}
+
+func TestInvalidWriteCopyStaysInsideNonDotDestination(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "source"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(d, "destination")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	component := strings.Repeat("q", 200)
+	name := "prefix/" + component
+	for len(name)+len(component)+2 < destinationPathMax+100 {
+		name += "/" + component
+	}
+	name += "/file"
+	_, errOut, code := exec(t, d, "", "-r", "-w", "-o", "path:="+name, "-o", "invalid=write", "source", "destination")
+	if code != 0 || errOut != "" {
+		t.Fatalf("copy invalid=write = (%d, %q)", code, errOut)
+	}
+	destinationRoot, err := os.OpenRoot(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destinationRoot.Close()
+	got, err := destinationRoot.ReadFile(name)
+	if err != nil || string(got) != "x" {
+		t.Fatalf("selected destination = (%q, %v)", got, err)
+	}
+	runRoot, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	if _, err := runRoot.ReadFile(name); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("member leaked into run directory: %v", err)
+	}
+}
+
 func TestExplicitDashArchiveIsAFile(t *testing.T) {
 	d := makeTree(t)
 	if _, e, code := exec(t, d, "", "-w", "-f", "-", "src/a.txt"); code != 0 {
@@ -91,7 +335,7 @@ func overLongDestinationName() string {
 
 // POSIX classes a member pathname longer than the destination hierarchy
 // allows as an invalid value: with the default invalid=bypass action the
-// member is skipped with a diagnostic and a nonzero exit while every other
+// member is skipped with a diagnostic while every other
 // member is still extracted. It must not condemn the whole archive.
 func TestOverLongMemberPathnameIsBypassedAndProcessingContinues(t *testing.T) {
 	d := t.TempDir()
@@ -117,8 +361,8 @@ func TestOverLongMemberPathnameIsBypassedAndProcessingContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, errs, code := exec(t, d, "", "-r", "-f", "deep.tar")
-	if code != 1 || errs == "" {
-		t.Fatalf("over-long member extract = (%d, %q), want status 1 with a diagnostic", code, errs)
+	if code != 0 || errs == "" {
+		t.Fatalf("over-long member extract = (%d, %q), want status 0 with a diagnostic", code, errs)
 	}
 	if got, err := os.ReadFile(filepath.Join(d, "good.txt")); err != nil || string(got) != "ok" {
 		t.Fatalf("valid sibling member = (%q, %v), want extracted \"ok\"", got, err)
@@ -136,7 +380,7 @@ func TestOverLongMemberPathnameIsBypassedAndProcessingContinues(t *testing.T) {
 
 // A -s substitution can rewrite a valid archived name into one the
 // destination cannot hold. The member is bypassed with a diagnostic and a
-// nonzero exit instead of failing mid-extraction.
+// successful exit instead of failing mid-extraction.
 func TestSubstitutionToOverLongPathnameIsBypassed(t *testing.T) {
 	d := makeTree(t)
 	if _, e, code := exec(t, d, "", "-w", "-f", "a.tar", "src/a.txt", "src/sub/b.txt"); code != 0 {
@@ -145,8 +389,8 @@ func TestSubstitutionToOverLongPathnameIsBypassed(t *testing.T) {
 	dest := t.TempDir()
 	long := overLongDestinationName()
 	_, errs, code := exec(t, dest, "", "-r", "-f", filepath.Join(d, "a.tar"), "-s", ",^src/a\\.txt$,"+long+",")
-	if code != 1 || !strings.Contains(errs, "cannot be created in the destination hierarchy") {
-		t.Fatalf("over-long substitution = (%d, %q), want status 1 with a bypass diagnostic", code, errs)
+	if code != 0 || !strings.Contains(errs, "cannot be created in the destination hierarchy") {
+		t.Fatalf("over-long substitution = (%d, %q), want status 0 with a bypass diagnostic", code, errs)
 	}
 	if got, err := os.ReadFile(filepath.Join(dest, "src", "sub", "b.txt")); err != nil || string(got) != "beta" {
 		t.Fatalf("unrelated member = (%q, %v), want extracted \"beta\"", got, err)
