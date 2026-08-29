@@ -3581,17 +3581,17 @@ nohup utility [argument...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `utility; argument`. The first operand is the utility, PATH-searched when it has no separator and invoked with the remaining operands verbatim; no option parsing is performed apart from a sole --help/--version argument; a missing utility operand is an error with status 127.
+**Operands:** `utility; argument`. After an optional -- option terminator, the first operand is the utility, PATH-searched when it has no separator and invoked with the remaining operands verbatim; a missing utility operand is an error with status 127.
 
-**Special tokens:** No - or -- token is special; every word after the utility passes through unchanged.
+**Special tokens:** A leading -- is the Utility Syntax Guideline 10 option terminator and is not passed to the utility; - has no special meaning and subsequent words pass through unchanged.
 
 **Standard input:** A terminal standard input is redirected to an unreadable /dev/null before command lookup; a non-terminal standard input passes through to the utility.
 
 **Environment:** `HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PATH`.
 
-**Standard output:** A terminal (or absent) standard output is appended to nohup.out in the invocation directory, else $HOME/nohup.out, created 0600; otherwise the utility inherits it unchanged and nohup writes nothing to it.
+**Standard output:** A terminal (or absent) standard output is appended to nohup.out in the invocation directory, else $HOME/nohup.out, created 0600; otherwise, including when closed, the utility inherits it unchanged and nohup writes nothing to it.
 
-**Standard error:** Diagnostics only, including the required appending-output notice; a terminal (or absent) standard error is redirected to the same destination as standard output.
+**Standard error:** Diagnostics only, including the required appending-output notice; a terminal (or absent) standard error follows the redirected terminal standard output, or is appended to nohup.out when standard output is closed.
 
 **Effects:** `Invokes the utility (documented exec-wrapper exception) with SIGHUP ignored in the utility via a trap-and-exec shell wrapper on unix, while the nohup invocation itself also survives SIGHUP; may create or append nohup.out; the utility receives exactly the invocation environment.`.
 
@@ -3607,7 +3607,7 @@ nohup utility [argument...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/nohup`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/nohup/nohup_test.go#TestNohupMissing;cmds/nohup/nohup_test.go#TestNohupInternalErrorStatusIsUnconditional;cmds/nohup/nohup_test.go#TestNohupRunsCommand;cmds/nohup/nohup_test.go#TestNohupFoundButNotExecutableReturns126;cmds/nohup/nohup_test.go#TestNohupNotFoundReturns127;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalEquivalentOutput;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalOutput;cmds/nohup/nohup_test.go#TestNohupFallsBackToHomeNohupOut;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalInput;cmds/nohup/nohup_test.go#TestNohupTerminalRedirectionDiagnostics;cmds/nohup/nohup_test.go#TestNohupDevNullOpenFailure;cmds/nohup/nohup_signal_unix_test.go#TestNohupIgnoresHangupForChild;cmds/nohup/nohup_signal_unix_test.go#TestNohupInvocationSurvivesHangup;cmds/nohup/nohup_signal_unix_test.go#TestNohupPreservesInvocationEnvironment`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nohup:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/nohup/nohup_test.go#TestNohupMissing;cmds/nohup/nohup_test.go#TestNohupInternalErrorStatusIsUnconditional;cmds/nohup/nohup_test.go#TestNohupRunsCommand;cmds/nohup/nohup_test.go#TestNohupFoundButNotExecutableReturns126;cmds/nohup/nohup_test.go#TestNohupNotFoundReturns127;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalEquivalentOutput;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalOutput;cmds/nohup/nohup_test.go#TestNohupFallsBackToHomeNohupOut;cmds/nohup/nohup_test.go#TestNohupRedirectsTerminalInput;cmds/nohup/nohup_test.go#TestNohupClosedStdoutAndTerminalStderrRequiresNohupOut;cmds/nohup/nohup_test.go#TestNohupTerminalRedirectionDiagnostics;cmds/nohup/nohup_test.go#TestNohupDevNullOpenFailure;cmds/nohup/nohup_signal_unix_test.go#TestNohupIgnoresHangupForChild;cmds/nohup/nohup_signal_unix_test.go#TestNohupInvocationSurvivesHangup;cmds/nohup/nohup_signal_unix_test.go#TestNohupPreservesInvocationEnvironment`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nohup:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

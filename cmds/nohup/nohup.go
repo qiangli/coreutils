@@ -19,11 +19,11 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
-	// Issue 7 defines no nohup options: the first operand is the utility even
-	// when its name begins with '-'. Retain GNU's standalone help/version
-	// extension outside POSIX mode, with `--` as the explicit disambiguation
-	// for invoking a utility named --help or --version there.
-	disambiguated := !posix && len(args) > 0 && args[0] == "--"
+	// nohup defines no command-specific options, but POSIX Utility Syntax
+	// Guideline 10 still makes `--` the option-argument terminator.  This is
+	// also VSC-PCTS GA28.  Retain GNU's standalone help/version extensions
+	// outside POSIX mode; `--` disambiguates utilities with those names.
+	disambiguated := len(args) > 0 && args[0] == "--"
 	if disambiguated {
 		args = args[1:]
 	}
@@ -79,6 +79,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	// the redirect diagnostic, even when the command is also missing.
 	inTerminal := rc.In != nil && isTerminal(rc.In)
 	outTerminal := rc.Out == nil || isTerminal(rc.Out)
+	outClosed := isClosedFile(rc.Out)
 	errTerminal := rc.Err == nil || isTerminal(rc.Err)
 
 	var stdin io.Reader = rc.In
@@ -103,21 +104,33 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	c.Stdin = stdin
 
 	var displayPath string
+	var nohupOut *os.File
 	stdout := rc.Out
-	if outTerminal {
-		f, disp, err := openNohupOutput(rc)
+	// POSIX requires terminal stderr to follow nohup.out when stdout is a
+	// terminal *or is closed*.  A closed *os.File is not a terminal, so test
+	// that condition explicitly rather than silently sending stderr back to a
+	// dead descriptor and running the utility anyway.
+	if outTerminal || (errTerminal && outClosed) {
+		f, disp, err := nohupOutputOpener(rc)
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to open 'nohup.out': %v\n", err)
 			return internalFailureCode
 		}
 		defer f.Close()
-		stdout = f
+		nohupOut = f
+		if outTerminal {
+			stdout = f
+		}
 		displayPath = fmt.Sprintf("'%s'", disp)
 	}
 
 	stderr := rc.Err
 	if errTerminal {
-		stderr = stdout
+		if nohupOut != nil {
+			stderr = nohupOut
+		} else {
+			stderr = stdout
+		}
 	}
 
 	c.Stdout = stdout
@@ -127,6 +140,8 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	if inTerminal {
 		if outTerminal {
 			msg = "ignoring input and appending output to %s"
+		} else if errTerminal && outClosed {
+			msg = "ignoring input and appending standard error to %s"
 		} else if errTerminal {
 			msg = "ignoring input and redirecting stderr to stdout"
 		} else {
@@ -135,6 +150,8 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	} else {
 		if outTerminal {
 			msg = "appending output to %s"
+		} else if errTerminal && outClosed {
+			msg = "appending standard error to %s"
 		} else if errTerminal {
 			msg = "redirecting stderr to stdout"
 		}
@@ -214,6 +231,17 @@ func openNohupOutput(rc *tool.RunContext) (*os.File, string, error) {
 		}
 	}
 	return nil, "", err
+}
+
+var nohupOutputOpener = openNohupOutput
+
+func isClosedFile(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	_, err := f.Stat()
+	return err != nil
 }
 
 func commandExists(path string) bool {

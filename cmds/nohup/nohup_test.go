@@ -59,7 +59,7 @@ func TestNohupRunsCommand(t *testing.T) {
 
 	t.Run("posix_help_and_version_are_utility_operands", func(t *testing.T) {
 		dir := t.TempDir()
-		for _, name := range []string{"--", "--help", "--version"} {
+		for _, name := range []string{"--help", "--version"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nprintf 'utility:"+name+"'\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -74,6 +74,18 @@ func TestNohupRunsCommand(t *testing.T) {
 					t.Errorf("utility=%q POSIXLY_CORRECT=%q: code=%d out=%q err=%q", name, value, code, out.String(), errb.String())
 				}
 			}
+		}
+	})
+
+	t.Run("posix_double_dash_ends_options", func(t *testing.T) {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(), Dir: t.TempDir(),
+			Env:   []string{"PATH=/bin:/usr/bin", "POSIXLY_CORRECT=1"},
+			Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+		}
+		if code := run(rc, []string{"--", "sh", "-c", "printf posix-double-dash"}); code != 0 || out.String() != "posix-double-dash" || errb.Len() != 0 {
+			t.Fatalf("POSIX --: code=%d out=%q err=%q", code, out.String(), errb.String())
 		}
 	})
 
@@ -187,6 +199,47 @@ func TestNohupRedirectsStderrToStdoutWhenErrIsNil(t *testing.T) {
 	}
 	if out.String() != "outerr" {
 		t.Fatalf("stdout=%q", out.String())
+	}
+}
+
+func TestNohupClosedStdoutAndTerminalStderrRequiresNohupOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty not supported in this test on windows")
+	}
+	ptm, pts, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty.Open failed: %v", err)
+	}
+	defer ptm.Close()
+	defer pts.Close()
+
+	closedOut, err := os.CreateTemp(t.TempDir(), "closed-stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closedOut.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("both nohup.out locations are unavailable")
+	oldOpener := nohupOutputOpener
+	openerCalled := false
+	nohupOutputOpener = func(*tool.RunContext) (*os.File, string, error) {
+		openerCalled = true
+		return nil, "", wantErr
+	}
+	t.Cleanup(func() { nohupOutputOpener = oldOpener })
+
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"PATH=/bin:/usr/bin", "POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: closedOut, Err: pts},
+	}
+	if code := run(rc, []string{"sh", "-c", "exit 0"}); code != 127 {
+		t.Fatalf("closed stdout redirect failure code=%d, want 127", code)
+	}
+	if !openerCalled {
+		t.Fatal("nohup did not try nohup.out when stdout was closed and stderr was a terminal")
 	}
 }
 
