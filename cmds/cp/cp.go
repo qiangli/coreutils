@@ -505,6 +505,21 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		c.verbosef("'%s' -> '%s'", src, dst)
 		return
 	}
+	// Open the source before creating or truncating the destination. A source
+	// that was stat-able but cannot subsequently be read is a failed source
+	// operand, not a request to leave an empty target behind. This also lets a
+	// later source operand be processed without altering the target path for
+	// the failed one.
+	var in *os.File
+	if !c.attrsOnly {
+		var err error
+		in, err = os.Open(sp)
+		if err != nil {
+			c.errf("cannot open '%s' for reading: %s", src, reason(err))
+			return
+		}
+		defer in.Close()
+	}
 	flags := os.O_WRONLY | os.O_CREATE
 	if !c.attrsOnly {
 		flags |= os.O_TRUNC
@@ -522,14 +537,7 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		return
 	}
 	if !c.attrsOnly {
-		in, err := os.Open(sp)
-		if err != nil {
-			_ = out.Close()
-			c.errf("cannot open '%s' for reading: %s", src, reason(err))
-			return
-		}
 		rerr, werr := copyRegularData(out, in)
-		_ = in.Close()
 		cerr := out.Close()
 		if rerr != nil {
 			c.errf("error reading '%s': %s", src, reason(rerr))

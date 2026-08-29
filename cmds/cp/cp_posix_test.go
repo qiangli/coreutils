@@ -132,6 +132,38 @@ func TestCpDoesNotCreateMissingDestinationParents(t *testing.T) {
 	}
 }
 
+// A source that becomes unreadable after its initial stat must not cause cp to
+// create or truncate its destination. POSIX requires processing to continue
+// with later source operands, but the failed source is not a successful copy.
+func TestCpUnreadableSourceLeavesDestinationAbsentAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "blocked"), "secret")
+	write(t, filepath.Join(dir, "readable"), "payload")
+	if err := os.Mkdir(filepath.Join(dir, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o600) })
+	if f, err := os.Open(blocked); err == nil {
+		_ = f.Close()
+		t.Skip("current user can read a mode-000 file")
+	}
+
+	_, errb, code := runTool(t, dir, "blocked", "readable", "out")
+	if code != 1 || !strings.Contains(errb, "cannot open 'blocked' for reading") {
+		t.Fatalf("cp blocked readable out: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "out", "blocked")); !os.IsNotExist(err) {
+		t.Fatalf("destination for unreadable source exists: %v", err)
+	}
+	if got := read(t, filepath.Join(dir, "out", "readable")); got != "payload" {
+		t.Fatalf("later source was not copied: %q", got)
+	}
+}
+
 func TestCpPreserveFailsLoudlyWhenAccessTimeIsUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "source"), "payload")
