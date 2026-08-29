@@ -72,6 +72,23 @@ func TestPOSIXLexicalConventionsAndLimits(t *testing.T) {
 	}
 }
 
+func TestPOSIXStringMaxBoundary(t *testing.T) {
+	const limit = 1000 // _POSIX2_BC_STRING_MAX, also reported by getconf.
+
+	got, err := execute(t, `"`+strings.Repeat("x", limit)+`"`, false)
+	if err != nil {
+		t.Fatalf("BC_STRING_MAX-byte string: %v", err)
+	}
+	if want := strings.Repeat("x", limit); got != want {
+		t.Fatalf("BC_STRING_MAX-byte string output length = %d, want %d", len(got), len(want))
+	}
+
+	_, err = execute(t, `"`+strings.Repeat("x", limit+1)+`"`, false)
+	if err == nil || !strings.Contains(err.Error(), "BC_STRING_MAX") {
+		t.Fatalf("BC_STRING_MAX+1-byte string err=%v", err)
+	}
+}
+
 func TestPOSIXRegisterAssignmentAndBases(t *testing.T) {
 	src := `scale=1.9
 scale
