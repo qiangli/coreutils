@@ -121,11 +121,21 @@ func TestPOSIXGlobalSubstituteThenContinuesCommandList(t *testing.T) {
 }
 
 func TestPOSIXInteractiveGlobalAcceptsPrintSuffix(t *testing.T) {
-	in := "a\nhe one\nhe two\n.\nG/he/l\n.=\n.=\nQ\n"
-	code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
-	want := "he one\n1\nhe two\n2\nhe two$\n"
-	if code != 0 || errb != "" || out != want {
-		t.Fatalf("code=%d out=%q want=%q err=%q", code, out, want, errb)
+	for _, tc := range []struct {
+		suffix, final string
+	}{
+		{suffix: "l", final: "he two$\n"},
+		{suffix: "n", final: "2\the two\n"},
+		{suffix: "p", final: "he two\n"},
+	} {
+		t.Run(tc.suffix, func(t *testing.T) {
+			in := "a\nhe one\nhe two\n.\nG/he/" + tc.suffix + "\n.=\n.=\nQ\n"
+			code, out, errb := runEdIn(t, t.TempDir(), in, "-s")
+			want := "he one\n1\nhe two\n2\n" + tc.final
+			if code != 0 || errb != "" || out != want {
+				t.Fatalf("code=%d out=%q want=%q err=%q", code, out, want, errb)
+			}
+		})
 	}
 }
 
