@@ -422,6 +422,23 @@ func provision(t *testing.T, root, name string) {
 	}
 	prov := fmt.Sprintf("command\t%s\nversion\t%s\nlicense\t%s\nsource_url\t%s\nsource_sha256\t%s\n%scompiler\ttest\nbuilt_sha256\t%s\n",
 		e.Command, e.Version, e.License, e.URL, e.SHA256, recipe, hex.EncodeToString(sum[:]))
+	if name == "man" {
+		companion := filepath.Join(dir, "apropos")
+		if err := os.WriteFile(companion, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manual := filepath.Join(dir, "share", "man", "man1", "man.1")
+		if err := os.MkdirAll(filepath.Dir(manual), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manualBody := []byte(".TH MAN 1\n")
+		if err := os.WriteFile(manual, manualBody, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manualSum := sha256.Sum256(manualBody)
+		prov += fmt.Sprintf("companion_apropos_sha256\t%s\nmanual_man1_sha256\t%s\n",
+			hex.EncodeToString(sum[:]), hex.EncodeToString(manualSum[:]))
+	}
 	if err := os.WriteFile(filepath.Join(dir, "provenance.tsv"), []byte(prov), 0o644); err != nil {
 		t.Fatal(err)
 	}

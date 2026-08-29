@@ -178,6 +178,35 @@ provider_recipe_current() {
     "$_provider_provenance"
 }
 
+# provider_man_cache_current DEST
+#
+# A v2 man cache is one unit: executable, apropos companion, and self-manual.
+# Do the same digest checks at the build cache-hit boundary as the Go resolver,
+# so the resolver's "rebuild it" recovery instruction actually repairs a
+# missing or tampered payload instead of accepting the executable alone.
+provider_man_cache_current() {
+  _provider_man_dest=$1
+  _provider_man_provenance=$_provider_man_dest/provenance.tsv
+  _provider_man_binary=$_provider_man_dest/man
+  _provider_man_apropos=$_provider_man_dest/apropos
+  _provider_man_manual=$_provider_man_dest/share/man/man1/man.1
+  [ -f "$_provider_man_binary" ] && [ ! -L "$_provider_man_binary" ] &&
+    [ -x "$_provider_man_binary" ] || return 1
+  [ -f "$_provider_man_apropos" ] && [ ! -L "$_provider_man_apropos" ] &&
+    [ -x "$_provider_man_apropos" ] || return 1
+  [ -f "$_provider_man_manual" ] && [ ! -L "$_provider_man_manual" ] &&
+    [ -s "$_provider_man_manual" ] || return 1
+  _provider_man_binary_want=$(awk -F '\t' '$1 == "built_sha256" { print $2; exit }' "$_provider_man_provenance")
+  _provider_man_apropos_want=$(awk -F '\t' '$1 == "companion_apropos_sha256" { print $2; exit }' "$_provider_man_provenance")
+  _provider_man_manual_want=$(awk -F '\t' '$1 == "manual_man1_sha256" { print $2; exit }' "$_provider_man_provenance")
+  [ ${#_provider_man_binary_want} -eq 64 ] &&
+    [ ${#_provider_man_apropos_want} -eq 64 ] &&
+    [ ${#_provider_man_manual_want} -eq 64 ] || return 1
+  [ "$(provider_sha256 "$_provider_man_binary")" = "$_provider_man_binary_want" ] &&
+    [ "$(provider_sha256 "$_provider_man_apropos")" = "$_provider_man_apropos_want" ] &&
+    [ "$(provider_sha256 "$_provider_man_manual")" = "$_provider_man_manual_want" ]
+}
+
 # provider_download_verified URL SHA256 DEST
 #
 # Prints the URL that supplied the verified bytes. Every endpoint and attempt
@@ -299,7 +328,9 @@ esac
 
 dest=$cache/$cmd/$version
 target=$dest/$cmd
-if [ -x "$target" ] && provider_recipe_current "$dest/provenance.tsv" "$recipe_revision"; then
+if [ -x "$target" ] &&
+   provider_recipe_current "$dest/provenance.tsv" "$recipe_revision" &&
+   { [ "$cmd" != man ] || provider_man_cache_current "$dest"; }; then
   say "cached: $target ($license)"; printf '%s\n' "$target"; exit 0
 fi
 [ ! -x "$target" ] || say "stale build recipe: $target ($license); rebuilding"
@@ -307,6 +338,9 @@ fi
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "required build tool not found: $1"; }
 for t in curl tar make; do need "$t"; done
+provider_jobs=${POSIX_PROVIDER_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}
+provider_positive_integer "$provider_jobs" ||
+  fail "invalid provider build job count: $provider_jobs"
 
 # Compiler selection, most explicit first. Whichever is chosen is RECORDED next
 # to the binary: a provider built by an unrecorded compiler cannot be attributed
@@ -592,11 +626,22 @@ PATCHES
        --with-config-file="$_man_config" >/dev/null)
     for _d in gl/lib lib libdb src; do
       (cd "$build_dir/$_d" &&
-         make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null) ||
+         make -j"$provider_jobs" >/dev/null) ||
         fail "man build failed in $_d"
     done
+    # A locally-built provider must carry the manual for the standard utility
+    # it implements.  Minimal certification hosts deliberately omit native
+    # documentation payloads, so relying on /usr/share/man/man1/man.1 makes
+    # `man man` host-image-dependent even though the executable is pinned.
+    # Build the page from the same verified man-db source.  The runtime adapter
+    # publishes this relocatable cache directory without replacing an explicit
+    # caller MANPATH or man-db's configured default roots.
+    (cd "$build_dir/man" &&
+       make -j"$provider_jobs" >/dev/null) ||
+      fail "man manual build failed"
     found=$build_dir/src/man
     companion=$build_dir/src/apropos
+    provider_manual=$build_dir/man/man1/man.1
     ;;
   ex|vi)
     (cd "$src" && ./configure --with-features=normal --disable-gui --without-x \
@@ -619,7 +664,10 @@ fi
 install -m 0755 "$found" "$target"
 if [ "$cmd" = man ]; then
   [ -x "${companion:-}" ] || fail 'man build produced no apropos companion'
+  [ -s "${provider_manual:-}" ] || fail 'man build produced no man(1) page'
   install -m 0755 "$companion" "$dest/apropos"
+  install -d -m 0755 "$dest/share/man/man1"
+  install -m 0644 "$provider_manual" "$dest/share/man/man1/man.1"
 fi
 
 # Provenance sidecar: what was built, from which pinned bytes, by which
@@ -637,6 +685,7 @@ fi
   printf 'built_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$target" | awk '{print $1}'; else shasum -a 256 "$target" | awk '{print $1}'; fi)"
   if [ "$cmd" = man ]; then
     printf 'companion_apropos_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$dest/apropos" | awk '{print $1}'; else shasum -a 256 "$dest/apropos" | awk '{print $1}'; fi)"
+    printf 'manual_man1_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$dest/share/man/man1/man.1" | awk '{print $1}'; else shasum -a 256 "$dest/share/man/man1/man.1" | awk '{print $1}'; fi)"
   fi
   printf 'distributed\tno (built locally; provider binaries are never republished)\n'
 } > "$dest/provenance.tsv"

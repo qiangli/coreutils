@@ -201,6 +201,16 @@ func provision(t *testing.T, root, name, body string) string {
 			t.Fatal(err)
 		}
 		prov += fmt.Sprintf("companion_apropos_sha256\t%s\n", hex.EncodeToString(sum[:]))
+		manual := filepath.Join(dir, "share", "man", "man1", "man.1")
+		if err := os.MkdirAll(filepath.Dir(manual), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manualBody := []byte(".TH MAN 1\n")
+		if err := os.WriteFile(manual, manualBody, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manualSum := sha256.Sum256(manualBody)
+		prov += fmt.Sprintf("manual_man1_sha256\t%s\n", hex.EncodeToString(manualSum[:]))
 	}
 	if err := os.WriteFile(filepath.Join(dir, "provenance.tsv"), []byte(prov), 0o644); err != nil {
 		t.Fatal(err)
@@ -215,6 +225,45 @@ func TestManRejectsNonPOSIXOptionBeforeDispatch(t *testing.T) {
 	code, stdout, stderr := run(t, "man", rc, out, errb, "-h", "ls")
 	if code == 0 || stdout != "" || !strings.Contains(stderr, "unknown option -h") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestManProviderEnvPublishesRelocatableSelfManual(t *testing.T) {
+	sep := string(os.PathListSeparator)
+	provider := filepath.Join(t.TempDir(), "relocated", "man")
+	root := filepath.Join(filepath.Dir(provider), "share", "man")
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{name: "unset retains defaults", env: []string{"A=1"}, want: root + sep},
+		{name: "trailing default", env: []string{"MANPATH=/staged" + sep}, want: "/staged" + sep + root + sep},
+		{name: "leading default", env: []string{"MANPATH=" + sep + "/native"}, want: root + sep + sep + "/native"},
+		{name: "explicit unchanged", env: []string{"MANPATH=/only"}, want: "/only"},
+		{name: "last duplicate wins and is canonicalized", env: []string{"MANPATH=/stale", "A=1", "MANPATH=/last" + sep}, want: "/last" + sep + root + sep},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := append([]string(nil), tc.env...)
+			got := manProviderEnv(tc.env, provider)
+			var value string
+			count := 0
+			for i := len(got) - 1; i >= 0; i-- {
+				if strings.HasPrefix(got[i], "MANPATH=") {
+					count++
+					value = strings.TrimPrefix(got[i], "MANPATH=")
+				}
+			}
+			if count != 1 {
+				t.Fatalf("MANPATH assignment count=%d env=%q", count, got)
+			}
+			if value != tc.want {
+				t.Fatalf("MANPATH=%q want %q", value, tc.want)
+			}
+			if !slices.Equal(tc.env, before) {
+				t.Fatal("input environment mutated")
+			}
+		})
 	}
 }
 

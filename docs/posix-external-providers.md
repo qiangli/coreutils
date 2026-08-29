@@ -58,6 +58,22 @@ provenance checks, exit/signal status, and every non-ctags provider retain the
 normal dispatch path. This is an I/O semantic adapter, not another ctags
 implementation or a host-PATH fallback.
 
+## The man provider's own manual
+
+The man-db build installs its generated `man(1)` page beside the cached
+provider under `share/man/man1`, and provenance covers that page as well as the
+`man` and `apropos` executables. This keeps the POSIX standard-utility operand
+`man` available on minimal hosts that install commands without native manual
+payloads.
+
+At dispatch, that relocatable manual root is added only where `MANPATH` permits
+man-db's configured defaults: immediately before each empty path-list element.
+The empty element remains, so native defaults are not suppressed, and every
+explicit caller directory retains its order. If `MANPATH` is unset the adapter
+uses the provider root followed by an empty default marker; if it contains no
+empty marker, the fully explicit override is unchanged. Keyword search still
+dispatches directly to the verified `apropos` companion.
+
 ## Provisioning
 
 ```sh
@@ -106,7 +122,8 @@ no checkout.
 
 Before returning a path, the resolver checks the cached binary against its
 `provenance.tsv`: the command, the version, the pinned source digest, and the
-sha256 of the binary itself. A mismatch is an **error**, never a warning. An
+sha256 of the binary itself. For `man`, the verified companion and manual page
+are part of the same fail-closed identity. A mismatch is an **error**, never a warning. An
 unattributable binary in a certification arm is worse than a missing one,
 because it still produces numbers.
 
@@ -197,6 +214,7 @@ rejected; it does not re-hash the repository patch on every invocation.
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
 | `cmds/posixproviders/` | the ten registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
+| `tools/posix-providers/man-relocation-test.sh` | explicit source-build probe for the relocated provider's own `man(1)` page |
 | `tools/posix-providers/patches/` | pinned, digest-verified provider source corrections recorded in provenance |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
 | `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |

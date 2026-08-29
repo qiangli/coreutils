@@ -118,6 +118,36 @@ fi
 printf 'recipe_revision\t2\n' > "$tmp/provenance.tsv"
 provider_recipe_current "$tmp/provenance.tsv" 2
 
+# A current man recipe is not a cache hit unless every runtime payload still
+# matches its recorded identity. This keeps the resolver's rebuild instruction
+# recoverable after deletion or tampering.
+mkdir -p "$tmp/man/share/man/man1"
+printf '#!/bin/sh\n' > "$tmp/man/man"
+chmod 0755 "$tmp/man/man"
+printf '#!/bin/sh\n' > "$tmp/man/apropos"
+chmod 0755 "$tmp/man/apropos"
+printf '.TH MAN 1\n' > "$tmp/man/share/man/man1/man.1"
+binary_sha=$(provider_sha256 "$tmp/man/man")
+apropos_sha=$(provider_sha256 "$tmp/man/apropos")
+manual_sha=$(provider_sha256 "$tmp/man/share/man/man1/man.1")
+{
+  printf 'built_sha256\t%s\n' "$binary_sha"
+  printf 'companion_apropos_sha256\t%s\n' "$apropos_sha"
+  printf 'manual_man1_sha256\t%s\n' "$manual_sha"
+} > "$tmp/man/provenance.tsv"
+provider_man_cache_current "$tmp/man"
+printf 'tampered\n' >> "$tmp/man/share/man/man1/man.1"
+if provider_man_cache_current "$tmp/man"; then
+  echo 'tampered man manual was accepted as a current cache' >&2
+  exit 1
+fi
+printf '.TH MAN 1\n' > "$tmp/man/share/man/man1/man.1"
+rm "$tmp/man/apropos"
+if provider_man_cache_current "$tmp/man"; then
+  echo 'missing man apropos was accepted as a current cache' >&2
+  exit 1
+fi
+
 mkdir -p "$tmp/bin"
 printf 'verified provider source\n' > "$tmp/good"
 good_sha=$(provider_sha256 "$tmp/good")
@@ -191,30 +221,31 @@ fi
 [ ! -e "$tmp/archive" ]
 [ ! -e "$tmp/archive.part" ]
 
-# Exercise the production entry point, including extraction and provenance,
-# with a tiny source archive whose configure script creates a fake m4 binary.
-mkdir -p "$tmp/fake-m4"
-cat > "$tmp/fake-m4/configure" <<'CONFIGURE'
+# Exercise the generic production entry point, including extraction and
+# provenance, with a tiny synthetic provider. Do not call it m4: the real m4
+# route deliberately applies and gates the pinned POSIX semantics correction.
+mkdir -p "$tmp/fake-fixture"
+cat > "$tmp/fake-fixture/configure" <<'CONFIGURE'
 #!/bin/sh
 set -eu
-printf '#!/bin/sh\nexit 0\n' > m4
-chmod 0755 m4
+printf '#!/bin/sh\nexit 0\n' > fixture
+chmod 0755 fixture
 printf 'all:\n\t@:\n' > Makefile
 CONFIGURE
-chmod 0755 "$tmp/fake-m4/configure"
-tar -cJf "$tmp/fake-m4.tar.xz" -C "$tmp" fake-m4
-fake_sha=$(provider_sha256 "$tmp/fake-m4.tar.xz")
-printf 'm4\t9.9\tGPL-3.0\tlinux,darwin\t%s\t%s\n' \
+chmod 0755 "$tmp/fake-fixture/configure"
+tar -cJf "$tmp/fake-fixture.tar.xz" -C "$tmp" fake-fixture
+fake_sha=$(provider_sha256 "$tmp/fake-fixture.tar.xz")
+printf 'fixture\t9.9\tMIT\tlinux,darwin\t%s\t%s\n' \
   "$fake_sha" "$url" > "$tmp/manifest.tsv"
-export MOCK_MODE=fallback MOCK_GOOD="$tmp/fake-m4.tar.xz"
+export MOCK_MODE=fallback MOCK_GOOD="$tmp/fake-fixture.tar.xz"
 rm -f "$MOCK_URLS" "$MOCK_ARGS"
 POSIX_PROVIDER_MANIFEST="$tmp/manifest.tsv" \
 POSIX_PROVIDER_WORK="$tmp/build-work" \
 BASHY_BIN_CACHE="$tmp/cache" \
 POSIX_PROVIDER_CC=/usr/bin/cc \
-  "$here/build.sh" m4 >/dev/null
-prov=$tmp/cache/m4/9.9/provenance.tsv
-[ -x "$tmp/cache/m4/9.9/m4" ]
+  "$here/build.sh" fixture >/dev/null
+prov=$tmp/cache/fixture/9.9/provenance.tsv
+[ -x "$tmp/cache/fixture/9.9/fixture" ]
 awk -F '\t' -v want="$url" '$1 == "source_url" && $2 == want { found=1 } END { exit !found }' "$prov"
 awk -F '\t' '$1 == "retrieved_url" && $2 == "https://ftp.fau.de/gnu/m4/m4-1.4.19.tar.xz" { found=1 } END { exit !found }' "$prov"
 awk -F '\t' -v want="$fake_sha" '$1 == "source_sha256" && $2 == want { found=1 } END { exit !found }' "$prov"

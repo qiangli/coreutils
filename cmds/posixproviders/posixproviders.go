@@ -147,10 +147,63 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 		path = filepath.Join(filepath.Dir(path), "apropos")
 		providerName = "apropos"
 	}
-	if attempted, code := execProviderDedicated(rc, providerName, path, providerArgs); attempted {
+	providerRC := rc
+	if e.Command == "man" && !manKeyword {
+		adapted := *rc
+		adapted.Env = manProviderEnv(rc.Env, path)
+		providerRC = &adapted
+	}
+	if attempted, code := execProviderDedicated(providerRC, providerName, path, providerArgs); attempted {
 		return code
 	}
-	return execProviderFn(rc, providerName, path, providerArgs)
+	return execProviderFn(providerRC, providerName, path, providerArgs)
+}
+
+// manProviderEnv publishes the pinned provider's own man(1) page wherever the
+// caller permits man-db's configured default roots.  An empty MANPATH element
+// is man-db's marker for those defaults.  Insert the relocatable provider root
+// immediately before each such marker, retaining both the caller's ordering
+// and the empty element.  A fully explicit MANPATH remains fully explicit.
+func manProviderEnv(env []string, providerPath string) []string {
+	const key = "MANPATH="
+	value := ""
+	found := false
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], key) {
+			value = strings.TrimPrefix(env[i], key)
+			found = true
+			break
+		}
+	}
+	sep := string(os.PathListSeparator)
+	providerRoot := filepath.Join(filepath.Dir(providerPath), "share", "man")
+	if found {
+		parts := strings.Split(value, sep)
+		published := false
+		out := make([]string, 0, len(parts)*2)
+		for _, part := range parts {
+			if part == "" {
+				out = append(out, providerRoot)
+				published = true
+			}
+			out = append(out, part)
+		}
+		if !published {
+			value = strings.Join(parts, sep)
+		} else {
+			value = strings.Join(out, sep)
+		}
+	} else {
+		// No override means provider root followed by the configured defaults.
+		value = providerRoot + sep
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, assignment := range env {
+		if !strings.HasPrefix(assignment, key) {
+			out = append(out, assignment)
+		}
+	}
+	return append(out, key+value)
 }
 
 // m4ProviderArgs selects the standards dialect of the pinned GNU provider.

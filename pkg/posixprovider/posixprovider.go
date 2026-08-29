@@ -435,6 +435,26 @@ func (r Resolver) verifyProvenance(e Entry, path string) (string, error) {
 			return "", fmt.Errorf("%s %s has a %w: apropos companion hash differs from provenance\n"+
 				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, e.Command)
 		}
+		manual := filepath.Join(filepath.Dir(path), "share", "man", "man1", "man.1")
+		manualWant := strings.ToLower(strings.TrimSpace(rec["manual_man1_sha256"]))
+		if len(manualWant) != 64 {
+			return "", fmt.Errorf("%s %s has a %w: provenance records no manual_man1_sha256 (%s)\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, provPath, e.Command)
+		}
+		info, err := os.Lstat(manual)
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return "", fmt.Errorf("%s %s has a %w: man(1) payload is not a non-empty regular file\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, e.Command)
+		}
+		manualGot, err := fileSHA256(manual)
+		if err != nil {
+			return "", fmt.Errorf("%s %s has a %w: man(1) payload: %v\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, err, e.Command)
+		}
+		if manualGot != manualWant {
+			return "", fmt.Errorf("%s %s has a %w: man(1) payload hash differs from provenance\n"+
+				"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, e.Command)
+		}
 	}
 	return want, nil
 }

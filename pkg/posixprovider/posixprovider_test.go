@@ -49,7 +49,7 @@ func provision(t *testing.T, root string, e Entry, body []byte) string {
 func writeProvenance(t *testing.T, dir string, rec map[string]string) {
 	t.Helper()
 	var b strings.Builder
-	for _, k := range []string{"command", "version", "license", "source_url", "source_sha256", "recipe_revision", "compiler", "built_sha256", "companion_apropos_sha256", "distributed"} {
+	for _, k := range []string{"command", "version", "license", "source_url", "source_sha256", "recipe_revision", "compiler", "built_sha256", "companion_apropos_sha256", "manual_man1_sha256", "distributed"} {
 		if v, ok := rec[k]; ok {
 			b.WriteString(k + "\t" + v + "\n")
 		}
@@ -423,9 +423,39 @@ func TestResolveManRequiresVerifiedAproposCompanion(t *testing.T) {
 		}
 		sum := sha256.Sum256(body)
 		rec["companion_apropos_sha256"] = hex.EncodeToString(sum[:])
+		manual := filepath.Join(dir, "share", "man", "man1", "man.1")
+		if err := os.MkdirAll(filepath.Dir(manual), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manualBody := []byte(".TH MAN 1\n")
+		if err := os.WriteFile(manual, manualBody, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manualSum := sha256.Sum256(manualBody)
+		rec["manual_man1_sha256"] = hex.EncodeToString(manualSum[:])
 		writeProvenance(t, dir, rec)
 		return Resolver{CacheRoot: root, GOOS: runtime.GOOS}, companion
 	}
+	t.Run("manual missing", func(t *testing.T) {
+		r, companion := setup(t)
+		manual := filepath.Join(filepath.Dir(companion), "share", "man", "man1", "man.1")
+		if err := os.Remove(manual); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Resolve("man"); !errors.Is(err, ErrProvenance) {
+			t.Fatalf("missing manual error=%v, want ErrProvenance", err)
+		}
+	})
+	t.Run("manual tamper", func(t *testing.T) {
+		r, companion := setup(t)
+		manual := filepath.Join(filepath.Dir(companion), "share", "man", "man1", "man.1")
+		if err := os.WriteFile(manual, []byte("changed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Resolve("man"); !errors.Is(err, ErrProvenance) {
+			t.Fatalf("tampered manual error=%v, want ErrProvenance", err)
+		}
+	})
 	t.Run("valid", func(t *testing.T) {
 		r, _ := setup(t)
 		if _, err := r.Resolve("man"); err != nil {
