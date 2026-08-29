@@ -99,6 +99,13 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			propagation.TraceContext{},
 			propagation.Baggage{},
 		))
+		exporter := strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_TRACES_EXPORTER")))
+		switch exporter {
+		case "", "file", "console", "none", "otlp", "grpc", "http", "http/protobuf":
+		default:
+			os.Stderr.WriteString("bashy: telemetry disabled — unsupported OTEL_TRACES_EXPORTER=" + exporter + "\n")
+			return
+		}
 
 		// File sink, chosen by the standard OTEL_TRACES_EXPORTER=file.
 		//
@@ -141,7 +148,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			return
 		}
 
-		endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+		endpoint := networkEndpoint(exporter)
 		if endpoint == "" {
 			return // no-op mode. Deliberately, and completely.
 		}
@@ -161,7 +168,11 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 		// The spec's default is http/protobuf, and so is ours.
 		var exp sdktrace.SpanExporter
 		var err error
-		switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))) {
+		protocol := strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")))
+		if protocol == "" && exporter == "grpc" {
+			protocol = "grpc"
+		}
+		switch protocol {
 		case "grpc":
 			exp, err = otlptracegrpc.New(ctx)
 		default:
@@ -190,7 +201,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 		)
 		otel.SetTracerProvider(provider)
 		var mexp sdkmetric.Exporter
-		switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))) {
+		switch protocol {
 		case "grpc":
 			mexp, _ = otlpmetricgrpc.New(ctx)
 		default:

@@ -48,6 +48,7 @@ type spoolExporter struct {
 	mu   sync.Mutex
 	path string
 	f    *os.File
+	mode os.FileMode
 }
 
 func newSpoolExporter(path string) (*spoolExporter, error) {
@@ -66,7 +67,12 @@ func newSpoolExporter(path string) (*spoolExporter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open spool: %w", err)
 	}
-	return &spoolExporter{path: path, f: f}, nil
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat spool: %w", err)
+	}
+	return &spoolExporter{path: path, f: f, mode: fi.Mode().Perm()}, nil
 }
 
 // secureSpoolDir makes a directory created for the spool owner-only. It also
@@ -144,7 +150,7 @@ func openPrivateSpool(path string) (*os.File, error) {
 	// A file we created and Bashy's canonical file must be owner-only. An
 	// existing operator override may deliberately be a shared append target;
 	// changing its mode is outside the authority granted by naming it.
-	if !existed || isCanonicalSpoolPath(path) {
+	if !existed || isDefaultSpoolPath(path) {
 		if err := f.Chmod(0o600); err != nil {
 			_ = f.Close()
 			return nil, err
@@ -259,6 +265,15 @@ func isCanonicalSpoolPath(path string) bool {
 	if !ownsDir {
 		return false
 	}
+	return sameSpoolPath(path, canonical)
+}
+
+func isDefaultSpoolPath(path string) bool {
+	canonical, _ := defaultSpoolPath()
+	return sameSpoolPath(path, canonical)
+}
+
+func sameSpoolPath(path, canonical string) bool {
 	absCanonical, err := filepath.Abs(canonical)
 	return err == nil && filepath.Clean(path) == filepath.Clean(absCanonical)
 }
@@ -306,7 +321,26 @@ func isFileExporter() bool {
 // for the network path, and quietly spooling to a file instead would be its own
 // silent surprise.
 func hasOTLPEndpoint() bool {
-	return strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != ""
+	return strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")) != "" ||
+		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != ""
+}
+
+func networkEndpoint(exporter string) string {
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	switch exporter {
+	case "otlp", "grpc", "http", "http/protobuf":
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")), "grpc") || exporter == "grpc" {
+			return "http://localhost:4317"
+		}
+		return "http://localhost:4318"
+	default:
+		return ""
+	}
 }
 
 // maxSpoolBytes bounds the spool so telemetry cannot fill a disk when nothing
@@ -352,7 +386,7 @@ func (e *spoolExporter) rotateIfLarge() {
 		_ = os.Remove(tmpPath)
 		return
 	}
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(e.mode); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return
