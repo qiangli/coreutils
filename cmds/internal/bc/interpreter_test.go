@@ -231,6 +231,28 @@ b[1]
 	}
 }
 
+func TestPOSIXIdentifierNamespacesAtAdvertisedLimits(t *testing.T) {
+	src := `x
+x[2047]
+define x() {
+return(7)
+}
+x=3
+x[2047]=5
+x+x[2047]+x()
+scale=99
+q=1/3
+scale(q)
+`
+	got, err := execute(t, src, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "0\n0\n15\n99\n"; got != want {
+		t.Fatalf("stdout=%q, want %q", got, want)
+	}
+}
+
 func TestPOSIXFunctionsArraysAndDynamicLocals(t *testing.T) {
 	src := `x=4
 define g(x) {
