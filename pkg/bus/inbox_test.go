@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -141,6 +142,24 @@ func TestInboxJSONUsesTheBusEventEnvelope(t *testing.T) {
 	}
 	if got.To != "alice" || got.Body != "machine readable" || got.Principal != "scheduler" {
 		t.Fatalf("inbox envelope = %+v", got)
+	}
+}
+
+func TestInboxOpenByIDRetrievesWithoutConsuming(t *testing.T) {
+	isolate(t)
+	notifyForInbox(t, "alice", "retrievable body")
+	snapshot, err := SnapshotInbox("alice")
+	if err != nil || len(snapshot.Items) != 1 {
+		t.Fatalf("snapshot=%+v err=%v", snapshot.Items, err)
+	}
+	id := "bus:" + strconv.FormatInt(snapshot.Items[0].Seq, 10)
+	out, _, err := runInboxCommand(t, context.Background(), "--as", "alice", "--id", id, "--peek")
+	if err != nil || !strings.Contains(out, "retrievable body") {
+		t.Fatalf("open = %q, %v", out, err)
+	}
+	again, err := SnapshotInbox("alice")
+	if err != nil || len(again.Items) != 1 {
+		t.Fatalf("open-by-id consumed inbox: %+v, %v", again.Items, err)
 	}
 }
 

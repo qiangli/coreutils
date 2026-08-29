@@ -170,6 +170,28 @@ func MarkRead(subscriber string, throughSeq int64) error {
 	return writePending(subscriber, all)
 }
 
+// MarkPendingRead marks exactly one materialized timeline record as read.
+// Unlike MarkRead it does not consume earlier records merely because a
+// higher-priority later record was admitted first.
+func MarkPendingRead(subscriber string, seq int64) error {
+	all, err := ReadPending(subscriber)
+	if err != nil {
+		return err
+	}
+	now := nowRFC()
+	changed := false
+	for i := range all {
+		if all[i].Seq == seq && all[i].Unread() {
+			all[i].ReadAt = now
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writePending(subscriber, all)
+}
+
 // UnreadPending returns only what the agent has not been shown.
 func UnreadPending(subscriber string) ([]Pending, error) {
 	all, err := ReadPending(subscriber)

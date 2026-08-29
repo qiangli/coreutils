@@ -114,6 +114,9 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	var preparedInbox bus.PreparedPreamble
 	if strings.TrimSpace(opt.Prompt) != "" {
 		preparedInbox = bus.PrepareForAgent(name, opt.Prompt)
+		if err := preparedInbox.Err(); err != nil {
+			return nil, true, fmt.Errorf("chat: prepare opening inbox: %w", err)
+		}
 		opt.Prompt = preparedInbox.Text
 	}
 
@@ -221,6 +224,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	if strings.TrimSpace(opt.Prompt) != "" {
 		drv.prompt(opt.Prompt)
 	}
+	recordPreambleAdmission(ctx, preparedInbox)
 	if err := preparedInbox.Commit(); err != nil {
 		s.closeACP()
 		return s, true, fmt.Errorf("chat: opening ACP prompt was delivered but its inbox acknowledgement failed: %w", err)

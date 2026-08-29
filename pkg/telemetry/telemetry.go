@@ -281,6 +281,31 @@ func Provenance(ctx context.Context, name string, value int64, source string) {
 	))
 }
 
+// CoordinationAdmission records only aggregate accounting and a content
+// digest. Message bodies, senders, topics, IDs, and retrieval paths never enter
+// telemetry through this event.
+func CoordinationAdmission(ctx context.Context, digest string, inputItems, inputBytes, admittedItems, renderedBytes, omittedItems, omittedBytes int64) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		var end func()
+		ctx, end = standalone(ctx, "coordination.admission")
+		defer end()
+		span = trace.SpanFromContext(ctx)
+		if !span.IsRecording() {
+			return
+		}
+	}
+	span.AddEvent("coordination.admission", trace.WithAttributes(
+		attribute.String("coordination.content_digest", digest),
+		attribute.Int64("coordination.input_items", inputItems),
+		attribute.Int64("coordination.input_bytes", inputBytes),
+		attribute.Int64("coordination.admitted_items", admittedItems),
+		attribute.Int64("coordination.rendered_bytes", renderedBytes),
+		attribute.Int64("coordination.omitted_items", omittedItems),
+		attribute.Int64("coordination.omitted_bytes", omittedBytes),
+	))
+}
+
 // BoundHit records that a LIMIT BOUND — that something was cut short, capped, truncated,
 // throttled or timed out.
 //

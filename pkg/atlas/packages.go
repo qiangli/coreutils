@@ -130,6 +130,7 @@ var packages = map[string]Package{
 	// These answer §2.2a through their command's Stage. Nothing more is owed
 	// here: addVerb/stageTools already refused to let them ship unplaced.
 	"agentcmd":   cmdPkg("agent"),
+	"admission":  libPkg("bus", "store-neutral deterministic byte budgeting, priority projection, overflow digests, and prepared acknowledgements behind Bus/chat turn preambles; it owns no messages and therefore has no command surface"),
 	"ask":        cmdPkg("ask"),
 	"board":      cmdPkg("board"),
 	"browser":    cmdPkg("browser"),

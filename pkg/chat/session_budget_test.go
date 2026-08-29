@@ -1,10 +1,13 @@
 package chat
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/admission"
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 )
 
@@ -19,13 +22,17 @@ import (
 // budgetGate returns a gate holding `spent` dollars already burned today
 // against a $10/day api-key model, with a frozen clock.
 func budgetGate(t *testing.T, spent float64) func() {
+	return budgetGateFor(t, "acme-1", spent)
+}
+
+func budgetGateFor(t *testing.T, model string, spent float64) func() {
 	t.Helper()
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	g := llmbudget.New(llmbudget.Config{
 		Now: func() time.Time { return now },
 		Models: map[string]llmbudget.Model{
-			"acme-1": {
-				Name:      "acme-1",
+			model: {
+				Name:      model,
 				Kind:      "api",
 				Billing:   "metered",
 				Provider:  "acme",
@@ -38,7 +45,7 @@ func budgetGate(t *testing.T, spent float64) func() {
 	// seeded spend is not rolled over as stale.
 	y, m, d := now.Local().Date()
 	g.Load(llmbudget.State{Models: map[string]llmbudget.Counters{
-		"acme-1": {
+		model: {
 			DayStart:   time.Date(y, m, d, 0, 0, 0, 0, now.Local().Location()),
 			WeekStart:  weekStartForTest(now),
 			DayCostUSD: spent,
@@ -81,6 +88,51 @@ func TestSayIsRefusedWhenTheBudgetIsExhausted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "LLM budget") {
 		t.Fatalf("refused for the wrong reason, want an LLM budget refusal, got: %v", err)
+	}
+}
+
+func TestRefusedSayDoesNotAcknowledgePreparedInbox(t *testing.T) {
+	isolateRoom(t)
+	defer budgetGate(t, 9.99)()
+	if err := bus.Publish(bus.Notification{Principal: "owner", To: "budget-agent", Body: "do not consume me"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := sessionUnderTest()
+	s.inboxAgent = "budget-agent"
+	if err := s.Say(strings.Repeat("steer the agent ", 40)); err == nil || !strings.Contains(err.Error(), "LLM budget") {
+		t.Fatalf("want budget refusal, got %v", err)
+	}
+	snapshot, err := bus.SnapshotInbox("budget-agent")
+	if err != nil || len(snapshot.Items) != 1 || snapshot.Items[0].Body != "do not consume me" {
+		t.Fatalf("refused launch consumed inbox: items=%+v err=%v", snapshot.Items, err)
+	}
+}
+
+func TestRefusedChatLaunchDoesNotAcknowledgePreparedInbox(t *testing.T) {
+	isolateRoom(t)
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	defer budgetGateFor(t, "opus5", 9.99)()
+
+	acked := false
+	old := bus.PrepareTurnItems
+	bus.PrepareTurnItems = func(string) ([]admission.Item, error) {
+		return []admission.Item{{
+			Source: "meet", ID: "launch-1", Priority: admission.PriorityResponse,
+			Body: "waiting before launch", ArtifactRef: "bashy inbox --id meet:launch-1 --peek",
+			OverflowRef: "bashy inbox --peek",
+			Acknowledge: func() error { acked = true; return nil },
+		}}, nil
+	}
+	t.Cleanup(func() { bus.PrepareTurnItems = old })
+
+	_, err := Start(context.Background(), "claude:opus", SessionOptions{Prompt: strings.Repeat("launch prompt ", 40)})
+	if err == nil || !strings.Contains(err.Error(), "LLM budget") {
+		t.Fatalf("want budget refusal, got %v", err)
+	}
+	if acked {
+		t.Fatal("refused chat launch acknowledged prepared inbox")
 	}
 }
 

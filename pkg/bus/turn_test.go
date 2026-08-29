@@ -2,9 +2,11 @@ package bus
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/admission"
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
@@ -83,6 +85,107 @@ func TestPreparedTurnDoesNotAcknowledgeBeforeSuccessfulInjection(t *testing.T) {
 	}
 	if after := PrepareTurnPreamble("/tmp/prepared.sock"); after.Text != "" {
 		t.Fatalf("committed turn remained unread: %q", after.Text)
+	}
+}
+
+func TestTurnAdmissionBoundsLargeMixedBatchAndKeepsOmissionsUnread(t *testing.T) {
+	isolate(t)
+	joinLive(t, "bounded-session", "/tmp/bounded.sock")
+	subscribe(t, Subscription{Subscriber: "bounded", Topics: []string{"*"}, Instance: "bounded-session"})
+	for i := 0; i < 32; i++ {
+		body := "routine-" + strconv.Itoa(i) + " " + strings.Repeat("界", 300)
+		publish(t, "--topic", "status", "--as", "sender", body)
+	}
+	if err := Publish(Notification{Principal: "owner", To: "bounded", Topic: "ownership", Body: "BLOCKED ownership changed; stop"}); err != nil {
+		t.Fatal(err)
+	}
+
+	prepared := PrepareTurnPreamble("/tmp/bounded.sock")
+	if err := prepared.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Text) > DefaultTurnAdmissionBytes {
+		t.Fatalf("preamble is %d bytes", len(prepared.Text))
+	}
+	if !strings.Contains(prepared.Text, "BLOCKED ownership changed") || !strings.Contains(prepared.Text, admission.OverflowSchemaVersion) {
+		t.Fatalf("urgent/overflow projection missing:\n%s", prepared.Text)
+	}
+	if prepared.AdmissionReport().UnrepresentedItems == 0 {
+		t.Fatal("large batch unexpectedly had no unrepresented records")
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	retry := PrepareTurnPreamble("/tmp/bounded.sock")
+	if err := retry.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if retry.AdmissionReport().InputItems == 0 {
+		t.Fatal("committing represented headers silently consumed omitted bodies")
+	}
+}
+
+func TestCombinedHostAndBusAdmissionSharesOneBudgetAndExactAcks(t *testing.T) {
+	isolate(t)
+	joinLive(t, "combined-session", "/tmp/combined.sock")
+	subscribe(t, Subscription{Subscriber: "combined", Topics: []string{"*"}, Instance: "combined-session"})
+	publish(t, "--topic", "routine", "--as", "sender", strings.Repeat("b", 900))
+
+	hostAcked := false
+	oldItems := PrepareTurnItems
+	PrepareTurnItems = func(agent string) ([]admission.Item, error) {
+		return []admission.Item{{
+			Source: "meet", ID: "m1", Priority: admission.PriorityUrgent,
+			Topic: "CONFLICT", To: agent, Body: strings.Repeat("h", 900),
+			ArtifactRef: "bashy inbox --id meet:m1 --peek", OverflowRef: "bashy inbox --peek",
+			Acknowledge: func() error { hostAcked = true; return nil },
+		}}, nil
+	}
+	t.Cleanup(func() { PrepareTurnItems = oldItems })
+
+	prepared := PrepareTurnPreamble("/tmp/combined.sock")
+	if err := prepared.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Text) > DefaultTurnAdmissionBytes || !strings.Contains(prepared.Text, "meet:m1") {
+		t.Fatalf("combined projection:\n%s", prepared.Text)
+	}
+	if hostAcked {
+		t.Fatal("prepare acknowledged host input")
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !hostAcked {
+		t.Fatal("represented host header was not acknowledged")
+	}
+}
+
+func TestRenderFailureAndRetryAdvanceNoCursor(t *testing.T) {
+	isolate(t)
+	joinLive(t, "failure-session", "/tmp/failure.sock")
+	subscribe(t, Subscription{Subscriber: "failure", Instance: "failure-session"})
+	if err := Publish(Notification{Principal: "security", To: "failure", Topic: "security", Body: "STOP " + strings.Repeat("x", 600)}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldItems := PrepareTurnItems
+	PrepareTurnItems = func(string) ([]admission.Item, error) {
+		return []admission.Item{{Source: "host", ID: "bad", Priority: admission.PriorityUrgent, Body: strings.Repeat("z", 600)}}, nil
+	}
+	failed := PrepareTurnPreamble("/tmp/failure.sock")
+	if failed.Err() == nil {
+		t.Fatal("urgent record without a retrieval reference did not fail")
+	}
+	if err := failed.Commit(); err == nil {
+		t.Fatal("failed render commit unexpectedly succeeded")
+	}
+	PrepareTurnItems = nil
+	t.Cleanup(func() { PrepareTurnItems = oldItems })
+
+	retry := PrepareTurnPreamble("/tmp/failure.sock")
+	if err := retry.Err(); err != nil || retry.AdmissionReport().InputItems != 1 || !strings.Contains(retry.Text, "bus:") {
+		t.Fatalf("retry lost unread input: err=%v\n%s", err, retry.Text)
 	}
 }
 

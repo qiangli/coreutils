@@ -11,6 +11,7 @@ package bus
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ func NewInboxCmd() *cobra.Command {
 	var as string
 	var wait time.Duration
 	var peek, jsonOut bool
+	var id string
 	var limit int
 
 	cmd := &cobra.Command{
@@ -52,6 +54,12 @@ place, and --wait is bounded: a timeout is an empty successful read.`,
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(id) != "" {
+				if wait != 0 || limit != 0 {
+					return fmt.Errorf("inbox: --id cannot be combined with --wait or --limit")
+				}
+				return openInboxItem(cmd, who, id, jsonOut)
+			}
 			return runInbox(cmd, inboxOptions{
 				reader: who, wait: wait, peek: peek, limit: limit, jsonOut: jsonOut,
 			})
@@ -62,6 +70,7 @@ place, and --wait is bounded: a timeout is an empty successful read.`,
 	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new notification")
 	f.BoolVar(&peek, "peek", false, "read without advancing your cursor")
 	f.IntVarP(&limit, "limit", "n", 0, "print at most this many notifications (0 = no cap)")
+	f.StringVar(&id, "id", "", "open one durable notification by bus:<sequence> without advancing a cursor")
 	f.BoolVar(&jsonOut, "json", false, "emit one "+SchemaVersion+" JSON object per line (NDJSON)")
 	return cmd
 }
@@ -117,7 +126,7 @@ func SnapshotInbox(reader string) (InboxSnapshot, error) {
 	if _, err := ResolveFor(reader); err != nil {
 		return snap, err
 	}
-	pending, err := UnreadPending(reader)
+	allPending, err := ReadPending(reader)
 	if err != nil {
 		return snap, err
 	}
@@ -126,27 +135,58 @@ func SnapshotInbox(reader string) (InboxSnapshot, error) {
 		return snap, err
 	}
 	snap.through = through
-	for _, p := range pending {
-		if p.Seq > snap.pendingHigh {
-			snap.pendingHigh = p.Seq
-		}
-		snap.Items = append(snap.Items, p)
-	}
+	// Addressed backlog can predate an automatically-created subscription. Put
+	// those records into the existing pending materialization so admission can
+	// acknowledge an arbitrary priority-selected subset without inventing a new
+	// store or advancing the timeline cursor over omitted records.
 	for _, event := range direct {
 		candidate := Pending{SchemaVersion: SchemaVersion, Seq: event.Seq, TS: event.TS, Principal: event.Principal, Topic: event.Topic, To: event.To, Room: event.Room, Body: event.Body, Delivery: DeliveryQueued}
 		duplicate := false
-		for _, p := range snap.Items {
+		for _, p := range allPending {
 			if sameNotification(p, candidate) {
 				duplicate = true
 				break
 			}
 		}
 		if !duplicate {
-			snap.Items = append(snap.Items, candidate)
+			if err := AppendPending(reader, candidate); err != nil {
+				return snap, err
+			}
+			allPending = append(allPending, candidate)
 		}
+	}
+	for _, p := range allPending {
+		if !p.Unread() {
+			continue
+		}
+		if p.Seq > snap.pendingHigh {
+			snap.pendingHigh = p.Seq
+		}
+		snap.Items = append(snap.Items, p)
 	}
 	sort.SliceStable(snap.Items, func(i, j int) bool { return snap.Items[i].Seq < snap.Items[j].Seq })
 	return snap, nil
+}
+
+// CommitItem acknowledges one represented record and advances the direct
+// timeline cursor only after no earlier materialized record remains unread.
+func (s InboxSnapshot) CommitItem(seq int64) error {
+	if err := MarkPendingRead(s.reader, seq); err != nil {
+		return err
+	}
+	items, err := UnreadPending(s.reader)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Seq <= s.through {
+			return nil
+		}
+	}
+	if s.through > 0 {
+		return MarkNotificationsRead(s.reader, s.through)
+	}
+	return nil
 }
 
 func sameNotification(a, b Pending) bool {
@@ -187,6 +227,27 @@ func UnreadNotifications(reader string) ([]room.Event, int64, error) {
 // MarkNotificationsRead acknowledges a previously rendered bus snapshot.
 func MarkNotificationsRead(reader string, through int64) error {
 	return writeCursor(reader, through)
+}
+
+func openInboxItem(cmd *cobra.Command, reader, id string, jsonOut bool) error {
+	raw := strings.TrimSpace(id)
+	raw = strings.TrimPrefix(raw, "bus:")
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seq <= 0 {
+		return fmt.Errorf("inbox: invalid --id %q (want bus:<sequence>)", id)
+	}
+	items, err := ReadPending(reader)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Seq != seq {
+			continue
+		}
+		e := room.Event{Seq: item.Seq, TS: item.TS, Type: room.EventNotify, Principal: item.Principal, Topic: item.Topic, To: item.To, Room: item.Room, Body: item.Body, Priority: item.Delivery}
+		return writeEvent(cmd, e, jsonOut)
+	}
+	return fmt.Errorf("inbox: notification bus:%d is not in %s's durable inbox", seq, reader)
 }
 
 func runInbox(cmd *cobra.Command, opt inboxOptions) error {

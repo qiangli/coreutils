@@ -222,6 +222,9 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	var preparedInbox bus.PreparedPreamble
 	if strings.TrimSpace(opt.Prompt) != "" {
 		preparedInbox = bus.PrepareForAgent(name, opt.Prompt)
+		if err := preparedInbox.Err(); err != nil {
+			return nil, fmt.Errorf("chat: prepare opening inbox: %w", err)
+		}
 		opt.Prompt = preparedInbox.Text
 	}
 	next, d, err := governLaunch(ctx, name, l, opt.Prompt, lo)
@@ -412,6 +415,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 			return s, err
 		}
 	}
+	recordPreambleAdmission(ctx, preparedInbox)
 	if err := preparedInbox.Commit(); err != nil {
 		return s, fmt.Errorf("chat: opening prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
@@ -554,6 +558,9 @@ func (s *Session) Say(text string) error {
 	if s.CtlSock == "" && s.inboxAgent != "" {
 		preparedInbox = bus.PrepareForAgent(s.inboxAgent, text)
 	}
+	if err := preparedInbox.Err(); err != nil {
+		return fmt.Errorf("chat: prepare turn inbox: %w", err)
+	}
 	text = preparedInbox.Text
 
 	if d := s.governTurn(text); !d.Allowed() {
@@ -565,6 +572,7 @@ func (s *Session) Say(text string) error {
 	if err := s.say(text); err != nil {
 		return err
 	}
+	recordPreambleAdmission(context.Background(), preparedInbox)
 	if err := preparedInbox.Commit(); err != nil {
 		return fmt.Errorf("chat: turn was delivered but its inbox acknowledgement failed: %w", err)
 	}
