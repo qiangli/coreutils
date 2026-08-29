@@ -242,11 +242,20 @@ func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
 // correct CLI behavior, so term.IsTerminal alone cannot establish attendance.
 func telemetryAutomation() bool {
 	for _, name := range []string{"CI", "CODEX_CI", "WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_PRINCIPAL"} {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
+		if automationMarker(os.Getenv(name)) {
 			return true
 		}
 	}
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb")
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") || isolatedTerminalSession()
+}
+
+func automationMarker(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func isTerminal(f *os.File) bool {

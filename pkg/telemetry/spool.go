@@ -76,29 +76,39 @@ func newSpoolExporter(path string) (*spoolExporter, error) {
 // larger privilege boundary than protecting the spool file itself.
 func secureSpoolDir(path string) error {
 	dir := filepath.Dir(path)
-	fi, err := os.Lstat(dir)
+	lfi, err := os.Lstat(dir)
 	switch {
 	case os.IsNotExist(err):
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
-		fi, err = os.Lstat(dir)
+		fi, err := os.Stat(dir)
 		if err != nil {
 			return err
 		}
-		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		if !fi.IsDir() {
 			return fmt.Errorf("not a directory")
 		}
 		return os.Chmod(dir, 0o700)
 	case err != nil:
 		return err
-	case fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir():
+	}
+	fi, err := os.Stat(dir) // a symlink to a directory is a valid relocation
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
 		return fmt.Errorf("not a directory")
 	}
 
 	// Only the exact default home path is Bashy-owned. Basenames are not proof:
-	// /var/spool and an operator's group-shared spool/ are not ours to chmod.
-	if canonical, ownsDir := defaultSpoolPath(); ownsDir {
+	// /var/spool and an operator's group-shared or symlinked spool are not ours
+	// to chmod.
+	if lfi.Mode()&os.ModeSymlink == 0 {
+		canonical, ownsDir := defaultSpoolPath()
+		if !ownsDir {
+			return nil
+		}
 		canonical, err = filepath.Abs(canonical)
 		if err == nil && filepath.Clean(path) == filepath.Clean(canonical) {
 			return os.Chmod(dir, 0o700)
