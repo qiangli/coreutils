@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -161,12 +162,38 @@ func openSourceFile(rc *tool.RunContext, member, full string) (*os.File, error) 
 	if rootErr != nil {
 		return nil, err
 	}
-	f, rootErr = root.Open(filepath.FromSlash(member))
-	_ = root.Close()
+	f, rootErr = openRootRelativeLong(root, filepath.FromSlash(member))
 	if rootErr != nil {
 		return nil, err
 	}
 	return f, nil
+}
+
+// openRootRelativeLong avoids handing the kernel one near-PATH_MAX string.
+// Root.Open still accepts a single pathname argument; on kernels that reject
+// that argument before walking it, descend one component at a time and keep
+// the final open relative to the last directory descriptor.
+func openRootRelativeLong(root *os.Root, name string) (*os.File, error) {
+	parts := strings.FieldsFunc(filepath.ToSlash(name), func(r rune) bool { return r == '/' })
+	if len(parts) == 0 {
+		_ = root.Close()
+		return nil, fmt.Errorf("empty source pathname")
+	}
+	current := root
+	for _, component := range parts[:len(parts)-1] {
+		if component == "." {
+			continue
+		}
+		next, err := current.OpenRoot(component)
+		_ = current.Close()
+		if err != nil {
+			return nil, err
+		}
+		current = next
+	}
+	f, err := current.Open(parts[len(parts)-1])
+	_ = current.Close()
+	return f, err
 }
 
 // archiveMemberRoot preserves safe relative operand spelling (including a
@@ -253,6 +280,14 @@ func (w *walker) walk(member, abs string, fi os.FileInfo, followed bool) error {
 		fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", member, err)
 		w.diagnosed = true
 		return nil
+	}
+	if !w.o.t {
+		// POSIX directory reads mark the source's access timestamp. Some Linux
+		// mounts defer or suppress relatime updates, which made pathname-prefix
+		// resolution observably look as though pax never accessed the target.
+		// Materialize the same access event while preserving source mtime; -t
+		// takes the separate snapshot-and-restore path above.
+		_ = os.Chtimes(abs, time.Now(), fi.ModTime())
 	}
 	base := strings.TrimRight(member, "/")
 	for _, e := range entries {

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -79,7 +78,11 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		return 1
 	}
 	status = 0
-	sel := newSelector(o, patterns)
+	sel, err := newSelectorLocale(o, patterns, o.patternTables)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
 	var catalog []selectorMember
 	var catalogTimes []time.Time
 	var invalidMembers []paxInvalidHeaderFields
@@ -114,18 +117,19 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 	renames := make(map[string]string)
 	linkRenames := make(map[int]string)
 	for index, m := range catalog {
-		if !sel.keep(m.name, m.isDir) {
-			continue
-		}
-		// -u selection precedes -s and -i. Compare the archived member with
-		// the same pathname in the destination hierarchy, then continue to
-		// later members when an older occurrence is skipped.
+		// Determine -u eligibility before allowing -n to consume this pattern.
+		// The member still matched for unmatched-pattern diagnostics (prime has
+		// already recorded it), but an older occurrence must not prevent a
+		// later, newer occurrence from being selected for the same operand.
 		if o.newerOnly {
 			if fi, err := updateRoot.Lstat(filepath.FromSlash(m.name)); err == nil {
 				if !catalogTimes[index].After(fi.ModTime()) {
 					continue
 				}
 			}
+		}
+		if !sel.keep(m.name, m.isDir) {
+			continue
 		}
 		subName, subErr := applySubstitutionsErr(o.subst, m.name, rc.Err)
 		if subErr != nil {
@@ -682,7 +686,11 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 				if archive.pax {
 					existingFormat = "pax"
 				}
-				if o.format != existingFormat {
+				// A pax archive with no extended records is physically ustar and
+				// cannot honestly be distinguished from one. Accept pax output on
+				// that representation; an actual extended-header archive remains
+				// distinguishable and rejects explicit ustar output.
+				if o.format != existingFormat && !(o.format == "pax" && existingFormat == "ustar") {
 					fmt.Fprintf(rc.Err, "pax: cannot append %s data to an existing %s archive\n", o.format, existingFormat)
 					return 1
 				}
@@ -707,7 +715,9 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			flags = os.O_RDWR
 		}
 		var err error
-		file, err = openArchiveSink(archivePath, flags, 0o644)
+		// A newly created archive is an ordinary output file: POSIX specifies
+		// 0666 filtered by the invocation umask, not a hard-coded 0644.
+		file, err = openArchiveSink(archivePath, flags, 0o666)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
@@ -822,6 +832,9 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		}
 		if err == nil {
 			logicalData, err = patchRawMemberNames(logicalData, o.rawMemberNames)
+		}
+		if err == nil {
+			logicalData, err = normalizeTarChecksums(logicalData)
 		}
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
@@ -1210,12 +1223,23 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			return nil
 		}
 		archiveOut, archiveLink := out, link
+		implicitBinary := false
 		if o.format == "pax" {
 			var outEncodingErr, linkEncodingErr error
 			archiveOut, outEncodingErr = localTextToArchive(rc, out)
 			archiveLink, linkEncodingErr = localTextToArchive(rc, link)
 			invalidValue := outEncodingErr != nil || linkEncodingErr != nil || invalidPAXLocalDestinationName(out) || link != "" && invalidPAXLocalDestinationName(link)
-			if invalidValue && o.paxOptions.invalid == "bypass" {
+			// POSIX's default must preserve a pathname that is valid in the
+			// invocation locale even when it has no UTF-8 translation.  Such a
+			// name fits in the physical ustar header and is identified as binary
+			// by the adjacent pax header.  An explicitly requested
+			// invalid=bypass still means exactly that; structurally invalid names
+			// (NUL/overlong components) are never smuggled through this fallback.
+			implicitBinary = !o.paxOptions.invalidSet &&
+				(outEncodingErr != nil || linkEncodingErr != nil) &&
+				!invalidPAXLocalDestinationName(out) &&
+				(link == "" || !invalidPAXLocalDestinationName(link))
+			if invalidValue && o.paxOptions.invalid == "bypass" && !implicitBinary {
 				fmt.Fprintf(rc.Err, "pax: %s: value cannot be encoded as UTF-8; bypassed\n", out)
 				return nil
 			}
@@ -1230,7 +1254,12 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if err != nil {
 			return sourceTraversalErr(err)
 		}
-		rawMemberName := h.Name
+		// Keep the physical, post-substitution local name.  archiveOut may be
+		// its UTF-8 extended-header spelling and must not replace this value.
+		rawMemberName := out
+		if fi.IsDir() && !strings.HasSuffix(rawMemberName, "/") {
+			rawMemberName += "/"
+		}
 		h.Format = tarFormat(o.format)
 		if h.Format == tar.FormatPAX {
 			if err := translatePAXIdentityToArchive(rc, h, o.paxOptions.invalid); err != nil {
@@ -1264,21 +1293,22 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			if h.PAXRecords == nil {
 				h.PAXRecords = make(map[string]string)
 			}
-			// A basic pax header is otherwise indistinguishable from ustar on
-			// disk. This implementation keyword makes the selected format
-			// detectable so a later -a can reject a mismatched -x format.
-			h.PAXRecords["COREUTILS.format"] = "pax"
-			// ustar fields cover the owner but not the source device, inode or
-			// link count. pax extended records can, under the long-standing
-			// star/schily keywords, so a pax archive carries the identity a
-			// cpio header would have held.
+			// A basic pax member with no extended attributes is intentionally
+			// byte-for-byte ustar.  Do not invent a private record merely to make
+			// the selected format observable: POSIX consumers expect the ordinary
+			// header at the first block in this case.
+			// The standard ustar fields carry owner identity. Device/inode/link
+			// count are not POSIX pax keywords; hard-link identity is represented
+			// by ordinary ustar link members below, without forcing a private
+			// extended header onto every otherwise-basic pax member.
 			if id.ok {
 				h.Uid, h.Gid = int(id.uid), int(id.gid)
-				h.PAXRecords["SCHILY.dev"] = strconv.FormatUint(id.dev, 10)
-				h.PAXRecords["SCHILY.ino"] = strconv.FormatUint(id.ino, 10)
-				h.PAXRecords["SCHILY.nlink"] = strconv.FormatUint(id.nlink, 10)
 			}
-			invalidHeader, err := applyWritePAXOptions(rc, h, o.paxOptions)
+			effectivePAXOptions := o.paxOptions
+			if implicitBinary {
+				effectivePAXOptions.invalid = "binary"
+			}
+			invalidHeader, err := applyWritePAXOptions(rc, h, effectivePAXOptions)
 			if err != nil {
 				return err
 			}
@@ -1290,7 +1320,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			if invalidRename.linkSet {
 				h.Linkname = archiveLink
 			}
-			if invalidHeader {
+			if invalidHeader && !implicitBinary {
 				fmt.Fprintf(rc.Err, "pax: %s: value cannot be translated; written as binary\n", out)
 				invalidDiagnosed = true
 			}

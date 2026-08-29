@@ -31,6 +31,7 @@ type paxOptions struct {
 	deletes                []string
 	exthdrName, globalName string
 	invalid                string
+	invalidSet             bool
 	linkdata, times        bool
 	listSet                bool
 	listFormat             string
@@ -493,7 +494,7 @@ func parsePAXOptions(args []string, mode paxOptionMode, format string) (paxOptio
 				if mode == paxWrite && value != "binary" {
 					return paxOptions{}, fmt.Errorf("-o invalid=%s is not applicable in write mode", value)
 				}
-				o.invalid, o.needsPAX = value, true
+				o.invalid, o.invalidSet, o.needsPAX = value, true, true
 			case "linkdata":
 				if hasValue || mode != paxWrite {
 					return paxOptions{}, fmt.Errorf("-o linkdata is valid only as a keyword in write mode")

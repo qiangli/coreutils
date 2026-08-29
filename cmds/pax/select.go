@@ -3,7 +3,7 @@ package paxcmd
 import (
 	"fmt"
 	"io"
-	"path"
+	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/bre"
@@ -13,16 +13,34 @@ import (
 // pattern as a basic regular expression, so it is compiled with the shared
 // pkg/bre provider rather than Go's regexp (whose \(...\) are literal parens).
 type substitution struct {
-	re     *bre.Regexp
+	re     substitutionMatcher
 	repl   string
 	global bool
 	print  bool
+}
+
+type substitutionMatcher interface {
+	FindAllStringSubmatchIndex(string, int) ([][]int, error)
+	ExpandString([]byte, string, string, []int) ([]byte, error)
+}
+
+type cSubstitutionMatcher struct{ re *bre.Regexp }
+
+func (m cSubstitutionMatcher) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
+	return m.re.FindAllStringSubmatchIndexErr(s, n)
+}
+func (m cSubstitutionMatcher) ExpandString(dst []byte, template, src string, match []int) ([]byte, error) {
+	return m.re.ExpandString(dst, template, src, match), nil
 }
 
 // parseSubstitution accepts -s with ANY delimiter, as POSIX requires: the
 // character after 's' is the separator, so /, #, | and others are all legal.
 // Assuming '/' would break the common case of rewriting paths that contain it.
 func parseSubstitution(spec string) (substitution, error) {
+	return parseSubstitutionLocale(spec, nil)
+}
+
+func parseSubstitutionLocale(spec string, tables *bre.LocaleByteTables) (substitution, error) {
 	var s substitution
 	if len(spec) < 2 {
 		return s, fmt.Errorf("invalid -s expression %q", spec)
@@ -52,12 +70,20 @@ func parseSubstitution(spec string) (substitution, error) {
 	}
 	// The old part is a POSIX BRE. Longest() gives the leftmost-longest match
 	// POSIX specifies (the same setting sed's s/// uses).
-	re, err := bre.Compile(parts[0])
-	if err != nil {
-		return s, fmt.Errorf("invalid -s pattern %q: %v", parts[0], err)
+	if tables == nil {
+		re, err := bre.Compile(parts[0])
+		if err != nil {
+			return s, fmt.Errorf("invalid -s pattern %q: %v", parts[0], err)
+		}
+		re.Longest()
+		s.re = cSubstitutionMatcher{re: re}
+	} else {
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(parts[0]), tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpBRE})
+		if err != nil {
+			return s, fmt.Errorf("invalid -s pattern %q: %v", parts[0], err)
+		}
+		s.re = re
 	}
-	re.Longest()
-	s.re = re
 	// POSIX uses & for the whole match and \1..\9 for groups; the bre matcher's
 	// ExpandString reads ${0}..${9} the way Go's regexp does.
 	s.repl = translateReplacement(parts[1])
@@ -113,7 +139,7 @@ func applySubstitutions(subs []substitution, name string, report io.Writer) stri
 
 func applySubstitutionsErr(subs []substitution, name string, report io.Writer) (string, error) {
 	for _, s := range subs {
-		locs, err := s.re.FindAllStringSubmatchIndexErr(name, -1)
+		locs, err := s.re.FindAllStringSubmatchIndex(name, -1)
 		if err != nil {
 			return "", err
 		}
@@ -128,7 +154,11 @@ func applySubstitutionsErr(subs []substitution, name string, report io.Writer) (
 				break
 			}
 			b.WriteString(name[last:loc[0]])
-			b.Write(s.re.ExpandString(nil, s.repl, name, loc))
+			expanded, err := s.re.ExpandString(nil, s.repl, name, loc)
+			if err != nil {
+				return "", err
+			}
+			b.Write(expanded)
 			last = loc[1]
 		}
 		b.WriteString(name[last:])
@@ -154,6 +184,7 @@ type selector struct {
 	dirsOnly  bool   // -d
 
 	activeDirs []string // paths of explicitly matched directories (with trailing slash)
+	compiled   []*bre.LocaleByteRegexp
 }
 
 type selectorMember struct {
@@ -162,7 +193,18 @@ type selectorMember struct {
 }
 
 func newSelector(o *options, patterns []string) *selector {
-	return &selector{
+	s, err := newSelectorLocale(o, patterns, nil)
+	if err != nil {
+		panic(err) // package-local tests use only statically valid patterns
+	}
+	return s
+}
+
+func newSelectorLocale(o *options, patterns []string, tables *bre.LocaleByteTables) (*selector, error) {
+	if tables == nil {
+		tables, _ = bre.SnapshotLocaleByteCtypeTables(nil)
+	}
+	s := &selector{
 		patterns:  patterns,
 		matched:   make([]bool, len(patterns)),
 		consumed:  make([]bool, len(patterns)),
@@ -170,6 +212,81 @@ func newSelector(o *options, patterns []string) *selector {
 		firstOnly: o.selectNoPattern,
 		dirsOnly:  o.dirsNoDescend,
 	}
+	for _, pattern := range patterns {
+		ere, err := shellPatternERE(strings.TrimSuffix(pattern, "/"))
+		if err != nil {
+			return nil, err
+		}
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(ere), tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpERE})
+		if err != nil {
+			return nil, fmt.Errorf("invalid pattern %q: %v", pattern, err)
+		}
+		s.compiled = append(s.compiled, re)
+	}
+	return s, nil
+}
+
+// shellPatternERE translates POSIX pattern-matching notation into an anchored
+// byte ERE. Slash remains special, as it is for pax pathname operands, while
+// POSIX bracket elements are retained for the locale-aware regexp compiler.
+func shellPatternERE(pattern string) (string, error) {
+	var b strings.Builder
+	b.WriteByte('^')
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '*':
+			b.WriteString("[^/]*")
+		case '?':
+			b.WriteString("[^/]")
+		case '\\':
+			if i+1 == len(pattern) {
+				return "", fmt.Errorf("invalid pattern %q: trailing backslash", pattern)
+			}
+			i++
+			b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+		case '[':
+			end, err := shellBracketEnd(pattern, i)
+			if err != nil {
+				return "", err
+			}
+			bracket := pattern[i : end+1]
+			if len(bracket) > 2 && bracket[1] == '!' {
+				bracket = "[^" + bracket[2:]
+			}
+			b.WriteString(bracket)
+			i = end
+		default:
+			b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+		}
+	}
+	b.WriteByte('$')
+	return b.String(), nil
+}
+
+func shellBracketEnd(pattern string, start int) (int, error) {
+	i := start + 1
+	if i < len(pattern) && (pattern[i] == '!' || pattern[i] == '^') {
+		i++
+	}
+	if i < len(pattern) && pattern[i] == ']' { // literal ] in first position
+		i++
+	}
+	for i < len(pattern) {
+		if pattern[i] == '[' && i+1 < len(pattern) && strings.ContainsRune(".:=", rune(pattern[i+1])) {
+			delim := pattern[i+1]
+			close := strings.Index(pattern[i+2:], string([]byte{delim, ']'}))
+			if close < 0 {
+				return 0, fmt.Errorf("invalid pattern %q: unterminated bracket element", pattern)
+			}
+			i += close + 4
+			continue
+		}
+		if pattern[i] == ']' {
+			return i, nil
+		}
+		i++
+	}
+	return 0, fmt.Errorf("invalid pattern %q: unterminated bracket expression", pattern)
 }
 
 // prime records every directory member directly selected by an operand before
@@ -180,13 +297,12 @@ func newSelector(o *options, patterns []string) *selector {
 func (s *selector) prime(members []selectorMember) {
 	for i, p := range s.patterns {
 		patternNamesDir := strings.HasSuffix(p, "/")
-		matchPattern := strings.TrimSuffix(p, "/")
 		for _, m := range members {
 			name := strings.TrimSuffix(m.name, "/")
 			if patternNamesDir && !m.isDir {
 				continue
 			}
-			match, _ := path.Match(matchPattern, name)
+			match, _ := s.compiled[i].MatchString(name)
 			if !match {
 				continue
 			}
@@ -227,10 +343,9 @@ func (s *selector) keep(name string, isDir bool) bool {
 		}
 
 		patternNamesDir := strings.HasSuffix(p, "/")
-		matchPattern := strings.TrimSuffix(p, "/")
 		match := false
 		if !patternNamesDir || isDir {
-			match, _ = path.Match(matchPattern, name)
+			match, _ = s.compiled[i].MatchString(name)
 		}
 		if match {
 			s.matched[i] = true

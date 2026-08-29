@@ -168,8 +168,8 @@ func TestCharSpecialExplicitBlockSizeWins(t *testing.T) {
 				args = []string{"-w", "-b", "512", "-f", filepath.Join(d, "selected-archive"), "file"}
 			}
 			runWithOutput(t, d, cap, args...)
-			if got := cap.buf.Len(); got != 3072 {
-				t.Fatalf("archive with -b 512 is %d bytes, want 3072", got)
+			if got := cap.buf.Len(); got != 2048 {
+				t.Fatalf("archive with -b 512 is %d bytes, want 2048", got)
 			}
 		})
 	}

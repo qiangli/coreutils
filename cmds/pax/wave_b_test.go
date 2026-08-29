@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -731,9 +730,9 @@ func linkedTree(t *testing.T) (dir string, id fileIdentity) {
 	return dir, id
 }
 
-// A pax archive carries the source owner in the ustar fields and the device,
-// inode and link count in extended records, and a second name for an already
-// archived inode becomes a hardlink member rather than a second data copy.
+// A pax archive carries the source owner in the ustar fields, and a second
+// name for an already archived inode becomes a hardlink member rather than a
+// second data copy. It does not invent private identity extended records.
 func TestPaxWritePreservesSourceIdentityAndHardlinks(t *testing.T) {
 	d, id := linkedTree(t)
 	arc := filepath.Join(d, "archive.tar")
@@ -757,11 +756,8 @@ func TestPaxWritePreservesSourceIdentityAndHardlinks(t *testing.T) {
 		if int(id.uid) != h.Uid || int(id.gid) != h.Gid {
 			t.Errorf("%s: uid/gid = %d/%d, want %d/%d", h.Name, h.Uid, h.Gid, id.uid, id.gid)
 		}
-		if h.PAXRecords["SCHILY.dev"] != strconv.FormatUint(id.dev, 10) ||
-			h.PAXRecords["SCHILY.ino"] != strconv.FormatUint(id.ino, 10) ||
-			h.PAXRecords["SCHILY.nlink"] != strconv.FormatUint(id.nlink, 10) {
-			t.Errorf("%s: identity records = %v, want dev=%d ino=%d nlink=%d",
-				h.Name, h.PAXRecords, id.dev, id.ino, id.nlink)
+		if h.PAXRecords["SCHILY.dev"] != "" || h.PAXRecords["SCHILY.ino"] != "" || h.PAXRecords["SCHILY.nlink"] != "" {
+			t.Errorf("%s: non-POSIX identity records = %v", h.Name, h.PAXRecords)
 		}
 		switch h.Typeflag {
 		case tar.TypeLink:

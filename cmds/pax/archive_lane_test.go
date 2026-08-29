@@ -379,7 +379,7 @@ func TestTarAppendRewritesEndMarkers(t *testing.T) {
 	}
 }
 
-func TestTarAppendRejectsMismatchedFormat(t *testing.T) {
+func TestTarAppendAcceptsPhysicallyIndistinguishableBasicPAX(t *testing.T) {
 	d := t.TempDir()
 	if err := os.WriteFile(filepath.Join(d, "file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -388,15 +388,10 @@ func TestTarAppendRejectsMismatchedFormat(t *testing.T) {
 	if _, errs, code := exec(t, d, "", "-w", "-x", "ustar", "-f", arc, "file"); code != 0 {
 		t.Fatalf("create ustar: %d %s", code, errs)
 	}
-	before, _ := os.ReadFile(arc)
-	// With no -x, the selected output format is the default pax format. It
-	// still must be checked against the existing archive before O_TRUNC.
-	if _, errs, code := exec(t, d, "", "-w", "-a", "-f", arc, "file"); code == 0 || !strings.Contains(errs, "existing ustar") {
-		t.Fatalf("mismatched append: code=%d stderr=%q", code, errs)
-	}
-	after, _ := os.ReadFile(arc)
-	if !bytes.Equal(before, after) {
-		t.Fatal("mismatched append mutated the archive")
+	// With no extended records, POSIX pax and ustar have the same physical
+	// representation, so the default pax format must accept this archive.
+	if _, errs, code := exec(t, d, "", "-w", "-a", "-f", arc, "file"); code != 0 || errs != "" {
+		t.Fatalf("basic pax append: code=%d stderr=%q", code, errs)
 	}
 }
 

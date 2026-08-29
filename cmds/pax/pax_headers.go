@@ -287,7 +287,31 @@ func setRawTarChecksum(header []byte) {
 	for _, b := range header {
 		sum += int64(b)
 	}
-	copy(header[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	// POSIX permits either NUL or space termination. Seven octal digits plus
+	// a space keeps every octet consumable as octal by the certification
+	// parser while remaining accepted by standard ustar readers.
+	copy(header[148:156], fmt.Sprintf("%07o ", sum))
+}
+
+func normalizeTarChecksums(data []byte) ([]byte, error) {
+	out := append([]byte(nil), data...)
+	for off := 0; off+512 <= len(out); {
+		header := out[off : off+512]
+		if allZero(header) {
+			return out, nil
+		}
+		size, err := rawTarSize(header)
+		if err != nil {
+			return nil, err
+		}
+		setRawTarChecksum(header)
+		next := off + 512 + int((size+511)&^511)
+		if next > len(out) {
+			return nil, fmt.Errorf("truncated tar member")
+		}
+		off = next
+	}
+	return nil, fmt.Errorf("invalid tar archive: missing end markers")
 }
 
 // patchRawMemberNames restores the ustar name/prefix pair for ordinary pax

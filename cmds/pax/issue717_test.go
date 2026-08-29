@@ -215,13 +215,13 @@ func TestUSTARChecksumUsesPOSIXOctalAndTerminator(t *testing.T) {
 		t.Fatalf("write = (%d, %q, %d bytes)", code, errOut, len(out))
 	}
 	field := []byte(out[148:156])
-	for _, b := range field[:6] {
+	for _, b := range field[:7] {
 		if b < '0' || b > '7' {
 			t.Fatalf("checksum field=%q", field)
 		}
 	}
-	if field[6] != 0 || field[7] != ' ' {
-		t.Fatalf("checksum terminator=%q, want NUL space", field[6:])
+	if field[7] != ' ' {
+		t.Fatalf("checksum terminator=%q, want space", field[7:])
 	}
 }
 

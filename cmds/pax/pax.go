@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/cmds/internal/tzenv"
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -65,6 +66,7 @@ type options struct {
 	// extended-header path override. POSIX pax keeps that name in the ustar
 	// header and carries the override in the adjacent extended header.
 	rawMemberNames []string
+	patternTables  *bre.LocaleByteTables
 }
 
 type invalidCopyRename struct {
@@ -213,8 +215,18 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "-l is valid only in copy mode")
 		}
 	}
+	patternTables, _ := bre.SnapshotLocaleByteCtypeTables(nil)
+	if len(*subst) != 0 || (isList || isRead) && len(operands) != 0 {
+		var err error
+		patternTables, err = paxLocaleTables(rc.Env)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
+		}
+	}
+	o.patternTables = patternTables
 	for _, s := range *subst {
-		sub, err := parseSubstitution(s)
+		sub, err := parseSubstitutionLocale(s, patternTables)
 		if err != nil {
 			return tool.UsageError(rc, cmd, "%v", err)
 		}
@@ -471,7 +483,11 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		invalidMembers = append(invalidMembers, invalid.name || invalid.link || invalid.other)
 	}
 
-	sel := newSelector(o, patterns)
+	sel, err := newSelectorLocale(o, patterns, o.patternTables)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
 	catalog := make([]selectorMember, 0, len(members))
 	for _, h := range members {
 		catalog = append(catalog, selectorMember{
@@ -691,6 +707,13 @@ func headerFor(path string, fi os.FileInfo, link string) (*tar.Header, error) {
 		return nil, err
 	}
 	h.Name = filepath.ToSlash(path)
+	// The standard ustar mtime field has one-second resolution. Retaining host
+	// nanoseconds while forcing tar.FormatPAX would manufacture an mtime
+	// extended header for every ordinary file, contrary to pax's basic-header
+	// representation. Explicit -o mtime values are applied later.
+	h.ModTime = h.ModTime.Truncate(time.Second)
+	h.AccessTime = time.Time{}
+	h.ChangeTime = time.Time{}
 	if id := identityOf(fi); id.ok {
 		if account, err := user.LookupId(strconv.FormatUint(id.uid, 10)); err == nil {
 			h.Uname = account.Username
