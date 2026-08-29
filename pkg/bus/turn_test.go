@@ -67,6 +67,37 @@ func TestTurnPreambleIncludesHostUnifiedInboxWithoutBusPending(t *testing.T) {
 	}
 }
 
+func TestLegacyHostPreambleRemainsExactUntilItemAdapterIsWired(t *testing.T) {
+	isolate(t)
+	joinLive(t, "legacy-session", "/tmp/legacy.sock")
+	subscribe(t, Subscription{Subscriber: "legacy", Instance: "legacy-session"})
+	body := "legacy host input " + strings.Repeat("x", admission.DefaultPreviewBytes)
+	acked := false
+	oldInbox, oldItems := PrepareTurnInbox, PrepareTurnItems
+	PrepareTurnItems = nil
+	PrepareTurnInbox = func(string) PreparedPreamble {
+		return NewPreparedPreamble(body, func() error { acked = true; return nil })
+	}
+	t.Cleanup(func() { PrepareTurnInbox, PrepareTurnItems = oldInbox, oldItems })
+
+	prepared := PrepareTurnPreamble("/tmp/legacy.sock")
+	if err := prepared.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prepared.Text, body) {
+		t.Fatalf("legacy snapshot was reduced before a record-scoped adapter existed: %q", prepared.Text)
+	}
+	if acked {
+		t.Fatal("preparing legacy input acknowledged it")
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !acked {
+		t.Fatal("delivered legacy snapshot was not acknowledged")
+	}
+}
+
 func TestPreparedTurnDoesNotAcknowledgeBeforeSuccessfulInjection(t *testing.T) {
 	isolate(t)
 	joinLive(t, "prepared-session", "/tmp/prepared.sock")

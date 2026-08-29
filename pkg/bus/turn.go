@@ -203,26 +203,26 @@ func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
 		}
 		items = append(items, host...)
 	}
-	var legacy PreparedPreamble
-	if PrepareTurnInbox != nil {
-		legacy = PrepareTurnInbox(agent)
-		if legacy.err != nil {
-			return PreparedPreamble{err: legacy.err}
-		}
-		if legacy.Text != "" {
-			items = append(items, admission.Item{
-				Source: "host", ID: "unified", Priority: admission.PriorityDirected,
-				Body: legacy.Text, ArtifactRef: "bashy inbox --as " + strconv.Quote(agent) + " --peek",
-				OverflowRef: "bashy inbox --as " + strconv.Quote(agent) + " --peek",
-				Acknowledge: legacy.Commit,
-			})
-		}
-	}
 	rendered, err := admission.Render(items, admission.Options{BudgetBytes: DefaultTurnAdmissionBytes})
 	if err != nil {
 		return PreparedPreamble{err: err}
 	}
-	return PreparedPreamble{Text: rendered.Text, ack: []func() error{rendered.Commit}, report: rendered.Report}
+	prepared := PreparedPreamble{Text: rendered.Text, ack: []func() error{rendered.Commit}, report: rendered.Report}
+	// The legacy callback represents a whole host-owned snapshot with one
+	// acknowledgement. It cannot safely participate in record-scoped admission:
+	// reducing it to one header and then committing would consume bodies that the
+	// delivered retrieval command may no longer show as unread. Preserve the old
+	// exact delivery contract until the host wires PrepareTurnItems. When the item
+	// adapter is present it is authoritative, so do not also invoke the legacy
+	// callback and duplicate the same messages.
+	if PrepareTurnItems == nil && PrepareTurnInbox != nil {
+		legacy := PrepareTurnInbox(agent)
+		if legacy.err != nil {
+			return PreparedPreamble{err: legacy.err}
+		}
+		prepared = mergePrepared(prepared, legacy)
+	}
+	return prepared
 }
 
 func classifyPending(agent string, p Pending) admission.Priority {
