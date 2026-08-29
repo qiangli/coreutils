@@ -206,7 +206,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `vdir` | `cmds/vdir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `vi` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 24 |
 | `watch` | `cmds/watch` | — | Bashy/other extension | no | no | 1 | 4 |
-| `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 4 | 32 |
+| `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 4 | 33 |
 | `which` | `cmds/which` | — | Bashy/other extension | no | no | 1 | 9 |
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 4 | 32 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
