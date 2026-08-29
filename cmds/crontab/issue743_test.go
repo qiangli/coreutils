@@ -27,7 +27,7 @@ func TestIssue743BackslashOnlyEscapesPercent(t *testing.T) {
 	if got, want := j.Command[2], "printf 'a\\tb\\n' % x\\y"; got != want {
 		t.Errorf("command=%q, want %q", got, want)
 	}
-	if got, want := j.Stdin, "data%keep\nz"; got != want {
+	if got, want := j.Stdin, "data%keep\nz\n"; got != want {
 		t.Errorf("stdin=%q, want %q", got, want)
 	}
 }

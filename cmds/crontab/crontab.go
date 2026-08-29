@@ -330,7 +330,11 @@ func splitCronCommand(raw string) (command, stdin string) {
 	}
 	value := translated.String()
 	if index := strings.IndexByte(value, '\n'); index >= 0 {
-		return value[:index], value[index+1:]
+		// The command is parsed from a crontab text line with its record
+		// terminator removed.  Once an unescaped percent introduces standard
+		// input, that terminator belongs to the input data too: cron supplies
+		// a complete final line, not an unterminated byte sequence.
+		return value[:index], value[index+1:] + "\n"
 	}
 	return value, ""
 }

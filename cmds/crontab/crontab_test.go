@@ -499,7 +499,7 @@ func TestPercentCompilationAndExplicitShell(t *testing.T) {
 		t.Fatalf("jobs=%v err=%v", jobs, err)
 	}
 	j := jobs[0]
-	if j.Command[0] != shell || j.Command[2] != "cat - && printf %s done" || j.Stdin != "alpha\nbeta%tail  " {
+	if j.Command[0] != shell || j.Command[2] != "cat - && printf %s done" || j.Stdin != "alpha\nbeta%tail  \n" {
 		t.Fatalf("compiled job=%+v", j)
 	}
 	if !slices.Contains(j.Env, "SHELL="+shell) {
@@ -513,8 +513,39 @@ func TestPercentCompilationAndExplicitShell(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("execute with explicit SHELL: %v", err)
 	}
-	if got, want := string(delivered), "alpha\nbeta%tail  done"; got != want {
+	if got, want := string(delivered), "alpha\nbeta%tail  \ndone"; got != want {
 		t.Fatalf("explicit SHELL output=%q, want %q", got, want)
+	}
+}
+
+func TestPercentInputReachesScheduledCommand(t *testing.T) {
+	setupCronState(t)
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "consume-input")
+	result := filepath.Join(dir, "result")
+	program := "#!/bin/sh\nIFS= read -r first || exit 1\nIFS= read -r second || exit 1\nprintf '<%s>|<%s>\\n' \"$first\" \"$second\"\n"
+	if err := os.WriteFile(helper, []byte(program), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	source := fmt.Sprintf("SHELL=/bin/sh\n0 1 * * * %s > %s%%left%%right\\%%tail\n", helper, result)
+	rc, _, errOut := cronTestContext(t, source)
+	if code := runWithConfig(rc, nil, allowedConfig(rc.Dir)); code != 0 {
+		t.Fatalf("install code=%d stderr=%q", code, errOut)
+	}
+	jobs, err := schedule.NewStore(os.Getenv("BASHY_SCHEDULE_STATE")).LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if err := schedule.FireJob(jobs[0], io.Discard, nil); err != nil {
+		t.Fatalf("execute scheduled command: %v", err)
+	}
+	got, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<left>|<right%tail>\n"; string(got) != want {
+		t.Fatalf("scheduled stdin output=%q, want %q", got, want)
 	}
 }
 
