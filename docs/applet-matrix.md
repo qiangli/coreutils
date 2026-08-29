@@ -137,7 +137,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `nproc` | `cmds/nproc` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `ntp` | `cmds/ntp` | — | Bashy/other extension | no | no | 1 | 4 |
 | `numfmt` | `cmds/numfmt` | — | GNU Coreutils | yes | no | 1 | 14 |
-| `od` | `cmds/od` | — | GNU Coreutils | yes | yes | 1 | 56 |
+| `od` | `cmds/od` | — | GNU Coreutils | yes | yes | 1 | 57 |
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 3 | 19 |
 | `patch` | `cmds/patch` | — | POSIX/Unix utility | no | yes | 3 | 65 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 25 |
