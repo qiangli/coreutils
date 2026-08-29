@@ -57,6 +57,41 @@ provider_prepare_localedef_makefile() {
   mv "$_provider_makefile_tmp" "$_provider_makefile"
 }
 
+# glibc 2.39 promotes POSIXLY_CORRECT to global --verbose mode even though the
+# requirement cited by its own comment applies only to missing characters in
+# the charmap. That leaks diagnostics for omitted fields in GNU-only LC_*
+# categories and unrelated table-size chatter into otherwise valid POSIX
+# compilations. Apply a pinned source correction which passes conformance
+# verbosity only to the charmap reader and leaves explicit --verbose intact.
+provider_prepare_localedef_source() {
+  _provider_localedef_src=$1
+  _provider_localedef_record=$2
+  _provider_localedef_patch=$here/patches/glibc-2.39-posix-verbosity.patch
+  _provider_localedef_patch_sha=b13314db242417133d9a769170cc348cb5ca4ca7b8e1cfcc9325ab73e7e199fd
+  [ -f "$_provider_localedef_patch" ] || {
+    printf 'posix-provider: localedef POSIX verbosity correction is missing: %s\n' \
+      "$_provider_localedef_patch" >&2
+    return 1
+  }
+  _provider_localedef_actual=$(provider_sha256 "$_provider_localedef_patch")
+  [ "$_provider_localedef_actual" = "$_provider_localedef_patch_sha" ] || {
+    printf 'posix-provider: localedef POSIX verbosity correction digest mismatch: got %s want %s\n' \
+      "$_provider_localedef_actual" "$_provider_localedef_patch_sha" >&2
+    return 1
+  }
+  command -v patch >/dev/null 2>&1 || {
+    printf 'posix-provider: patch is required to prepare localedef\n' >&2
+    return 1
+  }
+  (cd "$_provider_localedef_src" && patch -f -p1 < "$_provider_localedef_patch") || {
+    printf 'posix-provider: localedef POSIX verbosity correction did not apply cleanly\n' >&2
+    return 1
+  }
+  printf 'recipe_patch\t%s\t%s\n' \
+    "patches/glibc-2.39-posix-verbosity.patch" "$_provider_localedef_patch_sha" \
+    >> "$_provider_localedef_record"
+}
+
 # CUPS 2.4.7's libcups initialization changes SIGPIPE to SIG_IGN process-wide
 # on platforms without SO_NOSIGPIPE. POSIX lp declares ASYNCHRONOUS EVENTS as
 # Default, so a utility invocation must preserve the inherited disposition.
@@ -424,6 +459,9 @@ case "$cmd" in
 0013-eglibc-Forward-port-cross-locale-generation-support.patch cbe2e5e881af37de43015632753327de631ee2a5763a9cb9ba36f85305a9e7ef
 0014-localedef-add-to-archive-uses-a-hard-coded-locale-pa.patch 6d7ff33fc45d1fc7225c67f0a1a0a329dcf87b8f7c2e75d0bfc36e1585bc1f55
 PATCHES
+
+    provider_prepare_localedef_source "$src" "$work/extra-$cmd.tsv" ||
+      fail "cannot prepare localedef $version for POSIX diagnostics"
 
     # The harness ships an eglibc-era config.sub that does not know aarch64 and
     # aborts configure with "machine not recognized". glibc's own scripts/ has

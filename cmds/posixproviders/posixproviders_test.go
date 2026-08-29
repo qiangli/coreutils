@@ -96,6 +96,8 @@ func TestLocaledefDashCharmapIsLiteralPathname(t *testing.T) {
 	}{
 		{name: "separate argument", in: []string{"-c", "-f", "-", "-i", "source", "locale"}, want: []string{"-c", "-f", "./-", "-i", "source", "locale"}},
 		{name: "attached argument", in: []string{"-f-", "locale"}, want: []string{"-f./-", "locale"}},
+		{name: "separate input pathname", in: []string{"-c", "-f", "charmap", "-i", "-", "locale"}, want: []string{"-c", "-f", "charmap", "-i", "./-", "locale"}},
+		{name: "attached input pathname", in: []string{"-i-", "locale"}, want: []string{"-i./-", "locale"}},
 		{name: "ordinary path unchanged", in: []string{"-f", "maps/portable", "locale"}, want: []string{"-f", "maps/portable", "locale"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,0 +1,15 @@
+--- a/locale/programs/localedef.c
++++ b/locale/programs/localedef.c
+@@ -224,4 +224,0 @@ main (int argc, char *argv[])
+-  /* POSIX.2 requires to be verbose about missing characters in the
+-     character map.  */
+-  verbose |= posix_conformance;
+-
+@@ -258,1 +254,6 @@ main (int argc, char *argv[])
+-  charmap = charmap_read (charmap_file, verbose, 1, be_quiet, 1);
++  /* POSIX.2 requires diagnostics for missing characters in the character
++     map.  Keep that requirement local to the charmap reader: promoting
++     POSIX conformance to global --verbose also diagnoses omitted fields in
++     non-POSIX LC_* extensions and emits unrelated table-size chatter.  */
++  charmap = charmap_read (charmap_file, verbose || posix_conformance,
++                          1, be_quiet, 1);

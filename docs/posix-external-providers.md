@@ -161,6 +161,17 @@ with `SIG_IGN`, because POSIX specifies the utility's asynchronous-event
 behavior as Default. The recipe verifies and records the correction's digest,
 and its manifest recipe revision prevents reuse of an older uncorrected cache.
 
+The pinned glibc 2.39 `localedef` build likewise carries one narrowly scoped
+source correction. Upstream turns `POSIXLY_CORRECT` into global `--verbose`,
+although its cited POSIX requirement concerns missing characters in the
+charmap. The correction passes conformance verbosity only to the charmap reader,
+so omitted fields in GNU-only `LC_*` extensions and unrelated table-size
+messages do not turn a warning-free POSIX locale definition into a warning.
+Explicit `--verbose` is unchanged. The dispatcher also maps option-arguments
+`-f -` and `-i -` to the literal pathname `./-`, because Issue 7 defines both
+as pathnames while glibc reserves `-` as an input sentinel. The patch digest is
+recorded in provenance and the recipe revision invalidates older cached builds.
+
 ## Files
 
 | Path | Role |

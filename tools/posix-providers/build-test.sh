@@ -28,6 +28,40 @@ grep -q './configure --prefix=/usr --with-glibc=' "$here/build.sh" || {
   exit 1
 }
 
+# POSIX conformance verbosity belongs only to the charmap reader. Verify the
+# pinned correction applies to the expected glibc 2.39 source shape, records
+# its digest, preserves explicit --verbose, and fails closed on drift/reapply.
+mkdir -p "$tmp/glibc/locale/programs"
+cat > "$tmp/glibc/locale/programs/localedef.c" <<'EOF'
+  if (delete_from_archive)
+    return delete_locales_from_archive (argc - remaining, &argv[remaining]);
+
+  /* POSIX.2 requires to be verbose about missing characters in the
+     character map.  */
+  verbose |= posix_conformance;
+
+  if (argc - remaining != 1)
+    {
+      /* We need exactly one non-option parameter.  */
+
+#endif
+
+  /* Process charmap file.  */
+  charmap = charmap_read (charmap_file, verbose, 1, be_quiet, 1);
+
+  /* Add the first entry in the locale list.  */
+  memset (&global, '\0', sizeof (struct localedef_t));
+EOF
+provider_prepare_localedef_source "$tmp/glibc" "$tmp/localedef-extra.tsv"
+! grep -q 'verbose |= posix_conformance' "$tmp/glibc/locale/programs/localedef.c"
+grep -q 'verbose || posix_conformance' "$tmp/glibc/locale/programs/localedef.c"
+grep -q '^recipe_patch	patches/glibc-2.39-posix-verbosity.patch	b13314db242417133d9a769170cc348cb5ca4ca7b8e1cfcc9325ab73e7e199fd$' \
+  "$tmp/localedef-extra.tsv"
+if provider_prepare_localedef_source "$tmp/glibc" "$tmp/localedef-extra-2.tsv" >/dev/null 2>&1; then
+  echo 'localedef source correction unexpectedly applied twice' >&2
+  exit 1
+fi
+
 # The lp recipe must remove CUPS' process-wide SIGPIPE override, fail closed if
 # the pinned source shape drifts, and record the exact local correction digest.
 mkdir -p "$tmp/cups/cups"

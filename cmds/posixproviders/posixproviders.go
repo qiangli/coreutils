@@ -151,12 +151,12 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 }
 
 // localedefProviderArgs adapts the pinned GNU provider to the POSIX pathname
-// meaning of an option-argument named "-". GNU localedef treats -f - as a
-// request for its built-in/default charmap, while POSIX localedef treats the
-// charmap option-argument as a pathname. In particular, a regular file
-// literally named "-" in the current directory must be opened. Prefixing it
-// with ./ removes GNU's sentinel interpretation without copying input or
-// changing any other argument.
+// meaning of an option-argument named "-". GNU localedef treats -f - and -i -
+// as requests for built-in/default input, while POSIX specifies both option
+// arguments as pathnames. In particular, a regular file literally named "-"
+// in the current directory must be opened. Prefixing it with ./ removes GNU's
+// sentinel interpretation without copying input or changing any other
+// argument.
 func localedefProviderArgs(args []string) []string {
 	out := append([]string(nil), args...)
 	for i := 0; i < len(out); i++ {
@@ -168,6 +168,13 @@ func localedefProviderArgs(args []string) []string {
 			i++
 		case out[i] == "-f-":
 			out[i] = "-f./-"
+		case out[i] == "-i" && i+1 < len(out):
+			if out[i+1] == "-" {
+				out[i+1] = "./-"
+			}
+			i++
+		case out[i] == "-i-":
+			out[i] = "-i./-"
 		}
 	}
 	return out
