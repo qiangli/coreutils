@@ -35,6 +35,17 @@ func IsRoot(path string, followFinal bool) bool {
 	return SameFile(path, RootPath(path), followFinal)
 }
 
+// IsRootInfo reports whether already-resolved info identifies path's volume
+// root. It avoids re-materializing path, which matters when a component-wise
+// traversal has reached an entry beyond PATH_MAX.
+func IsRootInfo(path string, info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	root, err := os.Stat(RootPath(path))
+	return err == nil && os.SameFile(info, root)
+}
+
 // RootPath returns the filesystem volume root against which path is checked.
 // It is separate from IsRoot so root derivation can be tested without
 // inspecting or operating on the host root.

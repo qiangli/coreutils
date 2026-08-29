@@ -23,6 +23,27 @@ func TestSameFileIdentity(t *testing.T) {
 	}
 }
 
+func TestIsRootInfoUsesResolvedIdentity(t *testing.T) {
+	root := t.TempDir()
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The helper derives the real volume root from path, so ordinary
+	// temporary directories must not be classified as roots.
+	if IsRootInfo(root, info) {
+		t.Fatalf("temporary directory %q classified as filesystem root", root)
+	}
+	volumeRoot := RootPath(root)
+	rootInfo, err := os.Stat(volumeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsRootInfo(filepath.Join(volumeRoot, "overlong", ".."), rootInfo) {
+		t.Fatal("resolved volume-root identity was not recognized")
+	}
+}
+
 func TestSameFileFinalSymlinkPolicy(t *testing.T) {
 	dir := t.TempDir()
 	reference := filepath.Join(dir, "reference")

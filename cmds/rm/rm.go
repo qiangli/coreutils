@@ -18,10 +18,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"unicode"
 
+	"github.com/qiangli/coreutils/cmds/internal/pathops"
 	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/term"
@@ -124,7 +126,7 @@ func (r *remover) remove(op string) {
 		return
 	}
 	rp := r.rc.Path(op)
-	fi, err := os.Lstat(rp)
+	fi, err := pathops.Lstat(rp)
 	if err != nil {
 		if r.force && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)) {
 			return
@@ -142,7 +144,7 @@ func (r *remover) remove(op string) {
 	// diagnostic below without attempting removal).
 	trailingSeparator := len(op) > 0 && os.IsPathSeparator(op[len(op)-1])
 	if (r.recursive || r.dir) && r.preserveRoot && (fi.IsDir() || trailingSeparator) &&
-		isFilesystemRoot(rp, true) {
+		(isFilesystemRoot(rp, true) || (fi.IsDir() && rootguard.IsRootInfo(rp, fi))) {
 		r.errf("it is dangerous to operate recursively on '%s'%s",
 			op, rootguard.AliasSuffix(op, rp))
 		return
@@ -194,7 +196,7 @@ func finalOperandComponent(op string) string {
 }
 
 func (r *remover) removeFile(op string) {
-	if err := os.Remove(r.rc.Path(op)); err != nil {
+	if err := pathops.Remove(r.rc.Path(op)); err != nil {
 		r.errf("cannot remove '%s': %s", op, reason(err))
 		return
 	}
@@ -205,27 +207,113 @@ func (r *remover) removeFile(op string) {
 // per-entry failures (the parent removal then reports its own
 // error), matching GNU rm -r.
 func (r *remover) removeTree(op string) {
-	entries, err := os.ReadDir(r.rc.Path(op))
+	// The ordinary non-interactive lane needs no per-entry observation.
+	// os.RemoveAll is implemented component-relatively on POSIX systems and
+	// therefore avoids both PATH_MAX materialization and one descriptor per
+	// depth. Keep the explicit walker below for prompts and verbose ordering.
+	if !r.interactive && !r.verbose && (!r.isTerminal || r.force) {
+		if err := pathops.RemoveAll(r.rc.Path(op)); err != nil {
+			r.errf("cannot remove '%s': %s", op, reason(err))
+		}
+		return
+	}
+
+	root, err := pathops.OpenRoot(r.rc.Path(op))
 	if err != nil {
 		r.errf("cannot remove '%s': %s", op, reason(err))
 		return
 	}
-	for _, e := range entries {
-		child := filepath.Join(op, e.Name())
-		r.remove(child)
-	}
+	defer root.Close()
 
-	// The second directory prompt is specific to -i.  The implicit
-	// write-protection prompt was already issued before descent.
-	if r.interactive && !r.confirm(op) {
-		return
+	type frame struct {
+		rel, display string
+		post         bool
+		info         os.FileInfo
 	}
+	stack := []frame{{rel: ".", display: op}}
+	for len(stack) > 0 {
+		idx := len(stack) - 1
+		current := stack[idx]
+		stack = stack[:idx]
 
-	if err := os.Remove(r.rc.Path(op)); err != nil {
-		r.errf("cannot remove '%s': %s", op, reason(err))
-		return
+		if current.post {
+			// The second directory prompt is specific to -i. The implicit
+			// write-protection prompt was issued before descent.
+			if r.interactive && !r.confirm(current.display) {
+				continue
+			}
+			if current.rel == "." {
+				// Root holds the directory open. Windows will not remove an open
+				// directory, so close it before removing the operand itself.
+				if err := root.Close(); err != nil {
+					r.errf("cannot remove '%s': %s", current.display, reason(err))
+					return
+				}
+				if err := pathops.Remove(r.rc.Path(op)); err != nil {
+					r.errf("cannot remove '%s': %s", current.display, reason(err))
+					return
+				}
+			} else if err := root.Remove(filepath.ToSlash(current.rel)); err != nil {
+				r.errf("cannot remove '%s': %s", current.display, reason(err))
+				continue
+			}
+			r.verbosef("removed directory '%s'", current.display)
+			continue
+		}
+
+		if current.info != nil && !current.info.IsDir() {
+			if r.shouldPrompt(r.rc.Path(current.display), current.info) && !r.confirm(current.display) {
+				continue
+			}
+			if err := root.Remove(filepath.ToSlash(current.rel)); err != nil {
+				r.errf("cannot remove '%s': %s", current.display, reason(err))
+				continue
+			}
+			r.verbosef("removed '%s'", current.display)
+			continue
+		}
+		if current.info != nil {
+			resolved := r.rc.Path(current.display)
+			if r.preserveRoot && (isFilesystemRoot(resolved, true) || rootguard.IsRootInfo(resolved, current.info)) {
+				r.errf("it is dangerous to operate recursively on '%s'%s",
+					current.display, rootguard.AliasSuffix(current.display, resolved))
+				continue
+			}
+			if r.shouldPrompt(r.rc.Path(current.display), current.info) && !r.confirm(current.display) {
+				continue
+			}
+		}
+
+		dir, openErr := root.Open(filepath.ToSlash(current.rel))
+		if openErr != nil {
+			r.errf("cannot remove '%s': %s", current.display, reason(openErr))
+			continue
+		}
+		entries, readErr := dir.ReadDir(-1)
+		closeErr := dir.Close()
+		if readErr != nil {
+			r.errf("cannot remove '%s': %s", current.display, reason(readErr))
+			continue
+		}
+		if closeErr != nil {
+			r.errf("cannot remove '%s': %s", current.display, reason(closeErr))
+			continue
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+
+		stack = append(stack, frame{rel: current.rel, display: current.display, post: true})
+		for i := len(entries) - 1; i >= 0; i-- {
+			entry := entries[i]
+			rel := filepath.Join(current.rel, entry.Name())
+			display := filepath.Join(current.display, entry.Name())
+			fi, statErr := root.Lstat(filepath.ToSlash(rel))
+			if statErr != nil {
+				r.errf("cannot remove '%s': %s", display, reason(statErr))
+				continue
+			}
+			stack = append(stack, frame{rel: rel, display: display, info: fi})
+		}
 	}
-	r.verbosef("removed directory '%s'", op)
 }
 
 func (r *remover) errf(format string, a ...any) {

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"unicode"
 
+	"github.com/qiangli/coreutils/cmds/internal/pathops"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -140,7 +141,7 @@ func (r *rm) remove1(op, displayOp string) bool {
 		return false
 	}
 	rp := rawOperandPath(r.rc, op)
-	fi, err := os.Lstat(rp)
+	fi, err := pathops.Lstat(rp)
 	if err != nil {
 		r.errf("failed to remove '%s': %s", displayOp, reason(err))
 		return false
@@ -149,7 +150,7 @@ func (r *rm) remove1(op, displayOp string) bool {
 		r.errf("failed to remove '%s': Not a directory", displayOp)
 		return false
 	}
-	if err := os.Remove(rp); err != nil {
+	if err := pathops.Remove(rp); err != nil {
 		if r.ignoreNonEmpty && isNonEmpty(err) {
 			return false
 		}
