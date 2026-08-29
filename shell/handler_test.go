@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 
 	_ "github.com/qiangli/coreutils/cmds/cat"
 	_ "github.com/qiangli/coreutils/cmds/head"
+	_ "github.com/qiangli/coreutils/cmds/tail"
 	_ "github.com/qiangli/coreutils/cmds/tr"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -181,6 +183,34 @@ func TestHandlerCoreutilsPipelineEarlyHeadClose(t *testing.T) {
 	}
 	if errb != "" {
 		t.Fatalf("stderr=%q, want empty", errb)
+	}
+}
+
+// TestHandlerTailOptionBoundaryAndParentOperand exercises the same public
+// applet contract through the embedded-shell adapter used by Bashy.  It pins
+// both argv preservation across -- and resolution of ../FILE after the shell
+// changes only its logical working directory.
+func TestHandlerTailOptionBoundaryAndParentOperand(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\n"
+	if err := os.WriteFile(filepath.Join(root, "parent-input.txt"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := "POSIXLY_CORRECT=1; export POSIXLY_CORRECT\n" +
+		"tail -n 1 -- parent-input.txt\n" +
+		"cd child\n" +
+		"tail ../parent-input.txt\n"
+	out, errb, err := runScript(t, script, root, Handler())
+	if err != nil {
+		t.Fatalf("embedded tail invocation: %v; stderr=%q", err, errb)
+	}
+	want := "line12\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\n"
+	if out != want || errb != "" {
+		t.Fatalf("embedded tail output=(%q, %q), want (%q, empty stderr)", out, errb, want)
 	}
 }
 
