@@ -51,7 +51,7 @@ type spoolExporter struct {
 }
 
 func newSpoolExporter(path string) (*spoolExporter, error) {
-	if err := secureSpoolDir(filepath.Dir(path)); err != nil {
+	if err := secureSpoolDir(path); err != nil {
 		return nil, fmt.Errorf("spool dir: %w", err)
 	}
 	f, err := openPrivateSpool(path)
@@ -61,21 +61,40 @@ func newSpoolExporter(path string) (*spoolExporter, error) {
 	return &spoolExporter{path: path, f: f}, nil
 }
 
-// secureSpoolDir makes the dedicated spool directory owner-only, including one
-// created by an earlier bashy version. Rejecting a final symlink avoids changing an
-// unrelated directory selected through a path indirection.
-func secureSpoolDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
+// secureSpoolDir makes a directory created for the spool owner-only. It also
+// hardens Bashy's canonical .../spool/spans.jsonl directory from older
+// versions. An arbitrary operator override may name an existing project or a
+// shared temporary directory; changing that directory's mode would be a much
+// larger privilege boundary than protecting the spool file itself.
+func secureSpoolDir(path string) error {
+	dir := filepath.Dir(path)
 	fi, err := os.Lstat(dir)
-	if err != nil {
+	switch {
+	case os.IsNotExist(err):
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		fi, err = os.Lstat(dir)
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			return fmt.Errorf("not a directory")
+		}
+		return os.Chmod(dir, 0o700)
+	case err != nil:
 		return err
-	}
-	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+	case fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir():
 		return fmt.Errorf("not a directory")
 	}
-	return os.Chmod(dir, 0o700)
+
+	// The canonical leaf names identify the directory Bashy owns for this
+	// purpose. Never chmod a sticky directory even if it happens to share those
+	// names: sticky directories conventionally serve multiple principals.
+	if filepath.Base(dir) == "spool" && filepath.Base(path) == "spans.jsonl" && fi.Mode()&os.ModeSticky == 0 {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
 }
 
 // openPrivateSpool opens a regular spool file with owner-only permissions.
