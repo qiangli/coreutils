@@ -627,11 +627,14 @@ func TestTimeWords(t *testing.T) {
 
 func TestDuStopsOptionParsingAtFirstOperand(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"first", "-a", "--al", "--"} {
+	// Include traversal and hard-link switches as pathnames: these options
+	// materially change the walk when they are incorrectly consumed after the
+	// first operand, and were the classes exercised by the Profile D failure.
+	for _, name := range []string{"first", "-H", "-L", "-a", "-l", "--al", "--"} {
 		write(t, dir, name, "x")
 	}
-	out, errb, code := runToolAt(t, dir, "-A", "-b", "first", "-a", "--al", "--")
-	if code != 0 || errb != "" || out != "1 first\n1 -a\n1 --al\n1 --\n" {
+	out, errb, code := runToolAt(t, dir, "-A", "-b", "first", "-H", "-L", "-a", "-l", "--al", "--")
+	if code != 0 || errb != "" || out != "1 first\n1 -H\n1 -L\n1 -a\n1 -l\n1 --al\n1 --\n" {
 		t.Fatalf("du option-looking operands = (%q, %q, %d)", out, errb, code)
 	}
 }
