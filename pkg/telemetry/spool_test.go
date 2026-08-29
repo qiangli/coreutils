@@ -81,6 +81,52 @@ func TestSpoolExporterAppends(t *testing.T) {
 	}
 }
 
+func TestSpoolExporterHardensExistingPaths(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "spans.jsonl")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, err := newSpoolExporter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Shutdown(context.Background())
+	for _, tc := range []struct {
+		path string
+		want os.FileMode
+	}{
+		{dir, 0o700},
+		{path, 0o600},
+	} {
+		fi, err := os.Stat(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != tc.want {
+			t.Errorf("%s permissions = %04o, want %04o", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestNewSpoolExporterRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.jsonl")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "spans.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	if _, err := newSpoolExporter(link); err == nil {
+		t.Fatal("newSpoolExporter accepted a symlink")
+	}
+}
+
 // Shutdown must tolerate being called twice — the SDK may shut an exporter down
 // on a path that already closed it, and a panic there would take the shell out.
 func TestSpoolExporterShutdownIdempotent(t *testing.T) {
@@ -143,6 +189,9 @@ func TestRotateKeepsValidJSONLines(t *testing.T) {
 	}
 	if fi.Size() >= maxSpoolBytes {
 		t.Errorf("spool not rotated: size=%d, bound=%d", fi.Size(), maxSpoolBytes)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("rotated spool permissions = %04o, want 0600", got)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {

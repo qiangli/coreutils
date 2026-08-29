@@ -37,8 +37,9 @@
 // Configuration is pure standard OTEL env vars (OTEL_EXPORTER_OTLP_ENDPOINT,
 // OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES, OTEL_TRACES_SAMPLER). With no endpoint
 // configured, spans default to the bounded local file spool; set
-// OTEL_TRACES_EXPORTER=none for a complete no-op. The global propagator is installed
-// even in no-op mode, so the wire-format contract survives without a collector.
+// OTEL_TRACES_EXPORTER=none for a complete no-op. Network export remains opt-in: set
+// an OTLP endpoint or exporter explicitly. The global propagator is installed even in
+// no-op mode, so the wire-format contract survives without a collector.
 package telemetry
 
 import (
@@ -128,7 +129,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			)
 			otel.SetTracerProvider(provider)
 			enabled = true
-			if os.Getenv("BASHY_TELEMETRY_QUIET") == "" {
+			if shouldReportTelemetryStatus(isTerminal(os.Stderr)) {
 				os.Stderr.WriteString("bashy: telemetry on → " + spoolPath + " (service=" + svc + ")\n")
 			}
 			shutdown = func(ctx context.Context) error {
@@ -204,10 +205,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 
 		enabled = true
 
-		// SAY SO. A feature that is silently on is as hard to debug as one that is
-		// silently off — and "is telemetry actually running?" is the first question
-		// anyone asks when the collector is empty. One line, to stderr, once.
-		if os.Getenv("BASHY_TELEMETRY_QUIET") == "" {
+		if shouldReportTelemetryStatus(isTerminal(os.Stderr)) {
 			os.Stderr.WriteString("bashy: telemetry on → " + endpoint + " (service=" + svc + ")\n")
 		}
 
@@ -222,6 +220,22 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 	})
 
 	return shutdown
+}
+
+// shouldReportTelemetryStatus keeps routine startup chatter out of captured agent
+// stderr. Interactive users still see the selected destination; noninteractive
+// callers may request it with BASHY_TELEMETRY_NOTICE or BASHY_TELEMETRY_DEBUG.
+// BASHY_TELEMETRY_QUIET remains a compatibility override for every mode.
+func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
+	if os.Getenv("BASHY_TELEMETRY_QUIET") != "" {
+		return false
+	}
+	return stderrIsTerminal || os.Getenv("BASHY_TELEMETRY_NOTICE") != "" || os.Getenv("BASHY_TELEMETRY_DEBUG") != ""
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // Tracer returns bashy's tracer. Safe before Init: the global provider is a no-op until

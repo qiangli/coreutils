@@ -51,14 +51,61 @@ type spoolExporter struct {
 }
 
 func newSpoolExporter(path string) (*spoolExporter, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := secureSpoolDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("spool dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openPrivateSpool(path)
 	if err != nil {
 		return nil, fmt.Errorf("open spool: %w", err)
 	}
 	return &spoolExporter{path: path, f: f}, nil
+}
+
+// secureSpoolDir makes the dedicated spool directory owner-only, including one
+// created by an earlier bashy version. Rejecting a final symlink avoids changing an
+// unrelated directory selected through a path indirection.
+func secureSpoolDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return fmt.Errorf("not a directory")
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+// openPrivateSpool opens a regular spool file with owner-only permissions.
+// Chmod is necessary for an existing file, since OpenFile's create mode is not
+// applied when the file is already present.
+func openPrivateSpool(path string) (*os.File, error) {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("not a regular file")
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fi, statErr := f.Stat()
+	if statErr != nil || !fi.Mode().IsRegular() {
+		_ = f.Close()
+		if statErr != nil {
+			return nil, statErr
+		}
+		return nil, fmt.Errorf("not a regular file")
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 // ExportSpans writes each span as one jsonline record.
@@ -225,18 +272,33 @@ func (e *spoolExporter) rotateIfLarge() {
 	if i := indexByte(keep, '\n'); i >= 0 {
 		keep = keep[i+1:]
 	}
-	tmp := e.path + ".rotating"
-	if err := os.WriteFile(tmp, keep, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(e.path), ".spans-*.rotating")
+	if err != nil {
+		return
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(keep); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
 		return
 	}
 	if err := e.f.Close(); err != nil {
-		_ = os.Remove(tmp)
+		_ = os.Remove(tmpPath)
 		return
 	}
-	if err := os.Rename(tmp, e.path); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(tmpPath, e.path); err != nil {
+		_ = os.Remove(tmpPath)
 	}
-	f, err := os.OpenFile(e.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openPrivateSpool(e.path)
 	if err != nil {
 		e.f = nil // writes become no-ops rather than panicking
 		return
