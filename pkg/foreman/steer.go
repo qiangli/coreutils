@@ -103,8 +103,8 @@ func (s *Session) TrySteer(msg string) (bool, error) {
 // because it landed while the agent was busy, which is the only time a
 // correction ever lands. It goes to the artifact and into the checkpoint's
 // accepted decisions like any other operator instruction.
-func (s *Session) noteSteer(msg string) {
-	_ = s.record(RoleMidTurn, "", msg)
+func (s *Session) noteSteer(msg string) error {
+	return s.record(RoleMidTurn, "", msg)
 }
 
 // Keystroke names TrySendKey accepts. These are the keys that mean something to

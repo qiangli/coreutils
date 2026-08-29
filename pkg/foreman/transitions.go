@@ -82,12 +82,55 @@ func (s Store) TransitionsPath() string {
 }
 
 func (s Store) appendTransition(tr Transition) error {
+	// A crash can leave the final append without its terminating newline. Remove
+	// only that incomplete tail before appending again; otherwise every reader
+	// stops at the torn record and all later valid transitions become invisible.
+	if err := s.trimTornTransitionTail(); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(s.TransitionsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	return json.NewEncoder(f).Encode(tr)
+}
+
+func (s Store) trimTornTransitionTail() error {
+	path := s.TransitionsPath()
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return err
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	const tail = int64(1024 * 1024)
+	off := info.Size() - tail
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, info.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil {
+		return err
+	}
+	cut := bytes.LastIndexByte(buf, '\n')
+	if cut < 0 {
+		return f.Truncate(0)
+	}
+	return f.Truncate(off + int64(cut) + 1)
 }
 
 func (s Store) loadTransitions() ([]Transition, error) {

@@ -130,7 +130,10 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 				fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", err.Error())
 				continue
 			} else if steered {
-				s.noteSteer(cmd.Message)
+				if err := s.noteSteer(cmd.Message); err != nil {
+					fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", "steer delivered but history record failed: "+err.Error())
+					continue
+				}
 				fmt.Fprintln(conn, `{"ok":true,"steered":true}`)
 				continue
 			}

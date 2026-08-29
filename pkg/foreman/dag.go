@@ -84,7 +84,9 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 	defer s.mu.Unlock()
 	s.setStatus(StatusWorking)
 	s.state.CurrentStep = task.Name
-	s.persistLocked() // idle → working is a transition a supervisor must see
+	if err := s.commitLocked(); err != nil { // idle → working is a transition a supervisor must see
+		return err
+	}
 	prompt := s.composeDAGPrompt(task)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       s.state.Agent,
@@ -94,18 +96,15 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 	}, s.runner)
 	if out := strings.TrimSpace(res.Output); out != "" {
 		if rerr := s.record(RoleAgent, task.Name, out); rerr != nil {
-			s.block("history artifact: " + rerr.Error())
-			return rerr
+			return s.blockAndCommit("history artifact: "+rerr.Error(), rerr)
 		}
 	}
 	if err != nil || res.ExitCode != 0 {
 		if err != nil {
-			s.block("runner: " + err.Error())
-			return err
+			return s.blockAndCommit("runner: "+err.Error(), err)
 		}
 		err = fmt.Errorf("foreman: runner exited %d", res.ExitCode)
-		s.block(err.Error())
-		return err
+		return s.blockAndCommit(err.Error(), err)
 	}
 	s.setStatus(StatusIdle)
 	return s.commitLocked()

@@ -195,6 +195,17 @@ func (s *Session) block(reason string) {
 	s.state.Blocker = strings.TrimSpace(reason)
 }
 
+// blockAndCommit makes a terminal turn failure observable before returning it.
+// ProcessPending stops on Apply errors, so deferring persistence to its normal
+// epilogue would leave state.json stuck at working indefinitely.
+func (s *Session) blockAndCommit(reason string, cause error) error {
+	s.block(reason)
+	if err := s.commitLocked(); err != nil {
+		return errors.Join(cause, fmt.Errorf("foreman: persist blocked state: %w", err))
+	}
+	return cause
+}
+
 // record appends one verbatim turn to the history artifact. A failed write is
 // a blocker: the prompt's references would otherwise point at an entry that
 // was never written.
@@ -216,12 +227,13 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			return s.record(RoleHuman, "", cmd.Message)
 		}
 		if err := s.record(RoleHuman, "", cmd.Message); err != nil {
-			s.block("history artifact: " + err.Error())
-			return err
+			return s.blockAndCommit("history artifact: "+err.Error(), err)
 		}
 		s.setStatus(StatusWorking)
 		s.state.CurrentStep = cmd.Message
-		s.persistLocked() // the turn has STARTED; say so now, not when it ends
+		if err := s.commitLocked(); err != nil { // the turn has STARTED; say so now, not when it ends
+			return err
+		}
 		if s.runner == nil && strings.TrimSpace(s.state.Agent) == "" && strings.TrimSpace(s.state.Role) == "" {
 			s.setStatus(StatusIdle)
 			return nil
@@ -235,10 +247,9 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 				// Falling through to the replay path would be the wrong kindness: it
 				// would produce a plausible answer from a fresh agent and hide the fact
 				// that the live one is gone.
-				s.block("live agent: " + err.Error())
 				s.state.Steering = false
 				s.state.SteerWhyNot = err.Error()
-				return err
+				return s.blockAndCommit("live agent: "+err.Error(), err)
 			}
 			s.setStatus(StatusIdle)
 			break
@@ -257,18 +268,15 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		}, s.runner)
 		if out := strings.TrimSpace(res.Output); out != "" {
 			if rerr := s.record(RoleAgent, "", out); rerr != nil {
-				s.block("history artifact: " + rerr.Error())
-				return rerr
+				return s.blockAndCommit("history artifact: "+rerr.Error(), rerr)
 			}
 		}
 		if err != nil || res.ExitCode != 0 {
 			if err != nil {
-				s.block("runner: " + err.Error())
-				return err
+				return s.blockAndCommit("runner: "+err.Error(), err)
 			}
 			err = fmt.Errorf("foreman: runner exited %d", res.ExitCode)
-			s.block(err.Error())
-			return err
+			return s.blockAndCommit(err.Error(), err)
 		}
 		s.setStatus(StatusIdle)
 	case CommandPause:

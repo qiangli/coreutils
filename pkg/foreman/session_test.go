@@ -94,3 +94,35 @@ func TestSessionStateMachine(t *testing.T) {
 		t.Fatalf("persisted state = %+v, want stopped done", reopened.State())
 	}
 }
+
+func TestRunnerFailurePersistsBlockedTransition(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Start(context.Background(), Options{
+		ID:     "runner-failure",
+		Goal:   "make failures observable",
+		Agent:  "stub",
+		Root:   dir,
+		Runner: &stubRunner{code: 7},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := s.Apply(context.Background(), Command{Verb: CommandTell, Message: "run"}); err == nil {
+		t.Fatal("Apply succeeded after runner exit 7")
+	}
+
+	persisted, err := s.Store().LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if persisted.Status != StatusBlocked || !strings.Contains(persisted.Blocker, "runner exited 7") {
+		t.Fatalf("persisted state = %+v, want blocked runner failure", persisted)
+	}
+	changes, err := s.Store().Changes(0)
+	if err != nil {
+		t.Fatalf("Changes: %v", err)
+	}
+	if len(changes) == 0 || changes[len(changes)-1].Status != StatusBlocked {
+		t.Fatalf("last transition = %+v, want blocked", changes)
+	}
+}

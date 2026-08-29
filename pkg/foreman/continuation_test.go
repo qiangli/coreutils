@@ -192,7 +192,9 @@ func TestCheckpointCarriesContinuityFacts(t *testing.T) {
 func TestMidTurnSteerIsRecordedAsADecision(t *testing.T) {
 	s := startReplaySession(t, "midturn", &sizeRunner{reply: "ok"})
 	s.mu.Lock() // a turn in flight
-	s.noteSteer("not that file — the other one")
+	if err := s.noteSteer("not that file — the other one"); err != nil {
+		t.Fatal(err)
+	}
 	s.mu.Unlock()
 	cp := s.Checkpoint()
 	if cp.DecisionsTotal != 1 || cp.Decisions[0].Role != RoleMidTurn || cp.Decisions[0].Text != "not that file — the other one" {
@@ -605,13 +607,7 @@ func TestChangesRecoverWhenJournalLagsOrLeads(t *testing.T) {
 		t.Fatalf("commit after lag = seq %d, %v (want 3)", c.Seq, err)
 	}
 	if trs, _ = store2.Changes(0); len(trs) != 3 || trs[1].Seq != 2 || trs[2].Seq != 3 {
-		// Seq 2 is now synthesized from... nothing: state.json is at 3. It is
-		// gone from the delta view, which is the documented cost of the crash
-		// window; what must hold is that seq 3 was not reused and nothing
-		// after the cursor is missing.
-		if len(trs) != 2 || trs[1].Seq != 3 {
-			t.Fatalf("after lag+commit: Changes(0) = %s", dump(trs))
-		}
+		t.Fatalf("after lag+commit: Changes(0) = %s", dump(trs))
 	}
 
 	// 3. Journal leads: the append landed, the state rename did not.
@@ -633,6 +629,13 @@ func TestChangesRecoverWhenJournalLagsOrLeads(t *testing.T) {
 	_ = f.Close()
 	if trs, err = store3.Changes(0); err != nil || len(trs) != 3 || trs[2].Seq != 6 {
 		t.Fatalf("torn tail: Changes(0) = %s, %v", dump(trs), err)
+	}
+	st3.Status = StatusBlocked
+	if c, err := store3.Commit(st3); err != nil || c.Seq != 7 {
+		t.Fatalf("commit after torn tail = seq %d, %v", c.Seq, err)
+	}
+	if trs, err = store3.Changes(6); err != nil || len(trs) != 1 || trs[0].Seq != 7 || trs[0].Status != StatusBlocked {
+		t.Fatalf("transition after torn tail: Changes(6) = %s, %v", dump(trs), err)
 	}
 }
 

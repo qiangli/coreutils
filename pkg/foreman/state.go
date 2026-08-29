@@ -206,21 +206,32 @@ func (s Store) Commit(st State) (State, error) {
 		return st, prevErr
 	}
 	havePrev := prevErr == nil
-	if havePrev && prev.Digest == digest && prev.Seq > 0 {
-		st.Seq, st.Digest, st.UpdatedAt = prev.Seq, prev.Digest, prev.UpdatedAt
-		return st, nil
-	}
-	var last int64
-	if havePrev {
-		last = prev.Seq
-		if last == 0 {
-			last = 1 // legacy record: Changes synthesizes it as seq 1
-		}
-	}
-	if tail, err := s.lastTransitionSeq(); err != nil {
+	last, err := s.lastTransitionSeq()
+	if err != nil {
 		return st, err
-	} else if tail > last {
-		last = tail
+	}
+	if havePrev {
+		prevSeq := prev.Seq
+		if prevSeq == 0 {
+			prevSeq = 1 // legacy record: Changes synthesizes it as seq 1
+		}
+		// Repair the crash window where state.json landed but its delta did not.
+		// Do this even for an identical state: otherwise the next distinct commit
+		// can advance past the missing sequence and make it unrecoverable.
+		if last < prevSeq {
+			prev.Seq = prevSeq
+			if prev.Digest == "" {
+				prev.Digest = CanonicalDigest(prev)
+			}
+			if err := s.appendTransition(transitionOf(prev)); err != nil {
+				return st, err
+			}
+			last = prevSeq
+		}
+		if prev.Digest == digest && prev.Seq > 0 {
+			st.Seq, st.Digest, st.UpdatedAt = prev.Seq, prev.Digest, prev.UpdatedAt
+			return st, nil
+		}
 	}
 	st.Seq = last + 1
 	st.Digest = digest
