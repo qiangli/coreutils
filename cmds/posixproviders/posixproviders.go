@@ -117,6 +117,9 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 			return 2
 		}
 	}
+	if e.Command == "localedef" {
+		providerArgs = localedefProviderArgs(args)
+	}
 
 	r, err := resolverFor(rc)
 	if err != nil {
@@ -145,6 +148,29 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 		return code
 	}
 	return execProviderFn(rc, providerName, path, providerArgs)
+}
+
+// localedefProviderArgs adapts the pinned GNU provider to the POSIX pathname
+// meaning of an option-argument named "-". GNU localedef treats -f - as a
+// request for its built-in/default charmap, while POSIX localedef treats the
+// charmap option-argument as a pathname. In particular, a regular file
+// literally named "-" in the current directory must be opened. Prefixing it
+// with ./ removes GNU's sentinel interpretation without copying input or
+// changing any other argument.
+func localedefProviderArgs(args []string) []string {
+	out := append([]string(nil), args...)
+	for i := 0; i < len(out); i++ {
+		switch {
+		case out[i] == "-f" && i+1 < len(out):
+			if out[i+1] == "-" {
+				out[i+1] = "./-"
+			}
+			i++
+		case out[i] == "-f-":
+			out[i] = "-f./-"
+		}
+	}
+	return out
 }
 
 // parseManArgs keeps the certification-facing provider on the POSIX

@@ -88,6 +88,28 @@ func TestArgvPassthrough(t *testing.T) {
 	}
 }
 
+func TestLocaledefDashCharmapIsLiteralPathname(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{name: "separate argument", in: []string{"-c", "-f", "-", "-i", "source", "locale"}, want: []string{"-c", "-f", "./-", "-i", "source", "locale"}},
+		{name: "attached argument", in: []string{"-f-", "locale"}, want: []string{"-f./-", "locale"}},
+		{name: "ordinary path unchanged", in: []string{"-f", "maps/portable", "locale"}, want: []string{"-f", "maps/portable", "locale"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := localedefProviderArgs(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("args=%q want %q", got, tc.want)
+			}
+			if len(tc.in) > 0 && &got[0] == &tc.in[0] {
+				t.Fatal("adapter returned caller-owned argument storage")
+			}
+		})
+	}
+}
+
 // newRC builds a RunContext over a temp cache root. Buffers are returned to the
 // caller so they are read AFTER Run — never in the same expression that calls
 // it, which evaluates the buffers first and silently asserts on empty strings.
