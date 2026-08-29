@@ -19,11 +19,12 @@ func replaceCommand(rc *tool.RunContext, path string, argv, env []string, argv0 
 		return false, nil
 	}
 
-	if rc.Dir != "" {
-		if err := os.Chdir(rc.Dir); err != nil {
-			return true, err
-		}
-	}
+	// DirIsProcessCwd is stronger than an ordinary directory hint: the
+	// standalone dispatcher has already proved that rc.Dir names this
+	// process's current directory. Do not chdir to the same directory again.
+	// Its absolute spelling can exceed PATH_MAX even though the process entered
+	// it one component at a time; re-resolving that spelling would fail before
+	// execve and prevent COMMAND from observing the valid inherited cwd.
 
 	// execvp resolves argv[0] through PATH but preserves the spelling supplied
 	// by the caller. Only env's explicit --argv0 option replaces that value.
