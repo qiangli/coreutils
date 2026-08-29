@@ -122,7 +122,13 @@ func secureSpoolDir(path string) error {
 // applied when the file is already present.
 func openPrivateSpool(path string) (*os.File, error) {
 	if fi, err := os.Lstat(path); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("not a regular file")
+		}
+		if !fi.Mode().IsRegular() {
+			if isNullDevice(path, fi) {
+				return os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			}
 			return nil, fmt.Errorf("not a regular file")
 		}
 	} else if !os.IsNotExist(err) {
@@ -145,6 +151,14 @@ func openPrivateSpool(path string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// isNullDevice preserves the historical explicit discard override without
+// treating arbitrary devices as spool files. OTEL_TRACES_EXPORTER=none is the
+// preferred opt-out, but existing profiles may still name /dev/null.
+func isNullDevice(path string, fi os.FileInfo) bool {
+	nullInfo, err := os.Stat(os.DevNull)
+	return err == nil && os.SameFile(fi, nullInfo)
 }
 
 // ExportSpans writes each span as one jsonline record.

@@ -231,7 +231,7 @@ func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
 	if os.Getenv("BASHY_TELEMETRY_QUIET") != "" {
 		return false
 	}
-	if os.Getenv("BASHY_TELEMETRY_NOTICE") != "" || os.Getenv("BASHY_TELEMETRY_DEBUG") != "" {
+	if automationMarker(os.Getenv("BASHY_TELEMETRY_NOTICE")) || automationMarker(os.Getenv("BASHY_TELEMETRY_DEBUG")) {
 		return true
 	}
 	return stderrIsTerminal && !telemetryAutomation()
@@ -246,7 +246,7 @@ func telemetryAutomation() bool {
 			return true
 		}
 	}
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") || isolatedTerminalSession()
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb")
 }
 
 func automationMarker(value string) bool {

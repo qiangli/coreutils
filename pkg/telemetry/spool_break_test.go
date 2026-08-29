@@ -127,14 +127,9 @@ func TestRelativeSpoolOverrideSurvivesChdir(t *testing.T) {
 }
 
 // "Automation-quiet" is decided by term.IsTerminal(stderr). But this repo's own
-// automation substrate — pkg/agentpty, which weave and chat use for every
-// subagent, including a raw `weave start -- bashy -c …` argv — runs the child
-// under a PTY precisely so the child believes it is interactive. The worker log
-// that weave captures is that PTY. Under it, stderr IS a terminal and nobody is
-// watching, so the routine notice lands in every captured agent log: the exact
-// output the run set out to remove. pkg/ctty already encodes the stricter
-// notion ("attended" needs positive evidence, not just a tty); telemetry
-// ignores it and no quieting env var is set by agentpty/weave for the child.
+// automation substrate runs children under a PTY precisely so they behave like
+// interactive CLIs. Such a harness must stamp positive automation evidence;
+// Weave does so with BASHY_AGENT_ID/BASHY_PRINCIPAL.
 func TestStartupNoticeStaysOutOfPTYDrivenAutomation(t *testing.T) {
 	if os.Getenv("TEST_TELEMETRY_PTY_CHILD") == "1" {
 		shutdown := Init(context.Background())
@@ -165,6 +160,7 @@ func TestStartupNoticeStaysOutOfPTYDrivenAutomation(t *testing.T) {
 	}
 	cmd.Env = append(env,
 		"TERM=xterm",
+		"BASHY_AGENT_ID=test-harness",
 		"TEST_TELEMETRY_PTY_CHILD=1",
 		"OTEL_TRACES_EXPORTER=file",
 		"BASHY_OTEL_SPOOL="+spool,
