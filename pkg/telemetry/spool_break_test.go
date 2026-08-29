@@ -143,14 +143,28 @@ func TestStartupNoticeStaysOutOfPTYDrivenAutomation(t *testing.T) {
 	}
 	spool := filepath.Join(t.TempDir(), "spans.jsonl")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestStartupNoticeStaysOutOfPTYDrivenAutomation$")
+	// Commit 280573ba answered this test with an env-marker allowlist (CI,
+	// CODEX_CI, WEAVE_AGENT, BASHY_AGENT_ID, BASHY_PRINCIPAL, TERM=dumb) and the
+	// test went green — but only because `go test` was itself running under
+	// weave, whose markers the child inherited. On a clean clone (`git clone;
+	// go test ./pkg/telemetry` from an xterm with no CI) the same test is red.
+	// A test whose verdict is decided by the invoker's environment asserts
+	// nothing; scrub the markers so the child is exactly what the comment above
+	// describes: a PTY allocated by a harness that did not stamp it.
 	env := []string{}
 	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "CI", "CODEX_CI", "WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_PRINCIPAL", "BASHY_AGENT", "TERM":
+			continue
+		}
 		if strings.HasPrefix(kv, "BASHY_TELEMETRY_") || strings.HasPrefix(kv, "OTEL_") {
 			continue
 		}
 		env = append(env, kv)
 	}
 	cmd.Env = append(env,
+		"TERM=xterm",
 		"TEST_TELEMETRY_PTY_CHILD=1",
 		"OTEL_TRACES_EXPORTER=file",
 		"BASHY_OTEL_SPOOL="+spool,
