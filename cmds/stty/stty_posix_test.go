@@ -147,6 +147,67 @@ func TestSttyRequiredReportsPropagateWriteErrors(t *testing.T) {
 	}
 }
 
+func TestSttyAllReportsDistinctInputAndOutputSpeeds(t *testing.T) {
+	for _, operands := range [][]string{
+		{"ispeed", "9600", "ospeed", "2400"},
+		{"ospeed", "2400", "ispeed", "9600"},
+	} {
+		t.Run(strings.Join(operands, "_"), func(t *testing.T) {
+			tty := openTTY(t)
+			if code, _, errb := runStty(t, tty, []string{"ispeed", "9600", "ospeed", "9600"}); code != 0 {
+				t.Fatalf("establish equal speeds: code=%d err=%q", code, errb)
+			}
+			before, err := getTerminalState(int(tty.Fd()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, _, errb := runStty(t, tty, operands)
+			if code != 0 {
+				after, err := getTerminalState(int(tty.Fd()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(after, before) {
+					t.Fatalf("rejected distinct speeds changed terminal:\nbefore=%+v\nafter=%+v", before, after)
+				}
+				if strings.TrimSpace(errb) == "" {
+					t.Fatal("rejected distinct speeds without a diagnostic")
+				}
+				return
+			}
+			code, out, errb := runStty(t, tty, []string{"-a"})
+			if code != 0 {
+				t.Fatalf("report distinct speeds: code=%d err=%q", code, errb)
+			}
+			if !strings.Contains(out, "ispeed 9600 baud; ospeed 2400 baud;") {
+				t.Fatalf("distinct speeds not reported: %q", out)
+			}
+		})
+	}
+}
+
+func TestSttyAllReportsDisabledControlCharactersAsUndef(t *testing.T) {
+	for _, operand := range []string{"^-", "undef"} {
+		t.Run(operand, func(t *testing.T) {
+			tty := openTTY(t)
+			for name := range controlChars {
+				if code, _, errb := runStty(t, tty, []string{name, operand}); code != 0 {
+					t.Fatalf("disable %s: code=%d err=%q", name, code, errb)
+				}
+			}
+			code, out, errb := runStty(t, tty, []string{"-a"})
+			if code != 0 {
+				t.Fatalf("report disabled characters: code=%d err=%q", code, errb)
+			}
+			for name := range controlChars {
+				if !strings.Contains(out, name+" = <undef>") {
+					t.Errorf("disabled %s not reported using POSIX representation: %q", name, out)
+				}
+			}
+		})
+	}
+}
+
 func testSttyRequiredModesReachTermios(t *testing.T) {
 	tty := openTTY(t)
 	code, _, errb := runStty(t, tty, []string{"ignbrk", "ocrnl", "tostop", "clocal"})
@@ -308,7 +369,7 @@ func testSttyUsesPlatformVDisableAndPrintsUndef(t *testing.T) {
 		t.Fatalf("VINTR=%d, want platform _POSIX_VDISABLE %d", got, posixVDisable)
 	}
 	code, out, errb := runStty(t, tty, []string{"-a"})
-	if code != 0 || !strings.Contains(out, "intr = undef") {
+	if code != 0 || !strings.Contains(out, "intr = <undef>") {
 		t.Fatalf("stty -a disabled character: code=%d out=%q err=%q", code, out, errb)
 	}
 }

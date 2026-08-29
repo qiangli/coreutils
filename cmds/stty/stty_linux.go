@@ -54,7 +54,17 @@ func setNativeSpeed(t *unix.Termios, which string, code uint64) {
 		return
 	}
 	if which == "ospeed" {
-		t.Cflag = (t.Cflag &^ termiosUint(unix.CBAUD)) | native
+		// A zero CIBAUD field means "use the output speed".  Materialize
+		// that logical input speed before changing CBAUD, otherwise changing
+		// only ospeed silently changes ispeed as well.
+		input := t.Cflag & termiosUint(unix.CIBAUD)
+		if input == 0 {
+			input = (t.Cflag & termiosUint(unix.CBAUD)) << 16
+		}
+		t.Cflag = (t.Cflag &^ termiosUint(unix.CBAUD|unix.CIBAUD)) | native
+		if input != native<<16 {
+			t.Cflag |= input
+		}
 	}
 	if which == "ispeed" {
 		output := t.Cflag & termiosUint(unix.CBAUD)

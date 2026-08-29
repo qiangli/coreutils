@@ -111,7 +111,23 @@ func applySpeed(fd int, which string, baud uint64) error {
 		return err
 	}
 	setNativeSpeed(t, which, code)
-	return setTermios(fd, t)
+	wantInput, wantOutput := nativeSpeeds(t)
+	if err := setTermios(fd, t); err != nil {
+		return err
+	}
+	// Some terminal drivers accept TCSETS but silently collapse asymmetric
+	// input/output speeds to the output speed.  Treat that as an unsupported
+	// setting instead of reporting success for a different terminal state.
+	// applySettings will restore the invocation's original state on this error.
+	applied, err := getTermios(fd)
+	if err != nil {
+		return err
+	}
+	gotInput, gotOutput := nativeSpeeds(applied)
+	if gotInput != wantInput || gotOutput != wantOutput {
+		return fmt.Errorf("terminal did not accept ispeed %d and ospeed %d", nativeToBaud(wantInput), nativeToBaud(wantOutput))
+	}
+	return nil
 }
 
 func outputBaud(state *terminalState) uint64 { return nativeToBaud(state.Ospeed) }
@@ -203,7 +219,7 @@ func printModeGroup(rc *tool.RunContext, value uint64, modes []flagMode) {
 func formatControlChar(value byte) string {
 	switch {
 	case value == posixVDisable:
-		return "undef"
+		return "<undef>"
 	case value == 0x7f:
 		return "^?"
 	case value < 0x20:
