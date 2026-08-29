@@ -186,19 +186,19 @@ func TestWeaveStatusReportsStaleWithoutMutatingQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := runWeave(t, "status", "1", "--json")
-	if code != 0 || !strings.Contains(out, `"health": "stale"`) || !strings.Contains(out, `"state": "failed"`) {
+	if code != 0 || !strings.Contains(out, `"health": "stale"`) || !strings.Contains(out, `"state": "working"`) {
 		t.Fatalf("JSON status = exit %d %s, want stale", code, out)
 	}
 	after, err := os.ReadFile(dir + "/queue.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(before) == string(after) {
-		t.Fatal("status did not durably repair the dead worker")
+	if string(before) != string(after) {
+		t.Fatal("status mutated queue; repair belongs to weave doctor/heartbeat")
 	}
 	out, code = runWeave(t, "status", "1", "--plain")
-	if code != 0 || !strings.Contains(out, "health:   healthy") {
-		t.Fatalf("second human status = exit %d %s, want coherent terminal health", code, out)
+	if code != 0 || !strings.Contains(out, "health:   stale") {
+		t.Fatalf("second human status = exit %d %s, want stable stale observation", code, out)
 	}
 }
 

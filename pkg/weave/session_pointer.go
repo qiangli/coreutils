@@ -34,7 +34,7 @@ func ReadSessionPointer(repoRoot string) (*SessionPointer, error) {
 }
 
 func WriteSessionPointer(repoRoot string, p *SessionPointer) error {
-	dir, err := weaveQueueDir(repoRoot)
+	dir, err := ensureWeaveQueueDir(repoRoot)
 	if err != nil {
 		return err
 	}

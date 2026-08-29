@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -110,6 +111,14 @@ func weaveReapQueueBlocking(dir, root, base string) ([]weaveReapAction, error) {
 }
 
 func weaveReapQueueWait(dir, root, base string, wait time.Duration) ([]weaveReapAction, error) {
+	// list/doctor/board call the reaper while rendering a snapshot. With no
+	// queue there is nothing to reconcile, and taking queue.lock would create
+	// the very per-repository state a read-only command is inspecting.
+	if _, err := os.Stat(filepath.Join(dir, "queue.json")); os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
 	var actions []weaveReapAction
 	err := withWeaveQueueLockWait(dir, wait, func(q *weaveQueue) error {
 		actions = weaveReapPass(q, root, base, time.Now().UTC())

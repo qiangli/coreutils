@@ -896,9 +896,6 @@ func weaveStoryDir(cmd *cobra.Command, mode weavecli.OutputMode, op string) (str
 	if err != nil {
 		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
-	}
 	return dir, nil
 }
 

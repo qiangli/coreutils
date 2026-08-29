@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,5 +71,38 @@ func TestDashboardRejectsUnknownPanel(t *testing.T) {
 	_, err := runCommand(t, "dashboard", "--expand", "future")
 	if err == nil || !strings.Contains(err.Error(), "unknown panel") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// board is a projection over weave/sprint/fleet state, not an initializer for
+// those stores. In particular, rendering it from a repository with no queue
+// must not mint the per-cwd queue tag that repeated dashboard polling used to
+// recreate after cleanup.
+func TestBoardReadDoesNotCreateWeaveState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	t.Chdir(repo)
+
+	cmd := NewCommand([]Source{NewWeaveSource(), NewSprintSource(), NewFleetSource()})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("board --json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bashy", "weave")); !os.IsNotExist(err) {
+		t.Fatalf("read-only board created weave state (stat err %v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bashy", "sprint")); !os.IsNotExist(err) {
+		t.Fatalf("read-only board created sprint state (stat err %v)", err)
 	}
 }

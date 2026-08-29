@@ -272,6 +272,10 @@ type weaveItem struct {
 	// is no longer alive — the wrapper crashed or was killed
 	// outside weave's control. Resume or abandon the item.
 	Stale bool `json:"stale,omitempty"`
+	// AgeSeconds is another read-time projection used by machine-wide boards.
+	// It keeps those boards from spawning the mutating doctor command merely to
+	// calculate an item's age.
+	AgeSeconds int64 `json:"age_seconds,omitempty"`
 	// CtlSock is the wrapper's per-issue control socket while the
 	// subagent runs (PTY mode only). `weave say` connects here to
 	// inject a line into the subagent's stdin. Set at claim time,
@@ -520,73 +524,101 @@ func weaveWorkspaceOwner(home, repoRoot string) (string, bool) {
 	return "", false
 }
 
-// weaveQueueDir RESOLVES the queue dir for a repo. It does not create it.
-//
-// Resolving is what every READ does — `weave list`, `bashy board`, and the
-// conductor-address lookup behind `bashy mb` all land here — so a mkdir on this
-// path means merely LOOKING at a repo mints permanent state for it. It did, and
-// the result was a litter of empty ~/.bashy/weave/<repo>-<hash> tags: one per
-// working directory anyone ever ran a read from, indistinguishable at a glance
-// from a real workspace and alarming to find.
-//
-// Creation belongs to the WRITE, next to the bytes being written — see
-// weaveWriteFile / weaveAppendFile / weaveEnsureQueueDir. loadWeaveQueue already
-// treats an absent dir as an empty queue, which is the correct answer for a repo
-// that has never had a run, so no read path needs the dir to exist.
+// weaveQueueNames derives the current and pre-hash queue directory names for a
+// repository. It is deliberately pure: read paths use the same identity as
+// weaveQueueDir without inheriting its migration and mkdir side effects.
+func weaveQueueNames(repoRoot string) (tag, legacy string) {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(repoRoot))
+	tag = fmt.Sprintf("%s-%08x", filepath.Base(repoRoot), h.Sum32())
+
+	r := strings.NewReplacer(string(filepath.Separator), "_", ":", "_")
+	legacy = r.Replace(strings.TrimPrefix(repoRoot, string(filepath.Separator)))
+	if len(legacy) > 120 {
+		legacy = legacy[len(legacy)-120:]
+	}
+	return tag, legacy
+}
+
+func weaveCanonicalRepoRoot(repoRoot string) string {
+	if root, err := weaveRepoRoot(repoRoot); err == nil {
+		return root
+	}
+	return filepath.Clean(repoRoot)
+}
+
+func weaveExistingLegacyQueue(home, repoRoot string) (string, error) {
+	tag, legacy := weaveQueueNames(repoRoot)
+	for _, root := range weaveLegacyStateRoots(home) {
+		for _, name := range []string{tag, legacy} {
+			candidate := filepath.Join(root, name)
+			if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+				return candidate, nil
+			} else if err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+		}
+	}
+	return "", nil
+}
+
+// weaveQueueDir resolves a queue path without creating or migrating anything.
+// This is the default because board, inbox, fleet, and list all resolve queue
+// paths while rendering read-only snapshots. A read must not turn a repository
+// with no weave state into one merely by looking. Creation belongs beside the
+// write; see ensureWeaveQueueDir, weaveWriteFile, and weaveAppendFile.
 func weaveQueueDir(repoRoot string) (string, error) {
+	repoRoot = weaveCanonicalRepoRoot(repoRoot)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	// A workspace belongs to the queue that CREATED it. Resolve upward before
-	// hashing, or a weave command run inside a workspace forks a fresh root.
 	if owner, ok := weaveWorkspaceOwner(home, repoRoot); ok {
 		return owner, nil
 	}
-	// Containment: the tag must NOT spell out the repo path — the
-	// workspace lives under this dir, so a path-mangled tag hands every
-	// subagent the origin location (one escape decoded exactly that).
-	// basename keeps the dir human-navigable; the hash disambiguates
-	// same-named repos without revealing where they live.
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(repoRoot))
-	tag := fmt.Sprintf("%s-%08x", filepath.Base(repoRoot), h.Sum32())
+
+	tag, _ := weaveQueueNames(repoRoot)
 	dir := filepath.Join(weaveStateRoot(home), tag)
-	// One-time migration from a legacy root — both the same tag and the older
-	// path-mangled tag — so existing queues (history, logs, workspaces) carry
-	// over. Newest legacy root wins.
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		r := strings.NewReplacer(string(filepath.Separator), "_", ":", "_")
-		legacy := r.Replace(strings.TrimPrefix(repoRoot, string(filepath.Separator)))
-		if len(legacy) > 120 {
-			legacy = legacy[len(legacy)-120:]
-		}
-	migrate:
-		for _, root := range weaveLegacyStateRoots(home) {
-			for _, name := range []string{tag, legacy} {
-				src := filepath.Join(root, name)
-				if st, err := os.Stat(src); err == nil && st.IsDir() {
-					_ = os.MkdirAll(weaveStateRoot(home), 0o755)
-					_ = os.Rename(src, dir)
-					break migrate
-				}
-			}
-		}
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return dir, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	legacyDir, err := weaveExistingLegacyQueue(home, repoRoot)
+	if err != nil {
+		return "", err
+	}
+	if legacyDir != "" {
+		return legacyDir, nil
 	}
 	return dir, nil
 }
 
+// ensureWeaveQueueDir is the explicit write-side resolver. Existing legacy
+// queues remain in place: renaming one can strand absolute workspace/log/socket
+// paths and let a cached writer recreate the old root, splitting the queue.
+// A fresh writer creates only the canonical root selected by weaveQueueDir.
+func ensureWeaveQueueDir(repoRoot string) (string, error) {
+	dir, err := weaveQueueDir(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func ensureWeaveQueueDirPath(dir string) error {
+	return os.MkdirAll(dir, 0o755)
+}
+
 // weaveEnsureQueueDir creates a queue dir on behalf of a caller that is about to
-// write into it. Read paths must never call this — see weaveQueueDir.
+// write into an already-resolved path. Read paths must never call this.
 func weaveEnsureQueueDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-// weaveWriteFile writes a file under the queue dir, creating the dir first.
-//
-// Ensuring the parent HERE rather than at every call site is what makes the
-// invariant hold: a writer cannot forget, and a reader cannot accidentally
-// inherit the mkdir just by resolving a path.
 func weaveWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -594,8 +626,6 @@ func weaveWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
 }
 
-// weaveAppendFile opens a log under the queue dir for append, creating the dir
-// first. The append counterpart of weaveWriteFile.
 func weaveAppendFile(path string, perm os.FileMode) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -632,6 +662,9 @@ func loadWeaveQueue(dir string) (*weaveQueue, error) {
 }
 
 func saveWeaveQueue(dir string, q *weaveQueue) error {
+	if err := ensureWeaveQueueDirPath(dir); err != nil {
+		return err
+	}
 	if q.Root == "" {
 		// Best-effort back-stamp for queues created before Root
 		// existed; saveWeaveQueue callers all run from the repo.
@@ -2343,14 +2376,6 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		return nil
 	}
 	dir, _ := weaveQueueDir(root)
-	// THE REAPER (weave_reaper.go). Every read of the queue is an
-	// opportunity to end a limbo, and `weave list` is the read that happens
-	// most: a dead-wrapper run must not survive being LOOKED AT. Idempotent,
-	// and it destroys nothing — it only writes state fields and flags.
-	if _, err := weaveReapQueue(dir, root, weaveBaseBranch(root)); err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
-			weavecli.ExitGenericFail, err))
-	}
 	// Lock-free read (weave_lock_common.go): a board read must return even
 	// while a multi-minute merge is running.
 	q, err := readWeaveQueue(dir)
@@ -2358,7 +2383,8 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
 			weavecli.ExitGenericFail, err))
 	}
-	unattended := weaveDoctorStaleCount(q, defaultWeaveDoctorThresholds(), time.Now().UTC())
+	now := time.Now().UTC()
+	unattended := weaveDoctorStaleCount(q, defaultWeaveDoctorThresholds(), now)
 	// Reconcile for display (not persisted here — prune/pull hold the
 	// lock and persist): a "submitted" item whose work already landed
 	// in base shows as "done" instead of lying about pending work.
@@ -2375,6 +2401,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	var outsideRefs []*weaveItem
 	var needsSteward []*weaveItem
 	for _, it := range q.Items {
+		age := weaveDoctorItemAge(it, now)
+		it.AgeSeconds = int64(age / time.Second)
+		it.Stale = weaveDoctorItemStale(it, age, defaultWeaveDoctorThresholds())
 		// A run that DIED WITH GOOD WORK INSIDE IT.
 		//
 		// weaveTerminalState is correctly conservative: `submitted` requires a
@@ -5082,26 +5111,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
 			weavecli.ExitInvalidArg, fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
-	// Classify the original evidence first. The established status contract then
-	// runs the opportunistic reaper so dead workers stop consuming capacity, but
-	// the first response still tells the operator that the cause was stale /
-	// wedged rather than presenting the repaired terminal state as healthy.
+	// Status is an observation. Lifecycle repair belongs to doctor and the
+	// heartbeat; a status poll must not rewrite queue.json or create a lock.
 	healthNow := time.Now().UTC()
 	rawHealth := weaveClassifyHealth(weaveHealthSnapshotFor(it, defaultWeaveHealthProbe(healthNow)), it, healthNow)
-	if _, err := weaveReapQueue(dir, root, weaveBaseBranch(root)); err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
-			weavecli.ExitGenericFail, err))
-	}
-	q, err = readWeaveQueue(dir)
-	if err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
-			weavecli.ExitGenericFail, err))
-	}
-	it = findWeaveItem(q, id)
-	if it == nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
-			weavecli.ExitInvalidArg, fmt.Errorf("run #%d disappeared from status view", id)))
-	}
 	base := weaveBaseBranch(root)
 	merged := weaveItemMerged(root, base, it)
 	weaveAnnotateSalvageable(root, base, it)
@@ -5117,12 +5130,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	stale := it.State == "working" && it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
 	healthSnapshot := weaveHealthSnapshotFor(it, defaultWeaveHealthProbe(healthNow))
 	health := weaveClassifyHealth(healthSnapshot, it, healthNow)
-	// Keep the original stale/wedged evidence as the health verdict so status
-	// tells the operator what actually happened, not merely what the reaper
-	// repaired it to.
-	if rawHealth.Health == weaveHealthStale || rawHealth.Health == weaveHealthWedged {
-		health = rawHealth
-	}
+	health = rawHealth
 	// Read-time isolation check, like stale/blocked: nothing is persisted
 	// here (status loads without the lock), but a run that escaped WHILE
 	// still running should say so now, not only once it terminates.
@@ -6927,8 +6935,8 @@ func weaveNotPullableDetail(it *weaveItem, base string, ahead int) string {
 // "skipped" with no reason is how a safety check becomes a mystery, and a
 // mystery is how people learn to pass --force by reflex.
 // weaveEmptyRootGrace is how long a childless state root is left alone before
-// prune will sweep it. weaveQueueDir MkdirAll's the root before the first queue
-// write, so a root created moments ago may belong to a weave STARTING in
+// prune will sweep it. The first queue writer creates the root, so a root
+// created moments ago may belong to a weave STARTING in
 // another repo — and other agents run weaves on this machine concurrently.
 const weaveEmptyRootGrace = time.Hour
 

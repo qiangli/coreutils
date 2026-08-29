@@ -211,7 +211,7 @@ func TestWeaveRecoverAbandonedFinalization(t *testing.T) {
 	}
 }
 
-func TestWeaveStatusRecoversExpiredFinalizationWithoutList(t *testing.T) {
+func TestWeaveStatusObservesExpiredFinalizationAndDoctorRecovers(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
 	dir, _ := weaveQueueDir(root)
@@ -226,8 +226,11 @@ func TestWeaveStatusRecoversExpiredFinalizationWithoutList(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := runWeave(t, "status", "1", "--json")
-	if code != 0 || !strings.Contains(out, `"state": "failed"`) {
-		t.Fatalf("direct status did not recover expired finalizing claim: exit=%d output=%s", code, out)
+	if code != 0 || !strings.Contains(out, `"state": "finalizing"`) {
+		t.Fatalf("status did not preserve finalizing state: exit=%d output=%s", code, out)
+	}
+	if out, code = runWeave(t, "doctor", "--json"); code != 0 || !strings.Contains(out, `"to": "failed"`) {
+		t.Fatalf("doctor did not recover expired finalizing claim: exit=%d output=%s", code, out)
 	}
 }
 

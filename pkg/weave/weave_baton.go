@@ -64,6 +64,9 @@ func loadConductorLock(queueDir string) (*ConductorLock, bool) {
 }
 
 func saveConductorLock(queueDir string, l *ConductorLock) error {
+	if err := ensureWeaveQueueDirPath(queueDir); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return err
@@ -128,6 +131,9 @@ func loadBaton(queueDir string) (*Baton, bool) {
 }
 
 func saveBaton(queueDir string, bt *Baton) error {
+	if err := ensureWeaveQueueDirPath(queueDir); err != nil {
+		return err
+	}
 	bt.WrittenAt = time.Now()
 	b, err := json.MarshalIndent(bt, "", "  ")
 	if err != nil {

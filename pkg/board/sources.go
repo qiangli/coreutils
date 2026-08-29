@@ -118,6 +118,8 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 				Blocked         bool      `json:"blocked"`
 				Salvageable     bool      `json:"salvageable"`
 				UnmergedCommits int       `json:"unmerged_commits"`
+				AgeSeconds      int64     `json:"age_seconds"`
+				Stale           bool      `json:"stale"`
 				Launch          *struct {
 					Agent      string        `json:"agent"`
 					Model      string        `json:"model"`
@@ -130,15 +132,10 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 		return err
 	}
 	for _, q := range result.Queues {
-		findings, doctorErr := loadWeaveDoctorFindings(ctx, q.Root)
-		if doctorErr != nil {
-			b.Warnings = append(b.Warnings, "weave doctor ("+q.Root+"): "+doctorErr.Error())
-		}
 		for _, x := range q.Items {
-			finding := findings[x.ID]
 			// Owner is the conductor principal and may be stale; it is not the
 			// launched agent. Agent identity comes only from launch_spec.
-			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: finding.AgeSeconds, Stale: finding.Stale}
+			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: x.AgeSeconds, Stale: x.Stale}
 			if x.Launch != nil {
 				if x.Launch.Agent != "" {
 					r.Agent = x.Launch.Agent

@@ -1,8 +1,13 @@
 package weave
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/bus"
 )
 
 // A conductor address exists only while somebody is ACCOUNTABLE for the sprint.
@@ -67,5 +72,76 @@ func TestConductorRoles_EmptyIsNotAnError(t *testing.T) {
 	}
 	if got := rolesFromQueue(&weaveQueue{}, time.Now()); got != nil {
 		t.Errorf("empty queue produced %+v", got)
+	}
+}
+
+// Role discovery is part of every unified-inbox snapshot. Looking for a role
+// in a repository that has never used weave must not create the repository's
+// queue tag (or even the top-level weave state directory).
+func TestConductorRoles_AbsentQueueIsSideEffectFree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	t.Chdir(repo)
+	root, err := weaveRepoRoot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tag, _ := weaveQueueNames(root)
+	wantAbsent := filepath.Join(weaveStateRoot(home), tag)
+	for i := 0; i < 3; i++ {
+		if got := conductorRoles(); got != nil {
+			t.Fatalf("conductorRoles() = %+v, want no roles", got)
+		}
+		if bus.HostRoles != nil {
+			_ = bus.HostRoles()
+		}
+		_ = bus.RoleLabelFor("conductor.999")
+		_ = bus.AddressedToRole("conductor:999")
+	}
+
+	if _, err := os.Stat(wantAbsent); !os.IsNotExist(err) {
+		t.Fatalf("read-only role lookup created queue tag %s (stat err %v)", wantAbsent, err)
+	}
+	if _, err := os.Stat(weaveStateRoot(home)); !os.IsNotExist(err) {
+		t.Fatalf("read-only role lookup created weave root %s (stat err %v)", weaveStateRoot(home), err)
+	}
+}
+
+func TestConductorRoles_ReadOnlyResolverFindsExistingQueue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	t.Chdir(repo)
+	root, err := weaveRepoRoot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWeaveQueue(dir, &weaveQueue{Stories: []*weaveStory{{
+		ID: 9, Lease: &weaveStoryLease{Holder: "codex", At: time.Now()},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := conductorRoles()
+	if len(got) != 1 || got[0].Label != "conductor:9" || got[0].Holder != "codex" {
+		t.Fatalf("conductorRoles() = %+v, want existing live queue role", got)
 	}
 }

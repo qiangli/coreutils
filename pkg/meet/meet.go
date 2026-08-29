@@ -374,6 +374,16 @@ func newOpenCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "opened %s in room %d\n", st.ID, st.Room)
 				return nil
 			}
+			// These flags only govern an unattended deliberation. They used to be
+			// silently ignored in the default interactive mode, so a command that
+			// explicitly said "one round, two turns, twenty minutes per turn" could
+			// sit in the REPL forever. Require the mode bit rather than guessing that
+			// a bounded-looking invocation meant to be interactive.
+			if !nonInteractive && !dry {
+				if flags := changedUnattendedOpenFlags(cmd); len(flags) > 0 {
+					return fmt.Errorf("meet open: %s only controls unattended deliberation; pass --non-interactive or omit the bounded flags to enter the REPL", strings.Join(flags, ", "))
+				}
+			}
 			if err := guardDepth(); err != nil {
 				return err
 			}
@@ -453,6 +463,19 @@ func newOpenCmd() *cobra.Command {
 		"seed the board from these message-board posts (comma-separated seqs, e.g. 3,7,12), "+
 			"attributed to their original authors, and post a pointer back to mb. Requires --board")
 	return cmd
+}
+
+// changedUnattendedOpenFlags names explicit lifecycle controls that have no
+// meaning in the interactive REPL. Defaults do not count: an ordinary
+// `meet open` remains interactive, while spelling a bound cannot be ignored.
+func changedUnattendedOpenFlags(cmd *cobra.Command) []string {
+	var out []string
+	for _, name := range []string{"rounds", "yes"} {
+		if cmd.Flags().Changed(name) {
+			out = append(out, "--"+name)
+		}
+	}
+	return out
 }
 
 // parseSeqList parses the comma-separated message-board sequence list of
@@ -745,6 +768,12 @@ func writeVerdict(w io.Writer, v *Verdict) {
 
 // repl is the interactive meeting loop.
 func repl(cmd *cobra.Command, st *State) error {
+	if st == nil {
+		return fmt.Errorf("meet: cannot enter interactive mode without a room")
+	}
+	if st.Status != "open" {
+		return fmt.Errorf("meet: %s is %s; terminal rooms cannot enter interactive mode", st.ID, st.Status)
+	}
 	w := cmd.OutOrStdout()
 	sc := bufio.NewScanner(cmd.InOrStdin())
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

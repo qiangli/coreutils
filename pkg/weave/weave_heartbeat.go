@@ -72,7 +72,7 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op,
 			weavecli.ExitPrecondFail, err))
 	}
-	queueDir, err := weaveQueueDir(root)
+	queueDir, err := ensureWeaveQueueDir(root)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op,
 			weavecli.ExitGenericFail, err))

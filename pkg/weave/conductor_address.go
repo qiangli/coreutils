@@ -10,6 +10,7 @@ package weave
 // derives the address from the sprint id for exactly this reason.
 
 import (
+	"os"
 	"strconv"
 	"time"
 
@@ -36,7 +37,12 @@ func init() {
 // that reports a broken queue: with no queue, or outside a repo, there are
 // simply no conductor addresses here.
 func conductorRoles() []bus.HostRole {
-	dir, err := weaveQueueDirForCwd()
+	cwd, _ := os.Getwd()
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return nil
+	}
+	dir, err := weaveQueueDir(root)
 	if err != nil {
 		return nil
 	}

@@ -221,7 +221,7 @@ func (errHydrationTestFailure) Error() string { return "hydration test timeout" 
 // An external kill can happen while clone/hydration is running, before the
 // item becomes working.  That must not leave a permanently allocated phantom
 // worker with no wrapper and no terminal evidence.
-func TestWeaveStatusRecoversDeadProvisioningLauncher(t *testing.T) {
+func TestWeaveStatusObservesDeadProvisioningLauncherAndDoctorRecovers(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
 	dir, _ := weaveQueueDir(root)
@@ -241,13 +241,16 @@ func TestWeaveStatusRecoversDeadProvisioningLauncher(t *testing.T) {
 		t.Fatalf("status failed (exit %d): %s", code, out)
 	}
 	for _, want := range []string{
-		`"state": "failed"`,
-		`"launch_phase": "failed: provisioning launcher exited before agent launch"`,
+		`"state": "allocated"`,
+		`"launch_phase": "hydrating submodules"`,
 		`"base_sha": "immutable-base"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status missing %s:\n%s", want, out)
 		}
+	}
+	if out, code = runWeave(t, "doctor", "--json"); code != 0 || !strings.Contains(out, `"to": "failed"`) {
+		t.Fatalf("doctor did not recover dead provisioning launcher: exit=%d output=%s", code, out)
 	}
 	q, err := loadWeaveQueue(dir)
 	if err != nil {

@@ -142,11 +142,7 @@ func weaveToolsDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(weaveStateRoot(home), "tools")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return dir, nil
+	return filepath.Join(weaveStateRoot(home), "tools"), nil
 }
 
 func toolProfilePath(dir, tool string) string { return filepath.Join(dir, tool+".json") }
@@ -164,6 +160,9 @@ func loadToolProfile(dir, tool string) (*ToolProfile, bool) {
 }
 
 func saveToolProfile(dir string, p *ToolProfile) error {
+	if err := ensureWeaveQueueDirPath(dir); err != nil {
+		return err
+	}
 	p.UpdatedAt = time.Now()
 	b, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {

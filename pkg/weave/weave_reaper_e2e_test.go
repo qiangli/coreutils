@@ -13,13 +13,14 @@ import (
 //
 // Kill a wrapper OUT OF BAND — the way a crash, an OOM, or a `kill -9` from
 // outside weave actually happens — and the very next `weave list` must report
-// the run as failed(wrapper-died). Before the reaper this run stayed "working"
+// the run as stale without mutating it. `weave doctor` then records
+// failed(wrapper-died). Before the reaper this run stayed "working"
 // forever: observed live at 2h56m and 5h26m, with `weave wait --all` blocked on
 // it and the scheduler still counting it as live capacity.
 //
 // The unit tests pin the rules; this pins that the rules are actually WIRED
 // into the command a conductor types.
-func TestGateListReapsOutOfBandKilledWrapper(t *testing.T) {
+func TestGateListObservesAndDoctorReapsOutOfBandKilledWrapper(t *testing.T) {
 	dir, root := newQueueInTempRepo(t)
 
 	// A real wrapper process, which we then kill from outside weave.
@@ -62,14 +63,24 @@ func TestGateListReapsOutOfBandKilledWrapper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load queue: %v", err)
 	}
-	if q.Items[0].State != "failed" {
-		t.Fatalf("after an out-of-band kill, `weave list` left state = %q, want failed", q.Items[0].State)
+	if q.Items[0].State != "working" {
+		t.Fatalf("read-only `weave list` changed state = %q, want working", q.Items[0].State)
 	}
-	if !strings.Contains(q.Items[0].Completion, "wrapper-died") {
-		t.Errorf("completion = %q, must name wrapper-died", q.Items[0].Completion)
+	if !strings.Contains(out.String(), "wrapper process is dead") {
+		t.Errorf("`weave list` did not surface stale state:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "failed") {
-		t.Errorf("`weave list` still shows the old state:\n%s", out.String())
+	doctor := newWeaveDoctorCmd()
+	doctor.SetOut(&out)
+	doctor.SetErr(&out)
+	if err := doctor.Execute(); err != nil {
+		t.Fatalf("weave doctor: %v\n%s", err, out.String())
+	}
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Items[0].State != "failed" || !strings.Contains(q.Items[0].Completion, "wrapper-died") {
+		t.Fatalf("doctor did not persist wrapper death: %#v", q.Items[0])
 	}
 }
 
