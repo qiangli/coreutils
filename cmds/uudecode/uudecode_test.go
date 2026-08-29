@@ -319,4 +319,12 @@ func TestChmodFailureIsWarningAndNonfatal(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(dir, "out")); err != nil || string(got) != "Cat" {
 		t.Fatalf("decoded output = %q, %v", got, err)
 	}
+	posixDir := t.TempDir()
+	_, errb, code = runToolEnv(t, posixDir, "begin 777 out\n#0V%T\n \nend\n", []string{"POSIXLY_CORRECT=1"})
+	if code != 0 || errb != "" {
+		t.Fatalf("POSIX chmod failure: err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(filepath.Join(posixDir, "out")); err != nil || string(got) != "Cat" {
+		t.Fatalf("POSIX decoded output = %q, %v", got, err)
+	}
 }

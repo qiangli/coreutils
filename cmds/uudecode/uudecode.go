@@ -170,8 +170,11 @@ func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string)
 	}
 	if chmodErr != nil {
 		// POSIX explicitly makes inability to set the requested access bits
-		// non-fatal: the decoded content remains the useful primary result.
-		fmt.Fprintf(rc.Err, "uudecode: %s: warning: cannot set permissions: %v\n", name, chmodErr)
+		// non-fatal. In POSIX mode it is therefore not a diagnostic condition;
+		// retain the useful GNU-style warning only outside that contract.
+		if !envPresent(rc.Env, "POSIXLY_CORRECT") {
+			fmt.Fprintf(rc.Err, "uudecode: %s: warning: cannot set permissions: %v\n", name, chmodErr)
+		}
 	}
 	return true
 }

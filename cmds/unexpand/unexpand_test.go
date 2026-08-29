@@ -46,6 +46,26 @@ func TestUnexpandAllAndFile(t *testing.T) {
 	}
 }
 
+func TestPOSIXOptionsEndAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"empty": "", "-t": "abc\n", "--": "def\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		operand string
+		want    string
+	}{{"-t", "abc\n"}, {"--", "def\n"}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"POSIXLY_CORRECT=1"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+		code := run(rc, []string{"empty", tc.operand})
+		if code != 0 || errb.String() != "" || out.String() != tc.want {
+			t.Fatalf("post-operand %q: code=%d stdout=%q stderr=%q", tc.operand, code, out.String(), errb.String())
+		}
+	}
+}
+
 func TestUnexpandTabsImpliesAll(t *testing.T) {
 	out, stderr, code := runUnexpand(t, "x   y\n", "-t", "4")
 	if code != 0 || stderr != "" {

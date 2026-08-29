@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -24,7 +25,13 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	base64Mode := fs.BoolP("base64", "m", false, "encode using base64")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if posixMode(rc.Env) {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}
@@ -80,6 +87,15 @@ func run(rc *tool.RunContext, args []string) int {
 		return encodeBase64(rc, input)
 	}
 	return encodeClassic(rc, input)
+}
+
+func posixMode(env []string) bool {
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], "POSIXLY_CORRECT=") {
+			return true
+		}
+	}
+	return false
 }
 
 func inputMode(input io.Reader) (os.FileMode, error) {

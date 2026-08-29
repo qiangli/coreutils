@@ -117,7 +117,13 @@ func run(rc *tool.RunContext, args []string) int {
 	all := fs.BoolP("all", "a", false, "convert all blanks, instead of just initial blanks")
 	firstOnly := fs.BoolP("first-only", "f", false, "convert only leading sequences of blanks (overrides -a)")
 	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input bytes as columns instead of UTF-8 characters")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	var operands []string
+	var code int
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		operands, code = tool.ParseRequireOrder(rc, cmd, fs, args)
+	} else {
+		operands, code = tool.Parse(rc, cmd, fs, args)
+	}
 	if code >= 0 {
 		return code
 	}

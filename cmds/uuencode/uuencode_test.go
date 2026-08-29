@@ -13,11 +13,28 @@ import (
 )
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	return runToolEnv(t, dir, stdin, nil, args...)
+}
+
+func runToolEnv(t *testing.T, dir, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, err bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &err}}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: env, Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &err}}
 	code := cmd.Run(rc, args)
 	return out.String(), err.String(), code
+}
+
+func TestPOSIXOptionsEndAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "input"), []byte("Cat"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	for _, remote := range []string{"-m", "--"} {
+		out, errb, code := runToolEnv(t, dir, "", []string{"POSIXLY_CORRECT=1"}, "input", remote)
+		if code != 0 || errb != "" || !strings.HasPrefix(out, "begin 640 "+remote+"\n") {
+			t.Fatalf("post-operand %q: code=%d stdout=%q stderr=%q", remote, code, out, errb)
+		}
+	}
 }
 
 func TestEncodeKnownVectorFromStdin(t *testing.T) {
