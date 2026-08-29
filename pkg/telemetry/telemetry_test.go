@@ -1,6 +1,9 @@
 package telemetry
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestShouldReportTelemetryStatus(t *testing.T) {
 	for _, tc := range []struct {
@@ -26,5 +29,16 @@ func TestShouldReportTelemetryStatus(t *testing.T) {
 				t.Errorf("shouldReportTelemetryStatus(%v) = %v, want %v", tc.terminal, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsTerminalRejectsNullDevice(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if isTerminal(f) {
+		t.Fatal("null device reported as an interactive terminal")
 	}
 }

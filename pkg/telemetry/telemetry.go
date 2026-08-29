@@ -61,6 +61,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/term"
 )
 
 // ServiceName is bashy's identity on the OTel plane. It joins the umbrella's existing
@@ -234,8 +235,7 @@ func shouldReportTelemetryStatus(stderrIsTerminal bool) bool {
 }
 
 func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return f != nil && term.IsTerminal(int(f.Fd()))
 }
 
 // Tracer returns bashy's tracer. Safe before Init: the global provider is a no-op until
