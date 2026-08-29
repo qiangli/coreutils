@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const helperEnv = "BASHY_INTERNAL_PROCGUARD_V1"
@@ -204,6 +205,15 @@ func relayStatus(err error) {
 		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 			if status.Signaled() {
 				sig := status.Signal()
+				// Most reset signals terminate us immediately, preserving the raw
+				// wait status for our parent. SIGPIPE is special in the Go runtime
+				// and can remain ignored after Reset; the old unbounded select then
+				// left the guard alive forever after its child was already reaped.
+				// Keep exact signal relay where the kernel honors it, with the
+				// conventional 128+signal status as a bounded fallback.
+				time.AfterFunc(250*time.Millisecond, func() {
+					os.Exit(128 + int(sig))
+				})
 				signal.Reset(sig)
 				_ = syscall.Kill(os.Getpid(), sig)
 				select {}

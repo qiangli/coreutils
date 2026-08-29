@@ -120,26 +120,49 @@ func TestGuardPreservesRelativePathArgsAndEnvironment(t *testing.T) {
 }
 
 func TestGuardRelaysSignalStatus(t *testing.T) {
-	cmd := exec.Command("sh", "-c", "kill -TERM $$")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	guard, err := Arm(cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	startErr := cmd.Start()
-	guard.Started(startErr)
-	if startErr != nil {
-		t.Fatal(startErr)
-	}
-	waitErr := cmd.Wait()
-	guard.Disarm()
-	exitErr, ok := waitErr.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("wait error = %v", waitErr)
-	}
-	status, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok || !status.Signaled() || status.Signal() != syscall.SIGTERM {
-		t.Fatalf("wait status = %#v, want signal SIGTERM", exitErr.Sys())
+	for _, tc := range []struct {
+		name string
+		sig  syscall.Signal
+	}{{"ordinary", syscall.SIGTERM}, {"Go-special SIGPIPE", syscall.SIGPIPE}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", fmt.Sprintf("kill -%d $$", tc.sig))
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			guard, err := Arm(cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			startErr := cmd.Start()
+			guard.Started(startErr)
+			if startErr != nil {
+				t.Fatal(startErr)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			var waitErr error
+			select {
+			case waitErr = <-done:
+			case <-time.After(2 * time.Second):
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				<-done
+				t.Fatalf("guard hung relaying %s", tc.sig)
+			}
+			guard.Disarm()
+			exitErr, ok := waitErr.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("wait error = %v", waitErr)
+			}
+			status, ok := exitErr.Sys().(syscall.WaitStatus)
+			if !ok {
+				t.Fatalf("wait status = %#v", exitErr.Sys())
+			}
+			if status.Signaled() && status.Signal() == tc.sig {
+				return
+			}
+			if tc.sig == syscall.SIGPIPE && status.Exited() && status.ExitStatus() == 128+int(tc.sig) {
+				return
+			}
+			t.Fatalf("wait status = %#v, want signal %s or exit %d", status, tc.sig, 128+int(tc.sig))
+		})
 	}
 }
 
