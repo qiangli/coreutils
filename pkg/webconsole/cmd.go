@@ -38,7 +38,7 @@ func NewAppsCmd() *cobra.Command {
 		// prints its own copy first and every failure is reported twice.
 		SilenceErrors: true,
 	}
-	cmd.AddCommand(newServeCmd(), newListCmd())
+	cmd.AddCommand(newServeCmd(), newListCmd(), newServiceCmd())
 	// Bare `bashy apps` serves — the common case should not need a subcommand.
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		serve, _, err := c.Find([]string{"serve"})
@@ -81,10 +81,11 @@ func sessionKey() ([]byte, error) {
 
 func newServeCmd() *cobra.Command {
 	var (
-		port  int
-		bind  string
-		scope string
-		write bool
+		port    int
+		bind    string
+		scope   string
+		write   bool
+		disable []string
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -95,6 +96,7 @@ func newServeCmd() *cobra.Command {
 			return runServe(c.Context(), c.OutOrStdout(), Options{
 				Scope:      scope,
 				AllowWrite: write,
+				Disable:    disable,
 			}, bind, port)
 		},
 	}
@@ -102,6 +104,8 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "address to bind")
 	cmd.Flags().StringVar(&scope, "scope", "", "filesystem root for the files panel (default: your home directory)")
 	cmd.Flags().BoolVar(&write, "allow-write", false, "allow the files panel to modify files")
+	cmd.Flags().StringSliceVar(&disable, "disable", nil,
+		"panels to leave out entirely — neither listed nor routed (terminal,files,relay,mb,board)")
 	return cmd
 }
 

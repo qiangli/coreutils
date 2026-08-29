@@ -156,6 +156,10 @@ var packages = map[string]Package{
 		"and so outpost's /shell can later collapse onto it instead of keeping a second implementation"),
 	"websession": libPkg("apps", "stateless HMAC session cookie + per-IP login throttle for a locally "+
 		"served web surface; copied from outpost's adminui, which is internal/ and so unimportable"),
+	"svcd": libPkg("apps", "the start/status/stop daemon lifecycle a supervised bashy service exposes: "+
+		"pidfile, a port probe that identifies the listener via /healthz before signalling it, and a "+
+		"stop that escalates so the port is actually freed. Adopted by the web console first; pkg/meet, "+
+		"pkg/sdlc and pkg/schedule still carry private copies and should migrate onto it"),
 	"mirror":        cmdPkg("mirror"),
 	"pair":          cmdPkg("pair"),
 	"patch":         cmdPkg("patch"),

@@ -61,6 +61,26 @@ type Options struct {
 
 	// Panels overrides discovery. Nil means Discover().
 	Panels []Panel
+
+	// Disable names panels to leave out entirely — not greyed out, not listed:
+	// absent from the tile list AND unrouted.
+	//
+	// This exists because outpost publishes the console under ONE app name, and
+	// HostShare grants are per app name. Without it, sharing the console would
+	// mean sharing the Terminal — which spawns a real bashy as this OS user —
+	// and that is strictly more authority than sharing outpost's own `shell`
+	// app was. A consolidation must not widen a grant by accident.
+	Disable []string
+}
+
+// disabled reports whether a panel was turned off for this console.
+func (o Options) disabled(name string) bool {
+	for _, d := range o.Disable {
+		if strings.EqualFold(strings.TrimSpace(d), name) {
+			return true
+		}
+	}
+	return false
 }
 
 type server struct {
@@ -117,6 +137,22 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	if s.panels == nil {
 		s.panels = Discover()
 	}
+	if len(opts.Disable) > 0 {
+		kept := s.panels[:0]
+		for _, p := range s.panels {
+			if !opts.disabled(p.Name) {
+				kept = append(kept, p)
+			}
+		}
+		s.panels = kept
+	}
+	// on reports whether a panel survived, so a disabled one is never ROUTED
+	// either. Dropping it from the tile list alone would leave the surface
+	// reachable to anyone who typed the path.
+	on := map[string]bool{}
+	for _, p := range s.panels {
+		on[p.Name] = true
+	}
 
 	mux := http.NewServeMux()
 
@@ -128,9 +164,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 
-	// Deep links from docs/agent-interaction-surfaces-design.md keep working.
-	mux.Handle("GET /shell", redirectTo("/term/"))
-	mux.Handle("GET /meet", redirectTo("/relay/"))
+	// Deep links from docs/agent-interaction-surfaces-design.md keep working,
+	// each only while its target panel is enabled.
+	if on["relay"] {
+		mux.Handle("GET /meet", redirectTo("/relay/"))
+	}
 
 	// The terminal is served by the launcher itself rather than mounted, so it
 	// gets a full page of its own with the launcher's <base href> — every app
@@ -138,35 +176,42 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// One pattern, dispatched inside: net/http's mux rejects "GET /term/"
 	// alongside "/term/ws" as conflicting, and the socket must accept the
 	// upgrade on any method anyway.
-	termSocket := webterm.SocketHandler(s.opts.Terminal)
-	mux.HandleFunc("/term/", func(w http.ResponseWriter, r *http.Request) {
-		if path.Base(r.URL.Path) == "ws" {
-			termSocket.ServeHTTP(w, r)
-			return
-		}
-		s.handleTermPage(w, r)
-	})
-	mux.Handle("GET /term", redirectTo("/term/"))
+	if on["terminal"] {
+		termSocket := webterm.SocketHandler(s.opts.Terminal)
+		mux.HandleFunc("/term/", func(w http.ResponseWriter, r *http.Request) {
+			if path.Base(r.URL.Path) == "ws" {
+				termSocket.ServeHTTP(w, r)
+				return
+			}
+			s.handleTermPage(w, r)
+		})
+		mux.Handle("GET /term", redirectTo("/term/"))
+		mux.Handle("GET /shell", redirectTo("/term/"))
+	}
 
 	// The board, served the same way and for the same reason: its own page at
 	// the launcher's root, so it inherits app.css and the header chrome. The
 	// atlas declares the TILE (Discover picks it up); panelHandler returns nil
 	// for it, exactly as it does for the terminal, so the panel loop below does
 	// not also mount it under coopauth.Mount and take the <base href> with it.
-	mux.HandleFunc("GET /mb/", s.handleMBPage)
-	mux.Handle("GET /mb", redirectTo("/mb/"))
-	mux.HandleFunc("GET /api/mb", s.handleMBList)
-	mux.HandleFunc("POST /api/mb", s.handleMBSend)
-	mux.HandleFunc("GET /api/mb/{seq}/viewers", s.handleMBViewers)
+	if on["mb"] {
+		mux.HandleFunc("GET /mb/", s.handleMBPage)
+		mux.Handle("GET /mb", redirectTo("/mb/"))
+		mux.HandleFunc("GET /api/mb", s.handleMBList)
+		mux.HandleFunc("POST /api/mb", s.handleMBSend)
+		mux.HandleFunc("GET /api/mb/{seq}/viewers", s.handleMBViewers)
+	}
 
 	// The steward board, same shape again: the tile is an atlas declaration,
 	// the page is served at the launcher's root, and panelHandler claims
 	// nothing. Read-only by construction — `board` is the one work verb the
 	// atlas marks CapReadOnly, and the panel must not erode that.
-	mux.HandleFunc("GET /board/", s.handleBoardPage)
-	mux.Handle("GET /board", redirectTo("/board/"))
-	mux.HandleFunc("GET /api/board", s.handleBoardOverview)
-	mux.HandleFunc("GET /api/board/panel/{id}", s.handleBoardPanel)
+	if on["board"] {
+		mux.HandleFunc("GET /board/", s.handleBoardPage)
+		mux.Handle("GET /board", redirectTo("/board/"))
+		mux.HandleFunc("GET /api/board", s.handleBoardOverview)
+		mux.HandleFunc("GET /api/board/panel/{id}", s.handleBoardPanel)
+	}
 
 	closers := []func() error{}
 	for _, p := range s.panels {
