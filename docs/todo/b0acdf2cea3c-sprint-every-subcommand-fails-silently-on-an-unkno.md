@@ -3,9 +3,10 @@ id: b0acdf2cea3c
 kind: task
 title: 'sprint: every subcommand fails silently on an unknown flag — exit 1, zero bytes on both streams'
 seq: 11
-status: todo
+status: done
 priority: p1
 created: 2026-08-30T23:30:16.611526Z
+closed: 2026-08-30T23:42:27.150117Z
 ---
 
 SPRINT: #87 (epic bashy-yoke; conductor casement). SHIPPED-CODE DEFECT, NOT
