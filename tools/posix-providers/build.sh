@@ -138,7 +138,7 @@ provider_prepare_m4_source() {
   _provider_m4_src=$1
   _provider_m4_record=$2
   _provider_m4_patch=$here/patches/m4-1.4.19-posix-semantics.patch
-  _provider_m4_patch_sha=63715144b5dce740bffa85860b819c65f26422cee8c66e56212d39fc0de334a2
+  _provider_m4_patch_sha=604222deaa1849ad78c2a0ad5f2ec515ae6b158f4638eddb38ee646abef4ea0f
   [ -f "$_provider_m4_patch" ] || {
     printf 'posix-provider: m4 POSIX correction is missing: %s\n' \
       "$_provider_m4_patch" >&2

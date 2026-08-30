@@ -60,7 +60,17 @@ case $maketemp_path in
   "$work"/maketemp??????) ;;
   *) fail 'maketemp did not emit the generated pathname' ;;
 esac
-[ -f "$maketemp_path" ] || fail 'maketemp did not create the output file'
+[ ! -e "$maketemp_path" ] || fail 'POSIX maketemp unexpectedly created a file'
+[ ! -s "$work/maketemp.err" ] || fail 'POSIX maketemp emitted a GNU-only diagnostic'
+
+# The edited line is inside upstream's no_gnu_extensions branch.  Pin the
+# untouched GNU branch too: it securely creates a file and stays warning-free.
+printf 'maketemp(%s/gnu-maketempXXXXXX)\n' "$work" |
+  "$m4" --fatal-warnings >"$work/gnu-maketemp.out" 2>"$work/gnu-maketemp.err" ||
+  fail 'GNU-mode maketemp failed'
+gnu_maketemp_path=$(cat "$work/gnu-maketemp.out")
+[ -f "$gnu_maketemp_path" ] || fail 'GNU-mode maketemp did not create a file'
+[ ! -s "$work/gnu-maketemp.err" ] || fail 'GNU-mode maketemp emitted a diagnostic'
 
 if printf 'mkstemp(%s/not-present/fXXXXXX)dnl\n' "$work" |
     "$m4" $flags >"$work/mkstemp.out" 2>"$work/mkstemp.err"; then
