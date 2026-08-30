@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,7 +107,7 @@ type walker struct {
 func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry) error) (bool, error) {
 	full := resolve(rc, name)
 	fi, err := os.Lstat(full)
-	if err != nil && safeRootRelative(name) {
+	if err != nil && rootRelativeSource(rc, name, full) {
 		if rooted, rootErr := openRunRoot(rc); rootErr == nil {
 			fi, err = rooted.Lstat(filepath.FromSlash(name))
 			_ = rooted.Close()
@@ -118,7 +119,7 @@ func walkOperand(rc *tool.RunContext, o *options, name string, fn func(walkEntry
 	// -H and -L both resolve a symlink named on the command line.
 	followed := false
 	if fi.Mode()&os.ModeSymlink != 0 && o.follow != followNone {
-		if fi, err = os.Stat(full); err != nil {
+		if fi, err = statSourcePath(rc, name, full); err != nil {
 			return false, sourceTraversalErr(err)
 		}
 		followed = true
@@ -141,6 +142,17 @@ func safeRootRelative(name string) bool {
 		clean != ".." && !strings.HasPrefix(clean, "../")
 }
 
+// rootRelativeSource reports whether member is the run-directory-relative
+// spelling of abs, and so whether a call that failed on abs may be retried
+// through a handle on the run directory. The check is not redundant with
+// safeRootRelative: archiveMemberRoot reduces an absolute or parent-escaping
+// operand to its basename, which *looks* safely relative but names a
+// different file under rc.Dir. Retrying that would silently archive the
+// wrong file.
+func rootRelativeSource(rc *tool.RunContext, member, abs string) bool {
+	return safeRootRelative(member) && resolve(rc, filepath.FromSlash(member)) == abs
+}
+
 func openRunRoot(rc *tool.RunContext) (*os.Root, error) {
 	base := rc.Dir
 	if base == "" {
@@ -153,47 +165,182 @@ func openRunRoot(rc *tool.RunContext) (*os.Root, error) {
 	return os.OpenRoot(base)
 }
 
+// memberComponents splits an archive member into pathname components, the
+// unit every root-relative retry works in.
+func memberComponents(member string) []string {
+	return strings.FieldsFunc(filepath.ToSlash(member), func(r rune) bool { return r == '/' })
+}
+
+// descendRunRoot walks comps down from the run directory one component at a
+// time and returns a handle on the last one. Every call it makes carries a
+// single component, so a chain whose *resolved* spelling exceeds the
+// platform's per-call pathname limit is still reachable even though no single
+// call may name it. os.Root's escape checks apply at every step, so the
+// descent can reach nothing the caller could not already reach.
+func descendRunRoot(rc *tool.RunContext, comps []string) (*os.Root, error) {
+	root, err := openRunRoot(rc)
+	if err != nil {
+		return nil, err
+	}
+	for _, component := range comps {
+		if component == "." {
+			continue
+		}
+		next, err := root.OpenRoot(component)
+		_ = root.Close()
+		if err != nil {
+			return nil, err
+		}
+		root = next
+	}
+	return root, nil
+}
+
+// sourceDirRoot opens member itself as a directory handle.
+func sourceDirRoot(rc *tool.RunContext, member string) (*os.Root, error) {
+	return descendRunRoot(rc, memberComponents(member))
+}
+
+// sourceParentRoot opens member's parent directory and returns the final
+// component, so the operation the caller actually wants stays a single-name
+// call relative to that descriptor.
+func sourceParentRoot(rc *tool.RunContext, member string) (*os.Root, string, error) {
+	parts := memberComponents(member)
+	if len(parts) == 0 {
+		return nil, "", fmt.Errorf("empty source pathname")
+	}
+	root, err := descendRunRoot(rc, parts[:len(parts)-1])
+	if err != nil {
+		return nil, "", err
+	}
+	return root, parts[len(parts)-1], nil
+}
+
 func openSourceFile(rc *tool.RunContext, member, full string) (*os.File, error) {
 	f, err := os.Open(full)
-	if err == nil || !safeRootRelative(member) {
+	if err == nil || !rootRelativeSource(rc, member, full) {
 		return f, err
 	}
-	root, rootErr := openRunRoot(rc)
+	root, base, rootErr := sourceParentRoot(rc, member)
 	if rootErr != nil {
 		return nil, err
 	}
-	f, rootErr = openRootRelativeLong(root, filepath.FromSlash(member))
+	defer root.Close()
+	f, rootErr = root.Open(base)
 	if rootErr != nil {
 		return nil, err
 	}
 	return f, nil
 }
 
-// openRootRelativeLong avoids handing the kernel one near-PATH_MAX string.
-// Root.Open still accepts a single pathname argument; on kernels that reject
-// that argument before walking it, descend one component at a time and keep
-// the final open relative to the last directory descriptor.
-func openRootRelativeLong(root *os.Root, name string) (*os.File, error) {
-	parts := strings.FieldsFunc(filepath.ToSlash(name), func(r rune) bool { return r == '/' })
-	if len(parts) == 0 {
-		_ = root.Close()
-		return nil, fmt.Errorf("empty source pathname")
+// statSourcePath is os.Stat for a source pax has decided to follow (-H on an
+// operand, -L anywhere), with the same component-wise retry. The retry keeps
+// os.Root's confinement, so it resolves only links that stay inside the run
+// directory; a link out of it keeps the original error rather than widening
+// what -H/-L may reach. It never fires unless the direct call already failed,
+// so no source that resolves today stops resolving.
+func statSourcePath(rc *tool.RunContext, member, full string) (os.FileInfo, error) {
+	fi, err := os.Stat(full)
+	if err == nil || !rootRelativeSource(rc, member, full) {
+		return fi, err
 	}
-	current := root
-	for _, component := range parts[:len(parts)-1] {
-		if component == "." {
-			continue
-		}
-		next, err := current.OpenRoot(component)
-		_ = current.Close()
-		if err != nil {
+	root, base, rootErr := sourceParentRoot(rc, member)
+	if rootErr != nil {
+		return nil, err
+	}
+	defer root.Close()
+	fi, rootErr = root.Stat(base)
+	if rootErr != nil {
+		return nil, err
+	}
+	return fi, nil
+}
+
+// sourceDirEntry is one child of a source directory with its lstat already
+// applied. Resolving eagerly is the point: fs.DirEntry.Info defers the lstat
+// and rebuilds the parent's resolved pathname to perform it, so a directory
+// that is only overlong once joined to rc.Dir fails per child even when the
+// enumeration itself succeeded. err is that child's own lookup failure, which
+// the walker diagnoses individually while continuing with its siblings.
+type sourceDirEntry struct {
+	name string
+	fi   os.FileInfo
+	err  error
+}
+
+// readSourceDir enumerates a source directory in os.ReadDir's deterministic
+// (lexical) order with every child's lstat resolved. The direct read is tried
+// first so traversal, symlink, and -X behavior are unchanged wherever it
+// works; the root-relative retry is reached only after a real failure.
+func readSourceDir(rc *tool.RunContext, member, abs string) ([]sourceDirEntry, error) {
+	retryable := rootRelativeSource(rc, member, abs)
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		if !retryable {
 			return nil, err
 		}
-		current = next
+		retried, rootErr := readSourceDirRootRelative(rc, member)
+		if rootErr != nil {
+			return nil, err // the direct failure is the one worth reporting
+		}
+		return retried, nil
 	}
-	f, err := current.Open(parts[len(parts)-1])
-	_ = current.Close()
-	return f, err
+	// The enumeration succeeding does not mean the deferred per-child lstats
+	// will: os.ReadDir names the directory once, Info names each child. Open
+	// the handle lazily so the common case costs nothing.
+	var handle *os.Root
+	tried := false
+	defer func() {
+		if handle != nil {
+			handle.Close()
+		}
+	}()
+	out := make([]sourceDirEntry, len(entries))
+	for i, e := range entries {
+		out[i].name = e.Name()
+		out[i].fi, out[i].err = e.Info()
+		if out[i].err == nil || !retryable {
+			continue
+		}
+		if !tried {
+			tried = true
+			handle, _ = sourceDirRoot(rc, member)
+		}
+		if handle == nil {
+			continue
+		}
+		if fi, statErr := handle.Lstat(e.Name()); statErr == nil {
+			out[i].fi, out[i].err = fi, nil
+		}
+	}
+	return out, nil
+}
+
+// readSourceDirRootRelative lists a directory reached component-wise. Names
+// come off the open descriptor and each lstat names one component relative to
+// it, so no call in the sequence ever receives the resolved pathname.
+func readSourceDirRootRelative(rc *tool.RunContext, member string) ([]sourceDirEntry, error) {
+	root, err := sourceDirRoot(rc, member)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	names, err := f.Readdirnames(-1)
+	_ = f.Close()
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(names)
+	out := make([]sourceDirEntry, len(names))
+	for i, name := range names {
+		out[i].name = name
+		out[i].fi, out[i].err = root.Lstat(name)
+	}
+	return out, nil
 }
 
 // archiveMemberRoot preserves safe relative operand spelling (including a
@@ -275,7 +422,7 @@ func (w *walker) walk(member, abs string, fi os.FileInfo, followed bool) error {
 	w.ancestors = append(w.ancestors, anc)
 	defer func() { w.ancestors = w.ancestors[:len(w.ancestors)-1] }()
 
-	entries, err := os.ReadDir(abs) // sorted by name: deterministic member order
+	entries, err := readSourceDir(w.rc, member, abs) // deterministic member order
 	if err != nil {
 		fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", member, err)
 		w.diagnosed = true
@@ -291,25 +438,26 @@ func (w *walker) walk(member, abs string, fi os.FileInfo, followed bool) error {
 	}
 	base := strings.TrimRight(member, "/")
 	for _, e := range entries {
-		childAbs := filepath.Join(abs, e.Name())
-		cfi, err := e.Info() // lstat semantics
-		if err != nil {
-			fmt.Fprintf(w.rc.Err, "pax: %s/%s: %v\n", base, e.Name(), err)
+		childMember := base + "/" + e.name
+		childAbs := filepath.Join(abs, e.name)
+		if e.err != nil { // lstat semantics, already applied by readSourceDir
+			fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", childMember, e.err)
 			w.diagnosed = true
 			continue
 		}
 		// Only -L resolves symlinks encountered below an operand; under -H
 		// they are archived as the symlinks they are.
-		childFollowed := false
+		cfi, childFollowed := e.fi, false
 		if cfi.Mode()&os.ModeSymlink != 0 && w.o.follow == followAll {
-			if cfi, err = os.Stat(childAbs); err != nil {
-				fmt.Fprintf(w.rc.Err, "pax: %s/%s: %v\n", base, e.Name(), err)
+			resolved, err := statSourcePath(w.rc, childMember, childAbs)
+			if err != nil {
+				fmt.Fprintf(w.rc.Err, "pax: %s: %v\n", childMember, err)
 				w.diagnosed = true
 				continue
 			}
-			childFollowed = true
+			cfi, childFollowed = resolved, true
 		}
-		if err := w.walk(base+"/"+e.Name(), childAbs, cfi, childFollowed); err != nil {
+		if err := w.walk(childMember, childAbs, cfi, childFollowed); err != nil {
 			return err
 		}
 	}
