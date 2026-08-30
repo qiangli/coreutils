@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -38,7 +39,8 @@ func NewAppsCmd() *cobra.Command {
 		// prints its own copy first and every failure is reported twice.
 		SilenceErrors: true,
 	}
-	cmd.AddCommand(newServeCmd(), newListCmd(), newServiceCmd())
+	cmd.AddCommand(newServeCmd(), newListCmd(), newServiceCmd(),
+		newPairCmd(), newDevicesCmd(), newRevokeCmd())
 	// Bare `bashy apps` serves — the common case should not need a subcommand.
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		serve, _, err := c.Find([]string{"serve"})
@@ -85,6 +87,7 @@ func newServeCmd() *cobra.Command {
 		bind    string
 		scope   string
 		write   bool
+		pair    bool
 		disable []string
 		apps    []string
 		appAuth []string
@@ -102,6 +105,7 @@ func newServeCmd() *cobra.Command {
 			return runServe(c.Context(), c.OutOrStdout(), Options{
 				Scope:      scope,
 				AllowWrite: write,
+				Pairing:    pair,
 				Disable:    disable,
 				Apps:       apps,
 				AppAuth:    auth,
@@ -119,6 +123,9 @@ func newServeCmd() *cobra.Command {
 			"(described by `<bin> meta --json`)")
 	cmd.Flags().StringArrayVar(&appAuth, "app-auth", nil,
 		"operator-authorized auth tier for a third-party mount: <mount>=public|system|custom, repeatable")
+	cmd.Flags().BoolVar(&pair, "pair", false,
+		"accept QR device pairings (`bashy apps pair`), and keep the LAN listener open "+
+			"only while a paired device exists")
 	return cmd
 }
 
@@ -180,7 +187,8 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 	// system login. The check is at BIND time, not per request: an operator who
 	// asks for something that cannot be made safe should learn at the point of
 	// the mistake, not from a 403 an hour later.
-	if !coopauth.IsLoopbackAddr(addr) {
+	offLoopback := !coopauth.IsLoopbackAddr(addr)
+	if offLoopback {
 		auth := hostauth.DefaultAuthenticator()
 		// Probe with empty credentials: every backend reports "I work, and no,
 		// that is not a password" without needing a real secret.
@@ -198,6 +206,13 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 			return fmt.Errorf("apps: session key: %w", err)
 		}
 		opts.Sessions = websession.NewStore(12*time.Hour, key)
+	} else if opts.Pairing {
+		// A pairing ticket names a LAN address. Minting one against a console
+		// nothing on the LAN can reach would hand the operator a QR that
+		// cannot work, and they would learn it from the phone.
+		return fmt.Errorf("apps: --pair needs a LAN-bound console; " +
+			"start it with --bind <lan-ip> (find one with `bashy resources system`), " +
+			"or reach this host through outpost instead")
 	}
 
 	opts.Ctx = ctx
@@ -208,9 +223,49 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 	}
 	defer func() { _ = closer() }()
 
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("apps: listen %s: %w", addr, err)
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+
+	// A LAN-bound console ALSO listens on loopback.
+	//
+	// Two reasons, and the second is the load-bearing one. The operator keeps
+	// local access at a stable address regardless of what the LAN listener is
+	// doing; and under --pair the LAN listener can be closed and reopened
+	// without taking the console down with it, which is what makes "exposure
+	// lasts exactly as long as a paired device" implementable rather than
+	// aspirational.
+	var extra net.Listener
+	if offLoopback {
+		local := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+		if l, lerr := net.Listen("tcp", local); lerr == nil {
+			extra = l
+			go func() { _ = srv.Serve(l) }()
+		} else {
+			// Not fatal: something else may hold the loopback port. Say so
+			// rather than implying local access that does not exist.
+			fmt.Fprintf(out, "  note: loopback %s unavailable (%v); LAN only\n", local, lerr)
+		}
+	}
+	defer func() {
+		if extra != nil {
+			_ = extra.Close()
+		}
+	}()
+
+	var ln net.Listener
+	if offLoopback && opts.Pairing {
+		// Pairing mode: the LAN listener opens and closes with the paired
+		// device set. It is NOT open at start — nothing is paired yet.
+		gate, gerr := runPairGatedListener(ctx, out, srv, addr, opts.PairStorePath)
+		if gerr != nil {
+			return gerr
+		}
+		defer gate()
+	} else {
+		l, lerr := net.Listen("tcp", addr)
+		if lerr != nil {
+			return fmt.Errorf("apps: listen %s: %w", addr, lerr)
+		}
+		ln = l
 	}
 
 	url := "http://" + addr + "/"
@@ -218,16 +273,113 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 	for _, st := range (&probeCache{}).Probe(ctx, Discover()) {
 		fmt.Fprintf(out, "  %-9s %s%s\n", st.Status, url[:len(url)-1], st.Path)
 	}
+	if offLoopback && opts.Pairing {
+		fmt.Fprintf(out, "\n  pairing mode: the LAN listener on %s opens only while a paired\n", addr)
+		fmt.Fprintf(out, "  device exists. Pair one with:  bashy apps pair\n")
+		fmt.Fprintf(out, "  Loopback stays up either way:  http://127.0.0.1:%d/\n", port)
+	}
 
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
+	if ln == nil {
+		// Pairing mode owns the LAN listener; this process just waits.
+		<-ctx.Done()
+		return nil
+	}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// runPairGatedListener keeps the LAN listener open for exactly as long as the
+// pairing state justifies it: at least one live paired device, or an
+// outstanding ticket somebody is about to scan.
+//
+// This is the structural half of the story. Exposure is not a config flag an
+// operator can leave switched on and forget — it is a FUNCTION of the paired
+// device set, so when the last device is revoked or expires the port closes on
+// its own. Accidental permanent exposure is not something the operator has to
+// remember to avoid.
+//
+// The console keeps serving on loopback throughout; only the LAN listener
+// comes and goes.
+func runPairGatedListener(ctx context.Context, out io.Writer, srv *http.Server, addr, storePath string) (func(), error) {
+	if storePath == "" {
+		p, err := pairPath()
+		if err != nil {
+			return nil, err
+		}
+		storePath = p
+	}
+	store := newPairStore(storePath)
+
+	var mu sync.Mutex
+	var ln net.Listener
+
+	closeLAN := func(reason string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ln == nil {
+			return
+		}
+		_ = ln.Close()
+		ln = nil
+		fmt.Fprintf(out, "bashy apps: LAN listener on %s closed (%s)\n", addr, reason)
+	}
+	openLAN := func(reason string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ln != nil {
+			return
+		}
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			fmt.Fprintf(out, "bashy apps: could not open the LAN listener on %s: %v\n", addr, err)
+			return
+		}
+		ln = l
+		fmt.Fprintf(out, "bashy apps: LAN listener on %s open (%s)\n", addr, reason)
+		go func() { _ = srv.Serve(l) }()
+	}
+
+	tick := time.NewTicker(2 * time.Second)
+	done := make(chan struct{})
+	go func() {
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				closeLAN("shutting down")
+				return
+			case <-done:
+				closeLAN("shutting down")
+				return
+			case <-tick.C:
+			}
+			st, err := store.load()
+			if err != nil {
+				// Unreadable state closes the port. Failing closed is the only
+				// safe direction for a decision about network exposure.
+				closeLAN("pairing state unreadable")
+				continue
+			}
+			now := time.Now()
+			devices := len(st.liveDevices(now))
+			pending := st.openTickets(now)
+			switch {
+			case devices > 0:
+				openLAN(fmt.Sprintf("%d paired device(s)", devices))
+			case pending > 0:
+				openLAN("a pairing code is waiting to be scanned")
+			default:
+				closeLAN("no paired devices")
+			}
+		}
+	}()
+	return func() { close(done) }, nil
 }

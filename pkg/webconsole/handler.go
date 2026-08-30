@@ -5,6 +5,8 @@ package webconsole
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -76,6 +78,16 @@ type Options struct {
 	// Panels overrides discovery. Nil means Discover().
 	Panels []Panel
 
+	// Pairing enables QR device pairing: `bashy apps pair` mints a one-time
+	// ticket, the phone redeems it at /pair/redeem, and the resulting session
+	// is device-scoped. Off unless the operator asked for it — it only makes
+	// sense on a LAN-bound console, and turning it on silently would open a
+	// redemption route nobody requested.
+	Pairing bool
+	// PairStorePath overrides the pairing document's location. Tests set it;
+	// production leaves it empty and gets the console's own state directory.
+	PairStorePath string
+
 	// Disable names panels to leave out entirely — not greyed out, not listed:
 	// absent from the tile list AND unrouted.
 	//
@@ -106,8 +118,13 @@ type server struct {
 	requireLogin bool
 	panels       []Panel
 	panelAuth    map[string]string // mount segment -> auth tier
-	probes       probeCache
-	boards       boardCache
+	// scopeSegments maps a panel NAME (what an operator types in --allow) to
+	// its mount SEGMENT (what the gate sees). They differ — the terminal is
+	// "terminal" at /term/ — and conflating them turns a deny into an allow.
+	scopeSegments map[string]string
+	pairing       *pairStore
+	probes        probeCache
+	boards        boardCache
 }
 
 // consoleGuard mirrors meet's: an SSO secret, when configured, makes the vouch
@@ -149,6 +166,25 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		// success path; this bounds a LAN brute-forcer on the failure path.
 		s.limiter = websession.NewLimiter(5, 12*time.Second)
 	}
+	if opts.Pairing {
+		path := opts.PairStorePath
+		if path == "" {
+			p, err := pairPath()
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("apps: pairing store: %w", err)
+			}
+			path = p
+		}
+		s.pairing = newPairStore(path)
+		if s.sessions == nil {
+			// Pairing without a session store would mint cookies nothing can
+			// validate. Fail closed rather than pair into a void.
+			return nil, nil, nil, errors.New("apps: pairing needs a session store (it is enabled by an off-loopback bind)")
+		}
+		if s.limiter == nil {
+			s.limiter = websession.NewLimiter(5, 12*time.Second)
+		}
+	}
 	if s.panels == nil {
 		s.panels = Discover()
 		if len(opts.Apps) > 0 {
@@ -175,11 +211,15 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// reachable to anyone who typed the path.
 	on := map[string]bool{}
 	s.panelAuth = map[string]string{}
+	s.scopeSegments = map[string]string{}
 	for _, p := range s.panels {
 		on[p.Name] = true
 		tier := p.Auth
 		if tier == "" {
 			tier = AuthSystem
+		}
+		if seg := strings.Trim(p.Path, "/"); seg != "" {
+			s.scopeSegments[strings.ToLower(p.Name)] = seg
 		}
 		// Key on the mount SEGMENT, not the name: they are allowed to differ
 		// (the terminal is "terminal" at /term/), and keying on the name would
@@ -202,6 +242,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("GET /login", s.handleLoginPage)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	if s.pairing != nil {
+		mux.HandleFunc("GET "+pairRedeemPath, s.handlePairRedeem)
+	}
 
 	// Deep links from docs/agent-interaction-surfaces-design.md keep working,
 	// each only while its target panel is enabled.

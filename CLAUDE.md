@@ -551,6 +551,10 @@ client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
   used directly, no Syncthing code), `benhoyt/goawk` (`cmds/awk`),
   `itchyny/gojq` (`cmds/jq`), `chromedp` (`pkg/browser`),
   `tiktoken-go/tokenizer` (`cmds/tokens`), `robfig/cron` (`pkg/schedule`),
+  `skip2/go-qrcode` (`pkg/webconsole` only — MIT, zero transitive deps; the
+  terminal QR for `bashy apps pair`. Justified because a QR encoder is
+  Reed-Solomon over GF(256) plus version/mask selection: a real algorithm, not
+  glue),
   cobra (the front-door verb trees), and `github.com/dhnt/dhnt`
   (`pkg/skills` — a versioned dep, NOT a submodule). Adding a dependency
   needs a written justification in the PR.
