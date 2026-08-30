@@ -53,6 +53,27 @@ vacuum, not a tie.
 - all rungs are green. **No one-sided product red is causally proven**, so no
   product or session-support patch was made.
 
+## Why the green is not vacuous
+
+A reducer that passes because it asserts nothing is worse than no reducer: it
+converts an evidence vacuum into false confidence. The reducer was therefore
+mutation-checked against the product before this disposition was written. Each
+mutation was applied to `cmds/write/write.go` alone, `go test ./cmds/write/
+-run S85` was run, and the source was restored:
+
+| Mutation to the product | Reducer result |
+|---|---|
+| Multi-line notice reworded (`more than one line` → `multiple lines`) | red — 1 rung |
+| Banner ellipsis shortened (`...` → `..`) | red — 5 rungs |
+| `mesg` group-write bit test inverted | red — 6 rungs |
+| Superuser exemption (`!isRoot &&`) dropped | red — 1 rung |
+
+Every axis of the authority boundary the owner hypothesis names — the message
+bit, the superuser exemption, the deterministic multi-line selection, and the
+banner byte shape — is load-bearing in at least one rung. The all-rungs-green
+result recorded above is therefore a green about the product, not about the
+test.
+
 ## What the green reducer does and does not establish
 
 Green establishes: under the public POSIX.1 Issue 7 write(1) specification

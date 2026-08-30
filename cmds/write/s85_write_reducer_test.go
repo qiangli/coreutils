@@ -23,6 +23,12 @@ package writecmd
 // test asserts that contract instead of merely promising it. The licensed
 // suite was not consulted; the expectations are derived from the public
 // POSIX.1 Issue 7 write(1) page and the documented selection rule.
+//
+// The literal "[Sat Aug 22 10:30:00 2026]" in every expected banner is the
+// fixture's frozen clock (nowFn = epoch+90m) rendered in time.ANSIC. The
+// transcripts are spelled out rather than composed from a shared format
+// string on purpose: an expectation that recomputes what the product
+// computes cannot witness a change in either.
 
 import (
 	"bytes"
@@ -32,10 +38,6 @@ import (
 	"testing"
 	"time"
 )
-
-// bannerAt is the exact banner write emits under the fixture's frozen clock:
-// nowFn is epoch+90m = 2026-08-22 10:30:00 UTC, rendered in time.ANSIC.
-const bannerAt = "Message from %s (%s) [Sat Aug 22 10:30:00 2026]...\n"
 
 // TestS85ReducerNeverTouchesTheHost encodes the probe contract's safety rule
 // as an executable assertion: after the fixture is installed, the login
