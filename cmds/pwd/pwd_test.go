@@ -273,3 +273,79 @@ func TestPwdHelpAndVersion(t *testing.T) {
 		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }
+
+// TestPwdPhysicalOnProcessCwdIgnoresLogicalPWD covers the DirIsProcessCwd
+// route — rc.Dir IS this process's cwd. multicall declares it unconditionally
+// (so `coreutils pwd`, a pwd-named symlink, and `bashy pwd` all arrive here),
+// and shell.Handler declares it whenever the interpreter's Dir resolves to the
+// process cwd. TestPwdPhysicalResolvesSymlinks exercises only the other route
+// (DirIsProcessCwd false, filepath.EvalSymlinks over rc.Dir), which is why the
+// defect survived it: the process route reached os.Getwd, documented to return
+// $PWD verbatim when it names the current directory, so -P — and a trailing -P
+// after -L — printed the logical symlink path a `cd` through a symlink leaves
+// in $PWD.
+func TestPwdPhysicalOnProcessCwdIgnoresLogicalPWD(t *testing.T) {
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "lnk")
+	if err := os.Symlink(real, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation not permitted: %v", err)
+		}
+		t.Fatal(err)
+	}
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Enter the directory THROUGH the symlink and advertise the logical name
+	// in the process environment, exactly as an interactive `cd` does.
+	if err := os.Chdir(link); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	t.Setenv("PWD", link)
+
+	logical := link + "\n"
+	physical := real + "\n"
+	// The symlink's own component must not survive into any physical answer.
+	linkComponent := string(filepath.Separator) + filepath.Base(link)
+
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"-P"}, want: physical},
+		{args: nil, want: physical},                  // -P is the default
+		{args: []string{"-L", "-P"}, want: physical}, // last option wins
+		{args: []string{"-LP"}, want: physical},
+		{args: []string{"--logical", "--physical"}, want: physical},
+		{args: []string{"-L"}, want: logical},
+		{args: []string{"-P", "-L"}, want: logical},
+	}
+	for _, tc := range cases {
+		name := strings.Join(tc.args, " ")
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:             context.Background(),
+				Dir:             link,
+				DirIsProcessCwd: true,
+				Env:             []string{"PWD=" + link},
+				Stdio:           tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+			}
+			code := cmd.Run(rc, tc.args)
+			if code != 0 || out.String() != tc.want || errb.String() != "" {
+				t.Fatalf("pwd %v = (%q, %q, %d), want (%q, \"\", 0)", tc.args, out.String(), errb.String(), code, tc.want)
+			}
+			if tc.want == physical && strings.Contains(out.String(), linkComponent) {
+				t.Fatalf("pwd %v = %q, still carries the symlink component %q", tc.args, out.String(), linkComponent)
+			}
+		})
+	}
+}

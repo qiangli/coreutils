@@ -4,8 +4,10 @@
 // The "current working directory" is the invocation's rc.Dir, never the
 // process cwd (the embedding shell owns its own cwd). Logical mode uses
 // PWD from the invocation environment when it is a valid name for rc.Dir;
-// physical mode and invalid logical names resolve every symlink in rc.Dir.
-// When both -L and -P are given, the last one takes precedence.
+// physical mode and invalid logical names resolve every symlink in rc.Dir —
+// through the kernel when rc.Dir IS the process cwd (DirIsProcessCwd), and
+// through EvalSymlinks otherwise. When both -L and -P are given, the last
+// one takes precedence.
 package pwdcmd
 
 import (
@@ -26,7 +28,30 @@ var cmd = &tool.Tool{
 	Usage:    "pwd [OPTION]...",
 }
 
-var processGetwd = os.Getwd
+// processGetwd reports the process's PHYSICAL working directory, the way
+// GNU pwd -P gets it: from the kernel, whose getcwd(2) never reports a
+// symlink component.
+//
+// It must NOT be os.Getwd. On every Unix that call opens with a "clumsy but
+// widespread kludge" (its own words): if the process environment's $PWD is
+// absolute and names the current directory, $PWD is returned verbatim. After
+// a logical `cd` through a symlink $PWD holds exactly the symlinked spelling
+// that -P exists to resolve, so os.Getwd hands back the logical answer. It
+// also reads the PROCESS environment, which a tool must never consult — the
+// invocation environment is rc.Env.
+//
+// os.Getwd stays as the fallback for the case the kernel cannot answer: a
+// current directory whose absolute name overruns the getcwd buffer. There
+// os.Getwd's slow ".."-walk reconstructs a physical name that the syscall
+// alone cannot produce.
+var processGetwd = physicalGetwd
+
+func physicalGetwd() (string, error) {
+	if dir, err := syscall.Getwd(); err == nil && filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	return os.Getwd()
+}
 
 // Run is wired in init: a literal would create an initialization
 // cycle (run's flag-error paths reference cmd).
