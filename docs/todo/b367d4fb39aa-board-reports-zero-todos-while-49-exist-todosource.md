@@ -3,9 +3,10 @@ id: b367d4fb39aa
 kind: task
 title: 'board reports zero todos while 49 exist: todoSource reads pre-loom-v2 JSON and its version guard only checks the field is non-empty'
 seq: 10
-status: todo
+status: done
 priority: p1
 created: 2026-08-30T22:01:22.172867Z
+closed: 2026-08-30T22:07:28.687364Z
 ---
 
 SPEC: coreutils/pkg/board (schema bashy-board-v1), coreutils/pkg/todo. DESIGN SIBLING: umbrella fe811f11 (sprint/todo/weave consistency contract) — that item is the convention; THIS is the shipped defect and is not gate-blocked.
