@@ -110,7 +110,7 @@ printenv	cmds/printenv		GNU Coreutils	yes	no	1	4
 printf	cmds/printf		GNU Coreutils	yes	yes	3	23
 ps	cmds/ps		POSIX/Unix utility	no	yes	4	31
 ptx	cmds/ptx		GNU Coreutils	yes	no	1	14
-pwd	cmds/pwd		GNU Coreutils	yes	yes	2	11
+pwd	cmds/pwd		GNU Coreutils	yes	yes	2	12
 readlink	cmds/readlink		GNU Coreutils	yes	no	1	8
 realpath	cmds/realpath		GNU Coreutils	yes	no	1	10
 renice	cmds/renice		POSIX/Unix utility	no	yes	4	32
