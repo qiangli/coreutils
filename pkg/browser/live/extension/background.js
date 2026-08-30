@@ -137,6 +137,7 @@ const SUPPORTED_METHODS = [
   "wait_for_selector", "keyboard_press",
   "clipboard_read", "clipboard_write",
   "cookies_get", "storage_get", "capabilities",
+  "dispatch_event",
   // DevTools-flavored — gated on a long-lived chrome.debugger attach
   // managed by debuggerAttach below.
   "network_list", "console_get", "perf_start", "perf_stop", "lighthouse",
@@ -357,11 +358,19 @@ async function onMessage(ev) {
   });
 }
 
+// targetTabId is the ONE source of truth for "which tab is being
+// driven". Every method that touches a page resolves through it —
+// including screenshot, which previously captured whatever happened to
+// be in the foreground and so could hand back a real PNG of a page the
+// caller never asked for.
 async function targetTabId() {
+  return (await targetTab()).id;
+}
+
+async function targetTab() {
   if (activeTabId !== null) {
     try {
-      await chrome.tabs.get(activeTabId);
-      return activeTabId;
+      return await chrome.tabs.get(activeTabId);
     } catch (e) {
       activeTabId = null;
     }
@@ -369,22 +378,33 @@ async function targetTabId() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tabs.length === 0) throw new Error("no active tab");
   activeTabId = tabs[0].id;
-  return activeTabId;
+  return tabs[0];
 }
 
 async function dispatch(method, params) {
   // Capabilities does not need a tab (it's a pure metadata read).
   if (method === "capabilities") return capabilities();
   if (method === "cookies_get") return cookiesGet(params);
+  if (method === "tabs") return handleTabs(params);
 
   const tabId = await targetTabId();
+  const out = await dispatchOnTab(method, params, tabId);
+  // Stamp the resolved tab on every page-touching result so a caller
+  // can prove which page answered instead of inferring it.
+  if (out && typeof out === "object" && out.tab_id === undefined) {
+    out.tab_id = tabId;
+  }
+  return out;
+}
+
+async function dispatchOnTab(method, params, tabId) {
   switch (method) {
     case "navigate":
       return navigate(tabId, params.url);
     case "back":
       return chrome.tabs.goBack(tabId).then(() => extractInTab(tabId, {}));
     case "screenshot":
-      return takeScreenshot(tabId);
+      return takeScreenshot(tabId, params);
     case "extract":
       return extractInTab(tabId, params);
     case "click":
@@ -393,10 +413,10 @@ async function dispatch(method, params) {
       return runInTab(tabId, "type", params);
     case "scroll":
       return runInTab(tabId, "scroll", params);
-    case "tabs":
-      return handleTabs(params);
     case "evaluate":
       return evaluateInTab(tabId, params.script);
+    case "dispatch_event":
+      return dispatchEventInTab(tabId, params);
     case "wait_for_selector":
       return waitForSelector(tabId, params);
     case "keyboard_press":
@@ -418,7 +438,9 @@ async function dispatch(method, params) {
     case "lighthouse":
       return lighthouse(tabId);
   }
-  throw new Error(`unknown method: ${method}`);
+  throw new Error(
+    `unknown method: ${method}; expected one of: ${SUPPORTED_METHODS.join(", ")}`
+  );
 }
 
 function capabilities() {
@@ -485,19 +507,126 @@ function waitForLoad(tabId) {
   });
 }
 
-async function takeScreenshot(tabId) {
+const SETTLE_MS_DEFAULT = 150;
+
+// settleTab waits for the renderer to actually paint the current DOM.
+// Two composited frames plus a short tail: a capture issued straight
+// after a click otherwise returns the PRE-click frame while `extract`
+// already reports the post-click DOM — an image and a DOM that
+// disagree, both reported as success.
+async function settleTab(tabId, settleMs) {
+  const ms = settleMs === undefined || settleMs === null || settleMs < 0
+    ? SETTLE_MS_DEFAULT
+    : settleMs;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [ms],
+      func: async (ms) => {
+        const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+        await frame();
+        await frame();
+        if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+        return true;
+      },
+    });
+  } catch (_) {
+    // A page we cannot inject into (chrome://, the web store) still
+    // gets captured; it just does not get the paint barrier.
+    if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+  }
+}
+
+// takeScreenshot captures THE TARGET TAB — the tab every other method
+// drives — not whatever is in the foreground.
+//
+// chrome.tabs.captureVisibleTab captures a *window's visible tab*, so
+// on any window whose foreground tab is not the driven one it returns
+// a real, well-formed PNG of the wrong page. The fix is to route a
+// non-foreground (or full-page) capture through CDP
+// Page.captureScreenshot, which addresses the tab directly, and to
+// re-check the foreground tab immediately before the cheap path so the
+// two can never disagree.
+async function takeScreenshot(tabId, params) {
+  params = params || {};
   const tab = await chrome.tabs.get(tabId);
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-  // strip the data:image/png;base64, prefix
-  const idx = dataUrl.indexOf(",");
-  // Caller (Go side) is responsible for MaxBytes / SavePath
-  // post-processing; the extension always emits a raw base64 PNG so
-  // the JPEG re-encode path lives in one place.
-  return { image: idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl };
+  await settleTab(tabId, params.settle_ms);
+
+  const fullPage = !!params.full_page;
+  let visible = false;
+  if (!fullPage) {
+    try {
+      const [front] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+      visible = !!front && front.id === tabId;
+    } catch (_) { visible = false; }
+  }
+
+  if (visible) {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    return screenshotResult(dataUrl, tab, "capture_visible_tab", fullPage);
+  }
+
+  // Background tab, or a full-page request: CDP addresses the tab
+  // itself. Costs a debugger attach (and its banner) — which is why
+  // the foreground case above stays on the cheap path.
+  try {
+    const dataUrl = await captureViaDebugger(tabId, fullPage);
+    return screenshotResult(dataUrl, tab, "cdp_capture_screenshot", fullPage);
+  } catch (cdpErr) {
+    if (fullPage) {
+      throw new Error(
+        `screenshot: full_page needs CDP and the debugger attach failed: ${cdpErr.message || cdpErr}`
+      );
+    }
+    // Last resort: bring the target tab forward, capture, put the
+    // previous foreground tab back. Visible to the user, so it is the
+    // fallback rather than the default — but a correct image of the
+    // right page beats a silent image of the wrong one.
+    const [prev] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+    await chrome.tabs.update(tabId, { active: true });
+    try {
+      await settleTab(tabId, params.settle_ms);
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      return screenshotResult(dataUrl, tab, "focus_and_capture", fullPage);
+    } finally {
+      if (prev && prev.id !== tabId) {
+        try { await chrome.tabs.update(prev.id, { active: true }); } catch (_) { /* closed */ }
+      }
+    }
+  }
+}
+
+async function captureViaDebugger(tabId, fullPage) {
+  await debuggerAttach.acquire(tabId, "Page");
+  try {
+    const opts = { format: "png" };
+    if (fullPage) opts.captureBeyondViewport = true;
+    const res = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", opts);
+    if (!res || !res.data) throw new Error("Page.captureScreenshot returned no data");
+    return res.data; // already bare base64, no data: prefix
+  } finally {
+    await debuggerAttach.release(tabId);
+  }
+}
+
+// screenshotResult normalises the two capture paths onto one envelope.
+// Caller (Go side) is responsible for MaxBytes / SavePath
+// post-processing; the extension always emits a raw base64 PNG so the
+// re-encode/write path lives in one place.
+function screenshotResult(data, tab, method, fullPage) {
+  const idx = data.indexOf(",");
+  const image = data.startsWith("data:") && idx >= 0 ? data.slice(idx + 1) : data;
+  return {
+    image,
+    tab_id: tab.id,
+    url: tab.url || "",
+    title: tab.title || "",
+    data: JSON.stringify({ capture: method, full_page: !!fullPage, tab_id: tab.id }),
+  };
 }
 
 async function extractInTab(tabId, params) {
-  const [{ result } = {}] = await chrome.scripting.executeScript({
+  const result = await injectOne({
     target: { tabId },
     args: [params || {}],
     func: (params) => {
@@ -510,6 +639,17 @@ async function extractInTab(tabId, params) {
         return { title: document.title, url: location.href, content: "", elements: "", error: "extract: scope " + SCOPE_SEL + " not found" };
       }
       const navFilter = !SCOPE_SEL;
+      const INCLUDE_HIDDEN = !!params.include_hidden;
+      function boxOf(el) {
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+      }
+      function shown(el) {
+        const cs = getComputedStyle(el);
+        if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }
       const all = root.querySelectorAll(
         "a, button, input, select, textarea, [role='button'], [role='link']"
       );
@@ -526,23 +666,46 @@ async function extractInTab(tabId, params) {
               ph.toLowerCase().indexOf(want) < 0 &&
               ar.toLowerCase().indexOf(want) < 0) continue;
         }
+        if (!INCLUDE_HIDDEN && !shown(el)) continue;
         matches.push(el);
       }
       const total = matches.length;
       const slice = matches.slice(OFFSET, OFFSET + LIMIT);
       const lines = [];
+      const records = [];
       for (let j = 0; j < slice.length; j++) {
         const el = slice[j];
         const tag = el.tagName.toLowerCase();
         const text = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 80);
-        const attrs = [];
+        const attrs = {};
+        const attrPairs = [];
         for (const a of ["type", "placeholder", "href", "name", "value", "role", "aria-label"]) {
           const v = el.getAttribute(a);
-          if (v) attrs.push(`${a}="${String(v).slice(0, 60)}"`);
+          if (v) {
+            attrs[a] = String(v).slice(0, 60);
+            attrPairs.push(`${a}="${String(v).slice(0, 60)}"`);
+          }
         }
-        lines.push(`[${OFFSET + j + 1}] <${tag} ${attrs.join(" ")}>${text}</${tag}>`);
+        const vis = shown(el);
+        // The index is the CLICK ADDRESS: `click --index N` resolves
+        // through the identical enumeration, so what is listed here is
+        // what gets clicked.
+        lines.push(`[${OFFSET + j + 1}]${vis ? "" : " (hidden)"} <${tag} ${attrPairs.join(" ")}>${text}</${tag}>`);
+        records.push({
+          index: OFFSET + j + 1,
+          tag: tag,
+          text: text,
+          attrs: attrs,
+          visible: vis,
+          box: boxOf(el),
+        });
       }
       const body = (root === document ? (document.body && document.body.innerText) : root.innerText) || "";
+      const viewport = {
+        width: Math.round(document.documentElement.clientWidth || window.innerWidth || 0),
+        height: Math.round(document.documentElement.clientHeight || window.innerHeight || 0),
+        dpr: window.devicePixelRatio || 1,
+      };
       return {
         title: document.title,
         url: location.href,
@@ -550,40 +713,117 @@ async function extractInTab(tabId, params) {
         elements: lines.join("\n"),
         total: total,
         truncated: total > (OFFSET + LIMIT),
+        viewport: viewport,
+        // Structured mirror of `elements`, so a --json caller never
+        // has to re-parse a pretty-printer's output to recover data
+        // the tool already had.
+        data: JSON.stringify({ viewport: viewport, elements: records }),
       };
     },
-  });
-  return result || { title: "", url: "", content: "", elements: "" };
+  }, "extract");
+  return result;
+}
+
+// injectOne runs one scripting.executeScript and returns the single
+// frame's result, converting "no frame" and "the injected function
+// threw" into errors.
+//
+// The old code destructured `[{ result } = {}]` from await and then
+// returned `result` with an empty-object fallback. When injection
+// failed — the commonest cause
+// being an invalid CSS selector, which makes querySelector throw —
+// `result` was undefined and the caller got a bare `{}`, which the
+// hub reported as `{"success":true}`. A click that resolved nothing
+// looked exactly like a click that worked.
+async function injectOne(opts, what) {
+  let frames;
+  try {
+    frames = await chrome.scripting.executeScript(opts);
+  } catch (e) {
+    throw new Error(`${what}: injection failed: ${String((e && e.message) || e)}`);
+  }
+  if (!frames || frames.length === 0) {
+    throw new Error(`${what}: no frame answered (page may have navigated away)`);
+  }
+  const frame = frames[0];
+  if (frame && frame.error) {
+    const msg = frame.error.message || String(frame.error);
+    throw new Error(`${what}: ${msg}`);
+  }
+  if (frame.result === undefined || frame.result === null) {
+    throw new Error(`${what}: script returned no result (it threw, or the frame was replaced)`);
+  }
+  return frame.result;
 }
 
 async function runInTab(tabId, kind, params) {
-  const [{ result } = {}] = await chrome.scripting.executeScript({
+  const result = await injectOne({
     target: { tabId },
     args: [kind, params],
     func: (kind, params) => {
       const matchText = params.match_text || "";
+      function query(root, sel) {
+        try {
+          return root.querySelector(sel);
+        } catch (e) {
+          return { __badSelector: sel, __reason: String((e && e.message) || e) };
+        }
+      }
       function elemsInScope() {
-        const scope = params.scope ? document.querySelector(params.scope) : document;
-        return (scope || document).querySelectorAll(
+        const scoped = params.scope ? query(document, params.scope) : document;
+        const scope = scoped && !scoped.__badSelector ? scoped : document;
+        return scope.querySelectorAll(
           "a, button, input, select, textarea, [role='button'], [role='link']"
         );
       }
-      function resolveTarget() {
-        if (params.selector) {
-          const sc = params.scope ? document.querySelector(params.scope) : document;
-          return (sc || document).querySelector(params.selector);
+      function shown(el) {
+        const cs = getComputedStyle(el);
+        if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }
+      function flatCandidates() {
+        // Mirror the extract enumeration EXACTLY — same landmark skip,
+        // same visibility filter. `extract` numbers this list, so [N]
+        // there is the element clicked by element_id N here. If the
+        // two predicates ever diverge, click-by-index silently hits a
+        // neighbour, which is the failure this whole path exists to
+        // remove.
+        const navFilter = !params.scope;
+        const includeHidden = !!params.include_hidden;
+        const flat = [];
+        for (const el of elemsInScope()) {
+          if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
+          if (!includeHidden && !shown(el)) continue;
+          flat.push(el);
         }
+        return flat;
+      }
+      function resolveTarget() {
         if (params.element_id && params.element_id > 0) {
-          const list = elemsInScope();
-          // For typed lookup, mirror the extract enumeration: skip
-          // nav landmarks unless caller passed an explicit scope.
-          const navFilter = !params.scope;
-          const flat = [];
-          for (const el of list) {
-            if (navFilter && el.closest && el.closest("nav, aside, [role='navigation'], [role='complementary']")) continue;
-            flat.push(el);
+          const flat = flatCandidates();
+          const el = flat[params.element_id - 1];
+          if (!el) {
+            return { __miss: `element index ${params.element_id} out of range (extract listed ${flat.length})` };
           }
-          return flat[params.element_id - 1] || null;
+          return el;
+        }
+        if (params.selector) {
+          const scoped = params.scope ? query(document, params.scope) : document;
+          if (scoped && scoped.__badSelector) {
+            return { __miss: `scope ${JSON.stringify(params.scope)} is not a valid CSS selector: ${scoped.__reason}` };
+          }
+          const el = query(scoped || document, params.selector);
+          if (el && el.__badSelector) {
+            const numeric = /^[0-9]+$/.test(params.selector);
+            return {
+              __miss: numeric
+                ? `${JSON.stringify(params.selector)} is not a CSS selector; pass an element index as element_id (bashy browser click --index ${params.selector})`
+                : `${JSON.stringify(params.selector)} is not a valid CSS selector: ${el.__reason}`,
+            };
+          }
+          if (!el) return { __miss: `no element matches selector ${JSON.stringify(params.selector)}` };
+          return el;
         }
         if (matchText) {
           const want = matchText.toLowerCase();
@@ -591,19 +831,25 @@ async function runInTab(tabId, kind, params) {
             const v = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim().toLowerCase();
             if (v.indexOf(want) >= 0) return el;
           }
+          return { __miss: `no element whose text contains ${JSON.stringify(matchText)}` };
         }
-        return null;
+        return { __miss: "no selector, element index, or match text given" };
+      }
+      function describe(el) {
+        const tag = el.tagName ? el.tagName.toLowerCase() : "?";
+        const label = ((el.innerText) || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 60);
+        return label ? `<${tag}> ${label}` : `<${tag}>`;
       }
       switch (kind) {
         case "click": {
           const el = resolveTarget();
-          if (!el) return { error: "click: element not found" };
+          if (el && el.__miss) return { error: `click: ${el.__miss}` };
           el.click();
-          return { content: "clicked" };
+          return { content: "clicked", data: JSON.stringify({ matched: describe(el) }) };
         }
         case "type": {
           const el = resolveTarget();
-          if (!el) return { error: "type: element not found" };
+          if (el && el.__miss) return { error: `type: ${el.__miss}` };
           el.focus();
           if ("value" in el) {
             el.value = params.text || "";
@@ -612,22 +858,66 @@ async function runInTab(tabId, kind, params) {
           }
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
-          return { content: "typed" };
+          return { content: "typed", data: JSON.stringify({ matched: describe(el) }) };
         }
         case "scroll": {
           let amount = params.amount || 500;
           if (params.direction === "up") amount = -amount;
           window.scrollBy(0, amount);
-          return { data: String(window.scrollY) };
+          return { content: `scrolled to ${window.scrollY}`, data: String(window.scrollY) };
         }
       }
       return { error: `runInTab: unknown kind ${kind}` };
     },
-  });
+  }, kind);
   if (result && result.error) {
     throw new Error(result.error);
   }
-  return result || {};
+  return result;
+}
+
+// dispatchEventInTab fires a named DOM event from the extension's
+// ISOLATED world. A page whose CSP omits 'unsafe-eval' disables
+// `evaluate` entirely, and the usual workaround — "click whatever
+// element happens to share the handler" — is not always available.
+// Nothing here is compiled from a string, so no CSP directive applies.
+async function dispatchEventInTab(tabId, params) {
+  const name = (params && params.event || "").trim();
+  if (!name) throw new Error("dispatch_event: event name required");
+  const result = await injectOne({
+    target: { tabId },
+    args: [name, params.detail || "", params.selector || ""],
+    world: "MAIN",
+    func: (name, detailRaw, selector) => {
+      let detail = null;
+      if (detailRaw) {
+        try { detail = JSON.parse(detailRaw); } catch (_) { detail = detailRaw; }
+      }
+      let target = window;
+      let where = "window";
+      if (selector === "document") {
+        target = document; where = "document";
+      } else if (selector) {
+        try {
+          target = document.querySelector(selector);
+        } catch (e) {
+          return { error: `dispatch_event: ${JSON.stringify(selector)} is not a valid CSS selector` };
+        }
+        if (!target) return { error: `dispatch_event: no element matches ${JSON.stringify(selector)}` };
+        where = selector;
+      }
+      const ev = detail === null
+        ? new Event(name, { bubbles: true, cancelable: true })
+        : new CustomEvent(name, { bubbles: true, cancelable: true, detail });
+      const notCancelled = target.dispatchEvent(ev);
+      return {
+        content: `dispatched ${name} on ${where}`,
+        data: JSON.stringify({ event: name, target: where, default_prevented: !notCancelled }),
+      };
+    },
+  }, "dispatch_event");
+  if (result && result.error) throw new Error(result.error);
+  return result;
 }
 
 async function evaluateInTab(tabId, script) {
@@ -872,33 +1162,113 @@ async function storageGet(tabId, params) {
   return { data: (result && result.value) || "{}" };
 }
 
+const TAB_ACTIONS = ["list", "switch", "new", "close"];
+
+function tabRecord(t, i, driven) {
+  return {
+    index: i + 1,
+    id: t.id,
+    title: t.title || "",
+    url: t.url || "",
+    active: !!t.active,
+    driven: t.id === driven,
+    window_id: t.windowId,
+  };
+}
+
+// selectTab resolves a tab from whichever address the caller gave.
+// Index is kept for compatibility, but --id / --url / --title are the
+// stable forms: an index captured at the start of a script is stale
+// the moment any tab opens or closes, which is a race no caller can
+// win. An ambiguous substring is an error listing the candidates,
+// never a silent pick of the first.
+function selectTab(tabs, params, driven) {
+  const wantURL = (params.match_url || "").toLowerCase();
+  const wantTitle = (params.match_title || "").toLowerCase();
+  if (wantURL || wantTitle) {
+    const hits = tabs.filter((t) => {
+      if (wantURL && (t.url || "").toLowerCase().indexOf(wantURL) < 0) return false;
+      if (wantTitle && (t.title || "").toLowerCase().indexOf(wantTitle) < 0) return false;
+      return true;
+    });
+    const what = wantURL
+      ? `url containing ${JSON.stringify(params.match_url)}`
+      : `title containing ${JSON.stringify(params.match_title)}`;
+    if (hits.length === 0) throw new Error(`tabs: no tab with ${what}`);
+    if (hits.length > 1) {
+      const lines = hits.map((t, i) => `  [${i + 1}] ${t.title || ""} — ${t.url || ""}`);
+      throw new Error(`tabs: ${hits.length} tabs match ${what}; be more specific:\n${lines.join("\n")}`);
+    }
+    return hits[0];
+  }
+  if (params.by_id && params.tab_id) {
+    const t = tabs.find((x) => x.id === params.tab_id);
+    if (!t) throw new Error(`tabs: no tab with id ${params.tab_id}`);
+    return t;
+  }
+  const idx = (params.tab_id || 1) - 1;
+  if (idx < 0 || idx >= tabs.length) {
+    throw new Error(`tabs: index ${idx + 1} out of range (${tabs.length} tabs open)`);
+  }
+  return tabs[idx];
+}
+
 async function handleTabs(params) {
   const action = params.action || "list";
+  if (!TAB_ACTIONS.includes(action)) {
+    throw new Error(
+      `unknown tab action ${JSON.stringify(action)}; expected one of: ${TAB_ACTIONS.join(", ")}`
+    );
+  }
+  const driven = activeTabId;
   if (action === "list") {
-    const tabs = await chrome.tabs.query({});
-    const lines = tabs.map((t, i) => `[${i + 1}] ${t.title || ""}\n    ${t.url || ""}`);
-    return { content: lines.join("\n") };
+    let tabs = await chrome.tabs.query({});
+    const wantURL = (params.match_url || "").toLowerCase();
+    const wantTitle = (params.match_title || "").toLowerCase();
+    if (wantURL) tabs = tabs.filter((t) => (t.url || "").toLowerCase().indexOf(wantURL) >= 0);
+    if (wantTitle) tabs = tabs.filter((t) => (t.title || "").toLowerCase().indexOf(wantTitle) >= 0);
+    const records = tabs.map((t, i) => tabRecord(t, i, driven));
+    const lines = records.map(
+      (r) => `[${r.index}]${r.driven ? " *" : ""} ${r.title}\n    ${r.url}`
+    );
+    return {
+      content: lines.join("\n"),
+      data: JSON.stringify(records),
+      total: records.length,
+      tab_id: driven || 0,
+    };
   }
   if (action === "switch") {
-    const idx = (params.tab_id || 1) - 1;
     const tabs = await chrome.tabs.query({});
-    if (idx < 0 || idx >= tabs.length) throw new Error(`tab ${idx + 1} not found`);
-    activeTabId = tabs[idx].id;
-    await chrome.tabs.update(tabs[idx].id, { active: true });
-    return { content: `switched to tab ${idx + 1}` };
+    const t = selectTab(tabs, params, driven);
+    activeTabId = t.id;
+    await chrome.tabs.update(t.id, { active: true });
+    return {
+      content: `switched to ${t.title || t.url || t.id}`,
+      url: t.url || "",
+      title: t.title || "",
+      tab_id: t.id,
+      data: JSON.stringify(tabRecord(t, tabs.indexOf(t), t.id)),
+    };
   }
   if (action === "new") {
     const t = await chrome.tabs.create({ url: params.url || "about:blank" });
     activeTabId = t.id;
-    return { content: `opened tab ${t.id}` };
+    return {
+      content: `opened tab ${t.id}`,
+      url: t.url || "",
+      tab_id: t.id,
+      data: JSON.stringify(tabRecord(t, 0, t.id)),
+    };
   }
-  if (action === "close") {
-    const tid = await targetTabId();
-    await chrome.tabs.remove(tid);
-    activeTabId = null;
-    return { content: `closed tab ${tid}` };
-  }
-  throw new Error(`unknown tab action: ${action}`);
+  // close
+  const tabs = await chrome.tabs.query({});
+  const target = (params.tab_id || params.match_url || params.match_title)
+    ? selectTab(tabs, params, driven)
+    : { id: await targetTabId() };
+  await chrome.tabs.remove(target.id);
+  if (activeTabId === target.id) activeTabId = null;
+  return { content: `closed tab ${target.id}`, tab_id: target.id };
 }
 
 // --- DevTools-flavored actions (network_list / console_get / perf_* /

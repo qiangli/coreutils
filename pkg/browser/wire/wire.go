@@ -45,6 +45,33 @@ type Action struct {
 	MaxBytes int    `json:"max_bytes,omitempty"`
 	SavePath string `json:"save_path,omitempty"`
 
+	// FullPage captures beyond the viewport (live mode routes this
+	// through CDP; probe/solo use chromedp's full-page capture).
+	FullPage bool `json:"full_page,omitempty"`
+
+	// SettleMs is how long a backend waits for the renderer to paint
+	// before capturing. A screenshot taken immediately after a click
+	// can otherwise return the pre-click frame while the DOM already
+	// reports the post-click state. Zero means "backend default".
+	SettleMs int `json:"settle_ms,omitempty"`
+
+	// IncludeHidden keeps elements that are present but not displayed
+	// in an extract, so "absent" and "not visible" stay separable.
+	IncludeHidden bool `json:"include_hidden,omitempty"`
+
+	// MatchURL / MatchTitle address a tab by substring instead of by
+	// index. An index captured at the start of a script is stale by
+	// the end whenever a tab opens or closes, so scripts should
+	// prefer these. An ambiguous match is an error, never a guess.
+	MatchURL   string `json:"match_url,omitempty"`
+	MatchTitle string `json:"match_title,omitempty"`
+
+	// DispatchEvent: Event is the event name, Detail an optional JSON
+	// document used as CustomEvent detail, and Target one of
+	// "window" (default) / "document" / a CSS selector via Selector.
+	Event  string `json:"event,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
 	// Wait/timeout. TimeoutMs applies to wait_for_selector (default
 	// 5000ms) and is honoured by future polled actions. State is one
 	// of "visible", "attached", "detached" (default "visible").
@@ -124,6 +151,26 @@ type Result struct {
 	// returned set is a prefix.
 	Total     int  `json:"total,omitempty"`
 	Truncated bool `json:"truncated,omitempty"`
+
+	// TabID is the browser tab the action actually ran against. Every
+	// live-mode action resolves its target through one shared source
+	// of truth and reports it here, so a caller can tell a capture of
+	// the wrong page from a capture of the right one.
+	TabID int `json:"tab_id,omitempty"`
+
+	// Viewport is the target page's CSS-pixel viewport at the time of
+	// the action. One integer settles "is this hidden by a responsive
+	// breakpoint?", which is otherwise unanswerable when page CSP
+	// blocks eval.
+	Viewport *Viewport `json:"viewport,omitempty"`
+}
+
+// Viewport is the CSS-pixel size of the driven page plus its device
+// pixel ratio.
+type Viewport struct {
+	Width  int     `json:"width"`
+	Height int     `json:"height"`
+	DPR    float64 `json:"dpr,omitempty"`
 }
 
 // MarshalJSON serializes Result with `data` rendered as decoded JSON
@@ -204,4 +251,12 @@ const (
 	ActionCookiesGet      = "cookies_get"
 	ActionStorageGet      = "storage_get"
 	ActionCapabilities    = "capabilities"
+
+	// ActionDispatchEvent fires a named DOM event from the extension's
+	// isolated world (live) or via CDP (probe/solo). It exists because
+	// a page whose Content-Security-Policy omits 'unsafe-eval' — the
+	// increasingly common default — disables ActionEvaluate entirely,
+	// and "click whichever element happens to share the handler" is
+	// not always available as a workaround.
+	ActionDispatchEvent = "dispatch_event"
 )

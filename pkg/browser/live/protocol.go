@@ -1,6 +1,10 @@
 package live
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/qiangli/coreutils/pkg/browser/wire"
+)
 
 // wsRequest is the wire envelope hub → extension. The id is generated
 // server-side; the extension echoes it back so callers can correlate
@@ -33,6 +37,15 @@ type extResult struct {
 	Path      string `json:"path,omitempty"`
 	Total     int    `json:"total,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+
+	// TabID is the tab the extension actually acted on — resolved
+	// through its single targetTabId() source of truth, not inferred.
+	TabID int `json:"tab_id,omitempty"`
+
+	// Viewport is reported by extract so a caller can tell "the
+	// element is absent" from "a responsive breakpoint hid it"
+	// without an eval that page CSP may forbid.
+	Viewport *wire.Viewport `json:"viewport,omitempty"`
 }
 
 // extHello is the unsolicited frame the extension sends as soon as it

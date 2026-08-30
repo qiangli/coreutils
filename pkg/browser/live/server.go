@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -86,10 +85,10 @@ func (h *hub) start(ctx context.Context) error {
 	h.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := h.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Warn("live: http.Server.Serve", "error", err)
+			logWarn("live: http.Server.Serve", "error", err)
 		}
 	}()
-	slog.Info("live: listening for extension", "addr", h.addr)
+	logInfo("live: listening for extension", "addr", h.addr)
 	return nil
 }
 
@@ -112,7 +111,7 @@ func (h *hub) stop(ctx context.Context) error {
 func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.up.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Warn("live: upgrade", "error", err)
+		logWarn("live: upgrade", "error", err)
 		return
 	}
 	h.mu.Lock()
@@ -127,7 +126,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	h.extPermissions = nil
 	h.helloReceived = make(chan struct{})
 	h.mu.Unlock()
-	slog.Info("live: extension connected", "remote", r.RemoteAddr)
+	logInfo("live: extension connected", "remote", r.RemoteAddr)
 
 	go h.readLoop(conn)
 }
@@ -145,7 +144,7 @@ func (h *hub) readLoop(conn *websocket.Conn) {
 		}
 		h.mu.Unlock()
 		_ = conn.Close()
-		slog.Info("live: extension disconnected")
+		logInfo("live: extension disconnected")
 	}()
 
 	for {
@@ -155,7 +154,7 @@ func (h *hub) readLoop(conn *websocket.Conn) {
 		}
 		var resp wsResponse
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			slog.Warn("live: bad response from extension", "raw", string(raw), "error", err)
+			logWarn("live: bad response from extension", "raw", string(raw), "error", err)
 			continue
 		}
 		// Unsolicited frames (id == 0) carry a `method` field: today only
@@ -182,7 +181,7 @@ func (h *hub) handleUnsolicited(resp wsResponse) {
 	}
 	var hi extHello
 	if err := json.Unmarshal(resp.Result, &hi); err != nil {
-		slog.Warn("live: bad _hello payload", "error", err)
+		logWarn("live: bad _hello payload", "error", err)
 		return
 	}
 	h.mu.Lock()
@@ -195,7 +194,7 @@ func (h *hub) handleUnsolicited(resp wsResponse) {
 	if firstHello && hr != nil {
 		close(hr)
 	}
-	slog.Info("live: extension hello", "version", hi.Version, "methods", len(hi.Methods))
+	logInfo("live: extension hello", "version", hi.Version, "methods", len(hi.Methods))
 }
 
 // ExtVersion returns the version reported by the extension's _hello
@@ -259,7 +258,7 @@ func (h *hub) awaitHello(ctx context.Context) error {
 		return ctx.Err()
 	case <-timer.C:
 		return errors.New("live: extension did not send _hello within 3s — likely an older extension. " +
-			"Reload it at chrome://extensions, or run: bashy browser install-extension")
+			"Reload it at chrome://extensions, or run: bashy browser setup live")
 	}
 }
 

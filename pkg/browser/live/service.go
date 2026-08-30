@@ -19,13 +19,15 @@ package live
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,7 +45,13 @@ const DefaultPort = 58082
 // The hub refuses to dispatch to any older version with an actionable
 // "reload at chrome://extensions" error. Reported by the extension's
 // `_hello` frame.
-const LiveExtensionMinVersion = "0.5.0"
+// 0.7.0 is a HARD floor, not a nicety: before it, `screenshot`
+// captured the window's foreground tab rather than the tab every other
+// method drives, so a stale extension hands back a well-formed PNG of
+// a page the caller never asked for. No Go-side change can detect that
+// from the outside — the image is real, just of the wrong page — so
+// the version gate is the only place it can be caught.
+const LiveExtensionMinVersion = "0.7.0"
 
 // LiveHandshakeTimeout caps how long hub.call waits for the extension
 // to send its _hello frame before treating the connection as too old.
@@ -105,7 +113,7 @@ func (s *Service) EnsureReady(ctx context.Context) error {
 		if probeHealth(s.port) {
 			s.role = roleClient
 			s.http = &http.Client{Timeout: 35 * time.Second}
-			slog.Info("live: hub already owned by another process; using client role", "port", s.port)
+			logInfo("live: hub already owned by another process; using client role", "port", s.port)
 			return nil
 		}
 	}
@@ -230,18 +238,78 @@ func (s *Service) Execute(ctx context.Context, action wire.Action) (*wire.Result
 	if res != nil && h != nil && res.URL != "" {
 		h.RecordLastTab(res.URL)
 	}
+	if res != nil && res.Success && action.Type == wire.ActionScreenshot {
+		if perr := finishScreenshot(res, action); perr != nil {
+			return &wire.Result{Error: perr.Error()}, nil
+		}
+	}
 	return res, err
+}
+
+// finishScreenshot applies SavePath / MaxBytes to a live capture.
+//
+// The extension deliberately always returns raw base64 and documents
+// that "the Go side is responsible for MaxBytes / SavePath" — but live
+// mode never actually did it, so `screenshot /tmp/x.png` wrote no
+// file, exited 0, and dumped 223 KB of base64 to stdout. probe/solo
+// have always honoured both (internal/cdpactions.Screenshot); this
+// closes the gap in the one mode that skipped it.
+func finishScreenshot(res *wire.Result, a wire.Action) error {
+	if res.Image == "" {
+		return nil
+	}
+	needFile := a.SavePath != ""
+	if !needFile && a.MaxBytes > 0 && len(res.Image) > a.MaxBytes {
+		needFile = true
+	}
+	if !needFile {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(res.Image)
+	if err != nil {
+		return fmt.Errorf("live: screenshot: decode image: %w", err)
+	}
+	path := a.SavePath
+	if path == "" {
+		f, err := os.CreateTemp("", "bashy-browser-*.png")
+		if err != nil {
+			return err
+		}
+		path = f.Name()
+		if _, err := f.Write(raw); err != nil {
+			_ = f.Close()
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+	} else {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(abs, raw, 0o644); err != nil {
+			return err
+		}
+		path = abs
+	}
+	res.Image = ""
+	res.Path = path
+	return nil
 }
 
 func staleExtensionError(ver string) string {
 	return fmt.Sprintf("live: extension stale (v%s < required v%s). "+
-		"Reload it at chrome://extensions, or run: bashy browser install-extension",
+		"Reload it at chrome://extensions, or run: bashy browser setup live",
 		ver, LiveExtensionMinVersion)
 }
 
 func methodNotAdvertisedError(method, ver string) string {
 	return fmt.Sprintf("live: method %q not advertised by extension v%s. "+
-		"Reload it at chrome://extensions, or run: bashy browser install-extension",
+		"Reload it at chrome://extensions, or run: bashy browser setup live",
 		method, ver)
 }
 
@@ -307,6 +375,8 @@ func unmarshalExt(raw json.RawMessage) (*wire.Result, error) {
 		Path:      inner.Path,
 		Total:     inner.Total,
 		Truncated: inner.Truncated,
+		TabID:     inner.TabID,
+		Viewport:  inner.Viewport,
 	}, nil
 }
 
@@ -341,29 +411,41 @@ func actionToParams(a wire.Action) (string, map[string]any, error) {
 		return "navigate", map[string]any{"url": a.URL}, nil
 	case wire.ActionClick:
 		return "click", map[string]any{
-			"selector":   a.Selector,
-			"element_id": a.ElementID,
-			"match_text": a.MatchText,
-			"scope":      a.Scope,
+			"selector":       a.Selector,
+			"element_id":     a.ElementID,
+			"match_text":     a.MatchText,
+			"scope":          a.Scope,
+			"include_hidden": a.IncludeHidden,
 		}, nil
 	case wire.ActionType:
 		return "type", map[string]any{"selector": a.Selector, "element_id": a.ElementID, "text": a.Text}, nil
 	case wire.ActionScroll:
 		return "scroll", map[string]any{"direction": a.Direction, "amount": a.Amount}, nil
 	case wire.ActionScreenshot:
-		return "screenshot", map[string]any{}, nil
+		return "screenshot", map[string]any{
+			"full_page": a.FullPage,
+			"settle_ms": a.SettleMs,
+		}, nil
 	case wire.ActionExtract:
 		return "extract", map[string]any{
-			"goal":       a.Goal,
-			"match_text": a.MatchText,
-			"scope":      a.Scope,
-			"limit":      a.Limit,
-			"offset":     a.Offset,
+			"goal":           a.Goal,
+			"match_text":     a.MatchText,
+			"scope":          a.Scope,
+			"limit":          a.Limit,
+			"offset":         a.Offset,
+			"include_hidden": a.IncludeHidden,
 		}, nil
 	case wire.ActionBack:
 		return "back", map[string]any{}, nil
 	case wire.ActionTabs:
-		return "tabs", map[string]any{"action": a.TabAction, "tab_id": a.TabID}, nil
+		return "tabs", map[string]any{
+			"action":      a.TabAction,
+			"tab_id":      a.TabID,
+			"by_id":       a.State == "id",
+			"url":         a.URL,
+			"match_url":   a.MatchURL,
+			"match_title": a.MatchTitle,
+		}, nil
 	case wire.ActionEvaluate:
 		return "evaluate", map[string]any{"script": a.Script}, nil
 	case wire.ActionWaitForSelector:
@@ -388,6 +470,12 @@ func actionToParams(a wire.Action) (string, map[string]any, error) {
 		return "storage_get", map[string]any{"storage": a.Storage, "key": a.StorageKey}, nil
 	case wire.ActionCapabilities:
 		return "capabilities", map[string]any{}, nil
+	case wire.ActionDispatchEvent:
+		return "dispatch_event", map[string]any{
+			"event":    a.Event,
+			"detail":   a.Detail,
+			"selector": a.Selector,
+		}, nil
 	case wire.ActionNetworkList:
 		return "network_list", map[string]any{}, nil
 	case wire.ActionConsoleGet:
@@ -400,4 +488,76 @@ func actionToParams(a wire.Action) (string, map[string]any, error) {
 		return "lighthouse", map[string]any{}, nil
 	}
 	return "", nil, fmt.Errorf("live: action %q not supported", a.Type)
+}
+
+// Status is what `browser status --mode live` reports. Every field is
+// observed, not defaulted: `status` previously answered
+// `{"mode":"live","reachable":false,"message":"mode \"live\" is not
+// supported"}` while every sibling subcommand drove 51 tabs happily —
+// a refusal that misroutes the caller to a weaker channel is worse
+// than no status at all.
+type Status struct {
+	Mode      string `json:"mode"`
+	HubPort   int    `json:"hub_port"`
+	HubUp     bool   `json:"hub_up"`
+	Reachable bool   `json:"reachable"`
+
+	Connected     bool   `json:"extension_connected"`
+	ExtVersion    string `json:"extension_version,omitempty"`
+	MinVersion    string `json:"extension_min_version"`
+	Stale         bool   `json:"extension_stale"`
+	MethodsCount  int    `json:"extension_methods,omitempty"`
+	Message       string `json:"message,omitempty"`
+	LastTabURL    string `json:"last_tab_url,omitempty"`
+	OwnedInThisPS bool   `json:"hub_owned_by_this_process"`
+}
+
+// LiveStatus probes the hub on port without binding one. It never
+// starts a hub as a side effect — asking a question must not change
+// the answer.
+func LiveStatus(ctx context.Context, port int) Status {
+	if port == 0 {
+		port = DefaultPort
+	}
+	st := Status{Mode: "live", HubPort: port, MinVersion: LiveExtensionMinVersion}
+	st.HubUp = probeHealth(port)
+	if !st.HubUp {
+		st.Message = fmt.Sprintf("no live hub on 127.0.0.1:%d — start one with: bashy browser hub", port)
+		return st
+	}
+	c := &http.Client{Timeout: 2 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/connected", port), nil)
+	if err != nil {
+		st.Message = err.Error()
+		return st
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		st.Message = fmt.Sprintf("hub on 127.0.0.1:%d did not answer /connected: %v", port, err)
+		return st
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		Connected    bool   `json:"connected"`
+		Version      string `json:"version"`
+		MethodsCount int    `json:"methods_count"`
+		Stale        bool   `json:"stale"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		st.Message = fmt.Sprintf("hub on 127.0.0.1:%d returned an unreadable /connected payload: %v", port, err)
+		return st
+	}
+	st.Connected = payload.Connected
+	st.ExtVersion = payload.Version
+	st.MethodsCount = payload.MethodsCount
+	st.Stale = payload.Stale
+	// "Reachable" means an action issued right now would reach a page.
+	st.Reachable = st.Connected && !st.Stale
+	switch {
+	case !st.Connected:
+		st.Message = "hub is up but no extension is attached — open the extension popup on your target tab and click Connect (first-time setup: bashy browser setup live)"
+	case st.Stale:
+		st.Message = staleExtensionError(st.ExtVersion)
+	}
+	return st
 }

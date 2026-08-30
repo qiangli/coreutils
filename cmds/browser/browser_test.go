@@ -119,11 +119,221 @@ func TestDefaultModeIsSolo(t *testing.T) {
 }
 
 func TestActionFromArgs(t *testing.T) {
-	a, err := actionFromArgs([]string{"type", "#q", "hello", "world"})
+	a, err := actionFromArgs([]string{"type", "#q", "hello", "world"}, actionFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.Type != "type" || a.Selector != "#q" || a.Text != "hello world" {
+		t.Fatalf("unexpected action: %#v", a)
+	}
+}
+
+// TestClickByIndexIsNotASelector pins the fix for the silent no-op:
+// `click 36` used to be sent as Selector:"36", which is not valid CSS,
+// so the injected querySelector threw, the extension returned an empty
+// frame, and the caller was told {"success":true}.
+func TestClickByIndexIsNotASelector(t *testing.T) {
+	a, err := actionFromArgs([]string{"click", "36"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ElementID != 36 {
+		t.Fatalf("click 36: ElementID=%d want 36 (action=%#v)", a.ElementID, a)
+	}
+	if a.Selector != "" {
+		t.Fatalf("click 36: Selector=%q, want empty — a bare integer is an index", a.Selector)
+	}
+
+	b, err := actionFromArgs([]string{"click"}, actionFlags{Index: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.ElementID != 7 {
+		t.Fatalf("--index 7: ElementID=%d want 7", b.ElementID)
+	}
+
+	c, err := actionFromArgs([]string{"click", "[aria-label=\"Open\"]"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Selector != "[aria-label=\"Open\"]" || c.ElementID != 0 {
+		t.Fatalf("selector form mis-parsed: %#v", c)
+	}
+
+	if _, err := actionFromArgs([]string{"click"}, actionFlags{}); err == nil {
+		t.Fatal("click with no target must be a usage error, not a no-op")
+	}
+}
+
+// TestScreenshotPathIsNotDiscarded pins the fix for `screenshot
+// /tmp/x.png` exiting 0 having written no file and dumped 223 KB of
+// base64 to stdout instead.
+func TestScreenshotPathIsNotDiscarded(t *testing.T) {
+	a, err := actionFromArgs([]string{"screenshot", "/tmp/shot-test.png"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.SavePath != "/tmp/shot-test.png" {
+		t.Fatalf("positional path dropped: %#v", a)
+	}
+	b, err := actionFromArgs([]string{"screenshot"}, actionFlags{Output: "/tmp/out.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.SavePath != "/tmp/out.png" {
+		t.Fatalf("--output dropped: %#v", b)
+	}
+	// Default is a FILE, not 200 KB of base64 into the caller's stdout.
+	c, err := actionFromArgs([]string{"screenshot"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SavePath == "" {
+		t.Fatal("screenshot with no args must default to writing a file")
+	}
+	if _, err := actionFromArgs([]string{"screenshot"}, actionFlags{Base64: true}); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := actionFromArgs([]string{"screenshot"}, actionFlags{Base64: true}); d.SavePath != "" {
+		t.Fatalf("--base64 must not write a file: %#v", d)
+	}
+	if _, err := actionFromArgs([]string{"screenshot", "/tmp/a.png"}, actionFlags{Base64: true}); err == nil {
+		t.Fatal("--base64 with a path must be a usage error")
+	}
+}
+
+// TestUnrecognisedOperandsFail pins the house rule: anything else
+// fails with a clear error, never a silent guess.
+func TestUnrecognisedOperandsFail(t *testing.T) {
+	for _, args := range [][]string{
+		{"back", "extra"},
+		{"screenshot", "/tmp/a.png", "extra"},
+		{"extract", "#main", "extra"},
+		{"scroll", "sideways"},
+	} {
+		if _, err := actionFromArgs(args, actionFlags{}); err == nil {
+			t.Fatalf("%v: expected a usage error, got none", args)
+		}
+	}
+}
+
+// TestTabActionErrorNamesTheValidSet: the error already knows the
+// action is invalid, so it knows the valid set. Discovering
+// list/switch/new/close used to take eight guesses.
+func TestTabActionErrorNamesTheValidSet(t *testing.T) {
+	_, err := actionFromArgs([]string{"tabs", "activate"}, actionFlags{})
+	if err == nil {
+		t.Fatal("expected an error for an invalid tab action")
+	}
+	for _, want := range []string{"list", "switch", "new", "close"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q", err, want)
+		}
+	}
+	// A bare integer is still a 1-based index.
+	a, err := actionFromArgs([]string{"tabs", "switch", "4"}, actionFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.TabID != 4 {
+		t.Fatalf("tabs switch 4: TabID=%d want 4", a.TabID)
+	}
+	// …and substring addressing is available so scripts need not race.
+	b, err := actionFromArgs([]string{"tabs", "switch"}, actionFlags{TabURL: "localhost:5478"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.MatchURL != "localhost:5478" {
+		t.Fatalf("--url dropped: %#v", b)
+	}
+}
+
+// TestUnknownSubcommandNamesTheValidSet mirrors the tab-action rule at
+// the top level.
+func TestUnknownSubcommandNamesTheValidSet(t *testing.T) {
+	_, errb, code := runTool(t, "shoot")
+	if code != 2 {
+		t.Fatalf("unknown subcommand exit=%d want 2", code)
+	}
+	for _, want := range []string{"screenshot", "navigate", "tabs"} {
+		if !strings.Contains(errb, want) {
+			t.Fatalf("error %q does not name %q", errb, want)
+		}
+	}
+}
+
+// TestPerSubcommandHelp: `browser tabs --help` used to be
+// byte-identical to `browser --help`. Fourteen subcommands shared one
+// page that documented none of them.
+func TestPerSubcommandHelp(t *testing.T) {
+	toolHelp, _, _ := runTool(t, "--help")
+	for _, sub := range []string{"tabs", "screenshot", "click", "extract", "status"} {
+		out, _, code := runTool(t, sub, "--help")
+		if code != 0 {
+			t.Fatalf("%s --help exit=%d", sub, code)
+		}
+		if out == toolHelp {
+			t.Fatalf("%s --help is identical to the tool help", sub)
+		}
+		if !strings.Contains(out, "Output:") {
+			t.Fatalf("%s --help does not state its output contract: %q", sub, out)
+		}
+	}
+	// screenshot's page must state the default the caller actually gets.
+	shot, _, _ := runTool(t, "screenshot", "--help")
+	if !strings.Contains(shot, "path") || !strings.Contains(shot, "--base64") {
+		t.Fatalf("screenshot help omits its output contract: %q", shot)
+	}
+	// tabs must name its vocabulary.
+	tabs, _, _ := runTool(t, "tabs", "--help")
+	for _, want := range []string{"list", "switch", "new", "close"} {
+		if !strings.Contains(tabs, want) {
+			t.Fatalf("tabs help omits %q", want)
+		}
+	}
+}
+
+// TestLiveStatusDoesNotDenyLiveMode pins the class-C fix: status must
+// not report a mode unsupported while its sibling subcommands support
+// it. With no hub running the honest answer is "not reachable, here is
+// how to start one" — never "mode is not supported".
+func TestLiveStatusDoesNotDenyLiveMode(t *testing.T) {
+	out, _, code := runTool(t, "--json", "--mode", "live", "--live-port", "1", "status")
+	if code != 0 {
+		t.Fatalf("live status exit=%d out=%q", code, out)
+	}
+	var env map[string]any
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env["mode"] != "live" {
+		t.Fatalf("mode=%v want live", env["mode"])
+	}
+	msg, _ := env["message"].(string)
+	if strings.Contains(msg, "not supported") {
+		t.Fatalf("live status still denies the mode: %q", msg)
+	}
+	if !strings.Contains(msg, "browser hub") {
+		t.Fatalf("live status names no remedy: %q", msg)
+	}
+	// probe_url is meaningless in live mode and must not be reported.
+	if _, ok := env["probe_url"]; ok {
+		t.Fatalf("live status reports probe_url: %#v", env)
+	}
+	if _, ok := env["hub_port"]; !ok {
+		t.Fatalf("live status omits hub_port: %#v", env)
+	}
+}
+
+// TestDispatchEventAction pins the CSP remedy's plumbing.
+func TestDispatchEventAction(t *testing.T) {
+	a, err := actionFromArgs([]string{"dispatch-event", "toggle-activity-panel"},
+		actionFlags{Detail: `{"open":true}`, On: "document"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Type != "dispatch_event" || a.Event != "toggle-activity-panel" ||
+		a.Detail != `{"open":true}` || a.Selector != "document" {
 		t.Fatalf("unexpected action: %#v", a)
 	}
 }

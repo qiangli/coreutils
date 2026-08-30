@@ -24,6 +24,14 @@ func browserHub(rc *tool.RunContext, ctx context.Context, args []string, asJSON 
 		return 2
 	}
 
+	// The hub is the ONE subcommand that legitimately logs: it is a
+	// long-running foreground process and its diagnostics are the
+	// point. Every other invocation leaves the sink discarding, so a
+	// one-shot `browser --json …` writes exactly one JSON document to
+	// stdout and nothing anywhere else.
+	live.SetLogger(live.NewWriterLogger(rc.Err))
+	defer live.SetLogger(nil)
+
 	svc := live.New(*port)
 	if err := svc.EnsureReady(ctx); err != nil {
 		fmt.Fprintf(rc.Err, "browser hub: %v\n", err)
