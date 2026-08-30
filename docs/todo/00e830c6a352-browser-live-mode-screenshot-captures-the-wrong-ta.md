@@ -3,9 +3,10 @@ id: 00e830c6a352
 kind: task
 title: 'browser live mode: screenshot captures the wrong tab and click-by-index silently no-ops, both reporting success'
 seq: 8
-status: todo
+status: done
 priority: p1
 created: 2026-08-30T18:02:59.062638Z
+closed: 2026-08-30T22:48:23.714686Z
 ---
 
 SPEC: coreutils/pkg/browser (live/, solo/, probe/, wire/). RELATED: SPRINT #87 (epic bashy-yoke) defect class B/C — an acknowledgement that overstates what happened. This item is the NON-COMMS instance and is NOT gate-blocked: browser is shipped code, not Yoke code.

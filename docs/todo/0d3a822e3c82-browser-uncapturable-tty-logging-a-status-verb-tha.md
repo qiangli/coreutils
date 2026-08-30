@@ -3,9 +3,10 @@ id: 0d3a822e3c82
 kind: task
 title: 'browser: uncapturable tty logging, a status verb that denies a working mode, and refusals that name no remedy'
 seq: 9
-status: todo
+status: done
 priority: p2
 created: 2026-08-30T18:03:28.188342Z
+closed: 2026-08-30T22:48:23.73455Z
 ---
 
 SPEC: coreutils/pkg/browser. SIBLING: item 00e830c6a352 (the success-that-did-not-happen cluster). RELATED: SPRINT #87 defect class C — "a refusal that names no remedy is indistinguishable from a reachability failure". These are the same class on the browser surface.
