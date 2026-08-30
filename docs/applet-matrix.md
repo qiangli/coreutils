@@ -133,7 +133,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 6 | 25 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 13 |
 | `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 34 |
-| `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 3 | 24 |
+| `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 4 | 27 |
 | `nproc` | `cmds/nproc` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `ntp` | `cmds/ntp` | — | Bashy/other extension | no | no | 1 | 4 |
 | `numfmt` | `cmds/numfmt` | — | GNU Coreutils | yes | no | 1 | 14 |
