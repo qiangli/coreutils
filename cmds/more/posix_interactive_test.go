@@ -462,12 +462,12 @@ func TestPOSIXEOFDispatch(t *testing.T) {
 	}
 	p.fileIndex = 1
 	p.top = 2
-	if !p.execute(moreCommand{key: 'b'}, true) || p.quit || p.top != 0 {
-		t.Fatalf("last-file EOF non-advance ended pager or failed: quit=%v top=%d", p.quit, p.top)
+	if p.execute(moreCommand{key: 'b'}, true) || !p.quit {
+		t.Fatalf("last-file EOF non-advance returned true or did not quit: quit=%v top=%d", p.quit, p.top)
 	}
 }
 
-func TestPOSIXEditorRemainsAvailableAtLastFileEOF(t *testing.T) {
+func TestPOSIXEditorCommandExitsAtLastFileEOF(t *testing.T) {
 	p, _, errb := memoryPager("one\ntwo\n", 2)
 	p.files, p.fileIndex, p.top, p.next = []string{"fixture"}, 0, 0, 2
 	dir := t.TempDir()
@@ -487,7 +487,7 @@ func TestPOSIXEditorRemainsAvailableAtLastFileEOF(t *testing.T) {
 	}
 	t.Cleanup(func() { runEditor = orig })
 
-	if !p.execute(moreCommand{key: 'v'}, true) || p.quit || !called {
+	if p.execute(moreCommand{key: 'v'}, true) || !p.quit || called {
 		t.Fatalf("last-file EOF editor: quit=%v called=%v stderr=%q", p.quit, called, errb.String())
 	}
 }
