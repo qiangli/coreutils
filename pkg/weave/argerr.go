@@ -28,6 +28,11 @@ import (
 // and reported success. A conductor reading "exit 0" believed the
 // handoff note was written.
 //
+// There are TWO ways a group swallows a typo'd subverb, and wrapping
+// Args only closes the first. The second is that cobra never calls
+// ValidateArgs at all on a group with no Run/RunE — see
+// makeGroupRunnable below, which is what makes the wrapper reachable.
+//
 // FlagErrorFunc has no positional-argument twin in cobra, so instead of
 // delegating the message to the host we wrap every command's Args
 // validator once, at tree-construction time, and report failures the
@@ -37,8 +42,38 @@ import (
 // drives the tree.
 func installArgsErrorReporting(root *cobra.Command) {
 	root.Args = reportingArgs(root)
+	makeGroupRunnable(root)
 	for _, sub := range root.Commands() {
 		installArgsErrorReporting(sub)
+	}
+}
+
+// makeGroupRunnable is what makes the wrapper above REACHABLE on a
+// group that has no Run/RunE of its own.
+//
+// cobra returns flag.ErrHelp for a non-runnable command BEFORE it ever
+// calls ValidateArgs (command.go: `if !c.Runnable() { return
+// flag.ErrHelp }` precedes the ValidateArgs call), and ExecuteC turns
+// ErrHelp into "print help, return nil". So on a group with no RunE the
+// Args wrapper is installed and never runs, and a typo'd subverb prints
+// the group's help and EXITS 0 — reporting success for a command that
+// did not exist. That is the worst of the three failures this file was
+// written for, and it survived here because every weave group happened
+// to have a RunE; `sprint session` does not, and it exited 0 on
+// `sprint session bogusverb`.
+//
+// Giving the group a RunE that simply shows help makes it Runnable, so
+// ValidateArgs runs and the wrapper reports the bad name. The no-args
+// path is unchanged by construction: cobra printed help and exited 0
+// before, and c.Help() prints help and exits 0 now.
+func makeGroupRunnable(cmd *cobra.Command) {
+	if !cmd.HasSubCommands() || cmd.Runnable() {
+		return
+	}
+	cmd.RunE = func(c *cobra.Command, _ []string) error {
+		// Reached only with NO positional args: any leftover positional
+		// on a group fails in ValidateArgs above, before this runs.
+		return c.Help()
 	}
 }
 

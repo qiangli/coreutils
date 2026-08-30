@@ -330,6 +330,27 @@ resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().StringVar(&epic, "epic", "", "filter to one epic")
 	flags.attach(cmd)
+
+	// SELF-REPORTING STRUCTURAL ERRORS — the same two installs NewWeaveCmd
+	// does (weave.go), and for the same reason. flags.attach above sets
+	// SilenceErrors/SilenceUsage so a subverb's own envelope is never
+	// double-printed; that silence ALSO swallows the errors cobra raises
+	// before any RunE runs. sprint had the silence and neither reporter, so
+	// every subverb exited 1 having written zero bytes to stdout AND stderr:
+	//
+	//	sprint checkpoint 87 --as x   exit=1  out=0B  err=0B
+	//	sprint comment 87 --body x    exit=1  out=0B  err=0B
+	//	sprint show 87 --nope         exit=1  out=0B  err=0B
+	//
+	// A silent exit 1 is indistinguishable from "ran, found nothing". It cost
+	// three recorded incidents on sprint #87 alone — most recently a
+	// continuity record its conductor believed was written and was not,
+	// because `--as` is not a checkpoint flag and nothing said so.
+	//
+	// cobra's FlagErrorFunc() climbs to the parent, so one install covers
+	// every subverb; installArgsErrorReporting has no such inheritance and
+	// walks the tree, so it must run AFTER AddCommand below.
+	cmd.SetFlagErrorFunc(weaveFlagErrorFunc)
 	cmd.AddCommand(
 		newWeaveBoardCmd(),
 		newWeaveStoryAddCmd(),
@@ -356,6 +377,11 @@ resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
 		newSprintSessionCmd(),
 		newWeaveConductCmd(),
 	)
+
+	// Positional-argument half. Must follow AddCommand: it walks
+	// root.Commands() to wrap each subverb's Args validator, so a
+	// subcommand added afterwards would not be covered.
+	installArgsErrorReporting(cmd)
 	return cmd
 }
 
