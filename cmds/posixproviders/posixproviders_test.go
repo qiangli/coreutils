@@ -627,8 +627,8 @@ func TestM4BuildRecipePinsPOSIXCorrection(t *testing.T) {
 	if !ok {
 		t.Fatal("m4 is absent from provider manifest")
 	}
-	if e.RecipeRevision != "posix-semantics-1" {
-		t.Fatalf("m4 recipe revision = %q, want posix-semantics-1", e.RecipeRevision)
+	if e.RecipeRevision != "posix-semantics-2" {
+		t.Fatalf("m4 recipe revision = %q, want posix-semantics-2", e.RecipeRevision)
 	}
 }
 

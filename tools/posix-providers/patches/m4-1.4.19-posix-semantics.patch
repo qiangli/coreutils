@@ -22,6 +22,11 @@ index 5e36ab3..5fe7545 100644
 +      set_quotes (NULL, NULL);
 +      return;
 +    }
+@@ -1590 +1597,3 @@ m4_maketemp (struct obstack *obs, int argc, macro_arguments *argv)
++  /* maketemp is a POSIX macro, so its GNU deprecation warning must remain
++     non-fatal in the POSIX dialect even when other warnings are fatal.  */
+-  M4ERROR ((warning_status, 0,
++  M4ERROR ((no_gnu_extensions ? 0 : warning_status, 0,
 diff --git a/src/input.c b/src/input.c
 index 727ac7f..f1c6676 100644
 --- a/src/input.c
