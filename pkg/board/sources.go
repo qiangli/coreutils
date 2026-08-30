@@ -250,6 +250,79 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 	return nil
 }
 
+// todoItem is one row of `todo list --json`, tolerant of both envelope
+// generations. `state` is the current field name; `status` was the pre-loom-v2
+// spelling and is kept as a fallback so a downgrade does not blank the column.
+type todoItem struct {
+	ID       string     `json:"id"`
+	Title    string     `json:"title"`
+	State    string     `json:"state"`
+	Status   string     `json:"status"`
+	Priority string     `json:"priority"`
+	Seq      int        `json:"seq"`
+	Due      *time.Time `json:"due"`
+	Overdue  bool       `json:"overdue"`
+	Created  time.Time  `json:"created"`
+}
+
+func (t todoItem) status() string {
+	if t.State != "" {
+		return t.State
+	}
+	return t.Status
+}
+
+// todoEnvelope reads `todo list --json` in either shape: loom-v2 wraps the rows
+// in `result`, earlier builds put them at the top level. Both are declared so
+// the board keeps working across a version skew between the two binaries rather
+// than silently reporting an empty queue.
+type todoEnvelope struct {
+	SchemaVersion string     `json:"schema_version"`
+	Items         []todoItem `json:"items"`
+	Result        struct {
+		Count int        `json:"count"`
+		Items []todoItem `json:"items"`
+	} `json:"result"`
+}
+
+func (e todoEnvelope) items() []todoItem {
+	if len(e.Result.Items) > 0 {
+		return e.Result.Items
+	}
+	return e.Items
+}
+
+// decodeTodoList parses one `todo list --json` payload into board rows.
+//
+// It fails LOUDLY on an envelope whose shape no longer matches what it declares,
+// because the alternative is what shipped: the rows moved under `result` in
+// loom-v2, the top-level decode yielded nothing, Load returned nil, and the
+// board reported zero todos on a host with 49 — no error, no warning.
+//
+// The count cross-check is the guard, not the version string. Comparing
+// schema_version against a list of known values would only catch drift someone
+// remembered to enumerate; the payload declaring its own length catches ANY
+// reshape, including one that keeps the version. The bare non-empty version test
+// this replaces could not catch anything at all: "loom-v2" is non-empty, so the
+// check that existed to detect exactly this drift passed it through.
+func decodeTodoList(raw []byte, scope string) ([]todoItem, error) {
+	var env todoEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", scope, err)
+	}
+	if env.SchemaVersion == "" {
+		return nil, fmt.Errorf("%s returned unversioned todo JSON", scope)
+	}
+	items := env.items()
+	if env.Result.Count > len(items) {
+		return nil, fmt.Errorf(
+			"%s: decoded %d of %d todo item(s); todo JSON envelope changed shape (schema_version %q)",
+			scope, len(items), env.Result.Count, env.SchemaVersion,
+		)
+	}
+	return items, nil
+}
+
 type todoSource struct{}
 
 func (todoSource) Name() string { return "todo" }
@@ -295,24 +368,12 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 		if err != nil {
 			return err
 		}
-		var env struct {
-			SchemaVersion string `json:"schema_version"`
-			Items         []struct {
-				ID, Title, Status, Priority string
-				Seq                         int        `json:"seq"`
-				Due                         *time.Time `json:"due"`
-				Overdue                     bool       `json:"overdue"`
-				Created                     time.Time  `json:"created"`
-			} `json:"items"`
+		items, err := decodeTodoList(raw, sc.scope)
+		if err != nil {
+			return err
 		}
-		if err := json.Unmarshal(raw, &env); err != nil {
-			return fmt.Errorf("decode %s: %w", sc.scope, err)
-		}
-		if env.SchemaVersion == "" {
-			return fmt.Errorf("%s returned unversioned todo JSON", sc.scope)
-		}
-		for _, x := range env.Items {
-			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.Status, Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created})
+		for _, x := range items {
+			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created})
 		}
 	}
 	sort.SliceStable(b.Todos, func(i, j int) bool {
