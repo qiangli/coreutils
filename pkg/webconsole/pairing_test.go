@@ -327,7 +327,7 @@ func TestQRPayloadIsVersioned(t *testing.T) {
 
 // TestRedeemURLCarriesTheVersion.
 func TestRedeemURLCarriesTheVersion(t *testing.T) {
-	got := redeemURL("dragon.local", 8639, "sec-ret")
+	got := redeemURL("workshop.local", 8639, "sec-ret")
 	u, err := url.Parse(got)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestRedeemURLCarriesTheVersion(t *testing.T) {
 	if u.Query().Get("v") != pairQRVersion || u.Query().Get("t") != "sec-ret" {
 		t.Fatalf("payload = %q", got)
 	}
-	if u.Host != "dragon.local:8639" {
+	if u.Host != "workshop.local:8639" {
 		t.Fatalf("host = %q", u.Host)
 	}
 }
