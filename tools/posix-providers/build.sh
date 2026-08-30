@@ -127,17 +127,18 @@ provider_prepare_lp_source() {
 # GNU m4 1.4.19's traditional switch disables extensions but retains several
 # historical GNU behaviors that conflict with the POSIX interface: lower-case
 # eval digits above nine, LIFO repeated m4wrap calls, changequote() disabling
-# quotes, and unrestricted -D/-U names. It also replaces default fatal-signal dispositions with diagnostic
-# handlers. Apply the reviewed correction to the unpacked upstream tree. The GPL
-# source remains an external, local build input. The tracked source-derived
-# patch is GPL-3.0-or-later; its path and digest are also recorded in the
-# provider provenance sidecar. Neither it nor GNU m4 is linked into the Go
-# multicall binary.
+# quotes, unrestricted -D/-U names, and a fatal GNU deprecation warning for the
+# POSIX maketemp macro. It also replaces default fatal-signal dispositions with
+# diagnostic handlers. Apply the reviewed correction to the unpacked upstream
+# tree. The GPL source remains an external, local build input. The tracked
+# source-derived patch is GPL-3.0-or-later; its path and digest are also recorded
+# in the provider provenance sidecar. Neither it nor GNU m4 is linked into the
+# Go multicall binary.
 provider_prepare_m4_source() {
   _provider_m4_src=$1
   _provider_m4_record=$2
   _provider_m4_patch=$here/patches/m4-1.4.19-posix-semantics.patch
-  _provider_m4_patch_sha=f91247bf25d7c66f2a6888c35ff5a2200df7979826b327f554a31d4d4939e3ac
+  _provider_m4_patch_sha=63715144b5dce740bffa85860b819c65f26422cee8c66e56212d39fc0de334a2
   [ -f "$_provider_m4_patch" ] || {
     printf 'posix-provider: m4 POSIX correction is missing: %s\n' \
       "$_provider_m4_patch" >&2

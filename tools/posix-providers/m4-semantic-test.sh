@@ -52,6 +52,16 @@ if printf 'eval(item[0])\n' | "$m4" $flags >"$work/expression.out" 2>"$work/expr
 fi
 [ -s "$work/expression.err" ] || fail 'invalid expression had no diagnostic'
 
+printf 'maketemp(%s/maketempXXXXXX)\n' "$work" |
+  "$m4" $flags >"$work/maketemp.out" 2>"$work/maketemp.err" ||
+  fail 'maketemp failed'
+maketemp_path=$(cat "$work/maketemp.out")
+case $maketemp_path in
+  "$work"/maketemp??????) ;;
+  *) fail 'maketemp did not emit the generated pathname' ;;
+esac
+[ -f "$maketemp_path" ] || fail 'maketemp did not create the output file'
+
 if printf 'mkstemp(%s/not-present/fXXXXXX)dnl\n' "$work" |
     "$m4" $flags >"$work/mkstemp.out" 2>"$work/mkstemp.err"; then
   fail 'failed mkstemp returned success'
