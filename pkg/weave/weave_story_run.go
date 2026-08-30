@@ -105,6 +105,14 @@ func sameSprintRun(a, b sprintRun) (bool, error) {
 	if a.Repo != b.Repo || a.ID != b.ID {
 		return false, nil
 	}
+	// Ids are QUEUE-LOCAL AND RECYCLED — prune a queue and the next `weave add`
+	// reuses the freed numbers. So matching (repo, queue, id) proves only that
+	// two records name the same SLOT, never the same unit of work. Born is the
+	// generation: when both records carry one and they differ, this is a reused
+	// id and the older link must not block the newer.
+	if !a.Born.IsZero() && !b.Born.IsZero() && !a.Born.Equal(b.Born) {
+		return false, nil
+	}
 	if a.Queue != "" && b.Queue != "" {
 		return a.Queue == b.Queue, nil
 	}

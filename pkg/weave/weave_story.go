@@ -57,6 +57,21 @@ type sprintRun struct {
 	Repo  string `json:"repo"`
 	ID    int64  `json:"id"`
 	Queue string `json:"queue,omitempty"` // stable opaque <repo>-<path-hash> queue identity
+	// Born is the linked run's creation time — the GENERATION discriminator.
+	//
+	// Queue identity names a CHECKOUT, not a run. Issue ids are queue-local
+	// and RECYCLED: prune a queue and the next `weave add` reuses the freed
+	// numbers. So (repo, queue, id) is not a stable name for a unit of work,
+	// and a brand-new run silently inherits the identity of a retired one —
+	// which made `sprint link` refuse three legitimate links across two
+	// sprints, each time reporting the run as "already linked" to a sprint
+	// that had long since shipped.
+	//
+	// Created is set once by `weave add` and never rewritten, so it separates
+	// generations without a schema migration or a new id space. Empty on
+	// records written before this field existed; see sameSprintRun for how
+	// those are handled.
+	Born time.Time `json:"born,omitempty"`
 }
 
 // weaveStoryLease is the conductor lease on a sprint. Liveness is a
@@ -741,6 +756,16 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint link", &flags, func(s *weaveStory) (string, error) {
 				for _, story := range currentBoard {
+					// A DONE sprint's links are a historical record, not a live
+					// claim. Blocking on them means a run can never be worked
+					// again once any sprint that touched it has shipped — and
+					// with recycled ids it also means a NEW run inherits the
+					// claim of a retired one. A run may be claimed by at most
+					// one sprint that is still in play; `sprint show` keeps the
+					// finished sprint's record either way.
+					if story.ID != id && story.Column == "done" {
+						continue
+					}
 					for _, r := range story.Runs {
 						same, serr := sameSprintRun(r, linked)
 						if serr != nil {
@@ -804,7 +829,12 @@ func resolveAndValidateSprintRunLink(repo string, task int64, queue string) (spr
 			return sprintRun{}, fmt.Errorf("cannot link %s#%d: launch runtime %s exceeds the %d-point cap %s; stop and restart it under its point cap first", repo, task, run.LaunchSpec.MaxRuntime, run.Points, cap)
 		}
 	}
-	return sprintRun{Repo: strings.TrimSpace(repo), ID: task, Queue: filepath.Base(queueDir)}, nil
+	return sprintRun{
+		Repo:  strings.TrimSpace(repo),
+		ID:    task,
+		Queue: filepath.Base(queueDir),
+		Born:  run.Created,
+	}, nil
 }
 
 // newWeaveCheckpointCmd is the conductor's durability heartbeat: update

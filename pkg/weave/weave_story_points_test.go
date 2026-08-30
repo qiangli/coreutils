@@ -78,8 +78,20 @@ func TestSprintLinkRequiresValidPointsBeforeStoryMutation(t *testing.T) {
 	storyDir, _ := sprintStoreDir()
 	q, _ := loadWeaveQueue(storyDir)
 	s := findWeaveStory(q, 1)
-	if s == nil || len(s.Runs) != 1 || s.Runs[0] != (sprintRun{Repo: repo, ID: 1, Queue: filepath.Base(dir)}) {
+	if s == nil || len(s.Runs) != 1 {
 		t.Fatalf("valid link missing: %+v", s)
+	}
+	got := s.Runs[0]
+	if got.Repo != repo || got.ID != 1 || got.Queue != filepath.Base(dir) {
+		t.Fatalf("valid link identity wrong: %+v", got)
+	}
+	// Born is the GENERATION discriminator — ids are queue-local and recycled,
+	// so a link without one cannot tell a fresh run from a retired one that
+	// happened to reuse the number. Asserted as non-zero rather than by struct
+	// equality: the value is a wall clock, and pinning it would only re-break
+	// this test the next time the record grows a field.
+	if got.Born.IsZero() {
+		t.Fatalf("link did not record the run's generation: %+v", got)
 	}
 }
 
