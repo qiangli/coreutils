@@ -51,7 +51,12 @@ const DefaultPort = 58082
 // a page the caller never asked for. No Go-side change can detect that
 // from the outside — the image is real, just of the wrong page — so
 // the version gate is the only place it can be caught.
-const LiveExtensionMinVersion = "0.7.0"
+// Deliberately NOT raised to 0.7.2. The floor exists to catch SILENT
+// wrongness — a stale extension handing back a real PNG of the wrong page.
+// 0.7.1 does not do that: its background capture fails LOUDLY with a timeout,
+// which is a bad experience but an honest one, and forcing every agent
+// mid-task through another reload to fix a loud failure is the worse trade.
+const LiveExtensionMinVersion = "0.7.1"
 
 // LiveHandshakeTimeout caps how long hub.call waits for the extension
 // to send its _hello frame before treating the connection as too old.

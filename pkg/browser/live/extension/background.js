@@ -509,17 +509,81 @@ function waitForLoad(tabId) {
 
 const SETTLE_MS_DEFAULT = 150;
 
+// CDP_CAPTURE_TIMEOUT_MS bounds the debugger capture path.
+//
+// A background tab has no compositing surface, and Page.captureScreenshot on
+// one does not fail — it NEVER RETURNS. That is worse than an error here,
+// because the focus-and-restore fallback below is reached only by a thrown
+// exception, so a hang bypassed the fallback entirely and blocked until the
+// caller's 30s ceiling killed the whole request. Found on the first live-mode
+// run against a real background tab; no unit test over the extension source
+// could have seen it.
+const CDP_CAPTURE_TIMEOUT_MS = 4000;
+
+// SETTLE_TIMEOUT_MS bounds the paint barrier. Belt and braces on top of the
+// visible-tab check above: a barrier that cannot complete must cost a slightly
+// early frame, never the whole request.
+const SETTLE_TIMEOUT_MS = 2000;
+
+// withTimeout rejects if p has not settled within ms. The underlying promise
+// is left to finish on its own — it cannot be cancelled — so callers that hold
+// a resource must release it on the timeout path too.
+function withTimeout(p, ms, label) {
+  let timer;
+  const bell = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label + ": no answer within " + ms + "ms")), ms);
+  });
+  return Promise.race([p, bell]).finally(() => clearTimeout(timer));
+}
+
+// viewportOf reads the target page's own dimensions. chrome.scripting works on
+// a hidden tab even though compositing does not, which is what makes the
+// surface override below possible.
+async function viewportOf(tabId) {
+  try {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        width: document.documentElement.clientWidth || window.innerWidth || 0,
+        height: document.documentElement.clientHeight || window.innerHeight || 0,
+        dpr: window.devicePixelRatio || 1,
+      }),
+    });
+    return result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // settleTab waits for the renderer to actually paint the current DOM.
 // Two composited frames plus a short tail: a capture issued straight
 // after a click otherwise returns the PRE-click frame while `extract`
 // already reports the post-click DOM — an image and a DOM that
 // disagree, both reported as success.
-async function settleTab(tabId, settleMs) {
+//
+// ONLY MEANINGFUL FOR A VISIBLE TAB, and getting that wrong hung the whole
+// call. requestAnimationFrame NEVER FIRES in a hidden tab — Chrome stops
+// servicing frames for one — so awaiting a frame there waits forever. It is
+// not merely slow, it never completes, and because the await is on the path
+// BEFORE the capture it took the request down with it. Measured directly:
+// script injection into a hidden tab returns in 0s, while a rAF callback in
+// the same tab had not fired after 2s.
+//
+// A hidden tab also has nothing to settle: it is not painting, and its
+// capture path renders on demand. So the barrier is skipped rather than
+// bounded-and-waited.
+async function settleTab(tabId, settleMs, visible) {
   const ms = settleMs === undefined || settleMs === null || settleMs < 0
     ? SETTLE_MS_DEFAULT
     : settleMs;
+  if (!visible) {
+    // Still yield briefly so a DOM mutation issued moments ago has landed,
+    // but through a timer, which a hidden tab does service.
+    if (ms > 0) await new Promise((r) => setTimeout(r, Math.min(ms, 250)));
+    return;
+  }
   try {
-    await chrome.scripting.executeScript({
+    await withTimeout(chrome.scripting.executeScript({
       target: { tabId },
       args: [ms],
       func: async (ms) => {
@@ -529,10 +593,11 @@ async function settleTab(tabId, settleMs) {
         if (ms > 0) await new Promise((r) => setTimeout(r, ms));
         return true;
       },
-    });
+    }), SETTLE_TIMEOUT_MS, "settle");
   } catch (_) {
-    // A page we cannot inject into (chrome://, the web store) still
-    // gets captured; it just does not get the paint barrier.
+    // A page we cannot inject into (chrome://, the web store), or a frame
+    // that never arrived: capture anyway, just without the barrier. Never
+    // hang on the way to a screenshot.
     if (ms > 0) await new Promise((r) => setTimeout(r, ms));
   }
 }
@@ -550,8 +615,9 @@ async function settleTab(tabId, settleMs) {
 async function takeScreenshot(tabId, params) {
   params = params || {};
   const tab = await chrome.tabs.get(tabId);
-  await settleTab(tabId, params.settle_ms);
 
+  // Resolve visibility FIRST: it selects both the capture path and the kind
+  // of settle that is even possible. Settling before knowing was the bug.
   const fullPage = !!params.full_page;
   let visible = false;
   if (!fullPage) {
@@ -561,6 +627,8 @@ async function takeScreenshot(tabId, params) {
     } catch (_) { visible = false; }
   }
 
+  await settleTab(tabId, params.settle_ms, visible);
+
   if (visible) {
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
     return screenshotResult(dataUrl, tab, "capture_visible_tab", fullPage);
@@ -569,10 +637,18 @@ async function takeScreenshot(tabId, params) {
   // Background tab, or a full-page request: CDP addresses the tab
   // itself. Costs a debugger attach (and its banner) — which is why
   // the foreground case above stays on the cheap path.
+  //
+  // TIME-BOUNDED: see CDP_CAPTURE_TIMEOUT_MS. A hidden tab can leave
+  // Page.captureScreenshot pending forever, and an unbounded await here would
+  // never reach the fallback below.
   try {
-    const dataUrl = await captureViaDebugger(tabId, fullPage);
+    const dataUrl = await withTimeout(
+      captureViaDebugger(tabId, fullPage), CDP_CAPTURE_TIMEOUT_MS, "cdp capture");
     return screenshotResult(dataUrl, tab, "cdp_capture_screenshot", fullPage);
   } catch (cdpErr) {
+    // The raced promise may still be in flight holding the attach; drop our
+    // reference so a timed-out capture cannot leak a debugger session.
+    try { await debuggerAttach.release(tabId); } catch (_) { /* already gone */ }
     if (fullPage) {
       throw new Error(
         `screenshot: full_page needs CDP and the debugger attach failed: ${cdpErr.message || cdpErr}`
@@ -585,7 +661,7 @@ async function takeScreenshot(tabId, params) {
     const [prev] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
     await chrome.tabs.update(tabId, { active: true });
     try {
-      await settleTab(tabId, params.settle_ms);
+      await settleTab(tabId, params.settle_ms, true);
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
       return screenshotResult(dataUrl, tab, "focus_and_capture", fullPage);
     } finally {
@@ -598,13 +674,32 @@ async function takeScreenshot(tabId, params) {
 
 async function captureViaDebugger(tabId, fullPage) {
   await debuggerAttach.acquire(tabId, "Page");
+  let overrode = false;
   try {
+    // Force a compositing surface. A hidden tab has none, which is precisely
+    // why Page.captureScreenshot hangs on one; explicit device metrics give
+    // the renderer something to draw into so the capture can complete WITHOUT
+    // stealing focus from whatever the operator is looking at.
+    const vp = await viewportOf(tabId);
+    if (vp && vp.width > 0 && vp.height > 0) {
+      await chrome.debugger.sendCommand({ tabId }, "Emulation.setDeviceMetricsOverride", {
+        width: vp.width, height: vp.height,
+        deviceScaleFactor: vp.dpr || 1, mobile: false,
+      });
+      overrode = true;
+    }
     const opts = { format: "png" };
     if (fullPage) opts.captureBeyondViewport = true;
     const res = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", opts);
     if (!res || !res.data) throw new Error("Page.captureScreenshot returned no data");
     return res.data; // already bare base64, no data: prefix
   } finally {
+    if (overrode) {
+      // Leaving an override behind would resize the operator's page.
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Emulation.clearDeviceMetricsOverride");
+      } catch (_) { /* tab closed, or already detached */ }
+    }
     await debuggerAttach.release(tabId);
   }
 }
