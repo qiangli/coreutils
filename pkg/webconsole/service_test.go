@@ -53,6 +53,20 @@ func TestServiceSpecMatchesTheHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestServicePairingIsExplicitAndDoesNotMutateTheBaseSpec(t *testing.T) {
+	plain := serviceSpec(false)
+	paired := serviceSpec(true)
+	if got := strings.Join(plain.Argv, " "); got != "apps serve" {
+		t.Fatalf("plain service argv = %q", got)
+	}
+	if got := strings.Join(paired.Argv, " "); got != "apps serve --pair" {
+		t.Fatalf("paired service argv = %q", got)
+	}
+	if got := strings.Join(spec.Argv, " "); got != "apps serve" {
+		t.Fatalf("base service spec mutated to %q", got)
+	}
+}
+
 // A disabled panel must be UNROUTED, not merely unlisted. outpost publishes the
 // console under one app name and HostShare grants are per app name, so if
 // disabling the Terminal only hid the tile, sharing the console would still

@@ -61,6 +61,7 @@ var spec = svcd.Spec{
 func newServiceCmd() *cobra.Command {
 	var opt svcd.Options
 	var asJSON bool
+	var pair bool
 	cmd := &cobra.Command{
 		Use:   "service",
 		Short: "run the console as a supervised background daemon",
@@ -77,13 +78,14 @@ func newServiceCmd() *cobra.Command {
 	cmd.PersistentFlags().IntVar(&opt.Port, "port", 0, "port the console listens on (0 = default)")
 	cmd.PersistentFlags().StringVar(&opt.Bind, "bind", "", "address the console binds (default 127.0.0.1)")
 	cmd.PersistentFlags().BoolVar(&asJSON, "json", false, "emit the status envelope as JSON")
+	cmd.PersistentFlags().BoolVar(&pair, "pair", false, "arm QR phone pairing for the console daemon")
 
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "start", Short: "start the console daemon",
 			SilenceUsage: true, SilenceErrors: true,
 			RunE: func(c *cobra.Command, _ []string) error {
-				st, err := spec.Start(opt)
+				st, err := serviceSpec(pair).Start(opt)
 				printServiceStatus(c.OutOrStdout(), st, asJSON, "start")
 				return err
 			},
@@ -116,6 +118,15 @@ func newServiceCmd() *cobra.Command {
 		},
 	)
 	return cmd
+}
+
+func serviceSpec(pair bool) svcd.Spec {
+	s := spec
+	s.Argv = append([]string{}, spec.Argv...)
+	if pair {
+		s.Argv = append(s.Argv, "--pair")
+	}
+	return s
 }
 
 // printServiceStatus writes the status line outpost greps.
