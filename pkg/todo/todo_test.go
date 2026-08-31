@@ -61,6 +61,41 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 }
 
+func TestTodoCLIAddAndEditSprint(t *testing.T) {
+	base := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := NewTodoCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(append([]string{"--base-dir", base}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("todo %v: %v\n%s", args, err, out.String())
+		}
+	}
+
+	run("add", "tracked delivery", "--sprint", "97")
+	items, err := List(RepoStore(base), "")
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items = %d, err = %v", len(items), err)
+	}
+	if items[0].Sprint != 97 {
+		t.Fatalf("added sprint = %d, want 97", items[0].Sprint)
+	}
+
+	run("edit", "1", "--sprint", "98")
+	item, err := ResolveRef(RepoStore(base), "1")
+	if err != nil || item.Sprint != 98 {
+		t.Fatalf("edited sprint = %d, err = %v", item.Sprint, err)
+	}
+	run("edit", "1", "--sprint", "0")
+	item, err = ResolveRef(RepoStore(base), "1")
+	if err != nil || item.Sprint != 0 {
+		t.Fatalf("unlinked sprint = %d, err = %v", item.Sprint, err)
+	}
+}
+
 func TestRepoStoreIsDocsTodo(t *testing.T) {
 	rs := RepoStore("/some/repo")
 	if rs.Sub != RepoSub || RepoSub != "docs/todo" {

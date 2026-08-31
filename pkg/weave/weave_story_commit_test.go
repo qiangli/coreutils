@@ -69,6 +69,12 @@ func TestValidateCommitTraceStories(t *testing.T) {
 	if err := validateCommitTraceStories(bad, stories); err == nil || !strings.Contains(err.Error(), "resolves to") {
 		t.Fatalf("mismatched pair err = %v", err)
 	}
+	missing := commitTrace{Sprint: 97, Stories: []commitStoryRef{{Number: 16, ID: "0123456789ab"}}}
+	if err := validateCommitTraceStories(missing, nil); err == nil ||
+		!strings.Contains(err.Error(), "todo add --sprint 97") ||
+		!strings.Contains(err.Error(), "weave run is execution") {
+		t.Fatalf("missing-story remedy err = %v", err)
+	}
 }
 
 func TestManagedCommitHookChainsAndValidates(t *testing.T) {

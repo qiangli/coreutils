@@ -123,7 +123,7 @@ func validateCommitTraceStories(trace commitTrace, stories []sprintStoryState) e
 		bySeq, numberOK := byNumber[ref.Number]
 		byStable, idOK := byID[ref.ID]
 		if !numberOK {
-			return fmt.Errorf("Story: #%d is not linked to Sprint: #%d", ref.Number, trace.Sprint)
+			return fmt.Errorf("Story: #%d is not linked to Sprint: #%d; a story is a repo todo, so file it with `bashy todo add --sprint %d ...` (a weave run is execution, not a story), then use `bashy sprint track %d --repo <repo>` when it lives in another repo", ref.Number, trace.Sprint, trace.Sprint, trace.Sprint)
 		}
 		if !idOK {
 			return fmt.Errorf("Story-ID: %s is not linked to Sprint: #%d", ref.ID, trace.Sprint)

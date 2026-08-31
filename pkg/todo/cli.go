@@ -125,7 +125,8 @@ func NewTodoCmd() *cobra.Command {
 			"personal list even inside a repo; --repo forces the repo list. Every command prints\n" +
 			"a header showing the resolved folder, so which list you are on is never in doubt.\n\n" +
 			"Relation to the other trackers: `bashy sprint` is a TIME-BOX (a window grouping\n" +
-			"items); `bashy weave` is the execution queue (`weave add --from-todo` seeds a run).",
+			"items); a sprint story is a repo todo filed with `todo add --sprint N`;\n" +
+			"`bashy weave` is the execution queue (`weave add --from-todo` seeds a run).",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -187,6 +188,7 @@ func emitJSON(cmd *cobra.Command, v any) error {
 func newAddCmd(sf storeFunc) *cobra.Command {
 	var priority, note string
 	var dueStr, recurring, assignee string
+	var sprint int64
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "add <title>",
@@ -197,6 +199,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cmd.Flags().Changed("sprint") && sprint < 1 {
+				return fmt.Errorf("--sprint must be a positive sprint number")
+			}
 			due, err := parseDue(dueStr)
 			if err != nil {
 				return err
@@ -205,8 +210,14 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cmd.Flags().Changed("sprint") {
+				it.Sprint = sprint
+				if _, err := st.Save(it); err != nil {
+					return err
+				}
+			}
 			if jsonOut {
-				return emitJSON(cmd, map[string]any{"id": it.ID, "status": it.Status, "title": it.Title})
+				return emitJSON(cmd, map[string]any{"id": it.ID, "status": it.Status, "title": it.Title, "sprint": it.Sprint})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added %s [%s] — %s\n", it.ID[:8], it.Status, it.Title)
 			return nil
@@ -217,6 +228,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
 	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item")
+	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
 }
@@ -433,6 +445,7 @@ func newStartCmd(sf storeFunc) *cobra.Command {
 func newEditCmd(sf storeFunc) *cobra.Command {
 	var title, priority, note string
 	var dueStr, recurring, assignee string
+	var sprint int64
 	cmd := &cobra.Command{
 		Use:   "edit <id|prefix>",
 		Short: "modify a task's title/priority/note",
@@ -468,6 +481,12 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			if cmd.Flags().Changed("assignee") {
 				it.Assignee = assignee
 			}
+			if cmd.Flags().Changed("sprint") {
+				if sprint < 0 {
+					return fmt.Errorf("--sprint must be zero (unlink) or a positive sprint number")
+				}
+				it.Sprint = sprint
+			}
 			if _, err := st.Save(it); err != nil {
 				return err
 			}
@@ -481,6 +500,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
 	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item")
+	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to (0 unlinks)")
 	return cmd
 }
 
