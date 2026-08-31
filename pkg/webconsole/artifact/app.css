@@ -519,6 +519,11 @@ body.standalone #bar { flex: none; }
   background: none; border: 0; padding: 0; color: var(--primary); text-decoration: underline;
 }
 .bd-sprint .more.open { color: var(--muted-foreground); }
+/* Two toggles now sit side by side on a card ("stories — 9" and
+   "continuity — 2 sections"). With padding:0 and no margin they rendered as
+   one run-on word. Targets the BUTTONS only: the "+N more" in a refs line is a
+   span in a flex row that already has its gap. */
+.bd-sprint button.more + button.more { margin-left: .9rem; }
 
 /* The continuity brief, as the labelled sections a conductor wrote — not a
  * <pre> wall. Prose wraps; only the label is monospaced, because the label is
