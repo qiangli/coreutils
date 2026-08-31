@@ -106,6 +106,12 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	var displayPath string
 	var nohupOut *os.File
 	stdout := rc.Out
+	if outClosed {
+		// A child executor cannot portably copy a closed *os.File. POSIX permits
+		// nohup to replace a closed standard descriptor with an unspecified open
+		// file, so use a null sink and still invoke the requested utility.
+		stdout = io.Discard
+	}
 	// POSIX requires terminal stderr to follow nohup.out when stdout is a
 	// terminal *or is closed*.  A closed *os.File is not a terminal, so test
 	// that condition explicitly rather than silently sending stderr back to a
@@ -169,7 +175,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	restoreHangup := ignoreHangup()
 	defer restoreHangup()
 
-	err := c.Run()
+	err := nohupCommandRunner(c)
 	if err == nil {
 		return 0
 	}
@@ -234,6 +240,8 @@ func openNohupOutput(rc *tool.RunContext) (*os.File, string, error) {
 }
 
 var nohupOutputOpener = openNohupOutput
+
+var nohupCommandRunner = func(c *exec.Cmd) error { return c.Run() }
 
 func isClosedFile(w io.Writer) bool {
 	f, ok := w.(*os.File)

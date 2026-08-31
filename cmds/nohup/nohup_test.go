@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -240,6 +241,43 @@ func TestNohupClosedStdoutAndTerminalStderrRequiresNohupOut(t *testing.T) {
 	}
 	if !openerCalled {
 		t.Fatal("nohup did not try nohup.out when stdout was closed and stderr was a terminal")
+	}
+}
+
+func TestNohupClosedStdoutUsesPermittedReplacementForUtility(t *testing.T) {
+	closedOut, err := os.CreateTemp(t.TempDir(), "closed-stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closedOut.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunner := nohupCommandRunner
+	invoked := false
+	nohupCommandRunner = func(c *exec.Cmd) error {
+		invoked = true
+		if isClosedFile(c.Stdout) {
+			return errors.New("executor rejected closed stdout")
+		}
+		return nil
+	}
+	t.Cleanup(func() { nohupCommandRunner = oldRunner })
+
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"PATH=/bin:/usr/bin", "POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: closedOut, Err: &errOut},
+	}
+	// POSIX permits nohup's execution environment to replace a closed
+	// standard descriptor with an unspecified open file. The utility must be
+	// invoked rather than failing at the executor's descriptor-copy boundary.
+	if code := run(rc, []string{"true"}); code != 0 {
+		t.Fatalf("closed stdout utility probe code=%d stderr=%q, want 0", code, errOut.String())
+	}
+	if !invoked {
+		t.Fatal("utility executor was not invoked")
 	}
 }
 
