@@ -57,7 +57,7 @@ func TestConflictAcrossRepos(t *testing.T) {
 	}
 	// The refusal IS the documentation: it must name who, and what to do instead.
 	msg := conflict.Error()
-	for _, want := range []string{"claude-a", "running the gate", "bashy claims", "weave add", "BASHY_CLAIM_FORCE"} {
+	for _, want := range []string{"claude-a", "running the gate", "claim list", "claim request", "weave add", "BASHY_CLAIM_FORCE"} {
 		if !contains(msg, want) {
 			t.Errorf("the refusal does not mention %q — an agent that read no docs learns the rule HERE:\n%s", want, msg)
 		}

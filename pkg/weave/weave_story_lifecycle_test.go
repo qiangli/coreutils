@@ -13,7 +13,7 @@ func TestSprintLifecycleSurface(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		have[sub.Name()] = true
 	}
-	for _, name := range []string{"start", "pause", "resume", "end"} {
+	for _, name := range []string{"start", "pause", "resume", "end", "goal", "track", "next", "focus"} {
 		if !have[name] {
 			t.Errorf("missing sprint lifecycle verb %q", name)
 		}
@@ -76,7 +76,7 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 	}
 
 	t.Setenv("WEAVE_CONDUCTOR", "Grace")
-	out, code := runSprint(t, "resume", "1")
+	out, code := runSprint(t, "resume", "1", "--as", "Grace")
 	if code != 0 {
 		t.Fatalf("resume exit=%d: %s", code, out)
 	}

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/spf13/cobra"
 )
 
@@ -111,7 +113,52 @@ sessions became invisible to each other.`,
 		},
 	}
 
-	cmd.AddCommand(list, release)
+	var requestMessage string
+	request := &cobra.Command{
+		Use:   "request",
+		Short: "Ask the live conflicting owner to review/merge or release the project claim",
+		Long: `request does not steal or bypass a claim. It finds the live owner whose
+path set conflicts with this project and sends that identity a durable, urgent
+coordination message through the Bashy bus. The owner decides whether to merge,
+sequence, hand off, or release; until then the git write guard continues to refuse.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			self := Self()
+			claims, err := List(DefaultDir())
+			if err != nil {
+				return err
+			}
+			var conflict *Claim
+			for _, c := range claims {
+				if c.Conflicts(roots(), self, time.Now()) {
+					conflict = c
+					break
+				}
+			}
+			if conflict == nil {
+				return fmt.Errorf("no live conflicting project claim; take it with `bashy claim --intent <work>`")
+			}
+			to := strings.TrimSpace(conflict.Holder.Name)
+			if to == "" {
+				return fmt.Errorf("conflicting claim has no addressable owner name")
+			}
+			from := strings.TrimSpace(self.Name)
+			if from == "" {
+				from = "agent"
+			}
+			body := strings.TrimSpace(requestMessage)
+			if body == "" {
+				body = fmt.Sprintf("MERGE REQUEST: %s requests review/merge sequencing or release of the %s project claim", from, conflict.Project)
+			}
+			if err := bus.Publish(bus.Notification{Principal: from, To: to, Body: body, Priority: bus.DeliveryInterrupt}); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "claim request: sent to %s; write lock remains enforced until that owner coordinates or releases\n", to)
+			return nil
+		},
+	}
+	request.Flags().StringVarP(&requestMessage, "message", "m", "", "merge/sequencing request (default names requester and project)")
+
+	cmd.AddCommand(list, request, release)
 	return cmd
 }
 

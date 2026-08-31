@@ -27,14 +27,18 @@ import (
 type weaveStory struct {
 	ID         int64            `json:"id"`
 	Title      string           `json:"title"`
-	Epic       string           `json:"epic,omitempty"`       // grouping label
-	SpecRef    string           `json:"spec_ref,omitempty"`   // handoff/spec doc reference
-	Acceptance string           `json:"acceptance,omitempty"` // done criteria
-	Column     string           `json:"column"`               // backlog|doing|review|done
-	Continuity string           `json:"continuity,omitempty"` // the resume brief
-	Lease      *weaveStoryLease `json:"lease,omitempty"`      // current conductor + heartbeat
-	Thread     []weaveComment   `json:"thread,omitempty"`     // sprint-level history
-	Runs       []sprintRun      `json:"runs,omitempty"`       // linked weave runs, CROSS-REPO
+	Epic       string           `json:"epic,omitempty"`        // grouping label
+	SpecRef    string           `json:"spec_ref,omitempty"`    // handoff/spec doc reference
+	Acceptance string           `json:"acceptance,omitempty"`  // done criteria
+	Column     string           `json:"column"`                // backlog|doing|review|done
+	Continuity string           `json:"continuity,omitempty"`  // the resume brief
+	Owner      string           `json:"owner,omitempty"`       // durable coordination identity across pauses
+	Goal       []sprintGoalItem `json:"goal,omitempty"`        // durable outcomes; completion is derived
+	StoryRoots []string         `json:"story_roots,omitempty"` // repo todo stores contributing stories
+	Execution  sprintExecution  `json:"execution,omitempty"`   // policy + current focus, never a copied order
+	Lease      *weaveStoryLease `json:"lease,omitempty"`       // current conductor + heartbeat
+	Thread     []weaveComment   `json:"thread,omitempty"`      // sprint-level history
+	Runs       []sprintRun      `json:"runs,omitempty"`        // linked weave runs, CROSS-REPO
 	// Boxes are the sprint's TIME CYCLES, oldest first — orthogonal to Column
 	// (position) and Lease (conductor liveness). A sprint is stopped and
 	// restarted freely over its life, so this is a LIST: one entry per
@@ -185,11 +189,17 @@ func weaveConductorName(asFlag string) string {
 // only truthful actor. Explicit process identity still wins so a different
 // agent cannot silently act through somebody else's lease.
 func weaveStoryConductorName(s *weaveStory, asFlag string) string {
-	if who, ok := weaveConductorIdentity(asFlag); ok {
-		return who
+	if strings.TrimSpace(asFlag) != "" {
+		return strings.TrimSpace(asFlag)
+	}
+	if s != nil && strings.TrimSpace(s.Owner) != "" {
+		return s.Owner
 	}
 	if holder, stale, free := weaveStoryLeaseState(s); !free && !stale {
 		return holder
+	}
+	if who, ok := weaveConductorIdentity(""); ok {
+		return who
 	}
 	return "conductor"
 }
@@ -372,6 +382,10 @@ resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
 		newWeaveStoryLinkCmd(),
 		newWeaveStoryUnlinkCmd(),
 		newWeaveCheckpointCmd(),
+		newSprintGoalCmd(),
+		newSprintTrackCmd(),
+		newSprintNextCmd(),
+		newSprintFocusCmd(),
 		// Conductor-coordination, moved here from `weave` (plan layer,
 		// not per-repo execution): the cloudbox shared-session group and
 		// the conductor director.
@@ -453,7 +467,8 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column 
 		s := &weaveStory{
 			ID: newID, Title: title, Epic: epic, SpecRef: spec,
 			Acceptance: acceptance, Column: column,
-			Created: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			Execution: sprintExecution{PriorityFirst: true},
+			Created:   time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		}
 		weaveStoryAppend(s, "conductor", "system", fmt.Sprintf("created in %s", column))
 		q.Stories = append(q.Stories, s)
@@ -503,7 +518,17 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 			fmt.Errorf("sprint #%d not found", id)))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{"sprint": s}))
+		progress := make([]map[string]any, 0, len(s.Goal))
+		for _, g := range s.Goal {
+			progress = append(progress, map[string]any{"id": g.ID, "checked": sprintGoalDone(g), "dangling": sprintGoalDangling(g)})
+		}
+		next, nerr := nextSprintStory(s)
+		if nerr != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint show", weavecli.ExitGenericFail, nerr))
+		}
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{
+			"sprint": s, "goal_progress": progress, "next_story": next,
+		}))
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
@@ -516,12 +541,15 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 	if s.Acceptance != "" {
 		fmt.Fprintf(out, "  acceptance: %s\n", s.Acceptance)
 	}
+	renderSprintExecution(out, s)
 	if h, stale, free := weaveStoryLeaseState(s); !free {
 		st := "fresh"
 		if stale {
 			st = fmt.Sprintf("STALE (no heartbeat for %s — take it)", time.Since(s.Lease.At).Round(time.Minute))
 		}
 		fmt.Fprintf(out, "  conductor:  %s (%s)\n", h, st)
+	} else if s.Owner != "" {
+		fmt.Fprintf(out, "  conductor:  %s (owner; lease unclaimed — `sprint resume %d`)\n", s.Owner, s.ID)
 	} else {
 		fmt.Fprintf(out, "  conductor:  (unclaimed — `sprint take %d`)\n", s.ID)
 	}
@@ -565,9 +593,14 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 				return fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint move", &flags, func(s *weaveStory) (string, error) {
+				if col == "done" {
+					if remaining := sprintUncheckedGoals(s); len(remaining) > 0 {
+						return "", fmt.Errorf("sprint #%d has unchecked goal items: %s", id, strings.Join(remaining, ", "))
+					}
+				}
 				from := s.Column
 				s.Column = col
-				weaveStoryAppend(s, weaveConductorName(""), "system", fmt.Sprintf("moved %s → %s", from, col))
+				weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", fmt.Sprintf("moved %s → %s", from, col))
 				return fmt.Sprintf("sprint #%d %s → %s", id, from, col), nil
 			})
 		},
@@ -594,25 +627,26 @@ continuity record (sprint show) and resume.`,
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			who := weaveConductorName(as)
 			return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
+				who := sprintTakeoverIdentity(s, as)
+				prev, stale, free := weaveStoryLeaseState(s)
+				if !free && !stale && prev != who && !force {
+					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+				}
 				// THE DEAD HOLDER CANNOT CLOSE THEIR OWN ROOM. A successor
 				// taking over a stale lease inherits a channel addressed to
 				// somebody who will never read it, so the takeover closes it
 				// and opens one that answers.
 				if s.Contact != nil {
-					_ = closeSprintRoom(s, weaveConductorName(""))
+					_ = closeSprintRoom(s, weaveStoryConductorName(s, ""))
 				}
 				if s.currentBox().Running() {
-					if c, err := openSprintRoom(s, weaveConductorName("")); err == nil {
+					if c, err := openSprintRoom(s, who); err == nil {
 						s.Contact = c
 					}
 				}
-				prev, stale, free := weaveStoryLeaseState(s)
-				if !free && !stale && prev != who && !force {
-					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
-				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
+				s.Owner = who
 				switch {
 				case free:
 					weaveStoryAppend(s, who, "system", "took conductor lease (was unclaimed)")
@@ -621,7 +655,7 @@ continuity record (sprint show) and resume.`,
 				default:
 					weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
 				}
-				return fmt.Sprintf("sprint #%d: %s is now conductor — read the continuity record (sprint show %d)", id, who, id), nil
+				return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s; read sprint show %d", id, who, sprintReadyLine(who), id), nil
 			})
 		},
 	}
@@ -652,8 +686,8 @@ untouched — they survive in the queue for the successor.`,
 				// still running would be a dead letterbox, but a handoff is
 				// precisely the case where the work moves WITH the role — the
 				// successor opens their own.
-				_ = closeSprintRoom(s, weaveConductorName(""))
-				who := weaveConductorName("")
+				who := weaveStoryConductorName(s, "")
+				_ = closeSprintRoom(s, who)
 				if strings.TrimSpace(message) != "" {
 					s.Continuity = message
 				}

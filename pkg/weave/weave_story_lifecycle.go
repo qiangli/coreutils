@@ -86,8 +86,8 @@ are not relaunched because pause never stopped them.`,
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			who := weaveConductorName(as)
 			return runWeaveStoryMutate(cmd, id, "sprint resume", &flags, func(s *weaveStory) (string, error) {
+				who := sprintTakeoverIdentity(s, as)
 				prev, stale, free := weaveStoryLeaseState(s)
 				if !free && !stale && prev != who && !force {
 					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to resume", id, prev)
@@ -96,6 +96,7 @@ are not relaunched because pause never stopped them.`,
 					_ = closeSprintRoom(s, who)
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
+				s.Owner = who
 				if s.currentBox().Running() {
 					if c, err := openSprintRoom(s, who); err == nil {
 						s.Contact = c
@@ -106,7 +107,7 @@ are not relaunched because pause never stopped them.`,
 				if brief == "" {
 					brief = "(no continuity brief recorded)"
 				}
-				return fmt.Sprintf("sprint #%d resumed by %s\ncontinuity: %s", id, who, brief), nil
+				return fmt.Sprintf("sprint #%d resumed by %s\ncoordination: use %s for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, who, sprintReadyLine(who), brief), nil
 			})
 		},
 	}

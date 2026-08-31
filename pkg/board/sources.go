@@ -381,6 +381,9 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 		if b.Todos[i].Scope != b.Todos[j].Scope {
 			return b.Todos[i].Scope < b.Todos[j].Scope
 		}
+		if a, z := todo.PriorityRank(b.Todos[i].Priority), todo.PriorityRank(b.Todos[j].Priority); a != z {
+			return a < z
+		}
 		return b.Todos[i].Number < b.Todos[j].Number
 	})
 	return nil

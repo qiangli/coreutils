@@ -225,6 +225,7 @@ func newSprintStartCmd() *cobra.Command {
 						id, prev, id)
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: now}
+				s.Owner = who
 				s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})
 				// A room is opened automatically, because an OPTIONAL room is
 				// empty exactly when it is needed: at the moment somebody

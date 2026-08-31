@@ -662,6 +662,12 @@ func loadWeaveQueue(dir string) (*weaveQueue, error) {
 		}
 		q.Items[i].LegacyWorkspace = ""
 	}
+	// Priority-first is the sprint execution invariant, including for cards
+	// written before the explicit execution-policy field existed. Story priority
+	// remains the only ordering source; this flag records that the policy applies.
+	for i := range q.Stories {
+		q.Stories[i].Execution.PriorityFirst = true
+	}
 	return &q, nil
 }
 
