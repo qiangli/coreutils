@@ -92,6 +92,26 @@ func TestLauncherFooterKeepsVersionAndGainsCopyright(t *testing.T) {
 	}
 }
 
+func TestLauncherConstrainsPhoneViewport(t *testing.T) {
+	h := newTestHandler(t, Options{})
+	w := do(h, "GET", "/app.css", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("app.css = %d, want 200", w.Code)
+	}
+	css := w.Body.String()
+	for _, want := range []string{
+		"@media (max-width: 40rem)",
+		"overflow-x: hidden",
+		"#who, #ver { display: none; }",
+		"#foot code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }",
+		"max-height: calc(100svh - 1rem)",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("phone layout is missing %q", want)
+		}
+	}
+}
+
 // Every managed app must carry the same copyright footer, but never the
 // launcher's own version/build detail — that identity belongs to the
 // launcher, not to an app served alongside it. The footer is mode-independent.

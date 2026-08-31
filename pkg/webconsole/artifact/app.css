@@ -605,3 +605,30 @@ body.standalone #bar { flex: none; }
   .bd-sprint .sec { display: block; }
   .bd-sprint .sec-k { margin-bottom: .15rem; }
 }
+
+/* Phone layout. Flex items default to min-width:auto, so one long footer code
+   token used to widen the whole app and push header controls off-screen. */
+@media (max-width: 40rem) {
+  html, body, #app { width: 100%; max-width: 100%; overflow-x: hidden; }
+  #app, #bar, #view, #foot, #nav { min-width: 0; }
+  #bar { padding: .6rem .75rem; }
+  #brand { gap: .5rem; min-width: 0; }
+  #who, #ver { display: none; }
+  #nav { flex: none; gap: .1rem; }
+  .iconbtn { width: 40px; height: 40px; }
+
+  #view { width: calc(100% - 1rem); margin: 1rem .5rem; padding: 1rem .75rem; border-radius: 14px; }
+  #search-wrap { margin-bottom: 1rem; }
+  .summary { gap: 1rem; padding: .75rem; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(82px, 1fr)); column-gap: .35rem; }
+
+  #foot { width: 100%; padding: 1rem .75rem; }
+  #foot span { max-width: 100%; }
+  #foot code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+
+  dialog#settings { width: calc(100% - 1rem); max-height: calc(100svh - 1rem); overflow-y: auto; }
+  .sheet { padding: 1rem .9rem .85rem; }
+  .seg { display: flex; width: 100%; }
+  .seg button { flex: 1; min-width: 0; padding-inline: .4rem; }
+  .pair-qr { width: min(168px, 55vw); height: auto; aspect-ratio: 1; }
+}
