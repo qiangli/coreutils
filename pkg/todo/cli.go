@@ -53,6 +53,12 @@ type listItem struct {
 	Recurring string     `json:"recurring,omitempty"`
 	Assignee  string     `json:"assignee,omitempty"`
 	Closed    *time.Time `json:"closed,omitempty"`
+
+	// Sprint is the sprint card this item is a story of, or 0 when it is a
+	// free-standing item. Emitted so a reader (the steward board, the web
+	// console) can group stories under their card without re-reading every
+	// item file — and never required, because todo does not depend on sprint.
+	Sprint int64 `json:"sprint,omitempty"`
 }
 
 // listResult is the result object of the `todo list --json` envelope: the
@@ -86,6 +92,7 @@ func toListItems(items []*issue.Issue, scope string) []listItem {
 			Recurring: it.Recurring,
 			Assignee:  it.Assignee,
 			Closed:    it.Closed,
+			Sprint:    it.Sprint,
 		})
 	}
 	return out

@@ -46,8 +46,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,6 +133,18 @@ type Issue struct {
 	Recurring string     `yaml:"recurring,omitempty" json:"recurring,omitempty"`
 	Assignee  string     `yaml:"assignee,omitempty" json:"assignee,omitempty"`
 
+	// Sprint is the sprint card this item is a story of, once one claims it.
+	// Exactly the shape and rationale as Weave above: the register is the
+	// durable truth, the sprint is the time-box, and this is the join that
+	// stops them becoming parallel universes.
+	//
+	// OPTIONAL AND NEVER REQUIRED. Absent means unlinked, which is a perfectly
+	// valid item — `todo` does not require a sprint and must not start to. A
+	// dangling reference is not an error either: a reader shows it, nothing
+	// validates it at write time, because write-time validation is enforcement
+	// by another name and these tools are deliberately uncoupled.
+	Sprint int64 `yaml:"sprint,omitempty" json:"sprint,omitempty"`
+
 	Closed     *time.Time `yaml:"closed,omitempty" json:"closed,omitempty"`
 	Resolution string     `yaml:"resolution,omitempty" json:"resolution,omitempty"` // fixed | declined | duplicate | obsolete
 	ClosedBy   string     `yaml:"closed_by,omitempty" json:"closed_by,omitempty"`
@@ -170,7 +184,39 @@ func Parse(b []byte) (*Issue, error) {
 	body = strings.TrimPrefix(body, "\r")
 	body = strings.TrimPrefix(body, "\n")
 	it.Body = strings.TrimRight(strings.TrimPrefix(body, "\n"), "\n")
+	if it.Sprint == 0 {
+		it.Sprint = sprintFromBody(it.Body)
+	}
 	return &it, nil
+}
+
+// sprintRef matches the sprint marker agents have been typing into item
+// bodies by convention: "SPRINT: #87", "SPRINT #87", "RELATED: SPRINT #87".
+var sprintRef = regexp.MustCompile(`(?i)\bsprint:?\s*#(\d+)`)
+
+// sprintFromBody recovers the sprint link from the body when the frontmatter
+// field is absent.
+//
+// The convention came FIRST and the field came second: eight items were filed
+// against sprint #87 with the link hand-typed into prose on both sides, and
+// nothing could answer "which items belong to #87?" without grepping. Deriving
+// on read means every one of those items links itself the moment this ships —
+// no migration, no bulk edit, and no agent has to learn a new spelling.
+//
+// The frontmatter field always wins when set, so an explicit link is never
+// overridden by a stray mention. The first marker wins; a body discussing
+// several sprints links to the one it leads with, which is how these items
+// actually read.
+func sprintFromBody(body string) int64 {
+	m := sprintRef.FindStringSubmatch(body)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // Marshal renders the issue back to its on-disk form.

@@ -150,10 +150,55 @@ function runRefsEl(refs) {
   return wrap;
 }
 
+// The linked STORIES are what a sprint is FOR, and this page showed none of
+// them: the overview payload carried sprints and runs and dropped todos
+// entirely, so every card rendered as a title with no work under it. A sprint
+// whose stories are invisible reads as an empty sprint.
+//
+// Rendered in two registers, both reusing the card's existing classes so this
+// costs no CSS: an always-visible chip line (what runRefsEl does for runs, so a
+// scan sees at once that a card has seven stories, not zero) and a collapsible
+// list carrying each story's status, priority and title.
+function storiesEl(stories) {
+  const wrap = el("div", "refs");
+  wrap.append(el("span", "k", "stories"));
+  const shown = stories.slice(0, 24);
+  for (const t of shown) {
+    const chip = el("span", "ref " + stateClass(t.status), "#" + (t.number || t.id));
+    // The full title on hover, so a chip line stays scannable without hiding
+    // what each chip is.
+    chip.title = [t.priority, t.status, t.title].filter(Boolean).join(" · ");
+    wrap.append(chip);
+  }
+  if (stories.length > shown.length) {
+    wrap.append(el("span", "more", "+" + (stories.length - shown.length) + " more"));
+  }
+  return wrap;
+}
+
+function storyListEl(stories) {
+  const btn = el("button", "more", "stories — " + stories.length);
+  btn.type = "button";
+  const body = el("div", "continuity");
+  body.hidden = true;
+  for (const t of stories) {
+    const row = el("div", "sec");
+    row.append(el("div", "sec-k " + stateClass(t.status),
+      "#" + (t.number || t.id) + (t.priority ? " " + t.priority : "")));
+    row.append(el("div", "sec-v", t.title || ""));
+    body.append(row);
+  }
+  btn.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    btn.classList.toggle("open", !body.hidden);
+  });
+  return [btn, body];
+}
+
 // A SPRINT card. The sprints are the reason this page exists — the lanes below
 // are runs, and a run is the execution of one item, not the time-boxed set a
 // conductor drives.
-function sprintEl(sp) {
+function sprintEl(sp, stories) {
   const n = el("article", "bd-sprint " + stateClass(sp.column));
   const head = el("header");
   head.append(el("span", "id", "#" + sp.id));
@@ -175,6 +220,12 @@ function sprintEl(sp) {
 
   const refs = sp.run_refs || [];
   if (refs.length) n.append(runRefsEl(refs));
+
+  stories = stories || [];
+  if (stories.length) {
+    n.append(storiesEl(stories));
+    n.append(...storyListEl(stories));
+  }
 
   const sections = continuitySections(sp.continuity);
   if (sections.length) {
@@ -199,9 +250,24 @@ function sprintEl(sp) {
   return n;
 }
 
+// storiesBySprint indexes the todos onto their card. A story whose sprint is 0
+// is UNLINKED, which is a perfectly ordinary item — todo does not require a
+// sprint — so it simply does not appear under any card.
+function storiesBySprint(todos) {
+  const by = new Map();
+  for (const t of todos || []) {
+    const id = t.sprint_id;
+    if (!id) continue;
+    if (!by.has(id)) by.set(id, []);
+    by.get(id).push(t);
+  }
+  return by;
+}
+
 function renderSprints(d) {
   const host = $("bd-sprints");
   const sps = d.sprints || [];
+  const by = storiesBySprint(d.todos);
   const h = el("header");
   h.append(el("span", "t", "Sprints"));
   h.append(el("span", "n", sps.length + (d.all ? "" : " of " + d.sprint_total)));
@@ -209,7 +275,7 @@ function renderSprints(d) {
   if (!sps.length) {
     body.append(el("p", "empty", d.all ? "No sprints." : "No sprint is open. Tick “include history” for the finished ones."));
   } else {
-    for (const sp of sps) body.append(sprintEl(sp));
+    for (const sp of sps) body.append(sprintEl(sp, by.get(sp.id)));
   }
   host.replaceChildren(h, body);
 }

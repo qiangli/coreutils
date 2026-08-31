@@ -199,3 +199,77 @@ func TestEmptyRegisterIsNotAnError(t *testing.T) {
 		t.Fatalf("List on a fresh repo = %v, %v; want empty, nil", all, err)
 	}
 }
+
+// TestSprintLinkDerivedFromBody pins the read-time derivation.
+//
+// The convention came FIRST: agents had been typing "SPRINT: #87" into item
+// bodies, and nothing could answer "which items belong to #87?" without
+// grepping prose. Deriving on read means every already-filed item links itself
+// with no migration and no bulk edit.
+func TestSprintLinkDerivedFromBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int64
+	}{
+		{"canonical marker", "SPRINT: #87 (epic bashy-yoke). SCOPE: ...", 87},
+		{"no colon", "RELATED: SPRINT #87 defect class B/C", 87},
+		{"lowercase", "sprint: #12 — notes", 12},
+		{"mid-sentence", "Filed against SPRINT #5 by the conductor.", 5},
+		{"first wins", "SPRINT: #87. Siblings live on SPRINT #85.", 87},
+		{"absent", "A perfectly ordinary item with no card.", 0},
+		{"not a sprint ref", "This sprints along nicely. #87 is a phone number.", 0},
+		{"zero is not a card", "SPRINT: #0", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte("---\nid: abc\ntitle: t\nstatus: todo\ncreated: 2026-08-30T00:00:00Z\n---\n\n" + tc.body + "\n")
+			it, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if it.Sprint != tc.want {
+				t.Errorf("Sprint = %d, want %d (body %q)", it.Sprint, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// TestExplicitSprintFieldWinsOverProse: an author who set the field means it.
+// A stray mention in the body must never override an explicit link, or the
+// structured field would be less trustworthy than the convention it replaces.
+func TestExplicitSprintFieldWinsOverProse(t *testing.T) {
+	raw := []byte("---\nid: abc\ntitle: t\nstatus: todo\nsprint: 42\ncreated: 2026-08-30T00:00:00Z\n---\n\nSPRINT: #87 mentioned in passing.\n")
+	it, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it.Sprint != 42 {
+		t.Errorf("Sprint = %d, want the explicit 42, not the prose 87", it.Sprint)
+	}
+}
+
+// TestSprintLinkRoundTrips: once derived, the link must survive a
+// Marshal/Parse cycle as a real frontmatter field, so an item edited by any
+// tool keeps its card.
+func TestSprintLinkRoundTrips(t *testing.T) {
+	raw := []byte("---\nid: abc\ntitle: t\nstatus: todo\ncreated: 2026-08-30T00:00:00Z\n---\n\nSPRINT: #87\n")
+	it, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := it.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "sprint: 87") {
+		t.Fatalf("marshalled item carries no sprint field:\n%s", out)
+	}
+	back, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Sprint != 87 {
+		t.Errorf("round trip lost the link: %d", back.Sprint)
+	}
+}

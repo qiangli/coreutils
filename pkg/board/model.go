@@ -132,6 +132,11 @@ type Todo struct {
 	Due      *time.Time `json:"due,omitempty"`
 	Overdue  bool       `json:"overdue,omitempty"`
 	Created  time.Time  `json:"created,omitempty,omitzero"`
+
+	// SprintID is the sprint card this todo is a story of, 0 when unlinked.
+	// It is what lets a reader group stories under their card; without it the
+	// board could only ever show a flat list, which is what it did.
+	SprintID int64 `json:"sprint_id,omitempty"`
 }
 
 type Sprint struct {

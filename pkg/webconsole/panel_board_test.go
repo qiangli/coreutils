@@ -6,6 +6,7 @@ package webconsole
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,16 @@ func fakeBoard(t *testing.T) *board.Board {
 			{ID: 10, Label: "working run", State: "submitted"},
 			{ID: 11, Label: "old run", State: "done"},
 			{ID: 12, Label: "gone run", State: "abandoned"},
+		}
+		// Stories: two linked to the live sprint, one linked to a finished
+		// one, one unlinked, one closed. Enough to pin grouping, the
+		// history filter, and the unlinked case at once.
+		b.Todos = []board.Todo{
+			{ID: "aaa", Number: 1, Title: "linked story", Status: "todo", Priority: "p1", SprintID: 1},
+			{ID: "bbb", Number: 2, Title: "second linked story", Status: "doing", Priority: "p2", SprintID: 1},
+			{ID: "ccc", Number: 3, Title: "story on a done sprint", Status: "todo", SprintID: 2},
+			{ID: "ddd", Number: 4, Title: "free-standing item", Status: "todo"},
+			{ID: "eee", Number: 5, Title: "finished story", Status: "done", SprintID: 1},
 		}
 		b.Warnings = []string{"fake: a source failed"}
 		return nil
@@ -234,4 +245,80 @@ func TestBoardServesNoMutatingMethod(t *testing.T) {
 	if !strings.Contains(do(h, "GET", "/api/board", "127.0.0.1:5555", nil).Body.String(), boardSchemaVersion) {
 		t.Fatal("GET /api/board returned no board payload — the negative test above proves nothing")
 	}
+}
+
+// TestBoardOverviewCarriesStories pins the fix for the web board showing a
+// sprint with no stories under it.
+//
+// The overview payload carried sprints and runs and dropped todos ENTIRELY —
+// "todos" appeared nowhere in this package — so every card on the page
+// rendered as a title with no work beneath it, and a sprint whose stories are
+// invisible reads as an empty sprint. The front-end was already willing: it
+// showed a todo COUNT in the summary strip, which is what made the absence
+// look like "this host has no todos" rather than "the payload has no field".
+func TestBoardOverviewCarriesStories(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	d := getJSON(t, h, "/api/board")
+	todos, ok := d["todos"].([]any)
+	if !ok {
+		t.Fatalf("the overview carries no `todos` field at all: keys=%v", keysOf(d))
+	}
+	// Default view hides history, exactly as it does for sprints and runs:
+	// four of the five stories are open.
+	if len(todos) != 4 {
+		t.Errorf("default view shows %d stories, want 4 open (of 5)", len(todos))
+	}
+	if d["todo_total"].(float64) != 5 {
+		t.Errorf("todo_total = %v, want the unfiltered 5", d["todo_total"])
+	}
+	for _, raw := range todos {
+		if strings.EqualFold(raw.(map[string]any)["status"].(string), "done") {
+			t.Errorf("a finished story survived the default view: %v", raw)
+		}
+	}
+
+	// The link is what makes them STORIES rather than a flat list.
+	bySprint := map[float64]int{}
+	for _, raw := range todos {
+		if id, ok := raw.(map[string]any)["sprint_id"].(float64); ok {
+			bySprint[id]++
+		}
+	}
+	if bySprint[1] != 2 {
+		t.Errorf("sprint 1 has %d linked open stories, want 2", bySprint[1])
+	}
+	// An unlinked item is ordinary, not an error: it simply belongs to no card.
+	if got := len(todos) - bySprint[1] - bySprint[2]; got != 1 {
+		t.Errorf("%d unlinked stories, want 1", got)
+	}
+}
+
+// TestBoardOverviewAllIncludesFinishedStories: --all is one idea across lanes,
+// sprints, runs and now stories. If they ever disagree the page can claim to
+// show everything while hiding one collection.
+func TestBoardOverviewAllIncludesFinishedStories(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	d := getJSON(t, h, "/api/board?all=1")
+	if got := len(d["todos"].([]any)); got != 5 {
+		t.Errorf("all=1 shows %d stories, want all 5", got)
+	}
+}
+
+func keysOf(d map[string]any) []string {
+	out := make([]string, 0, len(d))
+	for k := range d {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -263,6 +263,7 @@ type todoItem struct {
 	Due      *time.Time `json:"due"`
 	Overdue  bool       `json:"overdue"`
 	Created  time.Time  `json:"created"`
+	Sprint   int64      `json:"sprint"`
 }
 
 func (t todoItem) status() string {
@@ -373,7 +374,7 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 			return err
 		}
 		for _, x := range items {
-			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created})
+			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint})
 		}
 	}
 	sort.SliceStable(b.Todos, func(i, j int) bool {

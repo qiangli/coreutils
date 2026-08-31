@@ -121,12 +121,17 @@ type boardView struct {
 	AgeSeconds    int       `json:"age_seconds"`
 	TTLSeconds    int       `json:"ttl_seconds"`
 
-	Summary  board.Summary    `json:"summary"`
-	Rollup   board.Rollup     `json:"rollup"`
-	Lanes    []board.Lane     `json:"lanes"`
-	Agents   []board.Agent    `json:"agents"`
-	Sprints  []board.Sprint   `json:"sprints"`
-	Runs     []board.Run      `json:"runs"`
+	Summary board.Summary  `json:"summary"`
+	Rollup  board.Rollup   `json:"rollup"`
+	Lanes   []board.Lane   `json:"lanes"`
+	Agents  []board.Agent  `json:"agents"`
+	Sprints []board.Sprint `json:"sprints"`
+	Runs    []board.Run    `json:"runs"`
+	// Todos are the sprint's STORIES. The overview carried sprints and runs
+	// but never todos, so the web board could not show a card's stories at
+	// all — it showed a count in the summary strip and nothing behind it. A
+	// sprint whose stories are invisible reads as an empty sprint.
+	Todos    []board.Todo     `json:"todos"`
 	Panels   []boardPanelView `json:"panels"`
 	Warnings []string         `json:"warnings,omitempty"`
 
@@ -139,6 +144,7 @@ type boardView struct {
 	// Totals are the UNFILTERED counts, so "3 of 78" is always sayable.
 	SprintTotal int `json:"sprint_total"`
 	RunTotal    int `json:"run_total"`
+	TodoTotal   int `json:"todo_total"`
 }
 
 // terminalRun and doneSprint name the records that are HISTORY rather than live
@@ -154,6 +160,16 @@ func terminalRun(state string) bool {
 }
 
 func doneSprint(column string) bool { return strings.EqualFold(column, "done") }
+
+// doneTodo names a story that is finished. Kept beside terminalRun and
+// doneSprint so the three "this is history" rules stay visibly one idea.
+func doneTodo(status string) bool {
+	switch strings.ToLower(status) {
+	case "done", "closed", "cancelled", "canceled":
+		return true
+	}
+	return false
+}
 
 // handleBoardOverview is the steward board, projected for a browser.
 //
@@ -185,7 +201,7 @@ func (s *server) handleBoardOverview(w http.ResponseWriter, r *http.Request) {
 		Summary: b.Summary, Rollup: b.Rollup, Agents: b.Agents,
 		Warnings: b.Warnings, Resources: b.Resources, Utilization: b.Utilization,
 		All:         all,
-		SprintTotal: len(b.Sprints), RunTotal: len(b.Runs),
+		SprintTotal: len(b.Sprints), RunTotal: len(b.Runs), TodoTotal: len(b.Todos),
 	}
 
 	// The `done` lane is 75 of this host's 98 cards. It is history in kanban
@@ -208,6 +224,15 @@ func (s *server) handleBoardOverview(w http.ResponseWriter, r *http.Request) {
 	for _, run := range b.Runs {
 		if all || !terminalRun(run.State) {
 			v.Runs = append(v.Runs, run)
+		}
+	}
+
+	// Stories. Closed items are history for the same reason a done sprint is,
+	// so they follow the same --all rule the lanes/sprints/runs above use.
+	v.Todos = make([]board.Todo, 0, len(b.Todos))
+	for _, t := range b.Todos {
+		if all || !doneTodo(t.Status) {
+			v.Todos = append(v.Todos, t)
 		}
 	}
 
