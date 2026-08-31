@@ -233,6 +233,23 @@ func openSourceFile(rc *tool.RunContext, member, full string) (*os.File, error) 
 	return f, nil
 }
 
+func readSourceLink(rc *tool.RunContext, member, full string) (string, error) {
+	target, err := os.Readlink(full)
+	if err == nil || !rootRelativeSource(rc, member, full) {
+		return target, err
+	}
+	root, base, rootErr := sourceParentRoot(rc, member)
+	if rootErr != nil {
+		return "", err
+	}
+	defer root.Close()
+	target, rootErr = root.Readlink(base)
+	if rootErr != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 // statSourcePath is os.Stat for a source pax has decided to follow (-H on an
 // operand, -L anywhere), with the same component-wise retry. The retry keeps
 // os.Root's confinement, so it resolves only links that stay inside the run

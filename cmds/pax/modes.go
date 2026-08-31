@@ -1172,7 +1172,7 @@ func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, nam
 			}
 		case e.fi.Mode()&os.ModeSymlink != 0:
 			var target string
-			target, dataErr = os.Readlink(e.abs)
+			target, dataErr = readSourceLink(rc, e.member, e.abs)
 			data = []byte(target)
 		}
 		if dataErr != nil {
@@ -1190,7 +1190,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		link := ""
 		if fi.Mode()&os.ModeSymlink != 0 {
 			var err error
-			if link, err = os.Readlink(e.abs); err != nil {
+			if link, err = readSourceLink(rc, e.member, e.abs); err != nil {
 				return sourceTraversalErr(err)
 			}
 		}
@@ -1579,7 +1579,7 @@ func preflightCopyInvalidRenames(rc *tool.RunContext, o *options, files []string
 			link := ""
 			if e.fi.Mode()&os.ModeSymlink != 0 && !e.followed {
 				var err error
-				link, err = os.Readlink(e.abs)
+				link, err = readSourceLink(rc, e.member, e.abs)
 				if err != nil {
 					return err
 				}
@@ -1664,7 +1664,7 @@ func linkCopyNeedsInvalidRename(rc *tool.RunContext, o *options, files []string)
 				return errLinkCopyNeedsInvalidRename
 			}
 			if e.fi.Mode()&os.ModeSymlink != 0 && !e.followed {
-				link, readErr := os.Readlink(e.abs)
+				link, readErr := readSourceLink(rc, e.member, e.abs)
 				if readErr != nil {
 					return readErr
 				}
@@ -1902,7 +1902,7 @@ func copyOneByLink(rc *tool.RunContext, o *options, e walkEntry, target string) 
 			return nil, err
 		}
 	case e.fi.Mode()&os.ModeSymlink != 0 && !e.followed:
-		link, err := os.Readlink(source)
+		link, err := readSourceLink(rc, e.member, source)
 		if err != nil {
 			return nil, sourceTraversalErr(err)
 		}

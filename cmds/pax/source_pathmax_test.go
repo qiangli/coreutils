@@ -182,6 +182,46 @@ func TestCPIOSourcePathNearPathMaxIsArchived(t *testing.T) {
 	}
 }
 
+// Physical traversal is the default: a symlink's own value, not its referent,
+// must be archived. Reading that value must use the same component-wise source
+// resolution as lstat and regular-file content reads.
+func TestPhysicalSymlinkNearPathMaxIsArchived(t *testing.T) {
+	d := t.TempDir()
+	_, member := nearLimitSourceTree(t, d, symlinkLeaf)
+	if len(member) != destinationPathMax-1 {
+		t.Fatalf("fixture pathname length = %d, want %d", len(member), destinationPathMax-1)
+	}
+
+	if _, errOut, code := exec(t, d, "", "-w", "-f", "archive.pax", member); code != 0 || errOut != "" {
+		t.Fatalf("write pax near-PATH_MAX symlink = (%d, %q), want (0, \"\")", code, errOut)
+	}
+	h, _ := archivedMember(t, filepath.Join(d, "archive.pax"), member)
+	if h == nil || h.Typeflag != tar.TypeSymlink || h.Linkname != "referent" {
+		t.Fatalf("pax symlink = (%v), want link to referent", h)
+	}
+
+	if _, errOut, code := exec(t, d, "", "-w", "-x", "cpio", "-f", "archive.cpio", member); code != 0 || errOut != "" {
+		t.Fatalf("write cpio near-PATH_MAX symlink = (%d, %q), want (0, \"\")", code, errOut)
+	}
+	raw, err := os.ReadFile(filepath.Join(d, "archive.cpio"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := readCPIOEntries(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.name == member {
+			if entry.mode&0o170000 != 0o120000 || string(entry.data) != "referent" {
+				t.Fatalf("cpio symlink = (mode %#o, %q), want symlink to referent", entry.mode, entry.data)
+			}
+			return
+		}
+	}
+	t.Fatalf("cpio archive is missing deep symlink %q", member)
+}
+
 // -H resolves a symlink named as a command-line operand. The operand's own
 // spelling is within {PATH_MAX}; only pax's absolute rewrite is not, so the
 // followed stat must succeed and the referent's contents be archived.
