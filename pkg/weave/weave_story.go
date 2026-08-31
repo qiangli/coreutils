@@ -386,6 +386,8 @@ resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
 		newSprintTrackCmd(),
 		newSprintNextCmd(),
 		newSprintFocusCmd(),
+		newSprintCommitMsgCmd(),
+		newSprintHooksCmd(),
 		// Conductor-coordination, moved here from `weave` (plan layer,
 		// not per-repo execution): the cloudbox shared-session group and
 		// the conductor director.
