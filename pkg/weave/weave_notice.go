@@ -13,21 +13,22 @@ import (
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
-const weaveOwnerNoticeSchema = "bashy-owner-notice-v1"
-
 type weaveOwnerNotice struct {
-	ID            int64     `json:"id"`
-	Key           string    `json:"key"`
-	Type          string    `json:"type"`
-	Source        string    `json:"source"`
-	Repo          string    `json:"repo"`
-	Run           int64     `json:"run"`
-	Actor         string    `json:"actor"`
-	Owner         string    `json:"owner"`
-	Timestamp     time.Time `json:"timestamp"`
+	ID        int64         `json:"id"`
+	Key       string        `json:"key"`
+	Owner     string        `json:"owner"`
+	Activity  room.Activity `json:"activity"`
+	Delivered bool          `json:"delivered,omitempty"`
+	// Legacy fields are retained solely to replay notices written before the
+	// activity envelope existed. They are never re-published verbatim.
+	Type          string    `json:"type,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	Repo          string    `json:"repo,omitempty"`
+	Run           int64     `json:"run,omitempty"`
+	Actor         string    `json:"actor,omitempty"`
+	Timestamp     time.Time `json:"timestamp,omitempty"`
 	TerminalState string    `json:"terminal_state,omitempty"`
 	Evidence      string    `json:"evidence,omitempty"`
-	Delivered     bool      `json:"delivered,omitempty"`
 }
 
 // weaveOwnerFor resolves only durable ownership. It never picks an arbitrary
@@ -66,11 +67,25 @@ func weaveQueueOwnerNotice(dir string, q *weaveQueue, it *weaveItem, typ string)
 		}
 	}
 	q.NextOwnerNoticeID++
-	evidence := it.Head
-	if evidence == "" {
-		evidence = it.Completion
+	verb := "updated"
+	if typ == "assignment-started" {
+		verb = "assigned"
 	}
-	q.OwnerNotices = append(q.OwnerNotices, weaveOwnerNotice{ID: q.NextOwnerNoticeID, Key: key, Type: typ, Source: "weave", Repo: q.Root, Run: it.ID, Actor: it.Owner, Owner: owner, Timestamp: time.Now().UTC(), TerminalState: it.State, Evidence: evidence})
+	if typ == "run-terminal" {
+		verb = "completed"
+	}
+	now := time.Now().UTC()
+	actor := strings.TrimSpace(it.Owner)
+	if actor == "" {
+		actor = "weave"
+	}
+	q.OwnerNotices = append(q.OwnerNotices, weaveOwnerNotice{ID: q.NextOwnerNoticeID, Key: key, Owner: owner, Activity: room.Activity{
+		ID: key, Version: 1, Actor: actor, Verb: verb, Noun: "run",
+		ObjectRef: fmt.Sprintf("run:%d", it.ID), Repo: q.Root, Origin: "weave",
+		CorrelationID: fmt.Sprintf("weave-run-%d", it.ID), Priority: bus.DeliveryQueued,
+		Timestamp: now, FetchRef: fmt.Sprintf("weave:run:%d", it.ID),
+		Summary: fmt.Sprintf("weave run #%d %s", it.ID, it.State),
+	}})
 }
 
 // weaveDeliverOwnerNotices runs after the queue write. It is safe on every
@@ -86,9 +101,10 @@ func weaveDeliverOwnerNotices(dir string) {
 			continue
 		}
 		_, _ = bus.EnsureSubscription(e.Owner) // offline owner gets a durable inbox.
-		subject := weaveOwnerNoticeSubject(e)
+		activity := weaveNoticeActivity(e)
+		subject := activity.Summary
 		if !weaveOwnerNoticeOnTimeline(e.Key) {
-			if err := bus.Publish(bus.Notification{Principal: "weave", To: e.Owner, Body: subject, Priority: bus.DeliveryQueued}); err != nil {
+			if err := bus.Publish(bus.Notification{Principal: activity.Actor, To: e.Owner, Body: subject, Priority: bus.DeliveryQueued, Activity: &activity, MatchReason: "owner"}); err != nil {
 				continue
 			}
 			// A live addressed conversation is woken; a watcher cursor alone is
@@ -107,13 +123,33 @@ func weaveDeliverOwnerNotices(dir string) {
 	}
 }
 
-func weaveOwnerNoticeSubject(e weaveOwnerNotice) string {
-	state := e.TerminalState
-	if state == "" {
-		state = e.Type
+// weaveNoticeActivity migrates an undelivered v1 owner notice at the replay
+// boundary. Its old evidence field is intentionally not copied: details stay
+// behind the authorized fetch reference.
+func weaveNoticeActivity(e weaveOwnerNotice) room.Activity {
+	if e.Activity.Validate() == nil {
+		return e.Activity
 	}
-	line := fmt.Sprintf("weave run #%d %s", e.Run, state)
-	return fmt.Sprintf("%s [schema=%s event_id=%d event=%s source=%s repo=%s run=%d actor=%s owner=%s timestamp=%s terminal_state=%s evidence=%s key=%s]", line, weaveOwnerNoticeSchema, e.ID, e.Type, e.Source, e.Repo, e.Run, e.Actor, e.Owner, e.Timestamp.Format(time.RFC3339Nano), state, e.Evidence, e.Key)
+	verb := "updated"
+	if e.Type == "assignment-started" {
+		verb = "assigned"
+	}
+	if e.Type == "run-terminal" {
+		verb = "completed"
+	}
+	actor := strings.TrimSpace(e.Actor)
+	if actor == "" {
+		actor = "weave"
+	}
+	ts := e.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	return room.Activity{ID: e.Key, Version: 1, Actor: actor, Verb: verb, Noun: "run",
+		ObjectRef: fmt.Sprintf("run:%d", e.Run), Repo: e.Repo, Origin: "weave",
+		CorrelationID: fmt.Sprintf("weave-run-%d", e.Run), Priority: bus.DeliveryQueued,
+		Timestamp: ts, FetchRef: fmt.Sprintf("weave:run:%d", e.Run),
+		Summary: fmt.Sprintf("weave run #%d %s", e.Run, e.TerminalState)}
 }
 
 func weaveOwnerNoticeOnTimeline(key string) bool {
@@ -122,7 +158,7 @@ func weaveOwnerNoticeOnTimeline(key string) bool {
 		return false
 	}
 	for _, e := range events {
-		if strings.Contains(e.Body, "key="+key+"]") {
+		if e.Activity != nil && e.Activity.ID == key {
 			return true
 		}
 	}

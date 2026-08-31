@@ -104,6 +104,48 @@ type Event struct {
 	// interrupts it accepts, so an unauthorized or rate-limited interrupt is
 	// demoted to queued rather than honoured or dropped.
 	Priority string `json:"priority,omitempty"`
+	// Activity is the compact, durable fact emitted after a successful Coreutils
+	// transaction.  It deliberately carries references, never operation bodies
+	// or output.  Consumers use FetchRef under their own authorization to obtain
+	// details.
+	Activity *Activity `json:"activity,omitempty"`
+	// MatchReason records why this addressed event reached its recipient (for
+	// example owner, assignment, mention, membership, or subscription).
+	MatchReason string `json:"match_reason,omitempty"`
+}
+
+// Activity is the versioned wire contract for a committed state change. Keep
+// this shape additive: the room timeline is also consumed by the CLI, web,
+// recovery and background paths.
+type Activity struct {
+	ID            string    `json:"id"`
+	Version       int       `json:"version"`
+	Actor         string    `json:"actor"`
+	Verb          string    `json:"verb"`
+	Noun          string    `json:"noun"`
+	ObjectRef     string    `json:"object_ref"`
+	Repo          string    `json:"repo,omitempty"`
+	Sprint        string    `json:"sprint,omitempty"`
+	Topic         string    `json:"topic,omitempty"`
+	Origin        string    `json:"origin,omitempty"`
+	CorrelationID string    `json:"correlation_id,omitempty"`
+	Priority      string    `json:"priority,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+	FetchRef      string    `json:"fetch_ref,omitempty"`
+	Summary       string    `json:"summary"`
+}
+
+// Validate rejects incomplete envelopes before they can become durable facts.
+func (a Activity) Validate() error {
+	if strings.TrimSpace(a.ID) == "" || a.Version <= 0 || strings.TrimSpace(a.Actor) == "" ||
+		strings.TrimSpace(a.Verb) == "" || strings.TrimSpace(a.Noun) == "" ||
+		strings.TrimSpace(a.ObjectRef) == "" || a.Timestamp.IsZero() || strings.TrimSpace(a.Summary) == "" {
+		return fmt.Errorf("activity: id, version, actor, verb, noun, object_ref, timestamp, and summary are required")
+	}
+	if len(a.Summary) > 160 {
+		return fmt.Errorf("activity: summary exceeds 160 bytes")
+	}
+	return nil
 }
 
 const (

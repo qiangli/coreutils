@@ -18,12 +18,14 @@ const (
 
 // Notification is one attributed and addressed change to announce.
 type Notification struct {
-	Principal string
-	Topic     string
-	To        string
-	Room      string
-	Body      string
-	Priority  string
+	Principal   string
+	Topic       string
+	To          string
+	Room        string
+	Body        string
+	Priority    string
+	Activity    *room.Activity
+	MatchReason string
 }
 
 // Publish is the common enforcement path for CLI and programmatic publishers.
@@ -39,13 +41,23 @@ func Publish(n Notification) error {
 	default:
 		return fmt.Errorf("bus: unknown priority %q (use %s or %s)", n.Priority, DeliveryQueued, DeliveryInterrupt)
 	}
+	if n.Activity != nil {
+		if err := n.Activity.Validate(); err != nil {
+			return err
+		}
+		if n.Activity.Actor != n.Principal {
+			return fmt.Errorf("bus: activity actor must match principal")
+		}
+	}
 	return room.Notify(room.Event{
-		Principal: n.Principal,
-		Topic:     n.Topic,
-		To:        n.To,
-		Room:      n.Room,
-		Body:      n.Body,
-		Priority:  n.Priority,
+		Principal:   n.Principal,
+		Topic:       n.Topic,
+		To:          n.To,
+		Room:        n.Room,
+		Body:        n.Body,
+		Priority:    n.Priority,
+		Activity:    n.Activity,
+		MatchReason: n.MatchReason,
 	})
 }
 

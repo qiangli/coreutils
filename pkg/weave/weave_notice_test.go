@@ -1,7 +1,6 @@
 package weave
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -27,22 +26,42 @@ func TestOwnerNoticeIsDurableDeduplicatedAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var notices []string
+	var notices []room.Event
 	for _, e := range events {
-		if strings.Contains(e.Body, "event_id=") {
-			notices = append(notices, e.Body)
+		if e.Activity != nil {
+			notices = append(notices, e)
 		}
 	}
 	if len(notices) != 1 {
 		t.Fatalf("owner notices = %d, want one: %#v", len(notices), notices)
 	}
 	got := notices[0]
-	for _, want := range []string{"weave run #7 submitted", "schema=bashy-owner-notice-v1", "event=run-terminal", "owner=accountable-conductor", "terminal_state=submitted", "evidence=abc123"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("notice missing %q: %s", want, got)
-		}
+	if got.Body != "weave run #7 submitted" || got.MatchReason != "owner" {
+		t.Fatalf("visible notice = %#v", got)
 	}
-	if strings.Contains(got, "secret prompt") || strings.Contains(got, "VerifyOutput") {
-		t.Fatalf("notice leaked body/log material: %s", got)
+	a := got.Activity
+	if a.ID == "" || a.Version != 1 || a.Actor != "worker" || a.Verb != "completed" || a.Noun != "run" || a.ObjectRef != "run:7" || a.Repo != root || a.FetchRef != "weave:run:7" {
+		t.Fatalf("activity = %#v", a)
+	}
+}
+
+func TestOwnerNoticeNoOwnerIsNoop(t *testing.T) {
+	dir, root := newQueueInTempRepo(t)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	q := &weaveQueue{Root: root, Items: []*weaveItem{{ID: 8, State: "submitted"}}}
+	weaveQueueOwnerNotice(dir, q, q.Items[0], "run-terminal")
+	if len(q.OwnerNotices) != 0 {
+		t.Fatalf("unowned no-op queued notices: %#v", q.OwnerNotices)
+	}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+	weaveDeliverOwnerNotices(dir)
+	events, err := room.Timeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("unowned no-op emitted %d timeline events", len(events))
 	}
 }
