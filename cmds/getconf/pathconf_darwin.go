@@ -11,7 +11,8 @@ import (
 
 // Selector numbers from Darwin sys/unistd.h. Darwin numbers the selectors from
 // 1 where Linux starts at 0, which is precisely the transcription error
-// sysconf_test.go exists to catch.
+// sysconf_test.go exists to catch. Darwin libc has no timestamp selector, so
+// pcTimestampResolution is internal and handled before Pathconf.
 const (
 	scArgMax          = 1
 	scChildMax        = 2
@@ -42,7 +43,7 @@ const (
 	pcRecXferAlign        = 23
 	pcSymlinkMax          = 24
 	pcSyncIO              = 25
-	pcTimestampResolution = pcUndefined
+	pcTimestampResolution = 26
 )
 
 // Darwin has a real pathconf(2), so ask the kernel. A negative result with no
@@ -52,6 +53,16 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 	if rc != nil {
 		p = rc.Path(path)
 	}
+	if which == pcTimestampResolution {
+		var st unix.Statfs_t
+		if err := unix.Statfs(p, &st); err != nil {
+			return "", true, err
+		}
+		if resolution, ok := darwinTimestampResolution(unix.ByteSliceToString(st.Fstypename[:])); ok {
+			return resolution, true, nil
+		}
+		return undefined, true, nil
+	}
 	v, err := unix.Pathconf(p, which)
 	if err != nil {
 		return "", true, err
@@ -60,6 +71,20 @@ func pathconfStr(rc *tool.RunContext, which int, path string) (string, bool, err
 		return undefined, true, nil
 	}
 	return strconv.Itoa(v), true, nil
+}
+
+// Apple documents APFS timestamp granularity as one nanosecond and HFS+ as
+// one second. Unknown and remote filesystems stay undefined rather than
+// inheriting the host volume's answer.
+func darwinTimestampResolution(filesystem string) (string, bool) {
+	switch filesystem {
+	case "apfs":
+		return "1", true
+	case "hfs":
+		return "1000000000", true
+	default:
+		return "", false
+	}
 }
 
 // The POSIX revision this platform conforms to, as its own libc reports it.
