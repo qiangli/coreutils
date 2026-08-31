@@ -48,6 +48,10 @@ import (
 type weaveQueue struct {
 	NextID int64        `json:"next_id"`
 	Items  []*weaveItem `json:"items"`
+	// OwnerNotices is the durable lifecycle outbox and shares queue.json's
+	// atomic rename with the transition that created each event.
+	NextOwnerNoticeID int64              `json:"next_owner_notice_id,omitempty"`
+	OwnerNotices      []weaveOwnerNotice `json:"owner_notices,omitempty"`
 	// Root is the repo the queue serves, stamped on writes. Queues
 	// are keyed by a path-mangled tag that can't be reversed; Root
 	// lets `weave list` name nearby queues in its empty-queue hint.
@@ -3821,6 +3825,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.LogPath = logPath
 		}
 		freshIt.State = weaveTerminalState(exitCode, runErr, killReason, ev)
+		weaveQueueOwnerNotice(dir, freshQ, freshIt, "run-terminal")
 		if freshIt.State == "killed" {
 			// Signal death (watchdog, weave kill escalation, external
 			// SIGTERM): killed stays killed — never silently promoted.
@@ -3852,6 +3857,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if lockErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
 	} else {
+		weaveDeliverOwnerNotices(dir)
 		if ev.VerifyExit != nil {
 			if err := weaveCleanupManagedGOCache(dir, it); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "weave start: managed GOCACHE cleanup failed (continuing): %v\n", err)

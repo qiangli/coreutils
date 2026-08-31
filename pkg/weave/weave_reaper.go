@@ -122,11 +122,17 @@ func weaveReapQueueWait(dir, root, base string, wait time.Duration) ([]weaveReap
 	var actions []weaveReapAction
 	err := withWeaveQueueLockWait(dir, wait, func(q *weaveQueue) error {
 		actions = weaveReapPass(q, root, base, time.Now().UTC())
+		for _, a := range actions {
+			if a.To == "failed" || a.To == "done" {
+				weaveQueueOwnerNotice(dir, q, findWeaveItem(q, a.Issue), "run-reconciled")
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	weaveDeliverOwnerNotices(dir)
 	return actions, nil
 }
 
