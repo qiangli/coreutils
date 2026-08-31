@@ -3274,6 +3274,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				weaveAppendComment(freshIt, "conductor", "system",
 					fmt.Sprintf("reassigned %s → %s", prevOwner, freshIt.Owner))
 			}
+			weaveQueueOwnerNotice(dir, freshQ, freshIt, "assignment-started")
 			it = freshIt
 			return nil
 		})
@@ -3284,6 +3285,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start", code, lockErr))
 		}
+		weaveDeliverOwnerNotices(dir)
 	}
 	if !opts.resume {
 		// Persist before clone/hydration. This is deliberately allocated rather
@@ -3474,6 +3476,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				weaveAppendComment(freshIt, "conductor", "system",
 					fmt.Sprintf("reassigned %s → %s", prevOwner, freshIt.Owner))
 			}
+			weaveQueueOwnerNotice(dir, freshQ, freshIt, "assignment-started")
 			it = freshIt
 			return nil
 		})
@@ -3484,6 +3487,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed (continuing): %v\n", lockErr)
 		}
+		weaveDeliverOwnerNotices(dir)
 	}
 	memoryPrefix := ""
 	if opts.resume {
