@@ -12,8 +12,10 @@ import (
 	"io/fs"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/coopauth"
 )
@@ -165,7 +167,88 @@ func (s *server) servePageFile(w http.ResponseWriter, r *http.Request, name stri
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(versionAssets(injectBase(doc, coopauth.BaseHref(r))))
+	_, _ = w.Write(versionAssets(injectChrome(injectBase(doc, coopauth.BaseHref(r)), name, s.openAppsMode())))
+}
+
+// injectChrome adds the console's shared chrome — the copyright footer on
+// every page, plus the header button back to the launcher on every standalone
+// managed-app page (term.html, board.html, mb.html) when apps open in the
+// SAME tab — server-side, once, here.
+//
+// The mode is the persisted global "Open apps" setting, and the two halves of
+// the contract hold together: in same-tab mode an app REPLACES the launcher,
+// so the app needs an in-page way back (the button); in new-tab mode the
+// launcher is still sitting in the tab behind the app, so the button would
+// duplicate the browser's own affordance and is omitted. The footer is
+// mode-independent — every page states the same copyright.
+//
+// All of this exists so the markup is not hand-copied into every embedded
+// HTML file: index.html already owns a richer footer with live build/session
+// detail (rendered client-side by app.js), so this only appends the copyright
+// line to it; a managed app has no such footer at all, so this builds the
+// whole thing. Either way the text and the button are defined in exactly one
+// place.
+func injectChrome(doc []byte, name, openApps string) []byte {
+	if name == "index.html" {
+		// index.html's own <footer id="foot"> already carries the version
+		// detail (#foot-left / #foot-build / #foot-right) — leave it alone
+		// and only append the copyright line inside it.
+		return insertBeforeLast(doc, "</footer>", chromeCopyrightHTML())
+	}
+	// A managed app carries no version detail — the mark next to the wordmark
+	// and the build line in the footer are the launcher's own, not repeated
+	// here — only the copyright line, in a footer of its own.
+	if openApps != OpenNewTab {
+		// Same-tab mode (the default, and the fail-safe for any unknown
+		// value): the app replaced the launcher, so the return control is
+		// part of the page itself.
+		doc = insertBeforeLast(doc, "</header>", allAppsButtonHTML())
+	}
+	doc = insertBeforeLast(doc, "</body>", `<footer id="app-foot">`+chromeCopyrightHTML()+`</footer>`+"\n")
+	return doc
+}
+
+// chromeCopyrightHTML is the one statement of the copyright line, shared by
+// the launcher and every managed app so it reads identically everywhere.
+//
+// BASHY is the product's name — Bashy's Agentic Shell Harness Yoke — and the
+// line says exactly what the console is and is not: bash COMPATIBILITY is
+// behavior this project implements, not an affiliation with GNU. Static,
+// server-owned text only; nothing a client can influence reaches this string.
+func chromeCopyrightHTML() string {
+	return `<span id="copyright">BASHY &mdash; Bashy&rsquo;s Agentic Shell Harness Yoke. ` +
+		`Bash compatibility is behavior, not GNU affiliation. ` +
+		`&copy; ` + strconv.Itoa(time.Now().Year()) + ` qiangli. All rights reserved.</span>`
+}
+
+// allAppsButtonHTML is the header button every managed app carries to return
+// to the central launcher in same-tab mode. It is appended last inside
+// <header id="bar">, so it lands rightmost after whatever app-specific header
+// content precedes it — the same #bar/.iconbtn/.spacer layout language the
+// launcher's own header buttons use, and the same relative-URL ("./" against
+// <base href>) routing the brand mark and every other in-console link already
+// relies on, which is what keeps it correct under a route prefix.
+func allAppsButtonHTML() string {
+	return `<a id="all-apps-btn" class="iconbtn" href="./" title="All apps" aria-label="Back to all apps">` +
+		`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">` +
+		`<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>` +
+		`<rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>` +
+		`</svg></a>`
+}
+
+// insertBeforeLast inserts text immediately before the last occurrence of
+// marker, or returns doc unchanged if marker is absent — a page missing its
+// own closing tag is a bug this should surface as a broken page, not a panic.
+func insertBeforeLast(doc []byte, marker, insert string) []byte {
+	i := bytes.LastIndex(doc, []byte(marker))
+	if i < 0 {
+		return doc
+	}
+	out := make([]byte, 0, len(doc)+len(insert))
+	out = append(out, doc[:i]...)
+	out = append(out, insert...)
+	out = append(out, doc[i:]...)
+	return out
 }
 
 // injectBase rewrites (or inserts) the document's <base href>.

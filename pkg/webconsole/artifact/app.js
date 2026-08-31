@@ -42,6 +42,15 @@ const verEl = document.getElementById("ver");
 let apps = [];
 let search = "";
 
+// ------------------------------------------------------------------- look --
+// The GLOBAL "Open apps" mode, persisted by the SERVER (api/look), not
+// localStorage: the server also conditions the managed apps' return control
+// on it, so there must be one truth or the two halves of the setting drift.
+// "same-tab" (the default, and the fallback whenever the look API cannot be
+// reached) navigates this window; "new-tab" opens each app in its own tab
+// with rel=noopener.
+let openApps = "same-tab";
+
 // ------------------------------------------------------------------ config --
 // localStorage only: this is per-viewer chrome, not state anything else reads.
 // Every access is guarded — a private window or blocked site data throws on
@@ -211,16 +220,20 @@ function tile(a, opts = {}) {
   const wrap = document.createElement("div");
   wrap.className = "tile-wrap";
 
-  // A real link, opened in its own tab: every app gets the whole browser
-  // window, its own history and its own URL — nothing is framed inside the
-  // launcher. The launcher is a start page, not a container.
+  // A real link, never framed inside the launcher: the launcher is a start
+  // page, not a container. WHERE it opens follows the console's global
+  // "Open apps" mode — same tab (the default) navigates this window, and
+  // new tab gives the app a window of its own with rel=noopener, so it
+  // cannot reach back into this page.
   const open = a.status === "ready";
   const btn = document.createElement(open ? "a" : "button");
   btn.className = "tile";
   if (open) {
     btn.href = url(a.path.replace(/^\//, ""));
-    btn.target = "_blank";
-    btn.rel = "noopener";
+    if (openApps === "new-tab") {
+      btn.target = "_blank";
+      btn.rel = "noopener";
+    }
   } else {
     btn.type = "button";
   }
@@ -595,6 +608,25 @@ function pairNote(text) {
   return p;
 }
 
+// saveLook PUTs one mode to the console's look settings and repaints with
+// whatever the server confirms. The dialog stays usable when the request
+// cannot land (offline, auth): the current mode simply stays put, which is
+// the honest outcome of "not saved" rather than a silently wrong control.
+async function saveLook(v) {
+  try {
+    const r = await fetch(url("api/look"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ open_apps: v }),
+    });
+    if (!r.ok) throw new Error("look: " + r.status);
+    const l = await r.json();
+    openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
+  } catch (_) { /* keep the current mode; the server did not take the write */ }
+  buildSettings();
+  render();
+}
+
 // ----------------------------------------------------------------- session --
 // Sign-out appears only when there is a session to end.
 //
@@ -640,11 +672,15 @@ document.getElementById("theme-btn").addEventListener("click", () => {
 
 async function refresh() {
   try {
-    const [a, s] = await Promise.all([
+    const [a, s, l] = await Promise.all([
       fetch(url("api/apps")).then((r) => r.json()),
       fetch(url("api/session")).then((r) => r.json()).catch(() => null),
+      fetch(url("api/look")).then((r) => r.json()).catch(() => null),
     ]);
     apps = a.apps || [];
+    // The look ride-along fails soft: no answer leaves the mode at the
+    // same-tab default, which is exactly the server's own fallback.
+    if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
     if (s) {
       serverPairing = !!s.pairing;
       whoEl.textContent = s.user + " · " + s.via;
@@ -656,6 +692,16 @@ async function refresh() {
   } catch (e) {
     apps = [];
     whoEl.textContent = "offline";
+  }
+  // Only the home grid reflects liveness; repainting under a live terminal
+  // would tear down the session every few seconds.
+  render();
+}
+
+applyChrome();
+refresh();
+setInterval(refresh, 5000);
+fline";
   }
   // Only the home grid reflects liveness; repainting under a live terminal
   // would tear down the session every few seconds.

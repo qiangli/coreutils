@@ -96,6 +96,12 @@ type Options struct {
 	// production leaves it empty and gets the console's own state directory.
 	PairStorePath string
 
+	// LookStorePath overrides the look settings document's location (the
+	// global "Open apps" mode lives there). Tests set it; production leaves it
+	// empty and gets the console's own state directory. The store performs no
+	// I/O until first use, and a missing or corrupt document serves defaults.
+	LookStorePath string
+
 	// Disable names panels to leave out entirely — not greyed out, not listed:
 	// absent from the tile list AND unrouted.
 	//
@@ -132,6 +138,7 @@ type server struct {
 	// "terminal" at /term/ — and conflating them turns a deny into an allow.
 	scopeSegments map[string]string
 	pairing       *pairStore
+	look          *lookStore
 	probes        probeCache
 	boards        boardCache
 }
@@ -198,6 +205,21 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 			s.limiter = websession.NewLimiter(5, 12*time.Second)
 		}
 	}
+	// The look settings (global "Open apps" mode) are always present: no I/O
+	// happens here, a missing or corrupt document serves the safe default, and
+	// the chrome below needs a definite mode on every page render.
+	lookFile := opts.LookStorePath
+	if lookFile == "" {
+		if p, err := lookPath(); err != nil {
+			// A console that cannot locate its state dir still serves; it
+			// just cannot remember a preference across restarts.
+			slog.Warn("apps: console look store has no home; settings will not persist", "err", err)
+		} else {
+			lookFile = p
+		}
+	}
+	s.look = newLookStore(lookFile)
+
 	if s.panels == nil {
 		s.panels = Discover()
 		if len(opts.Apps) > 0 {
@@ -248,6 +270,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/apps", s.handleApps)
 	mux.HandleFunc("GET /api/session", s.handleSession)
+	// The look settings: GET is the structured projection, PUT is the one
+	// writer. Gated by the same console ladder as every other /api route —
+	// a preference write is a console write, not a public one.
+	mux.HandleFunc("GET /api/look", s.handleLookGet)
+	mux.HandleFunc("PUT /api/look", s.handleLookPut)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
 	mux.HandleFunc("GET /meta", s.handleMeta)
