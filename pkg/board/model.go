@@ -6,6 +6,7 @@ package board
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/resources"
@@ -185,6 +186,12 @@ type Sprint struct {
 	LeaseHolder   string   `json:"lease_holder,omitempty"`
 	ContinuityRef string   `json:"continuity_ref,omitempty"`
 	RunRefs       []RunRef `json:"run_refs,omitempty"`
+	// Story counts are derived from Todos after every source has loaded. They
+	// travel with the sprint so terminal, JSON, and browser projections cannot
+	// disagree about progress or make closed work disappear from the total.
+	StoryTotal  int `json:"story_total"`
+	StoryOpen   int `json:"story_open"`
+	StoryClosed int `json:"story_closed"`
 }
 
 type RunRef struct {
@@ -292,6 +299,26 @@ func Collect(ctx context.Context, opts Options, sources []Source, panels *Regist
 }
 
 func (b *Board) finalize(now time.Time) {
+	storyCounts := make(map[int64][2]int)
+	for _, t := range b.Todos {
+		if t.SprintID == 0 {
+			continue
+		}
+		counts := storyCounts[t.SprintID]
+		if closedStoryStatus(t.Status) {
+			counts[1]++
+		} else {
+			counts[0]++
+		}
+		storyCounts[t.SprintID] = counts
+	}
+	for i := range b.Sprints {
+		counts := storyCounts[b.Sprints[i].ID]
+		b.Sprints[i].StoryOpen = counts[0]
+		b.Sprints[i].StoryClosed = counts[1]
+		b.Sprints[i].StoryTotal = counts[0] + counts[1]
+	}
+
 	linked := map[string]int64{}
 	for _, sprint := range b.Sprints {
 		for _, ref := range sprint.RunRefs {
@@ -375,6 +402,15 @@ func (b *Board) finalize(now time.Time) {
 		if len(lanes[id]) > 0 || id != "done" {
 			b.Lanes = append(b.Lanes, Lane{ID: id, Title: laneTitle(id), Cards: lanes[id]})
 		}
+	}
+}
+
+func closedStoryStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "closed", "cancelled", "canceled":
+		return true
+	default:
+		return false
 	}
 }
 

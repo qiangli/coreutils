@@ -227,11 +227,17 @@ func (s *server) handleBoardOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stories. Closed items are history for the same reason a done sprint is,
-	// so they follow the same --all rule the lanes/sprints/runs above use.
+	// Stories on a visible sprint are the sprint's progress record, including
+	// the closed half. Hiding them made a 16-story sprint report 11 stories and
+	// erased the evidence behind its completion count. Closed UNLINKED stories
+	// and stories on hidden, finished sprints remain history unless all=1.
+	visibleSprints := make(map[int64]bool, len(v.Sprints))
+	for _, sp := range v.Sprints {
+		visibleSprints[sp.ID] = true
+	}
 	v.Todos = make([]board.Todo, 0, len(b.Todos))
 	for _, t := range b.Todos {
-		if all || !doneTodo(t.Status) {
+		if all || !doneTodo(t.Status) || visibleSprints[t.SprintID] {
 			v.Todos = append(v.Todos, t)
 		}
 	}

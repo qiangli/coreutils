@@ -45,7 +45,7 @@ function stateClass(s) {
   s = (s || "").toLowerCase();
   if (NEEDS.has(s)) return "needs";
   if (LIVE.has(s)) return "live";
-  if (["done", "merged", "abandoned", "killed", "no-op"].includes(s)) return "past";
+  if (["done", "closed", "cancelled", "canceled", "merged", "abandoned", "killed", "no-op"].includes(s)) return "past";
   return "";
 }
 
@@ -252,19 +252,41 @@ function storiesEl(stories, detailHost, sprintID) {
   return wrap;
 }
 
-function storyListEl(stories, detailHost, sprintID) {
-  const btn = el("button", "more", "stories — " + stories.length);
+function storyIsClosed(story) {
+  return ["done", "closed", "cancelled", "canceled"].includes(String(story.status || "").toLowerCase());
+}
+
+function storyStats(sp, stories) {
+  const derivedClosed = stories.filter(storyIsClosed).length;
+  const total = Number.isInteger(sp.story_total) ? sp.story_total : stories.length;
+  const closed = Number.isInteger(sp.story_closed) ? sp.story_closed : derivedClosed;
+  const open = Number.isInteger(sp.story_open) ? sp.story_open : Math.max(0, total - closed);
+  return { total, closed, open };
+}
+
+function storyListEl(sp, stories, detailHost, sprintID) {
+  const stats = storyStats(sp, stories);
+  const btn = el("button", "more", "stories — " + stats.closed + "/" + stats.total +
+    " complete · " + stats.closed + " closed · " + stats.open + " open");
   btn.type = "button";
   const body = el("div", "continuity");
   body.hidden = true;
-  for (const t of stories) {
-    const row = el("button", "sec link");
-    row.type = "button";
-    row.append(el("div", "sec-k " + stateClass(t.status),
-      "#" + (t.number || t.id) + (t.priority ? " " + t.priority : "")));
-    row.append(el("div", "sec-v", t.title || ""));
-    row.addEventListener("click", () => openStory(t.id, detailHost, sprintID));
-    body.append(row);
+  const groups = [
+    ["open", stories.filter((t) => !storyIsClosed(t))],
+    ["closed", stories.filter(storyIsClosed)],
+  ];
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    body.append(el("div", "story-group", label + " — " + items.length));
+    for (const t of items) {
+      const row = el("button", "sec link " + (storyIsClosed(t) ? "past" : ""));
+      row.type = "button";
+      row.append(el("div", "sec-k " + stateClass(t.status),
+        "#" + (t.number || t.id) + (t.priority ? " " + t.priority : "")));
+      row.append(el("div", "sec-v", t.title || ""));
+      row.addEventListener("click", () => openStory(t.id, detailHost, sprintID));
+      body.append(row);
+    }
   }
   btn.addEventListener("click", () => {
     body.hidden = !body.hidden;
@@ -306,7 +328,7 @@ function sprintEl(sp, stories) {
     const detail = el("div", "continuity story-detail");
     detail.hidden = true;
     n.append(storiesEl(stories, detail, sp.id));
-    n.append(...storyListEl(stories, detail, sp.id));
+    n.append(...storyListEl(sp, stories, detail, sp.id));
     n.append(detail);
     // Re-open whatever the reader had open before the last refresh. The body
     // is cached per id, so this costs no request.

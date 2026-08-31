@@ -268,18 +268,23 @@ func TestBoardOverviewCarriesStories(t *testing.T) {
 	if !ok {
 		t.Fatalf("the overview carries no `todos` field at all: keys=%v", keysOf(d))
 	}
-	// Default view hides history, exactly as it does for sprints and runs:
-	// four of the five stories are open.
-	if len(todos) != 4 {
-		t.Errorf("default view shows %d stories, want 4 open (of 5)", len(todos))
+	// A closed story on the visible sprint remains in the default payload: it
+	// is progress, not unrelated history. Open work is never hidden merely
+	// because its sprint is done, so all five records remain visible here.
+	if len(todos) != 5 {
+		t.Errorf("default view shows %d stories, want 4 open + 1 closed on visible work", len(todos))
 	}
 	if d["todo_total"].(float64) != 5 {
 		t.Errorf("todo_total = %v, want the unfiltered 5", d["todo_total"])
 	}
+	closed := 0
 	for _, raw := range todos {
 		if strings.EqualFold(raw.(map[string]any)["status"].(string), "done") {
-			t.Errorf("a finished story survived the default view: %v", raw)
+			closed++
 		}
+	}
+	if closed != 1 {
+		t.Errorf("default view carries %d closed stories, want the one linked to the visible sprint", closed)
 	}
 
 	// The link is what makes them STORIES rather than a flat list.
@@ -289,12 +294,26 @@ func TestBoardOverviewCarriesStories(t *testing.T) {
 			bySprint[id]++
 		}
 	}
-	if bySprint[1] != 2 {
-		t.Errorf("sprint 1 has %d linked open stories, want 2", bySprint[1])
+	if bySprint[1] != 3 {
+		t.Errorf("sprint 1 has %d linked stories, want 2 open + 1 closed", bySprint[1])
 	}
 	// An unlinked item is ordinary, not an error: it simply belongs to no card.
 	if got := len(todos) - bySprint[1] - bySprint[2]; got != 1 {
 		t.Errorf("%d unlinked stories, want 1", got)
+	}
+}
+
+func TestBoardOverviewCarriesPerSprintStoryProgress(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	d := getJSON(t, h, "/api/board")
+	sp := d["sprints"].([]any)[0].(map[string]any)
+	if sp["story_total"] != float64(3) || sp["story_open"] != float64(2) || sp["story_closed"] != float64(1) {
+		t.Fatalf("story progress = total:%v open:%v closed:%v, want 3/2/1", sp["story_total"], sp["story_open"], sp["story_closed"])
 	}
 }
 

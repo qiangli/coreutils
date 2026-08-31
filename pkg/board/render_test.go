@@ -56,10 +56,10 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 || got.Summary.Unattended != 1 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	// Rebased with the terminal golden above: one new entry in .panels. A board
-	// with no dag runs omits dag_runs entirely (omitempty), so the wire shape is
-	// unchanged for every existing consumer.
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "522132b64bcb25b517ca2248970efdaacd350c1fb869c38c1be149a9c278637d"; sum != want {
+	// Rebased 2026-08-31 for explicit per-sprint story progress. Even a sprint
+	// with zero stories carries total/open/closed zeroes so old-vs-empty is not
+	// another value a consumer has to guess.
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "6d83b99129258d33ab86dd8e0aee5a63e8d2995b62784c386bee568a1eab8672"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
 	}
 	if strings.Contains(string(raw), "dag_runs") {

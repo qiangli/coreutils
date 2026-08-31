@@ -596,6 +596,11 @@ body.standalone #bar { flex: none; }
   display: flex; gap: .5rem; align-items: baseline;
 }
 .bd-sprint .sec.link:hover, .bd-sprint .sec.link:focus-visible { background: var(--muted); }
+.bd-sprint .sec.link.past { opacity: .62; }
+.bd-sprint .story-group {
+  padding: .35rem 0 .15rem; font-size: .62rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground);
+}
 /* The detail pane is the one place a body is shown, so give it a little
    separation from the list it was opened from. */
 .bd-sprint .story-detail { border-top: 1px solid var(--border); margin-top: .3rem; }
