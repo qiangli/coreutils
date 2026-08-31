@@ -197,7 +197,6 @@ func runCore(rc *tool.RunContext, args []string) int {
 		n, err := eng.Load(operands[0])
 		if err != nil {
 			fmt.Fprintf(rc.Err, "ed: %v\n", err)
-			fmt.Fprintln(rc.Out, "?")
 			return 1
 		}
 		if !*silent {
