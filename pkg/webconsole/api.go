@@ -46,7 +46,11 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 		"user":          user,
 		"via":           via,
 		"require_login": s.requireLogin,
-		"build":         BuildOf(),
+		// Whether this console is armed for phone pairing. The Settings page
+		// reads it to tell "enabling will mint a code" from "enabling will show
+		// you the restart command" — without minting anything to find out.
+		"pairing": s.pairing != nil,
+		"build":   BuildOf(),
 	})
 }
 

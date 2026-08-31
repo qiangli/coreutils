@@ -395,11 +395,204 @@ function buildSettings() {
 
   document.getElementById("fav-summary").textContent =
     `${cfg.favorites.length} favorite${cfg.favorites.length === 1 ? "" : "s"}, ${cfg.recents.length} recent.`;
+
+  buildPairing();
 }
 document.getElementById("settings-btn").addEventListener("click", () => { buildSettings(); dlg.showModal(); });
 document.getElementById("clear-favs").addEventListener("click", () => { saveCfg({ favorites: [] }); buildSettings(); render(); });
 document.getElementById("clear-recents").addEventListener("click", () => { saveCfg({ recents: [] }); buildSettings(); render(); });
-dlg.addEventListener("close", render);
+dlg.addEventListener("close", () => { resetPairing(); render(); });
+
+// ------------------------------------------------------------- phone access --
+// Phone pairing is OFF until the operator flips the toggle, and flipping it is
+// the ONLY thing that ever asks the server to mint a ticket. A fresh load or a
+// closed sheet mints nothing and shows no code — the toggle is the whole
+// consent gesture. Redemption stays the password-sparing path `bashy apps pair`
+// already built; this only moves the mint behind a click.
+//
+// serverPairing mirrors /api/session's `pairing`: whether this console was
+// started with LAN pairing armed. It lets the section say, before minting
+// anything, whether enabling will produce a code or the command to restart with
+// --pair. Default false — fail closed if the session probe has not answered.
+let serverPairing = false;
+const pairToggle = () => document.getElementById("pair-toggle");
+const pairPanel = () => document.getElementById("pair-panel");
+
+function resetPairing() {
+  const t = pairToggle(); if (t) t.checked = false;
+  const p = pairPanel(); if (p) { p.hidden = true; p.replaceChildren(); }
+}
+
+function buildPairing() {
+  const t = pairToggle();
+  if (!t) return;
+  resetPairing();
+  const hint = document.getElementById("pair-armed-hint");
+  if (hint) hint.remove();
+  if (!serverPairing) {
+    // Not armed: say so up front rather than after a wasted mint. Enabling will
+    // still explain how to restart with LAN pairing on.
+    const note = pairNote("This console is not armed for LAN pairing yet — enabling shows the command to restart with it on.");
+    note.id = "pair-armed-hint";
+    t.closest("section").insertBefore(note, pairPanel());
+  }
+  t.onchange = () => {
+    if (t.checked) mintPairing();
+    else { const p = pairPanel(); p.hidden = true; p.replaceChildren(); }
+  };
+}
+
+async function mintPairing() {
+  const p = pairPanel();
+  p.hidden = false;
+  p.replaceChildren(pairNote("Minting a one-time code…"));
+  let data;
+  try {
+    const res = await fetch(url("api/pair"), { method: "POST", headers: { Accept: "application/json" } });
+    data = await res.json();
+  } catch (e) {
+    p.replaceChildren(pairNote("Could not reach the console: " + e));
+    const t = pairToggle(); if (t) t.checked = false;
+    return;
+  }
+  // enabled:false means the toggle did NOT open LAN access — reflect that by
+  // snapping the switch back off, and show the exact restart command.
+  if (data && data.enabled === false) {
+    p.replaceChildren(pairFailClosed(data));
+    const t = pairToggle(); if (t) t.checked = false;
+    return;
+  }
+  if (!data || data.error) {
+    p.replaceChildren(pairNote((data && data.error) || "Pairing failed."));
+    const t = pairToggle(); if (t) t.checked = false;
+    return;
+  }
+  p.replaceChildren(pairCodes(data));
+}
+
+function pairFailClosed(data) {
+  const box = document.createElement("div");
+  box.className = "pair-closed";
+  const h = document.createElement("p");
+  h.className = "pair-closed-title";
+  h.textContent = data.reason || "Phone access is not available on this console.";
+  box.append(h);
+  if (data.detail) {
+    const d = document.createElement("p");
+    d.className = "hint";
+    d.textContent = data.detail;
+    box.append(d);
+  }
+  if (data.restart) {
+    const lbl = document.createElement("p");
+    lbl.className = "hint";
+    lbl.textContent = "Restart the console with LAN pairing on:";
+    const code = document.createElement("code");
+    code.className = "pair-restart";
+    code.textContent = data.restart;
+    box.append(lbl, code);
+  }
+  return box;
+}
+
+function pairCodes(data) {
+  const addrs = data.addresses || [];
+  if (!addrs.length) {
+    return pairNote("The console could not work out an address a phone could reach. " +
+      "Check this host is on a network, or run `bashy apps pair --host <ip>`.");
+  }
+  const box = document.createElement("div");
+  box.className = "pair-codes-wrap";
+
+  // Two labelled codes: whichever the phone's network can resolve. The mDNS
+  // name survives a DHCP lease change; the raw LAN IP is the always-works
+  // fallback. Both carry the SAME single-use ticket.
+  const codes = document.createElement("div");
+  codes.className = "pair-codes";
+  for (const a of addrs) {
+    const c = document.createElement("div");
+    c.className = "pair-code";
+    if (a.qr) {
+      const img = document.createElement("img");
+      img.src = a.qr;
+      img.alt = "Pairing QR code for " + a.host;
+      img.className = "pair-qr";
+      c.append(img);
+    }
+    const lab = document.createElement("div");
+    lab.className = "pair-code-label"; lab.textContent = a.label;
+    const host = document.createElement("div");
+    host.className = "pair-code-host"; host.textContent = a.host;
+    c.append(lab, host);
+    codes.append(c);
+  }
+  box.append(codes);
+
+  const meta = document.createElement("p");
+  meta.className = "hint";
+  meta.textContent = `Scope: ${(data.scope || []).join(", ")} · code is single-use and expires in ~2 min` +
+    (data.device_ttl ? ` · device access lasts ${data.device_ttl}` : "") + ".";
+  box.append(meta);
+
+  if (data.note) {
+    const n = document.createElement("p");
+    n.className = "pair-warn";
+    n.textContent = data.note;
+    box.append(n);
+  }
+
+  box.append(pairInstructions());
+  return box;
+}
+
+// pairInstructions is the Add-to-Home-Screen help. The platform we can safely
+// detect is shown first; the other stays in the DOM (just muted) so a
+// misdetection never hides the steps someone actually needs.
+function pairInstructions() {
+  const wrap = document.createElement("div");
+  wrap.className = "pair-instructions";
+  const h = document.createElement("p");
+  h.className = "pair-instructions-title";
+  h.textContent = "Add it to your phone's home screen for an app-like launch:";
+  wrap.append(h);
+
+  const ios = instructionBlock("iPhone / iPad (Safari)", [
+    "Tap the Share button (a square with an up arrow)",
+    "Scroll down and tap “Add to Home Screen”",
+    "Tap “Add”",
+  ]);
+  const android = instructionBlock("Android (Chrome)", [
+    "Tap the ⋮ menu (three dots, top right)",
+    "Tap “Add to Home screen” / “Install app”",
+    "Tap “Add”",
+  ]);
+  ios.classList.add("pair-os");
+  android.classList.add("pair-os");
+
+  const ua = navigator.userAgent || "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua);
+  const isAndroid = /Android/.test(ua);
+  if (isIOS) { android.classList.add("pair-os-muted"); wrap.append(ios, android); }
+  else if (isAndroid) { ios.classList.add("pair-os-muted"); wrap.append(android, ios); }
+  else { wrap.append(ios, android); }
+  return wrap;
+}
+
+function instructionBlock(title, steps) {
+  const d = document.createElement("div");
+  const t = document.createElement("p");
+  t.className = "pair-os-title"; t.textContent = title;
+  const ol = document.createElement("ol");
+  for (const s of steps) { const li = document.createElement("li"); li.textContent = s; ol.append(li); }
+  d.append(t, ol);
+  return d;
+}
+
+function pairNote(text) {
+  const p = document.createElement("p");
+  p.className = "hint"; p.textContent = text;
+  return p;
+}
 
 // ----------------------------------------------------------------- session --
 // Sign-out appears only when there is a session to end.
@@ -452,6 +645,7 @@ async function refresh() {
     ]);
     apps = a.apps || [];
     if (s) {
+      serverPairing = !!s.pairing;
       whoEl.textContent = s.user + " · " + s.via;
       renderBuild(s.build);
       renderSession(s);

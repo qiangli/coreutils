@@ -842,7 +842,7 @@ func init() {
 	// cooperative-app advertisement); they share a word, not a namespace.
 	addVerb("apps", Entry{Stage: StageCross, Group: GroupPlatform,
 		Caps: []string{CapDaemon, CapJSON, CapSpawnsProcesses},
-		Web: &WebSurface{Label: "Apps", Mode: WebSelf, Port: 8639,
+		Web: &WebSurface{Label: "Apps", Mode: WebSelf, Port: 22749,
 			Start: []string{"apps"}, DefaultOn: true}})
 	addVerb("curl", staged(StageCross, provisioner(GroupNet, CapNeedsNetwork)))
 

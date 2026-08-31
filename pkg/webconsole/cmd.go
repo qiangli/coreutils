@@ -216,6 +216,10 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 	}
 
 	opts.Ctx = ctx
+	// The QR a Settings-page pairing mints must point a phone at the port this
+	// console actually bound, so an explicit --port override is honoured rather
+	// than a stale default baked into the link.
+	opts.Port = port
 
 	h, closer, err := Handler(opts)
 	if err != nil {

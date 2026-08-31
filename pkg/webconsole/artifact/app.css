@@ -246,6 +246,26 @@ dialog#settings::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2
 .btn.primary { background: var(--primary); color: #fff; border-color: transparent; }
 .sheet-foot { display: flex; justify-content: flex-end; margin-top: 1.25rem; }
 
+/* ---- phone access / QR pairing ---- */
+#pair-panel { margin-top: .6rem; }
+.pair-codes { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: center; }
+.pair-code { text-align: center; }
+.pair-qr { width: 168px; height: 168px; image-rendering: pixelated;
+  background: #fff; border: 1px solid var(--border); border-radius: .5rem; padding: .4rem; }
+.pair-code-label { margin-top: .35rem; font-size: .78rem; font-weight: 600; }
+.pair-code-host { font-size: .74rem; color: var(--muted-foreground); word-break: break-all; }
+.pair-warn { margin: .6rem 0 0; font-size: .76rem; color: var(--muted-foreground);
+  border-left: 3px solid var(--primary); padding-left: .5rem; }
+.pair-restart { display: block; margin-top: .25rem; padding: .4rem .55rem; font-size: .78rem;
+  background: var(--card); border: 1px solid var(--border); border-radius: .4rem; word-break: break-all; }
+.pair-closed-title { margin: 0 0 .3rem; font-weight: 600; font-size: .84rem; }
+.pair-instructions { margin-top: .8rem; display: grid; gap: .7rem; }
+.pair-instructions-title { margin: 0; font-size: .78rem; font-weight: 600; }
+.pair-os-title { margin: 0 0 .2rem; font-size: .76rem; font-weight: 600; }
+.pair-os ol { margin: 0; padding-left: 1.1rem; font-size: .78rem; color: var(--muted-foreground);
+  display: grid; gap: .12rem; }
+.pair-os-muted { opacity: .6; }
+
 /* ---- logo palette (the mark inverts so it reads on either theme) ---- */
 :root { --logo-bg: #0a0e1a; --logo-fg: #fafafa; --logo-accent: #3478f6; }
 :root[data-theme="dark"] { --logo-bg: #fafafa; --logo-fg: #0a0e1a; --logo-accent: #3478f6; }

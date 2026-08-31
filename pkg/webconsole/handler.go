@@ -34,9 +34,11 @@ const otelServiceName = "bashy-apps"
 // sessionCookie is the console's session cookie name.
 const sessionCookie = "bashy_console"
 
-// DefaultPort is the console's loopback port. It sits beside meet's 8637 and is
-// declared to the atlas so `commands --view web` and the console agree.
-const DefaultPort = 8639
+// DefaultPort is the console's loopback port (the "Apps" surface). It is
+// declared to the atlas so `commands --view web` and the console agree, and it
+// is the port a Settings-page pairing QR points a phone at unless --port
+// overrides it.
+const DefaultPort = 22749
 
 // Options configures a console.
 type Options struct {
@@ -78,6 +80,12 @@ type Options struct {
 	// Panels overrides discovery. Nil means Discover().
 	Panels []Panel
 
+	// Port is the port this console listens on, used to build the address a
+	// Settings-page pairing QR points a phone at. Zero means DefaultPort. It is
+	// the ACTUAL bound port so an explicit --port override is reflected in the
+	// code the phone scans rather than a stale default.
+	Port int
+
 	// Pairing enables QR device pairing: `bashy apps pair` mints a one-time
 	// ticket, the phone redeems it at /pair/redeem, and the resulting session
 	// is device-scoped. Off unless the operator asked for it — it only makes
@@ -116,6 +124,7 @@ type server struct {
 	auth         hostauth.Authenticator
 	limiter      *websession.Limiter
 	requireLogin bool
+	port         int
 	panels       []Panel
 	panelAuth    map[string]string // mount segment -> auth tier
 	// scopeSegments maps a panel NAME (what an operator types in --allow) to
@@ -154,7 +163,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		sessions:     opts.Sessions,
 		auth:         opts.Auth,
 		requireLogin: opts.RequireLogin,
+		port:         opts.Port,
 		panels:       opts.Panels,
+	}
+	if s.port == 0 {
+		s.port = DefaultPort
 	}
 	if s.requireLogin {
 		if s.sessions == nil {
@@ -242,6 +255,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("GET /login", s.handleLoginPage)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	// The Settings-page pairing mint is registered UNCONDITIONALLY so a console
+	// without --pair can still answer it — with a fail-closed body naming the
+	// restart command — rather than falling through to the SPA and returning
+	// HTML to a fetch() that expected JSON. handlePairMint checks s.pairing.
+	mux.HandleFunc("POST /api/pair", s.handlePairMint)
 	if s.pairing != nil {
 		mux.HandleFunc("GET "+pairRedeemPath, s.handlePairRedeem)
 	}

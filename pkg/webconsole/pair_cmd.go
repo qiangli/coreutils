@@ -25,7 +25,7 @@ import (
 // The flow is three lines of terminal and one scan:
 //
 //	$ bashy apps pair
-//	  http://workshop.local:8639/pair/redeem?v=1&t=…      <- also the raw LAN IP
+//	  http://workshop.local:22749/pair/redeem?v=1&t=…     <- also the raw LAN IP
 //	  [terminal QR]
 //	  waiting 120s for a device…
 //
