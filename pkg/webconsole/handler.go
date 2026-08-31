@@ -34,10 +34,11 @@ const otelServiceName = "bashy-apps"
 // sessionCookie is the console's session cookie name.
 const sessionCookie = "bashy_console"
 
-// DefaultPort is the console's loopback port (the "Apps" surface). It is
-// declared to the atlas so `commands --view web` and the console agree, and it
-// is the port a Settings-page pairing QR points a phone at unless --port
-// overrides it.
+// DefaultPort is the console's default port: 22749, the telephone-keypad
+// encoding of BASHY (2-2-7-4-9). It is declared to the atlas so
+// `commands --view web` and the console agree, and it is the port a
+// Settings-page pairing QR points a phone at unless --port overrides it.
+// Existing explicit 8639 deployments remain supported through --port.
 const DefaultPort = 22749
 
 // Options configures a console.

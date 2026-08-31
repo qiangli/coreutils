@@ -43,6 +43,14 @@
 // through outpost's direct tunnel; a download path that rides the cloudbox relay
 // would violate the fail-closed data-plane block (dhnt docs/cloudbox-data-plane-block.md).
 //
+// # Default port and name
+//
+// Apps defaults to 22749, the standard telephone-keypad encoding BASHY =
+// 2-2-7-4-9. Existing explicit 8639 configurations continue to work through
+// --port; only the default moves. BASHY expands to "Bashy's Agentic Shell
+// Harness Yoke". Bash compatibility describes behavior, not affiliation with
+// GNU or the GNU Bash project.
+//
 // # Chrome
 //
 // The launcher (index.html) and every standalone managed-app page it owns
