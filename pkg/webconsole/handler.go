@@ -293,6 +293,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.Handle("GET /board", redirectTo("/board/"))
 		mux.HandleFunc("GET /api/board", s.handleBoardOverview)
 		mux.HandleFunc("GET /api/board/panel/{id}", s.handleBoardPanel)
+		mux.HandleFunc("GET /api/board/story/{id}", s.handleBoardStory)
 	}
 
 	closers := []func() error{}

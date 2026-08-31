@@ -24,7 +24,7 @@ const el = (tag, cls, text) => {
   return n;
 };
 
-const state = { all: false, open: {} };
+const state = { all: false, open: {}, story: {} };
 
 // ---- formatting --------------------------------------------------------------
 
@@ -159,15 +159,91 @@ function runRefsEl(refs) {
 // costs no CSS: an always-visible chip line (what runRefsEl does for runs, so a
 // scan sees at once that a card has seven stories, not zero) and a collapsible
 // list carrying each story's status, priority and title.
-function storiesEl(stories) {
+// storyDetail fetches ONE story's full record. Cached per id for the life of
+// the page: a body does not change under a reader, and a second click on the
+// same story should not re-hit the host.
+const storyCache = new Map();
+async function storyDetail(id) {
+  if (storyCache.has(id)) return storyCache.get(id);
+  const p = fetch(url("api/board/story/" + encodeURIComponent(id)))
+    .then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+      return d;
+    });
+  storyCache.set(id, p);
+  // A failed fetch must not poison the cache — the next click should retry
+  // rather than replay the error forever.
+  p.catch(() => storyCache.delete(id));
+  return p;
+}
+
+// openStory renders a story's detail INTO an already-visible container. It is
+// the one place the page shows a body, so both entry points (a chip and a
+// list row) land here and agree.
+async function openStory(id, host, sprintID) {
+  // Remember it. The page reloads every 15s and re-renders with
+  // replaceChildren, so without this a reader's open story vanishes
+  // mid-sentence — the panels already solve the same problem with state.open.
+  if (sprintID) state.story[sprintID] = id;
+  host.hidden = false;
+  host.replaceChildren(el("div", "sec-v", "loading #" + id + " …"));
+  try {
+    const d = await storyDetail(id);
+    const rows = [];
+    // "unassigned" is todo's placeholder for "nobody", so rendering it as
+    // "@unassigned" invents a person. An absent owner shows as nothing.
+    const owner = d.assignee && !/^(unassigned|-|none)$/i.test(d.assignee) ? "@" + d.assignee : "";
+    const meta = [d.status, d.priority, owner,
+      d.sprint ? "sprint #" + d.sprint : "", d.scope]
+      .filter(Boolean).join(" · ");
+    const head = el("div", "sec");
+    head.append(el("div", "sec-k " + stateClass(d.status), "#" + (d.seq || d.id)));
+    head.append(el("div", "sec-v", d.title || ""));
+    rows.push(head);
+    if (meta) {
+      const m = el("div", "sec");
+      m.append(el("div", "sec-k", "meta"));
+      m.append(el("div", "sec-v", meta));
+      rows.push(m);
+    }
+    // The body is written as labelled paragraphs, exactly like a continuity
+    // brief, so it is rendered with the same splitter rather than as one wall.
+    const secs = continuitySections(d.body);
+    if (secs.length) {
+      for (const sec of secs) {
+        const row = el("div", "sec");
+        if (sec.label) row.append(el("div", "sec-k", sec.label));
+        row.append(el("div", "sec-v", sec.body));
+        rows.push(row);
+      }
+    } else {
+      const row = el("div", "sec");
+      row.append(el("div", "sec-v", "(no body)"));
+      rows.push(row);
+    }
+    host.replaceChildren(...rows);
+  } catch (e) {
+    // Name the failure. A detail pane that silently shows nothing is the same
+    // defect class this board is meant to report on.
+    const row = el("div", "sec");
+    row.append(el("div", "sec-k needs", "error"));
+    row.append(el("div", "sec-v", String(e.message || e)));
+    host.replaceChildren(row);
+  }
+}
+
+function storiesEl(stories, detailHost, sprintID) {
   const wrap = el("div", "refs");
   wrap.append(el("span", "k", "stories"));
   const shown = stories.slice(0, 24);
   for (const t of shown) {
-    const chip = el("span", "ref " + stateClass(t.status), "#" + (t.number || t.id));
-    // The full title on hover, so a chip line stays scannable without hiding
-    // what each chip is.
+    // A button, not a span: a thing that responds to a click has to be
+    // reachable by keyboard and announce itself as activatable.
+    const chip = el("button", "ref link " + stateClass(t.status), "#" + (t.number || t.id));
+    chip.type = "button";
     chip.title = [t.priority, t.status, t.title].filter(Boolean).join(" · ");
+    chip.addEventListener("click", () => openStory(t.id, detailHost, sprintID));
     wrap.append(chip);
   }
   if (stories.length > shown.length) {
@@ -176,16 +252,18 @@ function storiesEl(stories) {
   return wrap;
 }
 
-function storyListEl(stories) {
+function storyListEl(stories, detailHost, sprintID) {
   const btn = el("button", "more", "stories — " + stories.length);
   btn.type = "button";
   const body = el("div", "continuity");
   body.hidden = true;
   for (const t of stories) {
-    const row = el("div", "sec");
+    const row = el("button", "sec link");
+    row.type = "button";
     row.append(el("div", "sec-k " + stateClass(t.status),
       "#" + (t.number || t.id) + (t.priority ? " " + t.priority : "")));
     row.append(el("div", "sec-v", t.title || ""));
+    row.addEventListener("click", () => openStory(t.id, detailHost, sprintID));
     body.append(row);
   }
   btn.addEventListener("click", () => {
@@ -223,8 +301,19 @@ function sprintEl(sp, stories) {
 
   stories = stories || [];
   if (stories.length) {
-    n.append(storiesEl(stories));
-    n.append(...storyListEl(stories));
+    // One detail pane per card, shared by both entry points, so clicking a
+    // second story replaces the first rather than stacking panes nobody closes.
+    const detail = el("div", "continuity story-detail");
+    detail.hidden = true;
+    n.append(storiesEl(stories, detail, sp.id));
+    n.append(...storyListEl(stories, detail, sp.id));
+    n.append(detail);
+    // Re-open whatever the reader had open before the last refresh. The body
+    // is cached per id, so this costs no request.
+    const wasOpen = state.story[sp.id];
+    if (wasOpen && stories.some((t) => t.id === wasOpen)) {
+      openStory(wasOpen, detail, sp.id);
+    }
   }
 
   const sections = continuitySections(sp.continuity);

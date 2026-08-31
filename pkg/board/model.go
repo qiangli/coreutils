@@ -137,6 +137,40 @@ type Todo struct {
 	// It is what lets a reader group stories under their card; without it the
 	// board could only ever show a flat list, which is what it did.
 	SprintID int64 `json:"sprint_id,omitempty"`
+
+	// Store is the scope arguments that located this item (`--base-dir <repo>`
+	// or `--user --owner <name>`), kept so a reader can ask todo for the item's
+	// FULL record — the body especially — without re-deriving which of the
+	// host's several registers it came from.
+	//
+	// NOT serialized. It is a lookup key inside this process, not part of the
+	// board's public shape, and shipping a caller's argv in a payload would
+	// invite someone to treat it as one.
+	Store []string `json:"-"`
+}
+
+// Story is one item's FULL record, as `todo show --json` reports it. The board
+// carries the projection; this is what a reader asks for when it wants the
+// body behind a row.
+//
+// Deliberately fetched ONE AT A TIME rather than folded into the overview: the
+// bodies on this host run to seventy lines each, and the overview is polled.
+// The same reasoning already governs the panel rows — "the full set is one
+// deliberate request away".
+type Story struct {
+	ID       string     `json:"id"`
+	Kind     string     `json:"kind,omitempty"`
+	Title    string     `json:"title"`
+	Seq      int        `json:"seq,omitempty"`
+	Status   string     `json:"status"`
+	Priority string     `json:"priority,omitempty"`
+	Created  time.Time  `json:"created,omitzero"`
+	Assignee string     `json:"assignee,omitempty"`
+	Sprint   int64      `json:"sprint,omitempty"`
+	Due      *time.Time `json:"due,omitempty"`
+	Closed   *time.Time `json:"closed,omitempty"`
+	Body     string     `json:"body,omitempty"`
+	Scope    string     `json:"scope,omitempty"`
 }
 
 type Sprint struct {

@@ -374,7 +374,7 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 			return err
 		}
 		for _, x := range items {
-			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint})
+			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint, Store: sc.args})
 		}
 	}
 	sort.SliceStable(b.Todos, func(i, j int) bool {
@@ -476,4 +476,31 @@ func (fleetSource) Load(_ context.Context, b *Board, _ Options) error {
 		return fmt.Errorf("weave fleet availability unavailable; PATH fallback shown: %s", strings.TrimSpace(fleetErr.Error()))
 	}
 	return nil
+}
+
+// StoryDetail asks todo for one item's full record, in the register the board
+// found it in.
+//
+// It re-runs `todo show <id> --json` through the same in-process seam the
+// sources use rather than reading the item file itself: the on-disk format is
+// todo's business, and a reader that parses another tool's storage becomes a
+// second implementation of it that nobody remembers to update.
+func StoryDetail(t Todo) (*Story, error) {
+	if t.ID == "" {
+		return nil, fmt.Errorf("story: no id")
+	}
+	args := append(append([]string(nil), t.Store...), "show", t.ID, "--json")
+	raw, err := executeJSON(todo.NewTodoCmd(), args...)
+	if err != nil {
+		return nil, err
+	}
+	var st Story
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return nil, fmt.Errorf("story %s: %w", t.ID, err)
+	}
+	if st.ID == "" {
+		return nil, fmt.Errorf("story %s: todo returned no record", t.ID)
+	}
+	st.Scope = t.Scope
+	return &st, nil
 }

@@ -322,3 +322,58 @@ func keysOf(d map[string]any) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestBoardStoryDetail pins the clickable-story endpoint: the overview stays
+// a projection, and the body is one deliberate request away — the same rule
+// the panel endpoint already follows, and the reason the overview does not
+// simply carry every body (they run to seventy lines each here, and it is
+// polled).
+func TestBoardStoryDetail(t *testing.T) {
+	h, s := newBoardTestServer(t)
+	b := fakeBoard(t)
+	s.boards.mu.Lock()
+	s.boards.board, s.boards.at = b, time.Now()
+	s.boards.mu.Unlock()
+
+	// A story the board does not know must 404 naming the id, never 200 with
+	// an empty pane — a detail view that silently shows nothing is the defect
+	// class this board exists to report on.
+	w := do(h, "GET", "/api/board/story/nosuchstory", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown story = %d, want 404", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "nosuchstory") {
+		t.Errorf("404 does not name the id: %q", w.Body.String())
+	}
+
+	// A known story resolves far enough to attempt the lookup. The fake board
+	// carries no real register behind it, so the honest outcome is a NAMED
+	// upstream failure rather than a silent empty body.
+	w = do(h, "GET", "/api/board/story/aaa", "127.0.0.1:5555", nil)
+	if w.Code == http.StatusNotFound {
+		t.Fatalf("a story the board knows about was reported unknown: %q", w.Body.String())
+	}
+	if w.Code != http.StatusOK && !strings.Contains(w.Body.String(), "aaa") {
+		t.Errorf("failure does not name the story: %q", w.Body.String())
+	}
+}
+
+// TestBoardStoryEmptyIDMatchesItsSibling records what an empty id actually
+// does, rather than asserting a rule the codebase does not hold.
+//
+// `/api/board/story/` does not match the {id} pattern at all, so it falls
+// through to the SPA catch-all and returns the page — exactly as
+// `/api/board/panel/` already does. That is arguably wrong for an /api/ path
+// (a JSON caller gets HTML), but it is ONE pre-existing routing behaviour
+// shared by every /api/ typo, not something this endpoint introduced, and
+// fixing it here alone would make the two siblings disagree. Pinned so the
+// next reader sees it is known rather than rediscovering it.
+func TestBoardStoryEmptyIDMatchesItsSibling(t *testing.T) {
+	h, _ := newBoardTestServer(t)
+	story := do(h, "GET", "/api/board/story/", "127.0.0.1:5555", nil).Code
+	panel := do(h, "GET", "/api/board/panel/", "127.0.0.1:5555", nil).Code
+	if story != panel {
+		t.Fatalf("empty-id handling diverged from the sibling endpoint: story=%d panel=%d",
+			story, panel)
+	}
+}

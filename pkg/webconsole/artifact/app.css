@@ -548,6 +548,25 @@ body.standalone #bar { flex: none; }
 }
 .bd-sprint .refs .more { font-size: .66rem; color: var(--muted-foreground); }
 
+/* A story link. The chip and the list row are BUTTONS now — a thing that
+   responds to a click must be keyboard-reachable and announce itself — so they
+   need the browser's button chrome stripped back to what the span/div looked
+   like, plus an affordance saying they can be clicked. */
+.bd-sprint .link {
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+}
+.bd-sprint .refs .ref.link:hover,
+.bd-sprint .refs .ref.link:focus-visible { border-color: var(--primary); color: var(--primary); }
+.bd-sprint .sec.link {
+  width: 100%; background: none; border: 0; border-radius: .3rem;
+  display: flex; gap: .5rem; align-items: baseline;
+}
+.bd-sprint .sec.link:hover, .bd-sprint .sec.link:focus-visible { background: var(--muted); }
+/* The detail pane is the one place a body is shown, so give it a little
+   separation from the list it was opened from. */
+.bd-sprint .story-detail { border-top: 1px solid var(--border); margin-top: .3rem; }
+
 /* Narrow screens: the label column would squeeze the prose to a ribbon. */
 @media (max-width: 46rem) {
   .bd-sprint .sec { display: block; }

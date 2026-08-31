@@ -288,3 +288,50 @@ func (s *server) handleBoardPanel(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleBoardPage(w http.ResponseWriter, r *http.Request) {
 	s.servePageFile(w, r, "board.html")
 }
+
+// handleBoardStory serves ONE story's full record, body included.
+//
+// Separate from the overview on purpose, and for the reason the panel endpoint
+// already documents: the overview is POLLED, and the story bodies on this host
+// run to seventy lines each. Folding them in would put a megabyte on every
+// tick to serve a detail a reader opens one of at a time.
+//
+// Read-only like the rest of this page: `board` is the one work verb the atlas
+// marks CapReadOnly, and a detail view must not become the place that erodes
+// it.
+func (s *server) handleBoardStory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if strings.TrimSpace(id) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "story id required"})
+		return
+	}
+	b, _, err := s.boards.Get(r.Context(), s.opts.Ctx)
+	if err != nil || b == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "the board has not been collected yet"})
+		return
+	}
+	// Match on the id the page rendered, which is the short form; a prefix
+	// match keeps the link working whichever length a caller pasted.
+	var found *board.Todo
+	for i := range b.Todos {
+		if b.Todos[i].ID == id || strings.HasPrefix(b.Todos[i].ID, id) {
+			found = &b.Todos[i]
+			break
+		}
+	}
+	if found == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "no story " + id + " on this board"})
+		return
+	}
+	st, err := board.StoryDetail(*found)
+	if err != nil {
+		// Name what failed. A detail pane that silently shows nothing is the
+		// same defect class this sprint is about.
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error": "could not read story " + id + ": " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
