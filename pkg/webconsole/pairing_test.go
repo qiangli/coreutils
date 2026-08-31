@@ -74,6 +74,20 @@ func TestScanOneQRReachesTheConsoleWithoutAPassword(t *testing.T) {
 	}
 }
 
+func TestPairedDeviceCanLoadSharedChromeAssets(t *testing.T) {
+	h, store := pairEnv(t)
+	cookie := redeemScan(t, h, store, nil, time.Hour)
+	for _, asset := range []string{
+		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js",
+		"/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js",
+	} {
+		w := do(h, "GET", asset, "192.168.1.44:5555", withCookie(cookie))
+		if w.Code != http.StatusOK {
+			t.Errorf("paired device GET %s = %d, want 200 (body %q)", asset, w.Code, strings.TrimSpace(w.Body.String()))
+		}
+	}
+}
+
 // TestSecondScanOfTheSameTicketFails: single-use in both directions.
 func TestSecondScanOfTheSameTicketFails(t *testing.T) {
 	h, store := pairEnv(t)

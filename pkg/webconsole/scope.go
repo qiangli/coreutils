@@ -46,7 +46,9 @@ var defaultDeviceScope = []string{"board", "mb", "relay"}
 func consoleWidePath(p string) bool {
 	switch p {
 	case "/", "/api/apps", "/api/session", "/api/login", "/api/logout",
-		"/healthz", "/meta", "/login", "/favicon.ico":
+		"/healthz", "/meta", "/login", "/favicon.ico",
+		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js", "/term.js",
+		"/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js":
 		return true
 	}
 	// The SPA's own assets live at the root and belong to no panel.
