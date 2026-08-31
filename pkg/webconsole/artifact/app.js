@@ -522,7 +522,8 @@ function pairCodes(data) {
     const lab = document.createElement("div");
     lab.className = "pair-code-label"; lab.textContent = a.label;
     const host = document.createElement("div");
-    host.className = "pair-code-host"; host.textContent = a.host;
+    host.className = "pair-code-host";
+    host.textContent = a.access_url || a.host;
     c.append(lab, host);
     codes.append(c);
   }

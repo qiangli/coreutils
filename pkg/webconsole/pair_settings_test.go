@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -94,7 +95,12 @@ func TestPairMintOperatorSuccess(t *testing.T) {
 		Scope      []string `json:"scope"`
 		PayloadVer string   `json:"payload_version"`
 		Addresses  []struct {
-			Kind, Label, Host, URL, QR string
+			Kind      string `json:"kind"`
+			Label     string `json:"label"`
+			Host      string `json:"host"`
+			AccessURL string `json:"access_url"`
+			URL       string `json:"url"`
+			QR        string `json:"qr"`
 		} `json:"addresses"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -128,6 +134,10 @@ func TestPairMintOperatorSuccess(t *testing.T) {
 		if !strings.HasPrefix(a.QR, "data:image/png;base64,") {
 			t.Fatalf("address %q QR is not a PNG data URI: %.40q", a.Kind, a.QR)
 		}
+		wantAccess := "http://" + a.Host + ":22749/"
+		if a.AccessURL != wantAccess {
+			t.Fatalf("address %q access_url = %q, want %q", a.Kind, a.AccessURL, wantAccess)
+		}
 		u, err := url.Parse(a.URL)
 		if err != nil {
 			t.Fatalf("address %q URL unparseable: %v", a.Kind, err)
@@ -156,6 +166,66 @@ func TestPairMintOperatorSuccess(t *testing.T) {
 	}
 	if !kinds["mdns"] || !kinds["lan"] {
 		t.Fatalf("kinds = %v, want both mdns and lan", kinds)
+	}
+}
+
+// The Settings pairing flow also crosses a real HTTP server boundary: an
+// authenticated POST mints a ticket and the returned redeem URL completes the
+// one-time redirect flow. This catches routing/cookie behavior that direct
+// handler calls cannot.
+func TestPairSettingsE2EHTTPRoundTrip(t *testing.T) {
+	stubPairAddresses(t, "workshop.local", "192.168.1.20")
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "pairing.json")
+	sessions := websession.NewStore(12*time.Hour, []byte("test-key-test-key-test-key-32byt"))
+	h, closeHandler, err := Handler(Options{
+		Ctx:           t.Context(),
+		RequireLogin:  true,
+		Sessions:      sessions,
+		Pairing:       true,
+		PairStorePath: storePath,
+		Port:          22749,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeHandler() })
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	cookie := operatorCookie(t, sessions)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/pair", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(cookie)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/pair = %d, want 200", resp.StatusCode)
+	}
+	var minted struct {
+		Addresses []struct{ URL string } `json:"addresses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil || len(minted.Addresses) == 0 {
+		t.Fatalf("decode mint response: %v", err)
+	}
+	u, err := url.Parse(minted.Addresses[0].URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := *srv.Client()
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	redeem, err := client.Get(srv.URL + u.RequestURI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer redeem.Body.Close()
+	if redeem.StatusCode != http.StatusSeeOther {
+		t.Fatalf("GET redeem = %d, want 303", redeem.StatusCode)
 	}
 }
 

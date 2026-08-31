@@ -5,6 +5,7 @@ package webconsole
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -46,11 +47,12 @@ var (
 // its network can resolve, and the ticket closes on the first redemption
 // regardless of which one was used.
 type pairAddress struct {
-	Kind  string `json:"kind"`  // "mdns" | "lan"
-	Label string `json:"label"` // human label shown under the code
-	Host  string `json:"host"`  // the bare host the URL dials
-	URL   string `json:"url"`   // the versioned redeem URL the QR encodes
-	QR    string `json:"qr"`    // PNG data URI of URL, or "" if it could not render
+	Kind      string `json:"kind"`       // "mdns" | "lan"
+	Label     string `json:"label"`      // human label shown under the code
+	Host      string `json:"host"`       // the bare host the URL dials
+	AccessURL string `json:"access_url"` // clean root URL used after pairing
+	URL       string `json:"url"`        // the versioned redeem URL the QR encodes
+	QR        string `json:"qr"`         // PNG data URI of URL, or "" if it could not render
 }
 
 // handlePairMint mints a pairing ticket for the Settings page and returns
@@ -152,7 +154,8 @@ func (s *server) pairAddresses(secret string) []pairAddress {
 
 func (s *server) pairAddress(kind, label, host, secret string) pairAddress {
 	u := redeemURL(host, s.port, secret)
-	a := pairAddress{Kind: kind, Label: label, Host: host, URL: u}
+	access := "http://" + net.JoinHostPort(host, fmt.Sprint(s.port)) + "/"
+	a := pairAddress{Kind: kind, Label: label, Host: host, AccessURL: access, URL: u}
 	if data, err := qrPNGDataURI(u); err == nil {
 		a.QR = data
 	}
