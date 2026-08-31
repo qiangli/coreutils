@@ -1162,7 +1162,14 @@ func collectCPIOPath(rc *tool.RunContext, o *options, members *[]cpioMember, nam
 		var dataErr error
 		switch {
 		case e.fi.Mode().IsRegular():
-			data, dataErr = os.ReadFile(e.abs)
+			var f *os.File
+			f, dataErr = openSourceFile(rc, e.member, e.abs)
+			if dataErr == nil {
+				data, dataErr = io.ReadAll(f)
+				if closeErr := f.Close(); dataErr == nil {
+					dataErr = closeErr
+				}
+			}
 		case e.fi.Mode()&os.ModeSymlink != 0:
 			var target string
 			target, dataErr = os.Readlink(e.abs)

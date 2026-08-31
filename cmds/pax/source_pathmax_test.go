@@ -157,6 +157,31 @@ func TestSourceDirectoryOperandNearPathMaxIsFullyArchived(t *testing.T) {
 	}
 }
 
+// Every required output format must open a legal source pathname without
+// making it longer by resolving it against the embedding shell's directory.
+// The cpio lane used os.ReadFile on that synthesized absolute spelling even
+// after the shared walker had reached the member component by component.
+func TestCPIOSourcePathNearPathMaxIsArchived(t *testing.T) {
+	d := t.TempDir()
+	_, member := nearLimitSourceTree(t, d, regularLeaf)
+	if len(member) != destinationPathMax-1 {
+		t.Fatalf("fixture pathname length = %d, want %d", len(member), destinationPathMax-1)
+	}
+	for _, component := range strings.Split(member, "/") {
+		if len(component) > nameMax {
+			t.Fatalf("fixture component length = %d, exceeds %d", len(component), nameMax)
+		}
+	}
+	if _, errOut, code := exec(t, d, "", "-w", "-x", "cpio", "-f", "archive.cpio", member); code != 0 || errOut != "" {
+		t.Fatalf("write cpio near-PATH_MAX source = (%d, %q), want (0, \"\")", code, errOut)
+	}
+	out, errOut, code := exec(t, d, "", "-f", "archive.cpio")
+	if code != 0 || errOut != "" || !strings.Contains(out, member+"\n") {
+		t.Fatalf("list cpio near-PATH_MAX source = (%d, %q, contains=%t)",
+			code, errOut, strings.Contains(out, member+"\n"))
+	}
+}
+
 // -H resolves a symlink named as a command-line operand. The operand's own
 // spelling is within {PATH_MAX}; only pax's absolute rewrite is not, so the
 // followed stat must succeed and the referent's contents be archived.
