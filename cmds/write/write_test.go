@@ -1017,27 +1017,24 @@ func TestInactiveRecipientSessionIsRejected(t *testing.T) {
 	}
 }
 
-func TestStaleExistingTTYDoesNotTriggerMultiLoginNotice(t *testing.T) {
+// A live USER_PROCESS record, an existing terminal device, and mesg y are the
+// portable write(1) authority boundary. Linux /proc may report that ut_pid
+// does not itself own the terminal (for example when a login supervisor names
+// a descendant's PTY); that extra topology fact must not make a valid login
+// unreachable.
+func TestLiveRecordedTerminalDoesNotRequireLinuxProcOwnership(t *testing.T) {
 	w := install(t, fixture{uid: 1000, myTTY: "pts/1",
-		logins: []login{
-			{user: "bob", line: "pts/2", mode: writable, when: epoch},
-			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
-		}})
-	sessionOwnsTerminalFn = func(_ int, path string) bool {
-		return !strings.HasSuffix(path, "/pts/4")
-	}
+		logins: []login{{user: "bob", line: "pts/4", mode: writable, when: epoch}}})
+	sessionOwnsTerminalFn = func(int, string) bool { return false }
 	out, errOut, code := exec(t, "body\n", "bob")
 	if code != 0 || errOut != "" {
 		t.Fatalf("exit=%d stderr=%q", code, errOut)
 	}
 	if out != "" {
-		t.Fatalf("stale existing tty triggered multi-login notice: %q", out)
+		t.Fatalf("unexpected stdout: %q", out)
 	}
-	if got := w.read(t, "pts/2"); !strings.Contains(got, "body\n") {
-		t.Fatalf("authenticated terminal did not receive body: %q", got)
-	}
-	if got := w.read(t, "pts/4"); got != "" {
-		t.Fatalf("stale terminal received data: %q", got)
+	if got := w.read(t, "pts/4"); !strings.Contains(got, "body\n") {
+		t.Fatalf("live recorded terminal did not receive body: %q", got)
 	}
 }
 

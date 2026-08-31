@@ -543,8 +543,12 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 			missing++
 			continue
 		}
-		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(path) ||
-			(!agentDB && !sessionOwnsTerminalFn(r.PID, path)) {
+		// USER_PROCESS plus a live recorded PID and a terminal device is the
+		// portable login boundary. Do not additionally require Linux /proc to
+		// say that ut_pid itself owns the terminal: login supervisors may record
+		// a live parent while a descendant owns the PTY, and POSIX write(1)
+		// defines reachability through the login record and mesg permission.
+		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(path) {
 			missing++
 			continue
 		}
