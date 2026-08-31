@@ -493,3 +493,24 @@ func TestRoomsBackfillsADoor(t *testing.T) {
 		t.Error("the backfilled door must be persisted, or the number renumbers under the reader")
 	}
 }
+
+// Rooms feeds Relay's left navigation, not the meeting-history ledger. Closed
+// and abandoned sessions have released their doors; returning them here makes a
+// reused room number or repeated topic look like duplicate active channels.
+// `meet list` keeps its separate history-oriented path, so filtering this API
+// does not erase or hide history from the CLI.
+func TestRoomsExcludesHistoricalSessions(t *testing.T) {
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+
+	saveMeeting(t, "active", 1, "open")
+	saveMeeting(t, "concluded", 1, "closed")
+	saveMeeting(t, "reaped", 1, "abandoned")
+
+	rooms, err := Rooms()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) != 1 || rooms[0].ID != "active" {
+		t.Fatalf("Relay rooms = %+v, want only the active session", rooms)
+	}
+}

@@ -1,6 +1,8 @@
 package board
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -88,5 +90,44 @@ func TestDecodeTodoListFailsLoudlyWhenTheEnvelopeReshapes(t *testing.T) {
 func TestDecodeTodoListRejectsUnversionedPayload(t *testing.T) {
 	if _, err := decodeTodoList([]byte(`{"items":[]}`), "repo w"); err == nil {
 		t.Fatal("want an error for an unversioned payload")
+	}
+}
+
+// The web console is a host service and normally has no repository cwd. Fleet
+// still has useful catalog/PATH evidence there; absence of repository-scoped
+// weave cooldown data is an expected scope reduction, not a broken board
+// source and must not become the dashboard's "1 source warning" banner.
+func TestFleetSourceOutsideRepoUsesPATHFallbackWithoutWarning(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	b := &Board{}
+	if err := (fleetSource{}).Load(context.Background(), b, Options{}); err != nil {
+		t.Fatalf("non-repo fleet snapshot: %v", err)
+	}
+	if len(b.Agents) == 0 {
+		t.Fatal("non-repo fleet snapshot lost the host catalog")
+	}
+	for _, a := range b.Agents {
+		if a.Availability == "" {
+			t.Fatalf("agent %s has no PATH/catalog fallback verdict: %+v", a.Name, a)
+		}
+	}
+}
+
+// A genuine availability collector failure remains a warning after the PATH
+// fallback is populated. Only the expected absence of a repo is quiet.
+func TestFleetSourceStillReportsRealAvailabilityFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := &Board{}
+	want := errors.New("broken availability payload")
+	err := (fleetSource{loadAvailability: func() (map[string]fleetAvailability, error) {
+		return nil, want
+	}}).Load(context.Background(), b, Options{})
+	if err == nil || !strings.Contains(err.Error(), want.Error()) {
+		t.Fatalf("fleet error = %v, want the genuine collector failure", err)
+	}
+	if len(b.Agents) == 0 {
+		t.Fatal("a real collector failure must still populate the PATH fallback")
 	}
 }

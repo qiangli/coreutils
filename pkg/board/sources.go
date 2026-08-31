@@ -386,36 +386,32 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 	return nil
 }
 
-type fleetSource struct{}
+type fleetAvailability struct {
+	Agent        string `json:"agent"`
+	Tool         string `json:"tool"`
+	Model        string `json:"model"`
+	Reason       string `json:"reason"`
+	CoolingUntil string `json:"cooling_until"`
+	Available    bool   `json:"available"`
+	Found        bool   `json:"found"`
+}
+
+type fleetSource struct {
+	// loadAvailability is a test seam. Production uses
+	// loadWeaveFleetAvailability; keeping the seam here lets a test distinguish
+	// an expected non-repo snapshot from a real collector failure without
+	// replacing PATH or spawning a fake executable.
+	loadAvailability func() (map[string]fleetAvailability, error)
+}
 
 func (fleetSource) Name() string { return "fleet" }
-func (fleetSource) Load(_ context.Context, b *Board, _ Options) error {
-	raw, fleetErr := executeJSON(weave.NewWeaveCmd(), "fleet", "--agents", "--json")
-	type availability struct {
-		Agent        string `json:"agent"`
-		Tool         string `json:"tool"`
-		Model        string `json:"model"`
-		Reason       string `json:"reason"`
-		CoolingUntil string `json:"cooling_until"`
-		Available    bool   `json:"available"`
-		Found        bool   `json:"found"`
+func (s fleetSource) Load(_ context.Context, b *Board, _ Options) error {
+	load := s.loadAvailability
+	if load == nil {
+		load = loadWeaveFleetAvailability
 	}
-	available := map[string]availability{}
-	if fleetErr == nil {
-		var env wireEnvelope
-		var result struct {
-			Tools []availability `json:"tools"`
-		}
-		if err := json.Unmarshal(raw, &env); err != nil {
-			fleetErr = err
-		} else if err := json.Unmarshal(env.Result, &result); err != nil {
-			fleetErr = err
-		} else {
-			for _, row := range result.Tools {
-				available[row.Agent] = row
-			}
-		}
-	}
+	available, fleetErr := load()
+
 	cat := fleet.New()
 	agents, errs := cat.Agents()
 	if len(errs) > 0 {
@@ -476,6 +472,38 @@ func (fleetSource) Load(_ context.Context, b *Board, _ Options) error {
 		return fmt.Errorf("weave fleet availability unavailable; PATH fallback shown: %s", strings.TrimSpace(fleetErr.Error()))
 	}
 	return nil
+}
+
+// loadWeaveFleetAvailability enriches the machine roster with weave's
+// repository-scoped cooldown/probe evidence when the board is running inside a
+// clone. A web console is normally launched from a service directory or the
+// user's home, where no repository exists. That is an expected scope, not a
+// broken source: the board still has honest host-scoped PATH/catalog evidence,
+// so it returns that fallback without emitting a warning.
+func loadWeaveFleetAvailability() (map[string]fleetAvailability, error) {
+	available := map[string]fleetAvailability{}
+	if _, ok := todo.FindGitRoot(); !ok {
+		return available, nil
+	}
+
+	raw, fleetErr := executeJSON(weave.NewWeaveCmd(), "fleet", "--agents", "--json")
+	if fleetErr != nil {
+		return available, fleetErr
+	}
+	var env wireEnvelope
+	var result struct {
+		Tools []fleetAvailability `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return available, err
+	}
+	if err := json.Unmarshal(env.Result, &result); err != nil {
+		return available, err
+	}
+	for _, row := range result.Tools {
+		available[row.Agent] = row
+	}
+	return available, nil
 }
 
 // StoryDetail asks todo for one item's full record, in the register the board

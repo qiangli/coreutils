@@ -86,6 +86,18 @@ func apiErrorOf(t *testing.T, body []byte) string {
 
 func TestAPIRoomList(t *testing.T) {
 	st := newRoom(t)
+	// History can reuse both the active room's door and topic. Relay's channel
+	// navigation must not render those terminal sessions as duplicate entries.
+	closed := saveMeeting(t, "closed-copy", st.Room, "closed")
+	closed.Topic = st.Topic
+	if err := closed.save(); err != nil {
+		t.Fatal(err)
+	}
+	abandoned := saveMeeting(t, "abandoned-copy", st.Room, "abandoned")
+	abandoned.Topic = st.Topic
+	if err := abandoned.save(); err != nil {
+		t.Fatal(err)
+	}
 	srv := serveTest(t)
 
 	resp, body := doJSON(t, srv, "GET", "/api/rooms", nil)

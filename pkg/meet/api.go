@@ -168,12 +168,15 @@ type CreateOptions struct {
 	FromMB []int64
 }
 
-// Rooms lists every meeting on this host.
+// Rooms lists the active meetings a channel sidebar can attach to.
 //
 // It goes through openRooms (not listSessions) so an open meeting that predates
 // room numbers is given one on the way past — the list is where a human reads the
 // number they are about to type, and one that appeared only after some other
-// command ran would be a door that is sometimes there.
+// command ran would be a door that is sometimes there. Closed and abandoned
+// meetings remain available through the history-oriented CLI (`meet list`), but
+// they have released their room numbers and must not reappear in Relay as stale
+// copies of active channels with the same topic or door.
 func Rooms() ([]RoomSummary, error) {
 	sessions, err := openRooms()
 	if err != nil {
@@ -181,6 +184,9 @@ func Rooms() ([]RoomSummary, error) {
 	}
 	out := make([]RoomSummary, 0, len(sessions))
 	for _, s := range sessions {
+		if s.Status != "open" {
+			continue
+		}
 		out = append(out, RoomSummary{
 			ID: s.ID, Room: s.Room, Name: s.Name, Permanent: s.Permanent,
 			Board: s.Board, Topic: s.Topic, Status: s.Status,
