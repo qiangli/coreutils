@@ -701,13 +701,3 @@ async function refresh() {
 applyChrome();
 refresh();
 setInterval(refresh, 5000);
-fline";
-  }
-  // Only the home grid reflects liveness; repainting under a live terminal
-  // would tear down the session every few seconds.
-  render();
-}
-
-applyChrome();
-refresh();
-setInterval(refresh, 5000);

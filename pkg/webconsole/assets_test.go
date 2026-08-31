@@ -1,10 +1,13 @@
 package webconsole
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/treesitter"
 )
 
 var assetRe = regexp.MustCompile(`(?:src|href)="([^":?#][^":]*)"`)
@@ -61,6 +64,25 @@ func TestLauncherScriptDefinesItsEntryPoint(t *testing.T) {
 		if !strings.Contains(js, fn) {
 			t.Errorf("app.js calls but does not define %q", strings.TrimSuffix(fn, "("))
 		}
+	}
+}
+
+// The launcher is a tracked, embedded artifact, so a bad merge can leave every
+// HTTP check green while the browser refuses to execute any of it. Parse the
+// exact bytes served to the browser and reject tree-sitter recovery nodes.
+func TestLauncherScriptIsValidJavaScript(t *testing.T) {
+	h := newTestHandler(t, Options{})
+	w := do(h, "GET", "/app.js", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("app.js = %d", w.Code)
+	}
+
+	tree, err := treesitter.NewParser().Parse(context.Background(), w.Body.Bytes(), "javascript")
+	if err != nil {
+		t.Fatalf("parse app.js: %v", err)
+	}
+	if tree.Root == nil || tree.Root.HasError() {
+		t.Fatal("app.js contains invalid JavaScript syntax")
 	}
 }
 
