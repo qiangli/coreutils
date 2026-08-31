@@ -75,52 +75,99 @@ func TestS85ProbeExitCodes(t *testing.T) {
 }
 
 // TestS85ProbeDescriptorAndAppendMode isolates descriptor redirection,
-// file creation mode 0600, and append behavior over pre-existing content.
+// file creation mode 0600 for a newly created nohup.out, and append
+// behavior that preserves pre-existing content.
 func TestS85ProbeDescriptorAndAppendMode(t *testing.T) {
-	ptm, pts, err := pty.Open()
-	if err != nil {
-		t.Skipf("pty.Open failed: %v", err)
-	}
-	defer ptm.Close()
-	defer pts.Close()
+	t.Run("AbsentFileCreatedMode0600", func(t *testing.T) {
+		ptm, pts, err := pty.Open()
+		if err != nil {
+			t.Skipf("pty.Open failed: %v", err)
+		}
+		defer ptm.Close()
+		defer pts.Close()
 
-	dir := t.TempDir()
-	nohupOutPath := filepath.Join(dir, "nohup.out")
+		dir := t.TempDir()
+		nohupOutPath := filepath.Join(dir, "nohup.out")
 
-	// Seed pre-existing content in nohup.out
-	initialContent := "PRE-EXISTING CONTENT\n"
-	if err := os.WriteFile(nohupOutPath, []byte(initialContent), 0o600); err != nil {
-		t.Fatal(err)
-	}
+		// nohup.out does not exist before this run.
+		if _, err := os.Stat(nohupOutPath); !os.IsNotExist(err) {
+			t.Fatalf("nohup.out precondition: stat err = %v, want IsNotExist", err)
+		}
 
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   dir,
-		Env:   []string{"PATH=/bin:/usr/bin"},
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: pts, Err: pts},
-	}
-	if code := run(rc, []string{"sh", "-c", "printf 'NEW CONTENT\\n'"}); code != 0 {
-		t.Fatalf("code=%d", code)
-	}
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Env:   []string{"PATH=/bin:/usr/bin"},
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: pts, Err: pts},
+		}
+		if code := run(rc, []string{"sh", "-c", "printf 'NEW CONTENT\\n'"}); code != 0 {
+			t.Fatalf("code=%d", code)
+		}
 
-	// Assert pre-existing content is preserved and new content is appended
-	data, err := os.ReadFile(nohupOutPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantContent := initialContent + "NEW CONTENT\n"
-	if string(data) != wantContent {
-		t.Fatalf("nohup.out content = %q, want %q", string(data), wantContent)
-	}
+		data, err := os.ReadFile(nohupOutPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "NEW CONTENT\n" {
+			t.Fatalf("nohup.out content = %q, want %q", string(data), "NEW CONTENT\n")
+		}
 
-	// Assert mode is 0600
-	fi, err := os.Stat(nohupOutPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("nohup.out permissions = 0%o, want 0600", perm)
-	}
+		// Assert a newly created nohup.out is 0600.
+		fi, err := os.Stat(nohupOutPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("newly created nohup.out permissions = 0%o, want 0600", perm)
+		}
+	})
+
+	t.Run("AppendPreservesExistingContentAndMode", func(t *testing.T) {
+		ptm, pts, err := pty.Open()
+		if err != nil {
+			t.Skipf("pty.Open failed: %v", err)
+		}
+		defer ptm.Close()
+		defer pts.Close()
+
+		dir := t.TempDir()
+		nohupOutPath := filepath.Join(dir, "nohup.out")
+
+		// Seed pre-existing content in nohup.out
+		initialContent := "PRE-EXISTING CONTENT\n"
+		if err := os.WriteFile(nohupOutPath, []byte(initialContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Env:   []string{"PATH=/bin:/usr/bin"},
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: pts, Err: pts},
+		}
+		if code := run(rc, []string{"sh", "-c", "printf 'NEW CONTENT\\n'"}); code != 0 {
+			t.Fatalf("code=%d", code)
+		}
+
+		// Assert pre-existing content is preserved and new content is appended
+		data, err := os.ReadFile(nohupOutPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantContent := initialContent + "NEW CONTENT\n"
+		if string(data) != wantContent {
+			t.Fatalf("nohup.out content = %q, want %q", string(data), wantContent)
+		}
+
+		// Assert mode remains 0600
+		fi, err := os.Stat(nohupOutPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("nohup.out permissions = 0%o, want 0600", perm)
+		}
+	})
 }
 
 // TestS85ProbeWriteAndKillHangup isolates SIGHUP signal immunity

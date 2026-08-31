@@ -1,10 +1,10 @@
-# Profile D `nohup` Control-Instability Disposition — 2026-08-30
+# Profile D `nohup:21` Status and s85 Probe Coverage — 2026-08-30
 
 Primary contracts:
 [POSIX.1 Issue 7 `nohup`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nohup.html)
 and GNU Coreutils 9.11 `nohup`.
 
-## Observed Vector Analysis
+## Observed Vector
 
 * **Exact Identity:** `nohup:21`
 * **Observed Vector:**
@@ -12,11 +12,25 @@ and GNU Coreutils 9.11 `nohup`.
   * Paired GNU Control (2026-08-24): `PASS`
   * Paired GNU Control (2026-08-23): `FAIL`
 
-The paired GNU control run produced inconsistent results across dates (`2026-08-23=FAIL` vs `2026-08-24=PASS`). Converting a control-to-control disagreement or host-environment volatility into a product bug is explicitly prohibited under the review contract. The owner hypothesis of control/host instability was investigated against both the frozen/current Coreutils `nohup` binaries and the public suite-free s85 probe.
+The paired GNU control itself disagreed across dates (`2026-08-23=FAIL` vs
+`2026-08-24=PASS`). That disagreement has **not** been reproduced under a
+matched, controlled replay (same host, same harness build, same PTY/signal
+timing), so it cannot yet be attributed to either host/harness volatility or
+to a defect in this project's `nohup`. `nohup:21` stays **OPEN / UNRESOLVED**
+pending that matched replay; nothing below closes it.
 
-## Deterministic Behavior Isolation (s85 Probe Results)
+## s85 Probe Scope — Bounded Public Capability Evidence
 
-Coreutils `nohup` was evaluated against all five core execution vectors using the public suite-free s85 probe and focused tests in `cmds/nohup`:
+The s85 probes in `cmds/nohup/nohup_s85_probe_test.go` and the existing
+focused tests in `cmds/nohup` exercise `nohup`'s generic, publicly documented
+behavior surface: exit-status partitioning, descriptor redirection and
+`nohup.out` creation/append semantics, PATH resolution, ENOEXEC fallback, and
+SIGHUP immunity. They run against this project's own harness, not against the
+paired GNU control, and they do not replay the specific conditions (host,
+timing, PTY allocation) that produced the `nohup:21` observation above. They
+are therefore **bounded capability evidence for these generic vectors in
+isolation, not a reproduction of `nohup:21` and not evidence that resolves
+it**.
 
 1. **0 / 126 / 127 Exit Status Partitioning:**
    - **0 (Success):** Executable commands complete normally and return their exact exit status (`nohup true` exits `0`).
@@ -25,12 +39,13 @@ Coreutils `nohup` was evaluated against all five core execution vectors using th
 
 2. **SIGHUP Disposition & Process Immunity:**
    - Invoked utilities inherit `SIGHUP` set to ignored via `/bin/sh -c "trap '' HUP; exec \"$@\""`.
-   - The `nohup` process wrapper itself suppresses default termination via `signal.Notify(ch, syscall.SIGHUP)` while waiting for child execution, ensuring the waiting process wrapper survives `SIGHUP` delivered during execution.
+   - The `nohup` process wrapper itself suppresses default termination via `signal.Notify(ch, syscall.SIGHUP)` while waiting for child execution, so the waiting process wrapper survives `SIGHUP` delivered during execution.
 
 3. **File Descriptors & Creation / Append Semantics:**
    - Terminal standard input is redirected to write-only `/dev/null` before command lookup.
-   - Terminal standard output appends to `./nohup.out` in the working directory (created with mode `0600`), with fallback to `$HOME/nohup.out`.
-   - Appending to existing `nohup.out` preserves pre-existing file content.
+   - Terminal standard output appends to `./nohup.out` in the working directory, with fallback to `$HOME/nohup.out`.
+   - A `nohup.out` created where none existed is mode `0600` (probed explicitly with an absent-file precondition).
+   - Appending to an already-existing `nohup.out` preserves its pre-existing content and mode.
    - Terminal standard error follows redirected standard output, or appends to `nohup.out` when standard output is closed.
 
 4. **PATH Search & Resolution:**
@@ -43,13 +58,25 @@ Coreutils `nohup` was evaluated against all five core execution vectors using th
 ## Test Coverage
 
 Focused regression and s85 probe coverage in `cmds/nohup/nohup_s85_probe_test.go`:
-- `TestS85ProbeExitCodes`: Pins exit statuses `0`, `126`, and `127`.
-- `TestS85ProbeDescriptorAndAppendMode`: Pins `0600` file creation mode, descriptor redirection, and append behavior over pre-existing content.
-- `TestS85ProbeWriteAndKillHangup`: Pins child process `SIGHUP` immunity and output persistence to `nohup.out`.
+- `TestS85ProbeExitCodes`: pins exit statuses `0`, `126`, and `127`.
+- `TestS85ProbeDescriptorAndAppendMode`: two subtests — `AbsentFileCreatedMode0600` pins the creation mode of a newly created `nohup.out`, and `AppendPreservesExistingContentAndMode` pins append behavior and mode preservation over pre-existing content.
+- `TestS85ProbeWriteAndKillHangup`: pins child process `SIGHUP` immunity and output persistence to `nohup.out`.
 
-All `cmds/nohup` package tests pass 100%.
+These tests pass on this host as of this writing. That is evidence about the
+vectors listed above under the conditions this harness ran them in — it is
+not a conformance percentage claim for `nohup` as a whole, and it says
+nothing about why the paired GNU control disagreed across runs.
 
 ## Disposition & Matched-Replay Prerequisite
 
-* **Disposition:** Control/Host Instability. No product-owned red exists in `cmds/nohup`.
-* **Matched-Replay Prerequisite:** Re-certification of Profile D for `nohup:21` requires a stable host environment where the GNU control run deterministically passes without harness signal race conditions or PTY allocation variance between test runs.
+* **Disposition:** `nohup:21` remains **OPEN / UNRESOLVED**. The s85 probe
+  results above narrow the generic vectors that are *not* implicated, but a
+  product-owned defect specific to the `nohup:21` scenario has not been ruled
+  out, and no cause (host instability, harness race, or product defect) may
+  be asserted without the matched replay below.
+* **Matched-Replay Prerequisite:** re-certification of Profile D for
+  `nohup:21` requires a paired Subject-Under-Test/GNU-control (A/D) replay
+  run under matched conditions (same host, same harness build, same
+  PTY/signal timing) that reproduces or resolves the control's own
+  `PASS`/`FAIL` disagreement. That replay has not been run; the prerequisite
+  is unmet.
