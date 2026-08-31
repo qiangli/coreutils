@@ -370,6 +370,7 @@ resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
 		newSprintAbortCmd(),
 		newWeaveStoryCommentCmd(),
 		newWeaveStoryLinkCmd(),
+		newWeaveStoryUnlinkCmd(),
 		newWeaveCheckpointCmd(),
 		// Conductor-coordination, moved here from `weave` (plan layer,
 		// not per-repo execution): the cloudbox shared-session group and
@@ -814,6 +815,106 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in")
 	cmd.Flags().StringVar(&queue, "queue", "", "exact opaque queue tag when multiple same-named checkouts contain the run")
 	cmd.Flags().Int64Var(&task, "task", 0, "pointed weave run/issue id in that repo (points must be 1,2,3,5,8)")
+	flags.attach(cmd)
+	return cmd
+}
+
+// sprintRunMatchesRef reports whether a linked run record names the run the
+// caller asked to unlink.
+//
+// This deliberately does NOT go through sameSprintRun. That helper resolves a
+// legacy record's queue directory on disk to decide identity, and returns an
+// error when it cannot — correct for `link`, where creating a duplicate claim
+// is the hazard, but exactly wrong here. The reason a link needs removing is
+// usually that the run is GONE: abandoned, pruned, or its whole queue deleted.
+// An unlink that fails once the referent disappears can never clean up the one
+// case it exists for, so matching is decided from the record alone.
+//
+// An explicit --queue must match exactly. A record predating queue identity
+// carries an empty Queue and therefore never matches an explicit one; omit the
+// flag to reach those.
+func sprintRunMatchesRef(r sprintRun, repo string, task int64, queue string) bool {
+	if r.Repo != repo || r.ID != task {
+		return false
+	}
+	if queue != "" {
+		return r.Queue == queue
+	}
+	return true
+}
+
+func newWeaveStoryUnlinkCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var task int64
+	var repo, queue string
+	cmd := &cobra.Command{
+		Use:   "unlink <sprint> --repo <name> --task <issue>",
+		Short: "Remove a linked weave run from a sprint — the inverse of `sprint link`",
+		Long: `Detach a run from a sprint card.
+
+Runs are linked to record which work a sprint governs. When a run is abandoned,
+pruned, or re-filed under a new id, its link outlives it and the card keeps
+naming work that no longer exists. Without a way to remove one, a card's run
+list can only ever grow, and a long campaign accumulates dead references that
+every later reader has to chase before discovering they lead nowhere.
+
+Unlink does NOT require the run to still exist — a dangling reference is the
+usual reason to run it. It removes the card's claim and nothing else: the run
+itself, if it is still there, is untouched and may be linked to another sprint
+afterwards.
+
+Ambiguity is refused rather than guessed. If a card links several runs that
+share a repo and id across different checkouts, name the one you mean with
+--queue instead of removing whichever happened to be stored first.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			if task <= 0 || strings.TrimSpace(repo) == "" {
+				return fmt.Errorf("--repo <name> and --task <issue> required (a run lives in a specific repo)")
+			}
+			return runWeaveStoryMutate(cmd, id, "sprint unlink", &flags, func(s *weaveStory) (string, error) {
+				var matched []int
+				for i, r := range s.Runs {
+					if sprintRunMatchesRef(r, repo, task, queue) {
+						matched = append(matched, i)
+					}
+				}
+				if len(matched) == 0 {
+					// Report rather than fail: the caller's intent is "this
+					// card must not link that run", and that is already true.
+					// The wording must not read as though something was
+					// removed — a no-op reported as a removal is how a stale
+					// link survives a cleanup that believed it succeeded.
+					return fmt.Sprintf("sprint #%d does not link %s#%d — nothing removed", id, repo, task), nil
+				}
+				if len(matched) > 1 {
+					qs := make([]string, 0, len(matched))
+					for _, i := range matched {
+						q := s.Runs[i].Queue
+						if q == "" {
+							q = "(no queue recorded)"
+						}
+						qs = append(qs, q)
+					}
+					return "", fmt.Errorf("sprint #%d links %s#%d %d times across queues %s: name one with --queue",
+						id, repo, task, len(matched), strings.Join(qs, ", "))
+				}
+				i := matched[0]
+				removed := s.Runs[i]
+				s.Runs = append(s.Runs[:i], s.Runs[i+1:]...)
+				if removed.Queue != "" {
+					return fmt.Sprintf("sprint #%d unlinked %s#%d (queue %s)", id, repo, task, removed.Queue), nil
+				}
+				return fmt.Sprintf("sprint #%d unlinked %s#%d", id, repo, task), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in")
+	cmd.Flags().StringVar(&queue, "queue", "", "exact opaque queue tag when the card links this repo+id more than once")
+	cmd.Flags().Int64Var(&task, "task", 0, "linked weave run/issue id in that repo")
 	flags.attach(cmd)
 	return cmd
 }
