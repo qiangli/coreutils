@@ -40,7 +40,7 @@ dirname	cmds/dirname		GNU Coreutils	yes	yes	1	6
 du	cmds/du		GNU Coreutils	yes	yes	3	38
 duration	cmds/duration		Bashy/other extension	no	no	1	2
 echo	cmds/echo		GNU Coreutils	yes	yes	1	4
-ed	cmds/ed		POSIX/Unix utility	no	yes	3	47
+ed	cmds/ed		POSIX/Unix utility	no	yes	4	48
 env	cmds/env		GNU Coreutils	yes	yes	6	37
 ex	cmds/posixproviders		POSIX external provider	no	yes	4	34
 expand	cmds/expand		GNU Coreutils	yes	yes	2	29
@@ -52,7 +52,7 @@ file	cmds/file		POSIX/Unix utility	no	yes	4	40
 find	cmds/find		POSIX/Unix utility	no	yes	12	84
 fmt	cmds/fmt		GNU Coreutils	yes	no	1	18
 fold	cmds/fold		GNU Coreutils	yes	yes	2	30
-getconf	cmds/getconf		POSIX/Unix utility	no	yes	3	33
+getconf	cmds/getconf		POSIX/Unix utility	no	yes	4	35
 grep	cmds/grep		POSIX/Unix utility	no	yes	4	47
 groups	cmds/groups		GNU Coreutils	yes	no	1	1
 gunzip	cmds/gzip	gzip	Bashy/other extension	no	no	1	10
@@ -101,7 +101,7 @@ od	cmds/od		GNU Coreutils	yes	yes	1	57
 paste	cmds/paste		GNU Coreutils	yes	yes	3	19
 patch	cmds/patch		POSIX/Unix utility	no	yes	3	65
 pathchk	cmds/pathchk		GNU Coreutils	yes	yes	5	25
-pax	cmds/pax		POSIX/Unix utility	no	yes	17	199
+pax	cmds/pax		POSIX/Unix utility	no	yes	17	201
 pinky	cmds/pinky		GNU Coreutils	yes	no	1	6
 posix-providers	cmds/posixproviders		Bashy/other extension	no	no	4	34
 posixgate	cmds/posixgate		Bashy/other extension	no	no	1	33
