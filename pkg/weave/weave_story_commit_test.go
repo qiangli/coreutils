@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,27 @@ func TestManagedCommitHookChainsAndValidates(t *testing.T) {
 	for _, want := range []string{"commit-msg.before-bashy", `bashy sprint commit-msg "$1"`} {
 		if !strings.Contains(managedCommitHook, want) {
 			t.Errorf("managed hook missing %q", want)
+		}
+	}
+}
+
+func TestSprintCommitMsgPrintsActionableRefusal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	if err := os.WriteFile(path, []byte("fix: untracked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewSprintCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"commit-msg", path})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("invalid commit message passed")
+	}
+	for _, want := range []string{"commit provenance", "Sprint: #87", "Story-ID: d1e86f29d7a7"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("refusal missing %q:\n%s", want, out.String())
 		}
 	}
 }

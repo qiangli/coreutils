@@ -143,32 +143,35 @@ func newSprintCommitMsgCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		fail := func(err error) error {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint commit-msg", weavecli.ExitGenericFail, err))
+		}
 		raw, err := os.ReadFile(args[0])
 		if err != nil {
-			return fmt.Errorf("read commit message: %w", err)
+			return fail(fmt.Errorf("read commit message: %w", err))
 		}
 		trace, err := parseCommitTrace(string(raw))
 		if err != nil {
-			return fmt.Errorf("commit provenance: %w\n\nrequired form:\n\n  Sprint: #87\n  Story: #110\n  Story-ID: d1e86f29d7a7", err)
+			return fail(fmt.Errorf("commit provenance: %w\n\nrequired form:\n\n  Sprint: #87\n  Story: #110\n  Story-ID: d1e86f29d7a7", err))
 		}
 		dir, err := weaveStoryDir(cmd, flags.mode(), "sprint commit-msg")
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		q, err := loadWeaveQueue(dir)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		sprint := findWeaveStory(q, trace.Sprint)
 		if sprint == nil {
-			return fmt.Errorf("commit provenance: Sprint: #%d is not on this host's sprint board", trace.Sprint)
+			return fail(fmt.Errorf("commit provenance: Sprint: #%d is not on this host's sprint board", trace.Sprint))
 		}
 		stories, err := loadSprintStories(sprint)
 		if err != nil {
-			return fmt.Errorf("commit provenance: load Sprint #%d stories: %w", trace.Sprint, err)
+			return fail(fmt.Errorf("commit provenance: load Sprint #%d stories: %w", trace.Sprint, err))
 		}
 		if err := validateCommitTraceStories(trace, stories); err != nil {
-			return fmt.Errorf("commit provenance: %w", err)
+			return fail(fmt.Errorf("commit provenance: %w", err))
 		}
 		if flags.mode() == weavecli.OutputJSON {
 			return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint commit-msg", trace))
