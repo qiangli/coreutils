@@ -330,7 +330,29 @@ Each sprint card carries a spec-ref, acceptance, a kanban column, a
 CONTINUITY record (the resume brief), a conductor LEASE, and cross-repo
 run links {repo, id}. Durability (survive Ctrl+C / SIGKILL / token
 exhaustion): checkpoint often. The common lifecycle is start → pause →
-resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
+resume → end; handoff/take/stop remain the lower-level compatibility verbs.
+
+TRACKING: create and link a sprint story before implementation begins. Every
+delivery commit must end with one Sprint trailer and one Story/Story-ID pair
+for each story it advances:
+
+  Sprint: #87
+  Story: #110
+  Story-ID: d1e86f29d7a7
+
+Install the local fail-closed guard with ` + "`bashy sprint hooks install`" + `.
+The subject remains a normal conventional-commit summary; the trailers are
+the authoritative trace from delivered code back to sprint work.
+
+MANAGEMENT: the sprint owner is responsible for delivery from start to end,
+keeps priority and progress current, watches the inbox under the sprint's
+recorded owner name, and coordinates before touching another owner's work.
+Never delete or destroy work owned by another agent.
+
+When taking over a sprint, use its recorded owner name for message-board and
+meet coordination. To use another name, update sprint ownership first.
+Proactively review and merge delegated changes, then clean up only the
+branches, worktrees, and weave workspaces owned by this sprint.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveBoard(cmd, epic, &flags) // default = board
 		},

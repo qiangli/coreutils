@@ -79,6 +79,22 @@ func TestManagedCommitHookChainsAndValidates(t *testing.T) {
 	}
 }
 
+func TestSprintHelpStatesTrackingAndOwnershipContract(t *testing.T) {
+	help := NewSprintCmd().Long
+	for _, want := range []string{
+		"create and link a sprint story before implementation begins",
+		"Sprint: #87",
+		"bashy sprint hooks install",
+		"watches the inbox under the sprint's",
+		"recorded owner name",
+		"Never delete or destroy work owned by another agent",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("sprint help missing %q", want)
+		}
+	}
+}
+
 func TestSprintCommitMsgPrintsActionableRefusal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
 	if err := os.WriteFile(path, []byte("fix: untracked\n"), 0o600); err != nil {
