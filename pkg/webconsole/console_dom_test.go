@@ -700,3 +700,58 @@ func TestDOMRelayMeetChatAreTabs(t *testing.T) {
 		t.Errorf("%s tabs are marked selected, want exactly 1", selected)
 	}
 }
+
+// No panel may ignore the theme. relay's sidebar was a dark navy in the LIGHT
+// palette — left from this SPA's standalone design, where a permanently dark
+// rail was the look. Beside a light console it read as a bug, because nothing
+// else in the console has a panel that stays dark when the theme is light.
+//
+// The mark is checked against BOARD's rather than a literal: the console
+// inverts --logo-* between themes, and relay must do whatever the others do.
+func TestDOMRelayLightThemeHasNoDarkPanel(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	read := `(()=>{const a=document.querySelector("aside");
+		const r=document.querySelector(".console-logo rect, #brand .logo rect");
+		return JSON.stringify({
+			body: getComputedStyle(document.body).backgroundColor,
+			sidebar: a?getComputedStyle(a).backgroundColor:"",
+			logo: r?getComputedStyle(r).fill:"",
+		});})()`
+
+	var relay, board string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(1200*time.Millisecond),
+		chromedp.Evaluate(`localStorage.setItem("bashy.apps.config",JSON.stringify({theme:"light"}))`, nil),
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(read, &relay),
+		chromedp.Navigate(base+"/board/"),
+		chromedp.Sleep(1800*time.Millisecond),
+		chromedp.Evaluate(read, &board),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay light", errs())
+	t.Logf("light relay = %s", relay)
+	t.Logf("light board = %s", board)
+
+	// The console's light page colour, shared by both.
+	if !strings.Contains(relay, "rgb(242, 242, 245)") {
+		t.Errorf("relay's light page is not the console's #f2f2f5: %s", relay)
+	}
+	// A dark rail in a light theme is the defect this pins. White is the
+	// console's card surface; anything near-black is the old navy back again.
+	if !strings.Contains(relay, `"sidebar":"rgb(255, 255, 255)"`) {
+		t.Errorf("relay's sidebar is not a light surface in the light theme: %s", relay)
+	}
+	// Whatever the console does with the mark, relay does too.
+	var rj, bj map[string]string
+	if json.Unmarshal([]byte(relay), &rj) == nil && json.Unmarshal([]byte(board), &bj) == nil {
+		if rj["logo"] != bj["logo"] {
+			t.Errorf("relay's mark is %s but board's is %s — the apps' marks must "+
+				"track the same --logo-* tokens", rj["logo"], bj["logo"])
+		}
+	}
+}

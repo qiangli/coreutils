@@ -37,16 +37,24 @@ export function App() {
       <div className="flex h-dvh min-h-[540px] flex-col overflow-hidden bg-background text-foreground">
         <header className="console-bar shrink-0">
           <a className="console-brand" href="./" title="bashy relay">
+            {/* Themed like every other app's mark: --logo-* invert between
+                light and dark, so the tile never sits as a dark block in a
+                light header. */}
             <svg className="console-logo" viewBox="0 0 40 40" aria-hidden="true">
-              <rect width="40" height="40" rx="10" fill="#0a0e1a" />
+              <rect width="40" height="40" rx="10" fill="var(--logo-bg)" />
               <path
                 d="M10 12h20v13H17l-6 5v-5h-1z"
                 fill="none"
-                stroke="#fafafa"
+                stroke="var(--logo-fg)"
                 strokeLinejoin="round"
                 strokeWidth="2.5"
               />
-              <path d="M15 18h10" stroke="#2dd4bf" strokeLinecap="round" strokeWidth="2.5" />
+              <path
+                d="M15 18h10"
+                stroke="var(--logo-accent)"
+                strokeLinecap="round"
+                strokeWidth="2.5"
+              />
             </svg>
             <span className="console-wordmark hidden sm:flex">
               bashy<b>relay</b>

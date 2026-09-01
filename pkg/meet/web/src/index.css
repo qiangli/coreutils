@@ -41,33 +41,48 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* Light. Same rule as the dark block below: the tokens relay shares with the
+   console take the console's exact values (app.css :root), so the apps are one
+   palette rather than two.
+   The sidebar used to be oklch(0.205 …) — a dark navy — in the LIGHT theme,
+   left from this SPA's original standalone design. Beside a light console it
+   read as a bug, because it was one: nothing else in the console has a panel
+   that ignores the theme. It is now a light surface, card-white against the
+   #f2f2f5 page, which is the separation the console uses between page and
+   card. */
 :root {
   --radius: 0.7rem;
-  --background: oklch(0.985 0.004 85);
-  --foreground: oklch(0.225 0.025 254);
-  --card: oklch(0.998 0.002 85);
-  --card-foreground: oklch(0.225 0.025 254);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.225 0.025 254);
-  --primary: oklch(0.49 0.11 184);
-  --primary-foreground: oklch(0.985 0.005 180);
-  --secondary: oklch(0.955 0.009 250);
-  --secondary-foreground: oklch(0.31 0.03 254);
-  --muted: oklch(0.955 0.008 250);
-  --muted-foreground: oklch(0.535 0.028 255);
-  --accent: oklch(0.95 0.016 184);
-  --accent-foreground: oklch(0.33 0.06 184);
+  --background: #f2f2f5;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
   --destructive: oklch(0.58 0.2 27);
-  --border: oklch(0.9 0.012 255);
-  --input: oklch(0.9 0.012 255);
-  --ring: oklch(0.55 0.11 184);
-  --sidebar: oklch(0.205 0.035 257);
-  --sidebar-foreground: oklch(0.94 0.012 252);
-  --sidebar-primary: oklch(0.71 0.12 180);
-  --sidebar-primary-foreground: oklch(0.19 0.03 257);
-  --sidebar-accent: oklch(0.28 0.04 257);
-  --sidebar-accent-foreground: oklch(0.97 0.008 252);
-  --sidebar-border: oklch(1 0 0 / 9%);
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #2563eb;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #18181b;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: #e4e4e7;
+  /* The console's mark tokens, and it INVERTS between themes: a dark tile with
+     a light glyph on light, the reverse on dark. Hardcoding the tile left a
+     dark block sitting in a light header. */
+  --logo-bg: #0a0e1a;
+  --logo-fg: #fafafa;
+  --logo-accent: #2dd4bf;
   color-scheme: light;
 }
 
@@ -101,6 +116,9 @@
   --sidebar-accent: #27272a;
   --sidebar-accent-foreground: #fafafa;
   --sidebar-border: #27272a;
+  --logo-bg: #fafafa;
+  --logo-fg: #0a0e1a;
+  --logo-accent: #0d9488;
   color-scheme: dark;
 }
 
@@ -132,6 +150,9 @@
     --sidebar-accent: #27272a;
     --sidebar-accent-foreground: #fafafa;
     --sidebar-border: #27272a;
+    --logo-bg: #fafafa;
+    --logo-fg: #0a0e1a;
+    --logo-accent: #0d9488;
     color-scheme: dark;
   }
 }
