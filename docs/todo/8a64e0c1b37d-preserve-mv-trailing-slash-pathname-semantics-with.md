@@ -6,7 +6,7 @@ seq: 3
 status: todo
 priority: p2
 created: 2026-08-11T19:00:00Z
-sprint: 101
+sprint: 100
 ---
 
 Fix the `mv` raw-operand/path-normalization gap described in
@@ -46,3 +46,16 @@ is a new regression. They were simply invisible until 2026-09-01: coreutils CI
 had been failing at the BUILD step for weeks (`pkg/webconsole` gained a
 `../filebrowser` sibling replace the workflow never cloned), so no coreutils
 test ran in CI at all. Fixed in c3663683.
+
+## POSIX-cert impact
+
+`mv` is a POSIX-required utility in the certification scope
+(docs/posix-required-commands.md), and a trailing slash is not cosmetic
+syntax: POSIX pathname resolution requires a pathname ending in `/` to resolve
+to a directory. Reporting an EXISTING directory as "Not a directory" is a
+conformance defect in a certified utility, not only a CI failure, so this
+story is tracked under the POSIX cert sprint.
+
+The `-T` half stays a GNU extension and must not be conflated with it — the
+contract above already separates them, and that separation is the reason this
+is delicate rather than a one-line fix.
