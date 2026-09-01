@@ -289,7 +289,15 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 			if st := s.lastBox().Status(now); st != "" {
 				box = "  [" + st + "]"
 			}
-			fmt.Fprintf(out, "  #%d %s%s%s%s\n", s.ID, epicTag, weaveTruncate(s.Title, 52), lease, box)
+			// An OPEN sprint nobody can reach is the one row a scan must not
+			// slide past: the board is where a conductor decides what to pick
+			// up, and a card advertising an owner that answers nothing looks
+			// exactly like a healthy one.
+			reach := ""
+			if p := sprintCheckReachability(s).Problems; len(p) > 0 {
+				reach = fmt.Sprintf("  [UNREACHABLE: %d]", len(p))
+			}
+			fmt.Fprintf(out, "  #%d %s%s%s%s%s\n", s.ID, epicTag, weaveTruncate(s.Title, 52), lease, box, reach)
 		}
 		if !any {
 			fmt.Fprintln(out, "  —")
@@ -577,6 +585,12 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 		fmt.Fprintf(out, "  acceptance: %s\n", s.Acceptance)
 	}
 	renderSprintExecution(out, s)
+	// The plan's blind spot and the sprint's reachability belong HERE, next to
+	// the checklist they qualify. `sprint show` is what a conductor reads on
+	// resume; a plan that has stopped describing the sprint, or an owner nobody
+	// can reach, are exactly the facts that must not wait for a close attempt.
+	renderSprintCoverage(out, s)
+	renderSprintReachability(out, s)
 	if h, stale, free := weaveStoryLeaseState(s); !free {
 		st := "fresh"
 		if stale {

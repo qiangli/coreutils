@@ -450,6 +450,20 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					msg += ": " + strings.TrimSpace(note)
 				}
 				if ending {
+					// "done" must mean done. end deliberately carries no
+					// --force / --no-verify, so these are HARD refusals: the
+					// gate above proves the code still builds, and these two
+					// prove nothing was left behind or left out. A sprint that
+					// closes over an open story nobody planned, or over a dirty
+					// tree, is a green result reached because nothing looked.
+					if err := sprintCoverageGate(s, false, ""); err != nil {
+						return "", err
+					}
+					if hy := sprintCheckHygiene(s); !hy.Clean() {
+						return "", fmt.Errorf(
+							"sprint #%d cannot end — it is not clean:\n  %s\n  `bashy sprint prune %d` for the full state and the command that fixes each",
+							id, strings.Join(hy.Problems, "\n  "), id)
+					}
 					from := s.Column
 					who := weaveStoryConductorName(s, "")
 					s.Column = "done"

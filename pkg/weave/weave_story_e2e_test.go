@@ -276,3 +276,53 @@ func gitOutputForTest(root string, args ...string) (string, error) {
 	out, err := execCommandForTest("git", a...)
 	return out, err
 }
+
+// TestSprintEndGatesOnCoverageAndHygiene is the regression for a gap that was
+// CLAIMED closed and was not: `sprint move ... done` was gated while
+// `sprint end` set Column = "done" directly, so the documented "end gates on
+// it" was false and the strictest close path was the unguarded one.
+func TestSprintEndGatesOnCoverageAndHygiene(t *testing.T) {
+	src, err := os.ReadFile("weave_story_box.go")
+	if err != nil {
+		t.Fatalf("read box source: %v", err)
+	}
+	body := string(src)
+	// The gate must sit on the ending path itself, not on a sibling verb.
+	for _, want := range []string{"sprintCoverageGate(s, false, \"\")", "sprintCheckHygiene(s); !hy.Clean()"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("sprint end is missing its close gate %q — a sprint could end over open or unclean work", want)
+		}
+	}
+}
+
+// TestSprintShowSurfacesCoverageAndReachability guards the other silent gap:
+// renderSprintCoverage existed but nothing called it, so the plan's blind spot
+// was computed and never shown.
+func TestSprintShowSurfacesCoverageAndReachability(t *testing.T) {
+	src, err := os.ReadFile("weave_story.go")
+	if err != nil {
+		t.Fatalf("read story source: %v", err)
+	}
+	body := string(src)
+	for _, want := range []string{"renderSprintCoverage(out, s)", "renderSprintReachability(out, s)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("sprint show does not call %s — the finding is computed and never surfaced", want)
+		}
+	}
+	if !strings.Contains(body, "UNREACHABLE: %d") {
+		t.Error("sprint board does not flag unreachable open sprints")
+	}
+}
+
+// TestGoalAddCanCoverAStoryInOneStep — covering a newly reported bug must not
+// need two commands, because the second one is the one that gets skipped.
+func TestGoalAddCoversAStoryInOneStep(t *testing.T) {
+	cmd := NewSprintCmd()
+	goal, _, err := cmd.Find([]string{"goal", "add"})
+	if err != nil {
+		t.Fatalf("find goal add: %v", err)
+	}
+	if goal.Flags().Lookup("story") == nil {
+		t.Error("sprint goal add must accept --story so create-and-link is one command")
+	}
+}

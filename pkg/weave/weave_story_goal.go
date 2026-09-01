@@ -265,9 +265,9 @@ func findSprintGoal(s *weaveStory, id string) *sprintGoalItem {
 
 func newSprintGoalAddCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var goalID, text string
+	var goalID, text, story, repo string
 	var gate bool
-	cmd := &cobra.Command{Use: "add <sprint>", Short: "Add a required outcome to the sprint checklist", Args: cobra.ExactArgs(1)}
+	cmd := &cobra.Command{Use: "add <sprint>", Short: "Add a required outcome to the sprint checklist (--story covers one in the same step)", Args: cobra.ExactArgs(1)}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		id, err := strconv.ParseInt(args[0], 10, 64)
 		if err != nil {
@@ -277,17 +277,57 @@ func newSprintGoalAddCmd() *cobra.Command {
 		if goalID == "" || text == "" {
 			return fmt.Errorf("--id and --text are required")
 		}
+		// CREATE AND LINK IN ONE STEP. Covering a newly reported bug was two
+		// commands (add, then link), and the second is the one that actually
+		// closes the coverage gap — so the common case of "a p0 just arrived,
+		// put it in the plan" was exactly the case most likely to be left half
+		// done, leaving the plan silently not describing the sprint again.
+		var linkRoot string
+		var linkItem *issue.Issue
+		if strings.TrimSpace(story) != "" {
+			root, err := normalizeStoryRoot(repo)
+			if err != nil {
+				return err
+			}
+			it, err := todopkg.ResolveRef(todopkg.RepoStore(root), story)
+			if err != nil {
+				return err
+			}
+			if it.Sprint != id {
+				return fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
+			}
+			linkRoot, linkItem = root, it
+		}
 		return runWeaveStoryMutate(cmd, id, "sprint goal add", &flags, func(s *weaveStory) (string, error) {
 			if findSprintGoal(s, goalID) != nil {
 				return "", fmt.Errorf("goal item %q already exists", goalID)
 			}
-			s.Goal = append(s.Goal, sprintGoalItem{ID: goalID, Text: text, GateRequired: gate})
+			item := sprintGoalItem{ID: goalID, Text: text, GateRequired: gate}
+			msg := fmt.Sprintf("sprint #%d added goal %s", id, goalID)
+			if linkRoot != "" {
+				item.Stories = append(item.Stories, sprintStoryRef{Repo: linkRoot, ID: linkItem.ID})
+				found := false
+				for _, old := range s.StoryRoots {
+					found = found || old == linkRoot
+				}
+				if !found {
+					s.StoryRoots = append(s.StoryRoots, linkRoot)
+				}
+				msg += " linked to story " + linkItem.ID
+			}
+			s.Goal = append(s.Goal, item)
 			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", "added goal item "+goalID)
-			return fmt.Sprintf("sprint #%d added goal %s", id, goalID), nil
+			if linkRoot != "" {
+				weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system",
+					"linked story "+linkItem.ID+" to goal "+goalID)
+			}
+			return msg, nil
 		})
 	}
 	cmd.Flags().StringVar(&goalID, "id", "", "stable checklist id")
 	cmd.Flags().StringVar(&text, "text", "", "required outcome")
+	cmd.Flags().StringVar(&story, "story", "", "todo id or unique prefix to cover with this goal, in one step")
+	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story (default: this checkout)")
 	cmd.Flags().BoolVar(&gate, "gate-required", false, "require recorded evidence after stories close")
 	flags.attach(cmd)
 	return cmd
