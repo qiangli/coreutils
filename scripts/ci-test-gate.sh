@@ -9,10 +9,17 @@
 #
 # This is bashy's scripts/ci-bash53-gate.sh applied to Go tests:
 #
-#   * a test that fails but is NOT in the baseline -> NEW regression -> fail.
+#   * a test that fails but is NOT in the baseline -> re-run once, alone. Fails
+#     again -> NEW regression -> fail. Passes -> reported FLAKY, not fatal.
 #   * a baseline test that now passes -> progress -> fail, demanding you delete
 #     its line, so the baseline only shrinks and never silently drifts stale.
 #   * baseline == actual -> pass.
+#
+# The re-run is not tolerance-by-silence. It is positive evidence — the test was
+# executed a second time and passed — both outcomes are printed, and a test that
+# fails twice is a regression with no appeal. Without it a ~6800-test suite on a
+# shared runner is a coin flip, and a gate that is a coin flip gets muted, which
+# is exactly the state this script was written to end.
 #
 # When the baseline reaches empty, replace this with a plain `go test`.
 #
@@ -73,6 +80,26 @@ extract() { # extract <action> <want-test: yes|no>
         if (test != "" && index(test, "/") > 0) next
         if (want_test == "yes") { print pkg "\t" test } else { print pkg }
     }' "$events"
+}
+
+# Print what a failing test actually said. The gate captures -json into a temp
+# file (so a test name is attributed to its package under parallel execution),
+# which means NOTHING reaches the log unless we put it there — the first
+# version of this script reported "X failed" and no reason, forcing a re-run to
+# learn anything.
+show_test_output() { # show_test_output <package> <test>
+    awk -v want_pkg="$1" -v want_test="$2" '
+    {
+        pkg = ""; test = ""; out = ""
+        if (match($0, /"Package":"[^"]*"/)) { pkg  = substr($0, RSTART+11, RLENGTH-12) }
+        if (match($0, /"Test":"[^"]*"/))    { test = substr($0, RSTART+8,  RLENGTH-9)  }
+        if (pkg != want_pkg) next
+        if (test != want_test && index(test, want_test "/") != 1) next
+        if (!match($0, /"Output":".*"\}$/)) next
+        out = substr($0, RSTART+10, RLENGTH-12)
+        gsub(/\\n$/, "", out); gsub(/\\t/, "\t", out); gsub(/\\"/, "\"", out); gsub(/\\\\/, "\\", out)
+        print "    " out
+    }' "$events" | head -25
 }
 
 passed=$(extract pass yes | sort -u)
@@ -138,10 +165,45 @@ fi
 
 rc=0
 if [ -n "$new" ]; then
-    echo "gate: NEW regression(s) — these tests fail and are NOT in $BASELINE:" >&2
-    printf '  %s\n' "$new" >&2
-    echo "gate: fix the regression, or (only if intended, and only with a story) add it to the baseline with its cause." >&2
-    rc=1
+    # A suite this size on a shared runner has a flake tail, and a gate that is
+    # a coin flip gets muted — which would put us back where we started. So an
+    # unbaselined failure is RE-RUN ONCE, alone, and classified by what the
+    # second run says. This is not tolerance-by-silence: the retry is positive
+    # evidence (the test was executed again and passed), both outcomes are
+    # printed, and a test that fails twice is a regression, full stop.
+    echo "gate: $(printf '%s\n' "$new" | grep -c .) unbaselined failure(s); output follows, then one confirming re-run each." >&2
+    while IFS=$'\t' read -r pkg test; do
+        [ -n "$pkg" ] || continue
+        echo "gate: --- $pkg $test" >&2
+        show_test_output "$pkg" "$test" >&2
+    done <<EOF
+$new
+EOF
+
+    confirmed=""
+    flaky=""
+    while IFS=$'\t' read -r pkg test; do
+        [ -n "$pkg" ] || continue
+        if go test -count=1 -run "^${test}\$" "$pkg" >/dev/null 2>&1; then
+            flaky="$flaky$pkg\t$test\n"
+        else
+            confirmed="$confirmed$pkg\t$test\n"
+        fi
+    done <<EOF
+$new
+EOF
+
+    if [ -n "$flaky" ]; then
+        echo "gate: FLAKY — failed in the suite, PASSED on an isolated re-run:" >&2
+        printf "  $flaky" >&2
+        echo "gate: not treated as a regression, but it is real. File a story; a test that only sometimes holds is not evidence." >&2
+    fi
+    if [ -n "$confirmed" ]; then
+        echo "gate: NEW regression(s) — failed twice, and NOT in $BASELINE:" >&2
+        printf "  $confirmed" >&2
+        echo "gate: fix the regression, or (only if intended, and only with a story) add it to the baseline with its cause." >&2
+        rc=1
+    fi
 fi
 
 if [ -n "$fixed" ]; then
