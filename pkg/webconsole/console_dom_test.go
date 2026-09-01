@@ -33,6 +33,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -612,5 +613,90 @@ func TestDOMRelayPanelHeadersLineUp(t *testing.T) {
 				"app bar steps between columns", hs)
 			break
 		}
+	}
+}
+
+// relay must follow the console's theme.
+//
+// The console stores the choice under its own localStorage key and puts
+// data-theme on <html>; every other app keys off that attribute. relay keyed
+// dark off a `.dark` class that nothing defined and nothing set, so it had no
+// dark mode at all — measured: with the console dark and the system dark, relay
+// still painted near-white (oklch(0.985 …)).
+func TestDOMRelayFollowsTheConsoleTheme(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	read := `JSON.stringify({
+		theme: document.documentElement.getAttribute("data-theme"),
+		bg: getComputedStyle(document.body).backgroundColor,
+	})`
+	set := func(theme string) chromedp.Action {
+		return chromedp.Evaluate(
+			`localStorage.setItem("bashy.apps.config", JSON.stringify({theme:`+
+				strconv.Quote(theme)+`}))`, nil)
+	}
+
+	var dark, light string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(1500*time.Millisecond),
+		set("dark"),
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(read, &dark),
+		set("light"),
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(read, &light),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay theme", errs())
+	t.Logf("console dark  -> relay %s", dark)
+	t.Logf("console light -> relay %s", light)
+
+	if !strings.Contains(dark, `"theme":"dark"`) {
+		t.Errorf("relay ignored the console's dark choice: %s", dark)
+	}
+	// The console's own dark background, so the two apps are the same colour
+	// rather than two interpretations of "dark".
+	if !strings.Contains(dark, "rgb(9, 9, 11)") {
+		t.Errorf("relay's dark background is not the console's #09090b: %s", dark)
+	}
+	if !strings.Contains(light, `"theme":"light"`) {
+		t.Errorf("relay ignored the console's light choice: %s", light)
+	}
+	if dark == light {
+		t.Errorf("relay renders identically in both themes: %s", dark)
+	}
+}
+
+// Meet and Chat are two views of the sidebar, so they are tabs — both visible,
+// the selected one obvious, one tap to switch. They used to be a dropdown
+// hanging off the app logo.
+func TestDOMRelayMeetChatAreTabs(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	var tabs, labels, selected string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(3000*time.Millisecond),
+		chromedp.Evaluate(`String(document.querySelectorAll("[role=tab]").length)`, &tabs),
+		chromedp.Evaluate(`JSON.stringify([...document.querySelectorAll("[role=tab]")].map(t=>t.innerText.trim()))`, &labels),
+		chromedp.Evaluate(`String([...document.querySelectorAll("[role=tab]")].filter(t=>t.getAttribute("aria-selected")==="true").length)`, &selected),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay tabs", errs())
+
+	if tabs != "2" {
+		t.Errorf("expected two tabs (Meet, Chat), found %s", tabs)
+	}
+	if !strings.Contains(labels, "Meet") || !strings.Contains(labels, "Chat") {
+		t.Errorf("the tabs are not Meet and Chat: %s", labels)
+	}
+	// A tab strip whose selection is invisible is just two buttons.
+	if selected != "1" {
+		t.Errorf("%s tabs are marked selected, want exactly 1", selected)
 	}
 }

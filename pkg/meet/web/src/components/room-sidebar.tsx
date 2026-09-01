@@ -1,7 +1,6 @@
 import { useState } from "react"
 import {
   Bot,
-  ChevronDown,
   ChevronRight,
   Hash,
   MessageSquareText,
@@ -100,45 +99,63 @@ export function RoomSidebar({
           mark directly under the one in the app bar, and made the control look
           like branding rather than the mode switch it is. It now says which
           mode is open — Meet or Chat — which is the thing worth reading here. */}
-      <div className="flex h-[56px] items-center gap-3 px-5">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              aria-label="Switch between Meet and Chat"
-              className="h-8 gap-1.5 px-2 text-[13px] font-semibold tracking-tight"
-              size="sm"
-              variant="ghost"
-            >
-              {viewKind === "dm" ? <Bot className="size-4" /> : <Hash className="size-4" />}
-              {viewKind === "dm" ? "Chat" : "Meet"}
-              <ChevronDown className="size-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem className={cn(viewKind === "room" && "bg-accent")} onSelect={openChannels}>
-              <Hash className="size-3.5" /> Meet
-              {viewKind === "room" && <span className="ml-auto text-[10px]">selected</span>}
-            </DropdownMenuItem>
-            <DropdownMenuItem className={cn(viewKind === "dm" && "bg-accent")} onSelect={openDirectMessages}>
-              <Bot className="size-3.5" /> Chat
-              {viewKind === "dm" && <span className="ml-auto text-[10px]">selected</span>}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {/* No wordmark here: the app bar above names the app once, for all
-            three panels. This block keeps the mode menu and the connection
-            state, which are the sidebar's own. */}
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[11px] text-sidebar-foreground/55">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                connection === "open" ? "bg-emerald-400" : "bg-amber-400",
-              )}
-            />
-            {usingMock ? "Demo workspace" : connection}
-          </div>
+      {/* Meet and Chat are two views of this panel, so they are TABS, not a
+          menu: both are visible, the selected one is obvious without opening
+          anything, and switching is one tap rather than two. It was a dropdown
+          hanging off the app logo, which hid the choice behind a mark that
+          looked like branding.
+
+          56px to match the conversation and details headers beside it, so one
+          unbroken rule runs under the app bar. */}
+      <div className="flex h-[56px] items-center gap-2 px-4">
+        <div
+          className="flex items-center gap-0.5 rounded-lg bg-sidebar-accent/60 p-0.5"
+          role="tablist"
+          aria-label="Meet or Chat"
+        >
+          <button
+            aria-selected={viewKind === "room"}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium transition",
+              viewKind === "room"
+                ? "bg-sidebar text-sidebar-foreground shadow-sm"
+                : "text-sidebar-foreground/60 hover:text-sidebar-foreground",
+            )}
+            onClick={openChannels}
+            role="tab"
+            type="button"
+          >
+            <Hash className="size-3.5" /> Meet
+          </button>
+          <button
+            aria-selected={viewKind === "dm"}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium transition",
+              viewKind === "dm"
+                ? "bg-sidebar text-sidebar-foreground shadow-sm"
+                : "text-sidebar-foreground/60 hover:text-sidebar-foreground",
+            )}
+            onClick={openDirectMessages}
+            role="tab"
+            type="button"
+          >
+            <Bot className="size-3.5" /> Chat
+          </button>
         </div>
+
+        <span className="flex-1" />
+
+        <span
+          className="flex items-center gap-1.5 text-[11px] text-sidebar-foreground/55"
+          title={usingMock ? "Demo workspace" : connection}
+        >
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              connection === "open" ? "bg-emerald-400" : "bg-amber-400",
+            )}
+          />
+        </span>
       </div>
       <Separator className="bg-sidebar-border" />
 

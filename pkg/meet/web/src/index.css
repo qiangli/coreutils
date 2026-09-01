@@ -1,7 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
+/* The console sets data-theme on <html> (absent means follow the system), and
+   every other app keys off it. relay used to key off a .dark class that nothing
+   defined and nothing set, so it had no dark mode at all: with the console in
+   dark and the system in dark, relay still rendered near-white. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme inline {
   --font-sans: "DM Sans", "Avenir Next", "Segoe UI", sans-serif;
@@ -64,6 +68,72 @@
   --sidebar-accent: oklch(0.28 0.04 257);
   --sidebar-accent-foreground: oklch(0.97 0.008 252);
   --sidebar-border: oklch(1 0 0 / 9%);
+  color-scheme: light;
+}
+
+/* Dark. The tokens relay shares with the console take the console's exact
+   values (app.css :root[data-theme="dark"]), so the two apps are the same
+   colour rather than two interpretations of "dark". The SPA-only tokens are
+   derived to sit with them. */
+:root[data-theme="dark"] {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: #60a5fa;
+  --primary-foreground: #09090b;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --destructive: oklch(0.62 0.21 27);
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #60a5fa;
+  --sidebar: #111113;
+  --sidebar-foreground: #e4e4e7;
+  --sidebar-primary: #60a5fa;
+  --sidebar-primary-foreground: #09090b;
+  --sidebar-accent: #27272a;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #27272a;
+  color-scheme: dark;
+}
+
+/* No explicit choice: follow the system, exactly as app.css does. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #09090b;
+    --foreground: #fafafa;
+    --card: #18181b;
+    --card-foreground: #fafafa;
+    --popover: #18181b;
+    --popover-foreground: #fafafa;
+    --primary: #60a5fa;
+    --primary-foreground: #09090b;
+    --secondary: #27272a;
+    --secondary-foreground: #fafafa;
+    --muted: #27272a;
+    --muted-foreground: #a1a1aa;
+    --accent: #27272a;
+    --accent-foreground: #fafafa;
+    --destructive: oklch(0.62 0.21 27);
+    --border: #27272a;
+    --input: #27272a;
+    --ring: #60a5fa;
+    --sidebar: #111113;
+    --sidebar-foreground: #e4e4e7;
+    --sidebar-primary: #60a5fa;
+    --sidebar-primary-foreground: #09090b;
+    --sidebar-accent: #27272a;
+    --sidebar-accent-foreground: #fafafa;
+    --sidebar-border: #27272a;
+    color-scheme: dark;
+  }
 }
 
 * {
