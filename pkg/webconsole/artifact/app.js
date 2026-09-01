@@ -275,8 +275,27 @@ function tile(a, opts = {}) {
     star.setAttribute("aria-label", star.title);
     star.addEventListener("click", (e) => { e.stopPropagation(); toggleFav(a.name); });
     wrap.append(star);
+    attachLongPressFavorite(wrap);
   }
   return wrap;
+}
+
+// SUPPRESS THE BROWSER'S LONG-PRESS MENU ON A TILE.
+//
+// Long press already works for favouriting on a phone: the press puts the tile
+// in its hover state, the star appears, and it can be tapped. What ruins it is
+// that the SAME gesture also opens the browser's own long list of context-menu
+// items on top of the star.
+//
+// So the fix is only to take that menu away, and only here: page-wide
+// suppression would cost copy-link, open-in-new-tab and share everywhere else,
+// which is a bad trade for one shortcut. A mouse right-click keeps its menu —
+// a desktop user has no long press and loses nothing.
+function attachLongPressFavorite(wrap) {
+  wrap.addEventListener("contextmenu", (e) => {
+    if (e.pointerType === "mouse") return;
+    if (matchMedia("(hover: none)").matches) e.preventDefault();
+  });
 }
 
 function sectionEl(title, nodes) {

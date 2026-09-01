@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/qiangli/coreutils/pkg/websession"
@@ -310,5 +311,67 @@ func TestDOMBackgroundSwatchApplies(t *testing.T) {
 	}
 	if after == before {
 		t.Errorf("choosing a background changed nothing (data-bashy-bg stayed %q)", before)
+	}
+}
+
+// Long press on a tile must NOT open the browser's context menu.
+//
+// Favouriting on a phone already works: the long press puts the tile in its
+// hover state, the star appears, and it can be tapped — verified on a real
+// Samsung, which also corrected an earlier assumption here that a favorite
+// could never be added on touch at all. What ruins the gesture is that the same
+// press opens the browser's own long list of menu items over the star. So the
+// only thing to fix, and the only thing pinned here, is that menu.
+//
+// It emulates a real touch device (mobile metrics + touch events) rather than
+// setEmulatedMedia, which does not implement the `hover` feature — measured:
+// matchMedia("(hover: none)") still reported false under it.
+func TestDOMLongPressMenuSuppressedOnTiles(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	var hoverNone, onTileTouch, onTileMouse, offTile string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		emulation.SetDeviceMetricsOverride(390, 844, 3, true),
+		emulation.SetTouchEmulationEnabled(true).WithMaxTouchPoints(5),
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(1800*time.Millisecond),
+		chromedp.Evaluate(`String(matchMedia("(hover: none)").matches)`, &hoverNone),
+
+		// A touch long-press on a tile: the menu must be suppressed.
+		chromedp.Evaluate(`(()=>{const w=document.querySelector(".tile-wrap");
+			if(!w) return "NO TILE";
+			const ev=new PointerEvent("contextmenu",{bubbles:true,cancelable:true,pointerType:"touch"});
+			w.dispatchEvent(ev); return String(ev.defaultPrevented);})()`, &onTileTouch),
+
+		// A MOUSE right-click keeps its menu: a desktop user has no long press
+		// and must not lose copy-link or open-in-new-tab.
+		chromedp.Evaluate(`(()=>{const w=document.querySelector(".tile-wrap");
+			const ev=new PointerEvent("contextmenu",{bubbles:true,cancelable:true,pointerType:"mouse"});
+			w.dispatchEvent(ev); return String(ev.defaultPrevented);})()`, &onTileMouse),
+
+		// And suppression is SCOPED to tiles: the rest of the page keeps its
+		// menu, so copy/share are not taken away console-wide.
+		chromedp.Evaluate(`(()=>{const ev=new PointerEvent("contextmenu",{bubbles:true,cancelable:true,pointerType:"touch"});
+			document.body.dispatchEvent(ev); return String(ev.defaultPrevented);})()`, &offTile),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "long-press", errs())
+
+	if hoverNone != "true" {
+		t.Fatalf("device emulation did not produce a no-hover device (matchMedia=%s)", hoverNone)
+	}
+	if onTileTouch != "true" {
+		t.Errorf("the browser long-press menu still opens on a tile (defaultPrevented=%s); "+
+			"it covers the star the press just revealed", onTileTouch)
+	}
+	if onTileMouse != "false" {
+		t.Errorf("a MOUSE right-click on a tile lost its menu (defaultPrevented=%s); "+
+			"suppression must apply to the touch gesture only", onTileMouse)
+	}
+	if offTile != "false" {
+		t.Errorf("context menu suppressed off-tile too (defaultPrevented=%s); "+
+			"that would cost copy-link and share across the whole console", offTile)
 	}
 }
