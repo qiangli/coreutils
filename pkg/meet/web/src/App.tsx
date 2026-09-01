@@ -1,7 +1,6 @@
 import { useState } from "react"
 import {
   ChevronRight,
-  LayoutGrid,
   Menu,
   PanelRightClose,
   PanelRightOpen,
@@ -53,6 +52,38 @@ export function App() {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-[68px] shrink-0 items-center gap-3 border-b border-border/70 bg-background/88 px-3 backdrop-blur-xl sm:px-5">
+            {/* The brand block every console app carries: the panel's own mark
+                in a rounded tile, then bashy + the panel name. board, messages
+                and terminal state it in markup; relay is a mounted SPA, so it
+                draws the same thing itself.
+
+                The wordmark appears from sm: up. On a phone this header also
+                holds the rooms button and the conversation title, and the title
+                is the thing someone needs there — the mark alone still says
+                which app this is, and still returns to its own root. */}
+            <a
+              className="flex shrink-0 items-center gap-2 rounded-md text-foreground no-underline outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              href="./"
+              title="bashy relay"
+            >
+              <svg className="size-7 shrink-0" viewBox="0 0 40 40" aria-hidden="true">
+                <rect width="40" height="40" rx="10" fill="currentColor" opacity="0.08" />
+                <g
+                  transform="translate(8 8) scale(1)"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M4 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5L4.5 16.5zM18.5 10.5H19a2 2 0 0 1 2 2v5l-2.8-2H13" />
+                </g>
+              </svg>
+              <span className="font-display hidden text-[15px] tracking-tight sm:inline">
+                bashy<b className="font-semibold">relay</b>
+              </span>
+            </a>
+
             <Sheet>
               <SheetTrigger asChild>
                 <Button
@@ -153,9 +184,26 @@ export function App() {
               </SheetContent>
             </Sheet>}
 
+            {/* The console's all-apps mark — four rounded squares, matching
+                #all-apps-btn that injectChrome gives every embedded app. relay
+                is MOUNTED, so it never receives that button and draws the same
+                mark itself, exactly as the Files app does. */}
             <Button asChild aria-label="Back to all apps" size="icon-sm" variant="ghost">
               <a href="../" title="All apps">
-                <LayoutGrid />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                  <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                  <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                  <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                </svg>
               </a>
             </Button>
           </header>

@@ -433,3 +433,43 @@ func TestDOMPairingScopeIsChosenByTheOperator(t *testing.T) {
 		t.Errorf("ticking terminal did not widen the minted pass: scope=%s", scopeAfter)
 	}
 }
+
+// relay must wear the same header as the other apps.
+//
+// board, messages and terminal each state a brand block in markup — the
+// panel's mark in a rounded tile, then bashy + the panel name — and receive the
+// console's four-square all-apps control from injectChrome. relay is a MOUNTED
+// SPA, so it is served outside that path and receives neither: it has to draw
+// both itself, the same way the Files app does.
+func TestDOMRelayHeaderMatchesTheOtherApps(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	var brand, wordmark, allAppsRects, allAppsHref string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(3500*time.Millisecond),
+		chromedp.Evaluate(`String(!!document.querySelector(`+"`"+`header a[title="bashy relay"]`+"`"+`))`, &brand),
+		chromedp.Evaluate(`(document.querySelector(`+"`"+`header a[title="bashy relay"]`+"`"+`)?.innerText||"").trim()`, &wordmark),
+		chromedp.Evaluate(`String(document.querySelectorAll(`+"`"+`header a[title="All apps"] svg rect`+"`"+`).length)`, &allAppsRects),
+		chromedp.Evaluate(`document.querySelector(`+"`"+`header a[title="All apps"]`+"`"+`)?.getAttribute("href")||"NONE"`, &allAppsHref),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay", errs())
+
+	if brand != "true" {
+		t.Error("relay has no brand block; board/messages/terminal all carry one")
+	}
+	// The wordmark is hidden below sm: the phone header also holds the rooms
+	// button and the conversation title, which is what matters there. At this
+	// viewport it must be present.
+	if !strings.Contains(strings.ToLower(wordmark), "relay") {
+		t.Errorf("relay's brand does not name the app: %q", wordmark)
+	}
+	if allAppsRects != "4" {
+		t.Errorf("relay's all-apps control has %s rects, want the console's 4-square mark", allAppsRects)
+	}
+	if allAppsHref == "NONE" {
+		t.Error("relay has no all-apps control")
+	}
+}
