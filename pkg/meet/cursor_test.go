@@ -1,10 +1,12 @@
 package meet
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMeetSeenPathIsRoomLocalAndSafe(t *testing.T) {
@@ -88,5 +90,92 @@ func TestUnreadRecordsAcknowledgesOnlyTheRenderedSnapshot(t *testing.T) {
 	left, _, _, _, err := UnreadRecords(st.ID, "opencode", 0)
 	if err != nil || len(left) != 1 || left[0].Event.Text != "second" {
 		t.Fatalf("concurrent arrival was consumed: %+v err=%v", left, err)
+	}
+}
+
+func TestUnreadRecordsSkipsOwnPostsAndKeepsReaderCursorsIndependent(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"agent-a", "agent-b"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-a", Text: "A status"}); err != nil {
+		t.Fatal(err)
+	}
+	directed, other, _, through, err := UnreadRecords(st.ID, "agent-a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed)+len(other) != 0 {
+		t.Fatalf("A received its own outbound post: directed=%+v other=%+v", directed, other)
+	}
+	if through != 1 {
+		t.Fatalf("self-only snapshot through=%d, want 1 so the caller can pass it silently", through)
+	}
+	if err := MarkSeenThrough(st.ID, "agent-a", through); err != nil {
+		t.Fatal(err)
+	}
+	if got := SeenSeq(st.ID, "agent-a"); got != 1 {
+		t.Fatalf("A cursor=%d, want 1", got)
+	}
+	if got := SeenSeq(st.ID, "agent-b"); got != 0 {
+		t.Fatalf("A read advanced B cursor to %d", got)
+	}
+
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-b", Text: "B broadcast"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-b", To: "agent-a", Text: "B direct"}); err != nil {
+		t.Fatal(err)
+	}
+	directed, other, _, through, err = UnreadRecords(st.ID, "agent-a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 1 || directed[0].Event.Text != "B direct" {
+		t.Fatalf("A directed records=%+v, want B direct", directed)
+	}
+	if len(other) != 1 || other[0].Event.Text != "B broadcast" {
+		t.Fatalf("A broadcast records=%+v, want B broadcast", other)
+	}
+	if through != 3 {
+		t.Fatalf("peer snapshot through=%d, want 3", through)
+	}
+}
+
+func TestWaitForRoomDoesNotWakeOnReadersOwnPost(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"agent-a", "agent-b"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-a", Text: "A status"}); err != nil {
+		t.Fatal(err)
+	}
+
+	peerPosted := make(chan error, 1)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		peerPosted <- AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-b", To: "agent-a", Text: "B reply"})
+	}()
+	started := time.Now()
+	if err := WaitForRoom(context.Background(), st.ID, "agent-a", 0, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-peerPosted; err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 100*time.Millisecond {
+		t.Fatalf("wait woke on A's own post after %s", elapsed)
+	}
+	directed, other, _, _, err := UnreadRecords(st.ID, "agent-a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 1 || directed[0].Event.Text != "B reply" || len(other) != 0 {
+		t.Fatalf("wait result directed=%+v other=%+v, want only B reply", directed, other)
 	}
 }

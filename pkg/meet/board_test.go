@@ -30,7 +30,7 @@ func TestMeetUnreadSplitsDirectedAndCapsOnlyOther(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(directed) != 3 || directed[0].Text != "mine one" || directed[1].Text != "@codex: please check this" || directed[2].Text != "mine two" {
+	if len(directed) != 1 || directed[0].Text != "@codex: please check this" {
 		t.Fatalf("directed = %+v", directed)
 	}
 	if len(other) != 2 || other[0].Text != "four" || other[1].Text != "five" {
