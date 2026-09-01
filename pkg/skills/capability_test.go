@@ -197,11 +197,11 @@ func TestCapabilityKey_DivergesFromIdentity(t *testing.T) {
 	}
 }
 
-// The two canonical faces that actually ship. go-repo-health ensures build+test
+// Two canonical dual-bundle reference faces. go-repo-health ensures build+test
 // under a read-only cap; force-agent-shell ensures wired+forced. They are
 // genuinely different capabilities and must key apart — if this ever collides,
 // election would silently offer one where the other was asked for.
-func TestCapabilityKey_ShippedSkillsAreDistinct(t *testing.T) {
+func TestCapabilityKey_ReferenceSkillsAreDistinct(t *testing.T) {
 	const (
 		goRepoHealth    = "sokilili gosana efefecato reada fini enisure builida fini enisure gereeni fini fini"
 		forceAgentShell = "sokilili basoheyu efefecato reada fini enisure wireda fini enisure foroceda fini fini"
