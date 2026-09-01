@@ -131,6 +131,12 @@ at the build step over an uncloned `../filebrowser` sibling, so no test ran at
 all and nobody could tell. Every baseline entry names a story; nothing goes in
 without one.
 
+When reproducing a Linux-only failure locally, run the container as an ordinary
+user (`--user`), not as root: several tests establish their failure condition
+with `chmod 0o000`, which root ignores, so a root container turns them red and
+invites a baseline entry for a bug that does not exist. The ratchet caught
+exactly that on its first run.
+
 **A change is gated by BOTH `go test` and `scripts/crossvet.sh`.** `go test` on
 your host structurally cannot see a build-tag break: a `//go:build !windows`
 file never compiles for windows, so referencing it from an untagged `_test.go`

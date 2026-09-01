@@ -32,15 +32,14 @@ crossvet. Do not infer a TP identity or retirement from numeric ordering.
         mv_test.go:453: existing directory misdiagnosed as not-a-directory:
         "mv: cannot move 'src' to 'somedir/': Not a directory"
 
-Reproduced in a golang:1.26 Linux container, which ALSO fails a second test the
-CI log did not reach:
-
-    --- FAIL: TestMvCopyFallbackFailures
-        mv_test.go:555: expected failure when copy fails
-        mv_test.go:558: source should not be removed if copy fails
-
-Both PASS on darwin, so a macOS-only check will report this story as done when
+It PASSES on darwin, so a macOS-only check will report this story as done when
 it is not. Verify on Linux.
+
+CORRECTION (same day): an earlier revision of this note also claimed
+`TestMvCopyFallbackFailures` fails on linux. It does not. That was observed in
+a golang:1.26 container running as ROOT, where the `chmod 0o000` the test uses
+to make the copy fail is ignored; on the GitHub runner, an ordinary user, it
+passes. It is not part of this story.
 
 These tests were written red on purpose per the contract above, so nothing here
 is a new regression. They were simply invisible until 2026-09-01: coreutils CI

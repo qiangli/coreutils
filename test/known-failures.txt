@@ -38,8 +38,15 @@
 
 # 8a64e0c1b37d — mv trailing-slash pathname semantics. RED BY DESIGN: the
 # story's own contract says "prove the behavioral tests red on the current
-# base". Linux only; both pass on darwin.
-linux github.com/qiangli/coreutils/cmds/mv TestMvCopyFallbackFailures
+# base". Linux only; it passes on darwin.
+#
+# TestMvCopyFallbackFailures was briefly baselined here too and this gate
+# removed it on its first run. It does NOT fail on linux — it fails as ROOT.
+# The test chmods a source to 0o000 and expects the copy to fail; root ignores
+# the mode, so the copy succeeds and the assertion does not. It was observed in
+# a golang:1.26 container running as root, while the GitHub runner is an
+# ordinary user. Reproducing "on linux" in a root container silently inverts
+# every permission-based test — use --user, or believe the runner.
 linux github.com/qiangli/coreutils/cmds/mv TestMvNoTargetDirectoryTrailingSlashOnExistingDir
 
 # babd0878b511 — pkg/chat cancel teardown. The test's 5s budget IS
