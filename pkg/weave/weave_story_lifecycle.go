@@ -56,9 +56,21 @@ and audited.`,
 				// invocations. Act as the current fresh holder rather than falling
 				// back to the generic "conductor" identity on the second command.
 				who := prev
-				s.Continuity = message
-				_ = closeSprintRoom(s, who)
-				weaveStoryAppend(s, who, "system", "paused conductor session — continuity recorded; linked workers left running")
+				// The successor must inherit the TRUTH about the tree, not just
+				// the plan. Anything unclean, unreachable or unplanned is folded
+				// into the brief `sprint resume` prints, so nobody starts by
+				// rediscovering a dirty repo and blaming their own first command.
+				s.Continuity = message + sprintStateAddendum(s)
+				// THE ROOM BELONGS TO THE SPRINT, NOT THE CONDUCTOR. Pausing
+				// releases the lease; it does not end the sprint. Closing here
+				// left an OPEN card with a running box and nowhere to reach it
+				// during exactly the window somebody needs to ask a question.
+				roomNote := "; room stays open"
+				if !sprintRoomRetained(s) {
+					_ = closeSprintRoom(s, who)
+					roomNote = ""
+				}
+				weaveStoryAppend(s, who, "system", "paused conductor session — continuity recorded; linked workers left running"+roomNote)
 				s.Lease = nil
 				return fmt.Sprintf("sprint #%d paused — lease released; linked workers unchanged", id), nil
 			})
@@ -92,15 +104,19 @@ are not relaunched because pause never stopped them.`,
 				if !free && !stale && prev != who && !force {
 					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to resume", id, prev)
 				}
-				if s.Contact != nil {
-					_ = closeSprintRoom(s, who)
+				// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
+				// no agent: every coordination surface (mb, chat, inbox, ping)
+				// keys on this string, and one that names nobody is worse than
+				// none — it is printed as a contact and silently never answers.
+				if err := validateSprintOwner(who); err != nil {
+					return "", err
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
 				s.Owner = who
-				if s.currentBox().Running() {
-					if c, err := openSprintRoom(s, who); err == nil {
-						s.Contact = c
-					}
+				// Reuse the room the sprint already has; open one only when it
+				// has none. The transcript across a pause IS the handover.
+				if s.currentBox().Running() || sprintColumnOpen(s.Column) {
+					ensureSprintRoom(s, who)
 				}
 				weaveStoryAppend(s, who, "system", "resumed conductor session; continuity loaded")
 				brief := strings.TrimSpace(s.Continuity)

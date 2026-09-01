@@ -224,6 +224,13 @@ func newSprintStartCmd() *cobra.Command {
 					return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
 						id, prev, id)
 				}
+				// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
+				// no agent: every coordination surface (mb, chat, inbox, ping)
+				// keys on this string, and one that names nobody is worse than
+				// none — it is printed as a contact and silently never answers.
+				if err := validateSprintOwner(who); err != nil {
+					return "", err
+				}
 				s.Lease = &weaveStoryLease{Holder: who, At: now}
 				s.Owner = who
 				s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})

@@ -52,6 +52,7 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("BASHY_AGENTIC", "")
 	t.Setenv("WEAVE_CONDUCTOR", "Ada")
+	seedAgent(t, "Ada")
 
 	if out, code := runSprint(t, "add", "lifecycle test"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
@@ -76,6 +77,7 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 	}
 
 	t.Setenv("WEAVE_CONDUCTOR", "Grace")
+	seedAgent(t, "Grace")
 	out, code := runSprint(t, "resume", "1", "--as", "Grace")
 	if code != 0 {
 		t.Fatalf("resume exit=%d: %s", code, out)
@@ -106,6 +108,7 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("BASHY_AGENTIC", "")
 	t.Setenv("WEAVE_CONDUCTOR", "Ada")
+	seedAgent(t, "Ada")
 
 	if out, code := runSprint(t, "add", "end test"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
@@ -142,6 +145,7 @@ func TestSprintStartUsesDurableHolderTakenAs(t *testing.T) {
 	if out, code := runSprint(t, "add", "durable holder start"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
+	seedAgent(t, "meridian")
 	if out, code := runSprint(t, "take", "1", "--as", "meridian"); code != 0 {
 		t.Fatalf("take exit=%d: %s", code, out)
 	}
@@ -170,6 +174,7 @@ func TestSprintStartRecognizesBashyPrincipal(t *testing.T) {
 	if out, code := runSprint(t, "add", "principal holder start"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
+	seedAgent(t, "meridian")
 	if out, code := runSprint(t, "take", "1", "--as", "meridian"); code != 0 {
 		t.Fatalf("take exit=%d: %s", code, out)
 	}
@@ -185,6 +190,7 @@ func TestSprintEndNeverBoxedDoesNotInventDuration(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("BASHY_AGENTIC", "")
 	t.Setenv("WEAVE_CONDUCTOR", "Ada")
+	seedAgent(t, "Ada")
 
 	if out, code := runSprint(t, "add", "completed before boxes shipped"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)

@@ -79,14 +79,45 @@ func openSprintRoom(s *weaveStory, conductor string) (*sprintContact, error) {
 	return meetroom.Assume(sprintAssignment(s.ID, s.Title), conductor)
 }
 
-// closeSprintRoom releases a sprint's room on a graceful handoff.
+// closeSprintRoom releases a sprint's room when the SPRINT ends.
+//
+// It closes as the CONVENER, not as whoever happens to be running the command.
+// Only the organizer may close a meet room, and the room now outlives the
+// conductor who opened it (see weave_story_reach.go) — so by the time a sprint
+// stops, the actor is routinely somebody who was not there when it opened.
+// Passing the current actor would make the close silently fail and leak the
+// room, which is the failure this whole area exists to prevent.
 func closeSprintRoom(s *weaveStory, actor string) error {
 	if s.Contact == nil {
 		return nil
 	}
-	err := meetroom.Release(s.Contact, actor)
+	closer := strings.TrimSpace(s.Contact.Holder)
+	if closer == "" {
+		closer = actor
+	}
+	err := meetroom.Release(s.Contact, closer)
 	s.Contact = nil
 	return err
+}
+
+// ensureSprintRoom opens the room only when the sprint has none.
+//
+// Reusing a live room across a take is deliberate: the transcript IS the
+// handover context, and closing plus reopening on every conductor change threw
+// it away and filed a set of meet minutes for each hop of one continuous
+// conversation.
+func ensureSprintRoom(s *weaveStory, conductor string) string {
+	if s.Contact != nil {
+		return ""
+	}
+	c, err := openSprintRoom(s, conductor)
+	if err != nil {
+		// Reported, never swallowed: a contact that silently failed to open
+		// reads identically to one nobody has tried to use yet.
+		return fmt.Sprintf("; no room (%v)", err)
+	}
+	s.Contact = c
+	return "; " + c.String()
 }
 
 // pingSprintConductor publishes an interrupt to whoever is conducting.

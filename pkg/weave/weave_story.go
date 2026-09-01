@@ -396,6 +396,9 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newWeaveStoryAddCmd(),
 		newWeaveStoryShowCmd(),
 		newWeaveStoryMoveCmd(),
+		newWeaveStoryPruneCmd(),
+		newWeaveStoryEditCmd(),
+		newWeaveStoryRmCmd(),
 		newSprintStatusCmd(),
 		newSprintWhoCmd(),
 		newSprintPingCmd(),
@@ -611,6 +614,8 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 
 func newWeaveStoryMoveCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	var force bool
+	var forceReason string
 	cmd := &cobra.Command{
 		Use:   "move <sprint> <backlog|doing|review|done>",
 		Short: "Move a sprint to a kanban column",
@@ -629,14 +634,35 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 					if remaining := sprintUncheckedGoals(s); len(remaining) > 0 {
 						return "", fmt.Errorf("sprint #%d has unchecked goal items: %s", id, strings.Join(remaining, ", "))
 					}
+					// The goal check above asks whether the PLAN is finished.
+					// This asks whether the WORK is — a story filed into the
+					// sprint and never linked to a goal item was invisible to
+					// the first check, so a sprint could close clean over open
+					// work purely because nothing looked at it.
+					if err := sprintCoverageGate(s, force, forceReason); err != nil {
+						return "", err
+					}
+					if hy := sprintCheckHygiene(s); !hy.Clean() && !force {
+						return "", fmt.Errorf("sprint #%d is not clean:\n  %s\n  run `bashy sprint prune %d` for the full state, or --force --reason \"<why>\"",
+							id, strings.Join(hy.Problems, "\n  "), id)
+					}
 				}
 				from := s.Column
 				s.Column = col
+				// Leaving an open column ends the sprint's need for a room. This
+				// is the counterpart of retaining it across pause/handoff: the
+				// room's lifetime is the OPEN CARD's, so it closes here and not
+				// when a conductor happens to step away.
+				if sprintColumnOpen(from) && !sprintColumnOpen(col) {
+					_ = closeSprintRoom(s, weaveStoryConductorName(s, ""))
+				}
 				weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", fmt.Sprintf("moved %s → %s", from, col))
 				return fmt.Sprintf("sprint #%d %s → %s", id, from, col), nil
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "close over an unclean or uncovered state (requires --reason)")
+	cmd.Flags().StringVar(&forceReason, "reason", "", "why closing over open findings is correct — recorded on the card")
 	flags.attach(cmd)
 	return cmd
 }
@@ -665,17 +691,20 @@ continuity record (sprint show) and resume.`,
 				if !free && !stale && prev != who && !force {
 					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
 				}
-				// THE DEAD HOLDER CANNOT CLOSE THEIR OWN ROOM. A successor
-				// taking over a stale lease inherits a channel addressed to
-				// somebody who will never read it, so the takeover closes it
-				// and opens one that answers.
-				if s.Contact != nil {
-					_ = closeSprintRoom(s, weaveStoryConductorName(s, ""))
+				// The room is the SPRINT's, so a takeover inherits it rather
+				// than replacing it — the transcript left by the previous
+				// conductor is the handover context, and closing it to open an
+				// identical one discarded that and filed a set of meet minutes
+				// per hop. Only a sprint with no room gets a new one.
+				if s.currentBox().Running() || sprintColumnOpen(s.Column) {
+					ensureSprintRoom(s, who)
 				}
-				if s.currentBox().Running() {
-					if c, err := openSprintRoom(s, who); err == nil {
-						s.Contact = c
-					}
+				// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
+				// no agent: every coordination surface (mb, chat, inbox, ping)
+				// keys on this string, and one that names nobody is worse than
+				// none — it is printed as a contact and silently never answers.
+				if err := validateSprintOwner(who); err != nil {
+					return "", err
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
 				s.Owner = who
@@ -714,16 +743,24 @@ untouched — they survive in the queue for the successor.`,
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint handoff", &flags, func(s *weaveStory) (string, error) {
-				// Releasing the role closes its room. A closed room with work
-				// still running would be a dead letterbox, but a handoff is
-				// precisely the case where the work moves WITH the role — the
-				// successor opens their own.
+				// A handoff releases the ROLE; it does not end the SPRINT.
+				// "The successor opens their own" was true only once the
+				// successor arrived — and the interval before that is the whole
+				// problem: an open card, a running box, and no room during the
+				// exact window an arriving agent needs to ask who is taking it.
+				// The room now belongs to the sprint and waits for them.
 				who := weaveStoryConductorName(s, "")
-				_ = closeSprintRoom(s, who)
+				roomNote := "; room stays open for the successor"
+				if !sprintRoomRetained(s) {
+					_ = closeSprintRoom(s, who)
+					roomNote = ""
+				}
 				if strings.TrimSpace(message) != "" {
 					s.Continuity = message
 				}
-				weaveStoryAppend(s, who, "system", "handed off — released conductor lease")
+				// Same reason as pause: the state findings travel with the role.
+				s.Continuity += sprintStateAddendum(s)
+				weaveStoryAppend(s, who, "system", "handed off — released conductor lease"+roomNote)
 				s.Lease = nil
 				return fmt.Sprintf("sprint #%d: lease released; continuity recorded for the next conductor", id), nil
 			})
