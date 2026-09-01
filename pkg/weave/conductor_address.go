@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/bus"
+	"github.com/qiangli/coreutils/pkg/role"
 )
 
 func init() {
@@ -72,7 +73,12 @@ func rolesFromQueue(q *weaveQueue, now time.Time) []bus.HostRole {
 		}
 		// An expired lease is not a conductor. Accepting mail for one would
 		// promise an owner that walked away half an hour ago.
-		if now.Sub(s.Lease.At) > sprintLeaseTTL {
+		//
+		// Ask the seat rather than subtracting: only LIVE earns an address.
+		// A bare `now.Sub(at) > TTL` also admits the two states it cannot
+		// name — a heartbeat ahead of us is negative and so never expires,
+		// which would hand this sprint a permanent address.
+		if s.seat().Live(now) != role.LivenessLive {
 			continue
 		}
 		out = append(out, bus.HostRole{

@@ -123,7 +123,7 @@ func TestBox_RunningSprintCanOutliveItsConductor(t *testing.T) {
 	}
 	_, stale, free := weaveStoryLeaseState(s)
 	if !stale || free {
-		t.Errorf("lease should read STALE %v/%v after %s with a %s TTL", stale, free, 2*time.Hour, sprintLeaseTTL)
+		t.Errorf("lease should read STALE %v/%v after %s with a %s TTL", stale, free, 2*time.Hour, SprintLeaseTTL)
 	}
 }
 

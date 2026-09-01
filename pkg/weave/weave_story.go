@@ -88,7 +88,15 @@ type weaveStoryLease struct {
 	At     time.Time `json:"at"`
 }
 
-const sprintLeaseTTL = 30 * time.Minute
+// SprintLeaseTTL is how long a conductor's heartbeat stays believable.
+//
+// EXPORTED because it is not private policy: `bashy agents` grades the very
+// same lease when it projects the board into the live-work roster, and a
+// roster ageing leases on a different clock than the board reports a conductor
+// the board has already released. It carried a hand-copied literal until an
+// unageable lease shipped; a constant other modules can name is the only form
+// of that agreement a compiler checks.
+const SprintLeaseTTL = 30 * time.Minute
 
 var weaveStoryColumns = []string{"backlog", "doing", "review", "done"}
 
@@ -111,7 +119,7 @@ func findWeaveStory(q *weaveQueue, id int64) *weaveStory {
 }
 
 // weaveStoryLeaseState returns a short human marker for a sprint's lease:
-// holder + fresh/STALE/free. Stale = heartbeat older than sprintLeaseTTL.
+// holder + fresh/STALE/free. Stale = heartbeat older than SprintLeaseTTL.
 func weaveStoryLeaseState(s *weaveStory) (holder string, stale bool, free bool) {
 	l := s.seat()
 	switch l.Live(time.Now()) {
@@ -137,7 +145,7 @@ func weaveStoryLeaseState(s *weaveStory) (holder string, stale bool, free bool) 
 // produce.
 func (s *weaveStory) seat() role.Seat {
 	if s == nil || s.Lease == nil {
-		return role.Seat{TTL: sprintLeaseTTL}
+		return role.Seat{TTL: SprintLeaseTTL}
 	}
 	return role.Seat{
 		Holder: s.Lease.Holder,
@@ -146,7 +154,7 @@ func (s *weaveStory) seat() role.Seat {
 		// it as the acquisition time too would make every refresh look like a
 		// new tenure.
 		HeartbeatAt: s.Lease.At,
-		TTL:         sprintLeaseTTL,
+		TTL:         SprintLeaseTTL,
 	}
 }
 

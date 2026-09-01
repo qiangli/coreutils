@@ -25,7 +25,13 @@ func TestConductorRoles_OnlyLiveLeasesGetAnAddress(t *testing.T) {
 		{ID: 2}, // no lease at all
 		{ID: 3, Lease: &weaveStoryLease{Holder: "", At: now}}, // lease with no holder
 		{ID: 4, Lease: &weaveStoryLease{ // EXPIRED
-			Holder: "claude-opus5", At: now.Add(-2 * sprintLeaseTTL)}},
+			Holder: "claude-opus5", At: now.Add(-2 * SprintLeaseTTL)}},
+		// UNPROVED, not live. A heartbeat materially ahead of us cannot be
+		// aged: subtracting it is negative, so a bare `> TTL` test calls it
+		// fresh on every future call and this address accepts mail forever on
+		// behalf of a conductor who may be long gone.
+		{ID: 5, Lease: &weaveStoryLease{
+			Holder: "codex-gpt5.6-sol", At: now.Add(time.Hour)}},
 	}}
 
 	got := rolesFromQueue(q, now)
