@@ -7,7 +7,7 @@ status: todo
 priority: p0
 created: 2026-08-31T23:31:56.759938Z
 assignee: s88_pax_cluster
-sprint: 88
+sprint: 100
 ---
 
 Investigate POSIX Profile D pax shared FAIL seats 155,168,185,207,225,245,246,247 plus candidate pax:46 from public-safe metadata and source/history. Identify and implement only a concrete standards-aligned smallest fix with focused native tests; otherwise record the exact redacted evidence tuple and a public reducer plan. No licensed suite or journal bytes.

@@ -7,7 +7,7 @@ status: todo
 priority: p0
 created: 2026-08-31T23:30:21.747016Z
 assignee: s88-more-od
-sprint: 88
+sprint: 100
 ---
 
 Investigate Profile D shared-B blockers more:130/132/133/134 and od:5/16 from tracked public metadata, public source/history, and short native suite-free reducers. Implement only the smallest POSIX Issue 7-aligned fix with focused native tests; otherwise record the exact redacted result tuple needed. No licensed suite/journal bytes, local containers, pushes, merges, or pin bumps. Done when each identity has a source-backed disposition and any patch passes focused package tests.
