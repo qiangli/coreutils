@@ -62,7 +62,7 @@ jobs:
       # The vendored external/ forks (ollama, podman) pull cgo + Apple MLX
       # (darwin-only) and are upstream's to test. Vet + test coreutils' OWN
       # packages on every platform — that pure-Go userland is the product.
-      - name: Vet + test (coreutils packages; vendored external/ forks excluded)
+      - name: Vet (coreutils packages; vendored external/ forks excluded; Windows also compiles tests)
         shell: bash
         run: |
           # Exclude the vendored external/ forks (cgo + platform backends), but
@@ -86,6 +86,14 @@ jobs:
             # execute the behavioral suite, while Bashy's Windows integration
             # job exercises the portable room, shell and agent surfaces.
             go test -run '^$' $pkgs
-          else
-            go test $pkgs
           fi
+      # The suite runs through the RATCHET, not `go test` directly: tests for
+      # open stories are committed red on purpose, so a plain gate is
+      # permanently red and therefore reports nothing. The script derives the
+      # same package set as the vet step above (it must stay runnable on its
+      # own, outside CI) and fails on a NEW failure, on a baseline entry that
+      # started passing, and unconditionally on a build error.
+      - name: Test (no-regression ratchet against test/known-failures.txt)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./scripts/ci-test-gate.sh

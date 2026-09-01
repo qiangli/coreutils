@@ -117,6 +117,20 @@ go test ./...            # full incl. external/ — unix + submodules only
 scripts/crossvet.sh      # or: bashy dag crossvet
 ```
 
+**CI runs the suite through a RATCHET, not `go test` directly.** Tests for open
+stories are committed red on purpose (the mv trailing-slash story's contract
+says so in as many words), so a plain gate is permanently red and therefore
+reports nothing — a real break is indistinguishable from the known ones.
+`scripts/ci-test-gate.sh` compares the failing set against
+`test/known-failures.txt`, scoped per GOOS because these failures are NOT
+portable (mv and pax pass on darwin and fail on linux). It fails on a NEW
+failure, on a baseline entry that has started passing (delete its line — the
+baseline only shrinks), and ALWAYS on a package that fails without a failing
+test. That last rule is why the gate exists: coreutils CI spent weeks failing
+at the build step over an uncloned `../filebrowser` sibling, so no test ran at
+all and nobody could tell. Every baseline entry names a story; nothing goes in
+without one.
+
 **A change is gated by BOTH `go test` and `scripts/crossvet.sh`.** `go test` on
 your host structurally cannot see a build-tag break: a `//go:build !windows`
 file never compiles for windows, so referencing it from an untagged `_test.go`

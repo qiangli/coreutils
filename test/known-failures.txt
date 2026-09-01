@@ -1,0 +1,60 @@
+# Go tests known to FAIL — the no-regression ratchet baseline.
+#
+# scripts/ci-test-gate.sh runs the suite and compares the actual failing set
+# against this file, scoped to the platform the job is running on:
+#
+#   * a test that fails and is NOT listed here  -> a NEW regression, CI fails.
+#   * a test listed here that now PASSES        -> progress; CI fails and tells
+#     you to DELETE its line, so the baseline only ever shrinks and can never
+#     drift stale.
+#   * a PACKAGE that fails without any failing test (a build or setup error)
+#     -> always a hard failure, never baselineable.
+#
+# That last rule is the point. This gate exists because coreutils CI spent
+# weeks failing at the BUILD step — pkg/webconsole gained a ../filebrowser
+# flat-sibling replace the workflow never cloned — so NO coreutils test ran and
+# nobody could tell. A red CI that is red for one stale reason teaches nothing;
+# every entry below was invisible until 2026-09-01.
+#
+# The goal is an empty file. Every entry names a story; delete the line as its
+# fix lands. Nothing may be added without one.
+#
+# Format, one test per line:
+#
+#   <goos> <import-path> <TestName> [sometimes]
+#
+# <goos> is required because these are NOT portable failures: mv and pax pass
+# on darwin and fail on linux, and a darwin-only check would report their
+# stories done when they are not. An entry applies only to the platform named.
+#
+# `sometimes` marks a test observed BOTH passing and failing on the same
+# platform in CI. It suppresses only the progress check, never the regression
+# check, and the gate PRINTS the observed outcome of every such entry on every
+# run — an intermittent failure that goes quiet is exactly the "success reached
+# by the absence of evidence" this repo keeps rediscovering. It is a debt
+# marker with a story attached, not a disposition.
+#
+# Blank lines and #-comments ignored. Keep sorted.
+
+# 8a64e0c1b37d — mv trailing-slash pathname semantics. RED BY DESIGN: the
+# story's own contract says "prove the behavioral tests red on the current
+# base". Linux only; both pass on darwin.
+linux github.com/qiangli/coreutils/cmds/mv TestMvCopyFallbackFailures
+linux github.com/qiangli/coreutils/cmds/mv TestMvNoTargetDirectoryTrailingSlashOnExistingDir
+
+# babd0878b511 — pkg/chat cancel teardown. The test's 5s budget IS
+# cmd.WaitDelay, so the test deadline and the implementation's fallback are the
+# same number; reaching the fallback at all means the group kill missed a pipe
+# holder. Observed passing (run 33513814323) and failing (33515325794) on the
+# same macOS runner.
+darwin github.com/qiangli/coreutils/pkg/chat TestCancelKillsDescendants sometimes
+
+# 95fcce29a7cc — sprint 100 pax cluster. Linux only: PATH_MAX is 4096 there
+# against 1024 on darwin, so the near-limit tree lands in a different regime.
+linux github.com/qiangli/coreutils/cmds/pax TestFollowedSymlinkBelowOperandNearPathMaxIsArchived
+
+# ee78ee9771d5 — ctagsfifo's private-output guard compares os.SameFile (dev+ino
+# only), so a substitution reusing the freed inode passes it; the run then
+# blocks on the reader-less FIFO and reports that timeout instead. Consistent on
+# the linux runner, passes 5/5 in a golang:1.26 container.
+linux github.com/qiangli/coreutils/cmds/posixproviders/internal/ctagsfifo TestPrivateOutputIdentityChangeIsRejected
