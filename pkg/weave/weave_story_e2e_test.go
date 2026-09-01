@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/room"
+	todopkg "github.com/qiangli/coreutils/pkg/todo"
 )
 
 func execCommandForTest(name string, args ...string) (string, error) {
@@ -406,7 +407,7 @@ func TestSprintOwnerMustBeALiveEntryInBashyAgents(t *testing.T) {
 // coming, and the durable queue faithfully preserves a message that will never
 // be looked at.
 func TestConductorCannotWalkAwayFromUnreadRequests(t *testing.T) {
-	for _, verb := range []string{"pause", "hand off", "end"} {
+	for _, verb := range []string{"hand off", "end"} {
 		t.Run(verb, func(t *testing.T) {
 			// The gate is exercised directly: publishing real bus traffic into
 			// a temp HOME is a different subsystem's setup, and what must not
@@ -430,8 +431,10 @@ func TestConductorCannotWalkAwayFromUnreadRequests(t *testing.T) {
 // gate function that exists and is called from nowhere is the exact failure
 // this session already shipped once.
 func TestHandoverVerbsAllConsultTheUnansweredGate(t *testing.T) {
+	// pause and resume were ABSORBED: pause is an alias of handoff, resume of
+	// take. There are two release paths left, not three, and both must consult
+	// the gate — an alias cannot skip it because it shares the implementation.
 	for _, f := range []struct{ file, verb string }{
-		{"weave_story_lifecycle.go", "pause"},
 		{"weave_story.go", "hand off"},
 		{"weave_story_box.go", "end"},
 	} {
@@ -444,4 +447,112 @@ func TestHandoverVerbsAllConsultTheUnansweredGate(t *testing.T) {
 			t.Errorf("%s does not call %s — a conductor could leave with unread requests", f.file, want)
 		}
 	}
+}
+
+// TestStoryClaimIsExclusiveAndAnnounced covers the volunteer loop: an agent
+// takes a story off an ACTIVE sprint, the hold is exclusive, and yield returns
+// it to the queue. The exclusivity is the point — two agents picking the same
+// p0 discover it in a merge conflict, which is the expensive way.
+func TestStoryClaimIsExclusiveAndAnnounced(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("WEAVE_CONDUCTOR", "boss")
+	seedLiveAgent(t, "boss")
+	seedLiveAgent(t, "worker")
+
+	root := mustStoryRoot(t) // isolates the story store AND the cwd first
+	if out, code := runSprint(t, "add", "volunteer loop"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+		t.Fatalf("start exit=%d: %s", code, out)
+	}
+	// A story nobody has claimed yet.
+	store := todopkg.RepoStore(root)
+	it, err := todopkg.Add(store, "pick me", "", "p0", nil, "", "")
+	if err != nil {
+		t.Skipf("todo store unavailable here: %v", err)
+	}
+	it.Sprint = 1
+	if _, err := store.Save(it); err != nil {
+		t.Fatalf("attach story to sprint: %v", err)
+	}
+	if out, code := runSprint(t, "track", "1"); code != 0 {
+		t.Fatalf("track exit=%d: %s", code, out)
+	}
+
+	if out, code := runSprint(t, "claim", "1", it.ID, "--as", "worker"); code != 0 {
+		t.Fatalf("claim exit=%d: %s", code, out)
+	}
+	held, err := todopkg.ResolveRef(store, it.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Assignee != "worker" {
+		t.Fatalf("claim did not record the holder: assignee=%q", held.Assignee)
+	}
+
+	// A second agent must be refused, and told who to talk to.
+	out, code := runSprint(t, "claim", "1", it.ID, "--as", "boss")
+	if code == 0 {
+		t.Fatalf("a claimed story was handed to a second agent:\n%s", out)
+	}
+	if !strings.Contains(out, "worker") {
+		t.Errorf("refusal must name the current holder so the loser can coordinate:\n%s", out)
+	}
+
+	// Yield puts it back for anyone.
+	if out, code := runSprint(t, "yield", "1", it.ID, "--as", "worker", "-m", "out of context"); code != 0 {
+		t.Fatalf("yield exit=%d: %s", code, out)
+	}
+	back, err := todopkg.ResolveRef(store, it.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Assignee != "" || back.Status != todopkg.StatusTodo {
+		t.Fatalf("yield did not return the story to the queue: assignee=%q status=%q", back.Assignee, back.Status)
+	}
+}
+
+// TestSubmitRequiresEvidenceAndKeepsTheHold: submitted work is NOT available
+// for somebody else, and a submission that does not say where to look just
+// makes the manager go find it.
+func TestSubmitRequiresEvidenceAndKeepsTheHold(t *testing.T) {
+	cmd := NewSprintCmd()
+	sub, _, err := cmd.Find([]string{"submit"})
+	if err != nil {
+		t.Fatalf("find submit: %v", err)
+	}
+	if sub.Flags().Lookup("message") == nil {
+		t.Fatal("submit must take -m evidence")
+	}
+	// claim/yield are a pair; submit is deliberately not yield's opposite.
+	for _, v := range []string{"claim", "yield", "submit"} {
+		if c, _, err := cmd.Find([]string{v}); err != nil || c.Name() != v {
+			t.Errorf("sprint %s is not registered", v)
+		}
+	}
+}
+
+// mustStoryRoot gives the test its OWN repo to keep stories in.
+//
+// It does NOT resolve the current checkout. normalizeStoryRoot("") walks up to
+// the enclosing git repo, which during `go test` is this source tree — so an
+// earlier version of this helper wrote three fixture stories straight into
+// coreutils/docs/todo/ and they then showed up as uncovered work on a real
+// sprint's close gate. A test that writes to the repo it is testing is not a
+// test, it is a mutation with an assertion attached.
+func mustStoryRoot(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	if out, err := execCommandForTest("git", "-C", repo, "init", "-q"); err != nil {
+		t.Skipf("git unavailable here: %v (%s)", err, out)
+	}
+	t.Chdir(repo)
+	root, err := normalizeStoryRoot("")
+	if err != nil {
+		t.Skipf("no story root here: %v", err)
+	}
+	return root
 }

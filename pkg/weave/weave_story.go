@@ -405,14 +405,15 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newWeaveStoryShowCmd(),
 		newWeaveStoryMoveCmd(),
 		newWeaveStoryPruneCmd(),
+		newSprintClaimCmd(),
+		newSprintYieldCmd(),
+		newSprintSubmitCmd(),
 		newWeaveStoryEditCmd(),
 		newWeaveStoryRmCmd(),
 		newSprintStatusCmd(),
 		newSprintWhoCmd(),
 		newSprintPingCmd(),
 		newSprintStartCmd(),
-		newSprintPauseCmd(),
-		newSprintResumeCmd(),
 		newSprintStopCmd(),
 		newSprintEndCmd(),
 		newSprintExtendCmd(),
@@ -686,8 +687,9 @@ func newWeaveStoryTakeCmd() *cobra.Command {
 	var as string
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "take <sprint>",
-		Short: "Claim the conductor lease on a sprint (takes over a STALE/dead conductor)",
+		Use:     "take <sprint>",
+		Aliases: []string{"resume"},
+		Short:   "Claim the conductor lease on a sprint (takes over a STALE/dead conductor)",
 		Long: `take claims the conductor lease so a new conductor can pick up a sprint —
 the human-directed switch, or recovery after the previous conductor died
 (SIGKILL / token exhaustion). A free or STALE lease is taken directly; a
@@ -725,6 +727,14 @@ continuity record (sprint show) and resume.`,
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
 				s.Owner = who
+				// The brief is printed on TAKE, not offered by a separate verb.
+				// `resume` existed only to show it, which meant the takeover
+				// path that matters most — inheriting from a conductor that
+				// DIED — was the one that printed nothing.
+				brief := strings.TrimSpace(s.Continuity)
+				if brief == "" {
+					brief = "(no continuity brief recorded)"
+				}
 				switch {
 				case free:
 					weaveStoryAppend(s, who, "system", "took conductor lease (was unclaimed)")
@@ -733,7 +743,7 @@ continuity record (sprint show) and resume.`,
 				default:
 					weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
 				}
-				return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s; read sprint show %d", id, who, sprintReadyLine(who), id), nil
+				return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(who), brief), nil
 			})
 		},
 	}
@@ -747,17 +757,35 @@ func newWeaveStoryHandoffCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var message string
 	cmd := &cobra.Command{
-		Use:   "handoff <sprint>",
-		Short: "Graceful handoff: checkpoint continuity + release the conductor lease",
-		Long: `handoff is the graceful conductor exit (e.g. on Ctrl+C, planned switch,
-or running low on context): record a final continuity brief and RELEASE
-the lease so the next conductor takes over cleanly. In-flight tasks are
-untouched — they survive in the queue for the successor.`,
+		Use:     "handoff <sprint>",
+		Aliases: []string{"pause"},
+		Short:   "Graceful handoff: checkpoint continuity + release the conductor lease",
+		Long: `handoff is the conductor exit — Ctrl+C, a planned switch, low context,
+or simply stepping away: record a continuity brief and RELEASE the lease so
+whoever comes next starts from it. Aliased as pause, which it absorbed.
+
+There is deliberately ONE exit verb. "I am coming back" and "somebody else
+takes this" looked like different acts, but which one a departure turns out to
+be is not knowable when you leave: a conductor that pauses for five minutes may
+be killed, and its successor inherits a sprint with no brief. So the brief is
+always required, and the sprint stays equally resumable by anyone.
+
+Two things are untouched. Linked weave workers keep running — changing who
+conducts must not stop the work. And the room stays open while the card is
+open, so the interval with no conductor is still reachable.
+
+This releases the SEAT, not the CLOCK: the time box keeps running. Use stop to
+close the cadence, end when the sprint is finished.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			message = strings.TrimSpace(message)
+			if message == "" {
+				return fmt.Errorf("-m <continuity brief> required: whoever comes next starts from it, " +
+					"and whether that is you or a stranger is not knowable here")
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint handoff", &flags, func(s *weaveStory) (string, error) {
 				// A handoff releases the ROLE; it does not end the SPRINT.
@@ -775,18 +803,21 @@ untouched — they survive in the queue for the successor.`,
 					_ = closeSprintRoom(s, who)
 					roomNote = ""
 				}
-				if strings.TrimSpace(message) != "" {
-					s.Continuity = message
-				}
-				// Same reason as pause: the state findings travel with the role.
-				s.Continuity += sprintStateAddendum(s)
+				// THE BRIEF IS ALWAYS REQUIRED. `pause` demanded one and
+				// `handoff` did not, on the theory that a pause is temporary
+				// and a handoff is not — but which of the two this turns out to
+				// be is NOT KNOWABLE HERE. A conductor stepping away for five
+				// minutes may be SIGKILLed, and its "I will be back" becomes a
+				// stranger's cold start with no brief. That is why the lease is
+				// a heartbeat; the brief follows the same reasoning.
+				s.Continuity = message + sprintStateAddendum(s)
 				weaveStoryAppend(s, who, "system", "handed off — released conductor lease"+roomNote)
 				s.Lease = nil
 				return fmt.Sprintf("sprint #%d: lease released; continuity recorded for the next conductor", id), nil
 			})
 		},
 	}
-	cmd.Flags().StringVarP(&message, "message", "m", "", "final continuity brief (resume instructions for the successor)")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "continuity brief for whoever comes next (required)")
 	flags.attach(cmd)
 	return cmd
 }

@@ -13,7 +13,7 @@ func TestSprintLifecycleSurface(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		have[sub.Name()] = true
 	}
-	for _, name := range []string{"start", "pause", "resume", "end", "goal", "track", "next", "focus"} {
+	for _, name := range []string{"start", "handoff", "take", "end", "goal", "track", "next", "focus"} {
 		if !have[name] {
 			t.Errorf("missing sprint lifecycle verb %q", name)
 		}
