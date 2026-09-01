@@ -271,10 +271,34 @@ dialog#settings::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2
   font: inherit; font-size: .76rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- logo palette (the mark inverts so it reads on either theme) ---- */
-:root { --logo-bg: #0a0e1a; --logo-fg: #fafafa; --logo-accent: #3478f6; }
-:root[data-theme="dark"] { --logo-bg: #fafafa; --logo-fg: #0a0e1a; --logo-accent: #3478f6; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --logo-bg: #fafafa; --logo-fg: #0a0e1a; }
+/* ONE mark, every app, every theme.
+ *
+ * It used to invert — a dark tile on light, a light tile on dark — so the
+ * product's mark was two different objects depending on a setting, and the
+ * dark tile sat as a black block in a light header.
+ *
+ * These values are computed, not picked. A single tile has three constraints at
+ * once: it must read against the light page (#f2f2f5), against the dark page
+ * (#09090b), and carry a glyph. WCAG contrast for the candidates:
+ *
+ *     tile      vs light pg   vs dark pg   vs white glyph   worst case
+ *     #2563eb      4.63          3.85           5.17           3.85   <- chosen
+ *     #3478f6      3.64          4.89           4.07           3.64
+ *     #1d4ed8      6.00          2.97           6.70           2.97
+ *     #7dd3fc      1.49         11.93           1.67           1.49
+ *
+ * #2563eb has the best WORST CASE, and every one of its three clears the 3:1
+ * WCAG non-text threshold. A pale blue is the intuitive choice and the wrong
+ * one: #7dd3fc scores 1.49 against the light page, so the tile would all but
+ * vanish there. The accent #5eead4 is 3.49 against the tile and a different
+ * hue from the glyph, so it reads as a mark rather than a smudge.
+ */
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"] {
+  --logo-bg: #2563eb;
+  --logo-fg: #ffffff;
+  --logo-accent: #5eead4;
 }
 #brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 

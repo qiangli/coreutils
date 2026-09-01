@@ -755,3 +755,61 @@ func TestDOMRelayLightThemeHasNoDarkPanel(t *testing.T) {
 		}
 	}
 }
+
+// ONE mark: same tile in every app and every theme.
+//
+// It used to invert — dark tile on light, light tile on dark — so the product's
+// mark was two different objects depending on a setting, and the dark tile sat
+// as a black block in a light header. The colour is computed rather than picked
+// (the contrast table is in app.css beside the tokens): a single tile has to
+// read against the light page, against the dark page, AND carry a glyph, and
+// #2563eb has the best worst case at 3.85:1 with all three above the 3:1 WCAG
+// non-text bar. The intuitive pale blue fails: #7dd3fc scores 1.49 against the
+// light page and would all but vanish there.
+func TestDOMOneMarkEverywhere(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	tile := `(()=>{const r=document.querySelector(".console-logo rect, #brand .logo rect");
+		return r?getComputedStyle(r).fill:"NO MARK";})()`
+
+	seen := map[string]string{}
+	for _, theme := range []string{"light", "dark"} {
+		for _, page := range []string{"/board/", "/mb/", "/term/", "/relay/"} {
+			var got string
+			if err := chromedp.Run(ctx,
+				chromedp.Navigate(base+page),
+				chromedp.Sleep(900*time.Millisecond),
+				chromedp.Evaluate(`localStorage.setItem("bashy.apps.config",`+
+					`JSON.stringify({theme:`+strconv.Quote(theme)+`}))`, nil),
+				chromedp.Navigate(base+page),
+				chromedp.Sleep(2200*time.Millisecond),
+				chromedp.Evaluate(tile, &got),
+			); err != nil {
+				t.Fatalf("chromedp %s %s: %v", theme, page, err)
+			}
+			seen[theme+" "+page] = got
+		}
+	}
+	assertNoJSErrors(t, "one mark", errs())
+
+	var first, firstKey string
+	for k, v := range seen {
+		t.Logf("%-16s %s", k, v)
+		if v == "NO MARK" {
+			t.Errorf("%s has no mark", k)
+			continue
+		}
+		if first == "" {
+			first, firstKey = v, k
+			continue
+		}
+		if v != first {
+			t.Errorf("the mark differs: %s is %s but %s is %s — one mark, every app, "+
+				"every theme", k, v, firstKey, first)
+		}
+	}
+	// And it is the computed colour, not whatever happens to be consistent.
+	if first != "rgb(37, 99, 235)" {
+		t.Errorf("the mark is %s, want the computed #2563eb", first)
+	}
+}
