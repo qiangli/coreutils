@@ -25,8 +25,29 @@ func runTime(t *testing.T, env []string, args ...string) (out, errOut string, co
 	return o.String(), e.String(), code
 }
 
+// posixEnv is the process environment with the numeric locale pinned to POSIX.
+//
+// A test that wants to measure `time` must not inherit the machine's locale:
+// time refuses an LC_NUMERIC it has no radix for, so on any host whose LANG is,
+// say, en_US.UTF-8 every one of these tests failed on the locale before it
+// reached the behaviour under test. The cases that DO exercise locale handling
+// build their own env slice explicitly and are unaffected.
+func posixEnv() []string {
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, kv := range os.Environ() {
+		switch {
+		case strings.HasPrefix(kv, "LANG="),
+			strings.HasPrefix(kv, "LC_ALL="),
+			strings.HasPrefix(kv, "LC_NUMERIC="):
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "LANG=POSIX", "LC_ALL=POSIX", "LC_NUMERIC=POSIX")
+}
+
 func TestTimePosixFormat(t *testing.T) {
-	_, errOut, code := runTime(t, os.Environ(), "-p", "true")
+	_, errOut, code := runTime(t, posixEnv(), "-p", "true")
 	if code != 0 {
 		t.Fatalf("exit %d, want 0", code)
 	}
@@ -38,25 +59,25 @@ func TestTimePosixFormat(t *testing.T) {
 }
 
 func TestTimeExitStatusPropagates(t *testing.T) {
-	if _, _, code := runTime(t, os.Environ(), "sh", "-c", "exit 7"); code != 7 {
+	if _, _, code := runTime(t, posixEnv(), "sh", "-c", "exit 7"); code != 7 {
 		t.Errorf("exit %d, want 7 (command status propagates)", code)
 	}
 }
 
 func TestTimeCommandNotFound(t *testing.T) {
-	if _, _, code := runTime(t, os.Environ(), "definitely-not-a-real-command-xyz"); code != 127 {
+	if _, _, code := runTime(t, posixEnv(), "definitely-not-a-real-command-xyz"); code != 127 {
 		t.Errorf("not-found exit status = %d, want 127", code)
 	}
 }
 
 func TestTimeMissingCommand(t *testing.T) {
-	if _, _, code := runTime(t, os.Environ(), "-v"); code == 0 {
+	if _, _, code := runTime(t, posixEnv(), "-v"); code == 0 {
 		t.Error("missing command should be a usage error")
 	}
 }
 
 func TestTimeFormatSpecifiers(t *testing.T) {
-	out, errOut, _ := runTime(t, os.Environ(), "-f", "ELAPSED=%e CMD=%C EXIT=%x", "true")
+	out, errOut, _ := runTime(t, posixEnv(), "-f", "ELAPSED=%e CMD=%C EXIT=%x", "true")
 	_ = out
 	if !strings.Contains(errOut, "CMD=true") || !strings.Contains(errOut, "EXIT=0") {
 		t.Errorf("-f specifiers not expanded: %q", errOut)
@@ -100,13 +121,13 @@ func TestTimeCustomFormatLocalizesOnlyNumericConversions(t *testing.T) {
 
 func TestTimeAgenticBudgetTodo(t *testing.T) {
 	// A zero budget guarantees "over budget" → the TODO fires.
-	env := append(os.Environ(), "BASHY_AGENTIC=1")
+	env := append(posixEnv(), "BASHY_AGENTIC=1")
 	_, errOut, _ := runTime(t, env, "--budget", "0s", "--todo", "split this step", "true")
 	if !strings.Contains(errOut, `"kind":"todo"`) || !strings.Contains(errOut, "split this step") {
 		t.Errorf("expected an agent-mode TODO line, got %q", errOut)
 	}
 	// No budget ⇒ no TODO.
-	_, errOut2, _ := runTime(t, os.Environ(), "true")
+	_, errOut2, _ := runTime(t, posixEnv(), "true")
 	if strings.Contains(errOut2, "todo") {
 		t.Errorf("no budget should produce no TODO: %q", errOut2)
 	}
@@ -116,7 +137,7 @@ func TestTimeAgenticBudgetTodo(t *testing.T) {
 // named), never a silent fallback to stderr.
 func TestTimeOutputFileOpenError(t *testing.T) {
 	bad := filepath.Join(t.TempDir(), "no-such-dir", "out")
-	_, errOut, code := runTime(t, os.Environ(), "-o", bad, "true")
+	_, errOut, code := runTime(t, posixEnv(), "-o", bad, "true")
 	if code != 1 {
 		t.Fatalf("time -o unopenable: exit=%d, want 1", code)
 	}
