@@ -371,7 +371,7 @@ func TestCobraBoardTellAndRead(t *testing.T) {
 	if err := again.Execute(); err != nil {
 		t.Fatalf("empty meet read: %v", err)
 	}
-	if againOut.Len() != 0 || !strings.Contains(againErr.String(), "EMPTY") {
+	if againOut.Len() != 0 || !strings.Contains(againErr.String(), "EMPTY (seen through 1)") {
 		t.Fatalf("empty read stdout=%q stderr=%q", againOut.String(), againErr.String())
 	}
 }

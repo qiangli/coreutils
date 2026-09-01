@@ -25,10 +25,12 @@ const maxTranscriptLine = 4 * 1024 * 1024
 
 // Unread returns parsed transcript events this reader has not seen.
 //
-// Events spoken by the reader, or text that starts with @reader, are the
-// directed signals Event carries today, so they are returned in full.
-// Everything else is room broadcast history, trimmed to limit with older
-// reporting how many events were hidden.
+// Events addressed to the reader, or text that starts with @reader, are the
+// directed signals Event carries today, so they are returned in full. Events
+// authored by the reader are acknowledged by the caller's high-water mark but
+// are not inbound work and are therefore never returned. Everything else is
+// room broadcast history, trimmed to limit with older reporting how many events
+// were hidden.
 func Unread(id, reader string, limit int) (directed, other []Event, older int, err error) {
 	directed, other, older, _, err = UnreadThrough(id, reader, limit)
 	return directed, other, older, err
@@ -73,6 +75,13 @@ func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord
 		if seq <= at {
 			continue
 		}
+		// A room transcript contains both directions. The receive-side cursor
+		// must pass the reader's own outbound records without handing them back
+		// as inbound work: otherwise an inbox watch wakes on the status message
+		// it just sent and can miss the reply it was waiting for.
+		if authoredBy(e, reader) {
+			continue
+		}
 		record := UnreadRecord{Seq: seq, Event: e}
 		if directedEvent(e, reader) {
 			directed = append(directed, record)
@@ -87,13 +96,15 @@ func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord
 	return directed, other, older, through, nil
 }
 
+func authoredBy(e Event, reader string) bool {
+	reader = strings.TrimSpace(strings.TrimPrefix(reader, "@"))
+	return reader != "" && strings.EqualFold(strings.TrimSpace(e.Speaker), reader)
+}
+
 func directedEvent(e Event, reader string) bool {
 	reader = strings.TrimSpace(strings.TrimPrefix(reader, "@"))
 	if reader == "" {
 		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(e.Speaker), reader) {
-		return true
 	}
 	if strings.EqualFold(strings.TrimSpace(e.To), reader) {
 		return true

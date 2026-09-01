@@ -1018,10 +1018,11 @@ func newReadCmd() *cobra.Command {
 				}
 			}
 			if len(directed)+len(other) == 0 {
+				seen := SeenSeq(st.ID, reader)
 				if wait > 0 {
-					fmt.Fprintln(cmd.ErrOrStderr(), "EMPTY (timeout)")
+					fmt.Fprintf(cmd.ErrOrStderr(), "EMPTY (timeout; seen through %d)\n", seen)
 				} else {
-					fmt.Fprintln(cmd.ErrOrStderr(), "EMPTY")
+					fmt.Fprintf(cmd.ErrOrStderr(), "EMPTY (seen through %d)\n", seen)
 				}
 			}
 			return nil
