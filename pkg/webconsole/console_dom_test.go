@@ -473,3 +473,50 @@ func TestDOMRelayHeaderMatchesTheOtherApps(t *testing.T) {
 		t.Error("relay has no all-apps control")
 	}
 }
+
+// "Same header as the other apps" has to be MEASURED, or it drifts back into a
+// lookalike. This reads the computed box of relay's header and brand and
+// compares them with board's — the two are styled by separate stylesheets
+// (board links app.css; relay is a mounted SPA that restates the rules), which
+// is exactly the kind of duplication that silently diverges.
+func TestDOMRelayHeaderMatchesBoardMetrics(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	probe := `(()=>{const h=document.querySelector("header");
+		if(!h) return "NO HEADER";
+		const cs=getComputedStyle(h);
+		const logo=document.querySelector("header .logo, header .console-logo");
+		const mark=document.querySelector("header #wordmark, header .console-wordmark");
+		const m=mark?getComputedStyle(mark):null;
+		return JSON.stringify({
+			padding: cs.padding,
+			borderBottomWidth: cs.borderBottomWidth,
+			logo: logo?Math.round(logo.getBoundingClientRect().width):0,
+			wordmarkSize: m?m.fontSize:"",
+			wordmarkWeight: m?m.fontWeight:"",
+		});})()`
+
+	var boardBox, relayBox string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/board/"),
+		chromedp.Sleep(1800*time.Millisecond),
+		chromedp.Evaluate(probe, &boardBox),
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(3500*time.Millisecond),
+		chromedp.Evaluate(probe, &relayBox),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay metrics", errs())
+	t.Logf("board header = %s", boardBox)
+	t.Logf("relay header = %s", relayBox)
+
+	if boardBox == "NO HEADER" || relayBox == "NO HEADER" {
+		t.Fatalf("missing a header (board=%s relay=%s)", boardBox, relayBox)
+	}
+	if boardBox != relayBox {
+		t.Errorf("relay's header does not match board's.\n board = %s\n relay = %s\n"+
+			"They are styled by separate stylesheets — app.css and the meet SPA's "+
+			"index.css — so a change to one must be made in both.", boardBox, relayBox)
+	}
+}

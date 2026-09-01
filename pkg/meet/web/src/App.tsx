@@ -51,7 +51,7 @@ export function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-[68px] shrink-0 items-center gap-3 border-b border-border/70 bg-background/88 px-3 backdrop-blur-xl sm:px-5">
+          <header className="console-bar shrink-0">
             {/* The brand block every console app carries: the panel's own mark
                 in a rounded tile, then bashy + the panel name. board, messages
                 and terminal state it in markup; relay is a mounted SPA, so it
@@ -61,15 +61,11 @@ export function App() {
                 holds the rooms button and the conversation title, and the title
                 is the thing someone needs there — the mark alone still says
                 which app this is, and still returns to its own root. */}
-            <a
-              className="flex shrink-0 items-center gap-2 rounded-md text-foreground no-underline outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              href="./"
-              title="bashy relay"
-            >
-              <svg className="size-7 shrink-0" viewBox="0 0 40 40" aria-hidden="true">
-                <rect width="40" height="40" rx="10" fill="currentColor" opacity="0.08" />
+            <a className="console-brand" href="./" title="bashy relay">
+              <svg className="console-logo" viewBox="0 0 40 40" aria-hidden="true">
+                <rect width="40" height="40" rx="10" fill="var(--logo-bg, currentColor)" opacity="0.08" />
                 <g
-                  transform="translate(8 8) scale(1)"
+                  transform="translate(8 8)"
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.9"
@@ -79,8 +75,11 @@ export function App() {
                   <path d="M4 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5L4.5 16.5zM18.5 10.5H19a2 2 0 0 1 2 2v5l-2.8-2H13" />
                 </g>
               </svg>
-              <span className="font-display hidden text-[15px] tracking-tight sm:inline">
-                bashy<b className="font-semibold">relay</b>
+              {/* Hidden on a phone: this header also carries the rooms button
+                  and the conversation title, and the title is what matters
+                  there. The mark alone still identifies the app. */}
+              <span className="console-wordmark hidden sm:flex">
+                bashy<b>relay</b>
               </span>
             </a>
 
@@ -188,8 +187,7 @@ export function App() {
                 #all-apps-btn that injectChrome gives every embedded app. relay
                 is MOUNTED, so it never receives that button and draws the same
                 mark itself, exactly as the Files app does. */}
-            <Button asChild aria-label="Back to all apps" size="icon-sm" variant="ghost">
-              <a href="../" title="All apps">
+            <a className="console-iconbtn" href="../" title="All apps" aria-label="Back to all apps">
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
@@ -204,8 +202,7 @@ export function App() {
                   <rect x="3" y="14" width="7" height="7" rx="1.5" />
                   <rect x="14" y="14" width="7" height="7" rx="1.5" />
                 </svg>
-              </a>
-            </Button>
+            </a>
           </header>
 
           <MessageList
