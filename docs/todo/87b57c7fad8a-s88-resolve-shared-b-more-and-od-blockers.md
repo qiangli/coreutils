@@ -37,12 +37,36 @@ go test ./cmds/more -run 'EOF|ExitOnEOF' -count=20            PASS
 go test ./cmds/od -run 'POSIX|Offset|Format|Address|Locale' -count=20 PASS
 ```
 
-## Minimum redacted evidence still needed for `od`
+## Current replay classification
 
-For each of `od:5` and `od:16`, provide only: result class/status; stdout and
-stderr byte count, line count, and SHA-256; generic category counts selected
-from `address`, `format`, `option`, `operand`, `locale`, `diagnostic`, and
-`exit`; and whether both retained GNU controls have the same result. No
-journal text, expected/actual bytes, suite source, private path, hostname, or
-credential is needed. That tuple is sufficient to select a public reducer or
-to record a shared-control disposition without guessing.
+The sealed current replay completed all 16 Shared-B targets with no caps or
+infrastructure failures. The authorized fixed-vocabulary tuples classify all
+four `more` purposes as comparison-phase failures. Their paired shapes are
+`130/132` (13 lines, four `error`, two `expected`, two `exit`, two `stderr`,
+two `command`; `130` additionally has one `locale`) and `133/134` (eight
+lines, two `error`, one `expected`, one `exit`, one `stderr`, one `command`;
+`133` additionally has one `locale`). This reinforces the shared-control
+disposition; it does not identify a `more` state-machine clause.
+
+Both `od` purposes remain phase `unknown`; each has two `option` tokens and
+stdout-only category hits (`od:5` four, `od:16` two). Public reduction shows
+that this shape could match the two no-address spellings (`-A n` and `-An`)
+that pre-launch commit `395c40ab` already repaired. Current
+`POSIXLY_CORRECT=1` reducers for both spellings emit the first transformed item
+without a leading separator, and the existing 20x address/format suite is
+green. Repeating that patch or changing unrelated formatting would therefore
+be speculative.
+
+## Sharpened category-only evidence request
+
+For `od:5` and `od:16`, provide fixed-vocabulary counts for `address`,
+`radix`, `decimal`, `octal`, `hexadecimal`, `no_address`, `skip`, `count`,
+`type`, `character`, `named`, `signed`, `unsigned`, `float`, `duplicate`,
+`offset`, `stdin`, `file`, `default`, `order`, `invalid`, and `diagnostic`;
+separate stdout/stderr byte, line, and SHA-256 tuples; whether
+`POSIXLY_CORRECT` was present; and current/historical GNU-control result
+classes. For `more`, the sufficient fixed vocabulary is `eof`, `last_file`,
+`next_file`, `prompt`, `locale`, `unsupported`, `comparison`, `timeout`,
+`terminal`, `command`, `exit`, `stderr`, and `expected`, plus GNU-control
+result classes. No raw output, expected bytes, suite source, journal text,
+private path, hostname, or credential is required.
