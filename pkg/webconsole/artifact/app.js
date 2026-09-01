@@ -433,33 +433,35 @@ dlg.addEventListener("close", () => { resetPairing(); render(); });
 // anything, whether enabling will produce a code or the command to restart with
 // --pair. Default false — fail closed if the session probe has not answered.
 let serverPairing = false;
-const pairToggle = () => document.getElementById("pair-toggle");
+const pairButton = () => document.getElementById("pair-btn");
 const pairPanel = () => document.getElementById("pair-panel");
 
 function resetPairing() {
-  const t = pairToggle(); if (t) t.checked = false;
   const p = pairPanel(); if (p) { p.hidden = true; p.replaceChildren(); }
 }
 
+// Phone pairing reads like Appearance or Background: the section is always
+// there, stating what it does. What it does NOT have is an on/off switch — a
+// switch implies a persistent setting, and pairing is not one. Each pass is a
+// single-use, time-boxed credential, so asking for one is an ACTION (the
+// Favorites idiom), and it stays an explicit click rather than something that
+// happens merely because Settings was opened.
 function buildPairing() {
-  const t = pairToggle();
-  if (!t) return;
+  const b = pairButton();
+  if (!b) return;
   resetPairing();
   const instructions = document.getElementById("pair-instructions-host");
   if (instructions) instructions.replaceChildren(pairInstructions());
   const hint = document.getElementById("pair-armed-hint");
   if (hint) hint.remove();
   if (!serverPairing) {
-    // Not armed: say so up front rather than after a wasted mint. Enabling will
+    // Not armed: say so up front rather than after a wasted mint. Asking will
     // still explain how to restart with LAN pairing on.
-    const note = pairNote("This console is not armed for LAN pairing yet — enabling shows the command to restart with it on.");
+    const note = pairNote("This console is not armed for LAN pairing yet — asking for a code shows the command to restart with it on.");
     note.id = "pair-armed-hint";
-    t.closest("section").insertBefore(note, pairPanel());
+    b.closest("section").insertBefore(note, b);
   }
-  t.onchange = () => {
-    if (t.checked) mintPairing();
-    else { const p = pairPanel(); p.hidden = true; p.replaceChildren(); }
-  };
+  b.onclick = () => mintPairing();
 }
 
 async function mintPairing() {
@@ -472,19 +474,16 @@ async function mintPairing() {
     data = await res.json();
   } catch (e) {
     p.replaceChildren(pairNote("Could not reach the console: " + e));
-    const t = pairToggle(); if (t) t.checked = false;
     return;
   }
-  // enabled:false means the toggle did NOT open LAN access — reflect that by
-  // snapping the switch back off, and show the exact restart command.
+  // enabled:false means LAN access was NOT opened — show the exact restart
+  // command rather than an empty panel.
   if (data && data.enabled === false) {
     p.replaceChildren(pairFailClosed(data));
-    const t = pairToggle(); if (t) t.checked = false;
     return;
   }
   if (!data || data.error) {
     p.replaceChildren(pairNote((data && data.error) || "Pairing failed."));
-    const t = pairToggle(); if (t) t.checked = false;
     return;
   }
   p.replaceChildren(pairCodes(data));

@@ -334,9 +334,12 @@ func TestPairSettingsLifecycle(t *testing.T) {
 	}
 }
 
-// 8. The Settings section ships default-off and always carries a collapsed,
-// OS-selective Add-to-Home-Screen disclosure — content and accessibility
-// (alt text) both present.
+// 8. The Settings section is ALWAYS present and carries no on/off switch — it
+// reads like Appearance or Background, with asking for a pass as an action the
+// way Favorites has actions. A switch would imply a persistent setting, and a
+// pairing pass is a single-use, time-boxed credential. It also always carries a
+// collapsed, OS-selective Add-to-Home-Screen disclosure — content and
+// accessibility (alt text) both present.
 func TestPairSettingsRenderContent(t *testing.T) {
 	h := newTestHandler(t, Options{}) // loopback dev console: / is ungated
 
@@ -344,18 +347,16 @@ func TestPairSettingsRenderContent(t *testing.T) {
 	if !strings.Contains(page, "Phone pairing") {
 		t.Fatal("settings page is missing the Phone pairing section")
 	}
-	if !strings.Contains(page, `id="pair-toggle"`) {
-		t.Fatal("settings page is missing the pairing toggle")
+	if !strings.Contains(page, `id="pair-btn"`) {
+		t.Fatal("settings page is missing the pairing action button")
 	}
 	if !strings.Contains(page, `id="pair-instructions-host"`) {
 		t.Fatal("settings page is missing the always-present install-help host")
 	}
-	// Default OFF: the toggle input must not be pre-checked.
-	if i := strings.Index(page, `id="pair-toggle"`); i >= 0 {
-		tag := page[i : strings.IndexByte(page[i:], '>')+i]
-		if strings.Contains(tag, "checked") {
-			t.Fatalf("pairing toggle ships checked: %q", tag)
-		}
+	// No on/off switch. Minting is an ACTION, not a setting: a switch suggests
+	// a state that persists, while every pass is single-use and time-boxed.
+	if strings.Contains(page, `id="pair-toggle"`) {
+		t.Fatal("phone pairing still has an on/off switch; it must be an action button")
 	}
 
 	js := readArtifact(t, "app.js")
