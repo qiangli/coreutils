@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
 )
@@ -75,17 +76,31 @@ func newRoot(name, short string, list *cobra.Command, rest ...*cobra.Command) *c
 	c := &cobra.Command{
 		Use:           name,
 		Short:         short,
+		Long:          list.Long,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE:          list.RunE,
 	}
-	c.Flags().AddFlagSet(list.Flags())
+	// Cobra/pflag's AddFlagSet reuses *Flag values. Keep the option values shared
+	// with list.RunE, but copy the flag metadata so a wrapper may describe the
+	// bare noun's flags differently without silently changing `noun list --help`.
+	list.Flags().VisitAll(func(f *pflag.Flag) {
+		clone := *f
+		c.Flags().AddFlag(&clone)
+	})
 	c.CompletionOptions.DisableDefaultCmd = true
 	c.AddCommand(list)
 	c.AddCommand(rest...)
 	return c
 }
+
+const ringFieldHelp = `RING is the source of this selected definition, not where an executable or
+model runs: embedded = compiled baseline; shared = read-only directory from
+BASHY_TOOLS_PATH, BASHY_MODELS_PATH, or BASHY_AGENTS_PATH; cloud = organization
+catalog cached by sync; local = writable host override under BASHY_FLEET_DIR or
+the noun-specific BASHY_*_DIR. Precedence is embedded -> shared -> cloud ->
+local; the last definition of a name wins.`
 
 // --- tools --------------------------------------------------------------
 
@@ -105,7 +120,18 @@ func newToolsList(opts []Option) *cobra.Command {
 		Short: "List agentic CLI tools",
 		Long: "List agentic CLI tools.\n\n" +
 			"The asset registry's tool namespace is shared with MCP-style function kits;\n" +
-			"only kind:cli entries are fleet tools. --all shows the rest.",
+			"the default view contains visible kind:cli fleet tools. --all also includes\n" +
+			"hidden CLI definitions and non-CLI func/web/system entries.\n\n" +
+			"Fields:\n" +
+			"  NAME          canonical registry name used by --tool and agent bindings\n" +
+			"  KIND          cli = agent harness; func/web/system appear only with --all\n" +
+			"  BINARY        executable Bashy will run: declared binary, otherwise NAME;\n" +
+			"                use `tools verify NAME` to check PATH\n" +
+			"  MODEL-SELECT  yes when Bashy can pass a binding's model at launch; no means\n" +
+			"                the tool may choose its own default, and a binding is only a label\n" +
+			"  RING          source of the selected definition (explained below)\n\n" +
+			"JSON also includes aliases and spells MODEL-SELECT as selects_model.\n\n" +
+			ringFieldHelp,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -119,14 +145,14 @@ func newToolsList(opts []Option) *cobra.Command {
 				}
 				rows = append(rows, toolRow{
 					Name: t.Name, Kind: t.Kind, Aliases: t.Aliases,
-					Binary: t.CLI.Binary, Model: t.TakesModel(), Ring: t.Ring.String(),
+					Binary: t.Binary(), Model: t.TakesModel(), Ring: t.Ring.String(),
 				})
 			}
 			if asJSON {
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tKIND\tBINARY\tMODEL\tRING")
+			fmt.Fprintln(tw, "NAME\tKIND\tBINARY\tMODEL-SELECT\tRING")
 			for _, r := range rows {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Kind, r.Binary, yesNo(r.Model), r.Ring)
 			}
@@ -135,7 +161,7 @@ func newToolsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	c.Flags().BoolVar(&all, "all", false, "include non-cli tool kinds (func, web, system)")
+	c.Flags().BoolVar(&all, "all", false, "include hidden CLI and non-CLI func/web/system entries")
 	return c
 }
 
@@ -238,6 +264,16 @@ func BandLabelWithSource(band int, source string) string {
 	return l
 }
 
+// effectiveBandSource makes the legacy empty spelling explicit at presentation
+// boundaries. An absent source has always meant a declared prior; JSON callers
+// should not need that repository-history knowledge to interpret a band.
+func effectiveBandSource(band int, source string) string {
+	if band > 0 && source == "" {
+		return BandDeclared
+	}
+	return source
+}
+
 type modelRow struct {
 	Name       string   `json:"name"`
 	Band       int      `json:"band,omitempty"`
@@ -255,9 +291,20 @@ func newModelsList(opts []Option) *cobra.Command {
 		Use:   "list",
 		Short: "List inference backends",
 		Long: "List inference backends.\n\n" +
-			"BAND is the model's capability peg, L1 (basic) to L4 (frontier),\n" +
-			"normalized across providers — a vendor's own tier ladder is never\n" +
-			"mapped positionally. Agents inherit the band of the model they bind.",
+			"Fields:\n" +
+			"  NAME      canonical, version-explicit model name; aliases are also accepted\n" +
+			"  BAND      normalized capability peg: L1 basic through L4 frontier; '-' is\n" +
+			"            unpegged and '~' means not measured. Agents inherit this band\n" +
+			"  KIND      authentication path: subscription, api, or local; not billing mode\n" +
+			"  PROVIDER  backend/provider family used for authentication and routing\n" +
+			"  TARGET    default provider-side id passed to a tool; a tool-specific id may\n" +
+			"            override it, which `agents show NAME` displays\n" +
+			"  ALIASES   alternate accepted names, including a derived family alias\n" +
+			"  RING      source of the selected definition (explained below)\n\n" +
+			"Bands are comparable across providers; vendor tier names are not mapped\n" +
+			"positionally. For pegged rows JSON reports the numeric band and band_source\n" +
+			"(declared, operator, measured, or cascade); unpegged rows omit both.\n\n" +
+			ringFieldHelp,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -266,7 +313,7 @@ func newModelsList(opts []Option) *cobra.Command {
 			rows := make([]modelRow, 0, len(models))
 			for _, m := range models {
 				rows = append(rows, modelRow{
-					Name: m.Name, Band: m.Band, BandSource: m.BandSource, Kind: m.Kind, Provider: m.Provider,
+					Name: m.Name, Band: m.Band, BandSource: effectiveBandSource(m.Band, m.BandSource), Kind: m.Kind, Provider: m.Provider,
 					Target: m.Target(), Aliases: m.Names()[1:], Ring: m.Ring.String(),
 				})
 			}
@@ -340,13 +387,25 @@ func newAgentsList(opts []Option) *cobra.Command {
 		Use:   "list",
 		Short: "List named tool:model bindings",
 		Long: "List named tool:model bindings.\n\n" +
-			"An agent resolves when both halves of its binding are in the catalog.\n" +
-			"Dangling agents, and ephemeral clones minted for a single task, are\n" +
-			"hidden unless --all is given.\n\n" +
-			"BAND is inherited from the model — L1 (basic) to L4 (frontier) — and is\n" +
-			"how you select a roster without naming anyone: --min-band 3 is every\n" +
-			"agent worth seating at a design discussion. NICK is the agent's human\n" +
-			"name, assigned from its binding unless one was set with --nick.",
+			"Fields:\n" +
+			"  NAME      canonical singleton agent identity used for launch and attribution\n" +
+			"  NICK      human-friendly name, explicit or deterministically assigned\n" +
+			"  BAND      inherited model band; '~' is not measured, X1-X4 is a cascade\n" +
+			"            that reaches that band by escalation, and '-' is unpegged\n" +
+			"  TOOL      canonical agentic CLI half of the binding\n" +
+			"  MODEL     canonical model half; cascades show base->escalation model chain\n" +
+			"  RELIAB    optional operability prior from the agent ledger; '-' is unknown.\n" +
+			"            It is separate from capability BAND and is not a live check\n" +
+			"  RESOLVES  structural only: both TOOL and MODEL definitions exist. 'yes' does\n" +
+			"            not prove installation, credentials, launch, or a successful turn\n" +
+			"  RING      source of this agent definition, not its tool/model definitions\n\n" +
+			"Dangling agents and ephemeral task clones are hidden unless --all is given.\n" +
+			"Use `agents verify NAME` for launchability and `agents verify NAME --live`\n" +
+			"for an actual response. Use --min-band N to select a capable roster.\n\n" +
+			"JSON additionally includes binding (canonical tool:model), aliases, band_source\n" +
+			"for pegged rows (unpegged rows omit it), the model's kind/provider, and reason\n" +
+			"when resolves is false.\n\n" +
+			ringFieldHelp,
 		Example: "  bashy agents list --min-band 3\n" +
 			"  bashy agents list --json",
 		Args:          cobra.NoArgs,
@@ -371,7 +430,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 				if _, _, m, err := cat.Binding(a.Name); err != nil {
 					r.Resolves, r.Reason = false, err.Error()
 				} else {
-					r.Band, r.BandSource = m.Band, m.BandSource
+					r.Band, r.BandSource = m.Band, effectiveBandSource(m.Band, m.BandSource)
 					r.Kind, r.Provider = m.Kind, m.Provider
 				}
 				// A cascade agent shows its SERVED band (X4), not the base
@@ -420,7 +479,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
-	c.Flags().BoolVar(&all, "all", false, "include agents whose tool or model does not resolve")
+	c.Flags().BoolVar(&all, "all", false, "include dangling and ephemeral agents")
 	c.Flags().IntVar(&band, "band", 0, "only agents in exactly this band (1-4)")
 	c.Flags().IntVar(&minBand, "min-band", 0, "only agents in this band or above (1-4)")
 	return c
@@ -469,7 +528,7 @@ func newAgentsShow(opts []Option) *cobra.Command {
 				fmt.Fprintf(out, "resolves: no (%v)\n", err)
 				return nil
 			}
-			fmt.Fprintf(out, "tool:    %s (%s)\n", tool.Name, tool.CLI.Binary)
+			fmt.Fprintf(out, "tool:    %s (%s)\n", tool.Name, tool.Binary())
 			fmt.Fprintf(out, "model:   %s → %s\n", model.Name, model.TargetFor(tool.Name))
 			fmt.Fprintf(out, "launch:  %s\n", strings.Join(tool.Argv(model.TargetFor(tool.Name), PromptToken), " "))
 			if !tool.TakesModel() {

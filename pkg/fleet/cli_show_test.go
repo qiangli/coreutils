@@ -94,6 +94,31 @@ func TestAgentsShowYAMLEmitsTheEnvelope(t *testing.T) {
 	}
 }
 
+func TestAgentsShowReportsEffectiveBinaryFallback(t *testing.T) {
+	root := t.TempDir()
+	cat := New(WithRoot(root))
+	if err := cat.SaveTool(Tool{
+		Name: "fallback-tool", Kind: ToolKindCLI,
+		CLI: ToolCLI{Launch: ToolLaunch{Exec: "fallback-tool --model {model} {prompt}"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveModel(Model{Name: "m1", UpstreamID: "provider-m1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(Agent{Name: "fallback-agent", Tool: "fallback-tool", Model: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "show", "fallback-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "tool:    fallback-tool (fallback-tool)") {
+		t.Fatalf("agent summary omitted the effective binary fallback:\n%s", got)
+	}
+}
+
 // Asking for two formats is a caller mistake; letting one silently win would
 // hide it.
 func TestShowRejectsBothFormats(t *testing.T) {
