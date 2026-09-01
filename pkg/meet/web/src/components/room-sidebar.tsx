@@ -6,7 +6,6 @@ import {
   MessageSquareText,
   Plus,
   Radio,
-  Sparkles,
   UserRound,
 } from "lucide-react"
 
@@ -96,8 +95,12 @@ export function RoomSidebar({
       <div className="flex h-[68px] items-center gap-3 px-5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button aria-label="Open Bashy Relay menu" className="size-9 rounded-full bg-sidebar-primary text-sidebar-primary-foreground shadow-[0_8px_30px_rgb(13_148_136_/_0.24)] hover:bg-sidebar-primary/90" size="icon">
-              <Sparkles className="size-[18px]" />
+            <Button aria-label="Open Bashy Relay menu" className="size-9 rounded-[9px] bg-[#0a0e1a] p-0 text-white shadow-[0_8px_30px_rgb(13_148_136_/_0.24)] hover:bg-[#151b2d]" size="icon">
+              <svg aria-hidden="true" className="size-9" viewBox="0 0 40 40">
+                <rect fill="#0a0e1a" height="40" rx="10" width="40" />
+                <path d="M10 12h20v13H17l-6 5v-5h-1z" fill="none" stroke="#fafafa" strokeLinejoin="round" strokeWidth="2.5" />
+                <path d="M15 18h10" stroke="#2dd4bf" strokeLinecap="round" strokeWidth="2.5" />
+              </svg>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -112,8 +115,8 @@ export function RoomSidebar({
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="min-w-0">
-          <div className="font-display text-[17px] font-semibold tracking-tight">
-            Bashy Relay
+          <div className="font-display text-[17px] font-normal tracking-tight">
+            bashy<span className="font-bold">relay</span>
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-sidebar-foreground/55">
             <span

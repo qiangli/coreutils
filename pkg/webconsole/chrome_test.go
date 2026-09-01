@@ -313,6 +313,15 @@ func TestLauncherTilesFollowOpenAppsMode(t *testing.T) {
 			t.Errorf("settings dialog lost %q — the mode has no human surface", need)
 		}
 	}
+	for _, need := range []string{
+		`document.querySelectorAll("#open-apps-seg button")`,
+		`b.dataset.openVal === openApps`,
+		`b.onclick = () => saveLook(b.dataset.openVal)`,
+	} {
+		if !strings.Contains(js, need) {
+			t.Errorf("app.js lost open-apps settings binding %q", need)
+		}
+	}
 }
 
 // The structured API half: versioned JSON, both modes readable, exactly the

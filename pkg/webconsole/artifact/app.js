@@ -388,6 +388,11 @@ function buildSettings() {
     b.onclick = () => { saveCfg({ theme: b.dataset.themeVal }); buildSettings(); };
   }
 
+  for (const b of document.querySelectorAll("#open-apps-seg button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.openVal === openApps));
+    b.onclick = () => saveLook(b.dataset.openVal);
+  }
+
   const st = document.getElementById("section-toggles");
   st.replaceChildren(...SECTIONS.map(([key, label]) => {
     const row = document.createElement("label");
@@ -440,6 +445,8 @@ function buildPairing() {
   const t = pairToggle();
   if (!t) return;
   resetPairing();
+  const instructions = document.getElementById("pair-instructions-host");
+  if (instructions) instructions.replaceChildren(pairInstructions());
   const hint = document.getElementById("pair-armed-hint");
   if (hint) hint.remove();
   if (!serverPairing) {
@@ -555,20 +562,20 @@ function pairCodes(data) {
     box.append(n);
   }
 
-  box.append(pairInstructions());
   return box;
 }
 
-// pairInstructions is the Add-to-Home-Screen help. The platform we can safely
-// detect is shown first; the other stays in the DOM (just muted) so a
-// misdetection never hides the steps someone actually needs.
+// pairInstructions is always present in Settings, but collapsed until someone
+// asks for it. Only the likely phone family is shown initially; the adjacent
+// switch keeps the other instructions one click away when detection is wrong.
 function pairInstructions() {
-  const wrap = document.createElement("div");
-  wrap.className = "pair-instructions";
-  const h = document.createElement("p");
-  h.className = "pair-instructions-title";
-  h.textContent = "Add it to your phone's home screen for an app-like launch:";
-  wrap.append(h);
+  const disclosure = document.createElement("details");
+  disclosure.className = "pair-instructions";
+  const summary = document.createElement("summary");
+  summary.textContent = "Add to home screen";
+  const body = document.createElement("div");
+  body.className = "pair-instructions-body";
+  disclosure.append(summary, body);
 
   const ios = instructionBlock("iPhone / iPad (Safari)", [
     "Tap the Share button (a square with an up arrow)",
@@ -583,13 +590,24 @@ function pairInstructions() {
   ios.classList.add("pair-os");
   android.classList.add("pair-os");
 
-  const ua = navigator.userAgent || "";
-  const isIOS = /iPad|iPhone|iPod/.test(ua);
-  const isAndroid = /Android/.test(ua);
-  if (isIOS) { android.classList.add("pair-os-muted"); wrap.append(ios, android); }
-  else if (isAndroid) { ios.classList.add("pair-os-muted"); wrap.append(android, ios); }
-  else { wrap.append(ios, android); }
-  return wrap;
+  const platform = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  let selected = /Android|Linux|Win/i.test(platform) ? "android" : "ios";
+  const switcher = document.createElement("button");
+  switcher.type = "button";
+  switcher.className = "pair-os-switch";
+  const renderOS = () => {
+    const current = selected === "ios" ? ios : android;
+    const otherName = selected === "ios" ? "Android" : "iPhone / iPad";
+    switcher.textContent = `Show ${otherName} instructions`;
+    switcher.setAttribute("aria-label", switcher.textContent);
+    body.replaceChildren(current, switcher);
+  };
+  switcher.addEventListener("click", () => {
+    selected = selected === "ios" ? "android" : "ios";
+    renderOS();
+  });
+  renderOS();
+  return disclosure;
 }
 
 function instructionBlock(title, steps) {

@@ -51,10 +51,46 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, errMsg stri
       <strong>` + htmlEscape(owner) + `</strong> with that account's password.</p>
     ` + errBlock + `
     <label>User<input name="user" autocomplete="username" autofocus value="` + htmlEscape(owner) + `"></label>
-    <label>Password<input name="password" type="password" autocomplete="current-password"></label>
+    <label>Password
+      <span class="password-field">
+        <input id="login-password" name="password" type="password" autocomplete="current-password">
+        <button class="password-toggle" id="password-toggle" type="button" title="Show password"
+          aria-label="Show password" aria-controls="login-password" aria-pressed="false" tabindex="-1">
+          <svg class="eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+          <svg class="eye-off" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m3 3 18 18M10.6 6.2A11.5 11.5 0 0 1 12 6c6.5 0 10 6 10 6a18 18 0 0 1-2.3 3M6.6 6.6C3.6 8.4 2 12 2 12s3.5 6 10 6a10.8 10.8 0 0 0 4.1-.8M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
+        </button>
+      </span>
+    </label>
     <button class="btn primary" type="submit">Sign in</button>
   </form>
 </main>
+<script>
+(() => {
+  const input = document.getElementById("login-password");
+  const toggle = document.getElementById("password-toggle");
+  const eye = toggle.querySelector(".eye");
+  const eyeOff = toggle.querySelector(".eye-off");
+  // Drive the ATTRIBUTE, not the property. These are <svg> elements, so they
+  // are SVGElement -- and hidden is an IDL attribute of HTMLElement, which
+  // SVGElement does not inherit. Assigning that property on an icon would
+  // therefore set a meaningless JS expando, leave the real attribute
+  // untouched, and the two icons would never swap.
+  const setShown = (el, shown) => {
+    if (shown) el.removeAttribute("hidden");
+    else el.setAttribute("hidden", "");
+  };
+  toggle.addEventListener("click", () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    const label = show ? "Hide password" : "Show password";
+    toggle.title = label;
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("aria-pressed", String(show));
+    setShown(eye, !show);
+    setShown(eyeOff, show);
+  });
+})();
+</script>
 </body></html>`))
 }
 
@@ -83,6 +119,20 @@ label{display:flex;flex-direction:column;gap:.25rem;font-size:.75rem;color:var(-
 input{font:inherit;font-size:.92rem;text-transform:none;letter-spacing:0;color:var(--fg);
  padding:.5rem .65rem;border-radius:.5rem;border:1px solid var(--line);background:var(--bg)}
 input:focus{outline:none;box-shadow:0 0 0 2px var(--primary)}
+.password-field{position:relative;display:block}
+.password-field input{width:100%;padding-right:2.6rem}
+.password-toggle{position:absolute;right:.15rem;top:50%;transform:translateY(-50%);margin:0;padding:.4rem;
+ display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--muted)}
+.password-toggle:hover{color:var(--fg)}
+.password-toggle:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.password-toggle svg{width:1.05rem;height:1.05rem;fill:none;stroke:currentColor;stroke-width:1.8;
+ stroke-linecap:round;stroke-linejoin:round}
+/* The UA's [hidden]{display:none} is not reliable for an <svg>: the HTML UA
+   stylesheet declares a default XHTML namespace, so it does not dependably
+   match an element in the SVG namespace, and BOTH icons render at once. State
+   the rule in the author sheet, where the svg type selector matches inline SVG
+   regardless. */
+.password-toggle svg[hidden]{display:none}
 button{margin-top:.5rem;font:inherit;font-size:.92rem;font-weight:600;padding:.55rem;
  border-radius:.5rem;border:0;background:var(--primary);color:#fff;cursor:pointer}
 .err{margin:0;font-size:.82rem;color:#ef4444}
@@ -118,6 +168,19 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := auth.Authenticate(user, pass); err != nil {
 		s.renderLogin(w, r, "Incorrect password.")
+		return
+	}
+
+	// A loopback console mints NO sessions: cmd.go builds the store only when it
+	// binds off-loopback. /login is routed regardless, so without this guard a
+	// CORRECT password reached Mint on a nil *websession.Store and panicked --
+	// the page after signing in was blank, while a WRONG password returned a
+	// tidy 401. That asymmetry is why it survived every negative test.
+	//
+	// There is nothing to sign in TO here: the gate already admits the machine
+	// owner on loopback. Send them where they were trying to go.
+	if s.sessions == nil {
+		http.Redirect(w, r, coopauth.PrefixPath(r, "/"), http.StatusSeeOther)
 		return
 	}
 

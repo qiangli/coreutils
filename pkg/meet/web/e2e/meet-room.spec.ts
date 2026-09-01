@@ -116,9 +116,11 @@ test("renders room list from the real server and opens a live observe socket", a
     page.getByRole("button", { name: new RegExp(second) }),
   ).toBeVisible();
   await expect(page.getByText("Demo workspace")).toHaveCount(0);
-  const sidebar = page.locator("aside").filter({ hasText: "Bashy Relay" }).first();
+  const sidebar = page.locator("aside").filter({ hasText: "bashyrelay" }).first();
   await expect(sidebar.getByText("connecting")).toHaveCount(0);
   await expect(sidebar.getByText("open", { exact: true })).toBeVisible();
+  await expect(page.getByText("bashyrelay", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to all apps" })).toBeVisible();
 });
 
 test("creates a room from the sidebar and selects it with one agent seated", async ({ page }) => {
@@ -131,7 +133,7 @@ test("creates a room from the sidebar and selects it with one agent seated", asy
   await page.getByRole("button", { name: "Open meeting" }).click();
 
   const roomButton = page.getByRole("button", { name: new RegExp(topic) });
-  const sidebar = page.locator("aside").filter({ hasText: "Bashy Relay" }).first();
+  const sidebar = page.locator("aside").filter({ hasText: "bashyrelay" }).first();
   await expect(roomButton).toBeVisible();
   await expect(sidebar.getByText(primaryAgent)).toBeVisible();
   await expect(page.getByLabel("Message the room")).toBeEnabled();
@@ -148,7 +150,7 @@ test("invites an agent from room details and shows it in the roster", async ({ p
   await inviteField.selectOption(invitedAgent);
   await page.getByRole("button", { name: "Invite", exact: true }).first().click();
 
-  const sidebar = page.locator("aside").filter({ hasText: "Bashy Relay" }).first();
+  const sidebar = page.locator("aside").filter({ hasText: "bashyrelay" }).first();
   await expect(sidebar.getByText(invitedAgent)).toBeVisible();
 
   await page.getByRole("button", { name: `Remove ${invitedAgent}` }).first().click();
@@ -383,7 +385,7 @@ test("routes an unoccupied permanent role instead of silently posting it", async
 
 async function openMeet(page: Page) {
   await page.goto(`${baseURL}/?mock=0`);
-  await expect(page.getByText("Bashy Relay")).toBeVisible();
+  await expect(page.getByText("bashyrelay", { exact: true })).toBeVisible();
 }
 
 async function createRoomFromUI(page: Page, topic: string, agents: string) {

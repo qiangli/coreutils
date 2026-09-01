@@ -334,18 +334,21 @@ func TestPairSettingsLifecycle(t *testing.T) {
 	}
 }
 
-// 8. The Settings section ships default-off, and the Add-to-Home-Screen
-// instructions for both platforms ship with the launcher — content and
-// accessibility (alt text) both present.
+// 8. The Settings section ships default-off and always carries a collapsed,
+// OS-selective Add-to-Home-Screen disclosure — content and accessibility
+// (alt text) both present.
 func TestPairSettingsRenderContent(t *testing.T) {
 	h := newTestHandler(t, Options{}) // loopback dev console: / is ungated
 
 	page := do(h, "GET", "/", "127.0.0.1:5555", nil).Body.String()
-	if !strings.Contains(page, "Phone access") {
-		t.Fatal("settings page is missing the Phone access section")
+	if !strings.Contains(page, "Phone pairing") {
+		t.Fatal("settings page is missing the Phone pairing section")
 	}
 	if !strings.Contains(page, `id="pair-toggle"`) {
 		t.Fatal("settings page is missing the pairing toggle")
+	}
+	if !strings.Contains(page, `id="pair-instructions-host"`) {
+		t.Fatal("settings page is missing the always-present install-help host")
 	}
 	// Default OFF: the toggle input must not be pre-checked.
 	if i := strings.Index(page, `id="pair-toggle"`); i >= 0 {
@@ -360,6 +363,8 @@ func TestPairSettingsRenderContent(t *testing.T) {
 		"Add to Home Screen", // iOS Safari step
 		"Add to Home screen", // Android Chrome step
 		"Safari", "Chrome",
+		`document.createElement("details")`,
+		"Show ${otherName} instructions",
 		"Pairing QR code for ", // the QR <img alt> — accessibility
 	} {
 		if !strings.Contains(js, want) {

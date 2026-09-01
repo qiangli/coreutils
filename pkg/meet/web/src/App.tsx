@@ -1,6 +1,7 @@
 import { useState } from "react"
 import {
   ChevronRight,
+  LayoutGrid,
   Menu,
   PanelRightClose,
   PanelRightOpen,
@@ -151,6 +152,12 @@ export function App() {
                 />
               </SheetContent>
             </Sheet>}
+
+            <Button asChild aria-label="Back to all apps" size="icon-sm" variant="ghost">
+              <a href="../" title="All apps">
+                <LayoutGrid />
+              </a>
+            </Button>
           </header>
 
           <MessageList

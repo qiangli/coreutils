@@ -260,12 +260,14 @@ dialog#settings::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2
 .pair-restart { display: block; margin-top: .25rem; padding: .4rem .55rem; font-size: .78rem;
   background: var(--card); border: 1px solid var(--border); border-radius: .4rem; word-break: break-all; }
 .pair-closed-title { margin: 0 0 .3rem; font-weight: 600; font-size: .84rem; }
-.pair-instructions { margin-top: .8rem; display: grid; gap: .7rem; }
-.pair-instructions-title { margin: 0; font-size: .78rem; font-weight: 600; }
+.pair-instructions { margin-top: .8rem; border-top: 1px solid var(--border); padding-top: .55rem; }
+.pair-instructions summary { cursor: pointer; font-size: .78rem; font-weight: 600; color: var(--foreground); }
+.pair-instructions-body { margin-top: .65rem; display: grid; gap: .55rem; }
 .pair-os-title { margin: 0 0 .2rem; font-size: .76rem; font-weight: 600; }
 .pair-os ol { margin: 0; padding-left: 1.1rem; font-size: .78rem; color: var(--muted-foreground);
   display: grid; gap: .12rem; }
-.pair-os-muted { opacity: .6; }
+.pair-os-switch { justify-self: start; border: 0; padding: 0; background: none; color: var(--primary);
+  font: inherit; font-size: .76rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- logo palette (the mark inverts so it reads on either theme) ---- */
 :root { --logo-bg: #0a0e1a; --logo-fg: #fafafa; --logo-accent: #3478f6; }

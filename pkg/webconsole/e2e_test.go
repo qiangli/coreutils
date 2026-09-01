@@ -214,11 +214,15 @@ func TestE2EFilesServesItsScope(t *testing.T) {
 	// per invocation.
 	code, listing, _ := get(t, base+"/files/api/resources/")
 	if code == http.StatusOK && !strings.Contains(listing, marker) {
-		t.Errorf("scope %s does not list %s: %s", dir, marker, truncate(listing, 200))
+		t.Errorf("scope %s does not list %s: %s", dir, marker, ellipsize(listing, 200))
 	}
 }
 
-func truncate(s string, n int) string {
+// ellipsize is the test-local shortener. It is NOT named truncate: pair_http.go
+// declares a package-level truncate, and a same-package _test.go redeclaring it
+// makes the whole e2e build fail — which is why the e2e tag had stopped
+// compiling at all, taking the login round-trip guarantee with it.
+func ellipsize(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
@@ -377,7 +381,9 @@ func TestE2ELoginGuardsAnExposedConsole(t *testing.T) {
 
 	// The form itself must be reachable, or there is no way in.
 	if code, body, _ := get(t, base+"/login"); code != http.StatusOK ||
-		!strings.Contains(body, `name="password"`) {
+		!strings.Contains(body, `name="password"`) ||
+		!strings.Contains(body, `aria-label="Show password"`) ||
+		!strings.Contains(body, `input.type = show ? "text" : "password"`) {
 		t.Fatalf("/login = %d, no form", code)
 	}
 
