@@ -1,6 +1,7 @@
 import { useState } from "react"
 import {
   Bot,
+  ChevronDown,
   ChevronRight,
   Hash,
   MessageSquareText,
@@ -92,15 +93,25 @@ export function RoomSidebar({
         className,
       )}
     >
-      <div className="flex h-[68px] items-center gap-3 px-5">
+      {/* 56px to match the conversation sub-header beside it, so one unbroken
+          rule runs under the app bar across all three panels.
+
+          The trigger used to BE the app logo. That put a second copy of the
+          mark directly under the one in the app bar, and made the control look
+          like branding rather than the mode switch it is. It now says which
+          mode is open — Meet or Chat — which is the thing worth reading here. */}
+      <div className="flex h-[56px] items-center gap-3 px-5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button aria-label="Open Bashy Relay menu" className="size-9 rounded-[9px] bg-[#0a0e1a] p-0 text-white shadow-[0_8px_30px_rgb(13_148_136_/_0.24)] hover:bg-[#151b2d]" size="icon">
-              <svg aria-hidden="true" className="size-9" viewBox="0 0 40 40">
-                <rect fill="#0a0e1a" height="40" rx="10" width="40" />
-                <path d="M10 12h20v13H17l-6 5v-5h-1z" fill="none" stroke="#fafafa" strokeLinejoin="round" strokeWidth="2.5" />
-                <path d="M15 18h10" stroke="#2dd4bf" strokeLinecap="round" strokeWidth="2.5" />
-              </svg>
+            <Button
+              aria-label="Switch between Meet and Chat"
+              className="h-8 gap-1.5 px-2 text-[13px] font-semibold tracking-tight"
+              size="sm"
+              variant="ghost"
+            >
+              {viewKind === "dm" ? <Bot className="size-4" /> : <Hash className="size-4" />}
+              {viewKind === "dm" ? "Chat" : "Meet"}
+              <ChevronDown className="size-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -114,10 +125,10 @@ export function RoomSidebar({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {/* No wordmark here: the app bar above names the app once, for all
+            three panels. This block keeps the mode menu and the connection
+            state, which are the sidebar's own. */}
         <div className="min-w-0">
-          <div className="font-display text-[17px] font-normal tracking-tight">
-            bashy<span className="font-bold">relay</span>
-          </div>
           <div className="flex items-center gap-1.5 text-[11px] text-sidebar-foreground/55">
             <span
               className={cn(

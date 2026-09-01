@@ -232,3 +232,8 @@ button:disabled {
 }
 .console-iconbtn:hover { background: var(--card); color: var(--primary); }
 .console-iconbtn svg { width: 18px; height: 18px; }
+.console-foot {
+  flex: none; padding: .4rem 1rem; text-align: center;
+  font-size: .7rem; color: var(--muted-foreground);
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}

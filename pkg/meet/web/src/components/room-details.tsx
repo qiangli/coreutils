@@ -65,7 +65,9 @@ export function RoomDetails({
         className,
       )}
     >
-      <div className="flex h-[68px] items-center px-5">
+      {/* 56px, the same as the sidebar's and the conversation's own headers, so
+          one unbroken rule runs under the app bar across all three panels. */}
+      <div className="flex h-[56px] items-center px-5">
         <div>
           <div className="font-display text-[14px] font-semibold">
             Room details

@@ -30,7 +30,52 @@ export function App() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-dvh min-h-[540px] overflow-hidden bg-background text-foreground">
+      {/* Four parts: one bar across the top, then left / middle / right beneath
+          it — the shape board, messages and terminal have. relay used to be
+          three columns with the app bar living INSIDE the middle one, so the
+          header began 280px in and the app carried two brands. */}
+      <div className="flex h-dvh min-h-[540px] flex-col overflow-hidden bg-background text-foreground">
+        <header className="console-bar shrink-0">
+          <a className="console-brand" href="./" title="bashy relay">
+            <svg className="console-logo" viewBox="0 0 40 40" aria-hidden="true">
+              <rect width="40" height="40" rx="10" fill="#0a0e1a" />
+              <path
+                d="M10 12h20v13H17l-6 5v-5h-1z"
+                fill="none"
+                stroke="#fafafa"
+                strokeLinejoin="round"
+                strokeWidth="2.5"
+              />
+              <path d="M15 18h10" stroke="#2dd4bf" strokeLinecap="round" strokeWidth="2.5" />
+            </svg>
+            <span className="console-wordmark hidden sm:flex">
+              bashy<b>relay</b>
+            </span>
+          </a>
+
+          <span className="flex-1" />
+
+          {/* The console's all-apps mark. relay is MOUNTED, served outside the
+              path that injects #all-apps-btn, so it draws the same mark. */}
+          <a className="console-iconbtn" href="../" title="All apps" aria-label="Back to all apps">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="3" width="7" height="7" rx="1.5" />
+              <rect x="14" y="3" width="7" height="7" rx="1.5" />
+              <rect x="3" y="14" width="7" height="7" rx="1.5" />
+              <rect x="14" y="14" width="7" height="7" rx="1.5" />
+            </svg>
+          </a>
+        </header>
+
+        <div className="flex min-h-0 flex-1 overflow-hidden">
         <RoomSidebar
           agents={meet.agents}
           className="hidden lg:flex"
@@ -51,38 +96,9 @@ export function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <header className="console-bar shrink-0">
-            {/* The brand block every console app carries: the panel's own mark
-                in a rounded tile, then bashy + the panel name. board, messages
-                and terminal state it in markup; relay is a mounted SPA, so it
-                draws the same thing itself.
-
-                The wordmark appears from sm: up. On a phone this header also
-                holds the rooms button and the conversation title, and the title
-                is the thing someone needs there — the mark alone still says
-                which app this is, and still returns to its own root. */}
-            <a className="console-brand" href="./" title="bashy relay">
-              <svg className="console-logo" viewBox="0 0 40 40" aria-hidden="true">
-                <rect width="40" height="40" rx="10" fill="var(--logo-bg, currentColor)" opacity="0.08" />
-                <g
-                  transform="translate(8 8)"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M4 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5L4.5 16.5zM18.5 10.5H19a2 2 0 0 1 2 2v5l-2.8-2H13" />
-                </g>
-              </svg>
-              {/* Hidden on a phone: this header also carries the rooms button
-                  and the conversation title, and the title is what matters
-                  there. The mark alone still identifies the app. */}
-              <span className="console-wordmark hidden sm:flex">
-                bashy<b>relay</b>
-              </span>
-            </a>
-
+          {/* The conversation's own sub-header. The APP bar is above this,
+              spanning all three panels. */}
+          <header className="flex h-[56px] shrink-0 items-center gap-3 border-b border-border/70 px-3 sm:px-5">
             <Sheet>
               <SheetTrigger asChild>
                 <Button
@@ -183,26 +199,6 @@ export function App() {
               </SheetContent>
             </Sheet>}
 
-            {/* The console's all-apps mark — four rounded squares, matching
-                #all-apps-btn that injectChrome gives every embedded app. relay
-                is MOUNTED, so it never receives that button and draws the same
-                mark itself, exactly as the Files app does. */}
-            <a className="console-iconbtn" href="../" title="All apps" aria-label="Back to all apps">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="3" width="7" height="7" rx="1.5" />
-                  <rect x="14" y="3" width="7" height="7" rx="1.5" />
-                  <rect x="3" y="14" width="7" height="7" rx="1.5" />
-                  <rect x="14" y="14" width="7" height="7" rx="1.5" />
-                </svg>
-            </a>
           </header>
 
           <MessageList
@@ -242,6 +238,20 @@ export function App() {
             state={meet.state}
           />
         )}
+        </div>
+
+        {/* The fifth part. injectChrome gives every EMBEDDED app this footer;
+            relay is mounted and receives nothing, so it states the same line —
+            the copyright is the console's, not this panel's, so it spans all
+            three panels rather than sitting inside one. Text must match
+            chromeCopyrightHTML in webconsole/embed.go. */}
+        <footer className="console-foot">
+          <span id="copyright">
+            BASHY &mdash; Bashy&rsquo;s Agentic Shell Harness Yoke. Bash compatibility is
+            behavior, not GNU affiliation. &copy; {new Date().getFullYear()} qiangli. All
+            rights reserved.
+          </span>
+        </footer>
       </div>
     </TooltipProvider>
   )

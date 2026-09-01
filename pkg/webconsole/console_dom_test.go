@@ -31,6 +31,7 @@ package webconsole
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -518,5 +519,98 @@ func TestDOMRelayHeaderMatchesBoardMetrics(t *testing.T) {
 		t.Errorf("relay's header does not match board's.\n board = %s\n relay = %s\n"+
 			"They are styled by separate stylesheets — app.css and the meet SPA's "+
 			"index.css — so a change to one must be made in both.", boardBox, relayBox)
+	}
+}
+
+// relay is FIVE parts, in the console's shape: one bar across the top, then
+// left / middle / right beneath it, then the footer.
+//
+// It used to be three columns with the app bar inside the MIDDLE one — the
+// header began 280px in (measured in a live browser) and the app carried two
+// brands, one in the bar and one in the sidebar. And being a mounted SPA it
+// received neither the all-apps control nor the copyright footer that
+// injectChrome gives every embedded app.
+func TestDOMRelayIsFiveParts(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	var shape, brands, footer string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(3500*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const h=document.querySelector("header");
+			const f=document.querySelector(".console-foot,#app-foot");
+			const b=document.body.getBoundingClientRect();
+			const hr=h?h.getBoundingClientRect():null;
+			return JSON.stringify({
+				headerLeft: hr?Math.round(hr.left):-1,
+				headerSpansPage: hr?Math.round(hr.width)===Math.round(b.width):false,
+				hasFooter: !!f,
+			});})()`, &shape),
+		// One brand for the app, not one per panel.
+		chromedp.Evaluate(`String(document.querySelectorAll(".console-brand").length)`, &brands),
+		chromedp.Evaluate(`(document.querySelector(".console-foot")?.innerText||"").slice(0,60)`, &footer),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay shape", errs())
+	t.Logf("relay shape = %s", shape)
+
+	if !strings.Contains(shape, `"headerLeft":0`) {
+		t.Errorf("relay's app bar does not start at the page edge: %s — "+
+			"it is inside a column instead of above all of them", shape)
+	}
+	if !strings.Contains(shape, `"headerSpansPage":true`) {
+		t.Errorf("relay's app bar does not span the page: %s", shape)
+	}
+	if !strings.Contains(shape, `"hasFooter":true`) {
+		t.Error("relay has no footer; injectChrome gives every embedded app one")
+	}
+	if brands != "1" {
+		t.Errorf("relay shows %s brands; the app is named once, in the bar", brands)
+	}
+	if !strings.Contains(footer, "BASHY") {
+		t.Errorf("relay's footer is not the console copyright line: %q", footer)
+	}
+}
+
+// The three panels' own headers must be the same height, so one unbroken rule
+// runs under the app bar instead of a ragged step between columns. They are
+// three separate components and drifted to 68/56/68 once already.
+func TestDOMRelayPanelHeadersLineUp(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	var heights string
+	if err := chromedp.Run(ctx,
+		// A desktop viewport, or there is nothing to line up: the sidebar is
+		// hidden below lg and the details panel below xl, so a narrow window
+		// measures them at height 0 and the check passes for the wrong reason.
+		emulation.SetDeviceMetricsOverride(1600, 900, 1, false),
+		chromedp.Navigate(base+"/relay/"),
+		chromedp.Sleep(3500*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const sel="aside > div:first-child, main > header, [class*=border-l] > div:first-child";
+			const hs=[...document.querySelectorAll(sel)].map(e=>Math.round(e.getBoundingClientRect().height));
+			return JSON.stringify(hs);})()`, &heights),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "relay panels", errs())
+	t.Logf("panel header heights = %s", heights)
+
+	var hs []int
+	if err := json.Unmarshal([]byte(heights), &hs); err != nil || len(hs) < 3 {
+		t.Fatalf("expected three panel headers, got %s", heights)
+	}
+	for _, h := range hs {
+		if h == 0 {
+			t.Fatalf("a panel header measured 0 — the panel is hidden, so this "+
+				"would pass without comparing anything: %v", hs)
+		}
+	}
+	for _, h := range hs[1:] {
+		if h != hs[0] {
+			t.Errorf("the panels' headers are different heights %v — the rule under the "+
+				"app bar steps between columns", hs)
+			break
+		}
 	}
 }
