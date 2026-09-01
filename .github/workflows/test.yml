@@ -97,3 +97,18 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: ./scripts/ci-test-gate.sh
+
+      # Browser end-to-end checks for the bashy apps console. These are the only
+      # tests that can see the CASCADE, the DOM, and a script that THROWS —
+      # every other test in that package reads served bytes and cannot tell a
+      # working page from one whose JS died on load. Four UI defects shipped in
+      # one day through exactly that gap, including a fix in the pairing
+      # section that stopped the Settings dialog from opening at all.
+      #
+      # Linux only: the ubuntu runner image ships Chrome, which chromedp needs.
+      # They are behind the verifydom tag so a contributor without a browser is
+      # never blocked by them.
+      - name: E2E browser checks (bashy apps console)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: go test ./pkg/webconsole -tags verifydom -count=1 -timeout 15m

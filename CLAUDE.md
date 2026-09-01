@@ -137,6 +137,19 @@ with `chmod 0o000`, which root ignores, so a root container turns them red and
 invites a baseline entry for a bug that does not exist. The ratchet caught
 exactly that on its first run.
 
+**The bashy apps console has BROWSER end-to-end tests, and UI changes need
+them.** `pkg/webconsole`'s other tests read the SERVED BYTES: they can assert a
+string is present and nothing more — they cannot see the cascade, the DOM, or a
+script that throws. Four UI defects shipped in one day through that gap, the
+worst being a fix in the pairing section that stopped the Settings dialog from
+opening at all while every byte-level test still passed.
+`pkg/webconsole/console_dom_test.go` drives a real Chrome over the launcher,
+Settings (both pairing states), the login toggle, the pairing QR, the background
+swatches, the Files return control, and every panel — asserting no page threw.
+Run it with `go test ./pkg/webconsole -tags verifydom`; CI runs it on the Linux
+leg, whose runner image ships Chrome. It is tag-gated so a contributor without a
+browser is not blocked.
+
 **A change is gated by BOTH `go test` and `scripts/crossvet.sh`.** `go test` on
 your host structurally cannot see a build-tag break: a `//go:build !windows`
 file never compiles for windows, so referencing it from an untagged `_test.go`

@@ -461,7 +461,12 @@ function buildPairing() {
     // still explain how to restart with LAN pairing on.
     const note = pairNote("This console is not armed for LAN pairing yet — asking for a code shows the command to restart with it on.");
     note.id = "pair-armed-hint";
-    b.closest("section").insertBefore(note, b);
+    // Insert before the ACTIONS ROW, not the button: the button lives inside
+    // .pair-actions, so it is not a child of <section> and insertBefore would
+    // throw NotFoundError — taking the whole Settings dialog down with it,
+    // since buildSettings calls this before opening.
+    const anchor = b.closest(".pair-actions") || b;
+    anchor.parentNode.insertBefore(note, anchor);
   }
   b.onclick = () => mintPairing();
   // Refresh is the RE-pairing path. A pass is single-use by design, so the code
