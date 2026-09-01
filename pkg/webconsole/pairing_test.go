@@ -611,3 +611,25 @@ func TestAuditRecordsAreTimestamped(t *testing.T) {
 		t.Fatalf("timestamp %q is not RFC3339: %v", rec.Time, err)
 	}
 }
+
+// A freshly paired phone lands on the LAUNCHER, not on whichever panel happens
+// to be first in its scope. Dropping a device straight into /board/ gives it no
+// sense of where it is or what else it can reach; "/" is the console's one nav,
+// it lists exactly the panels this device is scoped to, and it is a
+// consoleWidePath, so the landing can never be a page the device is refused.
+func TestPairedDeviceLandsOnTheAppsLauncher(t *testing.T) {
+	h, store := pairEnv(t)
+
+	_, secret, err := store.issueTicket(nil, time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := do(h, "GET", pairRedeemPath+"?v="+pairQRVersion+"&t="+url.QueryEscape(secret),
+		"192.168.1.44:5555", nil)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("redeem = %d, want 303", w.Code)
+	}
+	if got := w.Header().Get("Location"); got != "/" {
+		t.Errorf("paired device lands on %q, want %q (the apps launcher)", got, "/")
+	}
+}

@@ -37,7 +37,7 @@ func TestVerifyDOMPairingSection(t *testing.T) {
 		}
 	})
 
-	var sectionText, toggleCount, panelHTML string
+	var sectionText, toggleCount, panelHTML, refreshBefore, refreshAfter string
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(srv.URL+"/"),
 		chromedp.Sleep(1200*time.Millisecond),
@@ -45,8 +45,10 @@ func TestVerifyDOMPairingSection(t *testing.T) {
 		chromedp.Sleep(1200*time.Millisecond),
 		chromedp.Evaluate(`document.getElementById("pair-section")?.innerText.slice(0,240) || "NO SECTION"`, &sectionText),
 		chromedp.Evaluate(`String(document.querySelectorAll("#pair-toggle").length)`, &toggleCount),
+		chromedp.Evaluate(`String(document.getElementById("pair-refresh")?.hidden)`, &refreshBefore),
 		chromedp.Click(`#pair-btn`, chromedp.ByQuery),
 		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(`String(document.getElementById("pair-refresh")?.hidden)`, &refreshAfter),
 		chromedp.Evaluate(`(document.getElementById("pair-panel")?.innerHTML || "").slice(0,200)`, &panelHTML),
 	); err != nil {
 		t.Fatalf("chromedp: %v", err)
@@ -70,5 +72,15 @@ func TestVerifyDOMPairingSection(t *testing.T) {
 	// Asking for a pass must actually produce the QR a phone can scan.
 	if !strings.Contains(panelHTML, "data:image/png;base64,") {
 		t.Errorf("no QR image rendered after asking for a code; panel = %q", panelHTML)
+	}
+
+	// Refresh is the RE-pairing path: a pass is single-use, so a second device
+	// (or a retry after "that code has already been used") needs a fresh one.
+	// It must not offer to refresh nothing, so it appears only once a code has.
+	if refreshBefore != "true" {
+		t.Errorf("refresh is visible before any code exists (hidden=%s)", refreshBefore)
+	}
+	if refreshAfter != "false" {
+		t.Errorf("refresh did not appear after a code was shown (hidden=%s)", refreshAfter)
 	}
 }

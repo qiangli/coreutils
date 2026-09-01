@@ -639,3 +639,7 @@ body.standalone #bar { flex: none; }
   .seg button { flex: 1; min-width: 0; padding-inline: .4rem; }
   .pair-qr { width: min(168px, 55vw); height: auto; aspect-ratio: 1; }
 }
+
+/* The pairing actions sit on one row: asking for a code, and replacing a spent
+   one. Wraps rather than overflowing on a narrow phone. */
+.pair-actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}

@@ -115,22 +115,18 @@ func (s *server) pairFailure(w http.ResponseWriter, peer, reason, human string, 
 </form></main></body></html>`))
 }
 
-// landingFor picks the page a freshly paired device should open: the first
-// panel actually in its scope. Landing on a tile it cannot open would greet a
-// phone with a 403 on its first request.
-func landingFor(scope []string) string {
-	for _, want := range []string{"board", "mb", "relay", "files", "terminal"} {
-		for _, s := range scope {
-			if strings.EqualFold(s, want) {
-				switch want {
-				case "terminal":
-					return "/term/"
-				default:
-					return "/" + want + "/"
-				}
-			}
-		}
-	}
+// landingFor picks the page a freshly paired device opens: the LAUNCHER.
+//
+// It used to open the first panel in scope (board, then mb, relay, files,
+// terminal), which dropped a phone straight into the board with no sense of
+// where it was or what else it could reach. The launcher is the console's one
+// nav with everything deep-linked beneath it, it lists exactly the panels this
+// device is scoped to, and it is a consoleWidePath — reachable by ANY admitted
+// session regardless of scope, so this can never land on a refusal.
+//
+// The scope argument stays: the panels a device may reach still come from it,
+// and a future landing rule would need it again.
+func landingFor(_ []string) string {
 	return "/"
 }
 

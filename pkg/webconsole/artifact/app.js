@@ -434,10 +434,12 @@ dlg.addEventListener("close", () => { resetPairing(); render(); });
 // --pair. Default false — fail closed if the session probe has not answered.
 let serverPairing = false;
 const pairButton = () => document.getElementById("pair-btn");
+const pairRefresh = () => document.getElementById("pair-refresh");
 const pairPanel = () => document.getElementById("pair-panel");
 
 function resetPairing() {
   const p = pairPanel(); if (p) { p.hidden = true; p.replaceChildren(); }
+  const r = pairRefresh(); if (r) r.hidden = true;
 }
 
 // Phone pairing reads like Appearance or Background: the section is always
@@ -462,6 +464,13 @@ function buildPairing() {
     b.closest("section").insertBefore(note, b);
   }
   b.onclick = () => mintPairing();
+  // Refresh is the RE-pairing path. A pass is single-use by design, so the code
+  // on screen is spent the moment a phone redeems it — and the second device,
+  // or a retry after "that code has already been used", needs a fresh one. It
+  // stays hidden until there is a code to replace, so it never offers to
+  // refresh nothing.
+  const r = pairRefresh();
+  if (r) r.onclick = () => mintPairing();
 }
 
 async function mintPairing() {
@@ -487,6 +496,8 @@ async function mintPairing() {
     return;
   }
   p.replaceChildren(pairCodes(data));
+  const r = pairRefresh();
+  if (r) r.hidden = false;
 }
 
 function pairFailClosed(data) {
