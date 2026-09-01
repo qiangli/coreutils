@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // sprintHygiene is the reported cleanliness of one sprint.
@@ -350,4 +351,29 @@ func sprintDeclaredStoryRoots(s *weaveStory) []string {
 		}
 	}
 	return roots
+}
+
+// sprintUnansweredGate refuses to walk away from a seat with unread requests.
+//
+// pause, handoff and end are the three ways a conductor stops answering. Each
+// of them, with mail sitting unread, converts a question into an indefinite
+// wait: the sender has no signal that nobody is coming, and the durable queue
+// faithfully preserves a message that will never be looked at.
+//
+// Reading is enough to clear it. The gate does not demand a reply — an agent
+// may legitimately decide a request needs no answer — only that somebody LOOKED,
+// which is the thing that was missing.
+func sprintUnansweredGate(s *weaveStory, verb string) error {
+	if s == nil || strings.TrimSpace(s.Owner) == "" {
+		return nil
+	}
+	n, oldest := sprintOwnerUnanswered(s.Owner)
+	if n == 0 {
+		return nil
+	}
+	return fmt.Errorf("sprint #%d cannot %s: %d unanswered message(s) for %q, oldest %s.\n"+
+		"  somebody is blocked on an answer that would never come.\n"+
+		"  read them first: bashy inbox --as %s\n"+
+		"  (reading is enough — the gate asks that somebody looked, not that you replied)",
+		s.ID, verb, n, s.Owner, oldest.Round(time.Minute), s.Owner)
 }

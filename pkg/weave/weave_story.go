@@ -717,7 +717,10 @@ continuity record (sprint show) and resume.`,
 				// no agent: every coordination surface (mb, chat, inbox, ping)
 				// keys on this string, and one that names nobody is worse than
 				// none — it is printed as a contact and silently never answers.
-				if err := validateSprintOwner(who); err != nil {
+				// CLAIM-TIME: the seat must be RUNNING, not merely declared.
+				// A sprint seated to a name with no process behind it accepts
+				// room messages and inbox mail that nobody will ever read.
+				if err := validateSprintClaimant(who); err != nil {
 					return "", err
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
@@ -764,6 +767,9 @@ untouched — they survive in the queue for the successor.`,
 				// exact window an arriving agent needs to ask who is taking it.
 				// The room now belongs to the sprint and waits for them.
 				who := weaveStoryConductorName(s, "")
+				if err := sprintUnansweredGate(s, "hand off"); err != nil {
+					return "", err
+				}
 				roomNote := "; room stays open for the successor"
 				if !sprintRoomRetained(s) {
 					_ = closeSprintRoom(s, who)

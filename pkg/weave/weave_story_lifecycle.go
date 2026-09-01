@@ -60,6 +60,9 @@ and audited.`,
 				// the plan. Anything unclean, unreachable or unplanned is folded
 				// into the brief `sprint resume` prints, so nobody starts by
 				// rediscovering a dirty repo and blaming their own first command.
+				if err := sprintUnansweredGate(s, "pause"); err != nil {
+					return "", err
+				}
 				s.Continuity = message + sprintStateAddendum(s)
 				// THE ROOM BELONGS TO THE SPRINT, NOT THE CONDUCTOR. Pausing
 				// releases the lease; it does not end the sprint. Closing here
@@ -108,7 +111,10 @@ are not relaunched because pause never stopped them.`,
 				// no agent: every coordination surface (mb, chat, inbox, ping)
 				// keys on this string, and one that names nobody is worse than
 				// none — it is printed as a contact and silently never answers.
-				if err := validateSprintOwner(who); err != nil {
+				// CLAIM-TIME: the seat must be RUNNING, not merely declared.
+				// A sprint seated to a name with no process behind it accepts
+				// room messages and inbox mail that nobody will ever read.
+				if err := validateSprintClaimant(who); err != nil {
 					return "", err
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}

@@ -228,7 +228,10 @@ func newSprintStartCmd() *cobra.Command {
 				// no agent: every coordination surface (mb, chat, inbox, ping)
 				// keys on this string, and one that names nobody is worse than
 				// none — it is printed as a contact and silently never answers.
-				if err := validateSprintOwner(who); err != nil {
+				// CLAIM-TIME: the seat must be RUNNING, not merely declared.
+				// A sprint seated to a name with no process behind it accepts
+				// room messages and inbox mail that nobody will ever read.
+				if err := validateSprintClaimant(who); err != nil {
 					return "", err
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: now}
@@ -456,6 +459,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					// prove nothing was left behind or left out. A sprint that
 					// closes over an open story nobody planned, or over a dirty
 					// tree, is a green result reached because nothing looked.
+					if err := sprintUnansweredGate(s, "end"); err != nil {
+						return "", err
+					}
 					if err := sprintCoverageGate(s, false, ""); err != nil {
 						return "", err
 					}

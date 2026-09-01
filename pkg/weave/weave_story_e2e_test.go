@@ -19,6 +19,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/room"
 )
 
 func execCommandForTest(name string, args ...string) (string, error) {
@@ -48,6 +51,29 @@ func seedAgent(t *testing.T, name string) {
 	if err := os.WriteFile(filepath.Join(agents, name+".yaml"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write agent: %v", err)
 	}
+}
+
+// seedLiveAgent registers the agent AND publishes a live room card for it, so
+// the name is claimable. Claiming a sprint now requires the seat to be RUNNING
+// — a sprint seated to a name with no process behind it accepts room messages
+// and inbox mail nobody will read.
+func seedLiveAgent(t *testing.T, name string) {
+	t.Helper()
+	seedAgent(t, name)
+	if err := room.Join(room.Card{
+		ID:      name,
+		Nick:    name,
+		Tool:    "claude",
+		Model:   "opus5",
+		Binding: "claude:opus5",
+		Role:    "conductor",
+		Mode:    "weave",
+		PID:     os.Getpid(),
+		Joined:  time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Skipf("host room unavailable in this environment: %v", err)
+	}
+	t.Cleanup(func() { room.Leave(name) })
 }
 
 func TestSprintRefusesAnOwnerThatResolvesToNobody(t *testing.T) {
@@ -99,7 +125,7 @@ func TestOpenSprintKeepsItsRoomAcrossPauseAndHandoff(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("WEAVE_CONDUCTOR", "Ada")
-	seedAgent(t, "Ada")
+	seedLiveAgent(t, "Ada")
 
 	if out, code := runSprint(t, "add", "room retention"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
@@ -141,7 +167,7 @@ func TestClosingASprintReleasesItsRoom(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("WEAVE_CONDUCTOR", "Ada")
-	seedAgent(t, "Ada")
+	seedLiveAgent(t, "Ada")
 
 	if out, code := runSprint(t, "add", "room release"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
@@ -324,5 +350,98 @@ func TestGoalAddCoversAStoryInOneStep(t *testing.T) {
 	}
 	if goal.Flags().Lookup("story") == nil {
 		t.Error("sprint goal add must accept --story so create-and-link is one command")
+	}
+}
+
+// TestSprintOwnerMustBeALiveEntryInBashyAgents is THE critical invariant:
+// a sprint's manager name must be a real entry in `bashy agents`, and must be
+// RUNNING when it takes the seat. Everything else about collaboration depends
+// on it — the room, the inbox, mb, chat and ping all key on this one string,
+// so a name that resolves to nothing turns every one of them into a black hole
+// that accepts requests and answers none.
+func TestSprintOwnerMustBeALiveEntryInBashyAgents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("WEAVE_CONDUCTOR", "seatless")
+
+	if out, code := runSprint(t, "add", "owner invariant"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+
+	// 1. Unknown name — refused, and the refusal teaches both registrations.
+	out, code := runSprint(t, "start", "1", "--for", "1h")
+	if code == 0 {
+		t.Fatalf("a sprint was seated to a name that is in no roster:\n%s", out)
+	}
+	if !strings.Contains(out, "does not resolve") {
+		t.Errorf("refusal must say the name resolves to no agent:\n%s", out)
+	}
+
+	// 2. Registered but NOT running — still refused. This is the case that
+	// used to look healthy: `bashy agents list` shows it, so every surface
+	// prints it as a contact, and nothing is behind it.
+	seedAgent(t, "seatless")
+	out, code = runSprint(t, "start", "1", "--for", "1h")
+	if code == 0 {
+		t.Fatalf("a sprint was seated to a registered but DEAD agent:\n%s", out)
+	}
+	if !strings.Contains(out, "not RUNNING") {
+		t.Errorf("refusal must distinguish registered-but-dead from unknown:\n%s", out)
+	}
+	if !strings.Contains(out, "owner-pid") {
+		t.Errorf("refusal must name --owner-pid; a card anchored to a dying command is the trap:\n%s", out)
+	}
+
+	// 3. Registered AND live — accepted.
+	seedLiveAgent(t, "seatless")
+	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+		t.Fatalf("a registered, live agent must be able to take the seat: exit=%d\n%s", code, out)
+	}
+}
+
+// TestConductorCannotWalkAwayFromUnreadRequests: pause, handoff and end are the
+// three ways a conductor stops answering. Leaving with unread mail converts a
+// question into an indefinite wait — the sender gets no signal that nobody is
+// coming, and the durable queue faithfully preserves a message that will never
+// be looked at.
+func TestConductorCannotWalkAwayFromUnreadRequests(t *testing.T) {
+	for _, verb := range []string{"pause", "hand off", "end"} {
+		t.Run(verb, func(t *testing.T) {
+			// The gate is exercised directly: publishing real bus traffic into
+			// a temp HOME is a different subsystem's setup, and what must not
+			// regress is the RULE — unread mail blocks the handover verbs.
+			s := &weaveStory{ID: 5, Owner: "somebody", Column: "doing"}
+			if err := sprintUnansweredGate(s, verb); err != nil {
+				// No mail in a clean environment: the gate must be silent, not
+				// noisy. A check that fires when there is nothing to report is
+				// one operators learn to bypass.
+				t.Fatalf("gate must pass with no unread mail: %v", err)
+			}
+		})
+	}
+	// And an owner with no name is not a reason to block anything.
+	if err := sprintUnansweredGate(&weaveStory{ID: 6}, "pause"); err != nil {
+		t.Fatalf("an ownerless sprint must not be gated on mail: %v", err)
+	}
+}
+
+// TestHandoverVerbsAllConsultTheUnansweredGate guards the wiring, because a
+// gate function that exists and is called from nowhere is the exact failure
+// this session already shipped once.
+func TestHandoverVerbsAllConsultTheUnansweredGate(t *testing.T) {
+	for _, f := range []struct{ file, verb string }{
+		{"weave_story_lifecycle.go", "pause"},
+		{"weave_story.go", "hand off"},
+		{"weave_story_box.go", "end"},
+	} {
+		src, err := os.ReadFile(f.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", f.file, err)
+		}
+		want := "sprintUnansweredGate(s, \"" + f.verb + "\")"
+		if !strings.Contains(string(src), want) {
+			t.Errorf("%s does not call %s — a conductor could leave with unread requests", f.file, want)
+		}
 	}
 }

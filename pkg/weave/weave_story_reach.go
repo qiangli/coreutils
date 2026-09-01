@@ -49,9 +49,20 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/room"
 )
+
+// sprintUnansweredAge is how long a message addressed to a sprint's owner may
+// sit unread before the sprint is reported unreachable.
+//
+// It is generous on purpose. An agent works in turns, so a few minutes of lag
+// is normal operation, not a fault. What this catches is the failure the whole
+// mechanism exists for: a request nobody is coming back to, with a sender
+// blocked on an answer that will never arrive.
+const sprintUnansweredAge = 30 * time.Minute
 
 // sprintColumnOpen reports whether a column means "this sprint is live work".
 //
@@ -123,6 +134,65 @@ func sprintOwnerInRoster(name string) bool {
 // but PRESENT. Reported, never enforced — see the package comment.
 func sprintOwnerLive(name string) bool { return sprintOwnerInRoster(name) }
 
+// validateSprintClaimant refuses to seat an owner that is not RUNNING.
+//
+// This is stricter than validateSprintOwner and applies only where a sprint is
+// CLAIMED — take, start, resume. The agent doing the claiming is by definition
+// executing right now, so requiring it to appear in the live roster costs a
+// correct caller nothing and refuses the case that breaks collaboration: a
+// sprint seated to a name with no process behind it, whose room and inbox
+// accept messages that will never be read.
+//
+// Liveness is NOT required afterwards. A conductor between turns is normal and
+// is only REPORTED, because enforcing it later would invalidate a sprint for
+// being idle and would refuse the recovery path a stale lease exists to allow.
+func validateSprintClaimant(name string) error {
+	if err := validateSprintOwner(name); err != nil {
+		return err
+	}
+	if sprintOwnerInRoster(name) {
+		return nil
+	}
+	return fmt.Errorf("sprint owner %q is registered but not RUNNING on this host, so nothing would answer its room or inbox.\n"+
+		"  publish this session first:\n"+
+		"    bashy agents track start <id> --agent %s --role conductor --owner-pid <your harness pid>\n"+
+		"  (--owner-pid matters: a card anchored to a short-lived command dies with it, and the seat goes quiet)",
+		name, name)
+}
+
+// sprintOwnerUnanswered reports messages addressed to the owner that nobody has
+// read, and how long the oldest has waited.
+//
+// This is the measurement that matters. A live process is a proxy; an unread
+// message with a sender waiting on it is the actual failure — and it is
+// observable without a daemon, because the bus already records ReadAt.
+func sprintOwnerUnanswered(name string) (count int, oldest time.Duration) {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return 0, 0
+	}
+	// READ-ONLY. SnapshotInbox would open a subscription as a side effect, and
+	// a consistency check run by a passer-by must not enrol somebody else's
+	// name in anything.
+	items, err := bus.ReadPending(n)
+	if err != nil {
+		return 0, 0
+	}
+	now := time.Now().UTC()
+	for _, it := range items {
+		if strings.TrimSpace(it.ReadAt) != "" {
+			continue
+		}
+		count++
+		if ts, perr := time.Parse(time.RFC3339, strings.TrimSpace(it.TS)); perr == nil {
+			if age := now.Sub(ts.UTC()); age > oldest {
+				oldest = age
+			}
+		}
+	}
+	return count, oldest
+}
+
 // validateSprintOwner refuses a conductor name that names nobody.
 //
 // The error names both fixes because the caller is usually an agent that does
@@ -160,12 +230,15 @@ func isPlaceholderConductorName(name string) bool {
 
 // sprintReachability is the reported state of the invariant for one sprint.
 type sprintReachability struct {
-	Open       bool     `json:"open"`
-	Owner      string   `json:"owner,omitempty"`
-	Registered bool     `json:"owner_registered"`
-	Live       bool     `json:"owner_live"`
-	Room       string   `json:"room,omitempty"`
-	Problems   []string `json:"problems,omitempty"`
+	Open       bool   `json:"open"`
+	Owner      string `json:"owner,omitempty"`
+	Registered bool   `json:"owner_registered"`
+	Live       bool   `json:"owner_live"`
+	Room       string `json:"room,omitempty"`
+	// Unanswered counts messages addressed to the owner that nobody has read.
+	Unanswered       int      `json:"unanswered,omitempty"`
+	OldestUnanswered string   `json:"oldest_unanswered,omitempty"`
+	Problems         []string `json:"problems,omitempty"`
 }
 
 // sprintCheckReachability reports — never mutates — whether an open sprint can
@@ -199,7 +272,20 @@ func sprintCheckReachability(s *weaveStory) sprintReachability {
 			// It is reported because an open sprint whose owner has no trace
 			// is indistinguishable from one whose owner is working.
 			r.Problems = append(r.Problems, fmt.Sprintf(
-				"owner %q has no live trace — it may not answer", r.Owner))
+				"owner %q has no live trace — it may not answer; republish with `bashy agents track start <id> --agent %s --owner-pid <pid>`",
+				r.Owner, r.Owner))
+		}
+		// UNANSWERED MAIL IS THE REAL FAILURE. Everything above is about
+		// whether somebody COULD answer; this is whether anybody DID. A sender
+		// blocked on a question nobody read waits forever, and until now
+		// nothing on any surface said so.
+		if n, oldest := sprintOwnerUnanswered(r.Owner); n > 0 {
+			r.Unanswered, r.OldestUnanswered = n, oldest.Round(time.Minute).String()
+			if oldest > sprintUnansweredAge {
+				r.Problems = append(r.Problems, fmt.Sprintf(
+					"%d unanswered message(s) for %q, oldest %s — somebody is waiting; read with `bashy inbox --as %s`",
+					n, r.Owner, oldest.Round(time.Minute), r.Owner))
+			}
 		}
 	}
 	if s.Contact == nil {
