@@ -280,6 +280,66 @@ function tile(a, opts = {}) {
   return wrap;
 }
 
+// WHAT THE PHONE MAY REACH.
+//
+// A pass used to be board/mb/relay always, with `bashy apps pair --allow ...`
+// the only way to widen it — so a phone that hit "terminal is not in the
+// scope" got a refusal and no way to act on it. The choice belongs here: the
+// console already required an OS login to reach this page, the chooser is the
+// signed-in operator at their own keyboard, and the server validates the names
+// and can only ever NARROW its own session.
+//
+// The shell and the filesystem stay OFF by default. Default-deny is the point:
+// granting them is a decision, and a decision made by ticking a box you can
+// see is a different thing from one made by a default you never read.
+const PAIR_SCOPE_DEFAULT = ["board", "mb", "relay"];
+const PAIR_SCOPE_SENSITIVE = { terminal: "a full shell as your OS user", files: "read your files" };
+
+function pairScopeNames() {
+  // Offer what this console actually serves, in launcher order, so the list
+  // cannot drift from the panels or promise one that is not mounted.
+  const names = apps.map((a) => String(a.name || "").toLowerCase()).filter(Boolean);
+  return names.length ? names : PAIR_SCOPE_DEFAULT.slice();
+}
+
+function buildPairScope() {
+  const host = document.getElementById("pair-scope");
+  if (!host) return;
+  const rows = pairScopeNames().map((name) => {
+    const row = document.createElement("label");
+    row.className = "row pair-scope-row";
+    const span = document.createElement("span");
+    span.textContent = name;
+    const warn = PAIR_SCOPE_SENSITIVE[name];
+    if (warn) {
+      const note = document.createElement("small");
+      note.className = "pair-scope-warn";
+      note.textContent = " — " + warn;
+      span.append(note);
+    }
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "pair-scope-box";
+    cb.value = name;
+    cb.checked = PAIR_SCOPE_DEFAULT.includes(name);
+    row.append(span, cb);
+    return row;
+  });
+  const head = document.createElement("p");
+  head.className = "hint";
+  head.textContent = "What this phone may reach:";
+  host.replaceChildren(head, ...rows);
+}
+
+function selectedPairScope() {
+  const boxes = [...document.querySelectorAll(".pair-scope-box")];
+  const on = boxes.filter((b) => b.checked).map((b) => b.value);
+  // An empty selection is not "everything" — the server would read it as
+  // absent and fall back to the default, so say what will happen instead of
+  // minting something the operator did not choose.
+  return on.length ? on : PAIR_SCOPE_DEFAULT.slice();
+}
+
 // SUPPRESS THE BROWSER'S LONG-PRESS MENU ON A TILE.
 //
 // Long press already works for favouriting on a phone: the press puts the tile
@@ -471,6 +531,7 @@ function buildPairing() {
   const b = pairButton();
   if (!b) return;
   resetPairing();
+  buildPairScope();
   const instructions = document.getElementById("pair-instructions-host");
   if (instructions) instructions.replaceChildren(pairInstructions());
   const hint = document.getElementById("pair-armed-hint");
@@ -503,7 +564,11 @@ async function mintPairing() {
   p.replaceChildren(pairNote("Minting a one-time code…"));
   let data;
   try {
-    const res = await fetch(url("api/pair"), { method: "POST", headers: { Accept: "application/json" } });
+    const res = await fetch(url("api/pair"), {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: selectedPairScope() }),
+    });
     data = await res.json();
   } catch (e) {
     p.replaceChildren(pairNote("Could not reach the console: " + e));

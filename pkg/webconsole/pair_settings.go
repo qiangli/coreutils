@@ -5,7 +5,9 @@ package webconsole
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -103,9 +105,35 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default scope/ttl/window (nil, 0, 0): the same board/mb/relay,
-	// four-hour-device, two-minute-window a bare `bashy apps pair` confers.
-	t, secret, err := s.pairing.issueTicket(nil, 0, 0)
+	// The operator may widen the pass beyond the read-and-communicate default.
+	//
+	// This is the one place a phone can be granted a shell, so it is bounded on
+	// every side rather than trusted: the caller is already the signed-in
+	// operator (isOperator, above), the names are validated against the panels
+	// this console actually serves, and scope remains a NARROWING — applied
+	// after the tier ladder, it can only remove reach from the operator's own
+	// session, never add any. An absent or empty scope keeps the default, so
+	// the fail-safe is still board/mb/relay.
+	var req struct {
+		Scope []string `json:"scope"`
+	}
+	if r.Body != nil {
+		// Ignore a decode error deliberately: no body is the normal case and
+		// means "default scope". A malformed body cannot widen anything,
+		// because Scope stays nil and ValidateScope passes it through.
+		_ = json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req)
+	}
+	if err := ValidateScope(req.Scope, s.panels); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"enabled": true,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// ttl/window 0: the four-hour-device, two-minute-window a bare
+	// `bashy apps pair` confers.
+	t, secret, err := s.pairing.issueTicket(req.Scope, 0, 0)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"enabled": true,

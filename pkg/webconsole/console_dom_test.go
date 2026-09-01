@@ -375,3 +375,61 @@ func TestDOMLongPressMenuSuppressedOnTiles(t *testing.T) {
 			"that would cost copy-link and share across the whole console", offTile)
 	}
 }
+
+// The operator chooses what a paired phone may reach, in Settings.
+//
+// Before this, a pass was always board/mb/relay and `bashy apps pair --allow`
+// was the only way to widen it — so a phone that hit "terminal is not in the
+// scope" got a refusal with no way to act on it. Two properties matter and both
+// are pinned: the shell and the filesystem are OFF by default (a grant must be
+// a decision, not an unread default), and ticking one is actually honoured in
+// the minted ticket.
+func TestDOMPairingScopeIsChosenByTheOperator(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{
+		Pairing:       true,
+		PairStorePath: t.TempDir() + "/pair.json",
+		Sessions:      websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
+	})
+
+	var boxes, checkedByDefault, scopeAfter string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Click(`#settings-btn`, chromedp.ByQuery),
+		chromedp.Sleep(1200*time.Millisecond),
+		chromedp.Evaluate(`String(document.querySelectorAll(".pair-scope-box").length)`, &boxes),
+		chromedp.Evaluate(`JSON.stringify([...document.querySelectorAll(".pair-scope-box")]
+			.filter(b=>b.checked).map(b=>b.value).sort())`, &checkedByDefault),
+
+		// Tick the shell, ask for a code, and read back what the server minted.
+		chromedp.Evaluate(`(()=>{const t=[...document.querySelectorAll(".pair-scope-box")]
+			.find(b=>b.value==="terminal");
+			if(!t) return "NO TERMINAL BOX"; t.checked=true; return "ticked";})()`, new(string)),
+		chromedp.Evaluate(`fetch("api/pair",{method:"POST",
+			headers:{Accept:"application/json","Content-Type":"application/json"},
+			body:JSON.stringify({scope:selectedPairScope()})})
+			.then(r=>r.json()).then(d=>JSON.stringify((d.scope||[]).sort()))`, &scopeAfter,
+			func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+				return p.WithAwaitPromise(true)
+			}),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "pair scope", errs())
+
+	if boxes == "0" {
+		t.Fatal("Settings offers no way to choose what a paired phone may reach")
+	}
+	// Default-deny: a shell or the filesystem must never be granted by a
+	// default nobody read.
+	if strings.Contains(checkedByDefault, "terminal") || strings.Contains(checkedByDefault, "files") {
+		t.Errorf("terminal/files are pre-granted by default: %s", checkedByDefault)
+	}
+	if !strings.Contains(checkedByDefault, "board") {
+		t.Errorf("the read-and-communicate default is missing: %s", checkedByDefault)
+	}
+	// And the choice must actually reach the ticket.
+	if !strings.Contains(scopeAfter, "terminal") {
+		t.Errorf("ticking terminal did not widen the minted pass: scope=%s", scopeAfter)
+	}
+}
