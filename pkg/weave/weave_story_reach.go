@@ -262,16 +262,16 @@ func sprintCheckReachability(s *weaveStory) sprintReachability {
 		r.Problems = append(r.Problems, fmt.Sprintf("owner %q is a placeholder, not an agent", r.Owner))
 	default:
 		r.Registered = sprintOwnerRegistered(r.Owner)
-		r.Live = sprintOwnerLive(r.Owner)
+		// A roster trace is not enough for an OPEN sprint. The manager must
+		// either have a managed turn-injection path or a live parent-owned
+		// external stream; when its watch fuse exits, reachability fails now.
+		r.Live = sprintInboxDeliveryLive(r.Owner)
 		if !r.Registered {
 			r.Problems = append(r.Problems, fmt.Sprintf(
 				"owner %q is not in `bashy agents` — mb/chat/inbox cannot reach it", r.Owner))
 		} else if !r.Live {
-			// Not a defect on its own: a conductor between turns is normal.
-			// It is reported because an open sprint whose owner has no trace
-			// is indistinguishable from one whose owner is working.
 			r.Problems = append(r.Problems, fmt.Sprintf(
-				"owner %q has no live trace — it may not answer; republish with `bashy agents track start <id> --agent %s --owner-pid <pid>`",
+				"owner %q has no live inbox delivery — use a managed session or rerun `bashy sprint take <id> --as %s --watch`",
 				r.Owner, r.Owner))
 		}
 		// UNANSWERED MAIL IS THE REAL FAILURE. Everything above is about

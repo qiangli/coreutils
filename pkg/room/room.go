@@ -177,6 +177,7 @@ const (
 	EventStatus    = "status"
 	EventNote      = "note"
 	EventNotify    = "notify"
+	EventAck       = "ack"
 )
 
 var appendMu sync.Mutex
