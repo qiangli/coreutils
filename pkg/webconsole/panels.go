@@ -127,7 +127,7 @@ func Discover() []Panel {
 			continue
 		}
 		add(Panel{
-			Name:      w.Mount,
+			Name:      verb,
 			Label:     w.Label,
 			Path:      "/" + w.Mount + "/",
 			Mode:      w.Mode,

@@ -82,7 +82,7 @@ func TestDisabledPanelIsUnroutedNotJustHidden(t *testing.T) {
 		{"/term/", "<title>Terminal"},
 		{"/term", "<title>Terminal"},
 		{"/shell", "<title>Terminal"},
-		{"/board/", "<title>Board"},
+		{"/sprint/", "<title>Sprint"},
 		{"/api/board", boardSchemaVersion},
 	} {
 		if body := do(h, "GET", tc.path, "127.0.0.1:5555", nil).Body.String(); strings.Contains(body, tc.mustNot) {

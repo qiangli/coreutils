@@ -248,17 +248,11 @@ export function App() {
         )}
         </div>
 
-        {/* The fifth part. injectChrome gives every EMBEDDED app this footer;
-            relay is mounted and receives nothing, so it states the same line —
-            the copyright is the console's, not this panel's, so it spans all
-            three panels rather than sitting inside one. Text must match
+        {/* Relay is mounted rather than injected, so it states the same shared
+            copyright line directly. Keep this text synchronized with
             chromeCopyrightHTML in webconsole/embed.go. */}
         <footer className="console-foot">
-          <span id="copyright">
-            BASHY &mdash; Bashy&rsquo;s Agentic Shell Harness Yoke. Bash compatibility is
-            behavior, not GNU affiliation. &copy; {new Date().getFullYear()} qiangli. All
-            rights reserved.
-          </span>
+          <span id="copyright">&copy; 2026 qiangli. All rights reserved.</span>
         </footer>
       </div>
     </TooltipProvider>

@@ -331,6 +331,7 @@ body.standalone #bar { flex: none; }
   font-size: .7rem; color: var(--muted-foreground);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
+#copyright { display: block; width: 100%; text-align: center; }
 
 /* A visible failure beats a blank card: see showFatal in app.js. */
 .fatal { border: 1px solid color-mix(in srgb, #ef4444 50%, var(--border));

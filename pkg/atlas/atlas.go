@@ -783,7 +783,7 @@ func init() {
 	// is the same projection with the history filterable rather than hardcoded.
 	addVerb("board", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace,
 		Caps: []string{CapJSON, CapReadOnly},
-		Web:  &WebSurface{Label: "Board", Mount: "board", Mode: WebInProcess, DefaultOn: true}})
+		Web:  &WebSurface{Label: "Sprint", Mount: "sprint", Mode: WebInProcess, DefaultOn: true}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 	// recall was a top-level verb until 2026-08-05 and is now `kb recall` — the

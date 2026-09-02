@@ -244,7 +244,7 @@ func TestDOMPairingSection(t *testing.T) {
 // Every panel must load and throw nothing. This is the sweep that catches a fix
 // in one app breaking another.
 func TestDOMEveryPanelLoadsCleanly(t *testing.T) {
-	for _, panel := range []string{"/", "/board/", "/mb/", "/files/", "/relay/", "/term/"} {
+	for _, panel := range []string{"/", "/sprint/", "/mb/", "/files/", "/relay/", "/term/"} {
 		t.Run(panel, func(t *testing.T) {
 			base, ctx, errs := domEnv(t, Options{})
 			var title string
@@ -523,7 +523,7 @@ func TestDOMRelayHeaderMatchesBoardMetrics(t *testing.T) {
 
 	var boardBox, relayBox string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/board/"),
+		chromedp.Navigate(base+"/sprint/"),
 		chromedp.Sleep(1800*time.Millisecond),
 		chromedp.Evaluate(probe, &boardBox),
 		chromedp.Navigate(base+"/relay/"),
@@ -592,7 +592,7 @@ func TestDOMRelayIsFiveParts(t *testing.T) {
 	if brands != "1" {
 		t.Errorf("relay shows %s brands; the app is named once, in the bar", brands)
 	}
-	if !strings.Contains(footer, "BASHY") {
+	if footer != "© 2026 qiangli. All rights reserved." {
 		t.Errorf("relay's footer is not the console copyright line: %q", footer)
 	}
 }
@@ -750,7 +750,7 @@ func TestDOMRelayLightThemeHasNoDarkPanel(t *testing.T) {
 		chromedp.Navigate(base+"/relay/"),
 		chromedp.Sleep(2500*time.Millisecond),
 		chromedp.Evaluate(read, &relay),
-		chromedp.Navigate(base+"/board/"),
+		chromedp.Navigate(base+"/sprint/"),
 		chromedp.Sleep(1800*time.Millisecond),
 		chromedp.Evaluate(read, &board),
 	); err != nil {
@@ -797,7 +797,7 @@ func TestDOMOneMarkEverywhere(t *testing.T) {
 
 	seen := map[string]string{}
 	for _, theme := range []string{"light", "dark"} {
-		for _, page := range []string{"/board/", "/mb/", "/term/", "/relay/"} {
+		for _, page := range []string{"/sprint/", "/mb/", "/term/", "/relay/"} {
 			var got string
 			if err := chromedp.Run(ctx,
 				chromedp.Navigate(base+page),

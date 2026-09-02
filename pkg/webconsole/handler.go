@@ -335,8 +335,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// nothing. Read-only by construction — `board` is the one work verb the
 	// atlas marks CapReadOnly, and the panel must not erode that.
 	if on["board"] {
-		mux.HandleFunc("GET /board/", s.handleBoardPage)
-		mux.Handle("GET /board", redirectTo("/board/"))
+		mux.HandleFunc("GET /sprint/", s.handleBoardPage)
+		mux.Handle("GET /sprint", redirectTo("/sprint/"))
+		// Keep old bookmarks working while Sprint becomes the public app name.
+		mux.Handle("GET /board", redirectTo("/sprint/"))
+		mux.Handle("GET /board/", redirectTo("/sprint/"))
 		mux.HandleFunc("GET /api/board", s.handleBoardOverview)
 		mux.HandleFunc("GET /api/board/panel/{id}", s.handleBoardPanel)
 		mux.HandleFunc("GET /api/board/story/{id}", s.handleBoardStory)

@@ -194,7 +194,7 @@ func TestBoardCacheServesStaleWhileRefreshing(t *testing.T) {
 
 func TestBoardPageAndTile(t *testing.T) {
 	h, _ := newBoardTestServer(t)
-	w := do(h, "GET", "/board/", "127.0.0.1:5555", nil)
+	w := do(h, "GET", "/sprint/", "127.0.0.1:5555", nil)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "board.js") {
 		t.Fatalf("board page = %d, want 200 serving board.js", w.Code)
 	}
@@ -203,8 +203,8 @@ func TestBoardPageAndTile(t *testing.T) {
 	for _, p := range Discover() {
 		if p.Name == "board" {
 			found = true
-			if p.Path != "/board/" || p.Source != "atlas" || !p.Available {
-				t.Fatalf("board panel = %+v, want an available atlas panel at /board/", p)
+			if p.Label != "Sprint" || p.Path != "/sprint/" || p.Source != "atlas" || !p.Available {
+				t.Fatalf("board panel = %+v, want the available Sprint app at /sprint/", p)
 			}
 		}
 	}
@@ -212,8 +212,18 @@ func TestBoardPageAndTile(t *testing.T) {
 		t.Fatal("no board tile: the atlas WebSurface declaration is what Discover reads")
 	}
 	s := &server{}
-	if hh, _ := s.panelHandler(Panel{Name: "board", Path: "/board/"}); hh != nil {
+	if hh, _ := s.panelHandler(Panel{Name: "board", Path: "/sprint/"}); hh != nil {
 		t.Fatal("board must not also be mounted: coopauth.Mount would take the <base href> with it")
+	}
+}
+
+func TestOldBoardRouteRedirectsToSprint(t *testing.T) {
+	h, _ := newBoardTestServer(t)
+	for _, oldPath := range []string{"/board", "/board/"} {
+		w := do(h, "GET", oldPath, "127.0.0.1:5555", nil)
+		if w.Code != http.StatusFound || w.Header().Get("Location") != "/sprint/" {
+			t.Errorf("GET %s = %d Location %q, want 302 to /sprint/", oldPath, w.Code, w.Header().Get("Location"))
+		}
 	}
 }
 
@@ -232,7 +242,7 @@ func TestBoardServesNoMutatingMethod(t *testing.T) {
 	s.boards.board, s.boards.at = fakeBoard(t), time.Now()
 	s.boards.mu.Unlock()
 
-	for _, path := range []string{"/api/board", "/api/board/panel/sprints", "/board/"} {
+	for _, path := range []string{"/api/board", "/api/board/panel/sprints", "/sprint/"} {
 		for _, m := range []string{"POST", "PUT", "DELETE", "PATCH"} {
 			body := do(h, m, path, "127.0.0.1:5555", nil).Body.String()
 			if strings.Contains(body, boardSchemaVersion) {

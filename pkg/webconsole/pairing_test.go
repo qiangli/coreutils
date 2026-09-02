@@ -65,11 +65,11 @@ func TestScanOneQRReachesTheConsoleWithoutAPassword(t *testing.T) {
 	h, store := pairEnv(t)
 
 	// Before pairing, the LAN peer is refused.
-	if got := do(h, "GET", "/board/", "192.168.1.44:5555", nil).Code; got == http.StatusOK {
+	if got := do(h, "GET", "/sprint/", "192.168.1.44:5555", nil).Code; got == http.StatusOK {
 		t.Fatal("an unpaired LAN peer reached the console")
 	}
 	cookie := redeemScan(t, h, store, nil, time.Hour)
-	if got := do(h, "GET", "/board/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusOK {
+	if got := do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusOK {
 		t.Fatalf("paired device on /board/ = %d, want 200", got)
 	}
 }
@@ -113,13 +113,13 @@ func TestSecondScanOfTheSameTicketFails(t *testing.T) {
 func TestRevokingTheOperatorGrantRevokesDerivedDevices(t *testing.T) {
 	h, store := pairEnv(t)
 	cookie := redeemScan(t, h, store, nil, time.Hour)
-	if got := do(h, "GET", "/board/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusOK {
+	if got := do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusOK {
 		t.Fatalf("paired device = %d, want 200", got)
 	}
 	if _, err := store.revokeAll(); err != nil {
 		t.Fatal(err)
 	}
-	w := do(h, "GET", "/board/", "192.168.1.44:5555", withCookie(cookie))
+	w := do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(cookie))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("after revoke --all = %d, want 403", w.Code)
 	}
@@ -158,8 +158,8 @@ func TestRevokingOneDeviceLeavesTheOthers(t *testing.T) {
 	}
 	// One of the two cookies still works, the other does not.
 	codes := []int{
-		do(h, "GET", "/board/", "192.168.1.44:5555", withCookie(a)).Code,
-		do(h, "GET", "/board/", "192.168.1.44:5555", withCookie(b)).Code,
+		do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(a)).Code,
+		do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(b)).Code,
 	}
 	if !(codes[0] == http.StatusForbidden && codes[1] == http.StatusOK) &&
 		!(codes[1] == http.StatusForbidden && codes[0] == http.StatusOK) {
@@ -172,7 +172,7 @@ func TestExpiredDeviceIsRefused(t *testing.T) {
 	h, store := pairEnv(t)
 	cookie := redeemScan(t, h, store, nil, 50*time.Millisecond)
 	time.Sleep(80 * time.Millisecond)
-	if got := do(h, "GET", "/board/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusForbidden {
+	if got := do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusForbidden {
 		t.Fatalf("expired device = %d, want 403", got)
 	}
 }
@@ -183,7 +183,7 @@ func TestDefaultScopeIsNotAShell(t *testing.T) {
 	h, store := pairEnv(t)
 	cookie := redeemScan(t, h, store, nil, time.Hour)
 
-	allowed := []string{"/board/", "/mb/", "/relay/"}
+	allowed := []string{"/sprint/", "/mb/", "/relay/"}
 	for _, p := range allowed {
 		if got := do(h, "GET", p, "192.168.1.44:5555", withCookie(cookie)).Code; got == http.StatusForbidden {
 			t.Fatalf("default scope refuses %s, which it is supposed to allow", p)
@@ -238,7 +238,7 @@ func TestScopeHoldsOnTheAPISurfaceToo(t *testing.T) {
 // deferral and the name-vs-mount difference (terminal lives at /term/).
 func TestScopeSegmentResolution(t *testing.T) {
 	cases := map[string]string{
-		"/board/":            "board",
+		"/sprint/":           "sprint",
 		"/api/board":         "board",
 		"/api/board/panel/7": "board",
 		"/term/ws":           "term",
@@ -515,7 +515,7 @@ func TestOperatorSessionIsUnaffectedByScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &http.Cookie{Name: sessionCookie, Value: cookieVal}
-	for _, p := range []string{"/", "/board/", "/files/", "/term/"} {
+	for _, p := range []string{"/", "/sprint/", "/files/", "/term/"} {
 		if got := do(h, "GET", p, "192.168.1.44:5555", withCookie(c)).Code; got == http.StatusForbidden {
 			t.Fatalf("an operator session was refused %s", p)
 		}

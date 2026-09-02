@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ---- helpers -------------------------------------------------------------
@@ -47,14 +46,10 @@ func lookGet(t *testing.T, h http.Handler) map[string]any {
 }
 
 // assertCopyright pins the one copyright line, identically on every page: the
-// product name, what BASHY stands for, that bash compatibility is behavior
-// and not GNU affiliation, the current year, and the rights reservation.
+// fixed copyright year and rights reservation, on its own centered line.
 func assertCopyright(t *testing.T, where, foot string) {
 	t.Helper()
-	want := regexp.MustCompile(
-		`<span id="copyright">BASHY &mdash; Bashy&rsquo;s Agentic Shell Harness Yoke\. ` +
-			`Bash compatibility is behavior, not GNU affiliation\. ` +
-			`&copy; ` + strconv.Itoa(time.Now().Year()) + ` qiangli\. All rights reserved\.</span>`)
+	want := regexp.MustCompile(`<span id="copyright">&copy; 2026 qiangli\. All rights reserved\.</span>`)
 	if !want.MatchString(foot) {
 		t.Errorf("%s: copyright line missing or malformed, footer = %q", where, foot)
 	}
@@ -122,7 +117,7 @@ func TestManagedAppFooterHasCopyrightNotVersion(t *testing.T) {
 			if w := lookPut(t, h, mode); w.Code != http.StatusOK {
 				t.Fatalf("PUT /api/look = %d, want 200", w.Code)
 			}
-			for _, page := range []string{"/term/", "/board/", "/mb/"} {
+			for _, page := range []string{"/term/", "/sprint/", "/mb/"} {
 				w := do(h, "GET", page, "127.0.0.1:5555", nil)
 				if w.Code != http.StatusOK {
 					t.Fatalf("GET %s = %d, want 200", page, w.Code)
@@ -155,7 +150,7 @@ func TestManagedAppLogoLinksToItsOwnRoot(t *testing.T) {
 		page, wantHref, wantTitleContains string
 	}{
 		{"/term/", `href="term/"`, "terminal"},
-		{"/board/", `href="board/"`, "board"},
+		{"/sprint/", `href="sprint/"`, "sprint"},
 		{"/mb/", `href="mb/"`, "messages"},
 	}
 	for _, c := range cases {
@@ -200,7 +195,7 @@ func TestNewTabModeOmitsReturnControl(t *testing.T) {
 	if w := lookPut(t, h, OpenNewTab); w.Code != http.StatusOK {
 		t.Fatalf("PUT /api/look = %d, want 200", w.Code)
 	}
-	for _, page := range []string{"/term/", "/board/", "/mb/"} {
+	for _, page := range []string{"/term/", "/sprint/", "/mb/"} {
 		w := do(h, "GET", page, "127.0.0.1:5555", nil)
 		if strings.Contains(w.Body.String(), `id="all-apps-btn"`) {
 			t.Errorf("%s: return control present in new-tab mode; it must be omitted", page)
@@ -217,9 +212,9 @@ func TestNewTabModeOmitsReturnControl(t *testing.T) {
 func assertReturnControl(t *testing.T, h http.Handler, want bool) {
 	t.Helper()
 	appSpecificMarker := map[string]string{
-		"/term/":  `id="status"`,
-		"/board/": `id="bd-age"`,
-		"/mb/":    `id="mb-who"`,
+		"/term/":   `id="status"`,
+		"/sprint/": `id="bd-age"`,
+		"/mb/":     `id="mb-who"`,
 	}
 	for page, marker := range appSpecificMarker {
 		t.Run(page, func(t *testing.T) {

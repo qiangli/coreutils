@@ -494,7 +494,7 @@ function renderMeta(d) {
   $("bd-foot").textContent =
     d.title + " · " + d.scope + " · re-collected at most every " + dur(d.ttl_seconds) +
     " (it forks a subprocess per weave queue root, so it is not free). " +
-    "This view never starts, merges, kills, or leases anything — `bashy board` in a browser.";
+    "This view never starts, merges, kills, or leases anything — `bashy sprint board` in a browser.";
 }
 
 // ---- loading -----------------------------------------------------------------

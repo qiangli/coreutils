@@ -12,10 +12,8 @@ import (
 	"io/fs"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/qiangli/coreutils/pkg/coopauth"
 )
@@ -211,14 +209,11 @@ func injectChrome(doc []byte, name, openApps string) []byte {
 // chromeCopyrightHTML is the one statement of the copyright line, shared by
 // the launcher and every managed app so it reads identically everywhere.
 //
-// BASHY is the product's name — Bashy's Agentic Shell Harness Yoke — and the
-// line says exactly what the console is and is not: bash COMPATIBILITY is
-// behavior this project implements, not an affiliation with GNU. Static,
-// server-owned text only; nothing a client can influence reaches this string.
+// The year is intentionally fixed by the product copy, not derived from the
+// server clock. Static, server-owned text only; nothing a client can influence
+// reaches this string.
 func chromeCopyrightHTML() string {
-	return `<span id="copyright">BASHY &mdash; Bashy&rsquo;s Agentic Shell Harness Yoke. ` +
-		`Bash compatibility is behavior, not GNU affiliation. ` +
-		`&copy; ` + strconv.Itoa(time.Now().Year()) + ` qiangli. All rights reserved.</span>`
+	return `<span id="copyright">&copy; 2026 qiangli. All rights reserved.</span>`
 }
 
 // allAppsButtonHTML is the header button every managed app carries to return
