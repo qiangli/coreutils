@@ -813,3 +813,56 @@ func TestDOMOneMarkEverywhere(t *testing.T) {
 		t.Errorf("the mark is %s, want the computed #2563eb", first)
 	}
 }
+
+// The Files panel must follow the console's theme too.
+//
+// It is a mounted third-party SPA (File Browser) with its OWN theme mechanism:
+// a server-injected setting, else the media preference, written to
+// documentElement.className. Nothing in that chain can see the console's
+// choice, so Files sat dark while every other app was light — reported as
+// "the files app always shows in dark mode".
+//
+// Same fix as relay: the served template resolves the console's stored choice
+// before the bundle boots and writes it where this app already looks for it.
+func TestDOMFilesFollowsTheConsoleTheme(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	read := `JSON.stringify({
+		cls: document.documentElement.className,
+		bg: getComputedStyle(document.body).backgroundColor,
+	})`
+	set := func(theme string) chromedp.Action {
+		return chromedp.Evaluate(
+			`localStorage.setItem("bashy.apps.config", JSON.stringify({theme:`+
+				strconv.Quote(theme)+`}))`, nil)
+	}
+
+	var dark, light string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/files/"),
+		chromedp.Sleep(1500*time.Millisecond),
+		set("dark"),
+		chromedp.Navigate(base+"/files/"),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(read, &dark),
+		set("light"),
+		chromedp.Navigate(base+"/files/"),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(read, &light),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "files theme", errs())
+	t.Logf("console dark  -> files %s", dark)
+	t.Logf("console light -> files %s", light)
+
+	if !strings.Contains(dark, `"cls":"dark"`) {
+		t.Errorf("files ignored the console's dark choice: %s", dark)
+	}
+	if !strings.Contains(light, `"cls":"light"`) {
+		t.Errorf("files ignored the console's light choice: %s", light)
+	}
+	if dark == light {
+		t.Errorf("files renders identically in both themes: %s", dark)
+	}
+}
