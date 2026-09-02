@@ -21,9 +21,16 @@ import (
 )
 
 func DefaultSources() []Source {
-	// Runs intentionally load first: the todo source uses their repo roots to
-	// discover every checked-in todo scope known to this machine.
-	return []Source{weaveSource{}, todoSource{}, sprintSource{}, fleetSource{}, resourceSource{}, dagSource{}}
+	// ORDER IS LOAD-BEARING, and for one reason: the todo source has to be told
+	// where to look. It discovers stores from the repo roots of weave RUNS and
+	// from the sprint cards' own StoryRoots, so both must be loaded before it.
+	//
+	// Sprint used to load AFTER todo, which meant the only cross-repo hint the
+	// todo source had was a run — and a sprint whose work is not driven through
+	// weave has none. Its stories were then found only if the reader happened to
+	// be standing in the right repo. Measured: the same sprint reported 23
+	// stories from one directory and 0 from another.
+	return []Source{weaveSource{}, sprintSource{}, todoSource{}, fleetSource{}, resourceSource{}, dagSource{}}
 }
 
 // NewDagSource exposes the dag run-journal source for callers assembling a
@@ -219,6 +226,7 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 			Continuity string   `json:"continuity"`
 			Acceptance string   `json:"acceptance"`
 			Runs       []RunRef `json:"runs"`
+			StoryRoots []string `json:"story_roots"`
 			Lease      *struct {
 				Holder string
 				At     time.Time
@@ -232,7 +240,7 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 		if !o.All && x.Column == "done" {
 			continue
 		}
-		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, RunRefs: x.Runs}
+		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, RunRefs: x.Runs, StoryRoots: x.StoryRoots}
 		if x.Acceptance != "" {
 			s.GateState = "pending"
 		}
@@ -243,7 +251,11 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 		}
 		if x.Lease != nil {
 			s.Conductor, s.LeaseHolder = x.Lease.Holder, x.Lease.Holder
-			s.LeaseStale = o.Now.Sub(x.Lease.At) > 30*time.Minute
+			// weave.SprintLeaseTTL, not a hand-copied literal: the sprint verbs,
+			// `bashy agents` and this board all grade the SAME lease, and a board
+			// ageing it on its own clock reports a conductor the verbs still
+			// consider live. That constant is exported for exactly this reason.
+			s.LeaseStale = o.Now.Sub(x.Lease.At) > weave.SprintLeaseTTL
 		}
 		b.Sprints = append(b.Sprints, s)
 	}
@@ -327,18 +339,28 @@ func decodeTodoList(raw []byte, scope string) ([]todoItem, error) {
 type todoSource struct{}
 
 func (todoSource) Name() string { return "todo" }
-func (todoSource) Load(_ context.Context, b *Board, o Options) error {
-	type scoped struct {
-		scope string
-		args  []string
-	}
-	var stores []scoped
+
+// scopedStore is one todo store the board will read, with the args that reach
+// it.
+type scopedStore struct {
+	scope string
+	args  []string
+}
+
+// todoStores decides WHERE the board looks for stories.
+//
+// Split out from Load so the rule is testable without the host's real stores —
+// the same reason rolesFromQueue exists. It shipped fused to the read, was
+// therefore never tested, and got the answer wrong in a way that depended on
+// the reader's working directory.
+func todoStores(b *Board) []scopedStore {
+	var stores []scopedStore
 	seen := map[string]bool{}
 	add := func(scope, p string, args ...string) {
 		p = filepath.Clean(p)
 		if !seen[p] {
 			seen[p] = true
-			stores = append(stores, scoped{scope, args})
+			stores = append(stores, scopedStore{scope, args})
 		}
 	}
 	if root, err := todo.Root(); err == nil {
@@ -360,7 +382,23 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 			add("repo "+filepath.Base(r.Repo), filepath.Join(r.Repo, "docs", "todo"), "--base-dir", r.Repo)
 		}
 	}
-	for _, sc := range stores {
+	// A sprint says where its own stories live. This is the only store hint that
+	// does not depend on where the READER is standing: the cwd finds one repo,
+	// runs find the repos weave happens to be driving, and a cross-repo sprint
+	// whose work is done by hand has neither. See Sprint.StoryRoots.
+	for _, sp := range b.Sprints {
+		for _, root := range sp.StoryRoots {
+			if strings.TrimSpace(root) == "" {
+				continue
+			}
+			add("repo "+filepath.Base(root), filepath.Join(root, "docs", "todo"), "--base-dir", root)
+		}
+	}
+	return stores
+}
+
+func (todoSource) Load(_ context.Context, b *Board, o Options) error {
+	for _, sc := range todoStores(b) {
 		args := append(append([]string(nil), sc.args...), "list", "--json")
 		if o.All {
 			args = append(args, "--all")

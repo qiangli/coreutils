@@ -186,6 +186,15 @@ type Sprint struct {
 	LeaseHolder   string   `json:"lease_holder,omitempty"`
 	ContinuityRef string   `json:"continuity_ref,omitempty"`
 	RunRefs       []RunRef `json:"run_refs,omitempty"`
+	// StoryRoots are the repo todo stores this sprint's stories live in.
+	//
+	// A sprint is USER-GLOBAL and spans repos by definition; its stories are
+	// per-repo records. Without this the board could only find them in stores it
+	// stumbled across — the reader's own working directory, and the repos of
+	// weave runs — so the same sprint reported 23 stories from one directory and
+	// 0 from another. A card that says where its stories are is the only source
+	// that does not depend on where the reader is standing.
+	StoryRoots []string `json:"story_roots,omitempty"`
 	// Story counts are derived from Todos after every source has loaded. They
 	// travel with the sprint so terminal, JSON, and browser projections cannot
 	// disagree about progress or make closed work disappear from the total.
@@ -371,7 +380,10 @@ func (b *Board) finalize(now time.Time) {
 		}
 	}
 	for _, t := range b.Todos {
-		b.Rows = append(b.Rows, Row{Source: "todo", Repo: t.Scope, ID: t.ID, State: t.Status, Label: t.Title})
+		// SprintID travels with the row. Runs and sprints already carried it and
+		// todo did not, so the union view could not correlate a story to the
+		// sprint it is a story OF — the one correlation the board exists to make.
+		b.Rows = append(b.Rows, Row{Source: "todo", Repo: t.Scope, ID: t.ID, State: t.Status, Label: t.Title, SprintID: t.SprintID})
 		if t.Status == "blocked" {
 			lanes["needs-steward"] = append(lanes["needs-steward"], Card{Layer: "todo", ID: t.ID, Label: t.Title, State: t.Status, Scope: t.Scope})
 		}
