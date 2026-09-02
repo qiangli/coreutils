@@ -73,11 +73,14 @@ func sprintInboxDeliveryLive(owner string) bool {
 		(card.Mode == "sprint-inbox" && room.HasCapability(card, room.CapInboxStream))
 }
 
+// sprintReadyLine tells the new conductor the ONE thing it now has to do.
+//
+// It used to report NOT READY unless a stream was attached, which named a
+// condition rather than an action and sent an agent off to arrange machinery.
+// Reading your inbox is the whole job: it is how mail arrives and it is what
+// keeps the seat live (RefreshSprintOwnerActivity).
 func sprintReadyLine(owner string) string {
-	if sprintInboxDeliveryLive(owner) {
-		return fmt.Sprintf("READY: attached inbox delivery armed for %s", owner)
-	}
-	return fmt.Sprintf("NOT READY: %s needs a managed session or a live attached `sprint take/start --watch` stream", owner)
+	return fmt.Sprintf("read your mail with `bashy inbox --as %s` (that also keeps the seat live)", owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {

@@ -137,26 +137,26 @@ func sprintOwnerLive(name string) bool { return sprintOwnerInRoster(name) }
 // validateSprintClaimant refuses to seat an owner that cannot receive a turn.
 //
 // This is stricter than validateSprintOwner and applies only where a sprint is
-// CLAIMED — take, start, resume. The agent doing the claiming is by definition
-// executing right now, so requiring a live managed-session delivery capability
-// costs a correct caller nothing and refuses both cases that break collaboration:
-// no process behind the name, or a watcher that only prints to an unobserved
-// terminal and therefore cannot wake the model.
+// CLAIMED — take, start, resume. The name must ADDRESS somebody. That is all.
 //
-// Liveness is NOT required afterwards. A conductor between turns is normal and
-// is only REPORTED, because enforcing it later would invalidate a sprint for
-// being idle and would refuse the recovery path a stale lease exists to allow.
+// It used to additionally require a live delivery path, which meant an agent
+// could not take a seat without first registering a process and then holding a
+// foreground watch open for the life of the sprint. That refused the ordinary
+// case — "take this sprint and read your inbox" — and it was measured standing
+// in the way of this project's own conductor five times in one session: a
+// pre-registration step, a foreground process a conversation-hosted agent
+// cannot hold, a fuse that ended the seat twice for not running a second
+// command, and a heartbeat scheduled to fire AFTER that fuse.
+//
+// The proxy was always the wrong test, and the comment on sprintOwnerUnanswered
+// below said so before this did: a live process is a proxy; unread mail with a
+// sender waiting on it is the actual failure. So claiming is not gated on a
+// process, and READING YOUR INBOX is what keeps the seat live — see
+// RefreshSprintOwnerActivity. An agent that reads its mail is reachable, which
+// is evidence rather than a proxy for it, and it is the thing an agent already
+// does at a turn boundary rather than a ritual invented for the tool.
 func validateSprintClaimant(name string) error {
-	if err := validateSprintOwner(name); err != nil {
-		return err
-	}
-	if sprintInboxDeliveryLive(name) {
-		return nil
-	}
-	return fmt.Errorf("sprint owner %q has no verified inbox delivery path.\n"+
-		"  managed session: take the sprint normally under this exact identity.\n"+
-		"  external harness: retain and read `bashy sprint take <id> --as %s --watch` (or `start ... --watch`) as a live foreground tool process",
-		name, name)
+	return validateSprintOwner(name)
 }
 
 // sprintOwnerUnanswered reports messages addressed to the owner that nobody has
@@ -262,17 +262,15 @@ func sprintCheckReachability(s *weaveStory) sprintReachability {
 		r.Problems = append(r.Problems, fmt.Sprintf("owner %q is a placeholder, not an agent", r.Owner))
 	default:
 		r.Registered = sprintOwnerRegistered(r.Owner)
-		// A roster trace is not enough for an OPEN sprint. The manager must
-		// either have a managed turn-injection path or a live parent-owned
-		// external stream; when its watch fuse exits, reachability fails now.
+		// Live is REPORTED, never a problem on its own. An attached stream is a
+		// proxy for attention, and an agent between turns has none while being
+		// perfectly reachable — flagging that produced a board where a working
+		// conductor read UNREACHABLE on a timer. The problem below is the thing
+		// that actually hurts somebody: mail nobody has read.
 		r.Live = sprintInboxDeliveryLive(r.Owner)
 		if !r.Registered {
 			r.Problems = append(r.Problems, fmt.Sprintf(
 				"owner %q is not in `bashy agents` — mb/chat/inbox cannot reach it", r.Owner))
-		} else if !r.Live {
-			r.Problems = append(r.Problems, fmt.Sprintf(
-				"owner %q has no live inbox delivery — use a managed session or rerun `bashy sprint take <id> --as %s --watch`",
-				r.Owner, r.Owner))
 		}
 		// UNANSWERED MAIL IS THE REAL FAILURE. Everything above is about
 		// whether somebody COULD answer; this is whether anybody DID. A sender
