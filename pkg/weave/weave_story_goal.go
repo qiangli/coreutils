@@ -80,7 +80,8 @@ func sprintInboxDeliveryLive(owner string) bool {
 // Reading your inbox is the whole job: it is how mail arrives and it is what
 // keeps the seat live (RefreshSprintOwnerActivity).
 func sprintReadyLine(owner string) string {
-	return fmt.Sprintf("read your mail with `bashy inbox --as %s` (that also keeps the seat live)", owner)
+	return fmt.Sprintf("next: `bashy inbox --as %s` (reads your mail and keeps the seat live; "+
+		"`--watch` to stay attached) · procedure: `bashy skills show inbox`", owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {

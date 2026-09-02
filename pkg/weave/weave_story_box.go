@@ -267,8 +267,13 @@ func newSprintStartCmd() *cobra.Command {
 				}
 				weaveStoryAppend(s, who, "system",
 					fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
-				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s",
-					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote), nil
+				// The same advisory `take` gives. `start` is the more common
+				// entry point — it is how a sprint BEGINS — and it was the one
+				// that said nothing, so an agent seated by it had to already
+				// know how mail reaches it.
+				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s\n%s",
+					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote,
+					sprintReadyLine(who)), nil
 			})
 		},
 	}

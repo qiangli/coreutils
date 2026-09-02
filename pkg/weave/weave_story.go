@@ -1160,7 +1160,8 @@ successor can take over.
 				s.Continuity = message
 				s.Lease = &weaveStoryLease{Holder: prev, At: time.Now().UTC()}
 				weaveStoryAppend(s, who, "progress", "checkpoint")
-				return fmt.Sprintf("sprint #%d: continuity updated, lease refreshed (%s)", id, prev), nil
+				return fmt.Sprintf("sprint #%d: continuity updated, lease refreshed (%s)%s",
+					id, prev, sprintUnreadReminder(prev)), nil
 			})
 		},
 	}

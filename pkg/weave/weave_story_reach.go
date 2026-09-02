@@ -192,6 +192,29 @@ func sprintOwnerUnanswered(name string) (count int, oldest time.Duration) {
 	return count, oldest
 }
 
+// sprintUnreadReminder is the one-line nudge appended to what a working
+// conductor already runs. Empty when there is nothing waiting.
+//
+// It is a REMINDER, not a gate: it blocks nothing, and it names the exact
+// command that clears it. The reason it exists is the delivery rule — mail
+// nobody reads is mail lost, and the agent that needs to know is the one busy
+// enough not to have looked. `sprint show` already reports this, but an agent
+// deep in a task is not running `sprint show`; it is running `checkpoint`.
+func sprintUnreadReminder(owner string) string {
+	n, oldest := sprintOwnerUnanswered(owner)
+	if n == 0 {
+		return ""
+	}
+	return formatUnreadReminder(n, oldest, owner)
+}
+
+// formatUnreadReminder is the wording, split out so it is testable without a
+// bus: the count and the command are the contract, not the store.
+func formatUnreadReminder(n int, oldest time.Duration, owner string) string {
+	return fmt.Sprintf(" — %d unread (oldest %s): read it with `bashy inbox --as %s`",
+		n, oldest.Round(time.Minute), owner)
+}
+
 // validateSprintOwner refuses a conductor name that names nobody.
 //
 // The error names both fixes because the caller is usually an agent that does
