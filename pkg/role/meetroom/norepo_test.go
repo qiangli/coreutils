@@ -72,3 +72,44 @@ func TestRoleRoomDeclaresItsSeatAsDefaultAddressee(t *testing.T) {
 		t.Fatal("the room stored its holder — mail would not survive a handover")
 	}
 }
+
+// A ROOM THAT PREDATES THE FIELD MUST STILL GET ONE.
+//
+// DefaultTo was added to a codebase that already had rooms. Set only at Create,
+// it is inert on every existing room — on this host that was all of them,
+// including the single sprint room the feature was written for, so the shipped
+// behavior was observably a no-op where it mattered most.
+func TestEnsureDefaultToDeclaresTheSeatOnAnExistingRoom(t *testing.T) {
+	var gotRef, gotLabel string
+	prev := setRoomDefaultTo
+	setRoomDefaultTo = func(ref, label string) error {
+		gotRef, gotLabel = ref, label
+		return nil
+	}
+	t.Cleanup(func() { setRoomDefaultTo = prev })
+
+	c := &role.Contact{Kind: "meet", Ref: "room-1"}
+	if err := EnsureDefaultTo(c, role.Assignment{Kind: role.Conductor, Ref: "99"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotRef != "room-1" || gotLabel != "conductor:99" {
+		t.Fatalf("EnsureDefaultTo set (%q, %q), want the room and its seat label", gotRef, gotLabel)
+	}
+}
+
+// No contact is not an error. A sprint with no room is an ordinary state, and
+// healing must never be the thing that reports it.
+func TestEnsureDefaultToIsAQuietNoOpWithoutARoom(t *testing.T) {
+	prev := setRoomDefaultTo
+	setRoomDefaultTo = func(string, string) error {
+		t.Fatal("healed a room that does not exist")
+		return nil
+	}
+	t.Cleanup(func() { setRoomDefaultTo = prev })
+
+	for _, c := range []*role.Contact{nil, {Kind: "meet"}, {Kind: "meet", Ref: "  "}} {
+		if err := EnsureDefaultTo(c, role.Assignment{Kind: role.Conductor, Ref: "99"}); err != nil {
+			t.Fatalf("EnsureDefaultTo(%+v) = %v, want nil", c, err)
+		}
+	}
+}

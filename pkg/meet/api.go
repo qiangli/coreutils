@@ -307,6 +307,30 @@ func Create(opts CreateOptions) (*State, error) {
 	return st, nil
 }
 
+// SetDefaultTo declares an existing room's late-bound default addressee.
+//
+// It exists because DefaultTo was added to a codebase that already had rooms:
+// a field set only at Create is inert on every room that predates it, which on
+// this host was ALL of them, including the one sprint room the feature was
+// written for. A feature that only works for rooms nobody has opened yet has
+// not shipped.
+//
+// Idempotent and narrowing-only in practice: the caller passes the label the
+// room's own role derives, so re-running it is a no-op. It writes nothing when
+// the value is unchanged, so a heal on a read path costs no disk.
+func SetDefaultTo(ref, label string) error {
+	st, err := roomOf(ref)
+	if err != nil {
+		return err
+	}
+	label = strings.TrimSpace(label)
+	if st.DefaultTo == label {
+		return nil
+	}
+	st.DefaultTo = label
+	return st.save()
+}
+
 // SeedBoardFromMB seeds a board with message-board posts as opening context and
 // posts a pointer BACK to mb, in one step. It is the shared body of `meet open
 // --board --from-mb` and CreateOptions.FromMB, so the CLI and a programmatic

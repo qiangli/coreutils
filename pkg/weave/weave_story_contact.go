@@ -108,6 +108,12 @@ func closeSprintRoom(s *weaveStory, actor string) error {
 // conversation.
 func ensureSprintRoom(s *weaveStory, conductor string) string {
 	if s.Contact != nil {
+		// The room exists. Make sure it still declares the SEAT as its default
+		// addressee: rooms opened before DefaultTo existed carry none, so
+		// unaddressed mail in them resolves to nobody — the very failure the
+		// field was added to close. Best-effort; a room without one is no worse
+		// off than it was.
+		_ = meetroom.EnsureDefaultTo(s.Contact, sprintAssignment(s.ID, s.Title))
 		return ""
 	}
 	c, err := openSprintRoom(s, conductor)

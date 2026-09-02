@@ -70,6 +70,22 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	return &role.Contact{Kind: kind, Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: contactHolder}, nil
 }
 
+// EnsureDefaultTo declares the seat as an EXISTING room's default addressee.
+//
+// Assume sets it for rooms it opens; this is for the ones that were already
+// open when the field was introduced, and for any room whose assignment is
+// re-derived later. Failure is not fatal to the caller: a room without a
+// default addressee still works, it just does not route unaddressed mail to the
+// seat, which is exactly the state it was already in.
+func EnsureDefaultTo(c *role.Contact, a role.Assignment) error {
+	if c == nil || strings.TrimSpace(c.Ref) == "" {
+		return nil
+	}
+	return setRoomDefaultTo(c.Ref, a.Label())
+}
+
+var setRoomDefaultTo = meet.SetDefaultTo
+
 // Release closes a bounded role room on a graceful handoff. A permanent
 // steward room stays open; release clears only its current @steward routing
 // alias, so the host address and transcript survive the handoff.
