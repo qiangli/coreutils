@@ -66,14 +66,18 @@ func sprintTakeoverIdentity(s *weaveStory, explicit string) string {
 
 func sprintInboxDeliveryLive(owner string) bool {
 	card, live, err := room.Find(room.AgentClaimID(owner))
-	return err == nil && live && card.Nick == owner && room.HasCapability(card, room.CapInboxDelivery)
+	if err != nil || !live || card.Nick != owner {
+		return false
+	}
+	return room.HasCapability(card, room.CapInboxDelivery) ||
+		(card.Mode == "sprint-inbox" && room.HasCapability(card, room.CapInboxStream))
 }
 
 func sprintReadyLine(owner string) string {
 	if sprintInboxDeliveryLive(owner) {
-		return fmt.Sprintf("READY: managed inbox delivery armed for %s", owner)
+		return fmt.Sprintf("READY: attached inbox delivery armed for %s", owner)
 	}
-	return fmt.Sprintf("NOT READY: %s is not a Bashy-managed session with inbox delivery; a terminal `inbox --watch` does not wake an agent", owner)
+	return fmt.Sprintf("NOT READY: %s needs a managed session or a live attached `sprint take/start --watch` stream", owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {

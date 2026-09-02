@@ -740,6 +740,8 @@ continuity record (sprint show) and resume.`,
 					weaveStoryAppend(s, who, "system", "took conductor lease (was unclaimed)")
 				case stale:
 					weaveStoryAppend(s, who, "system", fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
+				case prev == who:
+					weaveStoryAppend(s, who, "system", "resumed own conductor lease and delivery stream")
 				default:
 					weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
 				}

@@ -388,11 +388,11 @@ func TestSprintOwnerMustBeALiveEntryInBashyAgents(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a sprint was seated to a registered but DEAD agent:\n%s", out)
 	}
-	if !strings.Contains(out, "not a live Bashy-managed session") {
+	if !strings.Contains(out, "no verified inbox delivery") {
 		t.Errorf("refusal must distinguish an undeliverable session from unknown:\n%s", out)
 	}
-	if !strings.Contains(out, "agents track") || !strings.Contains(out, "cannot wake") {
-		t.Errorf("refusal must explain why roster publication is not agent delivery:\n%s", out)
+	if !strings.Contains(out, "--watch") || !strings.Contains(out, "foreground tool process") {
+		t.Errorf("refusal must teach the attached external-harness path:\n%s", out)
 	}
 
 	// 3. A live terminal watcher is still refused. It can print the message to a
@@ -407,7 +407,7 @@ func TestSprintOwnerMustBeALiveEntryInBashyAgents(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a terminal watcher was mistaken for agent delivery:\n%s", out)
 	}
-	if !strings.Contains(out, "cannot wake") {
+	if !strings.Contains(out, "foreground tool process") {
 		t.Errorf("watcher refusal must explain the missing wake-up path:\n%s", out)
 	}
 	room.Leave(room.AgentClaimID("seatless"))

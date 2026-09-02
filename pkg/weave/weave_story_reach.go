@@ -153,10 +153,10 @@ func validateSprintClaimant(name string) error {
 	if sprintInboxDeliveryLive(name) {
 		return nil
 	}
-	return fmt.Errorf("sprint owner %q is not a live Bashy-managed session with verified inbox delivery.\n"+
-		"  launch the agent through Bashy under this exact identity, then take the sprint there.\n"+
-		"  `agents track` and `inbox --watch` only publish/print state; they cannot wake an external agentic harness",
-		name)
+	return fmt.Errorf("sprint owner %q has no verified inbox delivery path.\n"+
+		"  managed session: take the sprint normally under this exact identity.\n"+
+		"  external harness: retain and read `bashy sprint take <id> --as %s --watch` (or `start ... --watch`) as a live foreground tool process",
+		name, name)
 }
 
 // sprintOwnerUnanswered reports messages addressed to the owner that nobody has

@@ -91,6 +91,11 @@ type Card struct {
 // delivery capability, not merely a background process printing to a terminal.
 const CapInboxDelivery = "inbox-delivery-v1"
 
+// CapInboxStream means an external agent harness owns the member's foreground
+// stdout and is responsible for retaining and reading its inbox event stream.
+// Unlike CapInboxDelivery, Bashy is not claiming it can inject a model turn.
+const CapInboxStream = "inbox-stream-v1"
+
 // HasCapability reports an exact capability advertised by a room member.
 func HasCapability(c Card, capability string) bool {
 	for _, candidate := range c.Caps {
