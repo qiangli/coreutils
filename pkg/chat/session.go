@@ -326,6 +326,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Events:    tail != nil,
+		Caps:      []string{room.CapInboxDelivery},
 	}
 	if tail != nil {
 		card.EventsPath = tail.path
@@ -419,6 +420,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	if err := preparedInbox.Commit(); err != nil {
 		return s, fmt.Errorf("chat: opening prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
+	s.startInboxRelay(ctx)
 	return s, nil
 }
 
@@ -591,7 +593,9 @@ func (s *Session) say(text string) error {
 	// TUI that may or may not be listening. Say's budget gate above is unchanged
 	// — a turn is billed the same whichever transport carries it.
 	if s.acp != nil {
-		s.acp.prompt(text)
+		if err := s.acp.prompt(text); err != nil {
+			return err
+		}
 		s.mu.Lock()
 		s.lastSteer = time.Now()
 		s.mu.Unlock()

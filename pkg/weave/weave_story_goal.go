@@ -64,16 +64,16 @@ func sprintTakeoverIdentity(s *weaveStory, explicit string) string {
 	return weaveConductorName(explicit)
 }
 
-func sprintInboxWatcherLive(owner string) bool {
+func sprintInboxDeliveryLive(owner string) bool {
 	card, live, err := room.Find(room.AgentClaimID(owner))
-	return err == nil && live && card.Mode == "inbox" && card.Nick == owner
+	return err == nil && live && card.Nick == owner && room.HasCapability(card, room.CapInboxDelivery)
 }
 
 func sprintReadyLine(owner string) string {
-	if sprintInboxWatcherLive(owner) {
-		return fmt.Sprintf("READY: inbox watcher verified for %s", owner)
+	if sprintInboxDeliveryLive(owner) {
+		return fmt.Sprintf("READY: managed inbox delivery armed for %s", owner)
 	}
-	return fmt.Sprintf("NOT READY: start `bashy inbox --as %s --watch --json`; do not manage work until this exact-name watcher is live", owner)
+	return fmt.Sprintf("NOT READY: %s is not a Bashy-managed session with inbox delivery; a terminal `inbox --watch` does not wake an agent", owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {
@@ -470,8 +470,8 @@ func newSprintFocusCmd() *cobra.Command {
 		}
 		return runWeaveStoryMutate(cmd, id, "sprint focus", &flags, func(s *weaveStory) (string, error) {
 			owner := weaveStoryConductorName(s, "")
-			if !sprintInboxWatcherLive(owner) {
-				return "", fmt.Errorf("sprint owner %s has no live exact-name inbox watcher; start `bashy inbox --as %s --watch --json` before managing work", owner, owner)
+			if !sprintInboxDeliveryLive(owner) {
+				return "", fmt.Errorf("sprint owner %s has no verified managed inbox delivery; launch it through Bashy (a terminal `inbox --watch` alone cannot wake the agent)", owner)
 			}
 			next, err := nextSprintStory(s)
 			if err != nil {

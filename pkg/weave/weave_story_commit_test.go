@@ -91,7 +91,7 @@ func TestSprintHelpStatesTrackingAndOwnershipContract(t *testing.T) {
 		"create and link a sprint story before implementation begins",
 		"Sprint: #87",
 		"bashy sprint hooks install",
-		"watches the inbox under the sprint's",
+		"receives the inbox automatically under the",
 		"recorded owner name",
 		"Never delete or destroy work owned by another agent",
 	} {

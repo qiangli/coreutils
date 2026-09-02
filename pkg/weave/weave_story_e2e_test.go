@@ -69,6 +69,7 @@ func seedLiveAgent(t *testing.T, name string) {
 		Binding: "claude:opus5",
 		Role:    "conductor",
 		Mode:    "weave",
+		Caps:    []string{room.CapInboxDelivery},
 		PID:     os.Getpid(),
 		Joined:  time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
@@ -387,14 +388,31 @@ func TestSprintOwnerMustBeALiveEntryInBashyAgents(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a sprint was seated to a registered but DEAD agent:\n%s", out)
 	}
-	if !strings.Contains(out, "not RUNNING") {
-		t.Errorf("refusal must distinguish registered-but-dead from unknown:\n%s", out)
+	if !strings.Contains(out, "not a live Bashy-managed session") {
+		t.Errorf("refusal must distinguish an undeliverable session from unknown:\n%s", out)
 	}
-	if !strings.Contains(out, "owner-pid") {
-		t.Errorf("refusal must name --owner-pid; a card anchored to a dying command is the trap:\n%s", out)
+	if !strings.Contains(out, "agents track") || !strings.Contains(out, "cannot wake") {
+		t.Errorf("refusal must explain why roster publication is not agent delivery:\n%s", out)
 	}
 
-	// 3. Registered AND live — accepted.
+	// 3. A live terminal watcher is still refused. It can print the message to a
+	// terminal nobody is polling; it cannot inject a new turn into the agent.
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID("seatless"), Nick: "seatless", Tool: "claude",
+		Binding: "claude:opus5", Mode: "inbox", PID: os.Getpid(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runSprint(t, "start", "1", "--for", "1h")
+	if code == 0 {
+		t.Fatalf("a terminal watcher was mistaken for agent delivery:\n%s", out)
+	}
+	if !strings.Contains(out, "cannot wake") {
+		t.Errorf("watcher refusal must explain the missing wake-up path:\n%s", out)
+	}
+	room.Leave(room.AgentClaimID("seatless"))
+
+	// 4. Registered, live, AND managed-delivery capable — accepted.
 	seedLiveAgent(t, "seatless")
 	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
 		t.Fatalf("a registered, live agent must be able to take the seat: exit=%d\n%s", code, out)

@@ -361,8 +361,8 @@ The subject remains a normal conventional-commit summary; the trailers are
 the authoritative trace from delivered code back to sprint work.
 
 MANAGEMENT: the sprint owner is responsible for delivery from start to end,
-keeps priority and progress current, watches the inbox under the sprint's
-recorded owner name, and coordinates before touching another owner's work.
+keeps priority and progress current, receives the inbox automatically under the
+sprint's recorded owner name, and coordinates before touching another owner's work.
 Never delete or destroy work owned by another agent.
 
 When taking over a sprint, use its recorded owner name for message-board and

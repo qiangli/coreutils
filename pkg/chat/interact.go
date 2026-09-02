@@ -14,6 +14,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/room"
 )
@@ -167,6 +168,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Native:    native,
+		Caps:      []string{room.CapInboxDelivery},
 	}
 	if err := room.Join(card); err != nil {
 		var live *room.ErrLive
@@ -183,6 +185,11 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		return 1, err
 	}
 	defer room.Leave(card.ID)
+	releaseInbox, err := bus.BindInstance(name, card.ID)
+	if err != nil {
+		return 1, fmt.Errorf("chat: bind %s inbox to live session: %w", name, err)
+	}
+	defer func() { _ = releaseInbox() }()
 
 	// A capture log ALONGSIDE the native TUI is what makes a live human session
 	// observable/attachable. Best-effort: if it cannot be opened the session still
@@ -237,7 +244,11 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		delivered  chan error
 		runDone    chan struct{}
 		promptText = opt.Prompt
+		inboxReady atomic.Bool
 	)
+	if strings.TrimSpace(promptText) == "" {
+		inboxReady.Store(true)
+	}
 	if strings.TrimSpace(promptText) != "" {
 		ready = &interactiveReady{}
 		if logSink != nil {
@@ -253,11 +264,30 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			if err != nil {
 				cancel() // do not leave a session running after silently losing its instruction
 			} else {
+				inboxReady.Store(true)
 				fmt.Fprintf(status, "chat: instruction delivered to %s\n", card.Nick)
 			}
 			delivered <- err
 		}()
 	}
+
+	// A foreground session is still a managed agent session. Printing a watcher
+	// in another terminal cannot wake the model; inject the prepared inbox block
+	// through this session's control socket and acknowledge it only after the
+	// socket accepted the steer. Agent TUIs queue that steer for their next turn.
+	// When there is an opening instruction, let it land first so two control
+	// writers cannot race during TUI startup.
+	sessionDone := make(chan struct{})
+	defer close(sessionDone)
+	go runInboxRelay(ctx, sessionDone, inboxReady.Load,
+		func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
+		func(p bus.PreparedPreamble) error {
+			if err := agentctl.Say(sock, p.Text); err != nil {
+				return err
+			}
+			recordPreambleAdmission(context.Background(), p)
+			return p.Commit()
+		})
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.

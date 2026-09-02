@@ -134,14 +134,14 @@ func sprintOwnerInRoster(name string) bool {
 // but PRESENT. Reported, never enforced — see the package comment.
 func sprintOwnerLive(name string) bool { return sprintOwnerInRoster(name) }
 
-// validateSprintClaimant refuses to seat an owner that is not RUNNING.
+// validateSprintClaimant refuses to seat an owner that cannot receive a turn.
 //
 // This is stricter than validateSprintOwner and applies only where a sprint is
 // CLAIMED — take, start, resume. The agent doing the claiming is by definition
-// executing right now, so requiring it to appear in the live roster costs a
-// correct caller nothing and refuses the case that breaks collaboration: a
-// sprint seated to a name with no process behind it, whose room and inbox
-// accept messages that will never be read.
+// executing right now, so requiring a live managed-session delivery capability
+// costs a correct caller nothing and refuses both cases that break collaboration:
+// no process behind the name, or a watcher that only prints to an unobserved
+// terminal and therefore cannot wake the model.
 //
 // Liveness is NOT required afterwards. A conductor between turns is normal and
 // is only REPORTED, because enforcing it later would invalidate a sprint for
@@ -150,14 +150,13 @@ func validateSprintClaimant(name string) error {
 	if err := validateSprintOwner(name); err != nil {
 		return err
 	}
-	if sprintOwnerInRoster(name) {
+	if sprintInboxDeliveryLive(name) {
 		return nil
 	}
-	return fmt.Errorf("sprint owner %q is registered but not RUNNING on this host, so nothing would answer its room or inbox.\n"+
-		"  publish this session first:\n"+
-		"    bashy agents track start <id> --agent %s --role conductor --owner-pid <your harness pid>\n"+
-		"  (--owner-pid matters: a card anchored to a short-lived command dies with it, and the seat goes quiet)",
-		name, name)
+	return fmt.Errorf("sprint owner %q is not a live Bashy-managed session with verified inbox delivery.\n"+
+		"  launch the agent through Bashy under this exact identity, then take the sprint there.\n"+
+		"  `agents track` and `inbox --watch` only publish/print state; they cannot wake an external agentic harness",
+		name)
 }
 
 // sprintOwnerUnanswered reports messages addressed to the owner that nobody has

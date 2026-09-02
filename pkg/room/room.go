@@ -86,6 +86,21 @@ type Card struct {
 	LeaseUntil string `json:"lease_until,omitempty"`
 }
 
+// CapInboxDelivery means the member's owning harness watches its unified inbox
+// and injects unread input through the member's real control transport. It is a
+// delivery capability, not merely a background process printing to a terminal.
+const CapInboxDelivery = "inbox-delivery-v1"
+
+// HasCapability reports an exact capability advertised by a room member.
+func HasCapability(c Card, capability string) bool {
+	for _, candidate := range c.Caps {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
+}
+
 // Event is one timeline entry — a join/leave/steer/status/note the room records.
 type Event struct {
 	Seq       int64  `json:"seq"`

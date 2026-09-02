@@ -55,8 +55,9 @@ type acpDriver struct {
 	// signalling, would be a poor trade for a real protocol.
 	end chan acpTurn
 
-	mu   sync.Mutex
-	turn strings.Builder // the current turn's streamed message chunks
+	mu     sync.Mutex
+	turn   strings.Builder // the current turn's streamed message chunks
+	active bool            // exactly one ACP prompt may be in flight
 
 	closeOnce sync.Once
 }
@@ -193,6 +194,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Events:    true, // it reports its own turn boundaries — the best kind
+		Caps:      []string{room.CapInboxDelivery},
 	}
 	_ = room.Join(card)
 	s.acpCard = card.ID
@@ -222,20 +224,31 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	// because a TUI silently swallows keystrokes it is not ready for; a JSON-RPC
 	// request is either answered or it is an error.
 	if strings.TrimSpace(opt.Prompt) != "" {
-		drv.prompt(opt.Prompt)
+		if err := drv.prompt(opt.Prompt); err != nil {
+			s.closeACP()
+			return s, true, err
+		}
 	}
 	recordPreambleAdmission(ctx, preparedInbox)
 	if err := preparedInbox.Commit(); err != nil {
 		s.closeACP()
 		return s, true, fmt.Errorf("chat: opening ACP prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
+	s.startInboxRelay(ctx)
 	return s, true, nil
 }
 
 // prompt starts a turn. It does not block: Start and Say both return as soon as
 // the agent has been asked, and WaitIdle is where a caller waits for the answer
 // — the same shape the pty path has, so callers do not change.
-func (d *acpDriver) prompt(text string) {
+func (d *acpDriver) prompt(text string) error {
+	d.mu.Lock()
+	if d.active {
+		d.mu.Unlock()
+		return fmt.Errorf("chat: ACP turn is still active")
+	}
+	d.active = true
+	d.mu.Unlock()
 	// Drop any unread report from a previous turn: this turn's boundary is the
 	// only one that can end this turn.
 	select {
@@ -252,6 +265,7 @@ func (d *acpDriver) prompt(text string) {
 		d.mu.Lock()
 		said := d.turn.String()
 		d.turn.Reset()
+		d.active = false
 		d.mu.Unlock()
 		select {
 		case d.end <- acpTurn{text: said, reason: reason, err: err}:
@@ -259,6 +273,15 @@ func (d *acpDriver) prompt(text string) {
 		}
 		endGenAIObservation(endObservation, d.launch, text, said, string(reason), err)
 	}()
+	return nil
+}
+
+func (d *acpDriver) idle() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Preserve the completed turn for the caller's WaitIdle. Starting the inbox
+	// turn before that result is consumed would make prompt() drain it as stale.
+	return !d.active && len(d.end) == 0
 }
 
 // waitACPTurn is WaitIdle for an ACP session: it waits for the agent to SAY the
