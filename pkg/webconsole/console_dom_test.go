@@ -33,6 +33,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -53,7 +54,9 @@ func domEnv(t *testing.T, opts Options) (string, context.Context, func() []strin
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	ctx, cancel := chromedp.NewContext(context.Background())
+	alloc, acancel := chromedp.NewExecAllocator(context.Background(), browserOpts()...)
+	t.Cleanup(acancel)
+	ctx, cancel := chromedp.NewContext(alloc)
 	t.Cleanup(cancel)
 	ctx, tcancel := context.WithTimeout(ctx, 90*time.Second)
 	t.Cleanup(tcancel)
@@ -72,6 +75,26 @@ func domEnv(t *testing.T, opts Options) (string, context.Context, func() []strin
 		}
 	})
 	return srv.URL, ctx, func() []string { return errs }
+}
+
+// browserOpts builds the browser launch flags.
+//
+// Chrome's own sandbox is left ON everywhere it works. On Linux it does not:
+// Ubuntu 23.10+ (which is what the CI runner is) disables unprivileged user
+// namespaces through AppArmor, so the zygote finds no usable sandbox and
+// Chrome aborts before the first navigation — every test in this file failed
+// that way on the Linux leg while passing on macOS and Windows.
+//
+// --no-sandbox is the documented workaround and is safe HERE for a reason that
+// does not generalise: this browser is disposable, it is launched by the test,
+// and the only thing it ever loads is the loopback console under test. The
+// alternative is not a safer Linux run, it is no Linux run at all.
+func browserOpts() []chromedp.ExecAllocatorOption {
+	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	if goruntime.GOOS == "linux" {
+		opts = append(opts, chromedp.NoSandbox)
+	}
+	return opts
 }
 
 func assertNoJSErrors(t *testing.T, where string, errs []string) {
