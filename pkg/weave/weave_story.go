@@ -13,6 +13,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/principal"
 	"github.com/qiangli/coreutils/pkg/role"
+	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -83,9 +84,34 @@ type sprintRun struct {
 // ephemerally (no stable process), so a lease goes stale when its
 // holder stops checkpointing (death by SIGKILL / token exhaustion /
 // OOM). A graceful handoff clears it; a successor takes a stale one.
+//
+// AttachedPID does not overturn that — it is the exception that proves it.
+// The heartbeat rule is the only one available when nothing is running, and
+// it stays the rule. But when a process IS holding the seat open, refusing to
+// record which one throws away the single piece of evidence that can be
+// rechecked at read time, and leaves a killed watch looking alive for a TTL.
 type weaveStoryLease struct {
 	Holder string    `json:"holder"`
 	At     time.Time `json:"at"`
+	// AttachedPID is set ONLY while a foreground process is holding this seat
+	// open on this host — today the `sprint take/start --watch` stream. It is
+	// not a second liveness model competing with the heartbeat; it is what
+	// makes the heartbeat's own claim checkable in the one case where the
+	// heartbeat lies.
+	//
+	// The lie is specific. An attached watch beats every TTL/3, so its last
+	// beat is up to ten minutes old when the process dies — and a heartbeat
+	// records only that somebody was alive THEN. Killed at beat+1s, the seat
+	// goes on reading healthy for the rest of the TTL with nothing running,
+	// which is exactly the ghost `bashy agents` reported. A holder that named
+	// no process could not be caught out; one that names its own can.
+	//
+	// Zero is the ordinary case and means "no process claims to be holding
+	// this open" — an ephemeral conductor refreshing by reading its mail
+	// (RefreshSprintOwnerActivity) MUST clear it, because a one-shot read's
+	// pid dies with the command and would otherwise sentence the seat to
+	// death the moment the read returned.
+	AttachedPID int `json:"attached_pid,omitempty"`
 }
 
 // SprintLeaseTTL is how long a conductor's heartbeat stays believable.
@@ -138,16 +164,16 @@ func weaveStoryLeaseState(s *weaveStory) (holder string, stale bool, free bool) 
 // seat expresses a sprint's conductor lease as the shared occupancy type, so
 // "is this held, and by whom" is answered by one rule rather than three.
 //
-// The stored shape is unchanged: a sprint lease records only a holder and a
-// timestamp, and the TTL is this package's constant. What changes is the
-// VERDICT — a lease with no timestamp now reads as unknown rather than as
-// silently fresh, which is what a zero time compared against a TTL used to
-// produce.
+// The TTL is this package's constant, and the VERDICT is what this function
+// adds — a lease with no timestamp reads as unknown rather than as silently
+// fresh, which is what a zero time compared against a TTL used to produce.
+// A dead attached process is folded in here, at the one place all three
+// liveness consumers already agree to ask, rather than at each of them.
 func (s *weaveStory) seat() role.Seat {
 	if s == nil || s.Lease == nil {
 		return role.Seat{TTL: SprintLeaseTTL}
 	}
-	return role.Seat{
+	seat := role.Seat{
 		Holder: s.Lease.Holder,
 		// A sprint lease has one timestamp doing both jobs: it is stamped on
 		// take and refreshed on checkpoint, so it is the heartbeat. Reporting
@@ -156,6 +182,20 @@ func (s *weaveStory) seat() role.Seat {
 		HeartbeatAt: s.Lease.At,
 		TTL:         SprintLeaseTTL,
 	}
+	// A HEARTBEAT IS A CLAIM ABOUT A MOMENT; A NAMED PROCESS IS CHECKABLE NOW.
+	//
+	// When a foreground watch is holding this seat open it stamps its pid, and
+	// it beats only every TTL/3 — so a watch killed just after a beat leaves a
+	// timestamp that is still comfortably "fresh" and a seat that nothing is
+	// occupying. Withdrawing the heartbeat (rather than inventing a fourth
+	// liveness word the shared type does not have) lands it on UNKNOWN: held
+	// per the record, with nothing saying it breathes. That is exactly what is
+	// true, and it is what lets a successor take the seat instead of waiting
+	// out a TTL behind a conductor that is already gone.
+	if s.Lease.AttachedPID > 0 && !room.PidAlive(s.Lease.AttachedPID) {
+		seat.HeartbeatAt = time.Time{}
+	}
+	return seat
 }
 
 // weaveConductorIdentity resolves process-local evidence for the acting

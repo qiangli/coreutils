@@ -32,6 +32,61 @@ func SprintClaimIdentity(id int64, explicit string, takeover bool) (string, erro
 // manager. Attached inbox acknowledgement uses this so a manager that is
 // actively consuming its delivery stream cannot simultaneously age stale.
 func RefreshSprintManagerLease(id int64, owner string) error {
+	return writeSprintManagerLease(id, owner, 0)
+}
+
+// HoldSprintManagerLease is the beat of a process that is holding the seat
+// open in the foreground, and it records that process. Use it instead of
+// RefreshSprintManagerLease whenever the caller will still be running when the
+// heartbeat it just wrote is read back — see weaveStoryLease.AttachedPID for
+// why the difference is load-bearing rather than cosmetic.
+func HoldSprintManagerLease(id int64, owner string, pid int) error {
+	if pid < 0 {
+		pid = 0
+	}
+	return writeSprintManagerLease(id, owner, pid)
+}
+
+// ReleaseSprintManagerLease stands the seat down when the stream that was
+// holding it open detaches.
+//
+// WITHOUT THIS, DETACHING WAS INVISIBLE. The attached watch is documented as
+// the seat being held for as long as the process runs, but ending it wrote
+// nothing: the last beat stayed on the lease, so `bashy agents` kept reporting
+// a healthy conductor for the remainder of the TTL with the process provably
+// gone. Symmetry is the fix — a beat that claims the seat on attach must be
+// answered by a stand-down on detach.
+//
+// The HOLDER is deliberately kept. Clearing it would erase who had the seat
+// and hand a successor a blank record; what is retracted is the CLAIM TO BE
+// BREATHING, which is the heartbeat alone. A conductor that detaches the
+// stream but keeps working simply reappears on its next inbox read — the same
+// evidence rule as everywhere else.
+//
+// Holder-checked like every other lease write, so a watch that exits because
+// somebody TOOK the seat cannot stand down the new occupant on its way out.
+func ReleaseSprintManagerLease(id int64, owner string) error {
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return err
+	}
+	owner = strings.TrimSpace(owner)
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		s := findWeaveStory(q, id)
+		if s == nil {
+			return fmt.Errorf("sprint #%d not found", id)
+		}
+		if s.Lease == nil || !strings.EqualFold(s.Lease.Holder, owner) {
+			return fmt.Errorf("sprint #%d is not held by %s", id, owner)
+		}
+		s.Lease.At = time.Time{}
+		s.Lease.AttachedPID = 0
+		s.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+func writeSprintManagerLease(id int64, owner string, pid int) error {
 	dir, err := sprintStoreDir()
 	if err != nil {
 		return err
@@ -47,6 +102,7 @@ func RefreshSprintManagerLease(id int64, owner string) error {
 		}
 		now := time.Now().UTC()
 		s.Lease.At = now
+		s.Lease.AttachedPID = pid
 		s.UpdatedAt = now
 		return nil
 	})
@@ -97,6 +153,10 @@ func RefreshSprintOwnerActivity(name string) {
 		for _, s := range q.Stories {
 			if s != nil && s.Lease != nil && strings.EqualFold(s.Lease.Holder, name) {
 				s.Lease.At = now
+				// An inbox read is an EVENT, not a tenancy: this command exits
+				// in a moment, so leaving a previous holder's pid on the lease
+				// would make the seat die with a process the reader never was.
+				s.Lease.AttachedPID = 0
 				s.UpdatedAt = now
 			}
 		}
