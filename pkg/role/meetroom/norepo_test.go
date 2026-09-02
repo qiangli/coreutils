@@ -45,3 +45,30 @@ func TestAssume_MinutesNeverLandInTheRepo(t *testing.T) {
 		_ = Release(c, "agent-1")
 	}
 }
+
+// A ROLE ROOM DECLARES ITS SEAT AS THE DEFAULT ADDRESSEE.
+//
+// The room is the place a sprint advertises for questions, so an unaddressed
+// message there is not addressed to nobody — it belongs to whoever is
+// accountable. The label is stored, never the holder: the room outlives its
+// conductor by design, and mail that named the person holding the lease when it
+// was written would go with them at exactly the handoff the room exists for.
+func TestRoleRoomDeclaresItsSeatAsDefaultAddressee(t *testing.T) {
+	var got meet.CreateOptions
+	prev := createRoom
+	createRoom = func(opts meet.CreateOptions) (*meet.State, error) {
+		got = opts
+		return &meet.State{ID: "room-1", Room: 1}, nil
+	}
+	t.Cleanup(func() { createRoom = prev })
+
+	if _, err := Assume(role.Assignment{Kind: role.Conductor, Ref: "99"}, "trestle"); err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultTo != "conductor:99" {
+		t.Fatalf("DefaultTo = %q, want the seat label a person types", got.DefaultTo)
+	}
+	if got.DefaultTo == "trestle" {
+		t.Fatal("the room stored its holder — mail would not survive a handover")
+	}
+}

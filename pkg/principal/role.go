@@ -20,6 +20,13 @@ import "strings"
 type HostRole struct {
 	Label string
 	Topic string
+	// Holder is who occupies the seat RIGHT NOW, or empty for a vacant one.
+	//
+	// It is carried rather than looked up because a seat with no answer to "who
+	// is in it" is not a usable answer: the reason to ask about `conductor:99`
+	// is to know who is accountable for sprint 99 today. It is also why nothing
+	// may CACHE this — the holder is exactly the part that changes.
+	Holder string
 }
 
 // roleSources are the registered role tables. Composed, never replaced: the
@@ -58,8 +65,8 @@ func (r *Resolver) resolveRole(name string) (Resolution, bool) {
 		return Resolution{
 			URN: URN(KindRole, hr.Label, r.owner), Kind: KindRole, Name: hr.Label,
 			Owner: r.owner, Source: SourceHost, Confidence: Declared,
-			Summary: "addressable seat on this host — mail to it survives a handover",
-			Facts:   [][2]string{{"topic", hr.Topic}},
+			Summary: roleSummary(hr),
+			Facts:   roleFacts(hr),
 			Contacts: []Contact{{
 				Method: "mb", Address: "bashy ping " + hr.Label + " \"<message>\"",
 				Source: SourceHost, Confidence: Declared, Live: true, Cost: 5,
@@ -67,4 +74,23 @@ func (r *Resolver) resolveRole(name string) (Resolution, bool) {
 		}, true
 	}
 	return Resolution{}, false
+}
+
+// roleSummary names the CURRENT holder, because that is the question. A seat
+// answer that only confirms the seat exists sends the asker off to find the
+// same thing again somewhere else.
+func roleSummary(hr HostRole) string {
+	if h := strings.TrimSpace(hr.Holder); h != "" {
+		return "addressable seat on this host, currently held by " + h +
+			" — mail to it survives a handover"
+	}
+	return "addressable seat on this host, currently VACANT — mail to it waits for a holder"
+}
+
+func roleFacts(hr HostRole) [][2]string {
+	facts := [][2]string{{"topic", hr.Topic}}
+	if h := strings.TrimSpace(hr.Holder); h != "" {
+		return append(facts, [2]string{"holder", h})
+	}
+	return append(facts, [2]string{"holder", "(vacant)"})
 }

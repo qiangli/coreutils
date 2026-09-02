@@ -93,6 +93,20 @@ func (a Assignment) Topic() string {
 	return fmt.Sprintf("%s.%s", a.Kind, strings.TrimSpace(a.Ref))
 }
 
+// Label is what a PERSON types to address the seat: "steward",
+// "conductor:99". Topic is the wire address; this is its human spelling, and
+// the two must stay in step because a label a reader cannot resolve back to a
+// topic is an address that silently reaches nobody.
+//
+// The steward is scoped to the host rather than to a ref, so it has no
+// qualifier — there is exactly one seat and "steward" names it.
+func (a Assignment) Label() string {
+	if a.Kind == Steward {
+		return string(Steward)
+	}
+	return fmt.Sprintf("%s:%s", a.Kind, strings.TrimSpace(a.Ref))
+}
+
 // Contact is where a role's holder can be reached.
 type Contact struct {
 	Kind string `json:"kind"`

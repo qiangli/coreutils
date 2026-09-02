@@ -81,12 +81,13 @@ func TestConductorRoles_EmptyIsNotAnError(t *testing.T) {
 	}
 }
 
-// Role discovery is part of every unified-inbox snapshot. Looking for a role
-// in a repository that has never used weave must not create the repository's
-// queue tag (or even the top-level weave state directory).
-func TestConductorRoles_AbsentQueueIsSideEffectFree(t *testing.T) {
+// Role discovery is part of every unified-inbox snapshot. Looking for a role on
+// a host with no sprint board must create neither the board nor the
+// repository's weave queue tag (or even the top-level weave state directory).
+func TestConductorRoles_AbsentBoardIsSideEffectFree(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
 	repo := filepath.Join(t.TempDir(), "repo")
 	if err := os.Mkdir(repo, 0o755); err != nil {
 		t.Fatal(err)
@@ -102,6 +103,10 @@ func TestConductorRoles_AbsentQueueIsSideEffectFree(t *testing.T) {
 
 	tag, _ := weaveQueueNames(root)
 	wantAbsent := filepath.Join(weaveStateRoot(home), tag)
+	board, err := sprintStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
 		if got := conductorRoles(); got != nil {
 			t.Fatalf("conductorRoles() = %+v, want no roles", got)
@@ -113,6 +118,9 @@ func TestConductorRoles_AbsentQueueIsSideEffectFree(t *testing.T) {
 		_ = bus.AddressedToRole("conductor:999")
 	}
 
+	if _, err := os.Stat(board); !os.IsNotExist(err) {
+		t.Fatalf("read-only role lookup created the sprint board %s (stat err %v)", board, err)
+	}
 	if _, err := os.Stat(wantAbsent); !os.IsNotExist(err) {
 		t.Fatalf("read-only role lookup created queue tag %s (stat err %v)", wantAbsent, err)
 	}
@@ -121,9 +129,15 @@ func TestConductorRoles_AbsentQueueIsSideEffectFree(t *testing.T) {
 	}
 }
 
-func TestConductorRoles_ReadOnlyResolverFindsExistingQueue(t *testing.T) {
+// THE REGRESSION. A sprint board is USER-GLOBAL; the per-repo weave queue is
+// not the same store. Reading the wrong one resolved zero addresses on every
+// host and said nothing, so `whois conductor:<n>` answered "names nothing on
+// this host" over a live lease. This test deliberately writes a live lease into
+// BOTH stores with different sprint ids: only the board's may be answered.
+func TestConductorRoles_ResolvesFromTheUserGlobalSprintBoard(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
 	repo := filepath.Join(t.TempDir(), "repo")
 	if err := os.Mkdir(repo, 0o755); err != nil {
 		t.Fatal(err)
@@ -136,11 +150,20 @@ func TestConductorRoles_ReadOnlyResolverFindsExistingQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := weaveQueueDir(root)
+	queueDir, err := weaveQueueDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := saveWeaveQueue(dir, &weaveQueue{Stories: []*weaveStory{{
+	if err := saveWeaveQueue(queueDir, &weaveQueue{Stories: []*weaveStory{{
+		ID: 41, Lease: &weaveStoryLease{Holder: "not-the-board", At: time.Now()},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	board, err := sprintStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWeaveQueue(board, &weaveQueue{Stories: []*weaveStory{{
 		ID: 9, Lease: &weaveStoryLease{Holder: "codex", At: time.Now()},
 	}}}); err != nil {
 		t.Fatal(err)
@@ -148,6 +171,30 @@ func TestConductorRoles_ReadOnlyResolverFindsExistingQueue(t *testing.T) {
 
 	got := conductorRoles()
 	if len(got) != 1 || got[0].Label != "conductor:9" || got[0].Holder != "codex" {
-		t.Fatalf("conductorRoles() = %+v, want existing live queue role", got)
+		t.Fatalf("conductorRoles() = %+v, want the live lease from the sprint board", got)
+	}
+}
+
+// A sprint spans repos, so its conductor address may not depend on which
+// checkout the reader happens to stand in — including standing in no repo at
+// all, which is where a plain `bashy inbox` is usually run from.
+func TestConductorRoles_ResolveOutsideAnyRepository(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	board, err := sprintStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWeaveQueue(board, &weaveQueue{Stories: []*weaveStory{{
+		ID: 12, Lease: &weaveStoryLease{Holder: "trestle", At: time.Now()},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	got := conductorRoles()
+	if len(got) != 1 || got[0].Label != "conductor:12" {
+		t.Fatalf("conductorRoles() = %+v, want the board role from outside a repo", got)
 	}
 }

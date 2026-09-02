@@ -939,9 +939,7 @@ func newTellCmd() *cobra.Command {
 				}
 				return err
 			}
-			if ev.Kind == "message" {
-				writeTellReceipts(cmd.ErrOrStderr(), args[0], ev)
-			}
+			writeTellReceipts(cmd.ErrOrStderr(), args[0], ev)
 			return nil
 		},
 	}
@@ -1036,6 +1034,11 @@ func newReadCmd() *cobra.Command {
 	return cmd
 }
 
+// writeTellReceipts tells the SENDER who the message went to and how far it
+// got. The resolution half is not decoration: a room's default addressee is
+// stored as a seat label, so without rendering it the sender believes they
+// addressed somebody and the recipient was never named — which is the Sprint 98
+// failure running in the other direction.
 func writeTellReceipts(w io.Writer, ref string, ev Event) {
 	st, err := roomOf(ref)
 	if err != nil {
@@ -1061,8 +1064,41 @@ func writeTellReceipts(w io.Writer, ref string, ev Event) {
 	}
 	seq := int64(len(events))
 	for _, r := range recipients {
-		fmt.Fprintf(w, "%s: %s\n", boardDeliveryState(st.ID, r, seq), r)
+		holder, live := bus.RoleHolderFor(r)
+		if !live && !isRoleAddress(r) {
+			fmt.Fprintf(w, "%s: %s\n", boardDeliveryState(st.ID, r, seq), r)
+			continue
+		}
+		if !live {
+			// The seat is real and vacant. Durable, addressed, undeliverable
+			// right now — and it resolves itself the moment somebody takes the
+			// lease, which is the entire point of addressing a seat.
+			fmt.Fprintf(w, "→ %s (no current holder — resolves when the seat is taken)\n", r)
+			fmt.Fprintf(w, "queued: %s\n", r)
+			continue
+		}
+		fmt.Fprintf(w, "→ %s (currently %s)\n", r, holder)
+		fmt.Fprintf(w, "%s: %s\n", boardDeliveryState(st.ID, holder, seq), holder)
 	}
+}
+
+// isRoleAddress reports a seat-shaped address ("conductor:99", "steward").
+//
+// It is deliberately shape-based rather than a registry lookup: an address the
+// host cannot resolve must still RENDER as the seat it names. The alternative
+// prints a bare label as if it were an agent name, which is how mail becomes
+// unattributable — the same argument bus.RoleLabelFor makes for the reverse
+// direction.
+func isRoleAddress(to string) bool {
+	to = strings.TrimSpace(to)
+	if to == "" {
+		return false
+	}
+	if strings.EqualFold(to, "steward") {
+		return true
+	}
+	kind, ref, ok := strings.Cut(to, ":")
+	return ok && strings.TrimSpace(kind) != "" && strings.TrimSpace(ref) != ""
 }
 
 func boardDeliveryState(id, reader string, seq int64) string {

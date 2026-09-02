@@ -134,3 +134,46 @@ func TestLoginDBAddsAWriteContact(t *testing.T) {
 		}
 	}
 }
+
+// A seat answer must name its CURRENT HOLDER. Knowing that `conductor:99` is
+// an address is not the question anybody asks — they ask who is accountable for
+// sprint 99 today, and an answer that omits it sends them off to look somewhere
+// else for the same fact.
+func TestWhoisNamesTheSeatsCurrentHolder(t *testing.T) {
+	withRoles(t, HostRole{Label: "conductor:99", Topic: "conductor.99", Holder: "trestle"})
+	r, _ := testResolver(t, testEnv(t))
+
+	ans := r.Resolve("conductor:99")
+	if !ans.Resolved || ans.Ambiguous() {
+		t.Fatalf("a registered seat did not resolve cleanly: %+v", ans)
+	}
+	res := ans.Matches[0]
+	if !strings.Contains(res.Summary, "trestle") {
+		t.Errorf("summary = %q, want the current holder named", res.Summary)
+	}
+	var holder string
+	for _, f := range res.Facts {
+		if f[0] == "holder" {
+			holder = f[1]
+		}
+	}
+	if holder != "trestle" {
+		t.Errorf("holder fact = %q, want trestle", holder)
+	}
+}
+
+// A vacant seat says so rather than reading as held. The address stays valid —
+// that is what makes mail survive a handover — but "who is in it" has an honest
+// answer and it is not silence.
+func TestWhoisReportsAVacantSeatAsVacant(t *testing.T) {
+	withRoles(t, HostRole{Label: "steward", Topic: "steward.host-1"})
+	r, _ := testResolver(t, testEnv(t))
+
+	ans := r.Resolve("steward")
+	if !ans.Resolved {
+		t.Fatal("a vacant seat must still resolve as an address")
+	}
+	if !strings.Contains(strings.ToLower(ans.Matches[0].Summary), "vacant") {
+		t.Errorf("summary = %q, want the vacancy stated", ans.Matches[0].Summary)
+	}
+}

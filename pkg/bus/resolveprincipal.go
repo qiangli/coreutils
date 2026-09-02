@@ -41,7 +41,7 @@ func init() {
 		roles := HostRoles()
 		out := make([]principal.HostRole, 0, len(roles))
 		for _, r := range roles {
-			out = append(out, principal.HostRole{Label: r.Label, Topic: r.Topic})
+			out = append(out, principal.HostRole{Label: r.Label, Topic: r.Topic, Holder: r.Holder})
 		}
 		return out
 	})

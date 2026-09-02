@@ -109,6 +109,14 @@ func directedEvent(e Event, reader string) bool {
 	if strings.EqualFold(strings.TrimSpace(e.To), reader) {
 		return true
 	}
+	// A seat address is resolved HERE, at read time, and never at write time.
+	// Mail addressed to `conductor:99` is directed at whoever holds that lease
+	// when it is read, so a handover re-targets it instead of orphaning it
+	// against the name of whoever held it when it was sent.
+	if holder, ok := bus.RoleHolderFor(strings.TrimSpace(e.To)); ok &&
+		strings.EqualFold(strings.TrimSpace(holder), reader) {
+		return true
+	}
 	text := strings.TrimSpace(e.Text)
 	if !strings.HasPrefix(text, "@") {
 		return false

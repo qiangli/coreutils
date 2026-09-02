@@ -114,6 +114,35 @@ func RoleLabelFor(topic string) string {
 	return topic
 }
 
+// RoleHolderFor resolves a role LABEL to whoever holds the seat RIGHT NOW.
+//
+// This is the read-time half of "the address is the seat, not its holder". A
+// message is stored addressed to `conductor:99`; who that is gets decided every
+// time somebody reads it, so a handover re-targets mail already in flight
+// instead of orphaning it against a name nobody answers to any more. Never
+// call this at write time and store the result — that is precisely the bug the
+// role address exists to prevent.
+//
+// ok reports that the LABEL names a live seat on this host. A seat that exists
+// but is vacant is not one: there is nobody to deliver to, and saying so is the
+// honest answer.
+func RoleHolderFor(label string) (holder string, ok bool) {
+	label = strings.TrimSpace(label)
+	if label == "" || HostRoles == nil {
+		return "", false
+	}
+	for _, r := range HostRoles() {
+		if !strings.EqualFold(r.Label, label) && !strings.EqualFold(r.Topic, label) {
+			continue
+		}
+		if strings.TrimSpace(r.Holder) == "" {
+			return "", false
+		}
+		return r.Holder, true
+	}
+	return "", false
+}
+
 // AddressedToRole reports a post addressed to a role that exists on this host.
 //
 // This is what makes role mail DIRECTED for a reader rather than background

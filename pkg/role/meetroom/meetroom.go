@@ -19,6 +19,10 @@ import (
 // The holder joins as a PARTICIPANT rather than as the chair: meet requires a
 // chair to have someone to call on, and this room deliberately has no roster
 // when it opens — existing before anyone needs it is the entire point.
+// createRoom is meet.Create behind a seam, so a test can assert WHAT this
+// package asks for without opening a real room on the developer's host.
+var createRoom = meet.Create
+
 func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	if strings.TrimSpace(a.Ref) == "" {
 		return nil, fmt.Errorf("role: assignment has no ref")
@@ -27,7 +31,7 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	if t := strings.TrimSpace(a.Title); t != "" {
 		subject += ": " + t
 	}
-	create := meet.Create
+	create := createRoom
 	kind := "meet"
 	if a.Kind == role.Steward {
 		create = func(opts meet.CreateOptions) (*meet.State, error) {
@@ -41,6 +45,11 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 		Participants: []string{holder},
 		Initiator:    holder,
 		Agenda:       agendaFor(a.Kind),
+		// Unaddressed mail here belongs to the SEAT, not to whoever holds it
+		// today. Storing the label makes the room outlive its conductor without
+		// the mail going with them — the room follows the sprint's column, the
+		// address follows the sprint's lease, and neither follows the agent.
+		DefaultTo: a.Label(),
 		// Never into the repo. A role room opens on every assume, so the default
 		// (<repo>/docs/meetings/) turned lease churn into tracked files naming a
 		// real host and user — in public source. See meet.OutStore.

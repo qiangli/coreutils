@@ -157,6 +157,9 @@ type CreateOptions struct {
 	MaxTurns     int
 	MaxStalls    int
 	Steerable    bool
+	// DefaultTo is the room's late-bound default addressee: a role LABEL
+	// ("conductor:99"), resolved to its holder at READ time. See State.DefaultTo.
+	DefaultTo string
 	// Board opens a room where participants read and post on their own turns: no
 	// chair, no spawned secretary. It implies NoSecretary — a board keeps no
 	// minutes and must never arm a pending one.
@@ -282,6 +285,7 @@ func Create(opts CreateOptions) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	st.DefaultTo = strings.TrimSpace(opts.DefaultTo)
 	if strings.TrimSpace(st.Secretary) == "" && !opts.NoSecretary && StartRoomSecretary != nil {
 		st.SecretaryPending = true
 		st.SecretaryBand = opts.SecretaryBand
@@ -440,7 +444,23 @@ func PostAs(ref, author, to, text string) (Event, error) {
 	if who == "" {
 		who = st.Human
 	}
-	return record(st, "human", who, string(RoleHuman), text)
+	// A chaired room carries an addressee too. It did not, and that was half of
+	// why a sprint's own room was write-only: a question asked there named
+	// nobody, so nobody was accountable for answering it. An explicit --to wins;
+	// otherwise the room's late-bound DefaultTo applies, which for a sprint room
+	// is `conductor:<n>` — the SEAT. The label is stored verbatim and resolved to
+	// a holder at READ time, so a handover re-targets mail already in flight.
+	target := strings.TrimSpace(strings.TrimPrefix(to, "@"))
+	if target == "" {
+		target = strings.TrimSpace(st.DefaultTo)
+	} else if _, isRole := bus.RoleHolderFor(target); !isRole {
+		target = canonAgent(target)
+	}
+	ev := Event{
+		Round: st.Round, Speaker: who, Role: string(RoleHuman),
+		Kind: "human", To: target, Text: text, TS: nowFn(),
+	}
+	return recordFull(st, ev)
 }
 
 func participantSeat(st *State, name string) bool {

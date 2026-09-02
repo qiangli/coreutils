@@ -258,6 +258,18 @@ type State struct {
 	// round-robin); Board only says the orchestrator never drives a turn itself.
 	Board bool `json:"board,omitempty"`
 
+	// DefaultTo is where UNADDRESSED mail in this room lands, held as a
+	// LATE-BOUND role label ("conductor:99") and never as a copied name.
+	//
+	// A sprint's room is the place its conductor advertises for questions, so
+	// "no --to" there does not mean "nobody" — it means the seat that is
+	// accountable for the sprint. Storing the label rather than the holder is
+	// the whole point: a lease changes hands, and mail addressed to the person
+	// who held it yesterday follows the agent instead of the responsibility.
+	// Resolution happens when the message is READ. See
+	// dhnt/docs/agent-inbox-unified-delivery.md sections 3-4.
+	DefaultTo string `json:"default_to,omitempty"`
+
 	// OpenTo, when set, DELEGATES SEATING to a declared audience: an agent that
 	// matches it may self-seat on its first board post, recorded as a `join`
 	// event so the roster still shows who came. Empty (the default) keeps seating
