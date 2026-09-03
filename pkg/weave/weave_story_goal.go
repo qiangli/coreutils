@@ -64,13 +64,29 @@ func sprintTakeoverIdentity(s *weaveStory, explicit string) string {
 	return weaveConductorName(explicit)
 }
 
+// sprintInboxDeliveryLive reports whether mail addressed to this owner can
+// actually arrive. It is a THIN PROJECTION of room.OwnerTransportFor and holds
+// no logic of its own, deliberately.
+//
+// It used to carry a private copy of that check, and two predicates answering
+// one question about one seat is the defect sprint 105 was opened to fix: the
+// board and `bashy agents` disagreed about the same conductor at the same
+// instant. A second copy here would have rebuilt exactly that.
+//
+// ONE BEHAVIOUR CHANGED IN THE MERGE, on purpose rather than by inheritance.
+// The old copy accepted CapInboxStream ONLY when the card's Mode was
+// "sprint-inbox", so a live `bashy inbox --watch --as X` (Mode "inbox") did not
+// count as reachable. It should: an agent holding its own inbox watch open has
+// undertaken to read it, which is the entire content of the attached rung. The
+// shared predicate counts it, so this now reports reachable in a case that
+// previously read as unreachable.
+//
+// The old copy also required card.Nick == owner. The shared predicate resolves
+// through AgentClaimID with the legacy bare-name fallback, which is the same
+// identity check every other caller uses.
 func sprintInboxDeliveryLive(owner string) bool {
-	card, live, err := room.Find(room.AgentClaimID(owner))
-	if err != nil || !live || card.Nick != owner {
-		return false
-	}
-	return room.HasCapability(card, room.CapInboxDelivery) ||
-		(card.Mode == "sprint-inbox" && room.HasCapability(card, room.CapInboxStream))
+	transport, _ := room.OwnerTransportFor(owner)
+	return transport.Deliverable()
 }
 
 // sprintReadyLine tells the new conductor the ONE thing it now has to do.
