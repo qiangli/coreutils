@@ -36,12 +36,31 @@ func TestResolveWithCatalogRendersNicknameFromFleetTemplate(t *testing.T) {
 
 func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	t.Setenv(UnsafeLaunchEnv, "1")
-	l, err := ResolveWithCatalog("opencode:deepseek-v4-pro", Options{}, testCatalog(t.TempDir()))
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveAgent(fleet.Agent{Name: "reviewer", Tool: "opencode", Model: "deepseek-v4-pro"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := ResolveWithCatalog("opencode:deepseek-v4-pro", Options{}, testCatalog(root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "run --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("launch = %+v", l)
+	}
+}
+
+func TestResolveWithCatalogRefusesUnregisteredLaunchIdentity(t *testing.T) {
+	for _, name := range []string{"claude", "codex:opus5"} {
+		_, err := ResolveWithCatalog(name, Options{}, testCatalog(t.TempDir()))
+		if err == nil {
+			t.Fatalf("ResolveWithCatalog(%q) unexpectedly succeeded", name)
+		}
+		for _, want := range []string{name, "bashy agents add " + name} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal for %q missing %q: %v", name, want, err)
+			}
+		}
 	}
 }
 

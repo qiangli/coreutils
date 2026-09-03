@@ -37,8 +37,7 @@ import (
 type weaveAgentLaunch = agentlaunch.Launch
 
 // weaveResolveAgent resolves a name to an agent: a nickname, an alias, or a
-// bare tool:model. It returns (nil, nil) when the name is not an agent —
-// a bare tool name, or something the registry has never heard of.
+// bare tool:model. It returns (nil, nil) when the name is not an agent.
 //
 // Availability is NOT decided here. This answers "what would this launch",
 // which is the question both `weave start` and `weave fleet` begin with.
@@ -165,8 +164,11 @@ func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch,
 		return nil, nil, nil // the conductor wrote a raw executable argv; honor it
 	}
 	l, err := weaveResolveAgent(toolArgs[0])
-	if err != nil || l == nil {
+	if err != nil {
 		return nil, nil, err
+	}
+	if l == nil {
+		return nil, nil, agentlaunch.RegistrationRefusal(toolArgs[0])
 	}
 	prompt := strings.TrimSpace(body)
 	if prompt == "" {

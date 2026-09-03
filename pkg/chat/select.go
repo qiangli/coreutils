@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
@@ -32,9 +33,7 @@ type pickCandidate struct {
 
 // PickAgent resolves a Selector to a single agent name ready for Interact/Invoke.
 //
-// A specific --agent wins outright (canonicalized through the catalog when it
-// names one; a bare tool like "claude" is left as-is — it is a valid launch that
-// names no agent). Otherwise the strongest operable agent matching --band/--tool
+// A specific --agent wins outright after resolving through the catalog. Otherwise the strongest operable agent matching --band/--tool
 // is chosen deterministically (highest band, then name). An unreachable match is
 // reported, never silently dropped — a session credited to an agent the host
 // cannot launch is the absence-of-evidence failure this fleet forbids.
@@ -50,7 +49,7 @@ func PickAgent(sel Selector) (string, error) {
 		if a, ok := newCatalog().Agent(sel.Agent); ok {
 			return a.Name, nil
 		}
-		return sel.Agent, nil
+		return "", agentlaunch.RegistrationRefusal(sel.Agent)
 	}
 	if sel.Band == 0 && strings.TrimSpace(sel.Tool) == "" {
 		return "", nil // no selector: caller falls back to the default agent

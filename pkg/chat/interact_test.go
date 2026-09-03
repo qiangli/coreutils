@@ -1,6 +1,9 @@
 package chat
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestPickAgentConflict — --agent with --band/--tool is a contradiction, not a
 // silent precedence.
@@ -13,15 +16,19 @@ func TestPickAgentConflict(t *testing.T) {
 	}
 }
 
-// TestPickAgentSpecific — a specific name passes through (canonicalized when the
-// catalog knows it, verbatim when it is a bare tool).
+// TestPickAgentSpecific refuses a spelling no registered agent owns, before a
+// launcher can mint an unaddressable principal from it.
 func TestPickAgentSpecific(t *testing.T) {
-	got, err := PickAgent(Selector{Agent: "claude"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "claude" {
-		t.Fatalf("bare tool should pass through unchanged, got %q", got)
+	for _, name := range []string{"claude", "codex:opus5"} {
+		got, err := PickAgent(Selector{Agent: name})
+		if err == nil || got != "" {
+			t.Fatalf("PickAgent(%q) = %q, %v; want refusal", name, got, err)
+		}
+		for _, want := range []string{name, "bashy agents add " + name} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal for %q missing %q: %v", name, want, err)
+			}
+		}
 	}
 }
 
