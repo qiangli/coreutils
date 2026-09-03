@@ -21,6 +21,20 @@ type Options struct {
 	Root       string
 	MaxRuntime time.Duration
 	Runner     chat.Runner
+
+	// Eager brings the agent up AT Start instead of on the first message.
+	//
+	// The default is lazy and that is right for a work session: an operator who
+	// starts a foreman and never tells it anything should not be paying for a
+	// model to sit at a prompt. But an OWNER session is started so that a name
+	// becomes REACHABLE, and until the agent is up there is no control socket
+	// and no room card advertising delivery — so mail addressed to the owner has
+	// nowhere to land. That window, between `sprint start` and whatever message
+	// happens to arrive first, is exactly the unreachable-owner state the sprint
+	// admission gate exists to refuse.
+	//
+	// So: eager for a seat, lazy for a task.
+	Eager bool
 }
 
 type Session struct {
@@ -88,7 +102,41 @@ func Start(ctx context.Context, opt Options) (*Session, error) {
 	if err := s.hist.replay(store); err != nil {
 		return nil, err
 	}
+	if opt.Eager {
+		if err := s.attachEagerly(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
+}
+
+// attachEagerly brings the agent up during Start, so the session is addressable
+// before anyone has spoken to it.
+//
+// The opening message is the GOAL, which is what steer() would have sent as the
+// first message anyway ("the opening message carries the goal and any host-kb
+// preamble"). This is the existing path run at a different time, not a new one.
+//
+// TWO LOCKING FACTS MAKE THE SHAPE OF THIS FUNCTION. attach() writes state and
+// calls persistLocked, so it must run under s.mu. closeLive() takes s.mu itself,
+// so the cleanup CANNOT run under it — doing the obvious thing and deferring a
+// close inside the locked region deadlocks. Hence: attach locked, release, then
+// clean up.
+//
+// The cleanup is deliberately unconditional on the error path rather than
+// conditional on how far attach got. attach only publishes s.live and s.logFile
+// after chat.Start succeeds, so today there is nothing to reclaim on failure —
+// but a caller that must know which half of a two-step failed is a caller that
+// breaks when the two steps change. closeLive is a no-op on an empty session.
+func (s *Session) attachEagerly(ctx context.Context) error {
+	s.mu.Lock()
+	err := s.attach(ctx, s.state.Goal)
+	s.mu.Unlock()
+	if err != nil {
+		s.closeLive()
+		return fmt.Errorf("foreman: eager attach: %w", err)
+	}
+	return nil
 }
 
 // Open resumes a session from its directory. Continuity is rebuilt from the
