@@ -789,7 +789,12 @@ continuity record (sprint show) and resume.`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&as, "as", "", "conductor name (default $WEAVE_CONDUCTOR/$WEAVE_AGENT)")
+	// Same canon as `sprint start`: --owner is the spelling, PROJECT MANAGER is
+	// what the sprint calls its owner, and --as stays as a hidden alias so every
+	// existing script keeps working.
+	role.AttachOwner(cmd.Flags(), &as, role.ProjectManager,
+		"accountable for delivery from start to end (default $WEAVE_CONDUCTOR/$WEAVE_AGENT)")
+	role.AttachOwnerAlias(cmd.Flags(), &as, "as", role.ProjectManager)
 	cmd.Flags().BoolVar(&force, "force", false, "take over a fresh lease")
 	flags.attach(cmd)
 	return cmd
