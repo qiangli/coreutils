@@ -216,10 +216,22 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 					return err
 				}
 			}
+			var notice AssignmentNotice
+			if it.Assignee != "" {
+				notice = notifyAssignee("todo", it)
+			}
 			if jsonOut {
-				return emitJSON(cmd, map[string]any{"id": it.ID, "status": it.Status, "title": it.Title, "sprint": it.Sprint})
+				out := map[string]any{"id": it.ID, "status": it.Status, "title": it.Title, "sprint": it.Sprint}
+				if notice.Assignee != "" {
+					out["assignee_notified"] = notice.Notified
+					if !notice.Notified {
+						out["assignee_reason"] = notice.Reason
+					}
+				}
+				return emitJSON(cmd, out)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added %s [%s] — %s\n", it.ID[:8], it.Status, it.Title)
+			printAssignmentNotice(cmd, notice)
 			return nil
 		},
 	}
@@ -227,7 +239,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
-	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item")
+	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item (notified over bashy notify; see bashy inbox)")
 	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
@@ -478,6 +490,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			if cmd.Flags().Changed("recurring") {
 				it.Recurring = recurring
 			}
+			reassigned := cmd.Flags().Changed("assignee") && assignee != ""
 			if cmd.Flags().Changed("assignee") {
 				it.Assignee = assignee
 			}
@@ -491,6 +504,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "edited %s — %s\n", it.ID[:8], it.Title)
+			if reassigned {
+				printAssignmentNotice(cmd, notifyAssignee("todo", it))
+			}
 			return nil
 		},
 	}
@@ -499,7 +515,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
-	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item")
+	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item (notified over bashy notify; see bashy inbox)")
 	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to (0 unlinks)")
 	return cmd
 }
@@ -522,6 +538,21 @@ func newRmCmd(sf storeFunc) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// printAssignmentNotice reports whether an assignment actually reached the
+// assignee, so `todo add`/`todo edit --assignee` are never silent about it.
+// A blank Assignee means the caller has nothing to report (no assignment
+// made) and prints nothing.
+func printAssignmentNotice(cmd *cobra.Command, notice AssignmentNotice) {
+	if notice.Assignee == "" {
+		return
+	}
+	if notice.Notified {
+		fmt.Fprintf(cmd.OutOrStdout(), "  notified %s (bashy inbox --as %s)\n", notice.Assignee, notice.Assignee)
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "  %s not notified: %s\n", notice.Assignee, notice.Reason)
 }
 
 func dash(s string) string {
