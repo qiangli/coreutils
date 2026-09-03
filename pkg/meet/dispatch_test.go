@@ -183,3 +183,77 @@ func TestDispatchRefusesABoard(t *testing.T) {
 		t.Fatal("dispatch ran on a board; a board's participants post on their own turns")
 	}
 }
+
+// THE POINT OF THE WHOLE STORY: a web DM must be MAIL, not a private
+// transcript. It used to write to <meetdir>/relay-dms/<agent>/, which nothing
+// else read — so one name had two mailboxes and only the CLI's was visible to
+// `bashy inbox`, to reachability, and to any spawn that reads its inbox before
+// answering.
+//
+// This asserts the property that closes it: a message sent through the web DM
+// path lands in the shared dm room as mail ADDRESSED to that agent, which is
+// what makes it directed in the unified inbox and what dispatch wakes on.
+func TestWebDMWritesMailTheAgentCanActuallyRead(t *testing.T) {
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
+	old := nowFn
+	nowFn = fixedNow
+	t.Cleanup(func() { nowFn = old })
+	prevSeat := operableFn
+	operableFn = func(string) (bool, string) { return true, "" }
+	t.Cleanup(func() { operableFn = prevSeat })
+
+	const agent, human = "codex", "qiangli"
+	if _, err := ensureRelayDM(agent, human); err != nil {
+		t.Skipf("this host cannot seat %s: %v", agent, err)
+	}
+	if err := appendRelayDMEvent(agent, relayDMEvent{
+		Speaker: human, Role: "user", Text: "are you there?",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	// It is in the shared room, not a private directory.
+	st, err := dmRoomFor(agent, human)
+	if err != nil {
+		t.Fatalf("dm room: %v", err)
+	}
+	events, err := readRoomTranscript(st.ID)
+	if err != nil {
+		t.Fatalf("transcript: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("the DM wrote nothing into the shared room")
+	}
+	last := events[len(events)-1]
+	if last.Text != "are you there?" {
+		t.Fatalf("room transcript last event = %q", last.Text)
+	}
+
+	// And it is DIRECTED at the agent, which is what makes it mail rather than
+	// ambient text: an unaddressed post wakes nobody and shows up in no inbox
+	// as directed.
+	if !strings.EqualFold(last.To, agent) {
+		t.Fatalf("the DM is addressed to %q, want %q — unaddressed, it is not mail",
+			last.To, agent)
+	}
+	directed, _, _, _, err := UnreadRecords(st.ID, agent, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 1 {
+		t.Fatalf("%s sees %d directed messages in its DM room, want 1", agent, len(directed))
+	}
+
+	// The agent's own reply must NOT be addressed back, or every reply would
+	// wake the next turn forever.
+	if err := appendRelayDMEvent(agent, relayDMEvent{
+		Speaker: agent, Role: "assistant", Text: "yes",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = readRoomTranscript(st.ID)
+	if reply := events[len(events)-1]; reply.To != "" {
+		t.Fatalf("the agent's reply is addressed to %q; a reply that is mail cascades", reply.To)
+	}
+}

@@ -6,12 +6,10 @@ package meet
 // owner; this file stores only the human-visible transcript Relay must replay.
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -51,129 +49,148 @@ func relayDMLock(agent string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
-func relayDMRoot() (string, error) {
-	base, err := baseDir()
+// dmRoomID resolves the ONE durable room two seats share.
+//
+// This used to be <meetdir>/relay-dms/<agent>/ — a private store nothing else
+// read. That was the bug: `bashy meet dm` (the CLI) already writes to the
+// permanent dm-<a>-<b> room, which the unified inbox reads as source "meet",
+// while the web DM wrote here, which it does not. So one name had two mailboxes
+// and only one of them was mail: a web DM was invisible to `bashy inbox --as X`,
+// to reachability, and to any spawn that reads its inbox before answering.
+//
+// The fix is to delete a store rather than add an inbox source. A fourth source
+// would have given one name two mailboxes ON PURPOSE.
+func dmRoomID(agent, human string) (string, error) {
+	name, err := directMessageRoomName(human, agent)
 	if err != nil {
 		return "", err
 	}
-	root := filepath.Join(base, "relay-dms")
-	return root, os.MkdirAll(root, 0o700)
+	return name, nil
 }
 
+// relayDMDir is the room's own store, so the observe tail keeps working
+// unchanged: a meet room already keeps its transcript at
+// <meetdir>/<id>/transcript.jsonl, which is exactly what this returned before.
 func relayDMDir(agent string) (string, error) {
-	root, err := relayDMRoot()
+	st, err := dmRoomFor(agent, "")
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, slugify(agent)), nil
+	return storeDir(st.ID)
+}
+
+// dmRoomFor loads, or creates, the durable room for this agent and human.
+func dmRoomFor(agent, human string) (*State, error) {
+	agent = canonAgent(agent)
+	if err := routableSeat(agent); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(human) == "" {
+		human = humanName()
+	}
+	name, err := dmRoomID(agent, human)
+	if err != nil {
+		return nil, err
+	}
+	return EnsurePermanentRoom(name, CreateOptions{
+		Topic:        "DM with " + agent,
+		Participants: []string{agent},
+		Human:        human,
+		Initiator:    human,
+		// A DM is a conversation, not a meeting: no chair runs the floor and
+		// nobody files minutes about two people talking.
+		Secretary: "",
+	})
 }
 
 func ensureRelayDM(agent, human string) (relayDM, error) {
-	agent = canonAgent(agent)
-	if err := routableSeat(agent); err != nil {
-		return relayDM{}, err
-	}
-	dir, err := relayDMDir(agent)
+	st, err := dmRoomFor(agent, human)
 	if err != nil {
 		return relayDM{}, err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return relayDM{}, err
+	who := strings.TrimSpace(st.Human)
+	if who == "" {
+		who = human
 	}
-	p := filepath.Join(dir, "state.json")
-	var st relayDM
-	if b, err := os.ReadFile(p); err == nil {
-		if err := json.Unmarshal(b, &st); err != nil {
-			return relayDM{}, fmt.Errorf("relay: read DM %s: %w", agent, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return relayDM{}, err
-	}
-	if st.Agent == "" {
-		st = relayDM{Agent: agent, Human: human, Created: time.Now().UTC()}
-	}
-	if st.Human == "" {
-		st.Human = human
-	}
-	st.Updated = time.Now().UTC()
-	b, _ := json.MarshalIndent(st, "", "  ")
-	if err := atomicWrite(p, append(b, '\n')); err != nil {
-		return relayDM{}, err
-	}
-	return st, nil
+	return relayDM{Agent: canonAgent(agent), Human: who, Created: st.Created, Updated: nowFn()}, nil
 }
 
 func relayDMEvents(agent string) ([]relayDMEvent, error) {
-	dir, err := relayDMDir(agent)
+	st, err := dmRoomFor(agent, "")
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(filepath.Join(dir, "transcript.jsonl"))
-	if os.IsNotExist(err) {
-		return []relayDMEvent{}, nil
-	}
+	events, err := readRoomTranscript(st.ID)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	out := make([]relayDMEvent, 0)
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		var event relayDMEvent
-		if err := json.Unmarshal(s.Bytes(), &event); err != nil {
-			return nil, err
+	out := make([]relayDMEvent, 0, len(events))
+	for i, e := range events {
+		role := "assistant"
+		if e.Kind == "human" || strings.EqualFold(e.Speaker, st.Human) {
+			role = "user"
 		}
-		out = append(out, event)
+		status := ""
+		if e.Status != "" {
+			status = e.Status
+		}
+		out = append(out, relayDMEvent{
+			ID: fmt.Sprintf("%d", i+1), Speaker: e.Speaker, Role: role,
+			Text: e.Text, TS: e.TS, Status: status,
+		})
 	}
-	return out, s.Err()
+	return out, nil
 }
 
+// appendRelayDMEvent writes into the shared room.
+//
+// The addressee is set deliberately: a human's message names the AGENT, which
+// is what makes it directed mail in that agent's unified inbox and what
+// `meet dispatch` wakes on. The agent's reply names nobody, which is what stops
+// a reply from waking anything and cascading.
 func appendRelayDMEvent(agent string, event relayDMEvent) error {
-	dir, err := relayDMDir(agent)
+	st, err := dmRoomFor(agent, "")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	ts := event.TS
+	if ts.IsZero() {
+		ts = nowFn()
 	}
-	event.ID = fmt.Sprintf("%d", time.Now().UnixNano())
-	if event.TS.IsZero() {
-		event.TS = time.Now().UTC()
+	kind, to := "message", ""
+	if event.Role == "user" {
+		kind, to = "human", canonAgent(agent)
 	}
-	b, _ := json.Marshal(event)
-	f, err := os.OpenFile(filepath.Join(dir, "transcript.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
+	return AppendEvent(st.ID, Event{
+		Round: st.Round, Speaker: event.Speaker, Role: string(RoleParticipant),
+		Kind: kind, To: to, Text: event.Text, Status: event.Status, TS: ts,
+	})
 }
 
+// listRelayDMs enumerates the durable dm-<a>-<b> rooms rather than a private
+// directory, so the web list and `bashy meet list` agree about what exists.
 func listRelayDMs() ([]relayDM, error) {
-	root, err := relayDMRoot()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(root)
+	sessions, err := listSessions()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]relayDM, 0)
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, st := range sessions {
+		if !st.Permanent || !strings.HasPrefix(st.Name, "dm-") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, entry.Name(), "state.json"))
-		if err != nil {
+		agent := ""
+		if len(st.Participants) > 0 {
+			agent = canonAgent(st.Participants[0])
+		}
+		if agent == "" {
 			continue
 		}
-		var st relayDM
-		if json.Unmarshal(b, &st) == nil && st.Agent != "" {
-			out = append(out, st)
-		}
+		out = append(out, relayDM{
+			Agent: agent, Human: st.Human, Created: st.Created, Updated: st.Created,
+		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
+	sort.Slice(out, func(i, j int) bool { return out[i].Agent < out[j].Agent })
 	return out, nil
 }
 
