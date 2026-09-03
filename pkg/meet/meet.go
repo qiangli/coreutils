@@ -65,7 +65,7 @@ func NewMeetCmd() *cobra.Command {
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(
-		newOpenCmd(), newConsultCmd(), newDMCmd(), newReadCmd(), newTellCmd(), newRoundCmd(),
+		newOpenCmd(), newConsultCmd(), newDMCmd(), newReadCmd(), newTellCmd(), newDispatchCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAbandonCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
