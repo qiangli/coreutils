@@ -91,6 +91,11 @@ func domEnv(t *testing.T, opts Options) (string, context.Context, func() []strin
 // alternative is not a safer Linux run, it is no Linux run at all.
 func browserOpts() []chromedp.ExecAllocatorOption {
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	// chromedp's 20-second default is shorter than Chrome can occasionally
+	// take to publish its DevTools endpoint on a busy shared CI runner. Keep
+	// the launch bounded by domEnv's 90-second context, but do not mistake a
+	// slow browser start for a broken page.
+	opts = append(opts, chromedp.WSURLReadTimeout(60*time.Second))
 	if goruntime.GOOS == "linux" {
 		opts = append(opts, chromedp.NoSandbox)
 	}
