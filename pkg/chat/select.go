@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
@@ -50,7 +51,15 @@ func PickAgent(sel Selector) (string, error) {
 		if a, ok := newCatalog().Agent(sel.Agent); ok {
 			return a.Name, nil
 		}
-		return sel.Agent, nil
+		// `chat --agent X` CLAIMS AN IDENTITY, so X must be one. This is the
+		// call site that differs from weave's raw argv: `weave start -- claude`
+		// runs a command and gets no principal, while a chat session is
+		// addressable, keeps a conversation store, and answers mail under that
+		// name. A bare tool here mints a name nothing can route to.
+		//
+		// --tool and --band are unaffected: they SELECT among registered agents
+		// rather than naming one, and are resolved below.
+		return "", agentlaunch.RegistrationRefusal(sel.Agent)
 	}
 	if sel.Band == 0 && strings.TrimSpace(sel.Tool) == "" {
 		return "", nil // no selector: caller falls back to the default agent

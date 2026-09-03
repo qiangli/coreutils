@@ -695,3 +695,30 @@ func replaceSandboxFlag(args []string, flag string) []string {
 }
 
 var ErrNoAgent = errors.New("agent launch: not an agent")
+
+// RegistrationRefusal is the shared fail-closed answer for a launch identity no
+// `bashy agents` record owns.
+//
+// IT IS NOT USED HERE, deliberately. Resolution lets an unregistered binding
+// LAUNCH: weave's TestUnNicknamedBindingIsNotAPrincipal pins that `aider:opus`
+// runs and simply is not stamped as a principal, and weaveAgentEnv returns the
+// base environment unchanged for it. That is the codebase's own answer to
+// "registration precedes use", and it is a better one than refusing the launch:
+// registration gates IDENTITY, not EXECUTION. An unregistered binding is a
+// command; it just cannot be addressed, which is exactly the property that
+// matters.
+//
+// So the refusal belongs at the call sites that REQUIRE an identity — a chat
+// session that is addressable and keeps a conversation store, or a roster entry
+// — and nowhere else. It names the rejected spelling AND the exact
+// command that fixes it, deriving tool and model from a tool:model spelling so
+// the suggestion is usable rather than generic.
+func RegistrationRefusal(name string) error {
+	name = strings.TrimSpace(name)
+	tool, model, bound := strings.Cut(name, ":")
+	if !bound || tool == "" || model == "" {
+		tool, model = name, "<model>"
+	}
+	return fmt.Errorf("agent launch: %q is not a registered Bashy agent; register it before launching:\n  bashy agents add %s --tool %s --model %s",
+		name, name, tool, model)
+}

@@ -302,3 +302,74 @@ func TestApplyYcodeDataDirNoOpForNonYcodeAndZeroLaunch(t *testing.T) {
 		}
 	}
 }
+
+// REGISTRATION GATES IDENTITY, NOT EXECUTION — and resolution is the execution
+// half, so it refuses nothing here.
+//
+// This is the codebase's own answer, found by breaking it twice. weave's
+// TestUnNicknamedBindingIsNotAPrincipal pins that `aider:opus` LAUNCHES and is
+// simply not stamped as a principal: weaveAgentEnv returns the base environment
+// unchanged for it. An unregistered binding is a command that cannot be
+// addressed, which is the property that actually matters — refusing to run it
+// would also break `weave start -- my-own-script`, and weave's own tests say
+// rewriting that "would silently change every conductor script".
+//
+// So RegistrationRefusal lives here as the shared MESSAGE, and the call sites
+// that require an identity use it. Resolution does not.
+func TestResolutionDoesNotRefuseAnUnregisteredBinding(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "codex", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "codex", Launch: fleet.ToolLaunch{Exec: "codex --model {model} {prompt}"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newCat := func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+
+	for _, name := range []string{"codex:opus5", "codex"} {
+		if _, err := ResolveWithCatalog(name, Options{}, newCat); err != nil {
+			if strings.Contains(err.Error(), "not a registered Bashy agent") {
+				t.Fatalf("%s was refused at resolution; registration gates identity, "+
+					"not execution: %v", name, err)
+			}
+		}
+	}
+}
+
+// The message still has to be actionable wherever a caller DOES need it.
+func TestRegistrationRefusalNamesTheFixCommand(t *testing.T) {
+	err := RegistrationRefusal("codex:opus5")
+	for _, want := range []string{"not a registered Bashy agent", "bashy agents add codex:opus5 --tool codex --model opus5"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal missing %q:\n%v", want, err)
+		}
+	}
+	// A bare name has no model half to suggest, so it must not invent one.
+	if got := RegistrationRefusal("scout").Error(); !strings.Contains(got, "--model <model>") {
+		t.Errorf("a bare name should suggest a placeholder model, got:\n%s", got)
+	}
+}
+
+// THE MOST SPECIFIC TRUE ERROR WINS. A tool that cannot select a model must
+// still say so, rather than being told to register a binding that would still
+// not work. A refusal that is true but less specific than the one it displaced
+// is a regression in diagnosis even when the verdict is right.
+func TestStructuralRefusalOutranksTheRegistrationRefusal(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "dumb", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "dumb", Launch: fleet.ToolLaunch{Exec: "dumb {prompt}"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveWithCatalog("dumb:opus", Options{},
+		func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) })
+	if err == nil {
+		t.Fatal("dumb:opus was accepted")
+	}
+	if !strings.Contains(err.Error(), "cannot select a model") {
+		t.Fatalf("the specific diagnosis was displaced by a less specific one:\n%v", err)
+	}
+}

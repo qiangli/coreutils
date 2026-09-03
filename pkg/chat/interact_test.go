@@ -1,6 +1,9 @@
 package chat
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestPickAgentConflict — --agent with --band/--tool is a contradiction, not a
 // silent precedence.
@@ -15,13 +18,36 @@ func TestPickAgentConflict(t *testing.T) {
 
 // TestPickAgentSpecific — a specific name passes through (canonicalized when the
 // catalog knows it, verbatim when it is a bare tool).
-func TestPickAgentSpecific(t *testing.T) {
-	got, err := PickAgent(Selector{Agent: "claude"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// A BARE TOOL IS NOT AN AGENT. This asserted the opposite until sprint #111:
+// `--agent claude` passed through and minted a launch identity no `bashy agents`
+// record owned — an address bus and inbox could never route to.
+//
+// The contract change is deliberate and scoped to THIS call site. `chat --agent`
+// claims an identity: the session is addressable, keeps a conversation store and
+// answers mail under that name. weave's `-- claude` is a raw command that claims
+// no identity and is untouched — its own tests say rewriting it "would silently
+// change every conductor script".
+func TestPickAgentRefusesABareToolAsAnIdentity(t *testing.T) {
+	_, err := PickAgent(Selector{Agent: "claude"})
+	if err == nil {
+		t.Fatal("a bare tool was accepted as an agent identity")
 	}
-	if got != "claude" {
-		t.Fatalf("bare tool should pass through unchanged, got %q", got)
+	// The refusal has to be actionable, not merely correct.
+	for _, want := range []string{"not a registered Bashy agent", "bashy agents add claude"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal is missing %q:\n%v", want, err)
+		}
+	}
+}
+
+// --tool SELECTS among registered agents rather than naming one, so it is
+// unaffected by the rule above. Pinning it here because the two read alike and
+// a later reader could easily "tidy" one into the other.
+func TestPickAgentStillSelectsByTool(t *testing.T) {
+	if _, err := PickAgent(Selector{Tool: "claude"}); err != nil {
+		if strings.Contains(err.Error(), "not a registered Bashy agent") {
+			t.Fatalf("--tool was refused as if it named an identity: %v", err)
+		}
 	}
 }
 
