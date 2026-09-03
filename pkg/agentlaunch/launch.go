@@ -173,8 +173,10 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	if a, ok := cat.Agent(name); ok {
 		toolName, modelName, lnch.Nick = a.Tool, a.Model, a.Name
 		namedAgent = true
+	} else if t, m, ok := strings.Cut(name, ":"); ok && t != "" && m != "" {
+		toolName, modelName = t, m
 	} else {
-		return lnch, RegistrationRefusal(name)
+		toolName = name
 	}
 	lnch.Tool, lnch.ToolName = toolName, toolName
 
@@ -327,20 +329,6 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	lnch.Args = out
 	lnch.TakesPrompt = true // a headless one-shot always takes its prompt on the command line
 	return lnch, nil
-}
-
-// RegistrationRefusal is the common fail-closed answer for a requested launch
-// identity which no `bashy agents` record owns.  A launch stamps a principal,
-// so permitting an unregistered spelling would mint an address that bus/inbox
-// can never route to.
-func RegistrationRefusal(name string) error {
-	name = strings.TrimSpace(name)
-	tool, model, binding := strings.Cut(name, ":")
-	if !binding || tool == "" || model == "" {
-		tool, model = name, "<model>"
-	}
-	return fmt.Errorf("agent launch: %q is not a registered Bashy agent; register it before launching:\n  bashy agents add %s --tool %s --model %s",
-		name, name, tool, model)
 }
 
 const UnsafeLaunchEnv = "BASHY_ALLOW_UNSAFE_AGENT_LAUNCH"

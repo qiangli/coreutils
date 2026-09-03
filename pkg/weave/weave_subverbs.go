@@ -133,10 +133,9 @@ ephemeral agent (007-w3) with its own name and its own context, so the
 runs are parallel because they are separate. Those workers are hidden from
 "bashy agents list" (see --all) and are reclaimed when their run finishes.
 
-Anything else is passed through untouched. A single token must name a registered
-agent: register a new identity with bashy agents add <name> --tool <tool> --model
-<model> before launching it. A multi-token raw executable argv is honored exactly
-as written. A registered agent followed by a weave flag is rejected because that
+Anything else is passed through untouched. A bare tool name (-- claude)
+still launches raw. A multi-token raw executable argv is honored exactly as
+written. A registered agent followed by a weave flag is rejected because that
 is the flags-after-'--' mistake that silently disables agent expansion; put
 weave flags before '--'.
 

@@ -117,23 +117,6 @@ func TestExpandAgentByAlias(t *testing.T) {
 	}
 }
 
-func TestExpandAgentRefusesUnregisteredSingleToken(t *testing.T) {
-	prev := fleetCatalog
-	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(t.TempDir())) }
-	t.Cleanup(func() { fleetCatalog = prev })
-	for _, name := range []string{"claude", "codex:opus5"} {
-		l, argv, err := weaveExpandAgent([]string{name}, "body", "title")
-		if err == nil || l != nil || argv != nil {
-			t.Fatalf("weaveExpandAgent(%q) = %+v, %q, %v; want refusal", name, l, argv, err)
-		}
-		for _, want := range []string{name, "bashy agents add " + name} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("refusal for %q missing %q: %v", name, want, err)
-			}
-		}
-	}
-}
-
 // A registered nickname never silently changes meaning from "agent" to
 // "executable" just because weave flags were placed after `--`. This exact
 // typo used to hydrate a full workspace and then fail with exec status 127.
