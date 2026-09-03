@@ -16,6 +16,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/capability"
+	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/spf13/cobra"
 )
@@ -229,7 +230,17 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f.StringVar(&sf.secretary, "secretary", "claude",
 		"secretary agent — records, decides nothing; never a participant or the chair. "+
 			"Pass --secretary \"\" for a room that keeps no minutes: a conversation rather than a meeting")
-	f.StringVar(&sf.chair, "chair", "", "chair agent — directs the discussion and judges done-ness; empty means round-robin with no chair")
+	// ONE FLAG, DOMAIN TITLES. A meeting's owner is its FACILITATOR: the seat
+	// that directs the discussion, judges done-ness, and answers for the room.
+	// It merges what used to be --chair and --initiator, which were two names
+	// for one accountability and produced rooms whose initiator had vanished
+	// while a chair still ran turns.
+	//
+	// Empty stays meaningful: no facilitator is round-robin with nobody
+	// directing, which is right for a small room and for a DM.
+	role.AttachOwner(f, &sf.chair, role.Facilitator,
+		"directs the discussion, judges done-ness, and answers for the room; empty means round-robin with no facilitator")
+	role.AttachOwnerAlias(f, &sf.chair, "chair", role.Facilitator)
 	f.StringArrayVar(&sf.agenda, "agenda", nil, "agenda item (repeatable)")
 	f.StringArrayVar(&sf.context, "context", nil, "file every participant reads before its first turn (repeatable)")
 	f.IntVar(&sf.maxTurns, "max-turns", defaultMaxTurns, "hard ceiling on participant turns under a --chair")

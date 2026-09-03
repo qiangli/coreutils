@@ -15,6 +15,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/role"
+
 	"github.com/qiangli/coreutils/pkg/issue"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -239,7 +241,11 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
-	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item (notified over bashy notify; see bashy inbox)")
+	// ONE FLAG, DOMAIN TITLES: an item's owner is its ASSIGNEE. --assignee
+	// stays as a hidden alias because it is what every existing script spells.
+	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
+		"who is working the item (notified over bashy notify; see bashy inbox)")
+	role.AttachOwnerAlias(cmd.Flags(), &assignee, "assignee", role.Assignee)
 	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
@@ -515,7 +521,11 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
-	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item (notified over bashy notify; see bashy inbox)")
+	// ONE FLAG, DOMAIN TITLES: an item's owner is its ASSIGNEE. --assignee
+	// stays as a hidden alias because it is what every existing script spells.
+	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
+		"who is working the item (notified over bashy notify; see bashy inbox)")
+	role.AttachOwnerAlias(cmd.Flags(), &assignee, "assignee", role.Assignee)
 	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to (0 unlinks)")
 	return cmd
 }

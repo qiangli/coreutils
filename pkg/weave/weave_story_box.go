@@ -57,6 +57,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -278,7 +279,18 @@ func newSprintStartCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&forDur, "for", DefaultSprintBox, "how long this sprint gets")
-	cmd.Flags().StringVar(&as, "as", "", "conductor name (default $BASHY_PRINCIPAL/$WEAVE_CONDUCTOR/$WEAVE_AGENT, then current lease holder)")
+	// ONE FLAG, DOMAIN TITLES. --owner is the single spelling across meet,
+	// sprint and todo; here it is called the PROJECT MANAGER, because that is
+	// what a sprint's owner is. --as keeps its own separate meaning (who I am
+	// acting as right now) and is retained as a hidden alias so every existing
+	// script, skill and doc keeps working.
+	//
+	// The conductor:<n> wire address is NOT renamed. It is resolved by
+	// bus.RegisterHostRoles at read time and story f93fdf47810c exists because
+	// it once resolved to nothing; the spoken word changes, the address does not.
+	role.AttachOwner(cmd.Flags(), &as, role.ProjectManager,
+		"accountable for delivery from start to end (default $BASHY_PRINCIPAL/$WEAVE_CONDUCTOR/$WEAVE_AGENT, then current lease holder)")
+	role.AttachOwnerAlias(cmd.Flags(), &as, "as", role.ProjectManager)
 	flags.attach(cmd)
 	return cmd
 }
