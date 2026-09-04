@@ -58,7 +58,7 @@ export const DEFAULT_HOLD_MS = 3_000
  * The window is therefore a property of the UI, not of the server, which will
  * answer "gone" on its own once the message has been read and answered.
  */
-export const RECALL_WINDOW_MS = 15_000
+export const RECALL_WINDOW_MS = 10_000
 
 /** holdMs is the hold this page is actually using.
  *

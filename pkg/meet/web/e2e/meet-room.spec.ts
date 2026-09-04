@@ -852,10 +852,10 @@ test("the recall offer expires and the control returns to Send", async ({ page }
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("button", { name: "Recall message" })).toBeVisible();
 
-  // RECALL_WINDOW_MS is 15s; the box stays empty so the offer is not withdrawn
+  // RECALL_WINDOW_MS is 10s; the box stays empty so the offer is not withdrawn
   // by typing, which is the other way it ends.
   await expect(page.getByRole("button", { name: "Recall message" })).toHaveCount(0, {
-    timeout: 25_000,
+    timeout: 20_000,
   });
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
 });
