@@ -77,7 +77,17 @@ In the REPL: plain text = a human turn · `@name <text>` = a targeted turn · `/
 
 `bashy meet serve` exposes the same room model in the web UI; it is not a
 read-only transcript viewer. The composer posts to the room, and `@agent text`
-addresses one seated agent. **Room actions** runs a round, poll, open question,
+addresses one seated agent — which records the question in the room, addressed
+to that agent, before the turn runs. A room shows both ends of every exchange:
+each message names who sent it and who it is for (one agent, `everyone`, or the
+room itself), and a speaker's badge names the seat it holds here — the owner's
+title, the facilitator, the secretary, a named role holder — rather than the
+`participant` role every agent turn is recorded with.
+
+A **Chat** (1:1) is the same view with the half that a single recipient makes
+redundant left out: it names the agent as `@name` in the same place a room puts
+its recipient control, prints no addressee under each message, and offers
+`Start work` as its only other action. **Room actions** runs a round, poll, open question,
 or convergence pass. A non-empty draft can instead be recorded as a decision,
 action item, or agenda item without also posting it as ordinary chat.
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react"
 import {
+  ArrowRight,
   Bot,
   CheckCircle2,
   CircleDotDashed,
@@ -15,13 +16,16 @@ import rehypeSanitize from "rehype-sanitize"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import type { LiveEvent, MeetEvent } from "@/lib/contracts"
+import type { LiveEvent, MeetEvent, State } from "@/lib/contracts"
+import { addresseeOf, isGenericTitle, seatOf, type Seat } from "@/lib/seats"
 import { cn } from "@/lib/utils"
 
 interface MessageListProps {
   events: MeetEvent[]
   live: LiveEvent | null
-  human: string
+  /** The room, so a message can say who its speaker and addressee ARE here —
+   * not merely that both are "participants". */
+  state: State | null
   kind?: "room" | "dm"
   // debugRaw is the reader's raw-transport view. `raw` is only ever present on
   // an event when it is on, so this prop is what tells an empty `raw` apart
@@ -47,10 +51,11 @@ const systemKinds = new Set([
 export function MessageList({
   events,
   live,
-  human,
+  state,
   kind = "room",
   debugRaw = false,
 }: MessageListProps) {
+  const agent = kind === "dm" ? state?.name || state?.owner || "" : ""
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -65,9 +70,20 @@ export function MessageList({
             {kind === "dm" ? "Direct message" : "Room opened"}
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            {kind === "dm"
-              ? "A private, governed Chat conversation with one registered agent."
-              : "This is a shared conversation. Messages, decisions, and actions stay together as the room works."}
+            {kind === "dm" ? (
+              <>
+                A private, governed Chat conversation with{" "}
+                {/* Named, not merely implied. Every message below carries the
+                    same "@name", so the one thing a 1:1 leaves out — the
+                    addressee — is the only thing this view has to state once. */}
+                <span className="font-medium text-foreground">
+                  {agent ? `@${agent}` : "one registered agent"}
+                </span>
+                .
+              </>
+            ) : (
+              "This is a shared conversation. Messages, decisions, and actions stay together as the room works."
+            )}
           </p>
         </div>
 
@@ -79,12 +95,13 @@ export function MessageList({
               <Message
                 debugRaw={debugRaw}
                 event={event}
-                human={human}
                 key={eventKey(event, index)}
+                kind={kind}
+                state={state}
               />
             ),
           )}
-          {live && <LiveMessage live={live} />}
+          {live && <LiveMessage live={live} state={state} />}
         </div>
         <div ref={endRef} />
       </div>
@@ -94,14 +111,25 @@ export function MessageList({
 
 function Message({
   event,
-  human,
+  state,
+  kind,
   debugRaw = false,
 }: {
   event: MeetEvent
-  human: string
+  state: State | null
+  kind: "room" | "dm"
   debugRaw?: boolean
 }) {
-  const isHuman = event.kind === "human" || event.speaker === human
+  const from = seatOf(event.speaker, state, event.role)
+  const isHuman = from.kind === "human" || event.kind === "human"
+  // WHO IT IS FOR, and only where that is not already known.
+  //
+  // A 1:1 has exactly one other party, so an addressee line there would repeat
+  // the same name under every message. A room is many-to-many: "@codex said
+  // this" does not say whether it was asked of the project manager, of one
+  // participant, or of everybody, and that is the difference between a
+  // transcript and a conversation you can follow.
+  const to = kind === "room" ? addresseeOf(event, state) : null
   return (
     <article className="group flex gap-3 rounded-xl px-2 py-4 transition-colors hover:bg-white/55 sm:gap-4 sm:px-3">
       <Avatar className="mt-0.5 size-9 shrink-0 border border-border/70 shadow-sm">
@@ -121,18 +149,27 @@ function Message({
         </AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-          <span className="text-[13px] font-semibold text-foreground">
-            {event.speaker}
-          </span>
-          {!isHuman && (
-            <Badge
-              className="h-[18px] rounded-full border-teal-200/70 bg-teal-50 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-teal-700"
-              variant="outline"
-            >
-              {event.role || "agent"}
-            </Badge>
+        {/* One stable hook for the whole attribution line — who spoke, who it
+            was for, what they are called here. Asserting on the article alone
+            cannot tell a badge that says "participant" from an agent that used
+            the word in its answer. */}
+        <div
+          className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-1"
+          data-message-header
+        >
+          <SeatName seat={from} />
+          {to && (
+            <span className="flex items-baseline gap-1">
+              {/* The arrow is decoration; the relationship is read aloud. */}
+              <ArrowRight
+                aria-hidden
+                className="size-3 shrink-0 self-center text-muted-foreground/60"
+              />
+              <span className="sr-only">to</span>
+              <SeatName muted seat={to} />
+            </span>
           )}
+          <RoleBadge seat={from} />
           <time className="text-[10px] text-muted-foreground/70">
             {formatTime(event.ts)}
           </time>
@@ -151,6 +188,51 @@ function Message({
         {debugRaw && event.raw && <RawTransport raw={event.raw} />}
       </div>
     </article>
+  )
+}
+
+/** SeatName prints a name the way the composer ADDRESSES it — "@codex" — so
+ * the transcript and the box you type into use one spelling. A person is
+ * printed bare: meet routes seats, and a human is not one. */
+function SeatName({ seat, muted = false }: { seat: Seat; muted?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "truncate",
+        muted
+          ? "text-[12px] font-medium text-muted-foreground"
+          : "text-[13px] font-semibold text-foreground",
+      )}
+      title={seat.label ? `seat ${seat.label} · ${seat.title}` : seat.title}
+    >
+      {seat.handle}
+    </span>
+  )
+}
+
+/** RoleBadge says what the speaker is CALLED in this room.
+ *
+ * Every agent turn is recorded with role "participant" — that is the meeting's
+ * role, and it was on every message in every room, which made the badge pure
+ * furniture. So a distinguished seat (the owner's title, the facilitator, the
+ * secretary, a named role holder) is shown in the room's own words and marked;
+ * a name the room knows nothing more about keeps its plain role. */
+function RoleBadge({ seat }: { seat: Seat }) {
+  if (seat.kind === "human" || !seat.title) return null
+  const named = seat.kind === "seat" && !isGenericTitle(seat.title)
+  return (
+    <Badge
+      className={cn(
+        "h-[18px] rounded-full px-1.5 text-[9px] font-semibold uppercase tracking-wide",
+        named
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-teal-200/70 bg-teal-50 text-teal-700",
+      )}
+      title={seat.label ? `seat ${seat.label}` : undefined}
+      variant="outline"
+    >
+      {seat.title}
+    </Badge>
   )
 }
 
@@ -173,7 +255,14 @@ function RawTransport({ raw }: { raw: string }) {
   )
 }
 
-function LiveMessage({ live }: { live: LiveEvent }) {
+function LiveMessage({
+  live,
+  state,
+}: {
+  live: LiveEvent
+  state: State | null
+}) {
+  const seat = seatOf(live.speaker, state, live.role)
   return (
     <article className="flex gap-3 rounded-xl bg-teal-50/45 px-2 py-4 sm:gap-4 sm:px-3">
       <Avatar className="mt-0.5 size-9 shrink-0 border border-teal-200 shadow-sm">
@@ -183,7 +272,7 @@ function LiveMessage({ live }: { live: LiveEvent }) {
       </Avatar>
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex items-center gap-2">
-          <span className="text-[13px] font-semibold">{live.speaker}</span>
+          <SeatName seat={seat} />
           <Badge
             className="h-[18px] animate-pulse rounded-full border-teal-200 bg-teal-50 px-1.5 text-[9px] uppercase tracking-wide text-teal-700"
             variant="outline"

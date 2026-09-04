@@ -31,6 +31,7 @@ import {
   type DMSummary,
   type State,
 } from "@/lib/contracts"
+import { seatOf } from "@/lib/seats"
 import { cn } from "@/lib/utils"
 
 interface RoomSidebarProps {
@@ -311,11 +312,11 @@ export function RoomSidebar({
                           : "text-sidebar-foreground/42",
                       )}
                     >
-                      {owner
-                        ? state.owner_title || "owner"
-                        : human
-                          ? "You"
-                          : role || "Agent"}
+                      {/* One resolution for all three surfaces (see lib/seats):
+                          the roster, the composer's recipient list and the
+                          transcript must not disagree about who the project
+                          manager, the facilitator or a named seat holder is. */}
+                      {human ? "You" : seatOf(name, state, role).title}
                     </div>
                   </div>
                   {!owner && name === state.initiator && (

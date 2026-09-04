@@ -230,9 +230,9 @@ export function App() {
           <MessageList
             debugRaw={meet.debugRaw}
             events={meet.events}
-            human={meet.state?.human ?? ""}
             kind={meet.selectedKind}
             live={meet.live}
+            state={meet.state}
           />
           <Composer
             error={meet.error}

@@ -62,6 +62,12 @@ export const eventSchema = z
     speaker: z.string().default("System"),
     role: z.string().default("system"),
     kind: eventKindSchema,
+    // Who the message is FOR. Marshalled omitempty, and an absent key is a real
+    // state rather than a missing field: it means shared room history, which is
+    // what every agent turn is (a reply names nobody, so it wakes nobody). A
+    // name or a seat label ("conductor:99") means directed mail; ALL_SEATS
+    // means an explicit broadcast.
+    to: z.string().default(""),
     text: z.string().default(""),
     file: z.string().optional(),
     ts: z.union([z.string(), z.number()]).optional(),
@@ -143,6 +149,11 @@ export const stateSchema = z
     // VACANT, which is a real state and not a missing field.
     owner: z.string().default(""),
     owner_title: z.string().default(""),
+    // The room's late-bound default addressee, held as a LABEL
+    // ("conductor:99") and never as a holder. It is what an unaddressed post
+    // becomes server-side, so the message list needs it to recognise the
+    // resolved owner behind a seat address instead of printing the raw label.
+    default_to: z.string().default(""),
   })
   .passthrough()
 

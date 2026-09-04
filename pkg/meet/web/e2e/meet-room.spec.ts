@@ -470,6 +470,89 @@ test("Everyone addresses the whole room rather than nobody", async ({ page }) =>
   await expect(page.getByText(message).first()).toBeVisible();
 });
 
+// EVERY MESSAGE IN A ROOM SAYS FROM AND TO.
+//
+// A room is many-to-many: "@codex said this" does not say whether it was asked
+// of the project manager, of one participant, or of everybody — and until this
+// landed, addressing an agent recorded ONLY the reply, so the human's own
+// message vanished and the room showed answers to questions nobody could see.
+test("a room message names both its sender and its addressee", async ({ page }) => {
+  const topic = unique("Browser addressing room");
+  const broadcast = unique("everyone please read this");
+  const question = unique("addressed question");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  // A broadcast: from the human, to everyone.
+  await selectRecipient(page, "Everyone");
+  await page.getByLabel("Message the room").fill(broadcast);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator("article", { hasText: broadcast })).toContainText("everyone");
+
+  // A directed question. The QUESTION has to be on screen, addressed to the
+  // agent — not only the answer to it.
+  await page.getByLabel("Message the room").fill(`@${primaryAgent} ${question}`);
+  await page.getByRole("button", { name: "Send message" }).click();
+  const asked = page
+    .locator("article", { hasText: question })
+    .filter({ hasNotText: "ECHO[" });
+  await expect(asked).toBeVisible({ timeout: 60_000 });
+  await expect(asked.locator("[data-message-header]")).toContainText(`@${primaryAgent}`);
+
+  // The reply is from the agent, and it is addressed to nobody: a turn is
+  // shared room history, which is what stops a reply from waking anything.
+  const reply = page
+    .locator("article", { hasText: question })
+    .filter({ hasText: "ECHO[" });
+  await expect(reply).toBeVisible({ timeout: 60_000 });
+  const replyHeader = reply.locator("[data-message-header]");
+  await expect(replyHeader).toContainText(`@${primaryAgent}`);
+  await expect(replyHeader).toContainText("the room");
+});
+
+// THE ROLE BADGE MUST SAY SOMETHING TRUE ABOUT THIS SPEAKER.
+//
+// Every agent turn is recorded with role "participant" (session.go), so the
+// badge read "participant" beside every name in every room and distinguished
+// nobody. The room already knows who its facilitator is; the badge now says so.
+test("a message badge names the speaker's seat, not the generic role", async ({ page }) => {
+  const topic = unique("Browser seat badge room");
+  const question = unique("facilitator question");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await page.getByLabel("Message the room").fill(`@${facilitatorAgent} ${question}`);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const reply = page
+    .locator("article", { hasText: question })
+    .filter({ hasText: "ECHO[" });
+  await expect(reply).toBeVisible({ timeout: 60_000 });
+  // Scoped to the attribution line: the agent's own answer quotes the word
+  // "participant" back (it is in the turn prompt), so an article-wide
+  // assertion would prove nothing about the badge.
+  const header = reply.locator("[data-message-header]");
+  await expect(header).toContainText("facilitator");
+  await expect(header).not.toContainText("participant");
+});
+
+// A 1:1 STATES ITS RECIPIENT AND OFFERS ONE ACTION.
+//
+// The composer does not parse "@name" in a chat (see submit), so the mention
+// button offered a syntax that would have been sent verbatim as prose. What a
+// chat needs in that slot is the one thing a room puts there: who this goes to,
+// named the same way — "@agent".
+test("a chat names its agent and offers only Start work", async ({ page }) => {
+  await createDM(primaryAgent);
+  await openMeet(page);
+  await openChat(page, primaryAgent);
+
+  await expect(page.getByText(`@${primaryAgent}`).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start work" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mention an agent" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Recipient: / })).toHaveCount(0);
+});
+
 async function selectRecipient(page: Page, name: string) {
   await page.getByRole("button", { name: /^Recipient: / }).click();
   await page.getByRole("menuitem", { name: new RegExp(name) }).click();

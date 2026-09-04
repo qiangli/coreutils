@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 // api.go is the ONE implementation both surfaces call. These tests hold that
@@ -513,4 +515,105 @@ func TestRoomsExcludesHistoricalSessions(t *testing.T) {
 	if len(rooms) != 1 || rooms[0].ID != "active" {
 		t.Fatalf("Relay rooms = %+v, want only the active session", rooms)
 	}
+}
+
+// Addressing an agent must leave the QUESTION in the room, not only the answer.
+//
+// It did not, and from a browser that meant your own message vanished: the room
+// showed replies to questions nobody could see, and a turn that timed out left
+// no trace that anything had been asked. The 1:1 chat records the human's
+// message and then runs the turn (relay_dm.go) — the same store — so the room
+// disagreed with the chat about the shape of one exchange.
+func TestAddressRecordsTheQuestionAddressedToTheAgent(t *testing.T) {
+	st := newRoom(t)
+	seatEverything(t)
+	withFakeAgent(t, "the answer")
+
+	if _, err := Address(t.Context(), st.ID, "codex", "what is the hostname?"); err != nil {
+		t.Fatalf("Address: %v", err)
+	}
+
+	events, err := readTranscript(st.ID)
+	if err != nil {
+		t.Fatalf("readTranscript: %v", err)
+	}
+	var asked *Event
+	for i := range events {
+		if events[i].Kind == "human" {
+			asked = &events[i]
+			break
+		}
+	}
+	if asked == nil {
+		t.Fatalf("the question was not recorded; transcript = %+v", events)
+	}
+	if asked.Speaker != st.Human {
+		t.Errorf("question attributed to %q, want the room's human %q", asked.Speaker, st.Human)
+	}
+	if asked.To != "codex" {
+		t.Errorf("question addressed to %q; an unaddressed question reaches no inbox", asked.To)
+	}
+	if asked.Text != "what is the hostname?" {
+		t.Errorf("question text = %q", asked.Text)
+	}
+	// Order matters: the question must be readable even when the turn after it
+	// times out or crashes.
+	if events[0].Kind != "human" {
+		t.Errorf("the answer was recorded before the question: %+v", events)
+	}
+}
+
+// ...and it must not then be delivered a SECOND time.
+//
+// The question is directed mail and `meet dispatch` wakes on exactly that, so a
+// question answered on the spot would be handed to the same agent again on the
+// next pass. Address acknowledges it, the way Dispatch acknowledges its own.
+func TestAddressLeavesNoUnreadMailForTheAgentThatAnswered(t *testing.T) {
+	st := newRoom(t)
+	seatEverything(t)
+	withFakeAgent(t, "the answer")
+
+	if _, err := Address(t.Context(), st.ID, "codex", "what is the hostname?"); err != nil {
+		t.Fatalf("Address: %v", err)
+	}
+
+	directed, _, _, err := Unread(st.ID, "codex", 0)
+	if err != nil {
+		t.Fatalf("Unread: %v", err)
+	}
+	if len(directed) != 0 {
+		t.Errorf("codex still has %d unread directed message(s) after answering: %+v", len(directed), directed)
+	}
+}
+
+// A FAILED turn is the opposite case: nothing answered the question, so it must
+// stay unread and the next dispatch must still deliver it.
+func TestAddressKeepsTheQuestionUnreadWhenTheTurnFails(t *testing.T) {
+	st := newRoom(t)
+	seatEverything(t)
+	old := apiRunner
+	apiRunner = func() chat.Runner { return unavailableRunner{} }
+	t.Cleanup(func() { apiRunner = old })
+
+	if _, err := Address(t.Context(), st.ID, "codex", "still needs an answer"); err == nil {
+		t.Fatal("a failed turn must report the failure")
+	}
+
+	directed, _, _, err := Unread(st.ID, "codex", 0)
+	if err != nil {
+		t.Fatalf("Unread: %v", err)
+	}
+	if len(directed) != 1 {
+		t.Fatalf("want the unanswered question still unread, got %d: %+v", len(directed), directed)
+	}
+	if directed[0].Text != "still needs an answer" {
+		t.Errorf("unread message = %q", directed[0].Text)
+	}
+}
+
+// unavailableRunner stands in for an agent CLI that could not be launched.
+type unavailableRunner struct{}
+
+func (unavailableRunner) Run(_ context.Context, _ string, _ []string, _ string) (string, int, error) {
+	return "", 127, errors.New("agent unavailable")
 }

@@ -409,6 +409,9 @@ function dmState(dm: DMSummary): State {
     // special-casing the DM view into a second code path.
     owner: dm.agent,
     owner_title: "agent",
+    // A chat has no seat to be late-bound to: the recipient IS the agent, and
+    // the room-side label ("conductor:99") has no counterpart here.
+    default_to: "",
   }
 }
 
@@ -417,6 +420,10 @@ function dmMeetEvent(event: DMEvent): MeetEvent {
     kind: event.role === "human" ? "human" : "turn",
     speaker: event.speaker,
     role: event.role,
+    // A 1:1 has one counterpart, so the addressee is implied and the message
+    // list does not print one. Carrying an invented name here would put the
+    // same "to" under every message and say nothing.
+    to: "",
     text: event.text,
     ts: event.ts,
     status: event.status,

@@ -34,6 +34,7 @@ import {
   type Member,
   type State,
 } from "@/lib/contracts"
+import { isGenericTitle, seatOf } from "@/lib/seats"
 import { cn } from "@/lib/utils"
 
 interface ComposerProps {
@@ -113,6 +114,19 @@ export function Composer({
   const ownerTitle = state?.owner_title || "owner"
   const isOwner = (name: string) =>
     Boolean(ownerName) && name.toLocaleLowerCase() === ownerName.toLocaleLowerCase()
+  // What one name is CALLED in this room — the same resolution the transcript
+  // and the roster use, so a reader who learns who the project manager is in
+  // one list recognises them in the other two. A generic title ("agent",
+  // "participant") is dropped rather than printed: it is the word that was on
+  // every row before, and it distinguished nobody.
+  const titleOf = (name: string, member?: Member) => {
+    const title = seatOf(name, state, member ? memberRole(member) : undefined).title
+    return isGenericTitle(title) ? "" : title
+  }
+  // The DM's counterpart, named the way the composer would address it. A 1:1
+  // has one recipient and no way to change it, so this is a LABEL where a room
+  // has a control — the recipient is stated rather than chosen.
+  const dmAgent = state?.name || state?.owner || ""
   // Two labels, deliberately. The BUTTON shows the name only — "codex-gpt5.6-sol
   // · project manager" is wider than the control and truncates to "codex-gpt5.6-
   // sol ·…", which spends the space on an ellipsis. The accessible name carries
@@ -120,10 +134,10 @@ export function Composer({
   // is on the badge in the list where there is room for it.
   const broadcast = recipient === ALL_SEATS
   const recipientName = broadcast || !recipient ? "Everyone" : recipient
-  const recipientLabel =
-    recipient && !broadcast && isOwner(recipient)
-      ? `${recipient} · ${ownerTitle}`
-      : recipientName
+  const recipientTitle = recipient && !broadcast ? titleOf(recipient) : ""
+  const recipientLabel = recipientTitle
+    ? `${recipient} · ${recipientTitle}`
+    : recipientName
 
   async function submit() {
     const value = text.trim()
@@ -207,16 +221,14 @@ export function Composer({
                       reader should not have to learn who is accountable in one
                       place and then fail to recognise them in another. */}
                   <span className="shrink-0 text-[10px] capitalize text-muted-foreground">
-                    {isOwner(memberName(agent))
-                      ? ownerTitle
-                      : memberRole(agent) || "agent"}
+                    {titleOf(memberName(agent), agent) || "agent"}
                   </span>
                 </button>
               ))}
             </div>
           )}
           <Textarea
-            aria-label={kind === "dm" ? `Message ${state?.name || "agent"}` : "Message the room"}
+            aria-label={kind === "dm" ? `Message ${dmAgent || "agent"}` : "Message the room"}
             className="max-h-40 min-h-[56px] resize-none border-0 bg-transparent px-4 pb-2 pt-3.5 text-[14px] leading-6 shadow-none focus-visible:ring-0"
             disabled={!state || state.status === "closed"}
             onChange={(event) => setText(event.target.value)}
@@ -229,12 +241,30 @@ export function Composer({
             placeholder={
               state?.status === "closed"
                 ? "This room is closed"
-                : kind === "dm" ? `Message ${state?.name || "agent"}…` : "Message the room…"
+                : kind === "dm"
+                  ? `Message @${dmAgent || "agent"}…`
+                  : "Message the room…"
             }
             ref={textareaRef}
             value={text}
           />
           <div className="flex items-center gap-1.5 px-2.5 pb-2.5">
+            {/* WHO THIS GOES TO, in the slot a room keeps its recipient control
+                in — a 1:1 states it, a room chooses it. The name is spelled
+                "@agent" because that is how the same message is addressed one
+                panel over, and because a chat whose recipient is only in the
+                window title makes the reader hold it in their head. It is
+                deliberately NOT a control: a direct message has exactly one
+                recipient, and offering a menu of one is offering a decision
+                that does not exist. */}
+            {kind === "dm" && dmAgent && (
+              <span
+                className="flex h-8 max-w-[13rem] items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-[11px] font-medium text-foreground"
+                title={`This conversation goes to ${dmAgent}`}
+              >
+                <span className="truncate">@{dmAgent}</span>
+              </span>
+            )}
             {kind === "dm" && (
               <Button
                 className="h-8 gap-1.5 rounded-lg px-3 text-[11px]"
@@ -312,7 +342,7 @@ export function Composer({
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-xs font-medium">{name}</div>
                         <div className="truncate text-[10px] capitalize text-muted-foreground">
-                          {isOwner(name) ? ownerTitle : memberRole(agent) || "agent"}
+                          {titleOf(name, agent) || "agent"}
                         </div>
                       </div>
                       {isOwner(name) && (
@@ -329,7 +359,12 @@ export function Composer({
                 })}
               </DropdownMenuContent>
             </DropdownMenu>}
-            <Tooltip>
+            {/* Addressing one agent is a ROOM operation. In a 1:1 there is
+                nobody else to mention: the composer does not parse "@name"
+                there (see submit), so the button offered a syntax that would
+                have been sent verbatim as prose. Start work is the only other
+                action a chat has. */}
+            {kind === "room" && <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   aria-label="Mention an agent"
@@ -345,7 +380,7 @@ export function Composer({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">Talk to one agent</TooltipContent>
-            </Tooltip>
+            </Tooltip>}
             <div className="ml-auto flex items-center gap-2">
               {text.trim() && (
                 <span className="hidden text-[10px] text-muted-foreground sm:block">
@@ -376,10 +411,10 @@ export function Composer({
         <div className="mt-1.5 flex items-center justify-between px-1">
           <span className="text-[9px] text-muted-foreground/65">
             {kind === "dm"
-              ? "Send asks a read-only question. Start work is available only inside managed containment."
+              ? `Goes to ${dmAgent ? `@${dmAgent}` : "this agent"}. Send asks a read-only question; Start work is available only inside managed containment.`
               : broadcast || !recipient
                 ? "Goes to everyone in the room. Start with @name to send one message elsewhere."
-                : `Goes to ${recipient}. Start with @name to send one message elsewhere.`}
+                : `Goes to @${recipient}. Start with @name to send one message elsewhere.`}
           </span>
           {state?.status === "open" && (
             <Badge
@@ -387,7 +422,7 @@ export function Composer({
               variant="outline"
             >
               <Check className="mr-1 size-2.5" />
-              Room open
+              {kind === "dm" ? "Chat open" : "Room open"}
             </Badge>
           )}
         </div>

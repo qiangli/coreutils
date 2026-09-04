@@ -542,7 +542,74 @@ func Address(ctx context.Context, ref, agent, text string) (Event, error) {
 		return Event{}, err
 	}
 	defer lease.Release()
-	return runTurn(ctx, st, canonAgent(name), text, apiRunner())
+	target := canonAgent(name)
+	if err := recordAsked(st, target, text); err != nil {
+		return Event{}, err
+	}
+	ev, err := runTurn(ctx, st, target, text, apiRunner())
+	if err != nil {
+		// The question stays UNREAD deliberately: the agent never answered it, so
+		// the next `meet dispatch` should still deliver it. Same rule Dispatch
+		// applies to its own failed turns.
+		return ev, err
+	}
+	markAnswered(st, target)
+	return ev, nil
+}
+
+// recordAsked writes the human's question into the room BEFORE the agent runs.
+//
+// Without it, addressing an agent from the browser made your own message
+// disappear: `Address` recorded only the reply, so the room showed answers to
+// questions nobody could see, and a turn that timed out left no trace that
+// anything had been asked at all. The 1:1 chat never had that problem — a DM
+// records the human's message and then runs the turn (relay_dm.go), which is
+// the same store — so this makes the room agree with the chat rather than
+// inventing a shape.
+//
+// The addressee is the agent, for the same reason it is in a DM: that is what
+// makes it directed mail in that agent's unified inbox, and what a later
+// handover re-targets. markAnswered is the other half — mail answered on the
+// spot must not be delivered a second time.
+func recordAsked(st *State, agent, text string) error {
+	who := strings.TrimSpace(st.Human)
+	if who == "" {
+		// Every room-creating path names a human (meet.go humanSeat, serve.go
+		// actorOf). A room that somehow has none gets no invented one: an event
+		// attributed to "" is worse than an unrecorded question.
+		return nil
+	}
+	_, err := recordFull(st, Event{
+		Round: st.Round, Speaker: who, Role: string(RoleHuman),
+		Kind: "human", To: agent, Text: text, TS: nowFn(),
+	})
+	return err
+}
+
+// markAnswered advances the addressed agent's read cursor past the exchange it
+// just took part in.
+//
+// The question above is directed mail, and Dispatch wakes on exactly that — so
+// without this, an agent that answered synchronously would be handed the same
+// question again on the next dispatch pass and would answer it twice. The mark
+// is honest rather than convenient: every turn is given the whole transcript as
+// context (transcriptContext), so an agent that took a turn HAS been shown the
+// room through that point. It is the same acknowledgement Dispatch makes after
+// its own turns.
+//
+// A cursor that fails to advance is reported IN THE ROOM rather than returned:
+// the turn is recorded and the reply is real, and the async job path turns any
+// error here into a "did not run" note, which would be a false report of the
+// one thing that did run.
+func markAnswered(st *State, agent string) {
+	_, _, _, through, err := UnreadThrough(st.ID, agent, 0)
+	if err == nil {
+		err = MarkSeenThrough(st.ID, agent, through)
+	}
+	if err != nil {
+		_, _ = record(st, "note", otelServiceName, "",
+			fmt.Sprintf("%s answered, but its read mark did not advance (%v); `bashy meet dispatch` may ask again", agent, err))
+	}
 }
 
 // apiRunner supplies the chat.Runner the exported verbs run turns with. In

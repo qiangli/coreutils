@@ -88,6 +88,9 @@ export const mockState: State = {
   // quietly demo a different product than the one that ships.
   owner: "Atlas",
   owner_title: "facilitator",
+  // An ordinary meeting advertises no late-bound seat; a sprint's room does
+  // ("conductor:99"). The demo is the ordinary case.
+  default_to: "",
 }
 
 export const mockDetail: RoomDetail = {
@@ -112,6 +115,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "System",
     role: "system",
     kind: "agenda",
+    to: "",
     text: "Agenda set: agree on the preview audience and choose the smallest convincing demo.",
     ts: new Date(now - 6_900_000).toISOString(),
   },
@@ -120,6 +124,10 @@ export const mockEvents: MeetEvent[] = [
     speaker: "Mira Chen",
     role: "human",
     kind: "human",
+    // An explicit broadcast — the demo shows the two addressed shapes a room
+    // really has, because a fixture that only ever posts to nobody demos a
+    // different product than the one that ships.
+    to: "all",
     text: "We have one hour. I’d like us to leave with a preview story that feels useful, not theatrical.",
     ts: new Date(now - 6_600_000).toISOString(),
   },
@@ -128,6 +136,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "Atlas",
     role: "research",
     kind: "turn",
+    to: "",
     text: "Across **nine customer interviews**, the strongest signal was confidence during setup.\n\nI’d frame the preview around one promise:\n\n> Bring a complicated question into a room and leave with a clear, owned decision.\n\nThat gives us a human story while still showing multiple agents collaborating.",
     status: "complete",
     duration_ms: 8200,
@@ -138,6 +147,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "System",
     role: "system",
     kind: "invite",
+    to: "",
     text: "Sage joined the room at Mira’s invitation.",
     ts: new Date(now - 5_700_000).toISOString(),
   },
@@ -146,6 +156,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "Sage",
     role: "strategy",
     kind: "turn",
+    to: "",
     text: "A concise flow could be:\n\n1. Name the outcome in everyday language.\n2. Let the room surface evidence and disagreement.\n3. Capture the decision and owner automatically.\n\nThe product should feel like a **calm facilitator**, not another dashboard.",
     status: "complete",
     duration_ms: 6100,
@@ -156,6 +167,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "System",
     role: "system",
     kind: "decision",
+    to: "",
     text: "Decision recorded: preview the guided room workflow with five design partners.",
     ts: new Date(now - 3_900_000).toISOString(),
   },
@@ -164,6 +176,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "System",
     role: "system",
     kind: "action",
+    to: "",
     text: "Action: Patch owns the stable demo environment by Thursday.",
     ts: new Date(now - 3_600_000).toISOString(),
   },
@@ -172,6 +185,7 @@ export const mockEvents: MeetEvent[] = [
     speaker: "Mira Chen",
     role: "human",
     kind: "human",
+    to: "Atlas",
     text: "Atlas, can you turn that into a two-sentence opening for the preview?",
     ts: new Date(now - 210_000).toISOString(),
   },
@@ -254,6 +268,7 @@ export async function mockPost(
     speaker: author,
     role: "human",
     kind: "human",
+    to: "",
     text,
     ts: new Date().toISOString(),
   }
