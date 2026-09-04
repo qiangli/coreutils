@@ -607,6 +607,9 @@ test("a chat names its agent and offers no action but sending", async ({ page })
   await expect(page.getByText(`@${primaryAgent}`).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Start work" })).toHaveCount(0);
+  // The mention button is gone from BOTH surfaces now — the recipient control
+  // is the one place a message is addressed — so this guards against it coming
+  // back here rather than distinguishing a chat from a room.
   await expect(page.getByRole("button", { name: "Mention an agent" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Recipient: / })).toHaveCount(0);
 });

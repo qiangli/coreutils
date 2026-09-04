@@ -22,11 +22,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import {
   ALL_SEATS,
   memberName,
   memberRole,
@@ -342,28 +337,12 @@ export function Composer({
                 })}
               </DropdownMenuContent>
             </DropdownMenu>}
-            {/* Addressing one agent is a ROOM operation. In a 1:1 there is
-                nobody else to mention: the composer does not parse "@name"
-                there (see submit), so the button offered a syntax that would
-                have been sent verbatim as prose. A chat has ONE action —
-                sending — which is why this slot is empty there. */}
-            {kind === "room" && <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Mention an agent"
-                  className="size-8 rounded-lg text-muted-foreground"
-                  onClick={() => {
-                    setText("@")
-                    textareaRef.current?.focus()
-                  }}
-                  size="icon-sm"
-                  variant="ghost"
-                >
-                  <AtSign className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Talk to one agent</TooltipContent>
-            </Tooltip>}
+            {/* The recipient control above IS the addressing surface: it names
+                who an unaddressed message goes to and changes it in one click.
+                A second control that only typed "@" into the box was a slower
+                way to reach the same decision, so it is gone. Typing "@name"
+                still works and still overrides the selection for one message —
+                the mention list above the box completes it. */}
             <div className="ml-auto flex items-center gap-2">
               {text.trim() && (
                 <span className="hidden text-[10px] text-muted-foreground sm:block">
