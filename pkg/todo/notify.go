@@ -4,7 +4,7 @@
 package todo
 
 // Cell A of the agent comms matrix (sprint #111, story ddd2176106b6):
-// --assignee was a free-text field nobody read. Assigning work told nobody,
+// --owner was once stored as a free-text assignee field nobody read. Assigning work told nobody,
 // and nothing on the item said whether the name typed into it was even
 // reachable — "whois todo:<id>" answered "names nothing on this host"
 // because todo is not a principal kind, and there was no way to find out

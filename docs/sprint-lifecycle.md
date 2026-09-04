@@ -11,9 +11,9 @@ start ──> running ──> pause ──> resume ──> running ──> end �
 ## Common workflow
 
 ```sh
-bashy sprint start 45 --for 4h
+bashy sprint start 45 --owner current-manager --for 4h
 bashy sprint pause 45 -m "current result; next action; blocker"
-bashy sprint resume 45 --as next-conductor
+bashy sprint resume 45 --owner next-conductor
 bashy sprint end 45 --gate 'go test ./...'
 ```
 

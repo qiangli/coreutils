@@ -9,7 +9,11 @@ import (
 // SprintClaimIdentity resolves the exact durable address a start/take command
 // will claim. Bashy's external-harness adapter uses it before mutation so the
 // foreground inbox stream is already live when claim validation runs.
-func SprintClaimIdentity(id int64, explicit string, takeover bool) (string, error) {
+func SprintClaimIdentity(id int64, explicit string, _ bool) (string, error) {
+	explicit = strings.TrimSpace(explicit)
+	if explicit == "" {
+		return "", fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+	}
 	dir, err := sprintStoreDir()
 	if err != nil {
 		return "", err
@@ -22,10 +26,14 @@ func SprintClaimIdentity(id int64, explicit string, takeover bool) (string, erro
 	if s == nil {
 		return "", fmt.Errorf("sprint #%d not found", id)
 	}
-	if takeover {
-		return sprintTakeoverIdentity(s, explicit), nil
+	if err := validateSprintOwner(explicit); err != nil {
+		return "", err
 	}
-	return weaveStoryConductorName(s, strings.TrimSpace(explicit)), nil
+	canonical, ok := canonicalFleetAgentName(explicit)
+	if !ok {
+		return "", fmt.Errorf("sprint manager %q is not a registered agent", explicit)
+	}
+	return canonical, nil
 }
 
 // RefreshSprintManagerLease records proven activity by the current sprint

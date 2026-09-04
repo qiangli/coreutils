@@ -265,8 +265,11 @@ func (c *Catalog) Model(name string) (Model, bool) {
 	return Model{}, false
 }
 
-// Agents returns every agent across every file, nickname-sorted.
-func (c *Catalog) Agents() ([]Agent, []error) {
+// agentEntries returns every agent declared by the merged file ring, including
+// entries whose canonical names collide. Resolution needs the complete set so
+// it can fail closed; Agents applies the user-facing one-row-per-NAME policy on
+// top of it.
+func (c *Catalog) agentEntries() ([]Agent, []error) {
 	var errs []error
 	cat := &assetring.Catalog[AgentFile]{
 		Sources: c.sources(dirAgents),
@@ -295,17 +298,56 @@ func (c *Catalog) Agents() ([]Agent, []error) {
 	return out, errs
 }
 
+// Agents returns every agent across every file, nickname-sorted.
+func (c *Catalog) Agents() ([]Agent, []error) {
+	entries, errs := c.agentEntries()
+	var out []Agent
+	seen := map[string]Agent{}
+	for _, a := range entries {
+		key := strings.ToLower(strings.TrimSpace(a.Name))
+		if previous, ok := seen[key]; ok {
+			errs = append(errs, fmt.Errorf(
+				"fleet: duplicate agent NAME %q (%s and %s); every agent identity must have one unique NAME",
+				a.Name, previous.MatrixKey(), a.MatrixKey()))
+			continue
+		}
+		seen[key] = a
+		out = append(out, a)
+	}
+	return out, errs
+}
+
 // Agent resolves an agent by nickname, human name, family alias, or declared
 // alias. It also accepts a bare tool:model binding, so `claude:opus4.8` names
 // its agent even before anyone has nicknamed it.
 func (c *Catalog) Agent(name string) (Agent, bool) {
-	agents, _ := c.Agents()
+	agents, _ := c.agentEntries()
+	canonicalCount := map[string]int{}
 	for _, a := range agents {
-		for _, n := range a.Names() {
-			if n == name {
-				return a, true
+		canonicalCount[strings.ToLower(strings.TrimSpace(a.Name))]++
+	}
+	unique := func(matches []Agent) (Agent, bool) {
+		if len(matches) != 1 || canonicalCount[strings.ToLower(strings.TrimSpace(matches[0].Name))] != 1 {
+			return Agent{}, false
+		}
+		return matches[0], true
+	}
+	matchNames := func(equal func(string) bool) []Agent {
+		var matches []Agent
+		for _, a := range agents {
+			for _, n := range a.Names() {
+				if equal(n) {
+					matches = append(matches, a)
+					break
+				}
 			}
 		}
+		return matches
+	}
+
+	exact := matchNames(func(n string) bool { return n == name })
+	if len(exact) > 0 {
+		return unique(exact)
 	}
 	if tool, model, ok := strings.Cut(name, ":"); ok {
 		// The model half is resolved through the catalog, not string-matched,
@@ -315,21 +357,22 @@ func (c *Catalog) Agent(name string) (Agent, bool) {
 		if m, found := c.Model(model); found {
 			model = m.Name
 		}
+		var matches []Agent
 		for _, a := range agents {
 			if a.Tool == tool && a.Model == model {
-				return a, true
+				matches = append(matches, a)
 			}
+		}
+		if len(matches) > 0 {
+			return unique(matches)
 		}
 	}
 	// Case-insensitive fallback, exact match having failed: a nickname is a
 	// human name (`Elif`), and a human types `elif`. Only reached when nothing
 	// matched exactly, so it never shadows a precise binding.
-	for _, a := range agents {
-		for _, n := range a.Names() {
-			if strings.EqualFold(n, name) {
-				return a, true
-			}
-		}
+	folded := matchNames(func(n string) bool { return strings.EqualFold(n, name) })
+	if len(folded) > 0 {
+		return unique(folded)
 	}
 	return Agent{}, false
 }

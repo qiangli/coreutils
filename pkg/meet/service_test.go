@@ -500,7 +500,7 @@ func TestMeetOpenIsSeparateFromService(t *testing.T) {
 	// in the binary leaves `start` refusing to convene from inside a meeting.
 	t.Setenv(meetDepthEnv, "")
 	out, err := runMeet(t, "open", "--topic", "ship the thing",
-		"--participant", "codex", "--dry-run")
+		"--participant", "codex", "--owner", "gemini", "--dry-run")
 	if err != nil {
 		t.Fatalf("`meet open --dry-run` must work: %v", err)
 	}

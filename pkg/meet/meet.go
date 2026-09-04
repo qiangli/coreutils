@@ -45,7 +45,7 @@ func guardDepth() error {
 	if d := meetDepth(); d >= 1 {
 		return fmt.Errorf("meet: refusing to convene a meeting from inside a meeting (%s=%d).\n"+
 			"      A participant must contribute a turn, not convene its own panel — that recursion is unbounded.\n"+
-			"      If you are an agent that needs a second opinion, say so in your turn and let the chair decide", meetDepthEnv, d)
+			"      If you are an agent that needs a second opinion, say so in your turn and let the facilitator decide", meetDepthEnv, d)
 	}
 	return nil
 }
@@ -82,7 +82,7 @@ func NewRelayCmd() *cobra.Command {
 	cmd := NewMeetCmd()
 	cmd.Use = "relay"
 	cmd.Short = "one plain communication surface for Meet channels and Chat direct messages"
-	cmd.Long = "Open Bashy Relay: Meet rooms appear as channels and governed Chat conversations appear as direct messages.\n" +
+	cmd.Long = "Open Bashy Meet: meeting rooms appear as channels and governed Chat conversations appear as direct messages.\n" +
 		"Use `bashy relay serve` for the local-first web UI. The precise `bashy meet` and `bashy chat` commands remain available for scripts."
 	return cmd
 }
@@ -151,9 +151,9 @@ func printPreview(w io.Writer, st *State) {
 		fmt.Fprintln(w, "  secretary    (none — this room keeps no minutes; nothing extracts its decisions)")
 	}
 	if st.chaired() {
-		fmt.Fprintf(w, "  chair        %s  directs, never argues — %s · %s\n", st.chair(), drivability(st.chair()), shellRouting(st.chair()))
+		fmt.Fprintf(w, "  facilitator  %s  directs, never argues — %s · %s\n", st.chair(), drivability(st.chair()), shellRouting(st.chair()))
 	} else {
-		fmt.Fprintln(w, "  chair        (none — round-robin; the human directs)")
+		fmt.Fprintln(w, "  facilitator  (none — round-robin; the human directs)")
 	}
 	for i, p := range st.Participants {
 		label := "participants"
@@ -228,23 +228,16 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent — decides content (repeatable)")
 	f.IntVar(&sf.minBand, "min-band", 0, "seat every operable agent at this capability band or above (1-4), instead of naming them")
 	f.StringVar(&sf.secretary, "secretary", "claude",
-		"secretary agent — records, decides nothing; never a participant or the chair. "+
+		"secretary agent — records, decides nothing; never a participant or the facilitator. "+
 			"Pass --secretary \"\" for a room that keeps no minutes: a conversation rather than a meeting")
 	// ONE FLAG, DOMAIN TITLES. A meeting's owner is its FACILITATOR: the seat
 	// that directs the discussion, judges done-ness, and answers for the room.
-	// It merges what used to be --chair and --initiator, which were two names
-	// for one accountability and produced rooms whose initiator had vanished
-	// while a chair still ran turns.
-	//
-	// Empty stays meaningful: no facilitator is round-robin with nobody
-	// directing, which is right for a small room and for a DM.
 	role.AttachOwner(f, &sf.chair, role.Facilitator,
-		"directs the discussion, judges done-ness, and answers for the room; empty means round-robin with no facilitator")
-	role.AttachOwnerAlias(f, &sf.chair, "chair", role.Facilitator)
+		"directs the discussion, judges done-ness, and answers for an open meeting")
 	f.StringArrayVar(&sf.agenda, "agenda", nil, "agenda item (repeatable)")
 	f.StringArrayVar(&sf.context, "context", nil, "file every participant reads before its first turn (repeatable)")
-	f.IntVar(&sf.maxTurns, "max-turns", defaultMaxTurns, "hard ceiling on participant turns under a --chair")
-	f.IntVar(&sf.maxStalls, "max-stalls", defaultMaxStalls, "consecutive looping/no-progress turns before the chair re-plans")
+	f.IntVar(&sf.maxTurns, "max-turns", defaultMaxTurns, "hard ceiling on participant turns under a facilitator")
+	f.IntVar(&sf.maxStalls, "max-stalls", defaultMaxStalls, "consecutive looping/no-progress turns before the facilitator re-plans")
 	f.StringVar(&sf.out, "out", "docs", "filing target: docs | kb | <path>")
 	f.StringVar(&sf.turnTimeout, "turn-timeout", "20m", "per-turn agent timeout (e.g. 20m); a wedged agent can't hang the round")
 	f.StringVar(&sf.decisionMode, "decision-mode", "infer", "infer: the secretary may record a converged decision (tagged); explicit: only stated decisions")
@@ -329,8 +322,8 @@ func deliberate(ctx context.Context, st *State, w io.Writer, rounds int, questio
 			// --rounds is a round-robin control. Under a chair the ledger loop
 			// decides how many turns to run, so honouring it is impossible —
 			// say so rather than silently running a shorter meeting than asked.
-			fmt.Fprintf(w, "meet: ⚠ --rounds %d ignored — %s is chairing, and a chair decides "+
-				"turn count itself (bounded by --max-turns %d). Drop --chair for round-robin rounds.\n",
+			fmt.Fprintf(w, "meet: ⚠ --rounds %d ignored — %s is facilitating, and the facilitator decides "+
+				"turn count (bounded by --max-turns %d). Drop --owner for round-robin rounds.\n",
 				rounds, st.chair(), st.MaxTurns)
 		}
 		res, err := runChaired(ctx, st, nil)
@@ -338,7 +331,7 @@ func deliberate(ctx context.Context, st *State, w io.Writer, rounds int, questio
 			return err
 		}
 		if verbose {
-			fmt.Fprintf(w, "chaired: %d turns, %d stalls, %d re-plans, %d degraded selections — stopped by %s\n",
+			fmt.Fprintf(w, "facilitated: %d turns, %d stalls, %d re-plans, %d degraded selections — stopped by %s\n",
 				res.Turns, res.Stalls, res.Replans, res.Degraded, res.StoppedBy)
 		}
 		if res.StoppedBy == "stalled" {
@@ -408,6 +401,9 @@ func newOpenCmd() *cobra.Command {
 			if strings.TrimSpace(sf.initiator) == "" {
 				sf.initiator = humanName() // `start` always names its initiator
 			}
+			if !sf.board && strings.TrimSpace(sf.chair) == "" {
+				return fmt.Errorf("meet: an open meeting requires an owner (facilitator) — pass --owner NAME from `bashy agents list`")
+			}
 			st, err := sf.newState()
 			if err != nil {
 				return err
@@ -468,8 +464,8 @@ func newOpenCmd() *cobra.Command {
 	f.BoolVar(&nonInteractive, "non-interactive", false, "run rounds then close, no REPL")
 	f.BoolVar(&yes, "yes", false, "close without asking the initiator to confirm")
 	f.BoolVar(&sf.board, "board", false,
-		"open a BOARD: participants read and post on their own turns. No chair runs the "+
-			"floor and no secretary is spawned — post with `bashy meet tell <room> --as <you> \"...\"`")
+		"open a BOARD: participants read and post on their own turns. No facilitator runs the "+
+			"floor and no secretary is spawned; post with bashy meet tell ROOM --as NAME MESSAGE")
 	f.StringVar(&fromMB, "from-mb", "",
 		"seed the board from these message-board posts (comma-separated seqs, e.g. 3,7,12), "+
 			"attributed to their original authors, and post a pointer back to mb. Requires --board")
@@ -794,7 +790,7 @@ func repl(cmd *cobra.Command, st *State) error {
 	}
 	fmt.Fprintf(w, "\nmeet %s · secretary=%s · participants: %s\n",
 		st.ID, secretary, strings.Join(st.Participants, ", "))
-	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /chair | /poll <q> | /ask <q> |")
+	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /facilitator | /poll <q> | /ask <q> |")
 	fmt.Fprintln(w, "          /invite <agent> | /kick <agent> |")
 	fmt.Fprintln(w, "          /decision <t> | /action owner: task | /agenda <t> | /show | /converge | /close")
 	fmt.Fprint(w, "you> ")
@@ -841,17 +837,17 @@ func repl(cmd *cobra.Command, st *State) error {
 			for _, e := range evs {
 				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
-		case line == "/chair":
+		case line == "/facilitator":
 			if !st.chaired() {
-				fmt.Fprintln(w, "⏺ no --chair agent for this meeting; use /round, or restart with --chair <agent>")
+				fmt.Fprintln(w, "⏺ no --owner (facilitator) for this meeting; use /round, or restart with --owner <agent>")
 				break
 			}
 			res, err := runChaired(cmd.Context(), st, nil)
 			if err != nil {
-				fmt.Fprintf(w, "⏺ chairing failed: %v\n", err)
+				fmt.Fprintf(w, "⏺ facilitation failed: %v\n", err)
 				break
 			}
-			fmt.Fprintf(w, "⏺ chaired %d turns (%d stalls, %d re-plans, %d degraded) — stopped by %s\n",
+			fmt.Fprintf(w, "⏺ facilitated %d turns (%d stalls, %d re-plans, %d degraded) — stopped by %s\n",
 				res.Turns, res.Stalls, res.Replans, res.Degraded, res.StoppedBy)
 		case strings.HasPrefix(line, "/poll "):
 			q := strings.TrimSpace(line[len("/poll "):])
@@ -1805,7 +1801,7 @@ func newDMCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Relay DM with %s · cold · Chat spawns the counterpart when you send a message\n", dm.Agent)
+				fmt.Fprintf(cmd.OutOrStdout(), "Meet DM with %s · cold · Chat spawns the counterpart when you send a message\n", dm.Agent)
 				return nil
 			}
 

@@ -17,7 +17,7 @@ import type { AgentOption } from "@/lib/contracts"
 interface NewRoomDialogProps {
   creating: boolean
   agents: AgentOption[]
-  onCreate: (topic: string, participants: string[]) => Promise<boolean>
+  onCreate: (topic: string, owner: string, participants: string[]) => Promise<boolean>
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }
@@ -36,14 +36,16 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
   const open = controlledOpen ?? internalOpen
   const setOpen = onOpenChange ?? setInternalOpen
   const [topic, setTopic] = useState("")
+  const [owner, setOwner] = useState("")
   const [participants, setParticipants] = useState<string[]>([])
-  const ready = topic.trim().length > 0 && participants.length > 0
+  const ready = topic.trim().length > 0 && owner.length > 0 && participants.length > 0
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!ready || creating) return
-    if (await onCreate(topic.trim(), participants)) {
+    if (await onCreate(topic.trim(), owner, participants)) {
       setTopic("")
+      setOwner("")
       setParticipants([])
       setOpen(false)
     }
@@ -56,12 +58,11 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogTrigger asChild>
         <Button
-          aria-label="New meeting"
-          className="size-7 text-sidebar-foreground/55 hover:text-sidebar-foreground"
-          size="icon-sm"
+          className="h-7 gap-1 px-2 text-[11px] text-sidebar-foreground/75 hover:text-sidebar-foreground"
+          size="sm"
           variant="ghost"
         >
-          <Plus className="size-4" />
+          <Plus className="size-3.5" /> New meeting
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[440px]">
@@ -88,8 +89,33 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
               />
             </div>
             <div className="grid gap-1.5">
+              <label className="text-[13px] font-medium" htmlFor="room-owner">
+                Facilitator
+              </label>
+              <select
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                id="room-owner"
+                onChange={(event) => {
+                  const next = event.currentTarget.value
+                  setOwner(next)
+                  setParticipants((current) => current.filter((name) => name !== next))
+                }}
+                value={owner}
+              >
+                <option value="">Choose a registered agent…</option>
+                {agents.map((agent) => (
+                  <option key={agent.name} value={agent.name}>
+                    {agent.nick ? `${agent.nick} · ` : ""}{agent.name}{agent.available ? "" : " · unavailable here"}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-muted-foreground">
+                Required. Meet never chooses a facilitator for you.
+              </p>
+            </div>
+            <div className="grid gap-1.5">
               <label className="text-[13px] font-medium" htmlFor="room-agents">
-                Agents
+                Participants
               </label>
               <select
                 className="min-h-32 rounded-md border border-input bg-transparent px-3 py-2 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -98,7 +124,7 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
                 onChange={(event) => setParticipants(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
                 value={participants}
               >
-                {agents.map((agent) => (
+                {agents.filter((agent) => agent.name !== owner).map((agent) => (
                   <option key={agent.name} value={agent.name}>
                     {agent.nick ? `${agent.nick} · ` : ""}{agent.name}{agent.band ? ` · L${agent.band}` : ""}{agent.ephemeral ? " · temporary" : ""}{agent.available ? "" : " · unavailable here"}
                   </option>

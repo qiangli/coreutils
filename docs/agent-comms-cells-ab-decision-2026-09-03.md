@@ -5,7 +5,7 @@ umbrella (not part of this repo). It names two INTEGRATION cells broken in
 the four-cell comms model (`mb`/`ping`/`meet`/`chat`, all of which work and
 were left untouched):
 
-- **Cell A** — `todo`'s `--assignee` is inert in both directions: assigning
+- **Cell A** — `todo`'s owner (the assignee) was inert in both directions: assigning
   tells nobody, and `whois todo:<id>` names nothing.
 - **Cell B** — `weave --help` names no `inbox`/`mail`/`message`/`notify` verb.
 
@@ -13,26 +13,23 @@ Both are decided below. Neither is left ambiguous.
 
 ## Cell A — HOOKED UP
 
-`todo add --assignee X` and `todo edit --assignee X` now notify X over the
+`todo add --owner X` and `todo edit --owner X` now notify X over the
 **existing** `bashy notify` front door (`pkg/bus/notify.go`'s `NotifyEvent`,
 the same channel `bashy inbox` already drains) — see `pkg/todo/notify.go`.
 No new verb, no todo-specific channel, per "prefer reusing an existing
 surface over adding a verb."
 
-It is best-effort by design: `docs/orchestration-roles.md` (dhnt) already
-records the field as an optional, unvalidated free-text string, so a todo
-write must never fail because the fabric could not resolve a name a human
-typed by hand. The caller gets an honest `AssignmentNotice` back instead —
-printed on `add`/`edit` immediately, not discovered later:
+An assigned item requires a canonical agent from `bashy agents list`; an
+unknown name is rejected before the item is written. The caller also gets an
+honest `AssignmentNotice` printed on `add`/`edit` immediately:
 
 ```
-$ bashy todo add "fix the thing" --assignee bob
-added a1b2c3d4 [todo] — fix the thing
+$ bashy todo add "fix the thing" --owner bob
+added a1b2c3d4 [assigned] — fix the thing
   notified bob (bashy inbox --as bob)
 
-$ bashy todo add "herd the cats" --assignee nobody-registered-anywhere
-added 9f8e7d6c [todo] — herd the cats
-  nobody-registered-anywhere not notified: notify: no target named "nobody-registered-anywhere" (…)
+$ bashy todo add "herd the cats" --owner nobody-registered-anywhere
+todo: assignee "nobody-registered-anywhere" is not a registered agent
 ```
 
 This closes both measured directions at once:
@@ -48,14 +45,11 @@ This closes both measured directions at once:
    what assignment-time notification already answers, one step earlier and
    without a new address grammar.
 
-`todo edit --assignee` reassignment notifies the same way; an edit that only
+`todo edit --owner` reassignment notifies the same way; an edit that only
 touches other fields does not re-notify.
 
-Status auto-promotion (`StatusAssigned`, documented in `todo.go` as
-"auto-set" but never wired) was deliberately **not** touched — it is a
-separate, pre-existing aspiration unrelated to comms reachability, and
-wiring it would have broken `TestListJSONEnvelopeUserScope`'s existing
-contract that an assignee alone does not change status.
+Assigning an owner promotes the item to `assigned`; clearing the owner returns
+an item still in that state to `todo`.
 
 Tests: `pkg/todo/notify_test.go` (delivery, unreachable-assignee reporting,
 and the `edit` reassignment path — all asserting the property via

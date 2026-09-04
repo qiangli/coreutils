@@ -32,7 +32,7 @@ func newSayCmd() *cobra.Command {
 		Short: "steer the agent that is currently speaking (mid-turn)",
 		Long: "Steer the agent that is currently speaking, without ending its turn.\n\n" +
 			"The text reaches the agent as keystrokes on its terminal, so it lands\n" +
-			"mid-answer: a chair can tell a participant that has wandered off the\n" +
+			"mid-answer: a facilitator can tell a participant that has wandered off the\n" +
 			"agenda to come back to it, and keep everything it has already said.\n\n" +
 			"Only an agent that currently holds the floor can be steered. There is\n" +
 			"no queue: a line for an agent that has already finished would be typed\n" +

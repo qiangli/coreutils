@@ -96,6 +96,27 @@ func TestStartRejectsInvalidMaxRuntime(t *testing.T) {
 	}
 }
 
+func TestStartCanPersistUnboundedExactOnceSession(t *testing.T) {
+	t.Setenv("BASHY_FOREMAN_DIR", t.TempDir())
+	t.Setenv("BASHY_FOREMAN_NO_SPAWN", "1")
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := run(rc, []string{"start", "--id", "owner", "--detach", "--goal", "manage", "--no-max-runtime", "--opening-send-once"})
+	if code != 0 {
+		t.Fatalf("start code = %d, err = %s", code, errb.String())
+	}
+	st, err := foreman.NewStore("", "owner").LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.MaxRuntime != "" || !st.Deadline.IsZero() || !st.OpeningSendOnce {
+		t.Fatalf("owner session policy was not persisted: %+v", st)
+	}
+	if code := run(rc, []string{"start", "--detach", "--goal", "bad", "--no-max-runtime", "--max-runtime", "1h"}); code == 0 {
+		t.Fatal("conflicting runtime flags were accepted")
+	}
+}
+
 func TestScriptedREPL(t *testing.T) {
 	t.Setenv("BASHY_FOREMAN_DIR", t.TempDir())
 	old := runner

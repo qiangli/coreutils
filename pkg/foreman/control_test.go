@@ -2,10 +2,49 @@ package foreman
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestControlStopDoesNotWaitForActiveTurnStateLock(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{
+		store:  NewStore(t.TempDir(), "locked-turn"),
+		state:  State{ID: "locked-turn", Status: StatusWorking},
+		stopCh: make(chan string, 1),
+	}
+	cancelled := make(chan struct{})
+	finished := make(chan struct{})
+
+	// Model Apply holding this lock for a long-running turn. Stop cancellation
+	// must happen before the watcher needs the lock to persist terminal state.
+	s.mu.Lock()
+	go func() {
+		s.watchControlLifetime(context.Background(), func() { close(cancelled) }, ln, make(chan struct{}), time.Time{}, "")
+		close(finished)
+	}()
+	// Let at least one health tick pass first. The regression was the tick itself
+	// trying to take s.mu and blocking the watcher before stop could be selected.
+	time.Sleep(200 * time.Millisecond)
+	s.requestStop("test stop")
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		s.mu.Unlock()
+		t.Fatal("stop cancellation waited behind the active turn state lock")
+	}
+	s.mu.Unlock()
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("control watcher did not finish after the turn released its lock")
+	}
+}
 
 func TestTellReachesSessionOverUnixSocket(t *testing.T) {
 	dir := t.TempDir()

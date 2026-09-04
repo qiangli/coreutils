@@ -62,7 +62,7 @@ func newPairCmd() *cobra.Command {
 		Short: "pair a phone with a QR code, so an OS password never crosses the wire",
 		Long: "pair mints a single-use, time-boxed pairing ticket and prints it as a QR.\n\n" +
 			"Scanning it opens the console on the phone with a DEVICE-SCOPED session:\n" +
-			"board, mb and relay by default — not a shell, not your home directory.\n" +
+			"Sprint, Messages and Meet by default — not a shell, not your home directory.\n" +
 			"Use --allow to widen it deliberately.\n\n" +
 			"Honest about the wire: this stops your OS PASSWORD from crossing a\n" +
 			"plaintext LAN. It does not encrypt the link.",
@@ -81,7 +81,7 @@ func newPairCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&window, "window", defaultTicketWindow,
 		"how long the code stays scannable")
 	cmd.Flags().StringSliceVar(&allow, "allow", nil,
-		"panels the device may reach (default board,mb,relay — NOT terminal or files)")
+		"panel mount IDs the device may reach (default board,mb,relay — Meet uses the relay mount; NOT terminal or files)")
 	cmd.Flags().StringVar(&host, "host", "", "address the phone should dial (default: this host's LAN IP)")
 	cmd.Flags().IntVar(&port, "port", DefaultPort, "port the console listens on")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the ticket as a typed object instead of a QR")

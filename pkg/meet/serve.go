@@ -119,7 +119,7 @@ func runMeetServe(ctx context.Context, out io.Writer, surface, bind string, port
 		Handler:           newServeHandler(ctx, MountOptions{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	fmt.Fprintf(out, "%s serve → http://%s/  (Bashy Relay; channels + direct messages)\n", surface, addr)
+	fmt.Fprintf(out, "%s serve → http://%s/  (Bashy Meet; channels + direct messages)\n", surface, addr)
 	if spaFS == nil {
 		fmt.Fprintf(out, "%s serve → ⚠ built without the web UI; the API and live streams work, `/` explains how to get the SPA\n", surface)
 	}
@@ -177,6 +177,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("POST /api/dms", handleRelayDMList)
 	route("GET /api/dms/{agent}", handleRelayDMGet)
 	route("POST /api/dms/{agent}/messages", handleRelayDMMessage(ctx))
+	route("POST /api/dms/{agent}/work", handleRelayDMWork(ctx))
 	route("/observe-dm", handleRelayDMObserve)
 	route("GET /api/rooms/{ref}", handleRoomGet)
 	route("POST /api/rooms", handleRoomCreate)
@@ -386,12 +387,36 @@ func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 // caller is its VERIFIED identity and the body is ignored; only ungated loopback —
 // which has already proved it is the machine owner — may say who it is.
 func handleRoomCreate(w http.ResponseWriter, r *http.Request) {
-	var opts CreateOptions
-	if err := decodeBody(r, &opts); err != nil {
+	// This is deliberately smaller than CreateOptions. A browser may choose who
+	// facilitates and participates; it may not smuggle in lifecycle, output, or
+	// launch controls that belong to the local CLI.
+	var body struct {
+		Topic        string   `json:"topic"`
+		Participants []string `json:"participants"`
+		Owner        string   `json:"owner"`
+		Human        string   `json:"human"`
+	}
+	if err := decodeBody(r, &body); err != nil {
 		apiErr(w, err)
 		return
 	}
-	opts.Human = actorOf(r, opts.Human)
+	owner := canonAgent(body.Owner)
+	if strings.TrimSpace(owner) == "" {
+		apiErr(w, errors.New("meet: a new meeting needs an explicit facilitator/owner"))
+		return
+	}
+	if len(body.Participants) == 0 {
+		apiErr(w, errors.New("meet: a new meeting needs at least one participant"))
+		return
+	}
+	if err := routableSeat(owner); err != nil {
+		apiErr(w, fmt.Errorf("meet: facilitator/owner: %w", err))
+		return
+	}
+	opts := CreateOptions{
+		Topic: body.Topic, Participants: body.Participants, Chair: owner,
+		NoSecretary: true, Human: actorOf(r, body.Human),
+	}
 	if strings.TrimSpace(opts.Human) == "" {
 		// Vouched but unnamed. Falling back to this host's user would file the room
 		// under the machine owner and hand them an organizer privilege the actual
@@ -400,12 +425,9 @@ func handleRoomCreate(w http.ResponseWriter, r *http.Request) {
 			"meet: this request is vouched for but carries no account name, so there is nobody to open the room as"))
 		return
 	}
-	// An explicitly named initiator still wins — that is `--initiator <agent>`,
-	// naming a seat other than the human as the one who must agree to conclude.
-	// Validate holds it to being someone at the table, as it always has.
-	if strings.TrimSpace(opts.Initiator) == "" {
-		opts.Initiator = opts.Human
-	}
+	// A browser-created meeting is convened by its authenticated human. The
+	// facilitator runs the floor; it does not inherit the organizer's authority.
+	opts.Initiator = opts.Human
 	st, err := Create(opts)
 	if err != nil {
 		apiErr(w, err)

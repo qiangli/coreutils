@@ -48,22 +48,6 @@ type sprintStoryState struct {
 	Missing  bool           `json:"missing,omitempty"`
 }
 
-func sprintTakeoverIdentity(s *weaveStory, explicit string) string {
-	// No explicit rename means takeover inherits the established coordination
-	// address, even when this process was launched under a different agent id.
-	// To use another name the caller must say so with --as, which atomically
-	// updates the lease before any ready/coordination instruction is printed.
-	if strings.TrimSpace(explicit) == "" && s != nil {
-		if strings.TrimSpace(s.Owner) != "" {
-			return s.Owner
-		}
-		if s.Lease != nil && strings.TrimSpace(s.Lease.Holder) != "" {
-			return s.Lease.Holder
-		}
-	}
-	return weaveConductorName(explicit)
-}
-
 // sprintInboxDeliveryLive reports whether mail addressed to this owner can
 // actually arrive. It is a THIN PROJECTION of room.OwnerTransportFor and holds
 // no logic of its own, deliberately.

@@ -112,6 +112,7 @@ func TestAppsListsTheBuiltinSurfaces(t *testing.T) {
 		Schema string `json:"schema_version"`
 		Apps   []struct {
 			Name      string `json:"name"`
+			Label     string `json:"label"`
 			Status    string `json:"status"`
 			StartHint string `json:"start_hint"`
 			Mode      string `json:"mode"`
@@ -124,8 +125,10 @@ func TestAppsListsTheBuiltinSurfaces(t *testing.T) {
 		t.Errorf("schema = %q, want %q", got.Schema, appsSchemaVersion)
 	}
 	seen := map[string]string{}
+	labels := map[string]string{}
 	for _, a := range got.Apps {
 		seen[a.Name] = a.Status
+		labels[a.Name] = a.Label
 		// A stopped proxy tile must always be able to tell the reader how to
 		// start it; a tile that only says "stopped" sends them hunting.
 		if a.Mode == "proxy" && a.StartHint == "" {
@@ -136,6 +139,9 @@ func TestAppsListsTheBuiltinSurfaces(t *testing.T) {
 		if _, ok := seen[want]; !ok {
 			t.Errorf("surface %q missing from /api/apps (have %v)", want, seen)
 		}
+	}
+	if labels["relay"] != "Meet" {
+		t.Errorf("relay mount label = %q, want Meet", labels["relay"])
 	}
 }
 

@@ -129,3 +129,21 @@ func TestRootAndListFlagHelpCanBeSpecializedIndependently(t *testing.T) {
 		t.Fatal("root and list share flag metadata; wrapper help mutations leak into list help")
 	}
 }
+
+func TestAgentsListJSONRefusesAnAmbiguousIdentity(t *testing.T) {
+	root := t.TempDir()
+	cat := New(WithRoot(root))
+	if err := cat.SaveAgent(Agent{Name: "alpha", Aliases: []string{"shared"}, Tool: "claude", Model: "opus5"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(Agent{Name: "beta", Aliases: []string{"shared"}, Tool: "codex", Model: "gpt-5.5"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCmd(t, NewAgentsCmd(WithRoot(root)), "list", "--json")
+	if err == nil {
+		t.Fatalf("ambiguous JSON roster succeeded: %s", out)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out), "[") {
+		t.Fatalf("ambiguous JSON roster emitted selectable rows: %s", out)
+	}
+}

@@ -8,6 +8,7 @@ package meet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/chat"
+	"github.com/qiangli/coreutils/pkg/coopauth"
+	"github.com/qiangli/coreutils/pkg/room"
 )
 
 type relayDM struct {
@@ -43,6 +46,17 @@ type relayDMDetail struct {
 var relayDMLocks sync.Map // canonical agent -> *sync.Mutex
 
 var invokeRelayDM = chat.Invoke
+var startRelayDMWork = chat.Start
+
+// trustedBashyWorkContainment is deliberately fail-closed. A generic OCI marker
+// proves only that this process is in some container; it says nothing about
+// host/workspace mounts or the restricted Bashy sandbox contract. There is no
+// trustworthy Bashy containment provenance available to this process today, so
+// production Start work refuses until an existing trusted runner can vouch for
+// it. Tests replace this seam to exercise the already-existing managed session.
+var trustedBashyWorkContainment = func() (bool, string) {
+	return false, "no trusted Bashy containment provenance is available"
+}
 
 func relayDMLock(agent string) *sync.Mutex {
 	v, _ := relayDMLocks.LoadOrStore(agent, &sync.Mutex{})
@@ -158,7 +172,7 @@ func appendRelayDMEvent(agent string, event relayDMEvent) error {
 		ts = nowFn()
 	}
 	kind, to := "message", ""
-	if event.Role == "user" {
+	if event.Role == "user" || event.Role == "human" {
 		kind, to = "human", canonAgent(agent)
 	}
 	return AppendEvent(st.ID, Event{
@@ -248,7 +262,7 @@ func handleRelayDMMessage(ctx context.Context) http.HandlerFunc {
 		}
 		body.Text = strings.TrimSpace(body.Text)
 		if body.Text == "" {
-			apiErr(w, fmt.Errorf("relay: an empty message is not a contribution"))
+			apiErr(w, fmt.Errorf("meet: an empty message is not a contribution"))
 			return
 		}
 		lock := relayDMLock(agent)
@@ -265,9 +279,126 @@ func handleRelayDMMessage(ctx context.Context) http.HandlerFunc {
 			return
 		}
 		lock.Unlock()
+		// A Start work session owns this canonical identity and has already bound
+		// its inbox. The event above is therefore the message: its inbox relay
+		// delivers it to the persistent session. Starting a second read-only
+		// Invoke here would both duplicate the request and violate one identity.
+		if relayDMWorkSessionLive(agent) {
+			writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "queued"})
+			return
+		}
 		go runRelayDMTurn(ctx, st, body.Text)
 		writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "working"})
 	}
+}
+
+func relayDMWorkSessionLive(agent string) bool {
+	card, ok, err := room.Find(room.AgentClaimID(canonAgent(agent)))
+	if err != nil || !ok || card.Mode != "meet-work" {
+		return false
+	}
+	for _, capability := range card.Caps {
+		if capability == room.CapInboxDelivery {
+			return true
+		}
+	}
+	return false
+}
+
+// handleRelayDMWork starts the existing managed Chat session for work that may
+// change the workspace. The browser never supplies a sandbox or approval flag:
+// this server-side provenance check is the only web path to AllowUnsafe. Once
+// trusted, chat.Start still uses the ordinary registered-agent resolver,
+// environment scrubber, singleton claim, control socket, and inbox relay.
+//
+// An uncontained web session cannot honestly be called attended. Meet has no
+// transport for rendering and answering a vendor CLI's approval prompt, so it
+// refuses instead of launching a process that will either stall or gain raw
+// host authority.
+func handleRelayDMWork(ctx context.Context) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agent := canonAgent(r.PathValue("agent"))
+		var body struct{ Text string }
+		if err := decodeBody(r, &body); err != nil {
+			apiErr(w, err)
+			return
+		}
+		body.Text = strings.TrimSpace(body.Text)
+		if body.Text == "" {
+			apiErr(w, fmt.Errorf("meet: Start work needs an instruction"))
+			return
+		}
+
+		// A cloud request must carry the verified identity installed by the auth
+		// gate. Falling back to the server's OS user here would turn an unnamed
+		// remote caller into the machine owner before a write-capable launch.
+		if coopauth.ArrivedViaCloud(r) {
+			id, ok := coopauth.IdentityOf(r)
+			if !ok || strings.TrimSpace(id.User) == "" {
+				writeErr(w, http.StatusForbidden, errors.New(
+					"meet: Start work requires an authenticated account"))
+				return
+			}
+		}
+
+		contained, reason := trustedBashyWorkContainment()
+		if !contained {
+			if strings.TrimSpace(reason) == "" {
+				reason = "trusted Bashy containment was not proven"
+			}
+			writeErr(w, http.StatusForbidden, fmt.Errorf(
+				"meet: Start work is unavailable: %s; use Chat for a read-only question", reason))
+			return
+		}
+
+		lock := relayDMLock(agent)
+		lock.Lock()
+		st, err := ensureRelayDM(agent, actorOf(r, ""))
+		lock.Unlock()
+		if err != nil {
+			apiErr(w, err)
+			return
+		}
+
+		_, err = startRelayDMWork(ctx, agent, chat.SessionOptions{
+			Prompt:      body.Text,
+			ReadOnly:    false,
+			Attended:    false,
+			AllowUnsafe: true,
+			Mode:        "meet-work",
+		})
+		if err != nil {
+			apiErr(w, fmt.Errorf("meet: could not start work with %s: %w", agent, err))
+			return
+		}
+
+		// Record what the human asked without addressing it as new mail: Start
+		// already delivered this opening prompt. Addressing the transcript event
+		// too would make the session's inbox relay deliver the same instruction a
+		// second time.
+		lock.Lock()
+		err = appendRelayDMWorkEvent(st, body.Text)
+		lock.Unlock()
+		if err != nil {
+			// Work is already live. A 4xx/5xx would invite a retry and duplicate it.
+			writeJSON(w, http.StatusAccepted, map[string]string{
+				"agent": agent, "status": "started", "warning": "work started but its request could not be added to the transcript",
+			})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "started"})
+	}
+}
+
+func appendRelayDMWorkEvent(st relayDM, text string) error {
+	room, err := dmRoomFor(st.Agent, st.Human)
+	if err != nil {
+		return err
+	}
+	return AppendEvent(room.ID, Event{
+		Round: room.Round, Speaker: st.Human, Role: string(RoleParticipant),
+		Kind: "human", Text: text, Status: "work-started", TS: nowFn(),
+	})
 }
 
 func runRelayDMTurn(ctx context.Context, st relayDM, prompt string) {

@@ -677,7 +677,7 @@ func init() {
 	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("relay", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses},
-		Web: &WebSurface{Label: "Relay", Mount: "relay", Mode: WebInProcess, Port: 8637,
+		Web: &WebSurface{Label: "Meet", Mount: "relay", Mode: WebInProcess, Port: 8637,
 			Start: []string{"relay", "serve"}, DefaultOn: true}})
 	// `meet` deliberately declares NO surface: relay owns the mount, and two verbs
 	// claiming "relay" would trip the duplicate-mount panic. They are one room.

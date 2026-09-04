@@ -30,6 +30,53 @@ func TestStartRefusesAToolWithNoInteractiveLaunch(t *testing.T) {
 	}
 }
 
+func TestOpeningSendOnceCapsThePTYBoundaryAtOneWrite(t *testing.T) {
+	if got := openingSendCap(true); got != 1 {
+		t.Fatalf("exact-once opening send cap = %d, want 1", got)
+	}
+	if got := openingSendCap(false); got != maxOpenSends {
+		t.Fatalf("ordinary chat opening send cap = %d, want %d", got, maxOpenSends)
+	}
+}
+
+func TestClosePTYForceCancelsAgentThatIgnoresQuit(t *testing.T) {
+	done := make(chan struct{})
+	cancelled := make(chan struct{})
+	s := &Session{
+		done: done,
+		cancel: func() {
+			close(cancelled)
+			close(done)
+		},
+	}
+
+	s.closePTY(10 * time.Millisecond)
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("Close left an agent alive after it ignored the graceful quit")
+	}
+}
+
+func TestAbortStartCancelsPostLaunchSession(t *testing.T) {
+	done := make(chan struct{})
+	cancelled := make(chan struct{})
+	s := &Session{
+		done: done,
+		cancel: func() {
+			close(cancelled)
+			close(done)
+		},
+	}
+
+	s.abortStart()
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("post-launch Start failure left its session running")
+	}
+}
+
 // CanSteer is how a caller degrades LOUDLY. foreman consults it before falling
 // back to replay; meet consults it before promising a chair it can interrupt.
 func TestCanSteerNamesTheReason(t *testing.T) {

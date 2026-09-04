@@ -86,6 +86,7 @@ type Session struct {
 	// whichever came later, this or lastWrite — see the comment there.
 	lastSteer time.Time
 	done      chan struct{}
+	cancel    context.CancelFunc // force-stops the PTY after Close's graceful /quit window
 	exit      int
 	err       error
 	killed    string
@@ -98,6 +99,10 @@ type SessionOptions struct {
 	// (codex, opencode) is SENT it over the control channel once it is up, which
 	// is the same thing from the caller's side and not from the tool's.
 	Prompt string
+	// OpeningSendOnce disables the generic TUI-startup resend loop for callers
+	// whose protocol promises byte-exact, at-most-once delivery. The ordinary
+	// chat path keeps its retry behavior; sprint-managed Foreman sessions opt in.
+	OpeningSendOnce bool
 
 	Cwd     string
 	Timeout time.Duration
@@ -149,6 +154,10 @@ type SessionOptions struct {
 	// Empty defaults to "session". It is how `bashy chat sessions` shows WHAT a
 	// member is doing, not just that it exists.
 	Mode string
+	// Task identifies the owning work/session on the room card. Foreman uses its
+	// durable session ID so callers can distinguish the intended manager from an
+	// unrelated live session using the same agent identity.
+	Task string
 }
 
 // launchOptions is the ONE translation from a session's options to the launcher's.
@@ -277,7 +286,12 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 
 	// The one-shot runner uses this same constructor. Session chooses steer_exec
 	// argv and a PTY below; neither choice gets a separate environment policy.
-	cmd := agentCommand(withLaunch(ctx, l), l.Tool, argv, cwd)
+	// Retain a child cancellation handle. Close first asks the TUI to leave, but
+	// an agent is allowed to ignore /quit; after the grace window the session
+	// contract still has to end the process tree rather than merely unlinking its
+	// control socket and pretending it is gone.
+	runCtx, cancel := context.WithCancel(ctx)
+	cmd := agentCommand(withLaunch(runCtx, l), l.Tool, argv, cwd)
 
 	// Prevention before cure: seed the tool's own config so its trust prompt never
 	// appears. agentpty's gate classifier is the backstop for the ones it misses.
@@ -294,6 +308,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		launch:       l,
 		allowPremium: opt.AllowPremium,
 		done:         make(chan struct{}),
+		cancel:       cancel,
 		// Seed the idle clock at launch. An agent that says NOTHING must still go
 		// idle — otherwise WaitIdle would hang forever on the one failure it most
 		// needs to report, which is an agent that never spoke.
@@ -322,6 +337,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		Nick:      l.Nick,
 		Band:      bindingBand(name),
 		Mode:      mode,
+		Task:      strings.TrimSpace(opt.Task),
 		CtlSock:   sock,
 		PID:       os.Getpid(),
 		Cwd:       cwd,
@@ -336,6 +352,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	// process first and discovering the conflict afterwards would leave a real
 	// agent running with no card, unsteerable and invisible to `chat sessions`.
 	if err := room.Join(card); err != nil {
+		cancel()
 		var live *room.ErrLive
 		if errors.As(err, &live) {
 			prior, _, _ := room.Find(live.ID)
@@ -345,6 +362,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	}
 	releaseInbox, err := bus.BindInstance(name, card.ID)
 	if err != nil {
+		cancel()
 		room.Leave(card.ID)
 		return nil, fmt.Errorf("chat: bind %s inbox to live session: %w", name, err)
 	}
@@ -356,6 +374,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	}
 
 	go func() {
+		defer cancel()
 		defer close(s.done)
 		defer room.Leave(card.ID)
 		defer func() { _ = releaseInbox() }()
@@ -404,20 +423,24 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	}()
 
 	if err := <-started; err != nil {
+		s.abortStart()
 		return s, err
 	}
 
 	// A tool that opens an EMPTY session takes its first message over the wire.
 	if !l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {
 		if err := s.waitReady(ctx); err != nil {
+			s.abortStart()
 			return s, err
 		}
-		if err := s.openConversation(ctx, opt.Prompt); err != nil {
+		if err := s.openConversation(ctx, opt.Prompt, opt.OpeningSendOnce); err != nil {
+			s.abortStart()
 			return s, err
 		}
 	}
 	recordPreambleAdmission(ctx, preparedInbox)
 	if err := preparedInbox.Commit(); err != nil {
+		s.abortStart()
 		return s, fmt.Errorf("chat: opening prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
 	s.startInboxRelay(ctx)
@@ -435,7 +458,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 //
 // So: send, then look for the agent to actually start writing. If it does not,
 // send once more. Confirmation is cheap; a false verdict about a model is not.
-func (s *Session) openConversation(ctx context.Context, prompt string) error {
+func (s *Session) openConversation(ctx context.Context, prompt string, sendOnce bool) error {
 	// RE-SEND until the agent CONFIRMS it began a turn — do not send twice and hope.
 	//
 	// A TUI still finishing startup silently swallows whatever you type: ycode paints
@@ -458,6 +481,12 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 	// Unmetered: Start already gated and will record this opening prompt.
 	if err := s.say(prompt); err != nil {
 		return fmt.Errorf("chat: could not open the conversation with %s: %w", s.Nick, err)
+	}
+	if sendOnce {
+		// Exact-once callers choose transport acceptance over the generic TUI
+		// acknowledgement/retry heuristic. Waiting here cannot add evidence without
+		// sending again, and sending again would violate their protocol.
+		return nil
 	}
 	sends := 1 // CAP re-sends: a swallowed send gets another chance, but a working
 	// agent (or one whose turn.start we simply failed to parse) is never spammed
@@ -498,7 +527,7 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 		}
 
 		// Not begun yet — the startup most likely ate the last send. Resend on backoff.
-		if sends < maxOpenSends && time.Now().After(nextResend) {
+		if sends < openingSendCap(sendOnce) && time.Now().After(nextResend) {
 			if err := s.say(prompt); err != nil {
 				return fmt.Errorf("chat: could not re-open the conversation with %s: %w", s.Nick, err)
 			}
@@ -522,6 +551,13 @@ const openAckBytes = 400
 // the first keystrokes; few enough that a working agent whose turn.start we failed
 // to parse is never spammed. With controlled-mode fast startup it rarely exceeds 1.
 const maxOpenSends = 6
+
+func openingSendCap(sendOnce bool) int {
+	if sendOnce {
+		return 1
+	}
+	return maxOpenSends
+}
 
 // Say puts a line in front of the agent WHILE it is working.
 //
@@ -870,16 +906,50 @@ func (s *Session) Close() {
 		s.closeACP()
 		return
 	}
+	s.closePTY(5 * time.Second)
+	_ = os.Remove(s.CtlSock)
+}
+
+// abortStart tears down a PTY that launched but failed before Start could hand
+// a usable session to its caller. There is no graceful conversation to preserve
+// on this path: cancel immediately so a readiness, delivery, or inbox-ack error
+// cannot strand a process and room claim that no supervisor owns.
+func (s *Session) abortStart() {
+	if s.acp != nil {
+		s.closeACP()
+		return
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
 	select {
 	case <-s.done:
-	default:
-		_ = s.Quit()
-		select {
-		case <-s.done:
-		case <-time.After(5 * time.Second):
-		}
+	case <-time.After(3 * time.Second):
 	}
 	_ = os.Remove(s.CtlSock)
+}
+
+func (s *Session) closePTY(grace time.Duration) {
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+	_ = s.Quit()
+	select {
+	case <-s.done:
+		return
+	case <-time.After(grace):
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	// agentpty escalates a cancelled process tree after two seconds. Bound this
+	// wait as well: Close must never deadlock its supervisor on a broken tool.
+	select {
+	case <-s.done:
+	case <-time.After(3 * time.Second):
+	}
 }
 
 // waitReady blocks until the control socket exists, so the first message is not

@@ -1,10 +1,60 @@
 package weave
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
+
+func ambiguousSprintFleet(t *testing.T) *fleet.Catalog {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `agents:
+  - name: duplicate-owner
+    tool: codex
+    model: one
+  - name: DUPLICATE-OWNER
+    tool: claude
+    model: two
+  - name: alpha-owner
+    aliases: [shared-owner]
+    tool: codex
+    model: one
+  - name: beta-owner
+    aliases: [shared-owner]
+    tool: claude
+    model: two
+`
+	if err := os.WriteFile(filepath.Join(dir, "ambiguous.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+}
+
+func TestSprintManagerRejectsAmbiguousAgentIdentity(t *testing.T) {
+	cat := ambiguousSprintFleet(t)
+	previous := fleetCatalog
+	fleetCatalog = func() *fleet.Catalog { return cat }
+	t.Cleanup(func() { fleetCatalog = previous })
+
+	for _, owner := range []string{"duplicate-owner", "shared-owner"} {
+		t.Run(owner, func(t *testing.T) {
+			if err := validateSprintOwner(owner); err == nil ||
+				!strings.Contains(err.Error(), "not a registered agent") {
+				t.Fatalf("ambiguous sprint manager %q was not rejected: %v", owner, err)
+			}
+		})
+	}
+}
 
 // A reminder is silent when there is nothing waiting. A surface that speaks up
 // with no news is one an agent learns to ignore, which would cost exactly the

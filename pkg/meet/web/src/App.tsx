@@ -36,7 +36,7 @@ export function App() {
           header began 280px in and the app carried two brands. */}
       <div className="flex h-dvh min-h-[540px] flex-col overflow-hidden bg-background text-foreground">
         <header className="console-bar shrink-0">
-          <a className="console-brand" href="./" title="bashy relay">
+          <a className="console-brand" href="./" title="bashy meet">
             {/* Themed like every other app's mark: --logo-* invert between
                 light and dark, so the tile never sits as a dark block in a
                 light header. */}
@@ -57,7 +57,7 @@ export function App() {
               />
             </svg>
             <span className="console-wordmark hidden sm:flex">
-              bashy<b>relay</b>
+              bashy<b>meet</b>
             </span>
           </a>
 
@@ -228,6 +228,7 @@ export function App() {
               }
             }}
             onSend={meet.send}
+            onStartWork={meet.startWork}
             queued={meet.queued}
             sending={meet.sending}
             state={meet.state}

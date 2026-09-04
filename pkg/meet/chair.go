@@ -10,7 +10,7 @@ import (
 
 // The CHAIR: the role that decides process.
 //
-// When an agent chairs (`--chair <agent>`), it directs the discussion. When no
+// When an agent facilitates (`--owner <agent>`), it directs the discussion. When no
 // agent chairs, the meeting is a fixed round-robin and nobody directs. That is
 // the entire turn-model question — there is no separate mode.
 //
@@ -55,7 +55,7 @@ const (
 // degrades gracefully when a field is missing.
 func chairPrompt(st *State, roster []string, correction string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are the CHAIR of a planning meeting. You do not contribute opinions and you do not "+
+	fmt.Fprintf(&b, "You are the FACILITATOR of a planning meeting. You do not contribute opinions and you do not "+
 		"keep the minutes; you direct the discussion and judge whether it is done.\n\nTopic: %s\n", st.Topic)
 	if len(st.Agenda) > 0 {
 		fmt.Fprintf(&b, "Agenda: %s\n", strings.Join(st.Agenda, " | "))
@@ -79,7 +79,7 @@ func chairPrompt(st *State, roster []string, correction string) string {
 // approach rather than calling on yet another participant.
 func replanPrompt(st *State, roster []string) string {
 	return fmt.Sprintf(
-		"You are the CHAIR. The meeting on %q has STALLED — participants are repeating themselves "+
+		"You are the FACILITATOR. The meeting on %q has STALLED — participants are repeating themselves "+
 			"or adding nothing new for %d consecutive turns.\n\nParticipants: %s\n\n"+
 			"In 2-4 sentences, state a NEW approach: what specific sub-question has gone unexamined, and who "+
 			"should examine it. Do not restate the discussion so far.",
@@ -177,7 +177,7 @@ func nextLedger(ctx context.Context, st *State, roster []string, fallback string
 		Progressing: true,
 		NextSpeaker: fallback,
 		Degraded:    true,
-		Reason: fmt.Sprintf("chair %s failed to name a valid participant in %d attempts; defaulting to %s",
+		Reason: fmt.Sprintf("facilitator %s failed to name a valid participant in %d attempts; defaulting to %s",
 			st.chair(), maxSelectorAttempts, fallback),
 	}
 }
@@ -199,7 +199,7 @@ type Deliberation struct {
 func runChaired(ctx context.Context, st *State, runner chat.Runner) (*Deliberation, error) {
 	roster := st.Participants
 	if len(roster) == 0 {
-		return nil, fmt.Errorf("meet: a chaired meeting needs participants")
+		return nil, fmt.Errorf("meet: a facilitated meeting needs participants")
 	}
 	// Held for the WHOLE deliberation, not per round: a chaired meeting's rounds
 	// are a single control loop (the ledger from one round picks the speaker for

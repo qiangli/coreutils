@@ -1,6 +1,8 @@
 package meet
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -9,6 +11,57 @@ import (
 	"github.com/qiangli/coreutils/pkg/chat"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
+
+func ambiguousRosterFleet(t *testing.T) *fleet.Catalog {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `agents:
+  - name: duplicate-owner
+    tool: codex
+    model: one
+  - name: DUPLICATE-OWNER
+    tool: claude
+    model: two
+  - name: alpha-owner
+    aliases: [shared-owner]
+    tool: codex
+    model: one
+  - name: beta-owner
+    aliases: [shared-owner]
+    tool: claude
+    model: two
+  - name: participant
+    tool: codex
+    model: one
+`
+	if err := os.WriteFile(filepath.Join(dir, "ambiguous.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+}
+
+func TestMeetingFacilitatorRejectsAmbiguousAgentIdentity(t *testing.T) {
+	cat := ambiguousRosterFleet(t)
+	previous := registeredAgentFn
+	registeredAgentFn = cat.Agent
+	t.Cleanup(func() { registeredAgentFn = previous })
+
+	for _, owner := range []string{"duplicate-owner", "shared-owner"} {
+		t.Run(owner, func(t *testing.T) {
+			_, err := (&sessionFlags{
+				topic: "identity boundary", participants: []string{"participant"},
+				secretary: "", chair: owner,
+			}).newState()
+			if err == nil || !strings.Contains(err.Error(), "not a registered agent") {
+				t.Fatalf("ambiguous facilitator %q was not rejected: %v", owner, err)
+			}
+		})
+	}
+}
 
 // rosterFleet builds a small catalog spanning three bands, with one L4 agent
 // whose harness is not installed on this host.
@@ -319,7 +372,7 @@ func TestStart_RefusesBareInstalledToolWithoutAgentRegistration(t *testing.T) {
 	t.Cleanup(func() { operableFn = old })
 
 	_, err := (&sessionFlags{topic: "t", participants: []string{"some-installed-tool"}}).newState()
-	if err == nil || !strings.Contains(err.Error(), "agents list --all") {
+	if err == nil || !strings.Contains(err.Error(), "bashy agents list") || strings.Contains(err.Error(), "--all") {
 		t.Fatalf("installed but unregistered tool must be rejected with registration guidance: %v", err)
 	}
 }

@@ -69,6 +69,14 @@ export async function postDM(agent: string, text: string): Promise<void> {
   })
 }
 
+export async function startDMWork(agent: string, text: string): Promise<void> {
+  if (usingMock) return
+  await request(`api/dms/${encodeURIComponent(agent)}/work`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  })
+}
+
 export function observeDM(
   agent: string,
   onEvent: (event: DMEvent) => void,
@@ -158,20 +166,19 @@ export async function getRoom(ref: string): Promise<RoomDetail> {
   )
 }
 
-/** NewRoom is the smallest room a browser can open. One participant is the 1:1
- * assistant case; several make it a meeting. Everything else on CreateOptions
- * (chair, secretary, agenda, bands) has a working default, and a room can grow
- * into those from the inside — the model has one room type, so the create form
- * does not need to ask which kind you want. */
+/** Browser meeting creation is intentionally narrow. The human must explicitly
+ * choose a registered facilitator and at least one separate participant; the
+ * server owns all lifecycle and execution controls. */
 export interface NewRoom {
   topic: string
   participants: string[]
+  owner: string
 }
 
 export async function createRoom(input: NewRoom): Promise<State> {
   if (usingMock) {
     try {
-      return stateSchema.parse(await mockCreateRoom(input.topic, input.participants))
+      return stateSchema.parse(await mockCreateRoom(input.topic, input.participants, input.owner))
     } catch (error) {
       normalizeError(error)
     }
@@ -179,7 +186,7 @@ export async function createRoom(input: NewRoom): Promise<State> {
   return stateSchema.parse(
     await request("api/rooms", {
       method: "POST",
-      body: JSON.stringify({ topic: input.topic, participants: input.participants }),
+      body: JSON.stringify(input),
     }),
   )
 }

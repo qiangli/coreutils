@@ -25,11 +25,13 @@ package weave
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -48,8 +50,8 @@ would let a sprint pass a bar it never set, with nothing recording that the bar
 moved. Changing acceptance on a sprint already in done requires --reason.
 
 Passing --owner re-points the sprint's coordination address, so the new name
-must resolve in "bashy agents" — permanent (agents add) or ad-hoc
-(agents track start). It does NOT take the conductor lease; use sprint take.`,
+must be a unique NAME shown by "bashy agents list". It does NOT take the
+conductor lease; use sprint take.`,
 		Args: cobra.ExactArgs(1),
 		Example: "  bashy sprint edit 99 --title \"Bashy Yoke II — coordination truthfulness\"\n" +
 			"  bashy sprint edit 99 --acceptance \"...\" --reason \"criteria clarified after triage\"\n" +
@@ -62,53 +64,89 @@ must resolve in "bashy agents" — permanent (agents add) or ad-hoc
 			if title == "" && spec == "" && acceptance == "" && epic == "" && owner == "" {
 				return fmt.Errorf("nothing to change: pass at least one of --title --spec --acceptance --epic --owner")
 			}
-			return runWeaveStoryMutate(cmd, id, "sprint edit", &flags, func(s *weaveStory) (string, error) {
-				actor := weaveStoryConductorName(s, "")
-				var changed []string
-				record := func(field, from, to string) {
-					weaveStoryAppend(s, actor, "system",
-						fmt.Sprintf("edited %s: %q → %q", field, from, to))
-					changed = append(changed, field)
-				}
-				if title != "" && title != s.Title {
-					record("title", s.Title, title)
-					s.Title = title
-				}
-				if spec != "" && spec != s.SpecRef {
-					record("spec", s.SpecRef, spec)
-					s.SpecRef = spec
-				}
-				if epic != "" && epic != s.Epic {
-					record("epic", s.Epic, epic)
-					s.Epic = epic
-				}
-				if acceptance != "" && acceptance != s.Acceptance {
-					// A closed sprint's criteria are history. Amending history
-					// without saying why is the one edit that can rewrite what
-					// a green close meant.
-					if strings.EqualFold(strings.TrimSpace(s.Column), "done") &&
-						strings.TrimSpace(reason) == "" {
-						return "", fmt.Errorf(
-							"sprint #%d is done — changing its acceptance rewrites what its close meant; pass --reason \"<why>\"", id)
+			expectedOwner := ""
+			mutate := func() error {
+				return runWeaveStoryMutate(cmd, id, "sprint edit", &flags, func(s *weaveStory) (string, error) {
+					actor := weaveStoryConductorName(s, "")
+					var changed []string
+					record := func(field, from, to string) {
+						weaveStoryAppend(s, actor, "system",
+							fmt.Sprintf("edited %s: %q → %q", field, from, to))
+						changed = append(changed, field)
 					}
-					record("acceptance", s.Acceptance, acceptance)
-					s.Acceptance = acceptance
-				}
-				if owner != "" && owner != s.Owner {
-					// Same rule as take/resume/start: an owner is an ADDRESS.
-					if err := validateSprintOwner(owner); err != nil {
-						return "", err
+					if title != "" && title != s.Title {
+						record("title", s.Title, title)
+						s.Title = title
 					}
-					record("owner", s.Owner, owner)
-					s.Owner = owner
+					if spec != "" && spec != s.SpecRef {
+						record("spec", s.SpecRef, spec)
+						s.SpecRef = spec
+					}
+					if epic != "" && epic != s.Epic {
+						record("epic", s.Epic, epic)
+						s.Epic = epic
+					}
+					if acceptance != "" && acceptance != s.Acceptance {
+						// A closed sprint's criteria are history. Amending history
+						// without saying why is the one edit that can rewrite what
+						// a green close meant.
+						if strings.EqualFold(strings.TrimSpace(s.Column), "done") &&
+							strings.TrimSpace(reason) == "" {
+							return "", fmt.Errorf(
+								"sprint #%d is done — changing its acceptance rewrites what its close meant; pass --reason \"<why>\"", id)
+						}
+						record("acceptance", s.Acceptance, acceptance)
+						s.Acceptance = acceptance
+					}
+					if owner != "" {
+						// Same rule as take/resume/start: an owner is an ADDRESS.
+						if err := validateSprintOwner(owner); err != nil {
+							return "", err
+						}
+						owner, _ = canonicalFleetAgentName(owner)
+					}
+					if owner != "" && owner != s.Owner {
+						if strings.TrimSpace(s.Owner) != expectedOwner {
+							return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
+						}
+						if sprintColumnOpen(s.Column) || s.currentBox().Running() {
+							return "", fmt.Errorf("sprint #%d is active — change its project manager with `sprint take %d --owner %s`", id, id, owner)
+						}
+						record("owner", s.Owner, owner)
+						s.Owner = owner
+					}
+					if len(changed) == 0 {
+						return fmt.Sprintf("sprint #%d unchanged", id), nil
+					}
+					if r := strings.TrimSpace(reason); r != "" {
+						weaveStoryAppend(s, actor, "decision", "edit reason: "+r)
+					}
+					return fmt.Sprintf("sprint #%d edited: %s", id, strings.Join(changed, ", ")), nil
+				})
+			}
+			if owner == "" {
+				return mutate()
+			}
+			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint edit", "edit managed sprint owner", func() error {
+				if err := validateSprintOwner(owner); err != nil {
+					return err
 				}
-				if len(changed) == 0 {
-					return fmt.Sprintf("sprint #%d unchanged", id), nil
+				owner, _ = canonicalFleetAgentName(owner)
+				before, err := sprintOwnerSnapshot(id)
+				if err != nil {
+					return err
 				}
-				if r := strings.TrimSpace(reason); r != "" {
-					weaveStoryAppend(s, actor, "decision", "edit reason: "+r)
+				expectedOwner = strings.TrimSpace(before.Owner)
+				if owner != expectedOwner && (sprintColumnOpen(before.Column) || before.currentBox().Running()) {
+					return fmt.Errorf("sprint #%d is active — change its project manager with `sprint take %d --owner %s`", id, id, owner)
 				}
-				return fmt.Sprintf("sprint #%d edited: %s", id, strings.Join(changed, ", ")), nil
+				if expectedOwner != "" && !strings.EqualFold(expectedOwner, owner) {
+					cwd, _ := os.Getwd()
+					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
+						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, owner, err)
+					}
+				}
+				return mutate()
 			})
 		},
 	}
@@ -116,7 +154,8 @@ must resolve in "bashy agents" — permanent (agents add) or ad-hoc
 	cmd.Flags().StringVar(&spec, "spec", "", "new spec/handoff doc reference")
 	cmd.Flags().StringVar(&acceptance, "acceptance", "", "new acceptance / done criteria")
 	cmd.Flags().StringVar(&epic, "epic", "", "new epic grouping label")
-	cmd.Flags().StringVar(&owner, "owner", "", "new coordination owner (must resolve in `bashy agents`)")
+	role.AttachOwner(cmd.Flags(), &owner, role.ProjectManager,
+		"new project manager; must be a NAME shown by bashy agents list")
 	cmd.Flags().StringVar(&reason, "reason", "", "why this edit is correct — required to amend a done sprint's acceptance")
 	flags.attach(cmd)
 	return cmd

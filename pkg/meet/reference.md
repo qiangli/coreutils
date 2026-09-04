@@ -14,13 +14,13 @@ second opinion mid-task runs `bashy meet consult` and reads back a verdict.
 | Role | Decides | Filled by |
 |---|---|---|
 | **participant** | **content** — argues, proposes, votes | agents, 1..N |
-| **chair** | **process** — poses the agenda, calls on speakers, judges done-ness. Never argues. | an agent (`--chair`), the human, or nobody |
+| **facilitator** | **process** — poses the agenda, calls on speakers, judges done-ness. Never argues. | an agent (`--owner`), the human, or nobody |
 | **secretary** | **nothing** — records, and extracts what was decided | exactly one agent (`--secretary`, default `claude`) |
 
 **These are enforced, not merely documented.** `meet` refuses to start a meeting
 where the secretary is also a participant (a recorder with a stake in the record),
-where the secretary is also the chair (it could declare the meeting over and then
-author the minutes saying so), or where the chair is also a participant (it would
+where the secretary is also the facilitator (it could declare the meeting over and then
+author the minutes saying so), or where the facilitator is also a participant (it would
 pick itself). A participant seated twice is refused too — a duplicate seat dilutes
 a vote and adds no diversity.
 
@@ -34,7 +34,7 @@ it* (see `close`).
 ## CLI
 
 ```
-bashy meet open    --topic TEXT [--participant AGENT ...] [--chair AGENT] [flags]
+bashy meet open    --topic TEXT [--participant AGENT ...] --owner AGENT [flags]
 bashy meet open    <room|id>    # reopen a closed room
 bashy meet consult --topic TEXT --question TEXT [--choice yes --choice no] [--json]
 
@@ -58,19 +58,19 @@ bashy meet list | resume <id> | reference
 ```
 
 Session flags (`start`, `consult`): `--topic` (required) · `--participant`
-(repeatable) · `--secretary` (default `claude`) · `--chair AGENT` (optional) ·
+(repeatable) · `--secretary` (default `claude`) · `--owner AGENT` (the facilitator) ·
 `--agenda` (repeatable) · `--context FILE` (repeatable — every participant reads the
 same source set) · `--turn-timeout` (default 20m) · `--decision-mode infer|explicit` ·
 `--min-turn-chars N` · `--initiator NAME` · `--max-turns` · `--max-stalls` ·
 `--out docs|kb|<path>`.
 
-There is **no `--mode` flag.** The turn model is a consequence of who chairs.
+There is **no `--mode` flag.** The turn model follows from who facilitates.
 
 `start` adds `--rounds N --non-interactive` (run then auto-close), `--dry-run`
 (print the resolved session + attendee gate, launch nothing), and `--yes`.
 
 In the REPL: plain text = a human turn · `@name <text>` = a targeted turn · `/round` ·
-`/chair` · `/poll <q>` · `/ask <q>` · `/decision <t>` · `/action owner: task` ·
+`/facilitator` · `/poll <q>` · `/ask <q>` · `/decision <t>` · `/action owner: task` ·
 `/agenda <t>` · `/show` · `/converge` · `/close`.
 
 ## Browser room controls
@@ -168,7 +168,7 @@ assignment before the contribution. A secretary is not kept as an idle billable
 process: Meet records the transcript synchronously, then invokes the assigned
 agent when convergence/minutes need secretary work. An explicitly configured
 `secretary` must likewise resolve to a named fleet agent and may not also be a
-participant or chair. CLI callers that deliberately pass `--secretary ""` retain
+participant or facilitator. CLI callers that deliberately pass `--secretary ""` retain
 the secretary-less conversation mode.
 
 **What you see.** The whole history first, in full — you are joining a
@@ -193,19 +193,19 @@ ephemeral, line-granular, and safe to lose, because everything it carried also
 lands, whole, in the transcript. The live channel is a *tee* of the agent's
 stdout, so it can never show a watcher something the record will not contain.
 
-## The turn model follows from who chairs
+## The turn model follows from who facilitates
 
 There is no mode flag, because there is nothing a mode flag could say that the
 roster does not already say.
 
-**No `--chair`** → strict round-robin: every participant speaks, once, per round.
+**No facilitator** → strict round-robin: every participant speaks, once, per round.
 The human directs (`/round`), or nobody does (`--non-interactive`, `consult`).
 Simple and cheap, but rigid — it cannot skip a participant with nothing to add,
 cannot call one twice mid-argument, and **cannot notice the meeting is going in
 circles**. Step repetition is the largest measured failure mode in multi-agent
 systems (~17% of failures across 1600+ traces).
 
-**`--chair <agent>`** → that agent directs. Before each turn it answers five
+**`--owner <agent>`** → that facilitator directs. Before each turn it answers five
 questions at once — speaker selection is only two of them:
 
 ```
@@ -227,7 +227,7 @@ the transcript and the minutes. Three defenses, each against a documented failur
   attempts **degrades to a default speaker and marks the ledger `degraded`**. A
   fallback that hides itself looks like a working selector.
 - **Stall counter.** `LOOPING` or `not PROGRESSING` for `--max-stalls` consecutive
-  turns triggers a **re-plan**: the chair is asked for a new approach instead of
+  turns triggers a **re-plan**: the facilitator is asked for a new approach instead of
   calling on another participant to repeat the loop. A second exhausted run of
   stalls stops the meeting rather than spinning. Stall detection runs *before*
   dispatch — that is the whole point.
@@ -237,23 +237,23 @@ the transcript and the minutes. Three defenses, each against a documented failur
   the orchestrator, never to a token a model emits — models both fail to stop and
   stop early, at measurable rates.
 
-The chair is a **distinct seat from the secretary**, and `meet` will not let one
+The facilitator is a **distinct seat from the secretary**, and `meet` will not let one
 agent hold both — see Roles above.
 
 ```bash
 bashy meet open --topic "…" \
   --participant codex --participant opencode \
-  --chair claude --secretary gemini \
+  --owner claude --secretary gemini \
   --max-turns 12 --max-stalls 3 --non-interactive
 ```
 
-A chaired run reports how it ended:
+A facilitated run reports how it ended:
 
 ```
-chaired: 6 turns, 2 stalls, 1 re-plans, 0 degraded selections — stopped by satisfied
+facilitated: 6 turns, 2 stalls, 1 re-plans, 0 degraded selections — stopped by satisfied
 ```
 
-`stopped_by` is `satisfied` (the chair's own call), or `max_turns` / `stalled` /
+`stopped_by` is `satisfied` (the facilitator's own call), or `max_turns` / `stalled` /
 `deadline` (a backstop fired). Only `satisfied` means the meeting finished.
 
 ## Turn styles
@@ -311,7 +311,7 @@ verdict is a clean `agree`.
 
 **Recursion is refused.** `meet` stamps `BASHY_MEET_DEPTH` into every agent it
 spawns, and convening a meeting from inside one is an error. A panelist that wants a
-second opinion must say so in its turn and let the chair decide — otherwise panels
+second opinion must say so in its turn and let the facilitator decide — otherwise panels
 fork panels, unboundedly (4 agents deep is 4ⁿ processes).
 
 **Cost and latency.** Convening N agents for R rounds is N×(R+1) CLI invocations.
@@ -402,7 +402,7 @@ say what is actually known, and name the recovery.
 `--secretary` on `converge`/`amend` is that recovery: it seats a replacement
 without re-running the deliberation, so a launch refusal costs a synthesis pass
 rather than the whole meeting. The replacement is still bound by the separation
-of powers — naming a participant or the chair is refused, and a refused
+of powers — naming a participant or the facilitator is refused, and a refused
 override leaves the session untouched.
 
 ## Failure reporting
@@ -446,7 +446,7 @@ A session is local under `~/.bashy/meet/<id>/`:
 | File | Contents |
 |---|---|
 | `state.json` | the durable header (roster, initiator, modes) |
-| `transcript.jsonl` | **append-only** events: turns, votes, chair ledgers, re-plans, human markers, confirmations |
+| `transcript.jsonl` | **append-only** events: turns, votes, facilitator ledgers, re-plans, human markers, confirmations |
 | `synthesis.json` | the secretary's latest pass — rewritten, never appended |
 | `turns/*.txt` | each turn's complete text |
 | `minutes.md` | when cwd is outside a git repo |

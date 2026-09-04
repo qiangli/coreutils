@@ -478,8 +478,8 @@ func TestDOMRelayHeaderMatchesTheOtherApps(t *testing.T) {
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(base+"/relay/"),
 		chromedp.Sleep(3500*time.Millisecond),
-		chromedp.Evaluate(`String(!!document.querySelector(`+"`"+`header a[title="bashy relay"]`+"`"+`))`, &brand),
-		chromedp.Evaluate(`(document.querySelector(`+"`"+`header a[title="bashy relay"]`+"`"+`)?.innerText||"").trim()`, &wordmark),
+		chromedp.Evaluate(`String(!!document.querySelector(`+"`"+`header a[title="bashy meet"]`+"`"+`))`, &brand),
+		chromedp.Evaluate(`(document.querySelector(`+"`"+`header a[title="bashy meet"]`+"`"+`)?.innerText||"").trim()`, &wordmark),
 		chromedp.Evaluate(`String(document.querySelectorAll(`+"`"+`header a[title="All apps"] svg rect`+"`"+`).length)`, &allAppsRects),
 		chromedp.Evaluate(`document.querySelector(`+"`"+`header a[title="All apps"]`+"`"+`)?.getAttribute("href")||"NONE"`, &allAppsHref),
 	); err != nil {
@@ -493,7 +493,7 @@ func TestDOMRelayHeaderMatchesTheOtherApps(t *testing.T) {
 	// The wordmark is hidden below sm: the phone header also holds the rooms
 	// button and the conversation title, which is what matters there. At this
 	// viewport it must be present.
-	if !strings.Contains(strings.ToLower(wordmark), "relay") {
+	if !strings.Contains(strings.ToLower(wordmark), "meet") {
 		t.Errorf("relay's brand does not name the app: %q", wordmark)
 	}
 	if allAppsRects != "4" {

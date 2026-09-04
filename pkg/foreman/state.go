@@ -50,6 +50,9 @@ type State struct {
 	MaxRuntime  string    `json:"max_runtime,omitempty"`
 	Deadline    time.Time `json:"deadline,omitempty"`
 	StopReason  string    `json:"stop_reason,omitempty"`
+	// OpeningSendOnce is persisted because a detached start is reopened by the
+	// serve subprocess before it launches the agent.
+	OpeningSendOnce bool `json:"opening_send_once,omitempty"`
 
 	// Binding is the canonical tool:model this session is actually talking to.
 	// Agent may be an alias or a nickname; a record must never store one of those.

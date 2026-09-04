@@ -462,6 +462,12 @@ func newAgentsList(opts []Option) *cobra.Command {
 				rows = append(rows, r)
 			}
 			if asJSON {
+				if err := reportCollisions(cmd.ErrOrStderr(), cat.CheckAliases()); err != nil {
+					return err
+				}
+				if err := reportParseErrs(cmd.ErrOrStderr(), errs); err != nil {
+					return err
+				}
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)

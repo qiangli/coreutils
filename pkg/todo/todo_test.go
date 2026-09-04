@@ -5,13 +5,105 @@ package todo
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/issue"
 )
+
+func ambiguousTodoFleet(t *testing.T) *fleet.Catalog {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `agents:
+  - name: duplicate-owner
+    tool: codex
+    model: one
+  - name: DUPLICATE-OWNER
+    tool: claude
+    model: two
+  - name: alpha-owner
+    aliases: [shared-owner]
+    tool: codex
+    model: one
+  - name: beta-owner
+    aliases: [shared-owner]
+    tool: claude
+    model: two
+`
+	if err := os.WriteFile(filepath.Join(dir, "ambiguous.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+}
+
+func TestTodoAssigneeRejectsAmbiguousAgentIdentity(t *testing.T) {
+	cat := ambiguousTodoFleet(t)
+	previous := todoAgentCatalog
+	todoAgentCatalog = func() *fleet.Catalog { return cat }
+	t.Cleanup(func() { todoAgentCatalog = previous })
+	st := &issue.Store{Root: t.TempDir()}
+
+	for _, owner := range []string{"duplicate-owner", "shared-owner"} {
+		t.Run(owner, func(t *testing.T) {
+			if _, err := Add(st, "ambiguous assignment", "", "", nil, "", owner); err == nil ||
+				!strings.Contains(err.Error(), "not a registered agent") {
+				t.Fatalf("ambiguous assignee %q was not rejected: %v", owner, err)
+			}
+		})
+	}
+	items, err := st.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("rejected ambiguous assignments persisted %d todos", len(items))
+	}
+}
+
+func pinTodoAgents(t *testing.T, names ...string) {
+	t.Helper()
+	cat := fleet.New(fleet.WithRoot(t.TempDir()))
+	for _, name := range names {
+		if err := cat.SaveAgent(fleet.Agent{Name: name, Tool: "codex", Model: "gpt5.6-sol"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := todoAgentCatalog
+	todoAgentCatalog = func() *fleet.Catalog { return cat }
+	t.Cleanup(func() { todoAgentCatalog = previous })
+}
+
+func TestAssignedStatusRequiresARegisteredAssignee(t *testing.T) {
+	t.Setenv("BASHY_TODO_DIR", t.TempDir())
+	pinTodoAgents(t, "worker")
+	st, err := UserStore("steward")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, err := Add(st, "unowned", "", "", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetStatus(st, it.ID, StatusAssigned); err == nil || !strings.Contains(err.Error(), "requires an owner (assignee)") {
+		t.Fatalf("ownerless assigned status error = %v", err)
+	}
+	owned, err := Add(st, "delegated", "", "", nil, "", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned.Status != StatusAssigned || owned.Assignee != "worker" {
+		t.Fatalf("delegated todo = status %q assignee %q", owned.Status, owned.Assignee)
+	}
+}
 
 func TestTodoLifecycle(t *testing.T) {
 	t.Setenv("BASHY_TODO_DIR", t.TempDir())

@@ -382,13 +382,13 @@ func (s *State) durableRef() string {
 	return s.ID
 }
 
-// boardRefusal is the error a chair-driven verb returns when the room is a board.
-// It names the mode and the alternative: there is no chair to run turns, so the
+// boardRefusal is the error a facilitator-driven verb returns when the room is a board.
+// It names the mode and the alternative: there is no facilitator to run turns, so the
 // caller posts on its own turn with `meet tell`.
 func (s *State) boardRefusal(what string) error {
 	ref := s.roomRef()
 	return fmt.Errorf("meet: room %s is a board — participants read and post on their own turns. "+
-		"There is no chair to %s. Post with: bashy meet tell %s --as <you> %q",
+		"There is no facilitator to %s. Post with: bashy meet tell %s --as <you> %q",
 		ref, what, ref, "...")
 }
 
@@ -407,10 +407,10 @@ func (s *State) recorded() bool { return s.secretary() != "" }
 // turnModel describes the turn model for humans.
 func (s *State) turnModel() string {
 	if s.chaired() {
-		return fmt.Sprintf("chaired by %s (max %d turns, re-plan after %d stalls)",
+		return fmt.Sprintf("facilitated by %s (max %d turns, re-plan after %d stalls)",
 			s.chair(), s.maxTurns(), s.maxStalls())
 	}
-	return "round-robin (no chair — every participant speaks each round)"
+	return "round-robin (no facilitator — every participant speaks each round)"
 }
 
 // attendees lists every seat, so the initiator can be validated against it.
@@ -496,26 +496,26 @@ func (s *State) Validate() error {
 			"the secretary records the decisions and must not have a stake in them", s.Secretary)
 	}
 	if s.recorded() && s.chaired() && strings.EqualFold(s.chair(), s.secretary()) {
-		return fmt.Errorf("meet: %s cannot be both chair and secretary — "+
-			"the chair decides when the meeting is done and the secretary writes down what it decided; "+
+		return fmt.Errorf("meet: %s cannot be both facilitator and secretary — "+
+			"the facilitator decides when the meeting is done and the secretary writes down what it decided; "+
 			"one agent doing both can conclude a meeting and then author the record of it.\n"+
-			"      Use a different --chair, or drop --chair to let the human direct the discussion", s.Secretary)
+			"      Use a different --owner, or drop --owner to let the human direct the discussion", s.Secretary)
 	}
 	// A chair that also argues biases every speaker selection toward its own thread.
 	if s.chaired() && seen[strings.ToLower(s.chair())] {
-		return fmt.Errorf("meet: %s cannot be both chair and participant — "+
-			"the chair picks who speaks next and would be picking itself", s.chair())
+		return fmt.Errorf("meet: %s cannot be both facilitator and participant — "+
+			"the facilitator picks who speaks next and would be picking itself", s.chair())
 	}
 	if s.chaired() && len(s.Participants) == 0 {
-		return fmt.Errorf("meet: a chair needs at least one --participant to call on")
+		return fmt.Errorf("meet: a facilitator needs at least one --participant to call on")
 	}
 
 	// A board has no floor to run: participants read and post on their own turns.
 	// A chair calls on speakers and nobody in a board is callable, so the two are
 	// contradictory rather than merely redundant.
 	if s.Board && s.chaired() {
-		return fmt.Errorf("meet: a board has no chair — participants read and post on their own turns, "+
-			"so there is nobody for %s to call on. Drop --chair, or drop --board", s.chair())
+		return fmt.Errorf("meet: a board has no facilitator-driven floor — participants read and post on their own turns, "+
+			"so there is nobody for %s to call on. Drop --owner, or drop --board", s.chair())
 	}
 
 	// The initiator must be someone at the table, so `close` knows who to ask.

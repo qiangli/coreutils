@@ -21,7 +21,7 @@ func TestBoardRefusesAChair(t *testing.T) {
 		Chair: "claude", Human: "qiangli", Board: true, Status: "open",
 	}
 	err := st.Validate()
-	if err == nil || !strings.Contains(err.Error(), "board has no chair") {
+	if err == nil || !strings.Contains(err.Error(), "board has no facilitator-driven floor") {
 		t.Fatalf("Board && chair must be refused naming the conflict: %v", err)
 	}
 	// Drop the chair and the same board validates.

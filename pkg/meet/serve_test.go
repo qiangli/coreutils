@@ -392,10 +392,11 @@ func TestAPIClose(t *testing.T) {
 
 func TestAPIRoomCreate(t *testing.T) {
 	newRoom(t) // isolate the store
+	pinFleet(t)
 	srv := serveTest(t)
 
 	resp, body := doJSON(t, srv, "POST", "/api/rooms", map[string]any{
-		"Topic": "Ask the assistant", "Participants": []string{"codex"},
+		"Topic": "Plan together", "Owner": "codex", "Participants": []string{"claude-fable5"},
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
@@ -404,10 +405,10 @@ func TestAPIRoomCreate(t *testing.T) {
 	if err := json.Unmarshal(body, &st); err != nil {
 		t.Fatalf("decode: %v (%s)", err, body)
 	}
-	// The zero CreateOptions is the chat room: no secretary, no chair. A room
-	// created from a browser must not silently acquire a note-taker.
-	if st.recorded() || st.chaired() {
-		t.Errorf("a created room defaults to no secretary and no chair: %+v", st)
+	// The browser must preserve the facilitator the human selected and must not
+	// silently acquire a note-taker.
+	if st.recorded() || st.Chair != "codex" {
+		t.Errorf("a created meeting needs its explicit owner and no secretary: %+v", st)
 	}
 	if st.Initiator == "" {
 		t.Error("a room opened through the API must name its organizer, or the privilege check is disabled forever")
@@ -417,7 +418,9 @@ func TestAPIRoomCreate(t *testing.T) {
 	}
 
 	// A room with no topic is refused by Validate, not by a second check here.
-	resp, body = doJSON(t, srv, "POST", "/api/rooms", map[string]any{"Participants": []string{"codex"}})
+	resp, body = doJSON(t, srv, "POST", "/api/rooms", map[string]any{
+		"Owner": "codex", "Participants": []string{"claude-fable5"},
+	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a topicless room = %d, body %s", resp.StatusCode, body)
 	}
@@ -472,11 +475,12 @@ func TestAPIRoomCreateSeatsTheCloudIdentity(t *testing.T) {
 	// minutes relative to it. Without this the suite writes into the repo's docs/.
 	t.Chdir(t.TempDir())
 	newRoom(t) // isolate the store; its human is the OS user "qiangli"
+	pinFleet(t)
 	srv := serveTest(t)
 
 	const cloudUser = "qiangli@example.com"
 	resp, body := doVouchedJSON(t, srv, cloudUser, "POST", "/api/rooms",
-		map[string]any{"Topic": "tunnel verification"})
+		map[string]any{"Topic": "tunnel verification", "Owner": "codex", "Participants": []string{"claude-fable5"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("creating a room as a cloud identity = %d, body %s", resp.StatusCode, body)
 	}
@@ -546,9 +550,12 @@ func TestAPIRoomCreateRefusesAnUnnamedVouch(t *testing.T) {
 // this host's — the local-first path must be untouched by the fix.
 func TestAPIRoomCreateOnLoopbackIsTheOSUser(t *testing.T) {
 	newRoom(t) // sets $USER=qiangli
+	pinFleet(t)
 	srv := serveTest(t)
 
-	resp, body := doJSON(t, srv, "POST", "/api/rooms", map[string]any{"Topic": "loopback control"})
+	resp, body := doJSON(t, srv, "POST", "/api/rooms", map[string]any{
+		"Topic": "loopback control", "Owner": "codex", "Participants": []string{"claude-fable5"},
+	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
 	}
@@ -570,11 +577,12 @@ func TestAPIRoomCreateOnLoopbackIsTheOSUser(t *testing.T) {
 func TestAPIOrganizerCheckStillRefusesAnotherCloudIdentity(t *testing.T) {
 	seatEverything(t)
 	newRoom(t)
+	pinFleet(t)
 	srv := serveTest(t)
 
 	const owner, intruder = "owner@example.com", "intruder@example.com"
 	resp, body := doVouchedJSON(t, srv, owner, "POST", "/api/rooms",
-		map[string]any{"Topic": "whose room is this", "Participants": []string{"codex"}})
+		map[string]any{"Topic": "whose room is this", "Owner": "codex", "Participants": []string{"claude-fable5"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create = %d, body %s", resp.StatusCode, body)
 	}
@@ -590,7 +598,7 @@ func TestAPIOrganizerCheckStillRefusesAnotherCloudIdentity(t *testing.T) {
 		body any
 	}{
 		{"invite", map[string]string{"agent": "opencode", "actor": owner}},
-		{"kick", map[string]string{"agent": "codex", "actor": owner}},
+		{"kick", map[string]string{"agent": "claude-fable5", "actor": owner}},
 		{"close", map[string]string{"actor": owner}},
 	} {
 		resp, body := doVouchedJSON(t, srv, intruder, "POST", "/api/rooms/"+st.ID+"/"+c.verb, c.body)
@@ -604,7 +612,7 @@ func TestAPIOrganizerCheckStillRefusesAnotherCloudIdentity(t *testing.T) {
 	}
 	// Nothing moved.
 	after, _ := loadState(st.ID)
-	if len(after.Participants) != 1 || after.Participants[0] != "codex" || after.Status != "open" {
+	if len(after.Participants) != 1 || after.Participants[0] != "claude-fable5" || after.Status != "open" {
 		t.Fatalf("a refused act must not mutate the room: %+v", after)
 	}
 

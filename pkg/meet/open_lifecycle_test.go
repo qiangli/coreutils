@@ -63,7 +63,7 @@ func TestOpenAllowsInteractiveTurnAndChairBounds(t *testing.T) {
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"open", "--topic", "interactive bounds", "--participant", "codex",
-		"--max-turns", "2", "--max-stalls", "1", "--turn-timeout", "20m"})
+		"--owner", "gemini", "--max-turns", "2", "--max-stalls", "1", "--turn-timeout", "20m"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("interactive turn/chair bounds: %v", err)
 	}
@@ -76,12 +76,30 @@ func TestOpenDryRunMayPreviewExplicitBounds(t *testing.T) {
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
 	t.Setenv(meetDepthEnv, "")
 	out, err := runMeet(t, "open", "--topic", "bounded preview", "--participant", "codex",
-		"--rounds", "1", "--turn-timeout", "20m", "--dry-run")
+		"--owner", "gemini", "--rounds", "1", "--turn-timeout", "20m", "--dry-run")
 	if err != nil {
 		t.Fatalf("dry-run preview: %v", err)
 	}
 	if !strings.Contains(out, "dry-run: no agents launched") {
 		t.Fatalf("dry-run output = %q", out)
+	}
+}
+
+func TestOpenRequiresARegisteredFacilitator(t *testing.T) {
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
+	t.Setenv(meetDepthEnv, "")
+
+	_, err := runMeet(t, "open", "--topic", "owned meeting", "--participant", "codex",
+		"--secretary", "", "--dry-run")
+	if err == nil || !strings.Contains(err.Error(), "owner (facilitator)") ||
+		!strings.Contains(err.Error(), "bashy agents list") {
+		t.Fatalf("ownerless meeting refusal = %v", err)
+	}
+
+	if _, err := runMeet(t, "open", "--topic", "owned meeting", "--participant", "codex",
+		"--owner", "gemini", "--secretary", "", "--dry-run"); err != nil {
+		t.Fatalf("registered facilitator was refused: %v", err)
 	}
 }
 

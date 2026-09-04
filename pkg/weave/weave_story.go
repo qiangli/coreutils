@@ -231,11 +231,9 @@ func weaveConductorName(asFlag string) string {
 	return "conductor"
 }
 
-// weaveStoryConductorName bridges ephemeral CLI identity with the durable
-// sprint lease. `sprint take --as X` and a later `sprint start` are separate
-// processes; when the latter has no identity evidence, the live holder is the
-// only truthful actor. Explicit process identity still wins so a different
-// agent cannot silently act through somebody else's lease.
+// weaveStoryConductorName bridges ephemeral acting identity with the durable
+// sprint lease for authorship and lifecycle records. Ownership mutations do
+// not use this fallback: start/take require their own explicit --owner.
 func weaveStoryConductorName(s *weaveStory, asFlag string) string {
 	if strings.TrimSpace(asFlag) != "" {
 		return strings.TrimSpace(asFlag)
@@ -454,6 +452,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintWhoCmd(),
 		newSprintPingCmd(),
 		newSprintStartCmd(),
+		newSprintInstructCmd(),
 		newSprintStopCmd(),
 		newSprintEndCmd(),
 		newSprintExtendCmd(),
@@ -741,60 +740,82 @@ continuity record (sprint show) and resume.`,
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
-				who := sprintTakeoverIdentity(s, as)
-				prev, stale, free := weaveStoryLeaseState(s)
-				if !free && !stale && prev != who && !force {
-					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint take", "transfer managed sprint owner", func() error {
+				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
+					return fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
 				}
-				// The room is the SPRINT's, so a takeover inherits it rather
-				// than replacing it — the transcript left by the previous
-				// conductor is the handover context, and closing it to open an
-				// identical one discarded that and filed a set of meet minutes
-				// per hop. Only a sprint with no room gets a new one.
-				if s.currentBox().Running() || sprintColumnOpen(s.Column) {
-					ensureSprintRoom(s, who)
-				}
-				// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
-				// no agent: every coordination surface (mb, chat, inbox, ping)
-				// keys on this string, and one that names nobody is worse than
-				// none — it is printed as a contact and silently never answers.
-				// CLAIM-TIME: the seat must be RUNNING, not merely declared.
-				// A sprint seated to a name with no process behind it accepts
-				// room messages and inbox mail that nobody will ever read.
+				who := strings.TrimSpace(as)
 				if err := validateSprintClaimant(who); err != nil {
-					return "", err
+					return err
 				}
-				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
-				s.Owner = who
-				// The brief is printed on TAKE, not offered by a separate verb.
-				// `resume` existed only to show it, which meant the takeover
-				// path that matters most — inheriting from a conductor that
-				// DIED — was the one that printed nothing.
-				brief := strings.TrimSpace(s.Continuity)
-				if brief == "" {
-					brief = "(no continuity brief recorded)"
+				who, _ = canonicalFleetAgentName(who)
+				before, err := sprintOwnerSnapshot(id)
+				if err != nil {
+					return err
 				}
-				switch {
-				case free:
-					weaveStoryAppend(s, who, "system", "took conductor lease (was unclaimed)")
-				case stale:
-					weaveStoryAppend(s, who, "system", fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
-				case prev == who:
-					weaveStoryAppend(s, who, "system", "resumed own conductor lease and delivery stream")
-				default:
-					weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
+				prev, stale, free := weaveStoryLeaseState(before)
+				if !free && !stale && prev != who && !force {
+					return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
 				}
-				return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(who), brief), nil
+				expectedOwner := strings.TrimSpace(before.Owner)
+				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
+					cwd, _ := os.Getwd()
+					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
+						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
+					}
+				}
+				return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
+					if strings.TrimSpace(s.Owner) != expectedOwner {
+						return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
+					}
+					prev, stale, free := weaveStoryLeaseState(s)
+					if !free && !stale && prev != who && !force {
+						return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+					}
+					// The room is the SPRINT's, so a takeover inherits it rather
+					// than replacing it — the transcript left by the previous
+					// conductor is the handover context, and closing it to open an
+					// identical one discarded that and filed a set of meet minutes
+					// per hop. Only a sprint with no room gets a new one.
+					if s.currentBox().Running() || sprintColumnOpen(s.Column) {
+						ensureSprintRoom(s, who)
+					}
+					// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
+					// no agent: every coordination surface (mb, chat, inbox, ping)
+					// keys on this string, and one that names nobody is worse than
+					// none — it is printed as a contact and silently never answers.
+					// CLAIM-TIME: the seat must be RUNNING, not merely declared.
+					// A sprint seated to a name with no process behind it accepts
+					// room messages and inbox mail that nobody will ever read.
+					s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
+					s.Owner = who
+					// The brief is printed on TAKE, not offered by a separate verb.
+					// `resume` existed only to show it, which meant the takeover
+					// path that matters most — inheriting from a conductor that
+					// DIED — was the one that printed nothing.
+					brief := strings.TrimSpace(s.Continuity)
+					if brief == "" {
+						brief = "(no continuity brief recorded)"
+					}
+					switch {
+					case free:
+						weaveStoryAppend(s, who, "system", "took conductor lease (was unclaimed)")
+					case stale:
+						weaveStoryAppend(s, who, "system", fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
+					case prev == who:
+						weaveStoryAppend(s, who, "system", "resumed own conductor lease and delivery stream")
+					default:
+						weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
+					}
+					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(who), brief), nil
+				})
 			})
 		},
 	}
-	// Same canon as `sprint start`: --owner is the spelling, PROJECT MANAGER is
-	// what the sprint calls its owner, and --as stays as a hidden alias so every
-	// existing script keeps working.
+	// Same canon as `sprint start`: --owner is the spelling and PROJECT MANAGER
+	// is what the sprint calls its owner.
 	role.AttachOwner(cmd.Flags(), &as, role.ProjectManager,
-		"accountable for delivery from start to end (default $WEAVE_CONDUCTOR/$WEAVE_AGENT)")
-	role.AttachOwnerAlias(cmd.Flags(), &as, "as", role.ProjectManager)
+		"accountable for delivery from start to end; required explicitly on every take")
 	cmd.Flags().BoolVar(&force, "force", false, "take over a fresh lease")
 	flags.attach(cmd)
 	return cmd
@@ -880,9 +901,9 @@ preserves the workspace — run weave prune later), clears the conductor
 lease, and parks the sprint in backlog. Unlike handoff (graceful — leaves
 in-flight runs intact for a successor) abort tears the work down.
 
-The conductor PROCESS itself is not killed (the lease is heartbeat-based,
-not pid-tracked) — but with no lease and no runs it can do nothing; kill it
-at the OS level if it is still polling.`,
+A Bashy-managed project-manager session is stopped before the board is parked;
+abort refuses rather than record a completed hard stop while that managed agent
+is still running. External managers remain the caller's responsibility.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -890,31 +911,44 @@ at the OS level if it is still polling.`,
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			who := weaveConductorName("")
-			return runWeaveStoryMutate(cmd, id, "sprint abort", &flags, func(s *weaveStory) (string, error) {
-				var killed, failed []string
-				for _, r := range s.Runs {
-					qd, derr := weaveQueueDirForSprintRun(r)
-					if derr != nil {
-						failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, derr))
-						continue
+			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint abort", "abort managed sprint owner", func() error {
+				before, err := sprintOwnerSnapshot(id)
+				if err != nil {
+					return err
+				}
+				cwd, _ := os.Getwd()
+				if err := stopRecordedSprintOwner(cmd.Context(), before, cwd); err != nil {
+					return fmt.Errorf("cannot abort sprint #%d while manager %s is still running: %w", id, before.Owner, err)
+				}
+				return runWeaveStoryMutate(cmd, id, "sprint abort", &flags, func(s *weaveStory) (string, error) {
+					if strings.TrimSpace(s.Owner) != strings.TrimSpace(before.Owner) {
+						return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, before.Owner, s.Owner)
 					}
-					if kerr := applyDirectiveKill(qd, r.ID, "sprint abort"); kerr != nil {
-						failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, kerr))
-						continue
+					var killed, failed []string
+					for _, r := range s.Runs {
+						qd, derr := weaveQueueDirForSprintRun(r)
+						if derr != nil {
+							failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, derr))
+							continue
+						}
+						if kerr := applyDirectiveKill(qd, r.ID, "sprint abort"); kerr != nil {
+							failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, kerr))
+							continue
+						}
+						killed = append(killed, fmt.Sprintf("%s#%d", r.Repo, r.ID))
 					}
-					killed = append(killed, fmt.Sprintf("%s#%d", r.Repo, r.ID))
-				}
-				s.Lease = nil
-				s.Column = "backlog"
-				weaveStoryAppend(s, who, "system", fmt.Sprintf("ABORTED — killed %d run(s), cleared lease, parked in backlog", len(killed)))
-				msg := fmt.Sprintf("sprint #%d ABORTED — killed [%s]; lease cleared; parked in backlog", id, strings.Join(killed, " "))
-				if len(s.Runs) == 0 {
-					msg = fmt.Sprintf("sprint #%d ABORTED — no linked runs; lease cleared; parked in backlog", id)
-				}
-				if len(failed) > 0 {
-					msg += "\n  could not kill (do it manually): " + strings.Join(failed, ", ")
-				}
-				return msg, nil
+					s.Lease = nil
+					s.Column = "backlog"
+					weaveStoryAppend(s, who, "system", fmt.Sprintf("ABORTED — killed %d run(s), cleared lease, parked in backlog", len(killed)))
+					msg := fmt.Sprintf("sprint #%d ABORTED — killed [%s]; lease cleared; parked in backlog", id, strings.Join(killed, " "))
+					if len(s.Runs) == 0 {
+						msg = fmt.Sprintf("sprint #%d ABORTED — no linked runs; lease cleared; parked in backlog", id)
+					}
+					if len(failed) > 0 {
+						msg += "\n  could not kill (do it manually): " + strings.Join(failed, ", ")
+					}
+					return msg, nil
+				})
 			})
 		},
 	}

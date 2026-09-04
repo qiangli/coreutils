@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   NotebookPen,
   Send,
+  Play,
   Sparkles,
   UsersRound,
   Vote,
@@ -51,6 +52,7 @@ interface ComposerProps {
   isOrganizer: boolean
   onDismissQueued: () => void
   onSend: (text: string, agent?: string) => Promise<void>
+  onStartWork: (text: string) => Promise<boolean>
   onAction: (action: string, label: string, body?: unknown) => Promise<boolean>
   onManageParticipants: () => void
   kind?: "room" | "dm"
@@ -64,6 +66,7 @@ export function Composer({
   isOrganizer,
   onDismissQueued,
   onSend,
+  onStartWork,
   onAction,
   onManageParticipants,
   kind = "room",
@@ -117,6 +120,12 @@ export function Composer({
     } else {
       await onSend(value)
     }
+  }
+
+  async function startWork() {
+    const value = text.trim()
+    if (!value || sending || kind !== "dm") return
+    if (await onStartWork(value)) setText("")
   }
 
   function mention(agent: Member) {
@@ -194,6 +203,18 @@ export function Composer({
             value={text}
           />
           <div className="flex items-center gap-1.5 px-2.5 pb-2.5">
+            {kind === "dm" && (
+              <Button
+                className="h-8 gap-1.5 rounded-lg px-3 text-[11px]"
+                disabled={!text.trim() || sending}
+                onClick={() => void startWork()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Play className="size-3.5" /> Start work
+              </Button>
+            )}
             {kind === "room" && <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -373,7 +394,9 @@ export function Composer({
         </div>
         <div className="mt-1.5 flex items-center justify-between px-1">
           <span className="text-[9px] text-muted-foreground/65">
-            Agent replies render as sanitized markdown.
+            {kind === "dm"
+              ? "Send asks a read-only question. Start work is available only inside managed containment."
+              : "Agent replies render as sanitized markdown."}
           </span>
           {state?.status === "open" && (
             <Badge

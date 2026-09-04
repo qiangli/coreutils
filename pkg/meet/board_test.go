@@ -17,7 +17,7 @@ func TestMeetUnreadSplitsDirectedAndCapsOnlyOther(t *testing.T) {
 		{Speaker: "codex", Kind: "turn", Text: "mine one"},
 		{Speaker: "opencode", Kind: "turn", Text: "two"},
 		{Speaker: "claude", Kind: "turn", Text: "three"},
-		{Speaker: "qiangli", Kind: "human", Text: "@codex: please check this"},
+		{Speaker: "qiangli", Kind: "human", To: "codex", Text: "@codex: please check this"},
 		{Speaker: "codex", Kind: "turn", Text: "mine two"},
 		{Speaker: "qiangli", Kind: "human", Text: "four"},
 		{Speaker: "opencode", Kind: "turn", Text: "five"},

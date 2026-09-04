@@ -13,14 +13,15 @@ import (
 )
 
 type Options struct {
-	ID         string
-	Goal       string
-	Agent      string
-	Role       string
-	Cwd        string
-	Root       string
-	MaxRuntime time.Duration
-	Runner     chat.Runner
+	ID              string
+	Goal            string
+	Agent           string
+	Role            string
+	Cwd             string
+	Root            string
+	MaxRuntime      time.Duration
+	Runner          chat.Runner
+	OpeningSendOnce bool
 
 	// Eager brings the agent up AT Start instead of on the first message.
 	//
@@ -80,15 +81,16 @@ func Start(ctx context.Context, opt Options) (*Session, error) {
 	store := NewStore(opt.Root, id)
 	now := time.Now().UTC()
 	st := State{
-		ID:        id,
-		Goal:      goal,
-		Status:    StatusIdle,
-		CtlSock:   store.CtlSockPath(),
-		Agent:     opt.Agent,
-		Role:      opt.Role,
-		Cwd:       opt.Cwd,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              id,
+		Goal:            goal,
+		Status:          StatusIdle,
+		CtlSock:         store.CtlSockPath(),
+		Agent:           opt.Agent,
+		Role:            opt.Role,
+		Cwd:             opt.Cwd,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		OpeningSendOnce: opt.OpeningSendOnce,
 	}
 	if opt.MaxRuntime > 0 {
 		st.MaxRuntime = opt.MaxRuntime.String()
@@ -274,6 +276,11 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			s.block("paused by operator")
 			return s.record(RoleHuman, "", cmd.Message)
 		}
+		// Compose continuity BEFORE recording this message. The message belongs
+		// once in the prompt below; including the just-recorded decision in the
+		// checkpoint would repeat it as CurrentStep, Accepted decisions, Recent
+		// turns, and Steering message.
+		prior := s.continuationLocked()
 		if err := s.record(RoleHuman, "", cmd.Message); err != nil {
 			return s.blockAndCommit("history artifact: "+err.Error(), err)
 		}
@@ -291,7 +298,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		// to the agent that is working right now" — and for most of this fleet's
 		// tools that is now literally what it does.
 		if ok, why := s.steerable(); ok {
-			if err := s.steer(ctx, cmd.Message); err != nil {
+			if err := s.steer(ctx, cmd.Message, prior); err != nil {
 				// Falling through to the replay path would be the wrong kindness: it
 				// would produce a plausible answer from a fresh agent and hide the fact
 				// that the live one is gone.
@@ -311,7 +318,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		res, err := chat.Invoke(ctx, chat.Options{
 			Agent:       s.state.Agent,
 			Role:        s.state.Role,
-			Instruction: s.composePrompt(cmd.Message),
+			Instruction: s.composePrompt(cmd.Message, prior),
 			Cwd:         s.state.Cwd,
 		}, s.runner)
 		if out := strings.TrimSpace(res.Output); out != "" {
@@ -367,14 +374,20 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 // window (checkpoint.go) and the new message — and NOT the session history.
 // The history is the artifact the checkpoint references. Its size is therefore
 // goal + kb + message + at most ContinuationBudget, on turn 3 and on turn 300.
-func (s *Session) composePrompt(msg string) string {
+func (s *Session) composePrompt(msg string, prepared ...string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal:\n%s\n\n", s.state.Goal)
 	if note := s.kbPreamble(); note != "" {
 		b.WriteString(note)
 		b.WriteByte('\n')
 	}
-	if cont := s.continuationLocked(); cont != "" {
+	cont := ""
+	if len(prepared) > 0 {
+		cont = prepared[0]
+	} else {
+		cont = s.continuationLocked()
+	}
+	if cont != "" {
 		b.WriteString(cont)
 		b.WriteByte('\n')
 	}

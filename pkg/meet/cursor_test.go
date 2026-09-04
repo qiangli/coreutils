@@ -145,6 +145,96 @@ func TestUnreadRecordsSkipsOwnPostsAndKeepsReaderCursorsIndependent(t *testing.T
 	}
 }
 
+func TestUnreadRecordsDoesNotDeliverAnotherParticipantsDirectedMail(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"agent-a", "agent-b", "agent-c"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-a", To: "agent-b", Text: "for B only"}); err != nil {
+		t.Fatal(err)
+	}
+
+	directed, other, _, through, err := UnreadRecords(st.ID, "agent-c", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed)+len(other) != 0 {
+		t.Fatalf("C received B's directed mail: directed=%+v other=%+v", directed, other)
+	}
+	if through != 1 {
+		t.Fatalf("through=%d, want 1 so C can acknowledge the non-inbound record", through)
+	}
+}
+
+func TestHistoryRecordsIgnoresNativeCursorAndPreservesRecipientFiltering(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"agent-a", "agent-b", "agent-c"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []Event{
+		{Kind: "message", Speaker: "agent-a", Text: "room history"},
+		{Kind: "message", Speaker: "agent-a", To: "agent-b", Text: "for B"},
+		{Kind: "message", Speaker: "agent-a", To: "agent-c", Text: "for C"},
+	} {
+		if err := AppendEvent(st.ID, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := MarkSeenThrough(st.ID, "agent-b", 3); err != nil {
+		t.Fatal(err)
+	}
+
+	directed, other, older, err := HistoryRecords(st.ID, "agent-b", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 0 || len(directed) != 1 || directed[0].Seq != 2 || directed[0].Event.Text != "for B" {
+		t.Fatalf("directed=%+v older=%d", directed, older)
+	}
+	if len(other) != 1 || other[0].Seq != 1 || other[0].Event.Text != "room history" {
+		t.Fatalf("history=%+v", other)
+	}
+	if got := SeenSeq(st.ID, "agent-b"); got != 3 {
+		t.Fatalf("HistoryRecords changed native cursor to %d", got)
+	}
+}
+
+func TestAtPrefixedBroadcastRemainsHistoryWhileExplicitToStaysPrivate(t *testing.T) {
+	st := newRoom(t)
+	st.Board = true
+	st.Participants = []string{"agent-a", "agent-b", "agent-c"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-a", Text: "@agent-b could everyone review this?"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendEvent(st.ID, Event{Kind: "message", Speaker: "agent-a", To: "agent-b", Text: "private for B"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, reader := range []string{"agent-b", "agent-c"} {
+		directed, other, _, _, err := UnreadRecords(st.ID, reader, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(other) != 1 || other[0].Event.Text != "@agent-b could everyone review this?" {
+			t.Fatalf("%s broadcast history=%+v", reader, other)
+		}
+		if reader == "agent-b" {
+			if len(directed) != 1 || directed[0].Event.Text != "private for B" {
+				t.Fatalf("B directed=%+v", directed)
+			}
+		} else if len(directed) != 0 {
+			t.Fatalf("C received B's explicit private mail: %+v", directed)
+		}
+	}
+}
+
 func TestWaitForRoomDoesNotWakeOnReadersOwnPost(t *testing.T) {
 	st := newRoom(t)
 	st.Board = true

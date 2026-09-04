@@ -390,6 +390,36 @@ func TestAliasCollisionIsReported(t *testing.T) {
 	if len(cols[0].Holds) != 2 {
 		t.Fatalf("collision must name both holders: %v", cols[0].Holds)
 	}
+	if got, ok := c.Agent("ace"); ok {
+		t.Fatalf("ambiguous alias resolved to %+v; resolution must fail closed", got)
+	}
+}
+
+func TestAgentsReturnOneRowPerCanonicalName(t *testing.T) {
+	overlay := assetring.FileFS(fstest.MapFS{
+		"first.yaml":  {Data: []byte("name: duplicate\ntool: claude\nmodel: opus5\n")},
+		"second.yaml": {Data: []byte("name: DUPLICATE\ntool: codex\nmodel: gpt-5.5\n")},
+	}, assetring.RingLocal, ".yaml")
+
+	c := New(WithoutLocalStore(), WithRoot(t.TempDir()), WithSource(dirAgents, overlay))
+	agents, errs := c.Agents()
+	count := 0
+	for _, a := range agents {
+		if strings.EqualFold(a.Name, "duplicate") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("agents list contains %d rows for one NAME, want 1: %+v", count, agents)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate agent NAME") {
+		t.Fatalf("duplicate NAME errors = %v", errs)
+	}
+	for _, query := range []string{"duplicate", "DUPLICATE", "DuPlIcAtE"} {
+		if got, ok := c.Agent(query); ok {
+			t.Errorf("ambiguous canonical NAME %q resolved to %+v; want fail closed", query, got)
+		}
+	}
 }
 
 // A dangling half is reported by name, never silently dropped.

@@ -38,6 +38,7 @@ func newTestStoreFunc(t *testing.T) storeFunc {
 // (the same read path inbox itself uses), never the command's own stdout.
 func TestAddAssigneeDeliversThroughTheExistingBus(t *testing.T) {
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	pinTodoAgents(t, "bob")
 	sf := newTestStoreFunc(t)
 
 	// Give "bob" prior inbox evidence (an existing drain cursor), which is
@@ -52,7 +53,7 @@ func TestAddAssigneeDeliversThroughTheExistingBus(t *testing.T) {
 	cmd := newAddCmd(sf)
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"fix the thing", "--assignee", "bob"})
+	cmd.SetArgs([]string{"fix the thing", "--owner", "bob"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("todo add: %v", err)
 	}
@@ -72,14 +73,9 @@ func TestAddAssigneeDeliversThroughTheExistingBus(t *testing.T) {
 	}
 }
 
-// TestAddAssigneeUnreachableIsReportedNotHidden is the DIRECTION-2 fix for
-// Cell A ("you cannot reach the assignee through the item"): the operator
-// used to have no way to learn that until they went and manually tried. Now
-// the add itself answers the question — an unresolvable free-text assignee
-// must produce a plain, printed "not notified" statement (checked by CONTENT,
-// not by exit status: the command still succeeds, because the assignee field
-// is deliberately unvalidated and a todo write must not fail over it).
-func TestAddAssigneeUnreachableIsReportedNotHidden(t *testing.T) {
+// An assignee is an identity, not free text. Refuse the write before a todo can
+// enter assigned-looking state with nobody behind the address.
+func TestAddAssigneeMustBeARegisteredAgent(t *testing.T) {
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	sf := newTestStoreFunc(t)
 
@@ -87,13 +83,21 @@ func TestAddAssigneeUnreachableIsReportedNotHidden(t *testing.T) {
 	cmd := newAddCmd(sf)
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
-	cmd.SetArgs([]string{"herd the cats", "--assignee", "nobody-registered-anywhere-zz"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("todo add: %v (assignment must not fail the write)", err)
+	cmd.SetArgs([]string{"herd the cats", "--owner", "nobody-registered-anywhere-zz"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "assignee") || !strings.Contains(err.Error(), "bashy agents list") {
+		t.Fatalf("unregistered assignee error = %v", err)
 	}
-
-	if !strings.Contains(errOut.String(), "not notified") {
-		t.Errorf("stderr = %q, want it to say the assignee was not notified", errOut.String())
+	st, _, storeErr := sf()
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	items, listErr := List(st, "")
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(items) != 0 {
+		t.Fatalf("refused assignment persisted %d todos", len(items))
 	}
 
 	events, _, err := bus.UnreadNotifications("nobody-registered-anywhere-zz")
@@ -106,10 +110,11 @@ func TestAddAssigneeUnreachableIsReportedNotHidden(t *testing.T) {
 }
 
 // TestEditReassignNotifies covers the second write path: an item assigned
-// after creation via `todo edit --assignee` must notify exactly like `add`
+// after creation via `todo edit --owner` must notify exactly like `add`
 // does, not just the assignee set at filing time.
 func TestEditReassignNotifies(t *testing.T) {
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	pinTodoAgents(t, "carol")
 	sf := newTestStoreFunc(t)
 	if err := bus.MarkNotificationsRead("carol", 0); err != nil {
 		t.Fatal(err)
@@ -128,7 +133,7 @@ func TestEditReassignNotifies(t *testing.T) {
 	cmd := newEditCmd(sf)
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{it.ID, "--assignee", "carol"})
+	cmd.SetArgs([]string{it.ID, "--owner", "carol"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("todo edit: %v", err)
 	}

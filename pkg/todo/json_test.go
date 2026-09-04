@@ -43,6 +43,7 @@ type envelopeShape struct {
 
 func TestListJSONEnvelopeUserScope(t *testing.T) {
 	t.Setenv("BASHY_TODO_DIR", t.TempDir())
+	pinTodoAgents(t, "alice")
 	st, err := UserStore("steward")
 	if err != nil {
 		t.Fatal(err)
@@ -113,8 +114,8 @@ func TestListJSONEnvelopeUserScope(t *testing.T) {
 	if got.Title != "ship the feature" {
 		t.Errorf("items[0].title = %q", got.Title)
 	}
-	if got.State != StatusTodo {
-		t.Errorf("items[0].state = %q, want %q", got.State, StatusTodo)
+	if got.State != StatusAssigned {
+		t.Errorf("items[0].state = %q, want %q", got.State, StatusAssigned)
 	}
 	if got.Priority != "p1" {
 		t.Errorf("items[0].priority = %q, want p1", got.Priority)

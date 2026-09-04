@@ -13,3 +13,10 @@ agents:
     ledger:
       reliability: high
       notes: second seat, so a test can invite one agent to a room that has another
+  - name: echoback-facilitator
+    tool: echoback
+    model: fixed
+    display: "echoback · facilitator"
+    ledger:
+      reliability: high
+      notes: dedicated facilitator seat for browser-created meeting tests

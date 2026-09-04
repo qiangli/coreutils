@@ -3,7 +3,6 @@ import {
   Bot,
   ChevronRight,
   Hash,
-  MessageSquareText,
   Plus,
   Radio,
   UserRound,
@@ -36,7 +35,7 @@ import { cn } from "@/lib/utils"
 interface RoomSidebarProps {
   creating: boolean
   agents: AgentOption[]
-  onCreate: (topic: string, participants: string[]) => Promise<boolean>
+  onCreate: (topic: string, owner: string, participants: string[]) => Promise<boolean>
   rooms: RoomSummary[]
   dms: DMSummary[]
   selectedRef: string
@@ -164,7 +163,6 @@ export function RoomSidebar({
           {viewKind === "room" ? <><div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
             <span>Meetings</span>
             <div className="flex items-center gap-1">
-              <MessageSquareText className="size-3.5" />
               <NewRoomDialog agents={agents} creating={creating} onCreate={onCreate} open={newRoomOpen} onOpenChange={setNewRoomOpen} />
             </div>
           </div>

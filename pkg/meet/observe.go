@@ -439,9 +439,9 @@ func writeEvent(w io.Writer, e Event, asJSON bool) {
 	case "action":
 		who = "ACTION"
 	case "ledger":
-		who = "CHAIR"
+		who = "FACILITATOR"
 	case "replan":
-		who = "CHAIR (new approach)"
+		who = "FACILITATOR (new approach)"
 	}
 
 	head := fmt.Sprintf("[r%d %s] %s", e.Round, e.TS.Local().Format("15:04:05"), who)

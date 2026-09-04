@@ -97,3 +97,35 @@ func TestReconcileIsIdempotent(t *testing.T) {
 		t.Errorf("observed evidence was lost: %+v", got)
 	}
 }
+
+func TestReconcileRetainsEvidenceForBindingSharedByNamedAgents(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+	if err := cat.SaveTool(fleet.Tool{Name: "claude", Kind: fleet.ToolKindCLI}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveModel(fleet.Model{Name: "opus4.8", Band: 3, Quality: 0.92}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"manager", "reviewer"} {
+		if err := cat.SaveAgent(fleet.Agent{Name: name, Tool: "claude", Model: "opus4.8"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := newCatalog
+	newCatalog = func() *fleet.Catalog {
+		return fleet.New(fleet.WithRoot(root), fleet.WithBaselineFS(fstest.MapFS{}))
+	}
+	t.Cleanup(func() { newCatalog = prev })
+
+	want := Cell{Quality: 0.99, Source: SourceHost, Samples: 12}
+	m := &Matrix{Agents: map[string]map[Capability]Cell{
+		"claude:opus4.8": {CapCoding: want},
+	}}
+	if m.reconcile() {
+		t.Fatal("a shared binding is canonical capability evidence, not an ambiguous identity")
+	}
+	if got := m.Agents["claude:opus4.8"][CapCoding]; got != want {
+		t.Fatalf("shared-binding evidence changed: got %+v want %+v", got, want)
+	}
+}

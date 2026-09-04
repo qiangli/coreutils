@@ -44,6 +44,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/issue"
+	"github.com/qiangli/coreutils/pkg/role"
 	todopkg "github.com/qiangli/coreutils/pkg/todo"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -65,7 +66,7 @@ func notifySprintOwner(s *weaveStory, from, body string) error {
 		Topic:     sprintTopic(s.ID),
 		To:        owner,
 		Body:      body,
-		Priority:  "normal",
+		Priority:  bus.DeliveryQueued,
 	}
 	if s.Contact != nil {
 		n.Room = s.Contact.Ref
@@ -102,7 +103,7 @@ func resolveSprintStoryFor(s *weaveStory, repo, ref string) (string, *issue.Issu
 
 func newSprintClaimCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var as, repo string
+	var owner, repo string
 	var force bool
 	cmd := &cobra.Command{
 		Use:     "claim <sprint> <story>",
@@ -127,10 +128,11 @@ Finish with submit (ready for review) or yield (handing it back unfinished).`,
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			return runSprintStoryClaim(cmd, id, args[1], as, repo, force, &flags)
+			return runSprintStoryClaim(cmd, id, args[1], owner, repo, force, &flags)
 		},
 	}
-	cmd.Flags().StringVar(&as, "as", "", "claiming agent (default $WEAVE_AGENT/$WEAVE_CONDUCTOR)")
+	role.AttachOwner(cmd.Flags(), &owner, role.Assignee,
+		"agent claiming the story (default $WEAVE_AGENT/$WEAVE_CONDUCTOR)")
 	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
 	cmd.Flags().BoolVar(&force, "force", false, "take a story another agent holds")
 	flags.attach(cmd)
@@ -145,6 +147,7 @@ func runSprintStoryClaim(cmd *cobra.Command, id int64, ref, as, repo string, for
 	if err := validateSprintClaimant(who); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint claim", weavecli.ExitPrecondFail, err))
 	}
+	who, _ = canonicalFleetAgentName(who)
 	return runWeaveStoryMutate(cmd, id, "sprint claim", flags, func(s *weaveStory) (string, error) {
 		if !sprintColumnOpen(s.Column) {
 			return "", fmt.Errorf("sprint #%d is %s — only an ACTIVE sprint takes volunteers", id, s.Column)

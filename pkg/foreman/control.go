@@ -7,15 +7,31 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
 )
 
+// ControlSupported reports whether this build can host Foreman's local control
+// transport. It is intentionally explicit: native Windows compiles the Unix
+// socket calls but cannot run them, so callers must refuse before mutating work.
+func ControlSupported() bool { return runtime.GOOS != "windows" }
+
 func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
+	if !ControlSupported() {
+		return fmt.Errorf("foreman: managed control sessions are not supported on native Windows")
+	}
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Snapshot before publishing the listener. Once the socket exists a first
+	// tell can immediately enter Apply and hold s.mu for an entire turn. The
+	// lifetime watcher must not need that mutex before it can observe stop.
+	initial := s.State()
+	if initial.Stopped {
+		return nil
+	}
 	path := s.store.CtlSockPath()
 	if err := s.store.Ensure(); err != nil {
 		return err
@@ -34,11 +50,11 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 	}
 	watchDone := make(chan struct{})
 	defer close(watchDone)
-	go s.watchControlLifetime(serveCtx, cancel, ln, watchDone)
+	go s.watchControlLifetime(serveCtx, cancel, ln, watchDone, initial.Deadline, initial.MaxRuntime)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if serveCtx.Err() != nil || s.stopped() {
+			if serveCtx.Err() != nil {
 				return nil
 			}
 			return err
@@ -48,14 +64,10 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 		// accepting the moment an agent started working — so the one time you most
 		// need to say "stop, wrong file", the socket would not even take the call.
 		go s.handleControlConn(serveCtx, conn)
-		if s.stopped() {
-			return nil
-		}
 	}
 }
 
-func (s *Session) watchControlLifetime(ctx context.Context, cancel context.CancelFunc, ln net.Listener, done <-chan struct{}) {
-	deadline := s.State().Deadline
+func (s *Session) watchControlLifetime(ctx context.Context, cancel context.CancelFunc, ln net.Listener, done <-chan struct{}, deadline time.Time, maxRuntime string) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -67,6 +79,7 @@ func (s *Session) watchControlLifetime(ctx context.Context, cancel context.Cance
 			return
 		case reason := <-s.stopCh:
 			cancel() // terminate the active turn before waiting for its state lock
+			s.closeLive()
 			s.markStopped(StatusDone, reason)
 			_ = ln.Close()
 			return
@@ -76,12 +89,8 @@ func (s *Session) watchControlLifetime(ctx context.Context, cancel context.Cance
 			// granting the worker the whole pre-suspend duration again.
 			if !deadline.IsZero() && !time.Now().Before(deadline) {
 				cancel() // CommandContext -> agentpty's process-tree kill path.
-				s.markStopped(StatusBlocked, "max runtime "+s.State().MaxRuntime+" exceeded")
-				_ = ln.Close()
-				return
-			}
-			if s.stopped() {
-				cancel()
+				s.closeLive()
+				s.markStopped(StatusBlocked, "max runtime "+maxRuntime+" exceeded")
 				_ = ln.Close()
 				return
 			}
@@ -100,12 +109,6 @@ func (s *Session) markStopped(status, reason string) {
 	s.state.StopReason = reason
 	s.state.Steering = false
 	s.persistLocked()
-}
-
-func (s *Session) stopped() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.state.Stopped
 }
 
 func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
@@ -205,6 +208,9 @@ type Ack struct {
 }
 
 func SendCommand(root, id string, cmd Command) (Ack, error) {
+	if !ControlSupported() {
+		return Ack{}, fmt.Errorf("foreman: managed control sessions are not supported on native Windows")
+	}
 	store := NewStore(root, id)
 	var ack Ack
 	if err := agentlaunch.SendJSONControl(store.CtlSockPath(), cmd, &ack, 3*time.Second); err != nil {

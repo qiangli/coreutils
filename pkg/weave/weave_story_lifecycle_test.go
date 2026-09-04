@@ -57,7 +57,7 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 	if out, code := runSprint(t, "add", "lifecycle test"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
 	if out, code := runSprint(t, "pause", "1"); code == 0 {
@@ -78,7 +78,7 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 
 	t.Setenv("WEAVE_CONDUCTOR", "Grace")
 	seedLiveAgent(t, "Grace")
-	out, code := runSprint(t, "resume", "1", "--as", "Grace")
+	out, code := runSprint(t, "resume", "1", "--owner", "Grace")
 	if code != 0 {
 		t.Fatalf("resume exit=%d: %s", code, out)
 	}
@@ -94,11 +94,11 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 		t.Fatalf("resume must claim the lease without restarting the box: %+v", s)
 	}
 
-	// The next CLI process may not inherit --as. Pause must use the durable
+	// The next CLI process may not inherit --owner. Pause must use the durable
 	// lease holder, not silently fall back to the generic conductor identity.
 	t.Setenv("WEAVE_CONDUCTOR", "")
 	if out, code := runSprint(t, "pause", "1", "-m", "paused again"); code != 0 {
-		t.Fatalf("pause after resume --as must use the lease identity, exit=%d: %s", code, out)
+		t.Fatalf("pause after resume --owner must use the lease identity, exit=%d: %s", code, out)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 	if out, code := runSprint(t, "add", "end test"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
 	if out, code := runSprint(t, "end", "1"); code == 0 {
@@ -133,7 +133,7 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 	}
 }
 
-func TestSprintStartUsesDurableHolderTakenAs(t *testing.T) {
+func TestSprintStartRequiresOwnerEvenWithDurableHolder(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -146,11 +146,14 @@ func TestSprintStartUsesDurableHolderTakenAs(t *testing.T) {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
 	seedLiveAgent(t, "meridian")
-	if out, code := runSprint(t, "take", "1", "--as", "meridian"); code != 0 {
+	if out, code := runSprint(t, "take", "1", "--owner", "meridian"); code != 0 {
 		t.Fatalf("take exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
-		t.Fatalf("start by durable holder exit=%d: %s", code, out)
+	if out, code := runSprint(t, "start", "1", "--for", "1h"); code == 0 || !strings.Contains(out, "--owner is required") {
+		t.Fatalf("start reused durable holder without explicit owner: exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", "meridian", "--for", "1h"); code != 0 {
+		t.Fatalf("explicit start exit=%d: %s", code, out)
 	}
 
 	q, err := loadWeaveQueue(home + "/.bashy/sprint")
@@ -159,11 +162,11 @@ func TestSprintStartUsesDurableHolderTakenAs(t *testing.T) {
 	}
 	s := findWeaveStory(q, 1)
 	if s == nil || s.Lease == nil || s.Lease.Holder != "meridian" || !s.currentBox().Running() {
-		t.Fatalf("start must preserve the holder established by take --as: %+v", s)
+		t.Fatalf("start must preserve the holder established by take --owner: %+v", s)
 	}
 }
 
-func TestSprintStartRecognizesBashyPrincipal(t *testing.T) {
+func TestSprintStartDoesNotUseBashyPrincipalAsOwner(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -175,12 +178,12 @@ func TestSprintStartRecognizesBashyPrincipal(t *testing.T) {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
 	seedLiveAgent(t, "meridian")
-	if out, code := runSprint(t, "take", "1", "--as", "meridian"); code != 0 {
+	if out, code := runSprint(t, "take", "1", "--owner", "meridian"); code != 0 {
 		t.Fatalf("take exit=%d: %s", code, out)
 	}
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/meridian")
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
-		t.Fatalf("start by BASHY_PRINCIPAL exit=%d: %s", code, out)
+	if out, code := runSprint(t, "start", "1", "--for", "1h"); code == 0 || !strings.Contains(out, "--owner is required") {
+		t.Fatalf("start chose BASHY_PRINCIPAL implicitly: exit=%d: %s", code, out)
 	}
 }
 

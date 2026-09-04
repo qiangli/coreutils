@@ -37,10 +37,8 @@ package weave
 // nobody answers is worse than a missing one: it consumes the time of whoever
 // trusted it before they discover there is nobody there.
 //
-// Registration is now required at every point an owner is WRITTEN, and both
-// paths the operator already has are accepted: a permanent entry (`agents add`)
-// or an ad-hoc one (`agents track start --agent`). The check is deliberately
-// REGISTRATION, not liveness — a conductor is ephemeral by design (the lease is
+// Registration is required at every point an owner is WRITTEN. The check is
+// deliberately REGISTRATION, not liveness — a conductor is ephemeral by design (the lease is
 // a heartbeat precisely because conductors die), so refusing to take a sprint
 // because the roster has not seen a trace yet would refuse the recovery case.
 // Liveness is REPORTED instead, where it is actionable.
@@ -82,24 +80,23 @@ func sprintRoomRetained(s *weaveStory) bool {
 	return s != nil && s.Contact != nil && sprintColumnOpen(s.Column)
 }
 
-// sprintOwnerRegistered reports whether a name resolves to an agent this host
-// knows — a permanent `agents add` entry or an ad-hoc `agents track` worker.
-//
-// Both count. The user-facing rule is "it shows up in `bashy agents`", and an
-// ad-hoc worker that published an assignment is exactly as addressable as a
-// declared one: mb, chat and inbox all key on the name, not on the ring.
+// sprintOwnerRegistered reports whether a name resolves to a durable fleet
+// agent — one of the canonical identities shown by `bashy agents list`.
 func sprintOwnerRegistered(name string) bool {
 	n := strings.TrimSpace(name)
 	if n == "" {
 		return false
 	}
-	if _, ok := fleetCatalog().Agent(n); ok {
-		return true
+	_, ok := fleetCatalog().Agent(n)
+	return ok
+}
+
+func canonicalFleetAgentName(name string) (string, bool) {
+	a, ok := fleetCatalog().Agent(strings.TrimSpace(name))
+	if !ok {
+		return "", false
 	}
-	// An ad-hoc worker exists only in the live roster; it never reaches the
-	// catalog. Checking the roster second keeps the common case (a declared
-	// agent) off the filesystem.
-	return sprintOwnerInRoster(n)
+	return a.Name, true
 }
 
 // sprintOwnerInRoster reports whether the name is currently present in the host
@@ -217,26 +214,23 @@ func formatUnreadReminder(n int, oldest time.Duration, owner string) string {
 
 // validateSprintOwner refuses a conductor name that names nobody.
 //
-// The error names both fixes because the caller is usually an agent that does
-// not know which one applies to it: a long-lived seat wants `agents add`, a
-// session-scoped worker wants `agents track start`.
+// The error points to the one canonical source of assignable identities.
 func validateSprintOwner(name string) error {
 	n := strings.TrimSpace(name)
 	if n == "" {
-		return fmt.Errorf("a sprint owner is required: pass --as <agent>")
+		return fmt.Errorf("a sprint owner (project manager) is required: pass --owner NAME from `bashy agents list`")
 	}
 	if isPlaceholderConductorName(n) {
 		return fmt.Errorf("%q is a placeholder, not an agent — it addresses nobody and collides "+
 			"across every sprint on this host.\n"+
-			"  pass --as <agent>, where <agent> appears in `bashy agents list`", n)
+			"  pass --owner NAME, where NAME appears in `bashy agents list`", n)
 	}
 	if sprintOwnerRegistered(n) {
 		return nil
 	}
-	return fmt.Errorf("sprint owner %q does not resolve to an agent, so mb/chat/inbox cannot reach it.\n"+
-		"  permanent seat: bashy agents add %s --tool <tool> --model <model>\n"+
-		"  ad-hoc worker:  bashy agents track start <id> --agent %s\n"+
-		"  then re-run with --as %s", n, n, n, n)
+	return fmt.Errorf("sprint manager %q is not a registered agent, so mb/chat/inbox cannot reach it.\n"+
+		"  choose NAME from: bashy agents list\n"+
+		"  then re-run with --owner %s", n, n)
 }
 
 // isPlaceholderConductorName catches the generic fallbacks that used to be

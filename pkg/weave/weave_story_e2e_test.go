@@ -87,13 +87,13 @@ func TestSprintRefusesAnOwnerThatResolvesToNobody(t *testing.T) {
 	if out, code := runSprint(t, "add", "unreachable owner"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	out, code := runSprint(t, "start", "1", "--for", "1h")
+	out, code := runSprint(t, "start", "1", "--owner", "ghost-that-does-not-exist", "--for", "1h")
 	if code == 0 {
 		t.Fatalf("start accepted an owner that resolves to no agent:\n%s", out)
 	}
-	// The refusal must be actionable: an agent reading it needs to know BOTH
-	// registration paths without going to look them up.
-	for _, want := range []string{"does not resolve", "agents add", "agents track start"} {
+	// The refusal must point to the canonical roster rather than suggesting an
+	// ad-hoc live seat that will disappear when its process exits.
+	for _, want := range []string{"sprint manager", "not a registered agent", "bashy agents list", "--owner"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("refusal missing %q:\n%s", want, out)
 		}
@@ -109,7 +109,7 @@ func TestSprintRefusesThePlaceholderConductorName(t *testing.T) {
 	if out, code := runSprint(t, "add", "placeholder owner"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	out, code := runSprint(t, "start", "1", "--for", "1h")
+	out, code := runSprint(t, "start", "1", "--owner", "conductor", "--for", "1h")
 	if code == 0 {
 		t.Fatalf("start accepted the placeholder name %q:\n%s", "conductor", out)
 	}
@@ -132,7 +132,7 @@ func TestOpenSprintKeepsItsRoomAcrossPauseAndHandoff(t *testing.T) {
 	if out, code := runSprint(t, "add", "room retention"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
 	roomAfterStart := sprintContactRef(t, 1)
@@ -155,7 +155,7 @@ func TestOpenSprintKeepsItsRoomAcrossPauseAndHandoff(t *testing.T) {
 	}
 
 	// And a successor inherits that same room rather than opening a second one.
-	if out, code := runSprint(t, "take", "1", "--as", "Ada"); code != 0 {
+	if out, code := runSprint(t, "take", "1", "--owner", "Ada"); code != 0 {
 		t.Fatalf("take exit=%d: %s", code, out)
 	}
 	if got := sprintContactRef(t, 1); got != roomAfterStart {
@@ -174,7 +174,7 @@ func TestClosingASprintReleasesItsRoom(t *testing.T) {
 	if out, code := runSprint(t, "add", "room release"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
 	if sprintContactRef(t, 1) == "" {
@@ -384,12 +384,12 @@ func TestSprintOwnerMustBeAnAddressableAgent(t *testing.T) {
 
 	// 1. Unknown name — REFUSED. Mail to it would reach nobody and no surface
 	// would say so, which is the loss this gate prevents.
-	out, code := runSprint(t, "start", "1", "--for", "1h")
+	out, code := runSprint(t, "start", "1", "--owner", "seatless", "--for", "1h")
 	if code == 0 {
 		t.Fatalf("a sprint was seated to a name that is in no roster:\n%s", out)
 	}
-	if !strings.Contains(out, "does not resolve") {
-		t.Errorf("refusal must say the name resolves to no agent:\n%s", out)
+	if !strings.Contains(out, "not a registered agent") {
+		t.Errorf("refusal must say the name is absent from the fleet:\n%s", out)
 	}
 
 	// 2. A placeholder — REFUSED. "conductor" is not unique: every sprint on
@@ -403,7 +403,7 @@ func TestSprintOwnerMustBeAnAddressableAgent(t *testing.T) {
 	// The name addresses a real agent, mail is durable, and it will be read
 	// when the agent next looks. Nothing is lost, so nothing is refused.
 	seedAgent(t, "seatless")
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", "seatless", "--for", "1h"); code != 0 {
 		t.Fatalf("a registered agent must be able to take the seat without holding a process: exit=%d\n%s", code, out)
 	}
 }
@@ -472,7 +472,7 @@ func TestStoryClaimIsExclusiveAndAnnounced(t *testing.T) {
 	if out, code := runSprint(t, "add", "volunteer loop"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "start", "1", "--for", "1h"); code != 0 {
+	if out, code := runSprint(t, "start", "1", "--owner", "boss", "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
 	// A story nobody has claimed yet.
@@ -489,7 +489,7 @@ func TestStoryClaimIsExclusiveAndAnnounced(t *testing.T) {
 		t.Fatalf("track exit=%d: %s", code, out)
 	}
 
-	if out, code := runSprint(t, "claim", "1", it.ID, "--as", "worker"); code != 0 {
+	if out, code := runSprint(t, "claim", "1", it.ID, "--owner", "worker"); code != 0 {
 		t.Fatalf("claim exit=%d: %s", code, out)
 	}
 	held, err := todopkg.ResolveRef(store, it.ID)
@@ -501,7 +501,7 @@ func TestStoryClaimIsExclusiveAndAnnounced(t *testing.T) {
 	}
 
 	// A second agent must be refused, and told who to talk to.
-	out, code := runSprint(t, "claim", "1", it.ID, "--as", "boss")
+	out, code := runSprint(t, "claim", "1", it.ID, "--owner", "boss")
 	if code == 0 {
 		t.Fatalf("a claimed story was handed to a second agent:\n%s", out)
 	}

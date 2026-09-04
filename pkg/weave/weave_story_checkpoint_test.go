@@ -44,7 +44,7 @@ func TestBeatrixSprintCheckpointRegression(t *testing.T) {
 	// behind it accepts room and inbox traffic nobody will ever read.
 	t.Setenv("WEAVE_CONDUCTOR", "Beatrix")
 	seedLiveAgent(t, "Beatrix")
-	out, code = runSprint(t, "take", "1")
+	out, code = runSprint(t, "take", "1", "--owner", "Beatrix")
 	if code != 0 {
 		t.Fatalf("take exit=%d out=%s", code, out)
 	}

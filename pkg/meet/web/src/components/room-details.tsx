@@ -127,7 +127,7 @@ export function RoomDetails({
           <section>
             <SectionTitle icon={Gavel}>Room setup</SectionTitle>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <Meta label="Chair" value={state?.chair || "Not assigned"} />
+              <Meta label="Facilitator" value={state?.chair || "Not assigned"} />
               <Meta
                 label="Secretary"
                 value={

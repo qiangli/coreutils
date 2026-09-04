@@ -25,12 +25,11 @@ const maxTranscriptLine = 4 * 1024 * 1024
 
 // Unread returns parsed transcript events this reader has not seen.
 //
-// Events addressed to the reader, or text that starts with @reader, are the
-// directed signals Event carries today, so they are returned in full. Events
-// authored by the reader are acknowledged by the caller's high-water mark but
-// are not inbound work and are therefore never returned. Everything else is
-// room broadcast history, trimmed to limit with older reporting how many events
-// were hidden.
+// Events explicitly addressed to the reader are returned in full. Events
+// authored by the reader or addressed to somebody else are acknowledged by the
+// caller's high-water mark but are not inbound work and are therefore never
+// returned. Everything else is room broadcast history, trimmed to limit with
+// older reporting how many events were hidden.
 func Unread(id, reader string, limit int) (directed, other []Event, older int, err error) {
 	directed, other, older, _, err = UnreadThrough(id, reader, limit)
 	return directed, other, older, err
@@ -69,7 +68,24 @@ func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord
 		return nil, nil, 0, 0, err
 	}
 	through = int64(len(events))
-	at := SeenSeq(id, reader)
+	directed, other, older = recordsAfter(events, reader, SeenSeq(id, reader), limit)
+	return directed, other, older, through, nil
+}
+
+// HistoryRecords returns the full sequence-preserving transcript visible to
+// reader. Unlike UnreadRecords it neither consults nor advances the reader's
+// native Meet cursor, so durable mailbox views can keep stable record IDs and
+// their local marks after another inbox consumer acknowledges the room.
+func HistoryRecords(id, reader string, limit int) (directed, other []UnreadRecord, older int, err error) {
+	events, err := readRoomTranscript(id)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	directed, other, older = recordsAfter(events, reader, 0, limit)
+	return directed, other, older, nil
+}
+
+func recordsAfter(events []Event, reader string, at int64, limit int) (directed, other []UnreadRecord, older int) {
 	for i, e := range events {
 		seq := int64(i + 1)
 		if seq <= at {
@@ -87,13 +103,23 @@ func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord
 			directed = append(directed, record)
 			continue
 		}
+		// A directed message is visible in the shared room transcript, but it is
+		// actionable inbox work only for its addressee. Classifying it as generic
+		// room history delivered the same 1:1 message to every seated identity.
+		if addressedEvent(e) {
+			continue
+		}
 		other = append(other, record)
 	}
 	if limit > 0 && len(other) > limit {
 		older = len(other) - limit
 		other = other[len(other)-limit:]
 	}
-	return directed, other, older, through, nil
+	return directed, other, older
+}
+
+func addressedEvent(e Event) bool {
+	return strings.TrimSpace(e.To) != ""
 }
 
 func authoredBy(e Event, reader string) bool {
@@ -117,13 +143,7 @@ func directedEvent(e Event, reader string) bool {
 		strings.EqualFold(strings.TrimSpace(holder), reader) {
 		return true
 	}
-	text := strings.TrimSpace(e.Text)
-	if !strings.HasPrefix(text, "@") {
-		return false
-	}
-	target, _, _ := strings.Cut(text[1:], " ")
-	target = strings.TrimRight(strings.TrimSpace(target), ":,")
-	return strings.EqualFold(target, reader)
+	return false
 }
 
 // WaitForRoom blocks until this reader has unread room events or bound expires.

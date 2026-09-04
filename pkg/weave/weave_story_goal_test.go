@@ -70,7 +70,7 @@ func TestSprintGoalCompletionFollowsStoryClosureAndReopen(t *testing.T) {
 	}
 }
 
-func TestSprintGateEvidenceAndTakeoverIdentity(t *testing.T) {
+func TestSprintGateEvidence(t *testing.T) {
 	root := t.TempDir()
 	id := sprintTestStory(t, root, 99125, "gated", "p0", todopkg.StatusDone)
 	g := sprintGoalItem{ID: "gate", Stories: []sprintStoryRef{{Repo: root, ID: id}}, GateRequired: true}
@@ -80,12 +80,5 @@ func TestSprintGateEvidenceAndTakeoverIdentity(t *testing.T) {
 	g.Evidence = "go test ./... PASS"
 	if !sprintGoalDone(g) {
 		t.Fatal("closed story plus evidence did not check goal")
-	}
-	s := &weaveStory{Lease: &weaveStoryLease{Holder: "established-owner"}}
-	if got := sprintTakeoverIdentity(s, ""); got != "established-owner" {
-		t.Fatalf("implicit takeover identity = %q", got)
-	}
-	if got := sprintTakeoverIdentity(s, "preferred-owner"); got != "preferred-owner" {
-		t.Fatalf("explicit rename = %q", got)
 	}
 }

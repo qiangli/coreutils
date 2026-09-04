@@ -76,7 +76,7 @@ A conductor is replaceable; the STORY is what persists. So:
     for the successor (their wrappers outlive you).
   • HARD death (SIGKILL/OOM/ratelimit) — no checkpoint runs; the lease goes
     STALE on its own. A successor recovers from the durable continuity record.
-  • PICK UP a story — ` + "`sprint take <id> --as <you>`" + ` (takes a free or STALE
+  • PICK UP a story — ` + "`sprint take <id> --owner <you>`" + ` (takes a free or STALE
     lease; ` + "`--force`" + ` for a fresh one), then ` + "`sprint show <id>`" + ` and resume
     from the continuity brief. This is the human-directed conductor switch.
 

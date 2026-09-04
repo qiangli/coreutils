@@ -363,7 +363,7 @@ func routableSeat(name string) error {
 		return nil
 	}
 	return fmt.Errorf("meet: %q is not a registered agent — choose one from "+
-		"`bashy agents list --all` or register an ephemeral agent first", name)
+		"`bashy agents list` or register an ephemeral agent first", name)
 }
 
 // Invite seats an agent in a running room. Organizer-only.

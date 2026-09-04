@@ -30,6 +30,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/issue"
 	"github.com/qiangli/coreutils/pkg/scope"
 )
@@ -46,6 +47,20 @@ const (
 )
 
 var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, StatusDone}
+
+var todoAgentCatalog = func() *fleet.Catalog { return fleet.New() }
+
+func canonicalAssignee(name string) (string, error) {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return "", nil
+	}
+	a, ok := todoAgentCatalog().Agent(n)
+	if !ok {
+		return "", fmt.Errorf("todo: assignee %q is not a registered agent — choose NAME from `bashy agents list`", n)
+	}
+	return a.Name, nil
+}
 
 // ValidStatus reports whether s is a known todo status.
 func ValidStatus(s string) bool { return slices.Contains(statuses, s) }
@@ -137,6 +152,14 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 	if m, err := MaxSeq(st); err == nil {
 		next = m + 1
 	}
+	assignee, err := canonicalAssignee(assignee)
+	if err != nil {
+		return nil, err
+	}
+	status := StatusTodo
+	if assignee != "" {
+		status = StatusAssigned
+	}
 	it := &issue.Issue{
 		ID:        issue.NewID(),
 		Kind:      issue.KindTask,
@@ -147,7 +170,7 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 		Due:       due,
 		Recurring: recurring,
 		Assignee:  assignee,
-		Status:    StatusTodo,
+		Status:    status,
 		Created:   time.Now().UTC(),
 	}
 	if _, err := st.Save(it); err != nil {
@@ -257,6 +280,16 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	it, err := ResolveRef(st, ref)
 	if err != nil {
 		return nil, err
+	}
+	if status == StatusAssigned {
+		assignee, err := canonicalAssignee(it.Assignee)
+		if err != nil {
+			return nil, err
+		}
+		if assignee == "" {
+			return nil, fmt.Errorf("todo: assigned status requires an owner (assignee) — pass --owner NAME from `bashy agents list`")
+		}
+		it.Assignee = assignee
 	}
 
 	if status == StatusDone && it.Recurring != "" {

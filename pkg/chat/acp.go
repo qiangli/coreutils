@@ -191,6 +191,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		Nick:      l.Nick,
 		Band:      bindingBand(name),
 		Mode:      mode,
+		Task:      strings.TrimSpace(opt.Task),
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Events:    true, // it reports its own turn boundaries — the best kind

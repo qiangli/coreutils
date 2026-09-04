@@ -112,7 +112,7 @@ func toListItems(items []*issue.Issue, scope string) []listItem {
 // Every command prints a one-line header with the resolved folder, so there is never
 // any doubt about which list you are on.
 func NewTodoCmd() *cobra.Command {
-	var owner, baseDir string
+	var baseDir string
 	var forceRepo, forceUser bool
 	root := &cobra.Command{
 		Use:   "todo",
@@ -135,13 +135,12 @@ func NewTodoCmd() *cobra.Command {
 	// Mounted under `bashy`, so cobra's generated `completion` verb documents a
 	// `todo` binary that does not exist.
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.PersistentFlags().StringVar(&owner, "owner", DefaultOwner, "personal-list owner (steward | a fixer id | a human name)")
 	root.PersistentFlags().BoolVar(&forceRepo, "repo", false, "force THIS repo's committed list (docs/todo/); error if not in a git repo")
 	root.PersistentFlags().BoolVar(&forceUser, "user", false, "force your personal host list (~/.bashy/todo/<owner>/), even inside a repo")
 	root.PersistentFlags().StringVar(&baseDir, "base-dir", "", "show the list of ANOTHER project root (<root>/docs/todo/) — travel repos without cd")
 
 	sf := func() (*issue.Store, string, error) {
-		st, label, err := ResolveStore(owner, forceRepo, forceUser, baseDir)
+		st, label, err := ResolveStore(DefaultOwner, forceRepo, forceUser, baseDir)
 		if err != nil {
 			return nil, "", err
 		}
@@ -241,11 +240,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
-	// ONE FLAG, DOMAIN TITLES: an item's owner is its ASSIGNEE. --assignee
-	// stays as a hidden alias because it is what every existing script spells.
+	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
 		"who is working the item (notified over bashy notify; see bashy inbox)")
-	role.AttachOwnerAlias(cmd.Flags(), &assignee, "assignee", role.Assignee)
 	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
@@ -402,7 +399,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 
 func newStatusCmd(sf storeFunc) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status <id|prefix> <todo|doing|blocked|done>",
+		Use:   "status <id|prefix> <todo|assigned|doing|blocked|done>",
 		Short: "update a task's status",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -496,9 +493,19 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			if cmd.Flags().Changed("recurring") {
 				it.Recurring = recurring
 			}
-			reassigned := cmd.Flags().Changed("assignee") && assignee != ""
-			if cmd.Flags().Changed("assignee") {
-				it.Assignee = assignee
+			ownerChanged := cmd.Flags().Changed("owner")
+			reassigned := ownerChanged && assignee != ""
+			if ownerChanged {
+				canonical, err := canonicalAssignee(assignee)
+				if err != nil {
+					return err
+				}
+				it.Assignee = canonical
+				if canonical != "" {
+					it.Status = StatusAssigned
+				} else if it.Status == StatusAssigned {
+					it.Status = StatusTodo
+				}
 			}
 			if cmd.Flags().Changed("sprint") {
 				if sprint < 0 {
@@ -521,11 +528,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
-	// ONE FLAG, DOMAIN TITLES: an item's owner is its ASSIGNEE. --assignee
-	// stays as a hidden alias because it is what every existing script spells.
+	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
 		"who is working the item (notified over bashy notify; see bashy inbox)")
-	role.AttachOwnerAlias(cmd.Flags(), &assignee, "assignee", role.Assignee)
 	cmd.Flags().Int64Var(&sprint, "sprint", 0, "sprint number this story belongs to (0 unlinks)")
 	return cmd
 }
@@ -551,7 +556,7 @@ func newRmCmd(sf storeFunc) *cobra.Command {
 }
 
 // printAssignmentNotice reports whether an assignment actually reached the
-// assignee, so `todo add`/`todo edit --assignee` are never silent about it.
+// assignee, so `todo add`/`todo edit --owner` are never silent about it.
 // A blank Assignee means the caller has nothing to report (no assignment
 // made) and prints nothing.
 func printAssignmentNotice(cmd *cobra.Command, notice AssignmentNotice) {

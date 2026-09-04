@@ -162,14 +162,21 @@ func Load() (*Matrix, error) {
 // evidence, not a durable record; what is added is a prior, marked as one.
 func (m *Matrix) reconcile() bool {
 	cat := newCatalog()
+	// Matrix keys are CAPABILITIES (tool:model), not runtime identities. Several
+	// uniquely named agents may deliberately share one binding, so Catalog.Agent
+	// must not validate this key: that resolver correctly rejects an ambiguous
+	// identity reference. Build the canonical binding set from the catalog rows
+	// instead and keep one aggregate evidence row for each binding.
+	bindings := map[string]bool{}
+	agents, _ := cat.Agents()
+	for _, a := range agents {
+		bindings[a.MatrixKey()] = true
+	}
 	changed := false
 	for agent := range m.Agents {
-		// The test is canonical identity, not mere resolvability. `claude:fable`
-		// still RESOLVES — the family alias carries it to fable5 — but it is no
-		// longer the canonical key, and leaving it would keep a duplicate row
-		// accumulating half the evidence for one agent under an old name.
-		a, ok := cat.Agent(agent)
-		if !ok || a.MatrixKey() != agent {
+		// Exact binding membership retires family aliases and removed models
+		// without treating multiple names on one binding as an identity collision.
+		if !bindings[agent] {
 			delete(m.Agents, agent)
 			changed = true
 		}

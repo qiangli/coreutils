@@ -14,6 +14,7 @@ import {
   observeDM,
   postMessage,
   postDM,
+  startDMWork,
   runAction,
   usingMock,
 } from "@/lib/api"
@@ -232,11 +233,11 @@ export function useMeetRoom() {
    * caller took, and guessing either would put a number on screen that a reload
    * corrects. Returns whether it worked, so the dialog knows to close. */
   const createRoom = useCallback(
-    async (topic: string, participants: string[]) => {
+    async (topic: string, owner: string, participants: string[]) => {
       setCreating(true)
       setError(null)
       try {
-        const created = await createRoomRequest({ topic, participants })
+        const created = await createRoomRequest({ topic, owner, participants })
         const nextRooms = await listRooms()
         setRooms(nextRooms)
         setSelectedKind("room")
@@ -271,6 +272,23 @@ export function useMeetRoom() {
     }
   }, [])
 
+  const startWork = useCallback(async (text: string) => {
+    if (!selectedRef || selectedKind !== "dm") return false
+    setSending(true)
+    setError(null)
+    setQueued(null)
+    try {
+      await startDMWork(selectedRef, text)
+      setQueued(`A managed work session for ${selectedRef} started. Later messages are delivered through the agent inbox.`)
+      return true
+    } catch (reason) {
+      setError(messageFor(reason))
+      return false
+    } finally {
+      setSending(false)
+    }
+  }, [selectedRef, selectedKind])
+
   const isOrganizer = useMemo(
     () => Boolean(state && state.initiator === state.human),
     [state],
@@ -296,6 +314,7 @@ export function useMeetRoom() {
     error,
     sending,
     send,
+    startWork,
     act,
     createRoom,
     createDM,
@@ -353,7 +372,7 @@ function addUnique(current: MeetEvent[], event: MeetEvent) {
 
 function messageFor(reason: unknown) {
   if (reason instanceof ZodError) {
-    return "Relay received an incompatible response. Refresh the page; if it persists, restart `bashy relay serve`."
+    return "Meet received an incompatible response. Refresh the page; if it persists, restart `bashy meet serve`."
   }
   if (reason instanceof Error) return reason.message
   return "Something went wrong. Please try again."

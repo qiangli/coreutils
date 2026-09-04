@@ -25,7 +25,7 @@ const (
 // flag: two places to say the same thing is two places to drift, and the
 // console needs the path and port anyway, which a bare flag cannot carry.
 type WebSurface struct {
-	Label string   `json:"label"`           // tile title: "Relay", "Loom"
+	Label string   `json:"label"`           // tile title: "Meet", "Loom"
 	Mount string   `json:"mount"`           // ONE path segment, no slashes; "" for WebSelf
 	Mode  string   `json:"mode"`            // WebSelf | WebInProcess | WebProxy
 	Port  int      `json:"port,omitempty"`  // the service's loopback port

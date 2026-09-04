@@ -2,10 +2,46 @@ package weave
 
 import (
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/room"
 )
+
+func TestStoryLifecycleNotificationsReachManagerInbox(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+
+	sprint := &weaveStory{ID: 120, Owner: "manager"}
+	for _, body := range []string{
+		"worker claimed story abc",
+		"worker yielded story abc",
+		"worker submitted story abc",
+	} {
+		if err := notifySprintOwner(sprint, "worker", body); err != nil {
+			t.Fatalf("notify manager: %v", err)
+		}
+	}
+
+	snapshot, err := bus.SnapshotInbox("manager")
+	if err != nil {
+		t.Fatalf("manager inbox: %v", err)
+	}
+	if len(snapshot.Items) != 3 {
+		t.Fatalf("manager received %d lifecycle notifications, want 3: %+v", len(snapshot.Items), snapshot.Items)
+	}
+	for i, verb := range []string{"claimed", "yielded", "submitted"} {
+		if !strings.Contains(snapshot.Items[i].Body, verb) {
+			t.Errorf("notification %d body = %q, want %q", i, snapshot.Items[i].Body, verb)
+		}
+		if snapshot.Items[i].Delivery != bus.DeliveryQueued {
+			t.Errorf("notification %d delivery = %q, want %q", i, snapshot.Items[i].Delivery, bus.DeliveryQueued)
+		}
+	}
+}
 
 func TestSprintDeliveryAcceptsAttachedExternalStream(t *testing.T) {
 	home := t.TempDir()

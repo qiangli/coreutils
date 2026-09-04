@@ -50,6 +50,7 @@ package weave
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -173,7 +174,7 @@ func roundDur(d time.Duration) string {
 func newSprintStartCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var forDur time.Duration
-	var as string
+	var as, instruction string
 	cmd := &cobra.Command{
 		Use:   "start <sprint>",
 		Short: "Open a sprint's time-box: start the clock and set a cutoff",
@@ -188,9 +189,9 @@ func newSprintStartCmd() *cobra.Command {
 			"each step defensible while the whole drifts from what was agreed.\n\n" +
 			"A sprint in `backlog` also moves to `doing`, because starting the clock and\n" +
 			"starting the work are the same act.",
-		Example: "  bashy sprint start 3            # the default cadence\n" +
-			"  bashy sprint start 3 --for 45m\n" +
-			"  bashy sprint start 3 --for 4h",
+		Example: "  bashy sprint start 3 --owner AGENT_NAME --instruction \"implement the agreed plan\"\n" +
+			"  bashy sprint start 3 --owner AGENT_NAME --for 45m\n" +
+			"  bashy sprint start 3 --owner AGENT_NAME --for 4h",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -201,96 +202,204 @@ func newSprintStartCmd() *cobra.Command {
 				return fmt.Errorf("--for must be positive (got %s)", forDur)
 			}
 			now := time.Now().UTC()
-			return runWeaveStoryMutate(cmd, id, "sprint start", &flags, func(s *weaveStory) (string, error) {
-				// Restarting a RUNNING box would silently discard the original
-				// commitment, which is the one number the record exists to keep
-				// honest. Extending is a different, explicit act.
-				if s.currentBox().Running() {
-					return "", fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
-						id, s.currentBox().Status(now), id, id)
+			cwd, _ := os.Getwd()
+			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint start", "start managed sprint owner", func() error {
+				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
+					return fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
 				}
-				// A BOX IN FLIGHT MUST HAVE AN OWNER. The conductor holding the
-				// lease is the sprint's scrum master: accountable for its
-				// delivery, for calling the stop, and for the decision when the
-				// cutoff arrives. A running box nobody holds is how a deadline
-				// passes with everyone assuming someone else was watching — and
-				// with several sprints running at once, that is the normal way
-				// to lose one rather than an unlucky one.
-				//
-				// So start CLAIMS a free (or stale) lease, and refuses to take a
-				// live one from someone else: quietly reassigning delivery
-				// ownership is not something a start command should do.
-				who := weaveStoryConductorName(s, as)
-				if prev, stale, free := weaveStoryLeaseState(s); !free && !stale && prev != who {
-					return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
-						id, prev, id)
-				}
-				// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
-				// no agent: every coordination surface (mb, chat, inbox, ping)
-				// keys on this string, and one that names nobody is worse than
-				// none — it is printed as a contact and silently never answers.
-				// CLAIM-TIME: the seat must be RUNNING, not merely declared.
-				// A sprint seated to a name with no process behind it accepts
-				// room messages and inbox mail that nobody will ever read.
+				who := strings.TrimSpace(as)
 				if err := validateSprintClaimant(who); err != nil {
-					return "", err
+					return err
 				}
-				s.Lease = &weaveStoryLease{Holder: who, At: now}
-				s.Owner = who
-				s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})
-				// A room is opened automatically, because an OPTIONAL room is
-				// empty exactly when it is needed: at the moment somebody
-				// urgent arrives and the conductor is mid-turn elsewhere.
-				// Failure is not fatal — a conductor with no intercom still
-				// has a box to run, and the surfaces say "no contact" rather
-				// than implying one.
-				roomNote := ""
-				if s.Contact == nil {
-					c, cerr := openSprintRoom(s, who)
-					switch {
-					case cerr != nil:
-						// Reported, never swallowed. A contact that silently
-						// failed to open reads identically to one nobody has
-						// tried to use yet, and the difference matters at
-						// exactly the moment someone needs to reach in.
-						roomNote = fmt.Sprintf("; no room (%v)", cerr)
-					default:
-						s.Contact = c
-						roomNote = "; " + c.String()
+				who, _ = canonicalFleetAgentName(who)
+				before, err := sprintOwnerSnapshot(id)
+				if err != nil {
+					return err
+				}
+				if before.currentBox().Running() {
+					return fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
+						id, before.currentBox().Status(now), id, id)
+				}
+				if prev, stale, free := weaveStoryLeaseState(before); !free && !stale && prev != who {
+					return fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first", id, prev, id)
+				}
+				expectedOwner := strings.TrimSpace(before.Owner)
+				if expectedOwner != "" && !strings.EqualFold(expectedOwner, who) {
+					if err := retireSprintOwnerSession(cmd.Context(), id, expectedOwner, cwd); err != nil {
+						return fmt.Errorf("cannot transfer sprint #%d manager from %s to %s: %w", id, expectedOwner, who, err)
 					}
-				} else {
-					roomNote = "; " + s.Contact.String()
 				}
-				moved := ""
-				if s.Column == "backlog" {
-					s.Column = "doing"
-					moved = " (backlog → doing)"
+				sessionNote, launched, err := ensureSprintOwnerSession(cmd.Context(), id, who, instruction, cwd, forDur)
+				if err != nil {
+					if launched {
+						_ = retireSprintOwnerSession(cmd.Context(), id, who, cwd)
+					}
+					return fmt.Errorf("sprint #%d manager instruction was not delivered: %w", id, err)
 				}
-				weaveStoryAppend(s, who, "system",
-					fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
-				// The same advisory `take` gives. `start` is the more common
-				// entry point — it is how a sprint BEGINS — and it was the one
-				// that said nothing, so an agent seated by it had to already
-				// know how mail reaches it.
-				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s\n%s",
-					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote,
-					sprintReadyLine(who)), nil
+				err = runWeaveStoryMutate(cmd, id, "sprint start", &flags, func(s *weaveStory) (string, error) {
+					// Starting is the point at which ownership becomes active. Require the
+					// caller to name that owner on THIS command: neither ambient process
+					// identity nor a manager recorded by an earlier edit/take is consent to
+					// start work now.
+					if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
+						return "", fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+					}
+					// Restarting a RUNNING box would silently discard the original
+					// commitment, which is the one number the record exists to keep
+					// honest. Extending is a different, explicit act.
+					if s.currentBox().Running() {
+						return "", fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
+							id, s.currentBox().Status(now), id, id)
+					}
+					// A BOX IN FLIGHT MUST HAVE AN OWNER. The conductor holding the
+					// lease is the sprint's scrum master: accountable for its
+					// delivery, for calling the stop, and for the decision when the
+					// cutoff arrives. A running box nobody holds is how a deadline
+					// passes with everyone assuming someone else was watching — and
+					// with several sprints running at once, that is the normal way
+					// to lose one rather than an unlucky one.
+					//
+					// So start CLAIMS a free (or stale) lease, and refuses to take a
+					// live one from someone else: quietly reassigning delivery
+					// ownership is not something a start command should do.
+					if strings.TrimSpace(s.Owner) != expectedOwner {
+						return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
+					}
+					if prev, stale, free := weaveStoryLeaseState(s); !free && !stale && prev != who {
+						return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
+							id, prev, id)
+					}
+					// AN OWNER MUST BE AN ADDRESS. Refuse a name that resolves to
+					// no agent: every coordination surface (mb, chat, inbox, ping)
+					// keys on this string, and one that names nobody is worse than
+					// none — it is printed as a contact and silently never answers.
+					// CLAIM-TIME: the seat must be RUNNING, not merely declared.
+					// A sprint seated to a name with no process behind it accepts
+					// room messages and inbox mail that nobody will ever read.
+					s.Lease = &weaveStoryLease{Holder: who, At: now}
+					s.Owner = who
+					s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})
+					// A room is opened automatically, because an OPTIONAL room is
+					// empty exactly when it is needed: at the moment somebody
+					// urgent arrives and the conductor is mid-turn elsewhere.
+					// Failure is not fatal — a conductor with no intercom still
+					// has a box to run, and the surfaces say "no contact" rather
+					// than implying one.
+					roomNote := ""
+					if s.Contact == nil {
+						c, cerr := openSprintRoom(s, who)
+						switch {
+						case cerr != nil:
+							// Reported, never swallowed. A contact that silently
+							// failed to open reads identically to one nobody has
+							// tried to use yet, and the difference matters at
+							// exactly the moment someone needs to reach in.
+							roomNote = fmt.Sprintf("; no room (%v)", cerr)
+						default:
+							s.Contact = c
+							roomNote = "; " + c.String()
+						}
+					} else {
+						roomNote = "; " + s.Contact.String()
+					}
+					moved := ""
+					if s.Column == "backlog" {
+						s.Column = "doing"
+						moved = " (backlog → doing)"
+					}
+					weaveStoryAppend(s, who, "system",
+						fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
+					// The same advisory `take` gives. `start` is the more common
+					// entry point — it is how a sprint BEGINS — and it was the one
+					// that said nothing, so an agent seated by it had to already
+					// know how mail reaches it.
+					return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s\n%s",
+						id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote+sessionNote,
+						sprintReadyLine(who)), nil
+				})
+				if err != nil && launched {
+					_ = retireSprintOwnerSession(cmd.Context(), id, who, cwd)
+				}
+				return err
 			})
 		},
 	}
 	cmd.Flags().DurationVar(&forDur, "for", DefaultSprintBox, "how long this sprint gets")
 	// ONE FLAG, DOMAIN TITLES. --owner is the single spelling across meet,
 	// sprint and todo; here it is called the PROJECT MANAGER, because that is
-	// what a sprint's owner is. --as keeps its own separate meaning (who I am
-	// acting as right now) and is retained as a hidden alias so every existing
-	// script, skill and doc keeps working.
+	// what a sprint's owner is. --as remains reserved for acting identity on
+	// authorship and inbox commands; it is not an ownership flag.
 	//
 	// The conductor:<n> wire address is NOT renamed. It is resolved by
 	// bus.RegisterHostRoles at read time and story f93fdf47810c exists because
 	// it once resolved to nothing; the spoken word changes, the address does not.
 	role.AttachOwner(cmd.Flags(), &as, role.ProjectManager,
-		"accountable for delivery from start to end (default $BASHY_PRINCIPAL/$WEAVE_CONDUCTOR/$WEAVE_AGENT, then current lease holder)")
-	role.AttachOwnerAlias(cmd.Flags(), &as, "as", role.ProjectManager)
+		"accountable for delivery from start to end; required explicitly on every start")
+	cmd.Flags().StringVar(&instruction, "instruction", "", "launch or reuse the project manager's managed session and deliver this request once")
+	flags.attach(cmd)
+	return cmd
+}
+
+// newSprintInstructCmd sends a later instruction to the current manager. It
+// deliberately has no --owner flag: changing ownership and talking to the
+// current owner are different operations, and this command must not combine
+// them or silently launch a second identity.
+func newSprintInstructCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var instruction string
+	cmd := &cobra.Command{
+		Use:   "instruct <sprint>",
+		Short: "Deliver one instruction to an active sprint's managed project manager",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			if strings.TrimSpace(instruction) == "" {
+				return fmt.Errorf("--instruction is required")
+			}
+			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint instruct", "instruct managed sprint owner", func() error {
+				dir, err := weaveStoryDir(cmd, flags.mode(), "sprint instruct")
+				if err != nil {
+					return err
+				}
+				q, err := readWeaveQueue(dir)
+				if err != nil {
+					return err
+				}
+				s := findWeaveStory(q, id)
+				if s == nil {
+					return fmt.Errorf("sprint #%d not found", id)
+				}
+				box := s.currentBox()
+				if !sprintColumnOpen(s.Column) || box == nil || !box.Running() {
+					return fmt.Errorf("sprint #%d is not active", id)
+				}
+				owner := strings.TrimSpace(s.Owner)
+				if owner == "" {
+					return fmt.Errorf("sprint #%d has no project manager", id)
+				}
+				cwd, _ := os.Getwd()
+				note, _, err := ensureSprintOwnerSession(cmd.Context(), id, owner, instruction, cwd, time.Until(box.Cutoff))
+				if err != nil {
+					return fmt.Errorf("sprint #%d instruction was not delivered: %w", id, err)
+				}
+				contact := "none"
+				if s.Contact != nil {
+					contact = s.Contact.String()
+				}
+				if flags.mode() == weavecli.OutputJSON {
+					return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint instruct", map[string]any{
+						"sprint": id, "owner": owner, "contact": contact, "delivery": strings.TrimPrefix(note, "; "),
+					}))
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "sprint instruct: sprint #%d; owner %s; meet %s%s\n", id, owner, contact, note)
+				return nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&instruction, "instruction", "", "exact request to deliver once to the current project manager")
 	flags.attach(cmd)
 	return cmd
 }
@@ -365,139 +474,151 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			now := time.Now().UTC()
-			if gateTimeout <= 0 {
-				return fmt.Errorf("gate timeout must be positive")
-			}
-			requireGate := !noVerify
-			var rep drainReport
-			return runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
-				b := s.currentBox()
-				unboxedEnd := ending && len(s.Boxes) == 0
-				if b == nil && !unboxedEnd {
-					// Saying "stopped" about a sprint that was never running
-					// would be a small lie of exactly the kind this feature is
-					// meant to remove.
-					return "", fmt.Errorf("sprint #%d has no running box — `sprint start %d` opens one", id, id)
+			return runSprintOwnerLifecycle(cmd, &flags, id, op, "close managed sprint owner", func() error {
+				now := time.Now().UTC()
+				if gateTimeout <= 0 {
+					return fmt.Errorf("gate timeout must be positive")
 				}
-				// PARK THE WORKERS FIRST. Whatever the gate says next, nothing
-				// should still be writing to the tree while it is judged — a
-				// gate racing a live agent measures neither.
-				if b != nil && b.Draining == nil {
-					b.Draining = &now
-				}
-				paused, problems := pauseLinkedRepos(s)
-				rep.Paused = paused
-				rep.Failures = problems
+				requireGate := !noVerify
+				var rep drainReport
+				var closedOwner string
+				cwd, _ := os.Getwd()
+				err = runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
+					b := s.currentBox()
+					unboxedEnd := ending && len(s.Boxes) == 0
+					if b == nil && !unboxedEnd {
+						// Saying "stopped" about a sprint that was never running
+						// would be a small lie of exactly the kind this feature is
+						// meant to remove.
+						return "", fmt.Errorf("sprint #%d has no running box — `sprint start %d` opens one", id, id)
+					}
+					// PARK THE WORKERS FIRST. Whatever the gate says next, nothing
+					// should still be writing to the tree while it is judged — a
+					// gate racing a live agent measures neither.
+					if b != nil && b.Draining == nil {
+						b.Draining = &now
+					}
+					paused, problems := pauseLinkedRepos(s)
+					rep.Paused = paused
+					rep.Failures = problems
 
-				// THE MINIMUM BAR: it compiles and the tests pass. A sprint
-				// that stops over a regression is not parked, it is a trap —
-				// the next sprint inherits damage it cannot tell from its own.
-				if strings.TrimSpace(gateCmd) != "" && !flags.quietF && !flags.jsonF {
-					fmt.Fprintf(cmd.ErrOrStderr(), "%s: running gate (timeout %s): %s\n", op, gateTimeout, gateCmd)
-				}
-				gateCtx, cancelGate := context.WithTimeout(cmd.Context(), gateTimeout)
-				out := runDrainGate(gateCtx, gateDir, gateCmd)
-				cancelGate()
-				rep.GateRan, rep.GatePassed, rep.GateCmd = out.Ran, out.Passed, out.Command
-				if b != nil {
-					b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
-				}
+					// THE MINIMUM BAR: it compiles and the tests pass. A sprint
+					// that stops over a regression is not parked, it is a trap —
+					// the next sprint inherits damage it cannot tell from its own.
+					if strings.TrimSpace(gateCmd) != "" && !flags.quietF && !flags.jsonF {
+						fmt.Fprintf(cmd.ErrOrStderr(), "%s: running gate (timeout %s): %s\n", op, gateTimeout, gateCmd)
+					}
+					gateCtx, cancelGate := context.WithTimeout(cmd.Context(), gateTimeout)
+					out := runDrainGate(gateCtx, gateDir, gateCmd)
+					cancelGate()
+					rep.GateRan, rep.GatePassed, rep.GateCmd = out.Ran, out.Passed, out.Command
+					if b != nil {
+						b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
+					}
 
-				// CLOSING CONDITIONS: committed, pushed, pinned. A green gate
-				// says the code works; it says nothing about whether the work
-				// was PUT anywhere the next sprint will find it.
-				var repoPath = func(run sprintRun) (string, bool) {
-					dir, err := weaveQueueDirForSprintRun(run)
-					if err != nil {
-						return "", false
-					}
-					return weaveRepoRootForQueue(dir)
-				}
-				repos := checkClosingConditions(s, currentBoard, repoPath)
-				rep.Repos = repos
-				var unclean []string
-				for i := range repos {
-					if !repos[i].OK() {
-						unclean = append(unclean, repos[i].Describe())
-					}
-				}
-
-				if !force {
-					if len(unclean) > 0 {
-						return "", fmt.Errorf("sprint #%d NOT stopped — the repos are not wrapped up:\n  %s\n"+
-							"  commit, push, and bump pins, then `sprint stop %d` again (--force records it unwrapped)",
-							id, strings.Join(unclean, "\n  "), id)
-					}
-					if len(problems) > 0 {
-						return "", fmt.Errorf("sprint #%d NOT stopped — could not park: %s\n  fix, then `sprint stop %d` again (or --force to close anyway)",
-							id, strings.Join(problems, "; "), id)
-					}
-					if out.Ran && !out.Passed {
-						// The refusal is the feature. Workers are parked, so
-						// nothing is burning; the remaining job is narrow.
-						tail := out.Output
-						if len(tail) > 600 {
-							tail = tail[len(tail)-600:]
+					// CLOSING CONDITIONS: committed, pushed, pinned. A green gate
+					// says the code works; it says nothing about whether the work
+					// was PUT anywhere the next sprint will find it.
+					var repoPath = func(run sprintRun) (string, bool) {
+						dir, err := weaveQueueDirForSprintRun(run)
+						if err != nil {
+							return "", false
 						}
-						return "", fmt.Errorf("sprint #%d NOT stopped — the gate FAILED, so this is not a good handoff state.\n"+
-							"  workers are parked; fix the regression, then `sprint stop %d` again.\n"+
-							"  gate: %s (exit %d)\n%s",
-							id, id, out.Command, out.ExitCode, tail)
+						return weaveRepoRootForQueue(dir)
 					}
-					if !out.Ran && requireGate {
-						return "", fmt.Errorf("sprint #%d NOT stopped — no gate given, so \"it still builds\" is unverified.\n"+
-							"  pass --gate '<cmd>', or --no-verify to close it unverified on the record", id)
+					repos := checkClosingConditions(s, currentBoard, repoPath)
+					rep.Repos = repos
+					var unclean []string
+					for i := range repos {
+						if !repos[i].OK() {
+							unclean = append(unclean, repos[i].Describe())
+						}
 					}
-				}
 
-				msg := ""
-				if unboxedEnd {
-					msg = "ended without a recorded time-box; " + drainEvidenceSummary(&rep)
-				} else {
-					b.StoppedAt = &now
-					elapsed := b.Elapsed(now)
-					verdict := "within the box"
-					if elapsed > b.Planned {
-						verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-b.Planned))
-					} else if d := b.Planned - elapsed; d > time.Minute {
-						verdict = fmt.Sprintf("under by %s", roundDur(d))
+					if !force {
+						if len(unclean) > 0 {
+							return "", fmt.Errorf("sprint #%d NOT stopped — the repos are not wrapped up:\n  %s\n"+
+								"  commit, push, and bump pins, then `sprint stop %d` again (--force records it unwrapped)",
+								id, strings.Join(unclean, "\n  "), id)
+						}
+						if len(problems) > 0 {
+							return "", fmt.Errorf("sprint #%d NOT stopped — could not park: %s\n  fix, then `sprint stop %d` again (or --force to close anyway)",
+								id, strings.Join(problems, "; "), id)
+						}
+						if out.Ran && !out.Passed {
+							// The refusal is the feature. Workers are parked, so
+							// nothing is burning; the remaining job is narrow.
+							tail := out.Output
+							if len(tail) > 600 {
+								tail = tail[len(tail)-600:]
+							}
+							return "", fmt.Errorf("sprint #%d NOT stopped — the gate FAILED, so this is not a good handoff state.\n"+
+								"  workers are parked; fix the regression, then `sprint stop %d` again.\n"+
+								"  gate: %s (exit %d)\n%s",
+								id, id, out.Command, out.ExitCode, tail)
+						}
+						if !out.Ran && requireGate {
+							return "", fmt.Errorf("sprint #%d NOT stopped — no gate given, so \"it still builds\" is unverified.\n"+
+								"  pass --gate '<cmd>', or --no-verify to close it unverified on the record", id)
+						}
 					}
-					msg = fmt.Sprintf("stopped after %s (planned %s) — %s; %s",
-						roundDur(elapsed), roundDur(b.Planned), verdict, drainSummary(&rep, elapsed, b.Planned))
-				}
-				if strings.TrimSpace(note) != "" {
-					msg += ": " + strings.TrimSpace(note)
-				}
-				if ending {
-					// "done" must mean done. end deliberately carries no
-					// --force / --no-verify, so these are HARD refusals: the
-					// gate above proves the code still builds, and these two
-					// prove nothing was left behind or left out. A sprint that
-					// closes over an open story nobody planned, or over a dirty
-					// tree, is a green result reached because nothing looked.
-					if err := sprintUnansweredGate(s, "end"); err != nil {
-						return "", err
+
+					msg := ""
+					if unboxedEnd {
+						msg = "ended without a recorded time-box; " + drainEvidenceSummary(&rep)
+					} else {
+						b.StoppedAt = &now
+						elapsed := b.Elapsed(now)
+						verdict := "within the box"
+						if elapsed > b.Planned {
+							verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-b.Planned))
+						} else if d := b.Planned - elapsed; d > time.Minute {
+							verdict = fmt.Sprintf("under by %s", roundDur(d))
+						}
+						msg = fmt.Sprintf("stopped after %s (planned %s) — %s; %s",
+							roundDur(elapsed), roundDur(b.Planned), verdict, drainSummary(&rep, elapsed, b.Planned))
 					}
-					if err := sprintCoverageGate(s, false, ""); err != nil {
-						return "", err
+					if strings.TrimSpace(note) != "" {
+						msg += ": " + strings.TrimSpace(note)
 					}
-					if hy := sprintCheckHygiene(s); !hy.Clean() {
-						return "", fmt.Errorf(
-							"sprint #%d cannot end — it is not clean:\n  %s\n  `bashy sprint prune %d` for the full state and the command that fixes each",
-							id, strings.Join(hy.Problems, "\n  "), id)
+					closedOwner = strings.TrimSpace(s.Owner)
+					if ending {
+						// "done" must mean done. end deliberately carries no
+						// --force / --no-verify, so these are HARD refusals: the
+						// gate above proves the code still builds, and these two
+						// prove nothing was left behind or left out. A sprint that
+						// closes over an open story nobody planned, or over a dirty
+						// tree, is a green result reached because nothing looked.
+						if err := sprintUnansweredGate(s, "end"); err != nil {
+							return "", err
+						}
+						if err := sprintCoverageGate(s, false, ""); err != nil {
+							return "", err
+						}
+						if hy := sprintCheckHygiene(s); !hy.Clean() {
+							return "", fmt.Errorf(
+								"sprint #%d cannot end — it is not clean:\n  %s\n  `bashy sprint prune %d` for the full state and the command that fixes each",
+								id, strings.Join(hy.Problems, "\n  "), id)
+						}
+						from := s.Column
+						who := weaveStoryConductorName(s, "")
+						s.Column = "done"
+						_ = closeSprintRoom(s, who)
+						s.Lease = nil
+						msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
+						weaveStoryAppend(s, who, "system", msg)
+						return fmt.Sprintf("sprint #%d %s", id, msg), nil
 					}
-					from := s.Column
-					who := weaveStoryConductorName(s, "")
-					s.Column = "done"
-					_ = closeSprintRoom(s, who)
-					s.Lease = nil
-					msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
-					weaveStoryAppend(s, who, "system", msg)
+					weaveStoryAppend(s, weaveConductorName(""), "system", msg)
 					return fmt.Sprintf("sprint #%d %s", id, msg), nil
+				})
+				if err != nil {
+					return err
 				}
-				weaveStoryAppend(s, weaveConductorName(""), "system", msg)
-				return fmt.Sprintf("sprint #%d %s", id, msg), nil
+				if sessionNote := releaseSprintOwnerSession(cmd.Context(), id, closedOwner, cwd); sessionNote != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n", op, strings.TrimPrefix(sessionNote, "; "))
+				}
+				return nil
 			})
 		},
 	}
@@ -720,7 +841,7 @@ func newSprintStatusCmd() *cobra.Command {
 			}
 			fmt.Fprintf(out, "ON THE CLOCK (%d)\n", len(onClock))
 			if len(onClock) == 0 {
-				fmt.Fprintln(out, "  — nothing running; `sprint start <id> --for <dur>`")
+				fmt.Fprintln(out, "  — nothing running; `sprint start <id> --owner NAME --for <dur>`")
 			}
 			for _, r := range onClock {
 				line(r)

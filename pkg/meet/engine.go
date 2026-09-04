@@ -92,9 +92,9 @@ func transcriptContext(events []Event) string {
 		case "action":
 			who = "ACTION"
 		case "ledger":
-			who = "CHAIR"
+			who = "FACILITATOR"
 		case "replan":
-			who = "CHAIR (new approach)"
+			who = "FACILITATOR (new approach)"
 		}
 		// Decisions/actions (short + load-bearing) and the most recent turns get a
 		// full preview; older turns collapse to a one-line reference.
@@ -554,7 +554,7 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 		attendees = append(attendees, p+" (participant)")
 	}
 	if st.chaired() {
-		attendees = append(attendees, st.chair()+" (chair)")
+		attendees = append(attendees, st.chair()+" (facilitator)")
 	}
 	if st.recorded() {
 		attendees = append(attendees, st.secretary()+" (secretary)")
@@ -653,9 +653,9 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 		case "confirm":
 			fmt.Fprintf(&b, "\n**%s** (conclusion confirmed): %s\n", e.Speaker, oneLine(redactHome(e.Text)))
 		case "ledger":
-			fmt.Fprintf(&b, "\n*chair: %s*\n", oneLine(redactHome(e.Text)))
+			fmt.Fprintf(&b, "\n*facilitator: %s*\n", oneLine(redactHome(e.Text)))
 		case "replan":
-			fmt.Fprintf(&b, "\n**%s** (chair re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(normalizeTurnText(e.Text)), e.File))
+			fmt.Fprintf(&b, "\n**%s** (facilitator re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(normalizeTurnText(e.Text)), e.File))
 		case "note":
 			fmt.Fprintf(&b, "\n*%s*\n", oneLine(redactHome(e.Text)))
 		case "invite", "kick":

@@ -150,7 +150,7 @@ func writeShow(w io.Writer, st *State, events []Event, syn *Synthesis) {
 	fmt.Fprintf(w, "status   %s  ·  round %d\n", st.Status, st.Round)
 	fmt.Fprintf(w, "initiator %s\n", st.initiatorLabel())
 	fmt.Fprintf(w, "secretary %s (records only)\n", st.Secretary)
-	fmt.Fprintf(w, "chair     %s\n", st.turnModel())
+	fmt.Fprintf(w, "facilitator %s\n", st.turnModel())
 	if len(st.Context) > 0 {
 		fmt.Fprintf(w, "context  %s\n", strings.Join(st.Context, ", "))
 	}

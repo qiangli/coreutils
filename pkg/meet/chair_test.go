@@ -276,7 +276,7 @@ func TestTurnModelFollowsFromTheRoster(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plain.chaired() {
-		t.Error("no --chair must mean round-robin")
+		t.Error("no --owner facilitator must mean round-robin")
 	}
 	if !strings.Contains(plain.turnModel(), "round-robin") {
 		t.Errorf("turnModel = %q", plain.turnModel())
@@ -288,7 +288,7 @@ func TestTurnModelFollowsFromTheRoster(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !chaired.chaired() || chaired.chair() != "gemini" {
-		t.Errorf("a --chair agent must imply the chaired turn model: %+v", chaired)
+		t.Errorf("a --owner facilitator must imply the chaired turn model: %+v", chaired)
 	}
 	if _, err := (&sessionFlags{topic: "t", secretary: "claude", chair: "gemini"}).newState(); err == nil {
 		t.Error("a chair with no participants to call on must be rejected up front")
@@ -309,10 +309,10 @@ func TestRoleSeparationIsEnforced(t *testing.T) {
 			"secretary and participant"},
 		{"secretary is also the chair",
 			sessionFlags{topic: "t", secretary: "claude", chair: "claude", participants: []string{"codex"}},
-			"chair and secretary"},
+			"facilitator and secretary"},
 		{"chair is also a participant",
 			sessionFlags{topic: "t", secretary: "claude", chair: "codex", participants: []string{"codex"}},
-			"chair and participant"},
+			"facilitator and participant"},
 		{"a participant is seated twice",
 			sessionFlags{topic: "t", secretary: "claude", participants: []string{"codex", "codex"}},
 			"seated twice"},

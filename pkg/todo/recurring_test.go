@@ -37,6 +37,7 @@ func TestParseDue(t *testing.T) {
 
 func TestRecurringBehavior(t *testing.T) {
 	t.Setenv("BASHY_TODO_DIR", t.TempDir())
+	pinTodoAgents(t, "alice")
 	st, _ := UserStore("steward")
 
 	due := time.Now().UTC()

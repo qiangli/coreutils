@@ -150,7 +150,7 @@ func (s *Session) TrySendKey(name string) (bool, error) {
 }
 
 // attach opens the live session, using the first message as its opening prompt.
-func (s *Session) attach(ctx context.Context, msg string) error {
+func (s *Session) attach(ctx context.Context, msg string, prepared ...string) error {
 	// Tee the agent's output to a log the operator can tail. A tee, never a
 	// redirect: what gets RECORDED in the history is byte-for-byte what it would
 	// have been with nobody watching. Observing must not change the record.
@@ -168,12 +168,14 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 		return err
 	}
 	live, err := chat.Start(ctx, s.state.Agent, chat.SessionOptions{
-		Prompt:   s.composePrompt(msg),
-		Cwd:      s.state.Cwd,
-		Stream:   sink,
-		Timeout:  timeout,
-		ReadOnly: false, // a foreman's agent is here to DO the work
-		Mode:     "foreman",
+		Prompt:          s.composePrompt(msg, prepared...),
+		OpeningSendOnce: s.state.OpeningSendOnce,
+		Cwd:             s.state.Cwd,
+		Stream:          sink,
+		Timeout:         timeout,
+		ReadOnly:        false, // a foreman's agent is here to DO the work
+		Mode:            "foreman",
+		Task:            s.state.ID,
 	})
 	if err != nil {
 		if openedLog != nil {
@@ -212,10 +214,10 @@ func (s *Session) remainingRuntime() (time.Duration, error) {
 // after it is sent RAW — the agent already has the conversation; replaying it
 // would be both wasteful and confusing, since the agent would see its own words
 // quoted back at it as if they were new.
-func (s *Session) steer(ctx context.Context, msg string) error {
+func (s *Session) steer(ctx context.Context, msg string, prepared ...string) error {
 	live := s.getLive()
 	if live == nil || !live.Live() {
-		if err := s.attach(ctx, msg); err != nil {
+		if err := s.attach(ctx, msg, prepared...); err != nil {
 			return err
 		}
 		live = s.getLive()

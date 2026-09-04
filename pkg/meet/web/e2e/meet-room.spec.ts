@@ -14,6 +14,7 @@ const repoRoot = path.resolve(webDir, "../../..");
 // See e2e/fleet/ — the launch template echoes the prompt back.
 const primaryAgent = "echoback-fixed";
 const invitedAgent = "echoback-alt";
+const facilitatorAgent = "echoback-facilitator";
 
 let server: ChildProcess | undefined;
 let baseURL = "";
@@ -116,10 +117,11 @@ test("renders room list from the real server and opens a live observe socket", a
     page.getByRole("button", { name: new RegExp(second) }),
   ).toBeVisible();
   await expect(page.getByText("Demo workspace")).toHaveCount(0);
-  const sidebar = page.locator("aside").filter({ hasText: "bashyrelay" }).first();
-  await expect(sidebar.getByText("connecting")).toHaveCount(0);
-  await expect(sidebar.getByText("open", { exact: true })).toBeVisible();
-  await expect(page.getByText("bashyrelay", { exact: true })).toBeVisible();
+  const sidebar = page.locator("aside").first();
+  await expect(sidebar.locator('[title="open"]')).toBeVisible();
+  await expect(page).toHaveTitle("Meet — bashy");
+  await expect(page.getByText("bashymeet", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Relay/)).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Back to all apps" })).toBeVisible();
 });
 
@@ -129,11 +131,12 @@ test("creates a room from the sidebar and selects it with one agent seated", asy
 
   await page.getByRole("button", { name: "New meeting" }).click();
   await page.getByLabel("Topic").fill(topic);
-  await page.getByLabel("Agents").selectOption(primaryAgent);
+  await page.getByLabel("Facilitator").selectOption(facilitatorAgent);
+  await page.getByLabel("Participants").selectOption(primaryAgent);
   await page.getByRole("button", { name: "Open meeting" }).click();
 
   const roomButton = page.getByRole("button", { name: new RegExp(topic) });
-  const sidebar = page.locator("aside").filter({ hasText: "bashyrelay" }).first();
+  const sidebar = page.locator("aside").first();
   await expect(roomButton).toBeVisible();
   await expect(sidebar.getByText(primaryAgent)).toBeVisible();
   await expect(page.getByLabel("Message the room")).toBeEnabled();
@@ -150,7 +153,7 @@ test("invites an agent from room details and shows it in the roster", async ({ p
   await inviteField.selectOption(invitedAgent);
   await page.getByRole("button", { name: "Invite", exact: true }).first().click();
 
-  const sidebar = page.locator("aside").filter({ hasText: "bashyrelay" }).first();
+  const sidebar = page.locator("aside").first();
   await expect(sidebar.getByText(invitedAgent)).toBeVisible();
 
   await page.getByRole("button", { name: `Remove ${invitedAgent}` }).first().click();
@@ -282,11 +285,9 @@ test("addressed agent replies render in the browser", async ({ page }) => {
 });
 
 test("opens a Chat-backed direct message and streams its reply", async ({ page }) => {
+  await createDM(primaryAgent);
   await openMeet(page);
-
-  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: /Chat/ }).click();
-  await page.getByRole("menuitem", { name: new RegExp(primaryAgent) }).click();
+  await openChat(page, primaryAgent);
   await expect(page.getByText("Direct message", { exact: true }).first()).toBeVisible();
 
   await page.locator("textarea").fill("say hello privately");
@@ -295,9 +296,9 @@ test("opens a Chat-backed direct message and streams its reply", async ({ page }
 });
 
 test("a long Chat turn visibly shows the agent working", async ({ page }) => {
+  await createDM(primaryAgent);
   await openMeet(page);
-  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: /Chat/ }).click();
+  await openChat(page, primaryAgent);
   await page.route("**/api/dms/*/messages", async (route) => {
     await route.fulfill({
       status: 202,
@@ -311,26 +312,38 @@ test("a long Chat turn visibly shows the agent working", async ({ page }) => {
   await expect(page.getByText(/reply will appear here/i)).toBeVisible();
 });
 
-test("Relay menu navigates to Meet channels and Chat direct messages", async ({ page }) => {
-  const topic = unique("Relay menu channel");
+test("Start work reaches server policy and fails closed without trusted Bashy containment", async ({ page }) => {
+  await createDM(primaryAgent);
+  await openMeet(page);
+  await openChat(page, primaryAgent);
+  const startWork = page.getByRole("button", { name: "Start work" });
+  await expect(startWork).toBeVisible();
+  await page.locator("textarea").fill("edit and test this change");
+  await startWork.click();
+  await expect(page.getByText(/no trusted Bashy containment provenance/i)).toBeVisible();
+  await expect(page.locator("textarea")).toHaveValue("edit and test this change");
+});
+
+test("Meet tabs navigate between channels and Chat direct messages", async ({ page }) => {
+  const topic = unique("Meet tab channel");
   await createRoom(topic, [primaryAgent]);
+  await createDM(primaryAgent);
   await openMeet(page);
 
-  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: /Chat/ }).click();
+  await openChat(page, primaryAgent);
   await expect(page.getByText("Past conversations", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Meetings", { exact: true }).first()).toHaveCount(0);
   await expect(page.getByRole("heading", { name: primaryAgent })).toBeVisible();
   await expect(page.locator("textarea")).toBeEnabled();
 
-  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: /Meet/ }).click();
+  await page.getByRole("tab", { name: /Meet/ }).click();
   await expect(page.getByText("Meetings", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Past conversations", { exact: true }).first()).toHaveCount(0);
   await expect(page.getByLabel("Message the room")).toBeEnabled();
 });
 
 test("an empty legacy DM transcript never renders raw schema JSON", async ({ page }) => {
+  await createDM(primaryAgent);
   await openMeet(page);
   await page.route("**/api/dms/echoback-fixed", async (route) => {
     await route.fulfill({
@@ -347,8 +360,7 @@ test("an empty legacy DM transcript never renders raw schema JSON", async ({ pag
       }),
     });
   }, { times: 1 });
-  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: /Chat/ }).click();
+  await openChat(page, primaryAgent);
   await expect(page.locator("textarea")).toBeEnabled();
   await expect(page.getByText(/expected.*array|invalid_type/i)).toHaveCount(0);
 });
@@ -385,13 +397,24 @@ test("routes an unoccupied permanent role instead of silently posting it", async
 
 async function openMeet(page: Page) {
   await page.goto(`${baseURL}/?mock=0`);
-  await expect(page.getByText("bashyrelay", { exact: true })).toBeVisible();
+  await expect(page.getByText("bashymeet", { exact: true })).toBeVisible();
+}
+
+async function openChat(page: Page, agent: string) {
+  await page.getByRole("tab", { name: /Chat/ }).click();
+  const dmButton = page.locator("aside").first().getByRole("button", { name: new RegExp(agent) });
+  const newChat = page.getByRole("menuitem", { name: new RegExp(agent) });
+  await Promise.race([dmButton.waitFor(), newChat.waitFor()]);
+  if (await newChat.isVisible()) await newChat.click();
+  else await dmButton.click();
+  await expect(page.getByRole("heading", { name: agent })).toBeVisible();
 }
 
 async function createRoomFromUI(page: Page, topic: string, agents: string) {
   await page.getByRole("button", { name: "New meeting" }).click();
   await page.getByLabel("Topic").fill(topic);
-  await page.getByLabel("Agents").selectOption(agents.split(/[,\s]+/).filter(Boolean));
+  await page.getByLabel("Facilitator").selectOption(facilitatorAgent);
+  await page.getByLabel("Participants").selectOption(agents.split(/[,\s]+/).filter(Boolean));
   await page.getByRole("button", { name: "Open meeting" }).click();
   await expect(
     page.getByRole("button", { name: new RegExp(topic) }),
@@ -407,6 +430,7 @@ async function createRoom(
     body: JSON.stringify({
       topic,
       participants,
+      owner: facilitatorAgent,
       human: "e2e-human",
     }),
   });
@@ -421,6 +445,13 @@ async function createRoom(
     );
   }
   return { id: created.id };
+}
+
+async function createDM(agent: string): Promise<void> {
+  await api("api/dms", {
+    method: "POST",
+    body: JSON.stringify({ agent }),
+  });
 }
 
 async function postMessage(ref: string, author: string, text: string) {
