@@ -191,6 +191,23 @@ section.sect:first-child { margin-top: 0; }
    want attention get a dot. */
 .badge.ready { display: none; }
 .badge.stopped { background: var(--warn); }
+
+/* The Inbox tile's unread count. Its OWN corner, opposite the status dot:
+   "is this app running" and "is something waiting for me" are unrelated
+   questions, and one badge answering both would make each unreadable.
+
+   It counts the VIEWER's own unread and nothing else — see applyInboxCount in
+   app.js. The panel is a peek at every other name's mail, so a fleet total here
+   would be a number the reader can never clear. */
+.count {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9999px; border: 2px solid var(--card);
+  background: var(--primary); color: #fff;
+  font-size: .66rem; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: 0;
+}
 .label { font-size: .82rem; font-weight: 500; letter-spacing: -.025em; text-align: center;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 .25rem; }
 .sublabel { font-size: .7rem; color: var(--muted-foreground); text-align: center; margin-top: -.2rem; }

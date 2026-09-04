@@ -40,6 +40,8 @@ const footLeft = document.getElementById("foot-left");
 const verEl = document.getElementById("ver");
 
 let apps = [];
+// The Inbox tile's numbers, or null when this session may not read them.
+let inboxCounts = null;
 let search = "";
 
 // ------------------------------------------------------------------- look --
@@ -219,6 +221,56 @@ function svgIcon(spec, cls, width) {
 }
 
 // ------------------------------------------------------------------- tiles --
+// The Inbox tile's unread badge.
+//
+// WHOSE COUNT: the VIEWER's own, never the fleet's. The panel behind this tile
+// is a PEEK at every other name's mail — looking at an agent's inbox there
+// advances nothing, by construction, so an agent's backlog falls only when that
+// agent itself reads. A badge showing the fleet total would therefore be a
+// number the person looking at it can never clear, and a badge that never
+// clears is one people learn to ignore. The viewer's own count is the only one
+// their own reading moves, which is what makes it a badge rather than a gauge.
+//
+// The fleet backlog is still worth knowing, so it goes in the TOOLTIP — stated,
+// not alarmed — along with how many inboxes it is spread across, because 300
+// messages in one stalled inbox and 300 across the fleet are different
+// situations.
+//
+// WHY THIS IS A NAMED SPECIAL CASE rather than a generic "any panel may report
+// a count" channel: the obvious generic home is /api/apps, and that path is
+// consoleWidePath — reachable by ANY admitted session regardless of scope. Per-
+// panel counts there would hand a session scoped to the Terminal alone the
+// fleet's mail volume, quietly widening exactly the boundary the Inbox panel's
+// scope note draws. One consumer, one route, gated where its data is gated.
+function applyInboxCount(a, icon, btn) {
+  if (a.name !== "inbox" || !inboxCounts) return;
+  const fleet = inboxCounts.unread || 0;
+  // `waiting`, not `inboxes`: the number of inboxes that actually HOLD
+  // something. Spreading the total over every inbox on the host — most of them
+  // empty — would read as "2 unread across 3 inboxes" when only two hold
+  // anything, and the shape of a backlog is the point of stating it at all.
+  const boxes = inboxCounts.waiting || 0;
+  const mine = inboxCounts.viewer_unread || 0;
+
+  const scan = fleet
+    ? fleet + " unread across " + boxes + " inbox" + (boxes === 1 ? "" : "es") +
+      " — a peek; reading here consumes nothing"
+    : "nothing unread anywhere on this host";
+  btn.title = mine
+    ? mine + " waiting for you · " + scan
+    : (a.tip ? a.tip + " · " : "") + scan;
+
+  // A count on a panel that is not running would be a number from the last time
+  // it was, so the status dot has that corner to itself.
+  if (!mine || a.status !== "ready") return;
+  const count = document.createElement("span");
+  count.className = "count";
+  // Capped so a four-digit backlog cannot widen the tile and break the grid.
+  count.textContent = mine > 99 ? "99+" : String(mine);
+  count.setAttribute("aria-label", mine + " unread messages waiting for you");
+  icon.append(count);
+}
+
 function tile(a, opts = {}) {
   const ic = appIcon(a.name, a.icon);
   const wrap = document.createElement("div");
@@ -257,6 +309,7 @@ function tile(a, opts = {}) {
   const badge = document.createElement("span");
   badge.className = "badge " + a.status;
   icon.append(badge);
+  applyInboxCount(a, icon, btn);
   btn.append(icon);
 
   const label = document.createElement("span");
@@ -793,12 +846,18 @@ document.getElementById("theme-btn").addEventListener("click", () => {
 
 async function refresh() {
   try {
-    const [a, s, l] = await Promise.all([
+    const [a, s, l, i] = await Promise.all([
       fetch(url("api/apps")).then((r) => r.json()),
       fetch(url("api/session")).then((r) => r.json()).catch(() => null),
       fetch(url("api/look")).then((r) => r.json()).catch(() => null),
+      // ?summary=1 is six numbers, not 175 holder rows. It rides along and
+      // fails soft: a session whose scope excludes the Inbox panel is REFUSED
+      // this, and the right answer to that is a tile with no badge — not a
+      // broken start page.
+      fetch(url("api/inbox?summary=1")).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     apps = a.apps || [];
+    inboxCounts = i && !i.error ? i : null;
     // The look ride-along fails soft: no answer leaves the mode at the
     // same-tab default, which is exactly the server's own fallback.
     if (l && l.open_apps) openApps = l.open_apps === "new-tab" ? "new-tab" : "same-tab";
@@ -812,6 +871,7 @@ async function refresh() {
     }
   } catch (e) {
     apps = [];
+    inboxCounts = null;
     whoEl.textContent = "offline";
   }
   // Only the home grid reflects liveness; repainting under a live terminal

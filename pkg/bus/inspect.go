@@ -23,8 +23,11 @@ package bus
 //
 //  2. IT INTRODUCES NO STORE. Every fact here is derived from the two the bus
 //     already owns — the append-only room timeline and the per-subscriber
-//     pending materialization — plus the drain cursor. There is no index, no
-//     cache and no second copy that could disagree with them.
+//     pending materialization — plus the drain cursor. Nothing is persisted and
+//     there is no second copy that could disagree with them. The Inboxes
+//     snapshot below is an in-memory parse a caller may hold and revalidate by
+//     stat; it is a read, not a store, and it can only ever be behind the log,
+//     never in conflict with it.
 //
 // Read status is therefore REPORTED, never assumed: an item carries the
 // materialized ReadAt when one exists, and otherwise says only that the
@@ -167,13 +170,69 @@ func addressedIndex(events []room.Event) map[string][]room.Event {
 	return out
 }
 
+// Inboxes is ONE parse of the timeline, reusable across every name.
+//
+// It exists because the timeline is the expensive part and the only part that
+// is shared. Measured on a working host: 161k events / 18 MB, ~176 ms to read
+// and index, against ~2 small file reads per name afterwards. A caller
+// answering "how much is waiting everywhere" and a caller answering "show me
+// this one inbox" were each paying that 176 ms separately, on a timer.
+//
+// A snapshot is IMMUTABLE and carries the stat it was read at, so a caller can
+// ask Stale() and re-read only when the log actually moved — the same
+// stat-before-parse rule the drain loop follows. That is exact rather than
+// approximate: a quiet host revalidates for the price of one os.Stat, and a
+// busy one never serves a number from before the message it is being asked
+// about.
+type Inboxes struct {
+	index map[string][]room.Event
+	stat  timelineStat
+}
+
+// ReadInboxes parses the timeline once and indexes it by recipient.
+func ReadInboxes() (*Inboxes, error) {
+	stat, err := statTimeline()
+	if err != nil {
+		return nil, err
+	}
+	events, err := room.Timeline(0)
+	if err != nil {
+		return nil, err
+	}
+	// The stat is taken BEFORE the read, so an append that lands mid-read makes
+	// the snapshot look stale and is picked up next time. Taken after, the same
+	// append would be silently swallowed: the stat would already describe a file
+	// whose new tail this parse never saw.
+	return &Inboxes{index: addressedIndex(events), stat: stat}, nil
+}
+
+// Stale reports whether the timeline has moved since this snapshot was read.
+//
+// An error stats as stale: refusing to answer is worse than one extra parse,
+// and a snapshot that cannot be checked must not be reported as current.
+func (s *Inboxes) Stale() bool {
+	if s == nil {
+		return true
+	}
+	stat, err := statTimeline()
+	if err != nil {
+		return true
+	}
+	return stat != s.stat
+}
+
+// Of returns one name's inbox from this snapshot.
+func (s *Inboxes) Of(name, viewer string) (InboxView, error) {
+	return inspectInbox(name, viewer, s.index)
+}
+
 // InspectInbox returns one name's inbox without touching a single byte of state.
 func InspectInbox(name, viewer string) (InboxView, error) {
-	events, err := room.Timeline(0)
+	snap, err := ReadInboxes()
 	if err != nil {
 		return InboxView{}, err
 	}
-	return inspectInbox(name, viewer, addressedIndex(events))
+	return snap.Of(name, viewer)
 }
 
 func inspectInbox(name, viewer string, index map[string][]room.Event) (InboxView, error) {
@@ -254,17 +313,22 @@ func inspectInbox(name, viewer string, index map[string][]room.Event) (InboxView
 }
 
 // InspectInboxes lists every name on this host that has an inbox, summarized.
+func InspectInboxes(viewer string) ([]InboxHolder, error) {
+	snap, err := ReadInboxes()
+	if err != nil {
+		return nil, err
+	}
+	return snap.Holders(viewer)
+}
+
+// Holders lists every name with an inbox in this snapshot, summarized.
 //
 // The viewer is always present, first-class rather than a special case bolted on
 // by the caller: a person inspecting the fleet's mail is themselves an
 // addressable name, and a roster that omitted them would answer "whose mail is
 // this" with a list that excludes the one reading it.
-func InspectInboxes(viewer string) ([]InboxHolder, error) {
-	events, err := room.Timeline(0)
-	if err != nil {
-		return nil, err
-	}
-	index := addressedIndex(events)
+func (s *Inboxes) Holders(viewer string) ([]InboxHolder, error) {
+	index := s.index
 
 	sources := map[string]map[string]bool{}
 	note := func(name, source string) {
@@ -290,9 +354,9 @@ func InspectInboxes(viewer string) ([]InboxHolder, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range subs {
-		note(s.Subscriber, InboxHolderSubscribed)
-		note(s.To, InboxHolderSubscribed)
+	for _, sub := range subs {
+		note(sub.Subscriber, InboxHolderSubscribed)
+		note(sub.To, InboxHolderSubscribed)
 	}
 	for to := range index {
 		note(to, InboxHolderAddressed)

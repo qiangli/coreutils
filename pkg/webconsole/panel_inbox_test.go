@@ -245,3 +245,97 @@ func TestDisabledInboxIsAlsoUnrouted(t *testing.T) {
 		}
 	}
 }
+
+// The summary is what the launcher badge reads, and it separates two counts
+// that must never be merged.
+//
+// The panel is a PEEK: looking at an agent's inbox advances nothing, so that
+// agent's backlog falls only when the agent itself reads. `viewer_unread` is
+// therefore the only count the person looking can clear, and the only one that
+// works as a badge. `unread` is the fleet gauge. One field for both would put a
+// number on the tile that the reader's own actions can never move.
+func TestInboxSummarySeparatesTheViewersCountFromTheFleets(t *testing.T) {
+	inboxInTemp(t,
+		room.Event{Principal: "cairn", To: "operator", Topic: "done", Body: "merged"},
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		room.Event{Principal: "operator", To: "lintel", Topic: "gate", Body: "rerun"},
+		room.Event{Principal: "operator", To: "lintel", Topic: "gate", Body: "still red"},
+	)
+	h := newTestHandler(t, Options{})
+	d := getJSON(t, h, "/api/inbox?summary=1")
+
+	for field, want := range map[string]float64{
+		"viewer_unread": 1, // only what is waiting for the operator
+		"unread":        4, // every inbox on the host, theirs included
+		"total":         4,
+		"waiting":       3, // operator, cairn, lintel
+	} {
+		if got, _ := d[field].(float64); got != want {
+			t.Errorf("%s = %v, want %v", field, d[field], want)
+		}
+	}
+	if d["viewer"] != "operator" {
+		t.Errorf("viewer = %v", d["viewer"])
+	}
+	// A summary is six numbers. Shipping 175 holder rows to a poller that wants
+	// a badge is the waste the flag exists to avoid.
+	if _, ok := d["holders"]; ok {
+		t.Error("summary carried the holder list")
+	}
+	if _, ok := d["groups"]; ok {
+		t.Error("summary carried the group list")
+	}
+
+	// And the full roster states the same numbers, so the badge and the panel
+	// can never disagree about how much is waiting.
+	full := getJSON(t, h, "/api/inbox")
+	for _, field := range []string{"viewer_unread", "unread", "total", "waiting", "inboxes"} {
+		if full[field] != d[field] {
+			t.Errorf("%s: roster says %v, summary says %v", field, full[field], d[field])
+		}
+	}
+	if _, ok := full["holders"]; !ok {
+		t.Error("the full roster dropped its holders")
+	}
+}
+
+// Reading the summary is a read like any other on this panel.
+func TestInboxSummaryWritesNothing(t *testing.T) {
+	dir := inboxInTemp(t,
+		room.Event{Principal: "operator", To: "cairn", Topic: "t", Body: "b"},
+	)
+	h := newTestHandler(t, Options{})
+	before := roomFingerprint(t, dir)
+	for range 3 {
+		if w := do(h, "GET", "/api/inbox?summary=1", "127.0.0.1:5555", nil); w.Code != http.StatusOK {
+			t.Fatalf("summary = %d", w.Code)
+		}
+	}
+	for path, sum := range roomFingerprint(t, dir) {
+		if before[path] != sum {
+			t.Errorf("the summary rewrote %s", path)
+		}
+	}
+}
+
+// The cached snapshot must not outlive the fact it was read from.
+//
+// The launcher polls this every five seconds, so a cache keyed on a timer would
+// either miss every request (any TTL below the poll interval) or report a stale
+// count after a message landed. It is keyed on the timeline's stat instead.
+func TestInboxSummaryReflectsMailThatArrivesBetweenPolls(t *testing.T) {
+	inboxInTemp(t, room.Event{Principal: "cairn", To: "operator", Topic: "one", Body: "first"})
+	h := newTestHandler(t, Options{})
+
+	if got, _ := getJSON(t, h, "/api/inbox?summary=1")["viewer_unread"].(float64); got != 1 {
+		t.Fatalf("viewer_unread = %v, want 1", got)
+	}
+	if err := room.Notify(room.Event{
+		Type: room.EventNotify, Principal: "cairn", To: "operator", Topic: "two", Body: "second",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := getJSON(t, h, "/api/inbox?summary=1")["viewer_unread"].(float64); got != 2 {
+		t.Fatalf("viewer_unread = %v after a second message, want 2 — the snapshot is stale", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/bus"
@@ -49,12 +50,42 @@ type inboxFacets struct {
 	Delivery []inboxFacet `json:"delivery"`
 }
 
+// InboxTotals is the whole host in six numbers.
+//
+// ViewerUnread and Unread are deliberately SEPARATE fields rather than one
+// "unread", because they are different kinds of fact and only one of them is
+// actionable. The panel is a PEEK at every other name's mail: looking at an
+// agent's inbox here changes nothing, so that agent's backlog only ever falls
+// when the agent itself reads. The viewer's own count is the one their own
+// reading moves. A single number would merge a to-do list with a gauge.
+type InboxTotals struct {
+	Viewer string `json:"viewer"`
+	// ViewerUnread is what is waiting for the person looking — the only count
+	// their own actions can clear (`bashy inbox`).
+	ViewerUnread int `json:"viewer_unread"`
+	// Unread is every inbox on the host, the viewer's included. A backlog
+	// gauge: it falls when AGENTS read, never because somebody opened a page.
+	Unread  int `json:"unread"`
+	Total   int `json:"total"`
+	Inboxes int `json:"inboxes"`
+	// Waiting is how many inboxes have anything unread at all — the shape of
+	// the backlog, which a single sum cannot show: 300 messages in one stalled
+	// inbox and 300 spread over the fleet are different situations.
+	Waiting int `json:"waiting"`
+}
+
 // inboxRoster is the left-hand list: every name on this host that has an inbox.
 type inboxRoster struct {
-	SchemaVersion string             `json:"schema_version"`
-	Viewer        string             `json:"viewer"`
-	Holders       []bus.InboxHolder  `json:"holders"`
-	Groups        []inboxRosterGroup `json:"groups"`
+	SchemaVersion string `json:"schema_version"`
+	// Embedded so the six numbers appear at the top level of BOTH the summary
+	// and the full roster — one shape, not two that can disagree. The field is
+	// exported precisely so the promotion is unambiguous to encoding/json.
+	InboxTotals
+	// Holders and Groups are omitted for a summary request — see
+	// handleInboxRoster. The launcher wants six numbers for a badge, not 175
+	// rows it would throw away every five seconds.
+	Holders []bus.InboxHolder  `json:"holders,omitempty"`
+	Groups  []inboxRosterGroup `json:"groups,omitempty"`
 }
 
 // inboxRosterGroup is one section of the nav, already ordered.
@@ -106,18 +137,40 @@ func (s *server) viewerName(r *http.Request) string {
 // mail every few seconds while nobody was even looking at a message.
 func (s *server) handleInboxRoster(w http.ResponseWriter, r *http.Request) {
 	viewer := s.viewerName(r)
-	holders, err := bus.InspectInboxes(viewer)
+	snap, err := s.inboxes.Snapshot()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	holders, err := snap.Holders(viewer)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
 	byKind := map[string][]bus.InboxHolder{}
+	totals := InboxTotals{Viewer: viewer, Inboxes: len(holders)}
 	for _, h := range holders {
 		byKind[h.Kind] = append(byKind[h.Kind], h)
+		totals.Unread += h.Unread
+		totals.Total += h.Total
+		if h.Unread > 0 {
+			totals.Waiting++
+		}
+		if h.Name == viewer {
+			totals.ViewerUnread = h.Unread
+		}
 	}
 
-	out := inboxRoster{SchemaVersion: inboxSchemaVersion, Viewer: viewer, Holders: holders}
+	out := inboxRoster{SchemaVersion: inboxSchemaVersion, InboxTotals: totals}
+	// The launcher polls this every five seconds for one badge. Handing it 175
+	// holder rows to throw away is the kind of waste that only shows up as a
+	// slow start page, so ?summary=1 answers with the numbers alone.
+	if r.URL.Query().Get("summary") == "1" {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	out.Holders = holders
 	for _, g := range []struct{ kind, label string }{
 		{bus.InboxKindPerson, "You"},
 		{bus.InboxKindAgent, "Agents"},
@@ -157,7 +210,12 @@ func (s *server) handleInboxList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	viewer := s.viewerName(r)
-	view, err := bus.InspectInbox(name, viewer)
+	snap, err := s.inboxes.Snapshot()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	view, err := snap.Of(name, viewer)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -298,4 +356,40 @@ func inboxFacetList(m map[string]int) []inboxFacet {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// inboxCache holds one parsed timeline across requests.
+//
+// It is validated by STAT rather than by a TTL, and the difference matters in
+// both directions. The launcher and an open Inbox tab each poll on a five-second
+// timer, so any TTL shorter than that would miss on every single request and
+// buy nothing; any TTL longer would serve a number from before a message the
+// caller is asking about. Statting the log answers exactly: an unchanged
+// timeline costs one os.Stat, and a changed one is re-read on the next request
+// that needs it.
+//
+// The parse is what this protects. Measured on a working host: 161k events /
+// 18 MB / ~176 ms, which three pollers were each paying separately.
+type inboxCache struct {
+	mu   sync.Mutex
+	snap *bus.Inboxes
+}
+
+// Snapshot returns a current timeline snapshot, re-parsing only when the log
+// moved.
+//
+// The lock is held ACROSS the re-parse deliberately: two pollers arriving
+// together should produce one parse and one wait, not two parses.
+func (c *inboxCache) Snapshot() (*bus.Inboxes, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.snap != nil && !c.snap.Stale() {
+		return c.snap, nil
+	}
+	snap, err := bus.ReadInboxes()
+	if err != nil {
+		return nil, err
+	}
+	c.snap = snap
+	return snap, nil
 }

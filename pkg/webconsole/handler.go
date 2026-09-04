@@ -152,6 +152,7 @@ type server struct {
 	pairing       *pairStore
 	look          *lookStore
 	probes        probeCache
+	inboxes       inboxCache
 	boards        boardCache
 }
 

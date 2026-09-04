@@ -235,3 +235,73 @@ func TestInspectInboxDoesNotDoubleCountMaterializedMail(t *testing.T) {
 		t.Errorf("kept the wrong copy: %+v", view.Items[0])
 	}
 }
+
+// The snapshot is revalidated by STAT, not by a timer, and that is what makes
+// it safe to hold: a quiet host pays one os.Stat, and a host that just took a
+// message reports the snapshot stale rather than serving a number from before
+// it. A TTL cache could not offer the second half.
+func TestInboxSnapshotIsStaleOnlyWhenTheTimelineMoves(t *testing.T) {
+	isolate(t)
+	notify(t, "operator", "cairn", "one", "first")
+
+	snap, err := ReadInboxes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Stale() {
+		t.Fatal("a snapshot of an untouched timeline reports stale; every read would re-parse")
+	}
+	view, err := snap.Of("cairn", "operator")
+	if err != nil || len(view.Items) != 1 {
+		t.Fatalf("cairn = %d items, %v", len(view.Items), err)
+	}
+
+	notify(t, "operator", "cairn", "two", "second")
+	if !snap.Stale() {
+		t.Fatal("the timeline grew and the snapshot still reports current — " +
+			"a held snapshot would answer about mail that arrived before the message being asked about")
+	}
+	// And the OLD snapshot keeps answering consistently rather than half-updating:
+	// it is a parse, not a live view, so it can be behind but never in conflict.
+	if view, err := snap.Of("cairn", "operator"); err != nil || len(view.Items) != 1 {
+		t.Fatalf("stale snapshot = %d items, %v; want the 1 it was read with", len(view.Items), err)
+	}
+
+	fresh, err := ReadInboxes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view, err := fresh.Of("cairn", "operator"); err != nil || len(view.Items) != 2 {
+		t.Fatalf("re-read = %d items, %v; want 2", len(view.Items), err)
+	}
+}
+
+// A snapshot must not become a way to write. It is the same read path, so this
+// pins the invariant at the reusable entry point too.
+func TestInboxSnapshotWritesNothing(t *testing.T) {
+	dir := isolate(t)
+	notify(t, "operator", "cairn", "sprint", "pick up #12")
+
+	before := fingerprint(t, dir)
+	snap, err := ReadInboxes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snap.Holders("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snap.Of("cairn", "operator"); err != nil {
+		t.Fatal(err)
+	}
+	_ = snap.Stale()
+	after := fingerprint(t, dir)
+
+	if len(before) != len(after) {
+		t.Fatalf("the snapshot changed the file set: %d before, %d after", len(before), len(after))
+	}
+	for path, sum := range before {
+		if after[path] != sum {
+			t.Errorf("the snapshot rewrote %s", path)
+		}
+	}
+}

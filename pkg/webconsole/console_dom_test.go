@@ -44,6 +44,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/qiangli/coreutils/pkg/board"
 	"github.com/qiangli/coreutils/pkg/resources"
+	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/websession"
 )
 
@@ -1127,4 +1128,108 @@ func TestDOMSprintDisclosuresSurviveARefresh(t *testing.T) {
 // racing the fetch it starts.
 func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 	return p.WithAwaitPromise(true)
+}
+
+// The Inbox tile's unread badge, in a real browser.
+//
+// It counts the VIEWER's own unread and nothing else. The panel is a peek at
+// every other name's mail — looking there advances no cursor, so an agent's
+// backlog falls only when that agent reads — which means a fleet total on this
+// tile would be a number the person looking at it can never clear. The fleet
+// figure belongs in the tooltip, stated rather than alarmed.
+//
+// Byte-level tests cannot see this: the badge is created by applyInboxCount at
+// render time from a second fetch, so a tile with no badge and a tile whose
+// badge never rendered are the same bytes.
+func TestDOMInboxTileBadgeCountsTheViewerNotTheFleet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BASHY_ROOM_DIR", dir)
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("USER", "operator")
+	for _, e := range []room.Event{
+		{Principal: "cairn", To: "operator", Topic: "done", Body: "merged"},
+		{Principal: "cairn", To: "operator", Topic: "gate", Body: "86/86"},
+		// Four more waiting on OTHER names. None of these may reach the badge.
+		{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		{Principal: "operator", To: "lintel", Topic: "gate", Body: "rerun"},
+		{Principal: "operator", To: "lintel", Topic: "gate", Body: "still red"},
+		{Principal: "operator", To: "keystone", Topic: "merge", Body: "ready"},
+	} {
+		e.Type = room.EventNotify
+		if err := room.Notify(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	base, ctx, errs := domEnv(t, Options{})
+	var badge, tip string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(2200*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const t=[...document.querySelectorAll(".tile")]
+			.find(x=>(x.querySelector(".label")||{}).textContent==="Inbox");
+			return t?((t.querySelector(".count")||{}).textContent||"NO BADGE"):"NO TILE";})()`, &badge),
+		chromedp.Evaluate(`(()=>{const t=[...document.querySelectorAll(".tile")]
+			.find(x=>(x.querySelector(".label")||{}).textContent==="Inbox");
+			return t?(t.getAttribute("title")||""):"NO TILE";})()`, &tip),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "inbox badge", errs())
+
+	if badge != "2" {
+		t.Errorf("Inbox badge = %q, want \"2\" — the viewer's own unread, not the fleet's 6", badge)
+	}
+	if !strings.Contains(tip, "2 waiting for you") {
+		t.Errorf("tooltip does not state the viewer's count: %q", tip)
+	}
+	if !strings.Contains(tip, "6 unread across 4 inboxes") {
+		t.Errorf("tooltip does not state the fleet backlog: %q", tip)
+	}
+	if !strings.Contains(tip, "peek") {
+		t.Errorf("tooltip does not say reading here consumes nothing: %q", tip)
+	}
+}
+
+// With nothing waiting for the viewer there is NO badge, even while the fleet
+// has a backlog. A badge the reader cannot clear is one they learn to ignore,
+// and every other name's mail is theirs to read, not the viewer's.
+func TestDOMInboxTileHasNoBadgeWhenNothingIsWaitingForYou(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BASHY_ROOM_DIR", dir)
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("USER", "operator")
+	for _, e := range []room.Event{
+		{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		{Principal: "operator", To: "lintel", Topic: "gate", Body: "rerun"},
+	} {
+		e.Type = room.EventNotify
+		if err := room.Notify(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	base, ctx, errs := domEnv(t, Options{})
+	var badge, tip string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(2200*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const t=[...document.querySelectorAll(".tile")]
+			.find(x=>(x.querySelector(".label")||{}).textContent==="Inbox");
+			return t?(t.querySelector(".count")?"BADGE":"none"):"NO TILE";})()`, &badge),
+		chromedp.Evaluate(`(()=>{const t=[...document.querySelectorAll(".tile")]
+			.find(x=>(x.querySelector(".label")||{}).textContent==="Inbox");
+			return t?(t.getAttribute("title")||""):"NO TILE";})()`, &tip),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "inbox badge empty", errs())
+
+	if badge != "none" {
+		t.Errorf("Inbox badge = %q with nothing waiting for the viewer, want none", badge)
+	}
+	// The fleet backlog is still reported — just not as an alarm.
+	if !strings.Contains(tip, "2 unread across 2 inboxes") {
+		t.Errorf("tooltip does not state the fleet backlog: %q", tip)
+	}
 }
