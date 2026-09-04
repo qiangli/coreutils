@@ -366,6 +366,18 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		room.Leave(card.ID)
 		return nil, fmt.Errorf("chat: bind %s inbox to live session: %w", name, err)
 	}
+	// The socket name is stable for the agent identity. A crashed or just-stopped
+	// predecessor can therefore leave a pathname behind. OnStart fires before
+	// agentpty binds the new listener, so waitReady could otherwise mistake that
+	// stale path for this session's channel and write into a dying listener.
+	// Remove it only AFTER the singleton room claim succeeds; doing this before
+	// the claim could disconnect a legitimately live session.
+	if err := prepareSessionSocket(sock); err != nil {
+		cancel()
+		_ = releaseInbox()
+		room.Leave(card.ID)
+		return nil, err
+	}
 
 	started := make(chan error, 1)
 	var startedOnce sync.Once
@@ -445,6 +457,14 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	}
 	s.startInboxRelay(ctx)
 	return s, nil
+}
+
+func prepareSessionSocket(path string) error {
+	err := os.Remove(path)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return fmt.Errorf("chat: clear stale control channel %s: %w", path, err)
 }
 
 // openConversation sends the first message and CONFIRMS it arrived.

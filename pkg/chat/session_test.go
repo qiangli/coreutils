@@ -2,12 +2,27 @@ package chat
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
+
+func TestPrepareSessionSocketRemovesStalePathBeforeReadiness(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stable-agent.sock")
+	if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareSessionSocket(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stale control path survived preparation: %v", err)
+	}
+}
 
 // Start must REFUSE a tool it cannot steer, rather than quietly handing back a
 // one-shot.
