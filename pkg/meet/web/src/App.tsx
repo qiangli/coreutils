@@ -236,11 +236,15 @@ export function App() {
           />
           <Composer
             error={meet.error}
+            heldFor={meet.heldFor}
             initialDraft={meet.draft}
+            onCancel={meet.cancelSend}
             onDismissQueued={meet.dismissQueued}
             onRecipientChange={meet.setRecipient}
             onSend={meet.send}
+            pending={meet.pending}
             queued={meet.queued}
+            recalling={meet.recalling}
             recipient={meet.recipient}
             sending={meet.sending}
             state={meet.state}

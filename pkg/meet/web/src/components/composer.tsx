@@ -7,6 +7,7 @@ import {
   Hash,
   LoaderCircle,
   Send,
+  Undo2,
   X,
 } from "lucide-react"
 
@@ -28,6 +29,7 @@ import {
   type Member,
   type State,
 } from "@/lib/contracts"
+import type { PendingSend, RecallOutcome } from "@/hooks/use-meet-room"
 import { isGenericTitle, seatOf } from "@/lib/seats"
 import { cn } from "@/lib/utils"
 
@@ -43,6 +45,14 @@ interface ComposerProps {
   onDismissQueued: () => void
   onSend: (text: string, agent?: string) => Promise<void>
   kind?: "room" | "dm"
+  /** The message between the click and the delivery, or null. */
+  pending: PendingSend | null
+  /** Seconds left of the hold, for the countdown on the button. */
+  heldFor: number
+  /** A recall is in flight; the server has not answered yet. */
+  recalling: boolean
+  /** Stop the pending message. Resolves with what that achieved. */
+  onCancel: () => Promise<RecallOutcome>
 }
 
 export function Composer({
@@ -56,11 +66,36 @@ export function Composer({
   onDismissQueued,
   onSend,
   kind = "room",
+  pending,
+  heldFor,
+  recalling,
+  onCancel,
 }: ComposerProps) {
   // A cross-app shortcut may supply an editable starting point. It is a draft,
   // never an instruction: opening a link must not spend tokens or start work.
   const [text, setText] = useState(initialDraft)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // The retraction confirm. It is local to the composer because it is a UI
+  // question, not a state of the message: the message is already delivered
+  // whether or not this is open.
+  const [confirming, setConfirming] = useState(false)
+  const holding = pending?.phase === "holding"
+  const inFlight = Boolean(pending) && !holding
+
+  // cancel is one call for both branches — the HOOK decides which one applies,
+  // and for a dispatched message the SERVER does. The composer only reports the
+  // answer, and it puts a cancelled message back in the box: a send that was
+  // stopped in time should leave the sender exactly where they were, not make
+  // them retype what they wrote.
+  async function cancel() {
+    const held = pending?.text ?? ""
+    const outcome = await onCancel()
+    setConfirming(false)
+    if (outcome === "canceled" && held && !text.trim()) {
+      setText(held)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
+  }
   const agents = useMemo(
     () => {
       const participants = (state?.participants ?? []).filter(
@@ -184,6 +219,38 @@ export function Composer({
         {error && (
           <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">
             {error}
+          </div>
+        )}
+        {/* THE CONFIRM, and only on the irreversible branch. The message is out;
+            the sender cannot have it back, and the choice is whether to say so
+            in the room. That is a new permanent record everyone sees — worth one
+            question — where cancelling a held message is worth none. */}
+        {confirming && inFlight && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+            <Undo2 className="size-3.5 shrink-0" />
+            <span className="flex-1">
+              <strong className="font-semibold">Already delivered.</strong> It
+              cannot be unsent
+              {pending?.agent ? ` — ${pending.agent} may be reading it` : ""}.
+              Post a retraction beside it?
+            </span>
+            <Button
+              className="h-6 rounded-md px-2 text-[11px]"
+              disabled={recalling}
+              onClick={() => void cancel()}
+              size="sm"
+              variant="outline"
+            >
+              {recalling ? "Retracting…" : "Post retraction"}
+            </Button>
+            <Button
+              className="h-6 rounded-md px-2 text-[11px]"
+              onClick={() => setConfirming(false)}
+              size="sm"
+              variant="ghost"
+            >
+              Leave it
+            </Button>
           </div>
         )}
         <div className="relative rounded-2xl border border-border bg-card shadow-[0_10px_34px_rgb(15_23_42_/_0.08)] transition-shadow focus-within:border-primary/35 focus-within:shadow-[0_12px_40px_rgb(15_118_110_/_0.12)]">
@@ -344,24 +411,69 @@ export function Composer({
                 still works and still overrides the selection for one message —
                 the mention list above the box completes it. */}
             <div className="ml-auto flex items-center gap-2">
-              {text.trim() && (
+              {!pending && text.trim() && (
                 <span className="hidden text-[10px] text-muted-foreground sm:block">
                   Enter to send · Shift+Enter for a new line
                 </span>
               )}
+              {holding && (
+                <span className="text-[10px] font-medium text-muted-foreground">
+                  Sending in {heldFor}s · click to cancel
+                </span>
+              )}
+              {inFlight && (
+                <span className="text-[10px] font-medium text-muted-foreground">
+                  {confirming ? "Already delivered" : "Sent · click to recall"}
+                </span>
+              )}
+              {/* THE ONE CONTROL. While a message is pending the send button IS
+                  the cancel button, so there is nothing extra to find at the
+                  moment a sender wants it — and it says which of the two things
+                  a click will do, because those are not the same act.
+
+                  No confirmation while it is still held: that click is instant,
+                  reverses nothing, and hands the text back for editing. Asking
+                  "are you sure" there would add a step to the recovery path and
+                  risk the hold expiring mid-dialog — sending the very message
+                  the dialog was about. The confirm is on the OTHER branch, where
+                  the message is already delivered and the only remaining move
+                  posts a permanent record everyone can see. */}
               <Button
-                aria-label="Send message"
+                aria-label={
+                  holding
+                    ? `Cancel send (${heldFor}s)`
+                    : inFlight
+                      ? "Recall message"
+                      : "Send message"
+                }
                 className={cn(
-                  "size-8 rounded-lg transition-all",
-                  text.trim()
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-muted-foreground",
+                  "relative size-8 rounded-lg transition-all",
+                  pending
+                    ? "bg-secondary text-foreground hover:bg-amber-100 hover:text-amber-900"
+                    : text.trim()
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-muted-foreground",
                 )}
-                disabled={!text.trim() || sending}
-                onClick={() => void submit()}
+                disabled={pending ? recalling : !text.trim() || sending}
+                onClick={() => {
+                  if (holding) {
+                    void cancel()
+                    return
+                  }
+                  if (inFlight) {
+                    setConfirming(true)
+                    return
+                  }
+                  void submit()
+                }}
                 size="icon-sm"
               >
-                {sending ? (
+                {pending ? (
+                  <>
+                    <LoaderCircle className="size-4 animate-spin opacity-60" />
+                    <X className="absolute size-3" />
+                  </>
+                ) : sending ? (
                   <LoaderCircle className="size-4 animate-spin" />
                 ) : (
                   <Send className="size-3.5" />
@@ -372,11 +484,15 @@ export function Composer({
         </div>
         <div className="mt-1.5 flex items-center justify-between px-1">
           <span className="text-[9px] text-muted-foreground/65">
-            {kind === "dm"
-              ? `Goes to ${dmAgent ? `@${dmAgent}` : "this agent"}. Enter to send.`
-              : broadcast || !recipient
-                ? "Goes to everyone in the room. Start with @name to send one message elsewhere."
-                : `Goes to @${recipient}. Start with @name to send one message elsewhere.`}
+            {holding
+              ? "Nothing has been sent yet. Cancelling now leaves no trace."
+              : inFlight
+                ? "Delivered. It can be retracted, which posts a record — not erased."
+                : kind === "dm"
+                  ? `Goes to ${dmAgent ? `@${dmAgent}` : "this agent"}. Enter to send.`
+                  : broadcast || !recipient
+                    ? "Goes to everyone in the room. Start with @name to send one message elsewhere."
+                    : `Goes to @${recipient}. Start with @name to send one message elsewhere.`}
           </span>
           {state?.status === "open" && (
             <Badge

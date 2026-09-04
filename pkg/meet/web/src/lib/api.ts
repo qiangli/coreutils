@@ -3,11 +3,13 @@ import {
   dmDetailSchema,
   dmEventSchema,
   dmObserveFrameSchema,
+  dmSendSchema,
   dmSummarySchema,
   errorSchema,
   eventSchema,
   jobRefSchema,
   observeFrameSchema,
+  recallSchema,
   roomDetailSchema,
   roomSummarySchema,
   stateSchema,
@@ -20,6 +22,7 @@ import {
   type DMDetail,
   type DMEvent,
   type DMSummary,
+  type RecallResult,
 } from "./contracts"
 import {
   MockHttpError,
@@ -63,11 +66,30 @@ export async function getDM(agent: string, debugRaw = false): Promise<DMDetail> 
   return dmDetailSchema.parse(await request(url))
 }
 
-export async function postDM(agent: string, text: string): Promise<void> {
-  await request(`api/dms/${encodeURIComponent(agent)}/messages`, {
+/** postDM sends into a 1:1 and returns the `ts` of the record it wrote.
+ *
+ * The timestamp is the handle a recall names. A chat appends the human's line
+ * INSIDE this request — that is what makes the reply streamable — so there is
+ * no job to cancel afterwards, and naming the record is the only way to ask for
+ * it back.
+ */
+export async function postDM(agent: string, text: string): Promise<string> {
+  const result = await request(`api/dms/${encodeURIComponent(agent)}/messages`, {
     method: "POST",
     body: JSON.stringify({ text }),
   })
+  const parsed = dmSendSchema.safeParse(result)
+  return parsed.success ? (parsed.data.ts ?? "") : ""
+}
+
+/** recallDM withdraws a chat message, by the ts postDM returned. */
+export async function recallDM(agent: string, ts: string): Promise<RecallResult> {
+  return recallSchema.parse(
+    await request(`api/dms/${encodeURIComponent(agent)}/recall`, {
+      method: "POST",
+      body: JSON.stringify({ ts }),
+    }),
+  )
 }
 
 // api/dms/<agent>/work — the managed write-capable session — is deliberately
@@ -212,6 +234,49 @@ export async function postMessage(
       body: JSON.stringify({ author, text, to: to ?? "" }),
     }),
   )
+}
+
+/** recall asks the server to stop a message, and reports what that achieved.
+ *
+ * Both handles are sent when the caller has both: the JOB is the only one that
+ * can still produce a clean cancel, and the `ts` is what remains once the job
+ * has finished. The verdict is the SERVER's — a browser cannot observe whether
+ * the record was written, and a UI that guessed would be claiming a fact it
+ * cannot see.
+ */
+export async function recall(
+  ref: string,
+  handle: { job?: string; ts?: string },
+): Promise<RecallResult> {
+  if (usingMock) return { verdict: "canceled" }
+  return recallSchema.parse(
+    await request(`api/rooms/${encodeURIComponent(ref)}/recall`, {
+      method: "POST",
+      body: JSON.stringify({ job: handle.job ?? "", ts: handle.ts ?? "" }),
+    }),
+  )
+}
+
+/** runActionJob is runAction for the verbs that answer with a JOB REF.
+ *
+ * It returns the job id so a caller can recall the dispatch it just started;
+ * runAction stays as the void-returning form every other control uses.
+ */
+export async function runActionJob(
+  ref: string,
+  action: string,
+  body?: unknown,
+): Promise<string> {
+  if (usingMock) {
+    await runAction(ref, action, body)
+    return ""
+  }
+  const result = await request(
+    `api/rooms/${encodeURIComponent(ref)}/${action}`,
+    { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) },
+  )
+  const parsed = jobRefSchema.safeParse(result)
+  return parsed.success ? (parsed.data.job ?? parsed.data.id ?? "") : ""
 }
 
 export async function runAction(

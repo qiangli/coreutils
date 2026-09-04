@@ -54,6 +54,10 @@ export const eventKindSchema = z.enum([
   "confirm",
   "invite",
   "kick",
+  // A withdrawal. It is a RECORD, not an edit: the transcript is append-only
+  // and the message it withdraws stays where it was, so a reader (and an agent
+  // that already read the original) sees the correction rather than a hole.
+  "retraction",
 ])
 
 export const eventSchema = z
@@ -79,6 +83,10 @@ export const eventSchema = z
     choice: z.string().optional(),
     choices: z.array(z.string()).optional(),
     ledger: z.unknown().optional(),
+    // On a `retraction`: the `ts` of the record it withdraws. Events carry no
+    // id, so the timestamp is the handle — the same one this file's eventKey
+    // already dedupes on.
+    retracts: z.string().optional(),
     // The agent's un-normalized output, sent only when the reader turned the
     // raw-transport view on. Absent on every ordinary frame.
     raw: z.string().optional(),
@@ -184,6 +192,12 @@ export const dmEventSchema = z.object({
   text: z.string(),
   ts: z.union([z.string(), z.number()]),
   status: z.string().optional(),
+  // The underlying record's own kind and, on a retraction, the `ts` it
+  // withdraws. Both optional: an older server projects a chat onto
+  // user/assistant alone, and a client that required them would refuse every
+  // frame from it.
+  kind: z.string().optional(),
+  retracts: z.string().optional(),
   raw: z.string().optional(),
 })
 
@@ -207,6 +221,27 @@ export const jobRefSchema = z.object({
   ref: z.string().optional(),
 })
 
+// The 202 a chat's send answers with. `ts` names the record it just wrote, and
+// is optional because an older server does not send one — a client without it
+// simply has no handle to recall by, which is a missing capability rather than
+// a broken response.
+export const dmSendSchema = z.object({
+  agent: z.string().optional(),
+  status: z.string().optional(),
+  ts: z.string().optional(),
+})
+
+// What a recall ACHIEVED, decided by the server and never by the client.
+//
+// The three values are exclusive and a client renders one sentence for each. It
+// must not collapse "gone" into "canceled": the first means the system no longer
+// knows, the second promises the message never went out.
+export const recallSchema = z.object({
+  verdict: z.enum(["canceled", "retracted", "gone"]),
+  event: eventSchema.optional(),
+  retracted: z.string().optional(),
+})
+
 export const errorSchema = z.object({ error: z.string() })
 
 export const observeFrameSchema = z.discriminatedUnion("kind", [
@@ -216,6 +251,7 @@ export const observeFrameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), data: liveEventSchema }),
 ])
 
+export type RecallResult = z.infer<typeof recallSchema>
 export type Member = z.infer<typeof memberSchema>
 export type AgentOption = z.infer<typeof agentOptionSchema>
 export type RoomSummary = z.infer<typeof roomSummarySchema>

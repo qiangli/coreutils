@@ -17,10 +17,12 @@ import (
 // pass while production failed, which would be worse than no probe at all: it
 // would make a dead binding look verified.
 //
-// ReadOnly for the same reason a meeting turn is: answering a question needs no
-// write authority, and it means the probe passes the launch guard by construction
-// on an ordinary uncontained host, rather than demanding the operator weaken it
-// just to find out whether their fleet works.
+// ReadOnly because a probe asks one question — can this binding speak — and
+// answering it needs no write authority. That also means the probe passes the
+// launch guard by construction on an ordinary uncontained host, rather than
+// demanding the operator weaken it just to find out whether their fleet works.
+// (Meeting turns used to say the same thing and no longer do: a seat now acts.
+// See pkg/meet's turnAuthority. A probe is not a seat.)
 //
 // It runs in a scratch directory. A probe must not be able to touch the caller's
 // repo, and a first-run trust prompt fires per-directory — probing in a temp dir

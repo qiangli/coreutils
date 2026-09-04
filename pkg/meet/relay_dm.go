@@ -36,6 +36,15 @@ type relayDMEvent struct {
 	Text    string    `json:"text"`
 	TS      time.Time `json:"ts"`
 	Status  string    `json:"status,omitempty"`
+	// Kind and Retracts are carried through from the underlying record for ONE
+	// reason: a withdrawal has to look like a withdrawal here too. A chat
+	// projects every event onto user/assistant, and under that projection a
+	// retraction arrives as an ordinary message from the human and the message
+	// it withdraws still reads as live — which is the failure the whole feature
+	// exists to prevent, in the surface where a person is most likely to be
+	// reading.
+	Kind     string `json:"kind,omitempty"`
+	Retracts string `json:"retracts,omitempty"`
 	// Raw carries the agent's un-normalized output when the reader asked to see
 	// the transport (?raw=1). Never stored; see renderEvent.
 	Raw string `json:"raw,omitempty"`
@@ -159,6 +168,7 @@ func relayDMEvents(agent string, debugRaw bool) ([]relayDMEvent, error) {
 		ev := relayDMEvent{
 			ID: fmt.Sprintf("%d", i+1), Speaker: e.Speaker, Role: role,
 			Text: text, TS: e.TS, Status: status,
+			Kind: e.Kind, Retracts: e.Retracts,
 		}
 		if debugRaw && text != e.Text {
 			ev.Raw = e.Text
@@ -285,22 +295,40 @@ func handleRelayDMMessage(ctx context.Context) http.HandlerFunc {
 			apiErr(w, err)
 			return
 		}
-		if err := appendRelayDMEvent(agent, relayDMEvent{Speaker: st.Human, Role: "human", Text: body.Text}); err != nil {
+		// The timestamp is chosen HERE rather than left to the append, because
+		// it is the handle a recall names: events carry no id, and a caller that
+		// cannot name the record it just wrote can only ask to withdraw "the
+		// last one", which is a different message the moment two people type.
+		stamp := nowFn()
+		if err := appendRelayDMEvent(agent, relayDMEvent{
+			Speaker: st.Human, Role: "human", Text: body.Text, TS: stamp,
+		}); err != nil {
 			lock.Unlock()
 			apiErr(w, err)
 			return
 		}
 		lock.Unlock()
+		at := stamp.Format(time.RFC3339Nano)
 		// A Start work session owns this canonical identity and has already bound
 		// its inbox. The event above is therefore the message: its inbox relay
 		// delivers it to the persistent session. Starting a second read-only
 		// Invoke here would both duplicate the request and violate one identity.
 		if relayDMWorkSessionLive(agent) {
-			writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "queued"})
+			writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "queued", "ts": at})
 			return
 		}
-		go runRelayDMTurn(ctx, st, body.Text)
-		writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "working"})
+		// Cancellable, and remembered by agent name, so the sender can stop the
+		// turn their message started. A 1:1 has exactly one live turn by
+		// construction — one identity, one conversation store — so the name is a
+		// sufficient key and no job id is needed.
+		turnCtx, cancel := context.WithCancel(ctx)
+		turn := storeDMTurn(agent, cancel)
+		go func() {
+			defer clearDMTurn(agent, turn)
+			defer cancel()
+			runRelayDMTurn(turnCtx, st, body.Text)
+		}()
+		writeJSON(w, http.StatusAccepted, map[string]string{"agent": agent, "status": "working", "ts": at})
 	}
 }
 
@@ -419,8 +447,13 @@ func runRelayDMTurn(ctx context.Context, st relayDM, prompt string) {
 	defer lock.Unlock()
 	turnCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
+	// A chat seat ACTS: this is the surface a steward drives the machine from,
+	// so a turn that could only speak would make it a suggestion box. Same
+	// authority as `Start work` above, which had it already. See turnAuthority.
+	dmReadOnly, dmAllowUnsafe := turnAuthority()
 	res, err := invokeRelayDM(turnCtx, chat.Options{
-		Agent: st.Agent, Instruction: prompt, Cwd: "", ReadOnly: true,
+		Agent: st.Agent, Instruction: prompt, Cwd: "",
+		ReadOnly: dmReadOnly, AllowUnsafe: dmAllowUnsafe,
 	}, nil)
 	// Extract the assistant's words from whatever structured transport the tool
 	// streamed, exactly as the room engine does at classifyTurn. A DM is the
@@ -495,4 +528,68 @@ func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// --- Recall, for the 1:1 ------------------------------------------------------
+
+// dmTurns is the live turn per agent. A 1:1 holds one identity and one
+// conversation store, so there is at most one.
+var dmTurns sync.Map // agent -> *dmTurn
+
+// dmTurn is a handle rather than a bare cancel func so that "is this still the
+// turn I started?" is pointer identity. Comparing functions is not; without a
+// handle, a finished turn can delete — or worse, cancel — the NEXT one, which
+// is the classic stale-handle shape: the sender sends again, the previous
+// goroutine returns, and the new turn dies with no explanation anywhere.
+type dmTurn struct{ cancel context.CancelFunc }
+
+func storeDMTurn(agent string, cancel context.CancelFunc) *dmTurn {
+	t := &dmTurn{cancel: cancel}
+	dmTurns.Store(canonAgent(agent), t)
+	return t
+}
+
+func clearDMTurn(agent string, t *dmTurn) {
+	name := canonAgent(agent)
+	if v, ok := dmTurns.Load(name); ok && v == any(t) {
+		dmTurns.Delete(name)
+	}
+}
+
+// handleRelayDMRecall is "stop that message" for a chat.
+//
+// A chat appends the human's line INSIDE the send request — that is what makes
+// the reply streamable — so by the time a recall can arrive the record exists,
+// and the honest answer is a retraction rather than a cancellation. The compose
+// surface is what makes an actual cancel possible here: it holds the message
+// before dispatching it, so the common "wait, no" never reaches this handler at
+// all.
+func handleRelayDMRecall(w http.ResponseWriter, r *http.Request) {
+	agent := canonAgent(r.PathValue("agent"))
+	var body struct {
+		TS string `json:"ts"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		apiErr(w, err)
+		return
+	}
+	st, err := dmRoomFor(agent, "")
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	// Stop the turn first: the agent is reading the message being withdrawn, and
+	// every token it produces after the sender asked to stop is work nobody
+	// wants and context the conversation has to carry.
+	if v, ok := dmTurns.LoadAndDelete(agent); ok {
+		if turn, _ := v.(*dmTurn); turn != nil && turn.cancel != nil {
+			turn.cancel()
+		}
+	}
+	res, err := Recall(st, "", body.TS, actorOf(r, st.Human))
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }

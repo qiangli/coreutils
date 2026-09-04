@@ -261,3 +261,138 @@ type errRunner struct{}
 func (errRunner) Run(_ context.Context, _ string, _ []string, _ string) (string, int, error) {
 	return "", 127, errors.New("meet_test: the agent could not be started")
 }
+
+// --- Recall, over the wire ---------------------------------------------------
+
+// THE SENDER TAKES A MESSAGE BACK, and the answer is the one the room can
+// support rather than the one the browser hoped for.
+//
+// End-to-end because the verdict is assembled from three things a unit test
+// holds separately: the job the 202 handed back, whether the run had reached
+// its append, and what the transcript says afterwards. The failure this guards
+// is a UI that reports "canceled" for a message that went out — the browser
+// cannot see the difference, so the server has to be the one that answers.
+func TestRecallOverHTTPCancelsBeforeTheAppendAndRetractsAfter(t *testing.T) {
+	st := newRoom(t)
+	seatEverything(t)
+	srv := serveTest(t)
+
+	// TOO LATE: the agent already has the text. The blocking runner holds the
+	// turn open, which is the state a real agent is in while it thinks.
+	started := make(chan struct{}, 1)
+	old := apiRunner
+	apiRunner = func() chat.Runner { return blockingRunner{started: started} }
+	t.Cleanup(func() { apiRunner = old })
+
+	job := address(t, srv, st.ID, "codex", "withdraw this one")
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the turn never started; there is nothing to recall")
+	}
+
+	resp, body := doJSON(t, srv, "POST", "/api/rooms/"+st.ID+"/recall",
+		map[string]string{"job": job.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("recall: status %d (%s)", resp.StatusCode, body)
+	}
+	var late RecallResult
+	if err := json.Unmarshal(body, &late); err != nil {
+		t.Fatalf("recall must answer with a verdict: %v (%s)", err, body)
+	}
+	if late.Verdict != RecallRetracted {
+		t.Fatalf("verdict = %q, want %q — the agent was already reading it", late.Verdict, RecallRetracted)
+	}
+	if late.Event == nil || late.Event.Retracts == "" {
+		t.Fatalf("a retraction must name the record it withdraws: %+v", late.Event)
+	}
+	// The withdrawn message is STILL THERE. Deleting it would leave a hole in an
+	// append-only log and tell an agent that already read the line nothing.
+	var found bool
+	for _, e := range mustTranscript(t, st.ID) {
+		if e.Kind == "human" && e.Text == "withdraw this one" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the retracted message was removed from the transcript")
+	}
+
+	// IN TIME: nothing was appended, so nothing was sent. A recall for a handle
+	// the server never knew must NOT claim this — see the third case below.
+	before := len(mustTranscript(t, st.ID))
+	resp, body = doJSON(t, srv, "POST", "/api/rooms/"+st.ID+"/recall",
+		map[string]string{"job": "address-never-existed"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("recall of an unknown job: status %d (%s)", resp.StatusCode, body)
+	}
+	var unknown RecallResult
+	if err := json.Unmarshal(body, &unknown); err != nil {
+		t.Fatal(err)
+	}
+	if unknown.Verdict != RecallGone {
+		t.Errorf("unknown handle = %q, want %q: only a stopped send may report itself as not sent",
+			unknown.Verdict, RecallGone)
+	}
+	if after := len(mustTranscript(t, st.ID)); after != before {
+		t.Errorf("a recall of nothing wrote %d record(s)", after-before)
+	}
+}
+
+// A plain post is withdrawn by naming the record, which is the handle a chat and
+// a broadcast have: both append inside their own request and get no job.
+func TestRecallOverHTTPRetractsAPostedRecord(t *testing.T) {
+	st := newRoom(t)
+	srv := serveTest(t)
+
+	resp, body := doJSON(t, srv, "POST", "/api/rooms/"+st.ID+"/post",
+		map[string]string{"author": "qiangli", "text": "said too much"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("post: status %d (%s)", resp.StatusCode, body)
+	}
+	var posted Event
+	if err := json.Unmarshal(body, &posted); err != nil {
+		t.Fatal(err)
+	}
+	stamp := posted.TS.Format(time.RFC3339Nano)
+
+	resp, body = doJSON(t, srv, "POST", "/api/rooms/"+st.ID+"/recall",
+		map[string]string{"ts": stamp})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("recall: status %d (%s)", resp.StatusCode, body)
+	}
+	var out RecallResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Verdict != RecallRetracted || out.Retracted != stamp {
+		t.Fatalf("verdict %q retracted %q, want %q for %q", out.Verdict, out.Retracted, RecallRetracted, stamp)
+	}
+
+	// The transcript now carries BOTH records, and the withdrawal points at the
+	// message so a reader can line them up.
+	var retraction *Event
+	for i, e := range mustTranscript(t, st.ID) {
+		if e.Kind == "retraction" {
+			retraction = &mustTranscript(t, st.ID)[i]
+		}
+	}
+	if retraction == nil {
+		t.Fatal("no retraction in the transcript")
+	}
+	if retraction.Retracts != stamp {
+		t.Errorf("retraction points at %q, want %q", retraction.Retracts, stamp)
+	}
+	if !strings.Contains(retraction.Text, "said too much") {
+		t.Errorf("the retraction does not say what it withdraws: %q", retraction.Text)
+	}
+}
+
+func mustTranscript(t *testing.T, id string) []Event {
+	t.Helper()
+	events, err := readTranscript(id)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	return events
+}

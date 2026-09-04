@@ -178,6 +178,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("GET /api/dms/{agent}", handleRelayDMGet)
 	route("POST /api/dms/{agent}/messages", handleRelayDMMessage(ctx))
 	route("POST /api/dms/{agent}/work", handleRelayDMWork(ctx))
+	route("POST /api/dms/{agent}/recall", handleRelayDMRecall)
 	route("/observe-dm", handleRelayDMObserve)
 	route("GET /api/rooms/{ref}", handleRoomGet)
 	route("POST /api/rooms", handleRoomCreate)
@@ -186,6 +187,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("POST /api/rooms/{ref}/kick", handleKick)
 	route("POST /api/rooms/{ref}/mark", handleMark)
 	route("POST /api/rooms/{ref}/address", handleAsync(ctx, "address"))
+	route("POST /api/rooms/{ref}/recall", handleRecall)
 	route("POST /api/rooms/{ref}/round", handleAsync(ctx, "round"))
 	route("POST /api/rooms/{ref}/poll", handleAsync(ctx, "poll"))
 	route("POST /api/rooms/{ref}/ask", handleAsync(ctx, "ask"))
@@ -465,6 +467,36 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ev)
 }
 
+// handleRecall is "stop that message" for a room.
+//
+// The caller sends whichever handle it has — the job id from its own 202, the
+// timestamp of the record it can see, or both — and the SERVER says what that
+// achieved. It never says "canceled" for a message that went out: see recall.go
+// for why that distinction cannot be made in a browser.
+func handleRecall(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Job string `json:"job"`
+		TS  string `json:"ts"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		apiErr(w, err)
+		return
+	}
+	st, err := roomOf(r.PathValue("ref"))
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	// The retraction is attributed to the caller, resolved the same way a post
+	// is: a withdrawal signed by anyone but the sender is not a withdrawal.
+	res, err := Recall(st, body.Job, body.TS, actorOf(r, st.Human))
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func handleInvite(w http.ResponseWriter, r *http.Request) {
 	handleRoster(w, r, Invite)
 }
@@ -587,25 +619,25 @@ func handleAsync(srvCtx context.Context, verb string) http.HandlerFunc {
 			}
 		}
 
-		var run func(context.Context) error
+		var run func(context.Context, *liveJob) error
 		switch verb {
 		case "address":
 			if strings.TrimSpace(body.Agent) == "" {
 				apiErr(w, errors.New("meet: address needs an agent"))
 				return
 			}
-			run = func(ctx context.Context) error {
-				_, err := Address(ctx, ref, body.Agent, body.Text)
+			run = func(ctx context.Context, j *liveJob) error {
+				_, err := addressJob(ctx, ref, body.Agent, body.Text, j)
 				return err
 			}
 		case "round":
-			run = func(ctx context.Context) error { _, err := Round(ctx, ref); return err }
+			run = func(ctx context.Context, _ *liveJob) error { _, err := Round(ctx, ref); return err }
 		case "poll":
 			if strings.TrimSpace(body.Question) == "" {
 				apiErr(w, errors.New("meet: a poll needs a question"))
 				return
 			}
-			run = func(ctx context.Context) error {
+			run = func(ctx context.Context, _ *liveJob) error {
 				_, err := Poll(ctx, ref, body.Question, body.Choices)
 				return err
 			}
@@ -614,9 +646,9 @@ func handleAsync(srvCtx context.Context, verb string) http.HandlerFunc {
 				apiErr(w, errors.New("meet: an open question needs a question"))
 				return
 			}
-			run = func(ctx context.Context) error { _, err := Ask(ctx, ref, body.Question); return err }
+			run = func(ctx context.Context, _ *liveJob) error { _, err := Ask(ctx, ref, body.Question); return err }
 		case "converge":
-			run = func(ctx context.Context) error { _, err := Converge(ctx, ref); return err }
+			run = func(ctx context.Context, _ *liveJob) error { _, err := Converge(ctx, ref); return err }
 		default:
 			writeErr(w, http.StatusNotFound, fmt.Errorf("meet: no such verb %q", verb))
 			return
@@ -646,7 +678,7 @@ var jobSeq atomic.Uint64
 // So there is a microsecond-wide window in which another runner can win between
 // the probe and the real acquire. That is not papered over: the loser records its
 // refusal IN THE ROOM, where the caller is already watching.
-func startJob(srvCtx context.Context, id, verb string, run func(context.Context) error) (JobRef, error) {
+func startJob(srvCtx context.Context, id, verb string, run func(context.Context, *liveJob) error) (JobRef, error) {
 	lease, err := acquireRunLease(id)
 	if err != nil {
 		return JobRef{}, err
@@ -654,21 +686,36 @@ func startJob(srvCtx context.Context, id, verb string, run func(context.Context)
 	lease.Release()
 
 	job := fmt.Sprintf("%s-%d", verb, jobSeq.Add(1))
+	// The server's lifetime, not the request's: a request context is cancelled
+	// the instant the 202 is written, which would abort the work it promised.
+	// Cancellable, so the SENDER can stop it — see recall.go. Nobody else holds
+	// this cancel: a job ends when it finishes or when the person who started it
+	// takes it back.
+	parent := srvCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	j := registerJob(job, id, cancel)
 	go func() {
-		// The server's lifetime, not the request's: a request context is cancelled
-		// the instant the 202 is written, which would abort the work it promised.
-		ctx := srvCtx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		if err := run(ctx); err == nil {
+		defer cancel()
+		defer j.retire()
+		err := run(ctx, j)
+		switch {
+		case err == nil:
 			return
-		} else if st, lerr := loadState(id); lerr == nil {
-			// The transcript is the room's only output channel, so a job that failed
-			// says so there. A 202 followed by silence would leave the room believing
-			// a round is still coming.
-			_, _ = record(st, "note", otelServiceName, "",
-				fmt.Sprintf("%s (job %s) did not run: %v", verb, job, err))
+		case j.stopped():
+			// The recall already recorded what happened — a cancelled/retracted
+			// message plus a "did not run" note reads as two separate failures.
+			return
+		default:
+			if st, lerr := loadState(id); lerr == nil {
+				// The transcript is the room's only output channel, so a job that
+				// failed says so there. A 202 followed by silence would leave the
+				// room believing a round is still coming.
+				_, _ = record(st, "note", otelServiceName, "",
+					fmt.Sprintf("%s (job %s) did not run: %v", verb, job, err))
+			}
 		}
 	}()
 	return JobRef{ID: job, Room: id}, nil

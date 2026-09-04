@@ -81,6 +81,17 @@ type Event struct {
 	// that turn.
 	Ledger *Ledger `json:"ledger,omitempty"`
 
+	// Retracts names the record this event withdraws, by that record's
+	// RFC3339Nano timestamp — the same (kind, speaker, ts) key the transcript
+	// and the browser already dedupe on, because events carry no id of their
+	// own. Set only on a `retraction`.
+	//
+	// The withdrawal is an APPEND, never an edit: the transcript is append-only,
+	// the minutes are a projection of it, and a reader who saw the original
+	// (an agent, most of all) must be able to find out that it was withdrawn
+	// rather than discover a hole where it used to be.
+	Retracts string `json:"retracts,omitempty"`
+
 	// Raw is the agent's UN-normalized output, carried to a client only when it
 	// explicitly asked to debug the transport (see renderEvent). It is never
 	// stored — the record holds prose — and is absent from every ordinary read,

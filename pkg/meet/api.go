@@ -540,6 +540,18 @@ func participantSeat(st *State, name string) bool {
 // transcript that a concurrent round is also writing, and two speakers holding
 // the floor at once is the exact incoherence lease.go was added for.
 func Address(ctx context.Context, ref, agent, text string) (Event, error) {
+	return addressJob(ctx, ref, agent, text, nil)
+}
+
+// addressJob is Address with the RECALL boundary made explicit.
+//
+// j is the in-flight dispatch this run belongs to, or nil for a CLI call that
+// nobody can recall. Two things happen through it, and they are the whole of
+// the cancel/retract split described in recall.go: the run refuses to write
+// anything once its context is cancelled, and the instant it DOES write, it
+// says so — after that point the message exists and only a retraction can
+// withdraw it.
+func addressJob(ctx context.Context, ref, agent, text string, j *liveJob) (Event, error) {
 	st, err := roomOf(ref)
 	if err != nil {
 		return Event{}, err
@@ -566,9 +578,18 @@ func Address(ctx context.Context, ref, agent, text string) (Event, error) {
 	}
 	defer lease.Release()
 	target := canonAgent(name)
-	if err := recordAsked(st, target, text); err != nil {
+	// THE BOUNDARY. Everything above this line is preparation that leaves no
+	// trace a reader could see, so a recall arriving here still means "not
+	// sent". Checked after the lease rather than before, because waiting for a
+	// busy room is exactly when a sender changes their mind.
+	if err := ctx.Err(); err != nil {
+		return Event{}, errRecalled
+	}
+	asked, err := recordAsked(st, target, text)
+	if err != nil {
 		return Event{}, err
 	}
+	j.markCommitted(asked)
 	ev, err := runTurn(ctx, st, target, text, apiRunner())
 	if err != nil {
 		// The question stays UNREAD deliberately: the agent never answered it, so
@@ -594,19 +615,18 @@ func Address(ctx context.Context, ref, agent, text string) (Event, error) {
 // makes it directed mail in that agent's unified inbox, and what a later
 // handover re-targets. markAnswered is the other half — mail answered on the
 // spot must not be delivered a second time.
-func recordAsked(st *State, agent, text string) error {
+func recordAsked(st *State, agent, text string) (Event, error) {
 	who := strings.TrimSpace(st.Human)
 	if who == "" {
 		// Every room-creating path names a human (meet.go humanSeat, serve.go
 		// actorOf). A room that somehow has none gets no invented one: an event
 		// attributed to "" is worse than an unrecorded question.
-		return nil
+		return Event{}, nil
 	}
-	_, err := recordFull(st, Event{
+	return recordFull(st, Event{
 		Round: st.Round, Speaker: who, Role: string(RoleHuman),
 		Kind: "human", To: agent, Text: text, TS: nowFn(),
 	})
-	return err
 }
 
 // markAnswered advances the addressed agent's read cursor past the exchange it

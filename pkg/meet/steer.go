@@ -68,16 +68,19 @@ func sessionTurn(ctx context.Context, st *State, name, role, instruction, questi
 	// `speaking` without a `spoke`. Once-only, so the explicit closes below win.
 	defer live.close(statusError)
 
+	steerReadOnly, steerAllowUnsafe := turnAuthority()
 	sess, err := chat.Start(ctx, name, chat.SessionOptions{
 		Prompt:  prompt,
 		Cwd:     st.Cwd,
 		Timeout: budget,
 		Stream:  live,
-		// A meeting is a conversation, not a work session — every seat produces
-		// exactly one thing, which is text. Read-only also passes the launch guard by
-		// construction, so nobody has to weaken a host to hold a meeting.
-		ReadOnly: true,
-		Mode:     "meet",
+		// The steered seat gets the same authority as the one-shot seat — a seat
+		// that may act when it answers once and may not when it can be talked to
+		// mid-turn would be an accident of which code path started it. See
+		// turnAuthority for what this grants and how to restore read-only.
+		ReadOnly:    steerReadOnly,
+		AllowUnsafe: steerAllowUnsafe,
+		Mode:        "meet",
 	})
 	if err != nil {
 		ev := classifyTurn(st, name, question, "", 2, err, time.Since(start), budget)

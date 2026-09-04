@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import {
   ArrowRight,
   Bot,
@@ -42,6 +42,10 @@ interface MessageListProps {
 }
 
 const systemKinds = new Set([
+  // A retraction is ABOUT a message rather than another message. Rendering it
+  // as a full bubble would put the withdrawn text on screen twice, in a larger
+  // typeface than the thing it withdraws.
+  "retraction",
   "agenda",
   "ledger",
   "replan",
@@ -64,6 +68,18 @@ export function MessageList({
   debugRaw = false,
 }: MessageListProps) {
   const agent = kind === "dm" ? state?.name || state?.owner || "" : ""
+  // Which records have been withdrawn, resolved at READ time from the
+  // retractions in the transcript rather than stored on the message itself.
+  // The transcript is append-only, so the message cannot be edited to say so —
+  // and resolving here means a retraction that arrives later marks its target
+  // the moment it lands, with no second write.
+  const retracted = useMemo(() => {
+    const marked = new Set<string>()
+    for (const event of events) {
+      if (event.kind === "retraction" && event.retracts) marked.add(event.retracts)
+    }
+    return marked
+  }, [events])
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -109,6 +125,7 @@ export function MessageList({
                 event={event}
                 key={eventKey(event, index)}
                 kind={kind}
+                retracted={retracted.has(stampOf(event))}
                 state={state}
               />
             ),
@@ -125,11 +142,16 @@ function Message({
   event,
   state,
   kind,
+  retracted = false,
   debugRaw = false,
 }: {
   event: MeetEvent
   state: State | null
   kind: "room" | "dm"
+  /** The sender withdrew this message. It STAYS — see the note on retractions
+   * in the transcript: the record is append-only, and an agent that already
+   * read the original needs to see that it was withdrawn, not find a hole. */
+  retracted?: boolean
   debugRaw?: boolean
 }) {
   const from = seatOf(event.speaker, state, event.role)
@@ -185,11 +207,21 @@ function Message({
           <time className="text-[10px] text-muted-foreground/70">
             {formatTime(event.ts)}
           </time>
+          {retracted && (
+            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-900">
+              Retracted
+            </span>
+          )}
         </div>
         {debugRaw ? (
           <EventRecord event={event} />
         ) : isHuman ? (
-          <p className="whitespace-pre-wrap text-[14px] leading-6 text-foreground/90">
+          <p
+            className={cn(
+              "whitespace-pre-wrap text-[14px] leading-6 text-foreground/90",
+              retracted && "text-muted-foreground/60 line-through",
+            )}
+          >
             {event.text}
           </p>
         ) : (
@@ -394,6 +426,14 @@ function formatTime(value?: string | number) {
     hour: "numeric",
     minute: "2-digit",
   }).format(date)
+}
+
+/** stampOf is the record's own handle — the timestamp a retraction points at. */
+function stampOf(event: MeetEvent): string {
+  const ts = event.ts
+  if (typeof ts === "string") return ts
+  if (typeof ts === "number") return new Date(ts).toISOString()
+  return ""
 }
 
 function eventKey(event: MeetEvent, index: number) {

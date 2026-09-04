@@ -204,6 +204,7 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	// make `meet say` address an agent that is long gone. close is once-only, so
 	// the explicit close still wins.
 	defer live.close(statusError)
+	turnReadOnly, turnAllowUnsafe := turnAuthority()
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
 		Role:        role,
@@ -223,25 +224,12 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		PTY:         usePTY,
 		CtlSock:     sock,
 
-		// A MEETING IS A CONVERSATION, NOT A WORK SESSION. Every seat here —
-		// participant, chair, secretary — produces exactly one thing: text, which
-		// this process captures and writes. No attendee has any reason to touch
-		// the filesystem, and the context files it reviews are read INTO the
-		// prompt for it (Files, above), so it does not even need to open them.
-		//
-		// The same integrity argument as `bashy judge`, one step earlier: an
-		// agent that can edit the code it is discussing can quietly "fix" the
-		// thing under debate and then argue from the fixed version, and the
-		// minutes would record a discussion of a codebase that no longer exists.
-		//
-		// This is also what makes a meeting work OUT OF THE BOX. The launch guard
-		// refuses to strip an agent CLI's approval gate on an uncontained host —
-		// correctly, since that hands an unattended agent full access. Read-only
-		// removes the dangerous flags rather than demanding permission to keep
-		// them, so the guard passes BY CONSTRUCTION: there is nothing left to
-		// guard. Nobody has to set BASHY_ALLOW_UNSAFE_AGENT_LAUNCH to hold a
-		// meeting, and nobody has to weaken a host to watch one.
-		ReadOnly:         true,
+		// A seat ACTS: it runs a sprint, files the story, moves the branch. See
+		// turnAuthority for what that gives up (a seat used to be read-only, and
+		// the integrity argument for that has not stopped being true) and for
+		// $BASHY_MEET_READONLY, which puts it back host-wide.
+		ReadOnly:         turnReadOnly,
+		AllowUnsafe:      turnAllowUnsafe,
 		KillOnParentExit: true,
 	}, runner)
 
@@ -768,9 +756,14 @@ func converge(ctx context.Context, st *State, runner chat.Runner) (*Synthesis, e
 			"name one with `bashy meet amend %s --secretary AGENT`", st.ID, st.ID)
 	}
 	events, _ := readTranscript(st.ID)
+	secretaryReadOnly, secretaryAllowUnsafe := turnAuthority()
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent: st.Secretary, Role: string(RoleSecretary), Instruction: convergeInstruction(st.decisionMode()),
 		Context: []string{transcriptContext(events)}, Cwd: st.Cwd, Timeout: turnTimeout(st), KillOnParentExit: true,
+		// The secretary writes the minutes, and under a manager seat it also
+		// files what the room decided. Same authority as every other seat — see
+		// turnAuthority.
+		ReadOnly: secretaryReadOnly, AllowUnsafe: secretaryAllowUnsafe,
 	}, runner)
 	if err != nil {
 		return nil, fmt.Errorf("meet: secretary %s failed: %w", st.Secretary, err)

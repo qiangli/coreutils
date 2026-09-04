@@ -619,8 +619,24 @@ async function selectRecipient(page: Page, name: string) {
   await page.getByRole("menuitem", { name: new RegExp(name) }).click();
 }
 
+/** openMeet opens the app with the SEND HOLD OFF.
+ *
+ * The composer holds a clicked message for five seconds before dispatching it,
+ * so that cancelling can truthfully mean "not sent". Every test below is about
+ * something else, and paying that five seconds per message would make the suite
+ * slow and its assertions racy against the hold rather than against the room.
+ * The hold has its own tests, which ask for it explicitly — see openMeetHolding.
+ */
 async function openMeet(page: Page) {
-  await page.goto(`${baseURL}/?mock=0`);
+  await page.goto(`${baseURL}/?mock=0&hold=0`);
+  await expect(page.getByText("bashymeet", { exact: true })).toBeVisible();
+}
+
+/** openMeetHolding opens the app with a send hold, for the tests that are about
+ * it. The window is passed explicitly rather than relying on the default so a
+ * change to that default cannot silently make these tests flaky. */
+async function openMeetHolding(page: Page, ms: number) {
+  await page.goto(`${baseURL}/?mock=0&hold=${ms}`);
   await expect(page.getByText("bashymeet", { exact: true })).toBeVisible();
 }
 
@@ -740,3 +756,79 @@ function freePort(): Promise<number> {
 function unique(prefix: string) {
   return `${prefix} ${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+
+// --- Taking a message back ---------------------------------------------------
+
+// IN TIME: the message never went out, and the sender gets their text back.
+//
+// This is the branch that can honestly say "not sent", and it can only say it
+// because nothing has left the browser yet — an aborted request would prove
+// nothing, since the server may have committed a microsecond earlier. The test
+// therefore asserts on the ROOM as well as on the banner: a UI that said
+// "canceled" over a message that reached the transcript would be the exact lie
+// the design exists to prevent.
+test("cancelling during the hold sends nothing and restores the text", async ({ page }) => {
+  const topic = unique("Browser cancel room");
+  const message = unique("never actually sent");
+  await openMeetHolding(page, 5_000);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await selectRecipient(page, "Everyone");
+  await page.getByLabel("Message the room").fill(message);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  // While it is held, the SEND button is the CANCEL button and says so.
+  const cancel = page.getByRole("button", { name: /^Cancel send/ });
+  await expect(cancel).toBeVisible();
+  await expect(page.getByText(/Sending in \d+s · click to cancel/)).toBeVisible();
+  await cancel.click();
+
+  await expect(page.getByText("Canceled — the message was not sent.")).toBeVisible();
+  // The text comes back for editing rather than being lost, and the room never
+  // saw it — before OR after a reload, which is what rules out a UI that merely
+  // hid what it had already sent.
+  await expect(page.getByLabel("Message the room")).toHaveValue(message);
+  // Scoped to the TRANSCRIPT, not the page: the composer legitimately holds
+  // this text now, and a page-wide search would match the textarea it was
+  // restored into — passing the moment the feature broke the other way.
+  const inRoom = page.locator("article").filter({ hasText: message });
+  await expect(inRoom).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator("article").filter({ hasText: message })).toHaveCount(0);
+});
+
+// TOO LATE: the message is out, so it is withdrawn IN THE ROOM rather than
+// pretended away — and the composer asks first, because a retraction is a
+// permanent record everyone can see.
+test("recalling after the hold posts a retraction beside the message", async ({ page }) => {
+  const topic = unique("Browser retract room");
+  const message = unique("please disregard this");
+  // A hold short enough that the message is already dispatched by the time the
+  // test clicks, which is the state this branch is about.
+  await openMeetHolding(page, 1);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await selectRecipient(page, "Everyone");
+  await page.getByLabel("Message the room").fill(message);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText(message).first()).toBeVisible();
+
+  const recall = page.getByRole("button", { name: "Recall message" });
+  await expect(recall).toBeVisible();
+  await recall.click();
+
+  // The confirm names the consequence rather than asking a bare "are you sure".
+  await expect(page.getByText("Already delivered.")).toBeVisible();
+  await page.getByRole("button", { name: "Post retraction" }).click();
+
+  await expect(
+    page.getByText(/Too late to unsend — the message was already delivered/),
+  ).toBeVisible();
+  // BOTH records survive: the withdrawn message stays where it was, marked, and
+  // the retraction sits beside it. Deleting would leave a hole in an
+  // append-only log and tell a reader who saw the original nothing.
+  await expect(page.getByText("Retracted").first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByText(message).first()).toBeVisible();
+  await expect(page.getByText("Retracted").first()).toBeVisible();
+});
