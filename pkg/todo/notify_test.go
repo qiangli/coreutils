@@ -23,6 +23,11 @@ func newTestStoreFunc(t *testing.T) storeFunc {
 	t.Setenv("BASHY_PRINCIPAL", "")
 	t.Setenv("BASHY_AGENT_ID", "")
 	t.Setenv("WEAVE_AGENT", "")
+	// Lifecycle gates deliberately run with a minimal environment that omits
+	// USER and LOGNAME. Establish the human author this test exercises instead
+	// of borrowing it from whichever shell happened to start `go test`.
+	t.Setenv("USER", "steward")
+	t.Setenv("LOGNAME", "steward")
 	st, err := UserStore("steward")
 	if err != nil {
 		t.Fatal(err)
