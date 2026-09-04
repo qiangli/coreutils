@@ -2,11 +2,27 @@ package foreman
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/chat"
 )
+
+func TestLiveSessionOptionsCarryExplicitUnsafeAuthorization(t *testing.T) {
+	s := &Session{state: State{
+		ID: "sprint-115-manager", Agent: "claude-opus5", Cwd: "/work",
+		OpeningSendOnce: true, AllowUnsafe: true,
+	}}
+	sink := io.Discard
+	got := s.liveSessionOptions("start sprint", sink, 3*time.Minute)
+	if !got.AllowUnsafe || !got.OpeningSendOnce || got.Prompt != "start sprint" ||
+		got.Cwd != "/work" || got.Stream != sink || got.Timeout != 3*time.Minute ||
+		got.Mode != "foreman" || got.Task != "sprint-115-manager" {
+		t.Fatalf("live session options lost detached policy: %+v", got)
+	}
+}
 
 // An injected Runner is the test seam AND the programmatic entry point. A caller
 // that supplied its own runner asked for exactly that runner — it must not be

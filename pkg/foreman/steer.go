@@ -167,16 +167,8 @@ func (s *Session) attach(ctx context.Context, msg string, prepared ...string) er
 	if err != nil {
 		return err
 	}
-	live, err := chat.Start(ctx, s.state.Agent, chat.SessionOptions{
-		Prompt:          s.composePrompt(msg, prepared...),
-		OpeningSendOnce: s.state.OpeningSendOnce,
-		Cwd:             s.state.Cwd,
-		Stream:          sink,
-		Timeout:         timeout,
-		ReadOnly:        false, // a foreman's agent is here to DO the work
-		Mode:            "foreman",
-		Task:            s.state.ID,
-	})
+	live, err := chat.Start(ctx, s.state.Agent, s.liveSessionOptions(
+		s.composePrompt(msg, prepared...), sink, timeout))
 	if err != nil {
 		if openedLog != nil {
 			_ = openedLog.Close()
@@ -195,6 +187,20 @@ func (s *Session) attach(ctx context.Context, msg string, prepared ...string) er
 	// turn is still running, which is the only time steering it would do any good.
 	s.persistLocked()
 	return nil
+}
+
+func (s *Session) liveSessionOptions(prompt string, sink io.Writer, timeout time.Duration) chat.SessionOptions {
+	return chat.SessionOptions{
+		Prompt:          prompt,
+		OpeningSendOnce: s.state.OpeningSendOnce,
+		Cwd:             s.state.Cwd,
+		Stream:          sink,
+		Timeout:         timeout,
+		ReadOnly:        false, // a foreman's agent is here to DO the work
+		AllowUnsafe:     s.state.AllowUnsafe,
+		Mode:            "foreman",
+		Task:            s.state.ID,
+	}
 }
 
 func (s *Session) remainingRuntime() (time.Duration, error) {

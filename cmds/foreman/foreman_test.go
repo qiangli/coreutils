@@ -101,7 +101,7 @@ func TestStartCanPersistUnboundedExactOnceSession(t *testing.T) {
 	t.Setenv("BASHY_FOREMAN_NO_SPAWN", "1")
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	code := run(rc, []string{"start", "--id", "owner", "--detach", "--goal", "manage", "--no-max-runtime", "--opening-send-once"})
+	code := run(rc, []string{"start", "--id", "owner", "--detach", "--goal", "manage", "--no-max-runtime", "--opening-send-once", "--yolo"})
 	if code != 0 {
 		t.Fatalf("start code = %d, err = %s", code, errb.String())
 	}
@@ -109,7 +109,7 @@ func TestStartCanPersistUnboundedExactOnceSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.MaxRuntime != "" || !st.Deadline.IsZero() || !st.OpeningSendOnce {
+	if st.MaxRuntime != "" || !st.Deadline.IsZero() || !st.OpeningSendOnce || !st.AllowUnsafe {
 		t.Fatalf("owner session policy was not persisted: %+v", st)
 	}
 	if code := run(rc, []string{"start", "--detach", "--goal", "bad", "--no-max-runtime", "--max-runtime", "1h"}); code == 0 {

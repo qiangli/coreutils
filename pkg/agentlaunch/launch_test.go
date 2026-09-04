@@ -68,6 +68,35 @@ func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
 	}
 }
 
+func TestManagedSprintOwnerProfilesResolveWithExplicitUnsafeAuthorization(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		agent string
+		tool  string
+	}{
+		{agent: "claude-opus5", tool: "claude"},
+		{agent: "codex-gpt5.6-sol", tool: "codex"},
+		{agent: "agy-opus4.6", tool: "agy"},
+		{agent: "opencode-kimi-k3", tool: "opencode"},
+		{agent: "ycode-gpt5.6-sol", tool: "ycode"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			l, err := ResolveWithCatalog(tc.agent, Options{
+				Steer: true, AllowUnsafe: true,
+			}, testCatalog(root))
+			if err != nil {
+				t.Fatalf("managed sprint owner %q did not resolve: %v", tc.agent, err)
+			}
+			if l.ToolName != tc.tool || !l.Named() {
+				t.Fatalf("managed sprint owner %q resolved as %+v", tc.agent, l)
+			}
+			if len(l.Args) == 0 {
+				t.Fatalf("managed sprint owner %q has no steerable argv", tc.agent)
+			}
+		})
+	}
+}
+
 func TestResolveCarriesSelectedCredentialNames(t *testing.T) {
 	t.Setenv(UnsafeLaunchEnv, "1")
 	l, err := ResolveWithCatalog("ycode:glm-5.2", Options{}, testCatalog(t.TempDir()))

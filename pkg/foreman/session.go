@@ -22,6 +22,11 @@ type Options struct {
 	MaxRuntime      time.Duration
 	Runner          chat.Runner
 	OpeningSendOnce bool
+	// AllowUnsafe records the operator's explicit authorization for this
+	// unattended managed session to keep the agent CLI's approval-bypass flag.
+	// It is persisted because a detached start is reopened by the serve process
+	// before the live chat session is launched.
+	AllowUnsafe bool
 
 	// Eager brings the agent up AT Start instead of on the first message.
 	//
@@ -91,6 +96,7 @@ func Start(ctx context.Context, opt Options) (*Session, error) {
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		OpeningSendOnce: opt.OpeningSendOnce,
+		AllowUnsafe:     opt.AllowUnsafe,
 	}
 	if opt.MaxRuntime > 0 {
 		st.MaxRuntime = opt.MaxRuntime.String()

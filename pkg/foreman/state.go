@@ -53,6 +53,10 @@ type State struct {
 	// OpeningSendOnce is persisted because a detached start is reopened by the
 	// serve subprocess before it launches the agent.
 	OpeningSendOnce bool `json:"opening_send_once,omitempty"`
+	// AllowUnsafe carries an explicit --yolo decision across detached startup.
+	// Without persistence, the parent accepts the mode and the serve child loses
+	// it just before chat applies the unattended-host launch guard.
+	AllowUnsafe bool `json:"allow_unsafe,omitempty"`
 
 	// Binding is the canonical tool:model this session is actually talking to.
 	// Agent may be an alias or a nickname; a record must never store one of those.

@@ -21,7 +21,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "foreman",
 	Synopsis: "Drive a persistent, steerable agent session.",
-	Usage:    "foreman start [--detach] [--max-runtime 30m|--no-max-runtime] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status [--wait DURATION] [--after SEQ] [--watch] [--json] <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
+	Usage:    "foreman start [--detach] [--yolo] [--max-runtime 30m|--no-max-runtime] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status [--wait DURATION] [--after SEQ] [--watch] [--json] <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
 }
 
 const defaultForemanMaxRuntime = 30 * time.Minute
@@ -133,6 +133,7 @@ func runStart(rc *tool.RunContext, flags map[string]string, args []string, jsonO
 		MaxRuntime:      maxRuntime,
 		Runner:          runner,
 		OpeningSendOnce: flags["opening-send-once"] == "true",
+		AllowUnsafe:     flags["yolo"] == "true",
 	})
 	if err != nil {
 		return fail(rc, jsonOut, err)
@@ -520,7 +521,7 @@ func parseKVFlags(args []string) (map[string]string, []string) {
 			continue
 		}
 		switch name {
-		case "json", "once", "detach", "watch", "no-max-runtime", "opening-send-once":
+		case "json", "once", "detach", "watch", "no-max-runtime", "opening-send-once", "yolo":
 			flags[name] = "true"
 		default:
 			if i+1 >= len(args) {
