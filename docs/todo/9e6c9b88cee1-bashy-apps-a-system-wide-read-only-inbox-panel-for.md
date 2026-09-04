@@ -3,10 +3,11 @@ id: 9e6c9b88cee1
 kind: task
 title: 'bashy apps: a system-wide, read-only Inbox panel for every agent''s waiting mail'
 seq: 49
-status: todo
+status: done
 priority: p1
 created: 2026-09-04T17:47:45.966064Z
 sprint: 122
+closed: 2026-09-04T17:50:35.535046Z
 ---
 
 `bashy inbox` is first-person: it fixes the filter to one reader and, unless
