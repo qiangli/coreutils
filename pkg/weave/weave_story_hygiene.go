@@ -48,6 +48,10 @@ import (
 type sprintHygiene struct {
 	Repos    []string `json:"repos,omitempty"`
 	Problems []string `json:"problems,omitempty"`
+	// Shared names repositories whose dirty state belongs to another active
+	// sprint as well. They remain visible in reports, but cannot block this
+	// sprint's close because the state is not attributable to it alone.
+	Shared []string `json:"shared,omitempty"`
 	// Reclaimable names host artifacts that prune could remove right now. It is
 	// informational: leftover disk is untidy, not unsafe, and must never make a
 	// sprint unclosable on its own.
@@ -69,6 +73,7 @@ func sprintCheckHygiene(s *weaveStory) sprintHygiene {
 		return h
 	}
 	seen := map[string]bool{}
+	shared := sprintSharedHygieneRoots(s, sprintHygieneBoard())
 	for _, run := range s.Runs {
 		dir, err := weaveQueueDirForSprintRun(run)
 		if err != nil {
@@ -87,6 +92,10 @@ func sprintCheckHygiene(s *weaveStory) sprintHygiene {
 		}
 		seen[root] = true
 		h.Repos = append(h.Repos, root)
+		if ids := shared[hygieneRootKey(root)]; len(ids) > 0 {
+			h.Shared = append(h.Shared, sprintSharedHygieneLabel(run.Repo, root, ids))
+			continue
+		}
 		sprintInspectRepo(root, run.Repo, &h)
 	}
 	// DECLARED roots only — never the implicit current checkout.
@@ -102,13 +111,90 @@ func sprintCheckHygiene(s *weaveStory) sprintHygiene {
 		}
 		seen[root] = true
 		h.Repos = append(h.Repos, root)
+		if ids := shared[hygieneRootKey(root)]; len(ids) > 0 {
+			h.Shared = append(h.Shared, sprintSharedHygieneLabel(filepath.Base(root), root, ids))
+			continue
+		}
 		sprintInspectRepo(root, filepath.Base(root), &h)
 	}
 	sprintInspectRuns(s, &h)
 	sort.Strings(h.Problems)
 	sort.Strings(h.Reclaimable)
 	sort.Strings(h.Repos)
+	sort.Strings(h.Shared)
 	return h
+}
+
+// sprintHygieneBoard returns the board already held by a sprint mutation. A
+// standing `sprint prune` call has no mutation callback, so it reads the same
+// durable board directly. Failure to read merely removes the sharing exemption;
+// hygiene stays fail-closed and reports the dirty repository normally.
+func sprintHygieneBoard() []*weaveStory {
+	if currentBoard != nil {
+		return currentBoard
+	}
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return nil
+	}
+	q, err := readWeaveQueue(dir)
+	if err != nil || q == nil {
+		return nil
+	}
+	return q.Stories
+}
+
+// sprintSharedHygieneRoots finds exact checkouts attributed to another active
+// sprint. Declared story roots cover the repository holding that sprint's
+// stories (for example the umbrella); linked weave runs cover subrepositories
+// where implementation is active. Merely sharing a basename is insufficient.
+func sprintSharedHygieneRoots(s *weaveStory, stories []*weaveStory) map[string][]int64 {
+	out := map[string][]int64{}
+	for _, other := range stories {
+		if other == nil || s == nil || other.ID == s.ID || other.currentBox() == nil {
+			continue
+		}
+		roots := map[string]bool{}
+		for _, root := range sprintDeclaredStoryRoots(other) {
+			roots[hygieneRootKey(root)] = true
+		}
+		for _, run := range other.Runs {
+			dir, err := weaveQueueDirForSprintRun(run)
+			if err != nil {
+				continue
+			}
+			if root, ok := weaveRepoRootForQueue(dir); ok {
+				roots[hygieneRootKey(root)] = true
+			}
+		}
+		for root := range roots {
+			out[root] = append(out[root], other.ID)
+		}
+	}
+	for root := range out {
+		sort.Slice(out[root], func(i, j int) bool { return out[root][i] < out[root][j] })
+	}
+	return out
+}
+
+func hygieneRootKey(root string) string {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	return filepath.Clean(root)
+}
+
+func sprintSharedHygieneLabel(label, root string, ids []int64) string {
+	refs := make([]string, len(ids))
+	for i, id := range ids {
+		refs[i] = fmt.Sprintf("#%d", id)
+	}
+	return fmt.Sprintf("%s: shared with active sprint(s) %s in %s — dirty state is attributed, not ignored",
+		label, strings.Join(refs, ", "), root)
 }
 
 // sprintInspectRepo reports the git-visible state of one checkout.
@@ -301,6 +387,9 @@ func renderSprintHygiene(w io.Writer, h sprintHygiene) {
 	for _, r := range h.Reclaimable {
 		fmt.Fprintf(w, "  reclaimable: %s\n", r)
 	}
+	for _, shared := range h.Shared {
+		fmt.Fprintf(w, "  SHARED: %s\n", shared)
+	}
 }
 
 // sprintStateAddendum renders the sprint's current findings as a block to
@@ -318,7 +407,7 @@ func sprintStateAddendum(s *weaveStory) string {
 	hy := sprintCheckHygiene(s)
 	coverage := sprintCoverageProblems(s)
 	reach := sprintCheckReachability(s)
-	if hy.Clean() && len(coverage) == 0 && len(reach.Problems) == 0 && len(hy.Reclaimable) == 0 {
+	if hy.Clean() && len(coverage) == 0 && len(reach.Problems) == 0 && len(hy.Reclaimable) == 0 && len(hy.Shared) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -333,6 +422,9 @@ func sprintStateAddendum(s *weaveStory) string {
 	}
 	for _, c := range coverage {
 		b.WriteString("\n  UNCOVERED: " + c)
+	}
+	for _, shared := range hy.Shared {
+		b.WriteString("\n  SHARED: " + shared)
 	}
 	if n := len(hy.Reclaimable); n > 0 {
 		b.WriteString(fmt.Sprintf("\n  reclaimable: %d item(s) — `bashy sprint prune %d --apply`", n, s.ID))
