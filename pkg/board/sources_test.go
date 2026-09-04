@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -186,7 +187,7 @@ func TestTodoSourceLooksInEverySprintStoryRoot(t *testing.T) {
 	}}
 
 	var args []string
-	for _, st := range todoStores(b) {
+	for _, st := range firstOf(todoStores(b)) {
 		args = append(args, strings.Join(st.args, " "))
 	}
 	joined := strings.Join(args, "\n")
@@ -205,7 +206,7 @@ func TestTodoSourceLooksInEverySprintStoryRoot(t *testing.T) {
 // class of answer this change exists to remove.
 func TestTodoSourceIgnoresAnEmptyStoryRoot(t *testing.T) {
 	b := &Board{Sprints: []Sprint{{ID: 99, StoryRoots: []string{"", "   "}}}}
-	for _, st := range todoStores(b) {
+	for _, st := range firstOf(todoStores(b)) {
 		for i, a := range st.args {
 			if a == "--base-dir" && i+1 < len(st.args) && strings.TrimSpace(st.args[i+1]) == "" {
 				t.Fatalf("empty story root became a store: %v", st.args)
@@ -263,5 +264,66 @@ func TestTodoRowsCarryTheirSprintID(t *testing.T) {
 	// and must not be invented onto one.
 	if unlinked.SprintID != 0 {
 		t.Errorf("unlinked story row sprint_id = %d, want 0", unlinked.SprintID)
+	}
+}
+
+// firstOf drops todoStores' unreachable list so the store-shape assertions
+// above stay about the argv they are testing.
+func firstOf(stores []scopedStore, _ []string) []scopedStore { return stores }
+
+// ONE unreadable store must cost that store's rows and nothing else.
+//
+// The regression: the personal-list store was asked for with `--user --owner
+// <name>`, todo rejected `--owner` as unknown (an item's --owner is its
+// ASSIGNEE, not a store selector), and Load returned on that first error
+// before reading a single repo. A host with 183 stories reported ZERO — every
+// sprint card on the web board rendered with no stories under it and no story
+// link to click.
+func TestTodoSourceKeepsReadingAfterOneStoreFails(t *testing.T) {
+	orig := todoExec
+	t.Cleanup(func() { todoExec = orig })
+
+	var asked [][]string
+	todoExec = func(args ...string) ([]byte, error) {
+		asked = append(asked, args)
+		if slices.Contains(args, "--user") {
+			return nil, errors.New("unknown flag: --owner")
+		}
+		return []byte(`{"schema_version":"loom-v2","status":"ok","result":{"count":1,` +
+			`"items":[{"id":"abc","seq":7,"title":"a story","state":"todo","sprint":42}]}}`), nil
+	}
+
+	b := &Board{Sprints: []Sprint{{ID: 42, StoryRoots: []string{"/repos/umbrella"}}}}
+	err := todoSource{}.Load(context.Background(), b, Options{All: true})
+	if err == nil {
+		t.Fatal("a store that could not be read must still be reported, not swallowed")
+	}
+	if !strings.Contains(err.Error(), "user ") {
+		t.Errorf("the warning does not name the store it skipped: %v", err)
+	}
+	// The cwd is itself a git repo, so the readable stores are the story root
+	// plus whatever repo the test runs in — the count is the host's business.
+	// What must hold is that the failing store cost NOTHING but its own rows.
+	if len(b.Todos) == 0 {
+		t.Fatal("a failing store erased the readable ones")
+	}
+	for _, td := range b.Todos {
+		if td.SprintID != 42 {
+			t.Errorf("story lost its sprint link: %+v", td)
+		}
+	}
+	if len(asked) < 2 {
+		t.Errorf("Load stopped after the first store: %v", asked)
+	}
+}
+
+// `--owner` names an item's ASSIGNEE. Asking a STORE for it is what broke the
+// board, so no store may be addressed with it again.
+func TestTodoStoresNeverAskForAnOwnerFlag(t *testing.T) {
+	stores, _ := todoStores(&Board{Sprints: []Sprint{{ID: 1, StoryRoots: []string{"/repos/x"}}}})
+	for _, st := range stores {
+		if slices.Contains(st.args, "--owner") {
+			t.Fatalf("store %q asks todo for --owner, which selects no store: %v", st.scope, st.args)
+		}
 	}
 }

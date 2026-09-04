@@ -351,6 +351,14 @@ type todoSource struct{}
 
 func (todoSource) Name() string { return "todo" }
 
+// todoExec runs one `todo …` invocation. A var so a test can make ONE store
+// fail and assert the others still load — the whole point of the per-store
+// recovery below, and not otherwise reachable: an unreadable store on a real
+// host is a flag or envelope mismatch, not something a fixture can arrange.
+var todoExec = func(args ...string) ([]byte, error) {
+	return executeJSON(todo.NewTodoCmd(), args...)
+}
+
 // scopedStore is one todo store the board will read, with the args that reach
 // it.
 type scopedStore struct {
@@ -364,8 +372,9 @@ type scopedStore struct {
 // the same reason rolesFromQueue exists. It shipped fused to the read, was
 // therefore never tested, and got the answer wrong in a way that depended on
 // the reader's working directory.
-func todoStores(b *Board) []scopedStore {
+func todoStores(b *Board) ([]scopedStore, []string) {
 	var stores []scopedStore
+	var unreachable []string
 	seen := map[string]bool{}
 	add := func(scope, p string, args ...string) {
 		p = filepath.Clean(p)
@@ -374,15 +383,20 @@ func todoStores(b *Board) []scopedStore {
 			stores = append(stores, scopedStore{scope, args})
 		}
 	}
+	// The personal host list. `todo --user` reaches exactly ONE of these — the
+	// DefaultOwner's — because `--owner` is an item's ASSIGNEE, not a store
+	// selector, so there is no argv that names another owner's list. This used
+	// to emit `--user --owner <name>` per directory under the root; todo now
+	// rejects that as an unknown flag, and because Load abandoned the whole
+	// source on the first error, ONE unreachable personal list erased every
+	// repo's stories from the board. Ask only for what the CLI can answer, and
+	// name the rest in unreadable so the gap is reported rather than implied.
 	if root, err := todo.Root(); err == nil {
-		entries, _ := os.ReadDir(root)
-		for _, e := range entries {
-			if e.IsDir() {
-				add("user "+e.Name(), filepath.Join(root, e.Name()), "--user", "--owner", e.Name())
+		add("user "+todo.DefaultOwner, filepath.Join(root, todo.DefaultOwner), "--user")
+		for _, e := range readDirNames(root) {
+			if e != todo.DefaultOwner {
+				unreachable = append(unreachable, "user "+e)
 			}
-		}
-		if len(entries) == 0 {
-			add("user "+todo.DefaultOwner, filepath.Join(root, todo.DefaultOwner), "--user", "--owner", todo.DefaultOwner)
 		}
 	}
 	if cwd, ok := todo.FindGitRoot(); ok {
@@ -405,22 +419,53 @@ func todoStores(b *Board) []scopedStore {
 			add("repo "+filepath.Base(root), filepath.Join(root, "docs", "todo"), "--base-dir", root)
 		}
 	}
-	return stores
+	return stores, unreachable
 }
 
+// readDirNames lists a directory's subdirectory names, or nothing at all. A
+// missing personal-list root is the ordinary state of a fresh host, not a
+// failure to report.
+func readDirNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// Load reads every store it can and reports the ones it could not, rather than
+// abandoning the source at the first failure.
+//
+// THE FAILURE THIS ENCODES: one store that answered "unknown flag: --owner"
+// returned out of Load before any other store was read, so a host with 183
+// stories reported ZERO — every sprint card rendered with no stories under it
+// and no story link to click, while the only evidence was a single warning
+// line about a flag. A per-store failure must cost that store's rows and
+// nothing else; the error still surfaces, as a warning naming which stores
+// were skipped, because a board that quietly drops a source is the same defect
+// one layer down.
 func (todoSource) Load(_ context.Context, b *Board, o Options) error {
-	for _, sc := range todoStores(b) {
+	stores, unreadable := todoStores(b)
+	for _, sc := range stores {
 		args := append(append([]string(nil), sc.args...), "list", "--json")
 		if o.All {
 			args = append(args, "--all")
 		}
-		raw, err := executeJSON(todo.NewTodoCmd(), args...)
+		raw, err := todoExec(args...)
 		if err != nil {
-			return err
+			unreadable = append(unreadable, sc.scope+": "+err.Error())
+			continue
 		}
 		items, err := decodeTodoList(raw, sc.scope)
 		if err != nil {
-			return err
+			unreadable = append(unreadable, sc.scope+": "+err.Error())
+			continue
 		}
 		for _, x := range items {
 			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint, Store: sc.args})
@@ -435,6 +480,10 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 		}
 		return b.Todos[i].Number < b.Todos[j].Number
 	})
+	if len(unreadable) > 0 {
+		return fmt.Errorf("%d of %d store(s) not read: %s",
+			len(unreadable), len(stores)+len(unreadable), strings.Join(unreadable, "; "))
+	}
 	return nil
 }
 

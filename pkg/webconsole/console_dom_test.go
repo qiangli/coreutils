@@ -42,6 +42,7 @@ import (
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/qiangli/coreutils/pkg/board"
 	"github.com/qiangli/coreutils/pkg/websession"
 )
 
@@ -893,4 +894,197 @@ func TestDOMFilesFollowsTheConsoleTheme(t *testing.T) {
 	if dark == light {
 		t.Errorf("files renders identically in both themes: %s", dark)
 	}
+}
+
+// stubBoard makes the Sprint page deterministic: one live sprint carrying two
+// open and two closed stories. Without it these assertions would be about
+// whatever the developer's host happens to be working on.
+func stubBoard(t *testing.T) {
+	t.Helper()
+	orig := collectBoardFn
+	t.Cleanup(func() { collectBoardFn = orig })
+	collectBoardFn = func(context.Context) (*board.Board, error) {
+		return &board.Board{
+			SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
+			Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
+			Sprints: []board.Sprint{{ID: 42, Title: "A sprint with stories", Column: "doing",
+				StoryTotal: 4, StoryOpen: 2, StoryClosed: 2,
+				Continuity: "STATE: mid-flight\n\nNEXT ACTION: keep going"}},
+			Todos: []board.Todo{
+				{ID: "aaaa1111", Number: 1, Title: "still open", Status: "todo", SprintID: 42},
+				{ID: "bbbb2222", Number: 2, Title: "in progress", Status: "doing", SprintID: 42},
+				{ID: "cccc3333", Number: 3, Title: "finished", Status: "done", SprintID: 42},
+				{ID: "dddd4444", Number: 4, Title: "also finished", Status: "closed", SprintID: 42},
+			},
+		}, nil
+	}
+}
+
+// A sprint's STORIES must be on the card, its progress must be readable
+// without a click, and a closed story must not look like an open one.
+//
+// The regression this pins: the board's todo source asked its personal-list
+// store for `--owner`, todo rejected the flag, and the source returned on that
+// FIRST failure — so a host with 183 stories served zero, and every sprint
+// card rendered with no story chips and nothing to click. Byte-level tests saw
+// nothing: the page's markup was unchanged, only its data was empty.
+func TestDOMSprintCardShowsItsStories(t *testing.T) {
+	stubBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var chips, headStat, openColor, closedColor string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll(".bd-sprint .refs .ref"))
+			.map(n => n.textContent).join(",")`, &chips),
+		chromedp.Evaluate(`(document.querySelector(".bd-sprint .stories")||{}).textContent || "NO STAT"`, &headStat),
+		chromedp.Evaluate(`(() => {
+			const open = document.querySelector(".bd-sprint .refs .ref:not(.past)");
+			return open ? getComputedStyle(open).color : "NONE";
+		})()`, &openColor),
+		chromedp.Evaluate(`(() => {
+			const past = document.querySelector(".bd-sprint .refs .ref.past");
+			return past ? getComputedStyle(past).color + "|" + getComputedStyle(past).textDecorationLine : "NONE";
+		})()`, &closedColor),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "sprint", errs())
+
+	for _, want := range []string{"#1", "#2", "#3", "#4"} {
+		if !strings.Contains(chips, want) {
+			t.Errorf("story %s is not on the card; chips = %q", want, chips)
+		}
+	}
+	if !strings.Contains(headStat, "2 open") || !strings.Contains(headStat, "2 closed") {
+		t.Errorf("the card does not state its open/closed split: %q", headStat)
+	}
+	if openColor == "NONE" || closedColor == "NONE" {
+		t.Fatalf("missing an open or a closed chip (open=%s closed=%s)", openColor, closedColor)
+	}
+	if !strings.Contains(closedColor, "line-through") {
+		t.Errorf("a closed story is not struck through: %s", closedColor)
+	}
+	if strings.HasPrefix(closedColor, openColor+"|") {
+		t.Errorf("closed and open stories render in the SAME colour (%s) — the one "+
+			"distinction a progress display exists to make", openColor)
+	}
+}
+
+// A story number is a LINK, and clicking it must show that story.
+//
+// The detail pane is the whole reason the chips are buttons. It is asserted on
+// SPEAK rather than on content: these fixture ids do not exist in the host's
+// todo store, so the pane reports why it could not read one — which is the
+// contract. What must never happen is the third outcome, a pane that opens
+// and says nothing at all.
+func TestDOMStoryLinkOpensItsDetail(t *testing.T) {
+	stubBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var before, after string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`(() => {
+			const d = document.querySelector(".bd-sprint .story-detail");
+			return d ? String(!d.hidden) : "NO PANE";
+		})()`, &before),
+		chromedp.Click(`.bd-sprint .refs .ref.link`, chromedp.ByQuery),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(`(() => {
+			const d = document.querySelector(".bd-sprint .story-detail");
+			if (!d) return "NO PANE";
+			return (d.hidden ? "HIDDEN:" : "SHOWN:") + d.textContent.trim().slice(0, 120);
+		})()`, &after),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "story link", errs())
+
+	if before != "false" {
+		t.Errorf("the detail pane starts open, before anything was clicked: %s", before)
+	}
+	if !strings.HasPrefix(after, "SHOWN:") {
+		t.Fatalf("clicking a story number opened nothing: %s", after)
+	}
+	if strings.TrimPrefix(after, "SHOWN:") == "" {
+		t.Error("the detail pane opened EMPTY — a pane that shows nothing is " +
+			"indistinguishable from a link that does not work")
+	}
+}
+
+// An expanded disclosure must survive the 15-second poll.
+//
+// The page re-renders with replaceChildren, so anything a reader opened is
+// rebuilt from scratch. The opened story BODY was remembered; the story list
+// and the continuity brief were not, so a reader mid-scan had the list shut
+// under them on the next tick with no action of their own.
+func TestDOMSprintDisclosuresSurviveARefresh(t *testing.T) {
+	stubBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	// The toggles are the card's `button.more`, in render order: stories, then
+	// continuity. Open both, force a re-render, and read them back.
+	const openBoth = `(() => {
+		const btns = document.querySelectorAll(".bd-sprint button.more");
+		btns.forEach(b => b.click());
+		return String(btns.length);
+	})()`
+	const readState = `(() => {
+		const btns = Array.from(document.querySelectorAll(".bd-sprint button.more"));
+		return btns.map(b => b.textContent.split(" ")[0] + "=" +
+			(b.nextElementSibling && !b.nextElementSibling.hidden)).join(",");
+	})()`
+
+	var count, before, after, detail string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(openBoth, &count),
+		chromedp.Evaluate(readState, &before),
+		// The same re-render the poll performs, without waiting 15s for it.
+		chromedp.Evaluate(`load()`, nil, awaitPromise),
+		chromedp.Sleep(500*time.Millisecond),
+		chromedp.Evaluate(readState, &after),
+		chromedp.Evaluate(`(() => {
+			const d = document.querySelector(".bd-sprint .story-detail");
+			return d ? String(!d.hidden) : "NONE";
+		})()`, &detail),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "sprint refresh", errs())
+
+	if count != "2" {
+		t.Fatalf("expected the stories and continuity toggles, got %s", count)
+	}
+	// The two toggles are separated by their own hidden bodies, so an
+	// adjacent-sibling rule never matched them and they rendered as one
+	// run-on word ("…of 3continuity — 4 sections").
+	var gap string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`(() => {
+		const b = document.querySelectorAll(".bd-sprint button.more");
+		return getComputedStyle(b[0]).marginRight;
+	})()`, &gap)); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	if gap == "0px" {
+		t.Error("the stories and continuity toggles have no space between them")
+	}
+	if !strings.Contains(before, "stories=true") || !strings.Contains(before, "continuity=true") {
+		t.Fatalf("the toggles did not open at all: %s", before)
+	}
+	if before != after {
+		t.Errorf("a refresh collapsed what the reader had open.\n before = %s\n after  = %s",
+			before, after)
+	}
+	_ = detail
+}
+
+// awaitPromise lets chromedp.Evaluate resolve load()'s promise instead of
+// racing the fetch it starts.
+func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+	return p.WithAwaitPromise(true)
 }

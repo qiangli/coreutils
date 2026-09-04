@@ -24,7 +24,26 @@ const el = (tag, cls, text) => {
   return n;
 };
 
-const state = { all: false, open: {}, story: {} };
+// state is what a refresh must NOT throw away. The page re-renders every 15s
+// with replaceChildren, so anything a reader opened lives here or it collapses
+// under them mid-read: `open` is the panels, `stories`/`cont` are a sprint
+// card's two disclosures, and `story` is the one story whose body is showing.
+const state = { all: false, open: {}, stories: {}, cont: {}, story: {} };
+
+// disclose wires a toggle button to its body and REMEMBERS the answer under
+// key, so the next render restores it. Every disclosure on this page goes
+// through it — the story list forgot to, which is why an opened story list
+// collapsed on the next poll while the story body it was opened for stayed up.
+function disclose(btn, body, bag, key) {
+  const open = !!bag[key];
+  body.hidden = !open;
+  btn.classList.toggle("open", open);
+  btn.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    bag[key] = !body.hidden;
+    btn.classList.toggle("open", !body.hidden);
+  });
+}
 
 // ---- formatting --------------------------------------------------------------
 
@@ -266,11 +285,10 @@ function storyStats(sp, stories) {
 
 function storyListEl(sp, stories, detailHost, sprintID) {
   const stats = storyStats(sp, stories);
-  const btn = el("button", "more", "stories — " + stats.closed + "/" + stats.total +
-    " complete · " + stats.closed + " closed · " + stats.open + " open");
+  const btn = el("button", "more", "stories — " + stats.open + " open · " +
+    stats.closed + " closed of " + stats.total);
   btn.type = "button";
   const body = el("div", "continuity");
-  body.hidden = true;
   const groups = [
     ["open", stories.filter((t) => !storyIsClosed(t))],
     ["closed", stories.filter(storyIsClosed)],
@@ -288,10 +306,7 @@ function storyListEl(sp, stories, detailHost, sprintID) {
       body.append(row);
     }
   }
-  btn.addEventListener("click", () => {
-    body.hidden = !body.hidden;
-    btn.classList.toggle("open", !body.hidden);
-  });
+  disclose(btn, body, state.stories, sprintID);
   return [btn, body];
 }
 
@@ -299,6 +314,7 @@ function storyListEl(sp, stories, detailHost, sprintID) {
 // are runs, and a run is the execution of one item, not the time-boxed set a
 // conductor drives.
 function sprintEl(sp, stories) {
+  stories = stories || [];
   const n = el("article", "bd-sprint " + stateClass(sp.column));
   const head = el("header");
   head.append(el("span", "id", "#" + sp.id));
@@ -309,6 +325,16 @@ function sprintEl(sp, stories) {
     // The gate is the whole point of a sprint: entity.Sprint.CanConverge is
     // false without one, so its state is never decoration.
     head.append(el("span", "gate " + (sp.gate_state === "complete" ? "past" : "needs"), sp.gate_state));
+  }
+  // Progress belongs in the HEAD, not only on the disclosure that reveals the
+  // list. Whether a sprint has three stories left or thirty is the question a
+  // scan of the column is asking, and it should not cost a click per card.
+  const headStats = storyStats(sp, stories || []);
+  if (headStats.total) {
+    const chip = el("span", "stories" + (headStats.open ? "" : " past"),
+      headStats.open + " open / " + headStats.closed + " closed");
+    chip.title = headStats.closed + " of " + headStats.total + " stories complete";
+    head.append(chip);
   }
   n.append(head);
   n.append(el("p", "label", sp.title || ""));
@@ -321,7 +347,6 @@ function sprintEl(sp, stories) {
   const refs = sp.run_refs || [];
   if (refs.length) n.append(runRefsEl(refs));
 
-  stories = stories || [];
   if (stories.length) {
     // One detail pane per card, shared by both entry points, so clicking a
     // second story replaces the first rather than stacking panes nobody closes.
@@ -345,17 +370,13 @@ function sprintEl(sp, stories) {
       (labelled ? labelled + " sections" : sections.length + " note" + (sections.length === 1 ? "" : "s")));
     btn.type = "button";
     const body = el("div", "continuity");
-    body.hidden = true;
     for (const sec of sections) {
       const row = el("div", "sec");
       if (sec.label) row.append(el("div", "sec-k", sec.label));
       row.append(el("div", "sec-v", sec.body));
       body.append(row);
     }
-    btn.addEventListener("click", () => {
-      body.hidden = !body.hidden;
-      btn.classList.toggle("open", !body.hidden);
-    });
+    disclose(btn, body, state.cont, sp.id);
     n.append(btn, body);
   }
   return n;
