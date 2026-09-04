@@ -3,10 +3,11 @@ id: f5e7b865437c
 kind: task
 title: 'Meet web UI: hide room actions, name the room''s owner, and default the recipient to it'
 seq: 39
-status: todo
+status: done
 priority: p1
 created: 2026-09-04T09:19:42.53618Z
 sprint: 122
+closed: 2026-09-04T09:20:47.402297Z
 ---
 
 Four changes to the Meet app, plus the route rename.
