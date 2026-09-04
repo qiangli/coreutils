@@ -449,7 +449,9 @@ func PostAs(ref, author, to, text string) (Event, error) {
 			}
 		}
 		target := ""
-		if strings.TrimSpace(to) != "" {
+		if isAllSeats(to) {
+			target = AllSeats
+		} else if strings.TrimSpace(to) != "" {
 			target = canonAgent(strings.TrimSpace(strings.TrimPrefix(to, "@")))
 			if !participantSeat(st, target) {
 				return Event{}, fmt.Errorf("meet: failed: %s has no seat in board %s; invite it with `bashy meet invite %s %s`",
@@ -475,10 +477,21 @@ func PostAs(ref, author, to, text string) (Event, error) {
 	// is `conductor:<n>` — the SEAT. The label is stored verbatim and resolved to
 	// a holder at READ time, so a handover re-targets mail already in flight.
 	target := strings.TrimSpace(strings.TrimPrefix(to, "@"))
-	if target == "" {
+	switch {
+	case isAllSeats(target):
+		// An EXPLICIT broadcast. It must not fall through to DefaultTo below:
+		// in a sprint's room that would silently redirect "everyone" to the
+		// conductor's seat, and every other participant would then see nothing
+		// at all — directed mail is filtered out of the room-history bucket, so
+		// a message meant for the whole room would reach exactly one reader
+		// while its author was told it went to all of them.
+		target = AllSeats
+	case target == "":
 		target = strings.TrimSpace(st.DefaultTo)
-	} else if _, isRole := bus.RoleHolderFor(target); !isRole {
-		target = canonAgent(target)
+	default:
+		if _, isRole := bus.RoleHolderFor(target); !isRole {
+			target = canonAgent(target)
+		}
 	}
 	ev := Event{
 		Round: st.Round, Speaker: who, Role: string(RoleHuman),

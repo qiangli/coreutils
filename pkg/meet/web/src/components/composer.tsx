@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
+  ALL_SEATS,
   memberName,
   memberRole,
   type Member,
@@ -117,9 +118,12 @@ export function Composer({
   // sol ·…", which spends the space on an ellipsis. The accessible name carries
   // the title, so a screen reader still hears who this is, and the title itself
   // is on the badge in the list where there is room for it.
-  const recipientName = recipient || "Everyone"
+  const broadcast = recipient === ALL_SEATS
+  const recipientName = broadcast || !recipient ? "Everyone" : recipient
   const recipientLabel =
-    recipient && isOwner(recipient) ? `${recipient} · ${ownerTitle}` : recipientName
+    recipient && !broadcast && isOwner(recipient)
+      ? `${recipient} · ${ownerTitle}`
+      : recipientName
 
   async function submit() {
     const value = text.trim()
@@ -257,10 +261,10 @@ export function Composer({
                   size="sm"
                   variant="outline"
                 >
-                  {recipient ? (
-                    <AtSign className="size-3.5 text-primary" />
-                  ) : (
+                  {broadcast || !recipient ? (
                     <Hash className="size-3.5 text-muted-foreground" />
+                  ) : (
+                    <AtSign className="size-3.5 text-primary" />
                   )}
                   <span className="truncate">{recipientName}</span>
                   <ChevronDown className="size-3 shrink-0 opacity-60" />
@@ -275,18 +279,22 @@ export function Composer({
                 <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                   Send to
                 </DropdownMenuLabel>
+                {/* A REAL broadcast, not the absence of an addressee. Posting
+                    with no addressee reaches the transcript and no inbox, which
+                    from outside is indistinguishable from every agent in the
+                    room ignoring you. */}
                 <DropdownMenuItem
                   className="gap-3 rounded-lg px-2 py-2"
-                  onSelect={() => onRecipientChange("")}
+                  onSelect={() => onRecipientChange(ALL_SEATS)}
                 >
                   <Hash className="size-4 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-medium">Everyone</div>
                     <div className="text-[10px] text-muted-foreground">
-                      Post to the room; nobody is asked to reply
+                      Delivered to every participant&apos;s inbox
                     </div>
                   </div>
-                  {!recipient && <Check className="size-3.5 text-primary" />}
+                  {(broadcast || !recipient) && <Check className="size-3.5 text-primary" />}
                 </DropdownMenuItem>
                 {agents.map((agent) => {
                   const name = memberName(agent)
@@ -369,9 +377,9 @@ export function Composer({
           <span className="text-[9px] text-muted-foreground/65">
             {kind === "dm"
               ? "Send asks a read-only question. Start work is available only inside managed containment."
-              : recipient
-                ? `Goes to ${recipient}. Start with @name to send one message elsewhere.`
-                : "Posted to the room. Nobody is asked to reply."}
+              : broadcast || !recipient
+                ? "Goes to everyone in the room. Start with @name to send one message elsewhere."
+                : `Goes to ${recipient}. Start with @name to send one message elsewhere.`}
           </span>
           {state?.status === "open" && (
             <Badge

@@ -951,7 +951,9 @@ func newTellCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&as, "as", "", "participant name to post as (required on a board)")
-	cmd.Flags().StringVar(&to, "to", "", "participant name to address")
+	cmd.Flags().StringVar(&to, "to", "",
+		"participant name to address, or `all` to address every participant "+
+			"(omit to post room history that is addressed to nobody)")
 	return cmd
 }
 

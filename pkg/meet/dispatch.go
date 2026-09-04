@@ -37,15 +37,24 @@ type Dispatched struct {
 //
 // # DIRECTED MAIL ONLY, and this is a correctness rule rather than a policy
 //
-// Only messages addressed to a participant wake it. An unaddressed post wakes
-// nobody, and the reason is that the alternative does not terminate: if a
-// broadcast woke all N, each of the N replies is itself a post in the same
-// transcript, which would wake the others, forever. Rounds remain the mechanism
-// for "everyone speaks", because a round is bounded by construction.
+// Only messages ADDRESSED to a participant wake it. An UNADDRESSED post wakes
+// nobody, and the reason is that the alternative does not terminate: if "no
+// addressee" also meant "everybody", each of the N replies is itself an
+// unaddressed post in the same transcript, so it would wake the other N-1,
+// forever.
 //
-// Replies are safe by the same token — a turn is recorded with no addressee, so
-// it can never itself trigger a dispatch. And UnreadRecords already skips a
-// reader's OWN records, so an agent cannot wake itself.
+// Replies are safe by exactly that token — a turn is recorded with no addressee
+// (classifyTurn sets no To), so it can never itself trigger a dispatch. And
+// UnreadRecords already skips a reader's OWN records, so an agent cannot wake
+// itself.
+//
+// A BROADCAST is therefore something a caller has to SAY, not something that
+// falls out of saying nothing: `--to all` (AllSeats) is directed at every
+// participant and wakes each one ONCE. It terminates for the same reason
+// replies do — the turns it provokes are unaddressed — so the bound is N, not
+// a cascade. Rounds remain the mechanism for a moderated "everyone speaks"
+// with a chair and an agenda item; a broadcast is mail, and the difference is
+// that a round drives the floor while this one only fills inboxes.
 //
 // # Ordering and the cursor
 //

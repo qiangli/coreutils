@@ -218,6 +218,14 @@ export type DMSummary = z.infer<typeof dmSummarySchema>
 export type DMEvent = z.infer<typeof dmEventSchema>
 export type DMDetail = z.infer<typeof dmDetailSchema>
 
+/** ALL_SEATS is meet's explicit broadcast addressee (meet.AllSeats).
+ *
+ * Sending to it is NOT the same as sending to nobody: an unaddressed post is
+ * room history that no participant owes a reply to and that dispatch wakes
+ * nobody for, which is why "Everyone" cannot simply be the empty string.
+ */
+export const ALL_SEATS = "all"
+
 export function memberName(member: Member): string {
   return typeof member === "string" ? member : member.name
 }

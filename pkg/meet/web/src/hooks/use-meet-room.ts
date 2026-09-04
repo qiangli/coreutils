@@ -18,6 +18,7 @@ import {
   runAction,
   usingMock,
 } from "@/lib/api"
+import { ALL_SEATS } from "@/lib/contracts"
 import type {
   AgentOption,
   DMEvent,
@@ -172,6 +173,13 @@ export function useMeetRoom() {
           })
           await postDM(selectedRef, text)
           setQueued(`Your message to ${selectedRef} was accepted; the reply will appear here.`)
+        } else if (agent === ALL_SEATS) {
+          // A broadcast is MAIL, not a floor: it lands in every participant's
+          // inbox and waits to be read. Running N turns from one browser
+          // message is what `meet round` is for, and it is chaired.
+          const event = await postMessage(selectedRef, state.human, text, ALL_SEATS)
+          setEvents((current) => addUnique(current, event))
+          setQueued("Delivered to everyone in the room. Each participant sees it as their own mail.")
         } else if (agent) {
           await runAction(selectedRef, "address", { agent, text })
           setQueued(`Your message to ${agent} was accepted; the reply will appear here.`)
@@ -320,7 +328,11 @@ export function useMeetRoom() {
   const [recipientByRoom, setRecipientByRoom] = useState<Record<string, string>>(
     () => readStoredRecipients(),
   )
-  const owner = state?.owner ?? ""
+  // The owner when there is one, a real broadcast when there is not. Never the
+  // empty string: that posts room history addressed to nobody, which lands in
+  // no inbox and wakes no one — indistinguishable, from the outside, from every
+  // agent in the room ignoring you.
+  const owner = state?.owner || ALL_SEATS
   const recipient =
     selectedKind === "room" && selectedRef
       ? (recipientByRoom[selectedRef] ?? owner)

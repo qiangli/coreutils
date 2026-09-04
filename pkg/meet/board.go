@@ -132,6 +132,12 @@ func directedEvent(e Event, reader string) bool {
 	if reader == "" {
 		return false
 	}
+	// A broadcast is directed at EVERY reader. The author is not one of them —
+	// recordsAfter drops a reader's own records before it gets here — so this
+	// cannot hand somebody back their own announcement as work.
+	if isAllSeats(e.To) {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(e.To), reader) {
 		return true
 	}
@@ -266,4 +272,26 @@ func readRoomTranscript(id string) ([]Event, error) {
 			return nil, err
 		}
 	}
+}
+
+// AllSeats is the explicit broadcast addressee: mail every participant is
+// accountable for, as opposed to mail addressed to nobody.
+//
+// The distinction is the whole point, and it is not cosmetic. An UNADDRESSED
+// post (To == "") is room history — everyone can read it, nobody owes a reply,
+// and dispatch wakes no one. That is what makes replies safe: a turn is
+// recorded with no addressee, so it can never trigger another turn. If "no
+// addressee" also meant "everybody", each of N replies would wake the other
+// N-1 and the room would never settle.
+//
+// So a broadcast has to be SAID. Only a caller who typed it — `meet tell --to
+// all`, or Everyone in the browser's recipient list — produces one, and the
+// replies it provokes are unaddressed, so it wakes each participant exactly
+// once and terminates.
+const AllSeats = "all"
+
+// isAllSeats recognises the broadcast addressee in what a caller typed,
+// tolerating the "@" a person naturally writes in front of a name.
+func isAllSeats(to string) bool {
+	return strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(to), "@")), AllSeats)
 }

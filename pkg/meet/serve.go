@@ -441,8 +441,14 @@ func handleRoomCreate(w http.ResponseWriter, r *http.Request) {
 // vouched caller is credited with its verified identity; an ungated loopback
 // caller may say who it is, and an unstated one falls through to the ROOM's own
 // human, which is what `meet tell` does.
+// handlePost appends a human contribution, optionally ADDRESSED.
+//
+// `to` was dropped here for as long as this route existed, so the browser could
+// only ever post mail addressed to nobody — visible in the transcript, in no
+// participant's actionable inbox, and waking no one. The CLI could already say
+// it (`meet tell --to`); the room's own web UI could not. `all` broadcasts.
 func handlePost(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Author, Text string }
+	var body struct{ Author, Text, To string }
 	if err := decodeBody(r, &body); err != nil {
 		apiErr(w, err)
 		return
@@ -451,7 +457,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 	if id, ok := coopauth.IdentityOf(r); ok {
 		author = strings.TrimSpace(id.User)
 	}
-	ev, err := Post(r.PathValue("ref"), author, body.Text)
+	ev, err := PostAs(r.PathValue("ref"), author, body.To, body.Text)
 	if err != nil {
 		apiErr(w, err)
 		return

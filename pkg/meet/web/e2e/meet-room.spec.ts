@@ -210,7 +210,7 @@ test("posts a human message through the composer and reloads it from the transcr
 
   // Explicitly to the whole room: the composer's default recipient is the
   // room's owner, and a message to an owner runs that agent's turn rather than
-  // landing in the transcript as plain human prose.
+  // landing in the transcript as a human contribution.
   await selectRecipient(page, "Everyone");
   await page.getByLabel("Message the room").fill(message);
   await page.getByRole("button", { name: "Send message" }).click();
@@ -440,6 +440,34 @@ test("a changed recipient persists across a reload", async ({ page }) => {
   await selectRecipient(page, "Everyone");
   await page.reload();
   await expect(page.getByRole("button", { name: "Recipient: Everyone" })).toBeVisible();
+});
+
+// "Everyone" must put the message in every participant's INBOX, not merely in
+// the transcript.
+//
+// The composer could not express an addressee at all: /post dropped `to`, so
+// the room's own web UI could only ever post mail addressed to nobody —
+// present in the transcript, in no participant's actionable inbox, waking no
+// one. From outside that is indistinguishable from every agent ignoring you.
+test("Everyone addresses the whole room rather than nobody", async ({ page }) => {
+  const topic = unique("Browser broadcast room");
+  const message = unique("broadcast to the room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await selectRecipient(page, "Everyone");
+  const posted = page.waitForRequest((r) => r.url().endsWith("/post"));
+  await page.getByLabel("Message the room").fill(message);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const request = await posted;
+  if (request.postDataJSON().to !== "all") {
+    throw new Error(
+      `the composer posted to ${JSON.stringify(request.postDataJSON().to)}; ` +
+        `an empty addressee reaches no inbox at all`,
+    );
+  }
+  await expect(page.getByText(message).first()).toBeVisible();
 });
 
 async function selectRecipient(page: Page, name: string) {

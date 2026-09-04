@@ -194,16 +194,24 @@ export async function createRoom(input: NewRoom): Promise<State> {
   )
 }
 
+/** postMessage appends a human contribution, optionally ADDRESSED.
+ *
+ * `to` is what decides whether anyone is accountable for it: ALL_SEATS puts it
+ * in every participant's inbox, a name puts it in one, and omitting it posts
+ * room history addressed to nobody. The route accepted no addressee at all
+ * until now, so the browser could only ever produce the last of those.
+ */
 export async function postMessage(
   ref: string,
   author: string,
   text: string,
+  to?: string,
 ): Promise<MeetEvent> {
   if (usingMock) return eventSchema.parse(await mockPost(ref, author, text))
   return eventSchema.parse(
     await request(`api/rooms/${encodeURIComponent(ref)}/post`, {
       method: "POST",
-      body: JSON.stringify({ author, text }),
+      body: JSON.stringify({ author, text, to: to ?? "" }),
     }),
   )
 }
