@@ -14,7 +14,6 @@ import {
   observeDM,
   postMessage,
   postDM,
-  startDMWork,
   runAction,
   usingMock,
 } from "@/lib/api"
@@ -342,23 +341,6 @@ export function useMeetRoom() {
     }
   }, [selectDM])
 
-  const startWork = useCallback(async (text: string) => {
-    if (!selectedRef || selectedKind !== "dm") return false
-    setSending(true)
-    setError(null)
-    setQueued(null)
-    try {
-      await startDMWork(selectedRef, text)
-      setQueued(`A managed work session for ${selectedRef} started. Later messages are delivered through the agent inbox.`)
-      return true
-    } catch (reason) {
-      setError(messageFor(reason))
-      return false
-    } finally {
-      setSending(false)
-    }
-  }, [selectedRef, selectedKind])
-
   const isOrganizer = useMemo(
     () => Boolean(state && state.initiator === state.human),
     [state],
@@ -421,7 +403,6 @@ export function useMeetRoom() {
     error,
     sending,
     send,
-    startWork,
     act,
     createRoom,
     createDM,

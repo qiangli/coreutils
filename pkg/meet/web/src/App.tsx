@@ -173,14 +173,14 @@ export function App() {
             <Button
               aria-label={
                 meet.debugRaw
-                  ? "Hide the raw agent transport"
-                  : "Show the raw agent transport"
+                  ? "Show messages as text"
+                  : "Show messages as JSON"
               }
               aria-pressed={meet.debugRaw}
               className="h-7 px-2 text-[10px] font-semibold uppercase tracking-wide"
               onClick={() => meet.setDebugRaw(!meet.debugRaw)}
               size="sm"
-              title="Show the raw JSON an agent CLI streamed, under each message it was extracted from"
+              title="Switch each message between its prose and the JSON record it was rendered from"
               variant={meet.debugRaw ? "secondary" : "ghost"}
             >
               <Braces className="size-3.5" />
@@ -240,7 +240,6 @@ export function App() {
             onDismissQueued={meet.dismissQueued}
             onRecipientChange={meet.setRecipient}
             onSend={meet.send}
-            onStartWork={meet.startWork}
             queued={meet.queued}
             recipient={meet.recipient}
             sending={meet.sending}

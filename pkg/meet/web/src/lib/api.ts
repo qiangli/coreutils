@@ -70,13 +70,11 @@ export async function postDM(agent: string, text: string): Promise<void> {
   })
 }
 
-export async function startDMWork(agent: string, text: string): Promise<void> {
-  if (usingMock) return
-  await request(`api/dms/${encodeURIComponent(agent)}/work`, {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  })
-}
+// api/dms/<agent>/work — the managed write-capable session — is deliberately
+// NOT reachable from here. A 1:1 has one action, sending, and the browser had
+// no way to answer a vendor CLI's approval prompt, so the control it offered
+// was one the server refused outside proven containment. The endpoint remains
+// for callers that can prove it (see pkg/meet/relay_dm.go).
 
 export function observeDM(
   agent: string,

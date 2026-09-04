@@ -27,9 +27,17 @@ interface MessageListProps {
    * not merely that both are "participants". */
   state: State | null
   kind?: "room" | "dm"
-  // debugRaw is the reader's raw-transport view. `raw` is only ever present on
-  // an event when it is on, so this prop is what tells an empty `raw` apart
-  // from a message that simply was not transport.
+  // debugRaw is the reader's JSON view: every message body is replaced by the
+  // record it was rendered from.
+  //
+  // It used to mean ONLY "carry the un-normalized transport alongside", and
+  // that made the control dead. The server sends `raw` exclusively when
+  // normalization CHANGED the stored text — but every capture seam now
+  // normalizes BEFORE writing (engine.go's turn recorder, relay_dm.go's DM
+  // turn), so a record written by this build never differs from its render and
+  // `raw` is never populated. The toggle therefore had a visible effect only on
+  // transcripts left by an older build. A JSON view of the record itself is
+  // always available, which is what the button says it does.
   debugRaw?: boolean
 }
 
@@ -90,7 +98,11 @@ export function MessageList({
         <div className="space-y-1">
           {events.map((event, index) =>
             systemKinds.has(event.kind) ? (
-              <SystemEvent event={event} key={eventKey(event, index)} />
+              <SystemEvent
+                debugRaw={debugRaw}
+                event={event}
+                key={eventKey(event, index)}
+              />
             ) : (
               <Message
                 debugRaw={debugRaw}
@@ -174,7 +186,9 @@ function Message({
             {formatTime(event.ts)}
           </time>
         </div>
-        {isHuman ? (
+        {debugRaw ? (
+          <EventRecord event={event} />
+        ) : isHuman ? (
           <p className="whitespace-pre-wrap text-[14px] leading-6 text-foreground/90">
             {event.text}
           </p>
@@ -233,6 +247,24 @@ function RoleBadge({ seat }: { seat: Seat }) {
     >
       {seat.title}
     </Badge>
+  )
+}
+
+// EventRecord is the JSON half of the view toggle: the message's own record,
+// exactly as this client received it.
+//
+// `raw` is left out and rendered below instead — inside a JSON string every
+// newline is an escaped \n, so the one field a reader turns this view on to
+// study would be the one field they could not read.
+function EventRecord({ event }: { event: MeetEvent }) {
+  const { raw: _raw, ...record } = event
+  return (
+    <pre
+      className="mt-1 max-h-[420px] overflow-auto rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground"
+      data-event-json
+    >
+      {JSON.stringify(record, null, 2)}
+    </pre>
   )
 }
 
@@ -301,7 +333,13 @@ function LiveMessage({
   )
 }
 
-function SystemEvent({ event }: { event: MeetEvent }) {
+function SystemEvent({
+  event,
+  debugRaw = false,
+}: {
+  event: MeetEvent
+  debugRaw?: boolean
+}) {
   const Icon = iconFor(event.kind)
   const highlighted = event.kind === "decision" || event.kind === "action"
   return (
@@ -316,17 +354,21 @@ function SystemEvent({ event }: { event: MeetEvent }) {
       >
         <Icon className="size-3" />
       </div>
-      <div className="min-w-0">
-        <p
-          className={cn(
-            "text-[12px] leading-5",
-            highlighted
-              ? "font-medium text-slate-700"
-              : "text-muted-foreground",
-          )}
-        >
-          {event.text || event.question}
-        </p>
+      <div className="min-w-0 flex-1">
+        {debugRaw ? (
+          <EventRecord event={event} />
+        ) : (
+          <p
+            className={cn(
+              "text-[12px] leading-5",
+              highlighted
+                ? "font-medium text-slate-700"
+                : "text-muted-foreground",
+            )}
+          >
+            {event.text || event.question}
+          </p>
+        )}
         <span className="text-[9px] uppercase tracking-wider text-muted-foreground/55">
           {event.kind} · {formatTime(event.ts)}
         </span>

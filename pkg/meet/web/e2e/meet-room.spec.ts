@@ -288,13 +288,45 @@ test("normalizes a legacy transport turn and reveals raw JSON only on request", 
   await expect(page.getByText(/thread\.started/)).toHaveCount(0);
   await expect(page.getByText(/Raw transport/)).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Show the raw agent transport" }).click();
+  await page.getByRole("button", { name: "Show messages as JSON" }).click();
   await expect(page.getByText(/Raw transport \(3 lines\)/)).toBeVisible();
   await page.getByText(/Raw transport \(3 lines\)/).click();
   await expect(page.getByText(/thread\.started/)).toBeVisible();
 
-  await page.getByRole("button", { name: "Hide the raw agent transport" }).click();
+  await page.getByRole("button", { name: "Show messages as text" }).click();
   await expect(page.getByText(/Raw transport/)).toHaveCount(0);
+});
+
+// THE TOGGLE HAS TO DO SOMETHING ON AN ORDINARY MESSAGE.
+//
+// The test above is the only one the button used to pass, and it passes by
+// SEEDING a record an older build would have written. `raw` reaches the client
+// only when render-time normalization changed the stored text, and every
+// capture seam now normalizes before writing — so on every conversation this
+// build produces, pressing JSON did nothing at all. The view now switches each
+// message to the record it was rendered from, which always exists.
+test("the JSON toggle switches an ordinary message to its record and back", async ({ page }) => {
+  const topic = unique("Browser JSON view");
+  await createRoom(topic, [primaryAgent]);
+  const message = unique("plain prose with no transport");
+  await openMeet(page);
+  await page.getByRole("button", { name: new RegExp(topic) }).click();
+  await page.getByLabel("Message the room").fill(message);
+  await page.getByRole("button", { name: "Send message" }).click();
+  // The staffed agent echoes the prompt back, so the message text appears in
+  // its reply too: assert on the human's own message, not on the word anywhere.
+  const posted = page.getByText(message, { exact: true }).first();
+  await expect(posted).toBeVisible();
+
+  await page.getByRole("button", { name: "Show messages as JSON" }).click();
+  const record = page.locator("[data-event-json]").first();
+  await expect(record).toBeVisible();
+  await expect(record).toContainText(`"text": "${message}"`);
+  await expect(record).toContainText('"kind"');
+
+  await page.getByRole("button", { name: "Show messages as text" }).click();
+  await expect(page.locator("[data-event-json]")).toHaveCount(0);
+  await expect(posted).toBeVisible();
 });
 
 // The one that needed a deterministic agent: addressing runs a real turn through
@@ -353,18 +385,6 @@ test("a long Chat turn visibly shows the agent working", async ({ page }) => {
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByLabel(`${primaryAgent} is typing`)).toBeVisible();
   await expect(page.getByText(/reply will appear here/i)).toBeVisible();
-});
-
-test("Start work reaches server policy and fails closed without trusted Bashy containment", async ({ page }) => {
-  await createDM(primaryAgent);
-  await openMeet(page);
-  await openChat(page, primaryAgent);
-  const startWork = page.getByRole("button", { name: "Start work" });
-  await expect(startWork).toBeVisible();
-  await page.locator("textarea").fill("edit and test this change");
-  await startWork.click();
-  await expect(page.getByText(/no trusted Bashy containment provenance/i)).toBeVisible();
-  await expect(page.locator("textarea")).toHaveValue("edit and test this change");
 });
 
 test("Meet tabs navigate between channels and Chat direct messages", async ({ page }) => {
@@ -571,19 +591,22 @@ test("a message badge names the speaker's seat, not the generic role", async ({ 
   await expect(header).not.toContainText("participant");
 });
 
-// A 1:1 STATES ITS RECIPIENT AND OFFERS ONE ACTION.
+// A 1:1 STATES ITS RECIPIENT AND OFFERS ONE ACTION: SENDING.
 //
 // The composer does not parse "@name" in a chat (see submit), so the mention
 // button offered a syntax that would have been sent verbatim as prose. What a
 // chat needs in that slot is the one thing a room puts there: who this goes to,
-// named the same way — "@agent".
-test("a chat names its agent and offers only Start work", async ({ page }) => {
+// named the same way — "@agent". Start work went the same way for a harder
+// reason: the server refuses it outside proven containment, so it was a control
+// that could only fail, in the surface whose one useful mode is the message.
+test("a chat names its agent and offers no action but sending", async ({ page }) => {
   await createDM(primaryAgent);
   await openMeet(page);
   await openChat(page, primaryAgent);
 
   await expect(page.getByText(`@${primaryAgent}`).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Start work" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start work" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Mention an agent" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Recipient: / })).toHaveCount(0);
 });

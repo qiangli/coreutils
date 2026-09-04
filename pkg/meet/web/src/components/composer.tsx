@@ -7,7 +7,6 @@ import {
   Hash,
   LoaderCircle,
   Send,
-  Play,
   X,
 } from "lucide-react"
 
@@ -48,7 +47,6 @@ interface ComposerProps {
   onRecipientChange: (name: string) => void
   onDismissQueued: () => void
   onSend: (text: string, agent?: string) => Promise<void>
-  onStartWork: (text: string) => Promise<boolean>
   kind?: "room" | "dm"
 }
 
@@ -62,7 +60,6 @@ export function Composer({
   onRecipientChange,
   onDismissQueued,
   onSend,
-  onStartWork,
   kind = "room",
 }: ComposerProps) {
   // A cross-app shortcut may supply an editable starting point. It is a draft,
@@ -165,12 +162,6 @@ export function Composer({
     }
   }
 
-  async function startWork() {
-    const value = text.trim()
-    if (!value || sending || kind !== "dm") return
-    if (await onStartWork(value)) setText("")
-  }
-
   function mention(agent: Member) {
     setText(`@${memberName(agent)} `)
     requestAnimationFrame(() => textareaRef.current?.focus())
@@ -269,18 +260,6 @@ export function Composer({
                 <span className="truncate">@{dmAgent}</span>
               </span>
             )}
-            {kind === "dm" && (
-              <Button
-                className="h-8 gap-1.5 rounded-lg px-3 text-[11px]"
-                disabled={!text.trim() || sending}
-                onClick={() => void startWork()}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <Play className="size-3.5" /> Start work
-              </Button>
-            )}
             {/* WHO THIS GOES TO. The room's owner is preselected — in a
                 sprint's room that is its project manager, and unaddressed mail
                 there already lands on that seat server-side, so a composer
@@ -366,8 +345,8 @@ export function Composer({
             {/* Addressing one agent is a ROOM operation. In a 1:1 there is
                 nobody else to mention: the composer does not parse "@name"
                 there (see submit), so the button offered a syntax that would
-                have been sent verbatim as prose. Start work is the only other
-                action a chat has. */}
+                have been sent verbatim as prose. A chat has ONE action —
+                sending — which is why this slot is empty there. */}
             {kind === "room" && <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -415,7 +394,7 @@ export function Composer({
         <div className="mt-1.5 flex items-center justify-between px-1">
           <span className="text-[9px] text-muted-foreground/65">
             {kind === "dm"
-              ? `Goes to ${dmAgent ? `@${dmAgent}` : "this agent"}. Send asks a read-only question; Start work is available only inside managed containment.`
+              ? `Goes to ${dmAgent ? `@${dmAgent}` : "this agent"}. Enter to send.`
               : broadcast || !recipient
                 ? "Goes to everyone in the room. Start with @name to send one message elsewhere."
                 : `Goes to @${recipient}. Start with @name to send one message elsewhere.`}

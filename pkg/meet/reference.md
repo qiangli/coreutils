@@ -86,8 +86,12 @@ title, the facilitator, the secretary, a named role holder — rather than the
 
 A **Chat** (1:1) is the same view with the half that a single recipient makes
 redundant left out: it names the agent as `@name` in the same place a room puts
-its recipient control, prints no addressee under each message, and offers
-`Start work` as its only other action. **Room actions** runs a round, poll, open question,
+its recipient control, prints no addressee under each message, and offers no
+action but sending — the message IS the mode a 1:1 is useful in. (The managed
+write-capable session behind `api/dms/<agent>/work` stays server-side: the
+browser cannot answer a vendor CLI's approval prompt, so the control it used to
+show could only fail outside proven containment.)
+**Room actions** runs a round, poll, open question,
 or convergence pass. A non-empty draft can instead be recorded as a decision,
 action item, or agenda item without also posting it as ordinary chat.
 
