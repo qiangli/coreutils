@@ -200,7 +200,13 @@ func injectChrome(doc []byte, name, openApps string) []byte {
 		// Same-tab mode (the default, and the fail-safe for any unknown
 		// value): the app replaced the launcher, so the return control is
 		// part of the page itself.
-		doc = insertBeforeLast(doc, "</header>", allAppsButtonHTML())
+		//
+		// It goes in the CONSOLE BAR, which is not necessarily the page's last
+		// <header>: the inbox has a second one over its message list, so
+		// appending before the final </header> filed the return control inside
+		// the content area — a per-page position for a control that is the same
+		// control everywhere.
+		doc = insertBeforeCloseOf(doc, `<header id="bar"`, "</header>", allAppsButtonHTML())
 	}
 	doc = insertBeforeLast(doc, "</body>", `<footer id="app-foot">`+chromeCopyrightHTML()+`</footer>`+"\n")
 	return doc
@@ -229,6 +235,29 @@ func allAppsButtonHTML() string {
 		`<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>` +
 		`<rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>` +
 		`</svg></a>`
+}
+
+// insertBeforeCloseOf inserts text immediately before the close tag that ends
+// the element opened by open — the FIRST close after it, which is the right one
+// because the console's bar never nests another element of the same kind.
+//
+// A page with no such element falls back to the last close tag, which is what
+// this did before there was a page with two of them.
+func insertBeforeCloseOf(doc []byte, openTag, closeTag, insert string) []byte {
+	i := bytes.Index(doc, []byte(openTag))
+	if i < 0 {
+		return insertBeforeLast(doc, closeTag, insert)
+	}
+	j := bytes.Index(doc[i:], []byte(closeTag))
+	if j < 0 {
+		return doc
+	}
+	at := i + j
+	out := make([]byte, 0, len(doc)+len(insert))
+	out = append(out, doc[:at]...)
+	out = append(out, insert...)
+	out = append(out, doc[at:]...)
+	return out
 }
 
 // insertBeforeLast inserts text immediately before the last occurrence of

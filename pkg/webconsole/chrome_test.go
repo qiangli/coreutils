@@ -195,7 +195,7 @@ func TestNewTabModeOmitsReturnControl(t *testing.T) {
 	if w := lookPut(t, h, OpenNewTab); w.Code != http.StatusOK {
 		t.Fatalf("PUT /api/look = %d, want 200", w.Code)
 	}
-	for _, page := range []string{"/term/", "/sprint/", "/mb/"} {
+	for _, page := range []string{"/term/", "/sprint/", "/mb/", "/inbox/"} {
 		w := do(h, "GET", page, "127.0.0.1:5555", nil)
 		if strings.Contains(w.Body.String(), `id="all-apps-btn"`) {
 			t.Errorf("%s: return control present in new-tab mode; it must be omitted", page)
@@ -211,10 +211,16 @@ func TestNewTabModeOmitsReturnControl(t *testing.T) {
 // the shared .iconbtn look, the relative "./" route, and the accessible name.
 func assertReturnControl(t *testing.T, h http.Handler, want bool) {
 	t.Helper()
+	// Every standalone managed page, INCLUDING the inbox — which is the one
+	// page with a second <header> (over its message list). It was left out of
+	// this map, and the return control was duly injected into that inner header
+	// instead of the console bar, where it read as an inbox control rather than
+	// the console's.
 	appSpecificMarker := map[string]string{
 		"/term/":   `id="status"`,
 		"/sprint/": `id="bd-age"`,
 		"/mb/":     `id="mb-who"`,
+		"/inbox/":  `id="ib-who"`,
 	}
 	for page, marker := range appSpecificMarker {
 		t.Run(page, func(t *testing.T) {
