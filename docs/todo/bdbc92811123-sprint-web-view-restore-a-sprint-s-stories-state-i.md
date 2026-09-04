@@ -3,10 +3,11 @@ id: bdbc92811123
 kind: task
 title: 'Sprint web view: restore a sprint''s stories, state its open/closed split, and keep disclosures open across a refresh'
 seq: 38
-status: todo
+status: done
 priority: p1
 created: 2026-09-04T08:41:36.485814Z
 sprint: 122
+closed: 2026-09-04T08:43:14.369984Z
 ---
 
 The Sprint app served ZERO stories. board's todo source asked the personal-list store for `--user --owner <name>`; --owner is an item's ASSIGNEE, not a store selector, so todo answered 'unknown flag: --owner' and todoSource.Load returned on that FIRST failure before reading a single repo store. A host with 183 stories reported 0 — every card rendered with no story chips and nothing to click, and the only evidence was one warning line about a flag.
