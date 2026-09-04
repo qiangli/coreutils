@@ -131,3 +131,48 @@ func TestStartupNoticeNamesAnchoredSpoolPath(t *testing.T) {
 		t.Errorf("notice names %q, spool is %q", got, want)
 	}
 }
+
+func TestDisplayPathAbbreviatesOnlyCurrentHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	inside := filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl")
+	wantInside := filepath.Join("$HOME", ".agents", "otel", "spool", "spans.jsonl")
+	if got := displayPath(inside); got != wantInside {
+		t.Errorf("displayPath(%q)=%q, want %q", inside, got, wantInside)
+	}
+
+	outside := filepath.Join(filepath.Dir(home), "someone-else", "spans.jsonl")
+	if got := displayPath(outside); got != outside {
+		t.Errorf("displayPath(%q)=%q, want the exact non-home path", outside, got)
+	}
+}
+
+func TestStartupNoticeAbbreviatesHomeSpool(t *testing.T) {
+	if os.Getenv("TEST_TELEMETRY_HOME_NOTICE_CHILD") == "1" {
+		shutdown := Init(context.Background())
+		_ = shutdown(context.Background())
+		os.Exit(0)
+	}
+	home := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStartupNoticeAbbreviatesHomeSpool$")
+	cmd.Env = append(scrubbedEnv(),
+		"TEST_TELEMETRY_HOME_NOTICE_CHILD=1",
+		"HOME="+home,
+		"BASHY_TELEMETRY_NOTICE=1",
+		"OTEL_TRACES_EXPORTER=file",
+	)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("child: %v\n%s", err, stderr.String())
+	}
+	out := stderr.String()
+	want := "bashy: telemetry on → " + filepath.Join("$HOME", ".agents", "otel", "spool", "spans.jsonl") + " (service=bashy)"
+	if !strings.Contains(out, want) {
+		t.Errorf("startup notice %q does not contain %q", out, want)
+	}
+	if strings.Contains(out, home) {
+		t.Errorf("startup notice leaks literal home path %q: %q", home, out)
+	}
+}

@@ -45,6 +45,7 @@ package telemetry
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -138,7 +139,7 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			otel.SetTracerProvider(provider)
 			enabled = true
 			if shouldReportTelemetryStatus(isTerminal(os.Stderr)) {
-				os.Stderr.WriteString("bashy: telemetry on → " + sexp.path + " (service=" + svc + ")\n")
+				os.Stderr.WriteString("bashy: telemetry on → " + displayPath(sexp.path) + " (service=" + svc + ")\n")
 			}
 			shutdown = func(ctx context.Context) error {
 				ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -271,6 +272,32 @@ func automationMarker(value string) bool {
 
 func isTerminal(f *os.File) bool {
 	return f != nil && term.IsTerminal(int(f.Fd()))
+}
+
+// displayPath keeps startup notices private and compact without changing the
+// absolute path used by the exporter. Only a path actually within the current
+// user's home is abbreviated; paths elsewhere remain exact.
+func displayPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return path
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		return path
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	rel, err := filepath.Rel(home, absPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return path
+	}
+	if rel == "." {
+		return "$HOME"
+	}
+	return filepath.Join("$HOME", rel)
 }
 
 // Tracer returns bashy's tracer. Safe before Init: the global provider is a no-op until
