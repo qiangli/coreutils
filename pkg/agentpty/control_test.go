@@ -3,6 +3,7 @@
 package agentpty
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net"
 	"os"
@@ -11,6 +12,17 @@ import (
 	"testing"
 	"time"
 )
+
+func TestControlScannerAcceptsAccumulatedManagedInboxFrame(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 128*1024)
+	sc := newPTYControlScanner(bytes.NewReader(append(payload, '\n')))
+	if !sc.Scan() {
+		t.Fatalf("128 KiB managed opening frame was rejected: %v", sc.Err())
+	}
+	if got := len(sc.Bytes()); got != len(payload) {
+		t.Fatalf("managed opening frame length = %d, want %d", got, len(payload))
+	}
+}
 
 // The wire had three implementations — this one, agentlaunch's copy, and weave's
 // hand-rolled base64 — and they had already begun to disagree. These tests pin the

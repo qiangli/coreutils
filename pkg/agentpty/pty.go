@@ -370,7 +370,7 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 					}
 					go func(c net.Conn) {
 						defer c.Close()
-						sc := bufio.NewScanner(c)
+						sc := newPTYControlScanner(c)
 						for sc.Scan() {
 							writePTYControlLine(ptmx, sc.Text())
 						}
@@ -504,6 +504,19 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		}
 		return 1, reason, waitErr
 	}
+}
+
+// A managed opening turn includes the agent's pending unified inbox. That can
+// legitimately exceed bufio.Scanner's 64 KiB default even though each authored
+// message is individually bounded. Keep the line protocol bounded, but size it
+// for a real accumulated inbox rather than silently closing the socket halfway
+// through the frame (which surfaces to the sender as EPIPE).
+const maxPTYControlFrameBytes = 4 << 20
+
+func newPTYControlScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), maxPTYControlFrameBytes)
+	return sc
 }
 
 // steerEnterDelay separates the typed text from the Enter that submits it.
