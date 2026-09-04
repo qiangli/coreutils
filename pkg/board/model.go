@@ -227,6 +227,13 @@ type Run struct {
 	UnmergedCommits int       `json:"unmerged_commits,omitempty"`
 	AgeSeconds      int64     `json:"age_seconds,omitempty"`
 	Stale           bool      `json:"stale,omitempty"`
+	// Workspace is the filesystem-isolated clone backing this weave run.
+	// WorkspaceDiskBytes is measured from the directory tree at board collection time;
+	// an error keeps the workspace visible while explaining why its footprint
+	// is unavailable.
+	Workspace          string `json:"workspace,omitempty"`
+	WorkspaceDiskBytes uint64 `json:"workspace_disk_bytes,omitempty"`
+	WorkspaceDiskError string `json:"workspace_disk_error,omitempty"`
 }
 
 // DagRun is one `bashy dag` run as recorded by that package's run journal.

@@ -43,6 +43,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/qiangli/coreutils/pkg/board"
+	"github.com/qiangli/coreutils/pkg/resources"
 	"github.com/qiangli/coreutils/pkg/websession"
 )
 
@@ -916,7 +917,46 @@ func stubBoard(t *testing.T) {
 				{ID: "cccc3333", Number: 3, Title: "finished", Status: "done", SprintID: 42},
 				{ID: "dddd4444", Number: 4, Title: "also finished", Status: "closed", SprintID: 42},
 			},
+			Resources: &resources.System{
+				CPU: resources.CPU{UsagePercent: 31}, Memory: resources.Memory{UsedPercent: 42},
+				Disks: []resources.Disk{{Mount: "/", UsedPercent: 57}, {Mount: "/data", UsedPercent: 73}},
+			},
+			Panels: []board.PanelView{{ID: "agents", Title: "Agents"}, {ID: "runs", Title: "Runs"},
+				{ID: "workspaces", Title: "Workspaces", Collapsed: "1 workspace(s); 3.0GiB on disk",
+					Columns: []string{"RUN", "STATE", "DISK", "REPO", "WORKSPACE"},
+					Rows:    [][]string{{"#7", "working", "3.0GiB", "/repo", "/work/issue-7"}}},
+				{ID: "utilization", Title: "Utilization health"}},
 		}, nil
+	}
+}
+
+func TestDOMSprintShowsDiskAndWorkspaceUsage(t *testing.T) {
+	stubBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var summary, panels string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll("#bd-summary .bd-stat"))
+			.map(n => n.querySelector(".k").textContent + "=" + n.querySelector(".v").textContent).join(",")`, &summary),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll(".bd-panel-head"))
+			.map(n => n.textContent.trim()).join("|")`, &panels),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "sprint disk and workspaces", errs())
+	if !strings.Contains(summary, "cpu=31%") || !strings.Contains(summary, "memory=42%") || !strings.Contains(summary, "disk=73%") {
+		t.Errorf("resource summary = %q", summary)
+	}
+	if strings.Index(summary, "memory=42%") > strings.Index(summary, "disk=73%") {
+		t.Errorf("disk does not follow memory: %q", summary)
+	}
+	if !strings.Contains(panels, "Workspaces") || !strings.Contains(panels, "3.0GiB on disk") {
+		t.Errorf("workspace panel is absent: %q", panels)
+	}
+	if strings.Index(panels, "Runs") > strings.Index(panels, "Workspaces") || strings.Index(panels, "Workspaces") > strings.Index(panels, "Utilization health") {
+		t.Errorf("workspace panel placement = %q", panels)
 	}
 }
 

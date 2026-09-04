@@ -90,6 +90,10 @@ function renderSummary(d) {
   ];
   if (host.cpu) cells.push(stat("cpu", Math.round(host.cpu.usage_percent) + "%", ""));
   if (host.memory) cells.push(stat("memory", host.memory.used_percent + "%", ""));
+  if (host.disks && host.disks.length) {
+    const worst = host.disks.reduce((n, disk) => Math.max(n, Number(disk.used_percent) || 0), 0);
+    cells.push(stat("disk", Math.round(worst) + "%", ""));
+  }
   $("bd-summary").replaceChildren(...cells);
 
   const u = d.utilization;

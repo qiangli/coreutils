@@ -19,7 +19,7 @@ func (p panel) ID() string               { return p.id }
 func (p panel) Build(b *Board) PanelView { return p.build(b) }
 
 func DefaultPanels() *Registry {
-	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel(), dagPanel(), fleetPanel(), resourcePanel(), utilizationPanel())
+	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), workspacePanel(), salvagePanel(), dagPanel(), fleetPanel(), resourcePanel(), utilizationPanel())
 }
 
 // dagPanel projects recent `bashy dag` pipeline runs. Failures are what a
@@ -121,6 +121,50 @@ func runPanel() Panel {
 				unmerged = fmt.Sprintf("%d commits", x.UnmergedCommits)
 			}
 			v.Rows = append(v.Rows, []string{"#" + itoa(x.ID), x.State, duration(x.AgeSeconds), unmerged, dash(x.Tool), band(x.Band), dash(x.Model), x.Repo, x.Label})
+		}
+		return v
+	}}
+}
+
+// workspacePanel keeps a weave run and the disk it occupies adjacent in the
+// board hierarchy. This is deliberately separate from Host resources: the
+// latter answers "is the filesystem full?", while this answers "which
+// isolated clones are using it?".
+func workspacePanel() Panel {
+	return panel{id: "workspaces", build: func(b *Board) PanelView {
+		type row struct {
+			run Run
+		}
+		var rows []row
+		var total uint64
+		unavailable := 0
+		for _, run := range b.Runs {
+			if run.Workspace == "" {
+				continue
+			}
+			rows = append(rows, row{run: run})
+			if run.WorkspaceDiskError != "" {
+				unavailable++
+			} else if run.WorkspaceDiskBytes <= ^uint64(0)-total {
+				total += run.WorkspaceDiskBytes
+			}
+		}
+		sort.SliceStable(rows, func(i, j int) bool {
+			return rows[i].run.WorkspaceDiskBytes > rows[j].run.WorkspaceDiskBytes
+		})
+
+		v := PanelView{ID: "workspaces", Title: "Workspaces",
+			Collapsed: fmt.Sprintf("%d workspace(s); %s on disk", len(rows), resources.HumanBytes(total)),
+			Columns:   []string{"RUN", "STATE", "DISK", "REPO", "WORKSPACE"}}
+		if unavailable > 0 {
+			v.Collapsed += fmt.Sprintf("; %d unavailable", unavailable)
+		}
+		for _, x := range rows {
+			disk := resources.HumanBytes(x.run.WorkspaceDiskBytes)
+			if x.run.WorkspaceDiskError != "" {
+				disk = "unavailable: " + x.run.WorkspaceDiskError
+			}
+			v.Rows = append(v.Rows, []string{"#" + itoa(x.run.ID), x.run.State, disk, x.run.Repo, x.run.Workspace})
 		}
 		return v
 	}}

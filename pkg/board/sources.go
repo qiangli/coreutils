@@ -128,6 +128,7 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 				UnmergedCommits int       `json:"unmerged_commits"`
 				AgeSeconds      int64     `json:"age_seconds"`
 				Stale           bool      `json:"stale"`
+				Workspace       string    `json:"workspace"`
 				Launch          *struct {
 					Agent      string        `json:"agent"`
 					Model      string        `json:"model"`
@@ -143,7 +144,10 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 		for _, x := range q.Items {
 			// Owner is the conductor principal and may be stale; it is not the
 			// launched agent. Agent identity comes only from launch_spec.
-			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: x.AgeSeconds, Stale: x.Stale}
+			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: x.AgeSeconds, Stale: x.Stale, Workspace: x.Workspace}
+			if r.Workspace != "" {
+				r.WorkspaceDiskBytes, r.WorkspaceDiskError = workspaceDiskUsage(ctx, r.Workspace)
+			}
 			if x.Launch != nil {
 				if x.Launch.Agent != "" {
 					r.Agent = x.Launch.Agent

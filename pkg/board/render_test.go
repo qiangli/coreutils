@@ -39,7 +39,7 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	// Golden rebased 2026-07-25 for the dag panel. The ONLY delta is one added
 	// panel line; rows/lanes/summary are untouched because dag runs are a
 	// separate Board field, not new Rows.
-	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "57603a691568d506ff5d1b19e4a39b680a44eefa1fb12da0e8ea93516464584f"; got != want {
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "64023d3e89b18f0917ca02cad034f126748512708fd1ac8dd9c265f481c9b2bd"; got != want {
 		t.Errorf("terminal golden changed: got %s\n%s", got, text)
 	}
 	if !strings.Contains(string(text), "Dag runs") {
@@ -59,7 +59,7 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	// Rebased 2026-08-31 for explicit per-sprint story progress. Even a sprint
 	// with zero stories carries total/open/closed zeroes so old-vs-empty is not
 	// another value a consumer has to guess.
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "6d83b99129258d33ab86dd8e0aee5a63e8d2995b62784c386bee568a1eab8672"; sum != want {
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "1edc65155e6c83642b1a10ff7c255a3350f7f9ec330f689128920dce806ad218"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
 	}
 	if strings.Contains(string(raw), "dag_runs") {
