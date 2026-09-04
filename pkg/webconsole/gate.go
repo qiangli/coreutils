@@ -43,7 +43,7 @@ func isOpenPath(p string) bool {
 	return false
 }
 
-// firstSegment returns the leading path segment ("/relay/api/x" -> "relay").
+// firstSegment returns the leading path segment ("/meet/api/x" -> "meet").
 func firstSegment(p string) string {
 	p = strings.TrimPrefix(p, "/")
 	if i := strings.IndexByte(p, '/'); i >= 0 {

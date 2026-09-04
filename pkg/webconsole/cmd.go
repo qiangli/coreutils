@@ -117,7 +117,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scope, "scope", "", "filesystem root for the files panel (default: your home directory)")
 	cmd.Flags().BoolVar(&write, "allow-write", false, "allow the files panel to modify files")
 	cmd.Flags().StringSliceVar(&disable, "disable", nil,
-		"panels to leave out entirely — neither listed nor routed (terminal,files,relay,mb,board)")
+		"panels to leave out entirely — neither listed nor routed (terminal,files,meet,mb,sprint)")
 	cmd.Flags().StringArrayVar(&apps, "app", nil,
 		"publish a third-party program as a tile: <bin> or <bin>@<port>, repeatable "+
 			"(described by `<bin> meta --json`)")

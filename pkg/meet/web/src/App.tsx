@@ -236,19 +236,12 @@ export function App() {
           />
           <Composer
             error={meet.error}
-            isOrganizer={meet.isOrganizer}
-            onAction={meet.act}
             onDismissQueued={meet.dismissQueued}
-            onManageParticipants={() => {
-              if (window.matchMedia("(min-width: 1280px)").matches) {
-                setDetailsOpen(true)
-              } else {
-                setMobileDetailsOpen(true)
-              }
-            }}
+            onRecipientChange={meet.setRecipient}
             onSend={meet.send}
             onStartWork={meet.startWork}
             queued={meet.queued}
+            recipient={meet.recipient}
             sending={meet.sending}
             state={meet.state}
             kind={meet.selectedKind}

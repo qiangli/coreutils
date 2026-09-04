@@ -1,21 +1,13 @@
 import { useMemo, useRef, useState } from "react"
 import {
   AtSign,
-  BookmarkCheck,
   Check,
   ChevronDown,
   CircleDot,
-  ListChecks,
-  ListTodo,
+  Hash,
   LoaderCircle,
-  MessageCircleQuestion,
-  MessagesSquare,
-  NotebookPen,
   Send,
   Play,
-  Sparkles,
-  UsersRound,
-  Vote,
   X,
 } from "lucide-react"
 
@@ -27,7 +19,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
@@ -49,12 +40,12 @@ interface ComposerProps {
   sending: boolean
   queued: string | null
   error: string | null
-  isOrganizer: boolean
+  /** Who an unaddressed message goes to; "" is the whole room. */
+  recipient: string
+  onRecipientChange: (name: string) => void
   onDismissQueued: () => void
   onSend: (text: string, agent?: string) => Promise<void>
   onStartWork: (text: string) => Promise<boolean>
-  onAction: (action: string, label: string, body?: unknown) => Promise<boolean>
-  onManageParticipants: () => void
   kind?: "room" | "dm"
 }
 
@@ -63,12 +54,11 @@ export function Composer({
   sending,
   queued,
   error,
-  isOrganizer,
+  recipient,
+  onRecipientChange,
   onDismissQueued,
   onSend,
   onStartWork,
-  onAction,
-  onManageParticipants,
   kind = "room",
 }: ComposerProps) {
   const [text, setText] = useState("")
@@ -91,7 +81,17 @@ export function Composer({
         state?.permanent && state.name && !(state.name in (state.role_holders ?? {}))
           ? [{ name: state.name, role: "role", live: false }]
           : []
-      return [...participants, ...aliases, ...lazyAliases]
+      const all = [...participants, ...aliases, ...lazyAliases]
+      // The owner is not necessarily SEATED: a meeting's facilitator runs the
+      // floor without being on the roster, and a sprint room's seat holder may
+      // not have spoken yet. It is still the default recipient, so leaving it
+      // out made the one name the composer preselects the one name the reader
+      // could not choose again after switching away.
+      const owner = state?.owner ?? ""
+      if (owner && !all.some((m) => memberName(m).toLocaleLowerCase() === owner.toLocaleLowerCase())) {
+        all.unshift({ name: owner, role: state?.owner_title || "owner", live: false })
+      }
+      return all
     },
     [state],
   )
@@ -104,6 +104,22 @@ export function Composer({
     memberName(agent).toLocaleLowerCase().startsWith(mentionQuery ?? ""),
   )
   const roomOpen = state?.status === "open"
+  // The SERVER resolves the owner: the room stores a late-bound seat label
+  // ("conductor:99") and only the host holds the table that says who sits in
+  // it today. ownerTitle is the domain's own word — "project manager" for a
+  // sprint's room, "facilitator" for an ordinary meeting.
+  const ownerName = state?.owner ?? ""
+  const ownerTitle = state?.owner_title || "owner"
+  const isOwner = (name: string) =>
+    Boolean(ownerName) && name.toLocaleLowerCase() === ownerName.toLocaleLowerCase()
+  // Two labels, deliberately. The BUTTON shows the name only — "codex-gpt5.6-sol
+  // · project manager" is wider than the control and truncates to "codex-gpt5.6-
+  // sol ·…", which spends the space on an ellipsis. The accessible name carries
+  // the title, so a screen reader still hears who this is, and the title itself
+  // is on the badge in the list where there is room for it.
+  const recipientName = recipient || "Everyone"
+  const recipientLabel =
+    recipient && isOwner(recipient) ? `${recipient} · ${ownerTitle}` : recipientName
 
   async function submit() {
     const value = text.trim()
@@ -117,6 +133,11 @@ export function Composer({
     setText("")
     if (addressed) {
       await onSend(addressed[2].trim(), addressed[1])
+    } else if (kind === "room" && recipient) {
+      // The selected recipient, which defaults to the room's owner. A typed
+      // "@name" above overrides it for that one message without changing the
+      // selection — the same relationship a To: field has with a reply.
+      await onSend(value, recipient)
     } else {
       await onSend(value)
     }
@@ -175,9 +196,16 @@ export function Composer({
                       {initials(memberName(agent))}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="flex-1 font-medium">{memberName(agent)}</span>
-                  <span className="text-[10px] capitalize text-muted-foreground">
-                    {memberRole(agent) || "agent"}
+                  <span className="min-w-0 flex-1 truncate font-medium">
+                    {memberName(agent)}
+                  </span>
+                  {/* Same owner mark as the recipient list and the roster. A
+                      reader should not have to learn who is accountable in one
+                      place and then fail to recognise them in another. */}
+                  <span className="shrink-0 text-[10px] capitalize text-muted-foreground">
+                    {isOwner(memberName(agent))
+                      ? ownerTitle
+                      : memberRole(agent) || "agent"}
                   </span>
                 </button>
               ))}
@@ -215,137 +243,82 @@ export function Composer({
                 <Play className="size-3.5" /> Start work
               </Button>
             )}
+            {/* WHO THIS GOES TO. The room's owner is preselected — in a
+                sprint's room that is its project manager, and unaddressed mail
+                there already lands on that seat server-side, so a composer
+                that defaulted to nobody was disagreeing with its own room.
+                "Everyone" is a real choice, not the absence of one. */}
             {kind === "room" && <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  className="h-8 rounded-lg px-2.5 text-[11px] text-muted-foreground"
-                  size="sm"
-                  variant="ghost"
+                  aria-label={`Recipient: ${recipientLabel}`}
+                  className="h-8 max-w-[13rem] gap-1.5 rounded-lg px-2.5 text-[11px]"
                   disabled={!roomOpen || sending}
+                  size="sm"
+                  variant="outline"
                 >
-                  <Sparkles className="size-3.5 text-primary" />
-                  Room actions
-                  <ChevronDown className="size-3" />
+                  {recipient ? (
+                    <AtSign className="size-3.5 text-primary" />
+                  ) : (
+                    <Hash className="size-3.5 text-muted-foreground" />
+                  )}
+                  <span className="truncate">{recipientName}</span>
+                  <ChevronDown className="size-3 shrink-0 opacity-60" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="w-72 rounded-xl p-1.5"
+                className="max-h-80 w-72 overflow-y-auto rounded-xl p-1.5"
                 side="top"
                 sideOffset={8}
               >
-                {/* A board's floor is never run for it — the server answers
-                    these four with 409 wrong-mode — so a board simply does not
-                    offer them rather than offering buttons that only refuse. */}
-                {!state?.board && (
-                  <>
-                    <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Help the room move forward
-                    </DropdownMenuLabel>
-                    <ActionItem
-                      description="Give every agent a turn"
-                      icon={UsersRound}
-                      label="Hear from everyone"
-                      onSelect={() => onAction("round", "Round table")}
-                    />
-                    <ActionItem
-                      description="Ask a quick multiple-choice question"
-                      icon={Vote}
-                      label="Take a quick pulse"
-                      onSelect={() =>
-                        onAction("poll", "Quick pulse", {
-                          question:
-                            text.trim() || "Are we ready to move forward?",
-                          choices: ["Yes", "Needs more discussion"],
-                        })
-                      }
-                    />
-                    <ActionItem
-                      description="Open one question to the whole room"
-                      icon={MessageCircleQuestion}
-                      label="Ask the room"
-                      onSelect={() =>
-                        onAction("ask", "Ask the room", {
-                          question: text.trim() || "What are we missing?",
-                        })
-                      }
-                    />
-                    <ActionItem
-                      description="Synthesize agreement and open questions"
-                      icon={MessagesSquare}
-                      label="Find common ground"
-                      onSelect={() => onAction("converge", "Convergence")}
-                    />
-                    <DropdownMenuSeparator />
-                  </>
-                )}
                 <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Record the current draft
+                  Send to
                 </DropdownMenuLabel>
-                <ActionItem
-                  description="Save the draft as an agreed outcome"
-                  disabled={!text.trim()}
-                  icon={BookmarkCheck}
-                  label="Record decision"
-                  onSelect={() =>
-                    onAction("mark", "Record decision", {
-                      kind: "decision",
-                      text: text.trim(),
-                    })
-                  }
-                />
-                <ActionItem
-                  description="Save the draft as follow-up work"
-                  disabled={!text.trim()}
-                  icon={ListTodo}
-                  label="Record action item"
-                  onSelect={() =>
-                    onAction("mark", "Record action item", {
-                      kind: "action",
-                      text: text.trim(),
-                    })
-                  }
-                />
-                <ActionItem
-                  description="Add the draft to the agenda"
-                  disabled={!text.trim()}
-                  icon={NotebookPen}
-                  label="Add agenda item"
-                  onSelect={() =>
-                    onAction("mark", "Add agenda item", {
-                      kind: "agenda",
-                      text: text.trim(),
-                    })
-                  }
-                />
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-3 rounded-lg px-2 py-2"
-                  onSelect={() => setText("@")}
+                  onSelect={() => onRecipientChange("")}
                 >
-                  <AtSign className="size-4 text-violet-600" />
-                  <div>
-                    <div className="text-xs font-medium">Talk to one agent</div>
+                  <Hash className="size-4 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium">Everyone</div>
                     <div className="text-[10px] text-muted-foreground">
-                      Choose someone from the room
+                      Post to the room; nobody is asked to reply
                     </div>
                   </div>
+                  {!recipient && <Check className="size-3.5 text-primary" />}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="gap-3 rounded-lg px-2 py-2"
-                  disabled={!isOrganizer}
-                  onSelect={onManageParticipants}
-                >
-                  <ListChecks className="size-4 text-slate-500" />
-                  <div>
-                    <div className="text-xs font-medium">Manage participants</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      {isOrganizer
-                        ? "Invite or remove an agent"
-                        : "Organizer only"}
-                    </div>
-                  </div>
-                </DropdownMenuItem>
+                {agents.map((agent) => {
+                  const name = memberName(agent)
+                  return (
+                    <DropdownMenuItem
+                      className="gap-3 rounded-lg px-2 py-2"
+                      key={name}
+                      onSelect={() => onRecipientChange(name)}
+                    >
+                      <Avatar className="size-6">
+                        <AvatarFallback className="bg-teal-100 text-[9px] font-bold text-teal-800">
+                          {initials(name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{name}</div>
+                        <div className="truncate text-[10px] capitalize text-muted-foreground">
+                          {isOwner(name) ? ownerTitle : memberRole(agent) || "agent"}
+                        </div>
+                      </div>
+                      {isOwner(name) && (
+                        <Badge
+                          className="h-4 shrink-0 border-primary/30 px-1.5 text-[9px] font-medium capitalize text-primary"
+                          variant="outline"
+                        >
+                          {ownerTitle}
+                        </Badge>
+                      )}
+                      {recipient === name && <Check className="size-3.5 shrink-0 text-primary" />}
+                    </DropdownMenuItem>
+                  )
+                })}
               </DropdownMenuContent>
             </DropdownMenu>}
             <Tooltip>
@@ -396,7 +369,9 @@ export function Composer({
           <span className="text-[9px] text-muted-foreground/65">
             {kind === "dm"
               ? "Send asks a read-only question. Start work is available only inside managed containment."
-              : "Agent replies render as sanitized markdown."}
+              : recipient
+                ? `Goes to ${recipient}. Start with @name to send one message elsewhere.`
+                : "Posted to the room. Nobody is asked to reply."}
           </span>
           {state?.status === "open" && (
             <Badge
@@ -410,36 +385,6 @@ export function Composer({
         </div>
       </div>
     </div>
-  )
-}
-
-function ActionItem({
-  icon: Icon,
-  label,
-  description,
-  onSelect,
-  disabled = false,
-}: {
-  icon: typeof UsersRound
-  label: string
-  description: string
-  onSelect: () => void
-  disabled?: boolean
-}) {
-  return (
-    <DropdownMenuItem
-      className="gap-3 rounded-lg px-2 py-2.5"
-      disabled={disabled}
-      onSelect={onSelect}
-    >
-      <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary">
-        <Icon className="size-4" />
-      </div>
-      <div>
-        <div className="text-xs font-medium">{label}</div>
-        <div className="text-[10px] text-muted-foreground">{description}</div>
-      </div>
-    </DropdownMenuItem>
   )
 }
 

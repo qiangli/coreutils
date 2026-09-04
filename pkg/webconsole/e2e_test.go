@@ -234,26 +234,26 @@ func ellipsize(s string, n int) string {
 func TestE2ERelayServesTheRoom(t *testing.T) {
 	base := serve(t, Options{})
 
-	code, body, _ := get(t, base+"/relay/")
+	code, body, _ := get(t, base+"/meet/")
 	if code != http.StatusOK {
-		t.Fatalf("/relay/ = %d", code)
+		t.Fatalf("/meet/ = %d", code)
 	}
 	// Mounting under a prefix must rewrite the room's base href, or every asset
 	// it requests resolves against the launcher instead.
-	if !strings.Contains(body, `<base href="/relay/"`) {
-		t.Errorf("/relay/ base href not rewritten for the mount")
+	if !strings.Contains(body, `<base href="/meet/"`) {
+		t.Errorf("/meet/ base href not rewritten for the mount")
 	}
 
 	// The room's own API must work through the mount. This is the regression
 	// that matters most: stamping X-Forwarded-Prefix makes the room read the
 	// request as cloud-vouched, and its default gate would 403 the machine owner.
-	code, body, _ = get(t, base+"/relay/api/rooms")
+	code, body, _ = get(t, base+"/meet/api/rooms")
 	if code != http.StatusOK {
-		t.Fatalf("/relay/api/rooms = %d (%s) — the mounted gate is wrong",
+		t.Fatalf("/meet/api/rooms = %d (%s) — the mounted gate is wrong",
 			code, strings.TrimSpace(body))
 	}
 	if !json.Valid([]byte(body)) {
-		t.Errorf("/relay/api/rooms did not return JSON: %q", body)
+		t.Errorf("/meet/api/rooms did not return JSON: %q", body)
 	}
 }
 
@@ -366,7 +366,7 @@ func TestE2ELoginGuardsAnExposedConsole(t *testing.T) {
 	jar := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	for _, p := range []string{"/", "/api/apps", "/term/", "/files/", "/relay/"} {
+	for _, p := range []string{"/", "/api/apps", "/term/", "/files/", "/meet/"} {
 		req, _ := http.NewRequest("GET", base+p, nil)
 		req.Header.Set("Accept", "text/html")
 		resp, err := jar.Do(req)
@@ -414,7 +414,7 @@ func TestE2ELoginGuardsAnExposedConsole(t *testing.T) {
 		t.Fatalf("login returned %d, want 303", resp.StatusCode)
 	}
 
-	for _, p := range []string{"/", "/api/apps", "/files/", "/relay/api/rooms"} {
+	for _, p := range []string{"/", "/api/apps", "/files/", "/meet/api/rooms"} {
 		req, _ := http.NewRequest("GET", base+p, nil)
 		resp, err := c.Do(req)
 		if err != nil {

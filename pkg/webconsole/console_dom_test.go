@@ -250,7 +250,7 @@ func TestDOMPairingSection(t *testing.T) {
 // Every panel must load and throw nothing. This is the sweep that catches a fix
 // in one app breaking another.
 func TestDOMEveryPanelLoadsCleanly(t *testing.T) {
-	for _, panel := range []string{"/", "/sprint/", "/mb/", "/files/", "/relay/", "/term/"} {
+	for _, panel := range []string{"/", "/sprint/", "/mb/", "/files/", "/meet/", "/term/"} {
 		t.Run(panel, func(t *testing.T) {
 			base, ctx, errs := domEnv(t, Options{})
 			var title string
@@ -477,7 +477,7 @@ func TestDOMRelayHeaderMatchesTheOtherApps(t *testing.T) {
 
 	var brand, wordmark, allAppsRects, allAppsHref string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(3500*time.Millisecond),
 		chromedp.Evaluate(`String(!!document.querySelector(`+"`"+`header a[title="bashy meet"]`+"`"+`))`, &brand),
 		chromedp.Evaluate(`(document.querySelector(`+"`"+`header a[title="bashy meet"]`+"`"+`)?.innerText||"").trim()`, &wordmark),
@@ -532,7 +532,7 @@ func TestDOMRelayHeaderMatchesBoardMetrics(t *testing.T) {
 		chromedp.Navigate(base+"/sprint/"),
 		chromedp.Sleep(1800*time.Millisecond),
 		chromedp.Evaluate(probe, &boardBox),
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(3500*time.Millisecond),
 		chromedp.Evaluate(probe, &relayBox),
 	); err != nil {
@@ -565,7 +565,7 @@ func TestDOMRelayIsFiveParts(t *testing.T) {
 
 	var shape, brands, footer string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(3500*time.Millisecond),
 		chromedp.Evaluate(`(()=>{const h=document.querySelector("header");
 			const f=document.querySelector(".console-foot,#app-foot");
@@ -615,7 +615,7 @@ func TestDOMRelayPanelHeadersLineUp(t *testing.T) {
 		// hidden below lg and the details panel below xl, so a narrow window
 		// measures them at height 0 and the check passes for the wrong reason.
 		emulation.SetDeviceMetricsOverride(1600, 900, 1, false),
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(3500*time.Millisecond),
 		chromedp.Evaluate(`(()=>{const sel="aside > div:first-child, main > header, [class*=border-l] > div:first-child";
 			const hs=[...document.querySelectorAll(sel)].map(e=>Math.round(e.getBoundingClientRect().height));
@@ -667,14 +667,14 @@ func TestDOMRelayFollowsTheConsoleTheme(t *testing.T) {
 
 	var dark, light string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(1500*time.Millisecond),
 		set("dark"),
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(2500*time.Millisecond),
 		chromedp.Evaluate(read, &dark),
 		set("light"),
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(2500*time.Millisecond),
 		chromedp.Evaluate(read, &light),
 	); err != nil {
@@ -708,7 +708,7 @@ func TestDOMRelayMeetChatAreTabs(t *testing.T) {
 
 	var tabs, labels, selected string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(3000*time.Millisecond),
 		chromedp.Evaluate(`String(document.querySelectorAll("[role=tab]").length)`, &tabs),
 		chromedp.Evaluate(`JSON.stringify([...document.querySelectorAll("[role=tab]")].map(t=>t.innerText.trim()))`, &labels),
@@ -750,10 +750,10 @@ func TestDOMRelayLightThemeHasNoDarkPanel(t *testing.T) {
 
 	var relay, board string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(1200*time.Millisecond),
 		chromedp.Evaluate(`localStorage.setItem("bashy.apps.config",JSON.stringify({theme:"light"}))`, nil),
-		chromedp.Navigate(base+"/relay/"),
+		chromedp.Navigate(base+"/meet/"),
 		chromedp.Sleep(2500*time.Millisecond),
 		chromedp.Evaluate(read, &relay),
 		chromedp.Navigate(base+"/sprint/"),
@@ -803,7 +803,7 @@ func TestDOMOneMarkEverywhere(t *testing.T) {
 
 	seen := map[string]string{}
 	for _, theme := range []string{"light", "dark"} {
-		for _, page := range []string{"/sprint/", "/mb/", "/term/", "/relay/"} {
+		for _, page := range []string{"/sprint/", "/mb/", "/term/", "/meet/"} {
 			var got string
 			if err := chromedp.Run(ctx,
 				chromedp.Navigate(base+page),

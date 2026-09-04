@@ -115,9 +115,20 @@ type Options struct {
 }
 
 // disabled reports whether a panel was turned off for this console.
-func (o Options) disabled(name string) bool {
+// disabled reports whether --disable named this panel, by its internal NAME or
+// by the MOUNT a person actually sees.
+//
+// The two differ wherever an app was renamed without renaming its verb — the
+// room is `relay` at /meet/, the board is `board` at /sprint/ — and matching
+// the name alone means an operator who types the app's own name gets a SILENT
+// NO-OP: the panel they meant to remove is still listed, still routed, still
+// reachable. A refusal would be recoverable; quietly serving what was asked to
+// be withheld is not.
+func (o Options) disabled(p Panel) bool {
+	mount := strings.Trim(p.Path, "/")
 	for _, d := range o.Disable {
-		if strings.EqualFold(strings.TrimSpace(d), name) {
+		d = strings.TrimSpace(d)
+		if strings.EqualFold(d, p.Name) || (mount != "" && strings.EqualFold(d, mount)) {
 			return true
 		}
 	}
@@ -236,7 +247,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	if len(opts.Disable) > 0 {
 		kept := s.panels[:0]
 		for _, p := range s.panels {
-			if !opts.disabled(p.Name) {
+			if !opts.disabled(p) {
 				kept = append(kept, p)
 			}
 		}
@@ -293,9 +304,14 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	}
 
 	// Deep links from docs/agent-interaction-surfaces-design.md keep working,
-	// each only while its target panel is enabled.
+	// each only while its target panel is enabled. The room is mounted at
+	// /meet/ now — the app is called Meet everywhere a person sees it, and
+	// "Relay" on the address bar of a page titled Meet is the kind of
+	// inconsistency a reader has to stop and resolve. Old links still land.
 	if on["relay"] {
-		mux.Handle("GET /meet", redirectTo("/relay/"))
+		mux.Handle("GET /meet", redirectTo("/meet/"))
+		mux.Handle("GET /relay", redirectTo("/meet/"))
+		mux.Handle("GET /relay/", redirectTo("/meet/"))
 	}
 
 	// The terminal is served by the launcher itself rather than mounted, so it

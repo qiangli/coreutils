@@ -83,6 +83,11 @@ export const mockState: State = {
   round: 3,
   initiator: "Alex Rivera",
   decision_mode: "consent",
+  // The demo room has a facilitator, so the composer's recipient default has
+  // something to point at. A mock that omitted it would show "Everyone" and
+  // quietly demo a different product than the one that ships.
+  owner: "Atlas",
+  owner_title: "facilitator",
 }
 
 export const mockDetail: RoomDetail = {
@@ -235,7 +240,7 @@ export async function mockCreateRoom(
     members: participants,
     updated: new Date().toISOString(),
   })
-  return { ...mockState, id, room, topic, participants, chair: owner, round: 0 }
+  return { ...mockState, id, room, topic, participants, chair: owner, owner, owner_title: "facilitator", round: 0 }
 }
 
 export async function mockPost(

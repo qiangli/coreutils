@@ -28,7 +28,7 @@ import (
 //
 // WHAT IT DOES NOT DO. It does not invent a second, weaker pairing path. The
 // ticket is minted by the same pairStore, is single-use and time-boxed the same
-// way, confers the same default scope (board/mb/relay — not the terminal, not
+// way, confers the same default scope (sprint/mb/meet — not the terminal, not
 // files), and writes the same audit event. It does not broaden the listener:
 // on a console that was not started with --pair it FAILS CLOSED and hands back
 // the exact restart command, because a Settings toggle must never pretend it
@@ -113,7 +113,7 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 	// this console actually serves, and scope remains a NARROWING — applied
 	// after the tier ladder, it can only remove reach from the operator's own
 	// session, never add any. An absent or empty scope keeps the default, so
-	// the fail-safe is still board/mb/relay.
+	// the fail-safe is still sprint/mb/meet.
 	var req struct {
 		Scope []string `json:"scope"`
 	}

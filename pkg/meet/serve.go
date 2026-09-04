@@ -371,7 +371,7 @@ func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"state": st, "synthesis": syn})
+	writeJSON(w, http.StatusOK, map[string]any{"state": viewOf(st), "synthesis": syn})
 }
 
 // handleRoomCreate opens a room in the NAME OF WHOEVER ASKED FOR IT.
@@ -811,7 +811,7 @@ func handleObserveWS(w http.ResponseWriter, r *http.Request) {
 	// the roster, not whether the room was still open, not which round it was on. A
 	// UI cannot render a room from a stream of turns alone, and asking it to fetch
 	// the header over a second channel would race the backlog it is about to be sent.
-	if writeFrame(wsFrame{Kind: "info", Data: st}) != nil {
+	if writeFrame(wsFrame{Kind: "info", Data: viewOf(st)}) != nil {
 		return
 	}
 
@@ -882,7 +882,7 @@ func handleObserveWS(w http.ResponseWriter, r *http.Request) {
 			}
 			// A final info frame carries the closed header, so a client sees the
 			// status change rather than inferring it from a socket that hung up.
-			_ = writeFrame(wsFrame{Kind: "info", Data: cur, Note: "meeting " + cur.Status})
+			_ = writeFrame(wsFrame{Kind: "info", Data: viewOf(cur), Note: "meeting " + cur.Status})
 			_ = conn.WriteControl(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "meeting "+cur.Status),
 				time.Now().Add(time.Second))

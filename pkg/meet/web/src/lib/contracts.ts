@@ -134,6 +134,15 @@ export const stateSchema = z
     round: z.number().default(0),
     initiator: z.string().default(""),
     decision_mode: z.string().default(""),
+    // Who is accountable for this room, resolved by the SERVER at read time.
+    //
+    // The room stores a late-bound seat label ("conductor:99") so a handover
+    // re-targets mail already in flight; only the host holds the table that
+    // maps that seat to whoever sits in it today. So the browser is told the
+    // answer rather than deriving one — and owner is empty when the seat is
+    // VACANT, which is a real state and not a missing field.
+    owner: z.string().default(""),
+    owner_title: z.string().default(""),
   })
   .passthrough()
 

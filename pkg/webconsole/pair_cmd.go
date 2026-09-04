@@ -36,7 +36,8 @@ import (
 //  2. A device session inherits but never exceeds the operator authority that
 //     minted it: TTL is min(--ttl, remaining grant), and `revoke --all` ends
 //     the grant, which ends every device derived from it.
-//  3. The default SCOPE is board, mb, relay — not the terminal, not the home
+//  3. The default SCOPE is the board, the message board and the room — not
+//     the terminal, not the home
 //     directory. `--allow terminal` opts in explicitly.
 //  4. mDNS is best-effort. macOS and Windows answer <host>.local natively,
 //     Linux needs avahi — so the raw LAN IP is always printed too and an
@@ -81,7 +82,7 @@ func newPairCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&window, "window", defaultTicketWindow,
 		"how long the code stays scannable")
 	cmd.Flags().StringSliceVar(&allow, "allow", nil,
-		"panel mount IDs the device may reach (default board,mb,relay — Meet uses the relay mount; NOT terminal or files)")
+		"panels the device may reach, by app name or mount (default sprint,mb,meet; NOT terminal or files)")
 	cmd.Flags().StringVar(&host, "host", "", "address the phone should dial (default: this host's LAN IP)")
 	cmd.Flags().IntVar(&port, "port", DefaultPort, "port the console listens on")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the ticket as a typed object instead of a QR")

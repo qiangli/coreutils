@@ -304,6 +304,39 @@ export function useMeetRoom() {
     [state],
   )
 
+  // Who a message goes to when the reader has not typed "@name".
+  //
+  // A room's DEFAULT recipient is its owner — the project manager in a
+  // sprint's room. That is not a convenience: unaddressed mail in such a room
+  // already lands on that seat server-side, so a composer that sent to nobody
+  // was disagreeing with the room it was typing into. `""` is a real, choosable
+  // value meaning the whole room, which is why this is a string and not a
+  // nullable name.
+  //
+  // The choice is per ROOM and per BROWSER, so it is remembered here rather
+  // than on the room: two people in one room may each be talking to a different
+  // agent, and writing one reader's pick onto shared state would move the other
+  // reader's recipient under them.
+  const [recipientByRoom, setRecipientByRoom] = useState<Record<string, string>>(
+    () => readStoredRecipients(),
+  )
+  const owner = state?.owner ?? ""
+  const recipient =
+    selectedKind === "room" && selectedRef
+      ? (recipientByRoom[selectedRef] ?? owner)
+      : ""
+  const setRecipient = useCallback(
+    (next: string) => {
+      if (!selectedRef) return
+      setRecipientByRoom((current) => {
+        const updated = { ...current, [selectedRef]: next }
+        writeStoredRecipients(updated)
+        return updated
+      })
+    },
+    [selectedRef],
+  )
+
   return {
     agents,
     rooms,
@@ -330,6 +363,8 @@ export function useMeetRoom() {
     createDM,
     creating,
     isOrganizer,
+    recipient,
+    setRecipient,
     usingMock,
     debugRaw,
     setDebugRaw,
@@ -357,6 +392,11 @@ function dmState(dm: DMSummary): State {
     round: 0,
     initiator: dm.human,
     decision_mode: "",
+    // A direct message has one recipient and it is the agent named in it.
+    // Saying so keeps the composer's recipient logic uniform instead of
+    // special-casing the DM view into a second code path.
+    owner: dm.agent,
+    owner_title: "agent",
   }
 }
 
@@ -389,4 +429,35 @@ function messageFor(reason: unknown) {
   }
   if (reason instanceof Error) return reason.message
   return "Something went wrong. Please try again."
+}
+
+// The recipient picks live in localStorage, keyed by room.
+//
+// Wrapped in try/catch on BOTH sides: a private window, cleared site data, or
+// a browser configured to block storage makes the accessor itself throw, and a
+// composer that cannot remember a preference must still send messages.
+const RECIPIENT_STORE = "bashy.meet.recipient"
+
+function readStoredRecipients(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(RECIPIENT_STORE)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+    const out: Record<string, string> = {}
+    for (const [room, name] of Object.entries(parsed)) {
+      if (typeof name === "string") out[room] = name
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeStoredRecipients(value: Record<string, string>) {
+  try {
+    window.localStorage.setItem(RECIPIENT_STORE, JSON.stringify(value))
+  } catch {
+    /* a reader who cannot store a preference still gets this session's. */
+  }
 }

@@ -160,56 +160,30 @@ test("invites an agent from room details and shows it in the roster", async ({ p
   await expect(sidebar.getByText(invitedAgent)).toHaveCount(0);
 });
 
-test("room actions call their exact API routes and carry the draft", async ({ page }) => {
-  const topic = unique("Browser actions room");
+// The Room actions menu — round / poll / ask / converge / mark, plus the two
+// menu items that only pointed elsewhere — is HIDDEN from the web UI. It was
+// built for a facilitator driving a floor, and a person typing in a chat window
+// is not that; the verbs stay on the CLI, where the conductor uses them.
+//
+// Asserted as an ABSENCE on purpose. Nothing else fails when a menu quietly
+// comes back, and "for now" is exactly the kind of decision that gets undone by
+// a merge nobody read.
+test("the room actions menu is not offered in the browser", async ({ page }) => {
+  const topic = unique("Browser no-actions room");
   await openMeet(page);
   await createRoomFromUI(page, topic, primaryAgent);
 
-  const cases = [
-    { label: "Hear from everyone", action: "round", body: undefined },
-    {
-      label: "Take a quick pulse",
-      action: "poll",
-      body: { question: "Ship today?", choices: ["Yes", "Needs more discussion"] },
-    },
-    {
-      label: "Ask the room",
-      action: "ask",
-      body: { question: "Ship today?" },
-    },
-    { label: "Find common ground", action: "converge", body: undefined },
-  ];
-
-  await page.getByLabel("Message the room").fill("Ship today?");
-  for (const item of cases) {
-    await page.route(`**/api/rooms/*/${item.action}`, async (route) => {
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({ job: `test-${item.action}`, room: "test" }),
-      });
-    }, { times: 1 });
-    const requestPromise = page.waitForRequest((request) =>
-      request.url().endsWith(`/${item.action}`),
-    );
-    await page.getByRole("button", { name: "Room actions" }).click();
-    await page.getByRole("menuitem", { name: new RegExp(item.label) }).click();
-    const request = await requestPromise;
-    expect(request.method()).toBe("POST");
-    expect(request.postDataJSON()).toEqual(item.body ?? null);
+  await expect(page.getByRole("button", { name: "Room actions" })).toHaveCount(0);
+  for (const gone of ["Hear from everyone", "Take a quick pulse", "Ask the room",
+    "Find common ground", "Record decision", "Record action item", "Add agenda item"]) {
+    await expect(page.getByRole("menuitem", { name: new RegExp(gone) })).toHaveCount(0);
   }
 });
 
-test("records outcomes and reflects room closure without a reload", async ({ page }) => {
+test("reflects room closure and reopening without a reload", async ({ page }) => {
   const topic = unique("Browser lifecycle room");
-  const decision = unique("Ship the browser actions");
   await openMeet(page);
   await createRoomFromUI(page, topic, primaryAgent);
-
-  await page.getByLabel("Message the room").fill(decision);
-  await page.getByRole("button", { name: "Room actions" }).click();
-  await page.getByRole("menuitem", { name: /Record decision/ }).click();
-  await expect(page.getByText(decision).last()).toBeVisible();
 
   await page.getByRole("button", { name: "Close room" }).first().click();
   await page.getByRole("dialog").getByRole("button", { name: "Close room" }).click();
@@ -228,24 +202,16 @@ test("records outcomes and reflects room closure without a reload", async ({ pag
   });
 });
 
-test("manage participants opens the hidden room details panel", async ({ page }) => {
-  const topic = unique("Browser manage room");
-  await openMeet(page);
-  await createRoomFromUI(page, topic, primaryAgent);
-
-  await page.getByRole("button", { name: "Hide room details" }).click();
-  await expect(page.getByLabel("Agent to invite").first()).not.toBeVisible();
-  await page.getByRole("button", { name: "Room actions" }).click();
-  await page.getByRole("menuitem", { name: /Manage participants/ }).click();
-  await expect(page.getByLabel("Agent to invite").first()).toBeVisible();
-});
-
 test("posts a human message through the composer and reloads it from the transcript", async ({ page }) => {
   const topic = unique("Browser transcript room");
   const message = unique("human browser message");
   await openMeet(page);
   await createRoomFromUI(page, topic, primaryAgent);
 
+  // Explicitly to the whole room: the composer's default recipient is the
+  // room's owner, and a message to an owner runs that agent's turn rather than
+  // landing in the transcript as plain human prose.
+  await selectRecipient(page, "Everyone");
   await page.getByLabel("Message the room").fill(message);
   await page.getByRole("button", { name: "Send message" }).click();
 
@@ -436,6 +402,50 @@ test("routes an unoccupied permanent role instead of silently posting it", async
   await expect(page.getByText(/message to steward was accepted/i)).toBeVisible();
   await expect(page.getByText("@steward what is the hostname?", { exact: true })).toHaveCount(0);
 });
+
+// The room's OWNER is preselected, and in a sprint's room that owner is its
+// project manager. This is not a nicety: unaddressed mail in such a room
+// already lands on that seat server-side, so a composer defaulting to nobody
+// disagreed with the room it was typing into — the room had someone
+// accountable and the UI would not say who.
+test("the composer addresses the room owner by default and says so", async ({ page }) => {
+  const topic = unique("Browser owner default room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await expect(
+    page.getByRole("button", { name: `Recipient: ${facilitatorAgent} · facilitator` }),
+  ).toBeVisible();
+  // And the roster says the same thing, so the two lists cannot disagree about
+  // who is accountable.
+  const sidebar = page.locator("aside").first();
+  await expect(sidebar.getByText("facilitator").first()).toBeVisible();
+});
+
+// A changed recipient must SURVIVE. The pick is per room and per browser —
+// two people in one room may each be talking to a different agent — so it is
+// stored locally rather than written onto shared room state.
+test("a changed recipient persists across a reload", async ({ page }) => {
+  const topic = unique("Browser recipient persist room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await selectRecipient(page, primaryAgent);
+  await expect(page.getByRole("button", { name: `Recipient: ${primaryAgent}` })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: `Recipient: ${primaryAgent}` })).toBeVisible();
+
+  // "Everyone" is a real choice, not the absence of one, so it persists too.
+  await selectRecipient(page, "Everyone");
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Recipient: Everyone" })).toBeVisible();
+});
+
+async function selectRecipient(page: Page, name: string) {
+  await page.getByRole("button", { name: /^Recipient: / }).click();
+  await page.getByRole("menuitem", { name: new RegExp(name) }).click();
+}
 
 async function openMeet(page: Page) {
   await page.goto(`${baseURL}/?mock=0`);

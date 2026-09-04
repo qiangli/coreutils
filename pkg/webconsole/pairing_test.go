@@ -178,12 +178,12 @@ func TestExpiredDeviceIsRefused(t *testing.T) {
 }
 
 // TestDefaultScopeIsNotAShell is the per-panel-scope story's headline: a
-// paired phone reaches board/mb/relay and NOT /term/ or /files/.
+// paired phone reaches sprint/mb/meet and NOT /term/ or /files/.
 func TestDefaultScopeIsNotAShell(t *testing.T) {
 	h, store := pairEnv(t)
 	cookie := redeemScan(t, h, store, nil, time.Hour)
 
-	allowed := []string{"/sprint/", "/mb/", "/relay/"}
+	allowed := []string{"/sprint/", "/mb/", "/meet/"}
 	for _, p := range allowed {
 		if got := do(h, "GET", p, "192.168.1.44:5555", withCookie(cookie)).Code; got == http.StatusForbidden {
 			t.Fatalf("default scope refuses %s, which it is supposed to allow", p)

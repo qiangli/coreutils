@@ -54,7 +54,7 @@ func StripSpoofedTrustHeaders(next http.Handler) http.Handler {
 // Composition is by CONCATENATION, never replacement. For a console mounted at
 // /matrix/h/laptop/app/console that mounts a room at /relay:
 //
-//	outpost -> console:  path /relay/api/rooms  prefix /matrix/h/laptop/app/console
+//	outpost -> console:  path /meet/api/rooms  prefix /matrix/h/laptop/app/console
 //	console -> room:     path /api/rooms        prefix /matrix/h/laptop/app/console/relay
 //
 // The trailing slash on the resulting <base href> is the entire mechanism (see
@@ -74,7 +74,7 @@ func Mount(prefix string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, prefix)
 		if rest == "" {
-			// /relay -> /relay/ so the SPA's <base href> keeps its slash.
+			// /meet -> /meet/ so the SPA's <base href> keeps its slash.
 			http.Redirect(w, r, PrefixPath(r, prefix+"/"), http.StatusMovedPermanently)
 			return
 		}

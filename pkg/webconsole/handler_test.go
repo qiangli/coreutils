@@ -53,7 +53,7 @@ func TestLoopbackIsUngated(t *testing.T) {
 // loopback. It must receive the pass-through gate instead.
 func TestMountedRoomDoesNotLockOutTheOwner(t *testing.T) {
 	h := newTestHandler(t, Options{})
-	w := do(h, "GET", "/relay/api/rooms", "127.0.0.1:5555", nil)
+	w := do(h, "GET", "/meet/api/rooms", "127.0.0.1:5555", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("mounted room on loopback = %d, want 200 (body %q)\n"+
 			"the mount's X-Forwarded-Prefix is being read as 'arrived via cloud'",
@@ -68,13 +68,13 @@ func TestMountComposesPrefixes(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = coopauth.BaseHref(r) + "|" + r.URL.Path
 	})
-	h := coopauth.Mount("/relay", inner)
+	h := coopauth.Mount("/meet", inner)
 
-	r := httptest.NewRequest("GET", "/relay/api/rooms", nil)
+	r := httptest.NewRequest("GET", "/meet/api/rooms", nil)
 	r.Header.Set(coopauth.HdrForwardedPrefix, "/matrix/h/laptop/app/console")
 	h.ServeHTTP(httptest.NewRecorder(), r)
 
-	want := "/matrix/h/laptop/app/console/relay/|/api/rooms"
+	want := "/matrix/h/laptop/app/console/meet/|/api/rooms"
 	if got != want {
 		t.Fatalf("nested mount = %q, want %q", got, want)
 	}
@@ -147,7 +147,11 @@ func TestAppsListsTheBuiltinSurfaces(t *testing.T) {
 
 func TestDeepLinkAliasesSurvive(t *testing.T) {
 	h := newTestHandler(t, Options{})
-	for path, want := range map[string]string{"/shell": "/term/", "/meet": "/relay/"} {
+	// /relay is the OLD mount and must keep landing: the room moved to /meet/
+	// with the app's public name, and a bookmark is not a thing to break for a
+	// rename.
+	for path, want := range map[string]string{
+		"/shell": "/term/", "/meet": "/meet/", "/relay": "/meet/"} {
 		w := do(h, "GET", path, "127.0.0.1:5555", nil)
 		if w.Code != http.StatusFound || w.Header().Get("Location") != want {
 			t.Errorf("%s -> %d %q, want 302 %q", path, w.Code, w.Header().Get("Location"), want)
@@ -213,4 +217,65 @@ func TestEveryAvailablePanelIsMountedAtItsAdvertisedPath(t *testing.T) {
 				p.Name, p.Path)
 		}
 	}
+}
+
+// The room is Meet everywhere a PERSON meets it: the tile, the page title, and
+// the address bar.
+//
+// It was renamed to Meet in the launcher and left mounted at /relay/, so the
+// one place a reader can copy, paste and bookmark still said Relay — a name
+// that appears nowhere else in the product. The verb stays `relay`, which is
+// nobody's business but the code's; this asserts the split, which is the same
+// one the board made when it became /sprint/.
+func TestTheRoomIsMountedUnderItsPublicName(t *testing.T) {
+	h := newTestHandler(t, Options{})
+
+	w := do(h, "GET", "/meet/api/rooms", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("/meet/api/rooms = %d, want the room served at its public mount", w.Code)
+	}
+	for _, p := range findPanels(t, h) {
+		if p.Name == "relay" && p.Path != "/meet/" {
+			t.Errorf("the room's tile points at %q, not /meet/", p.Path)
+		}
+	}
+}
+
+// --disable must accept the name a person would type.
+//
+// The internal name and the public mount differ for exactly the renamed apps,
+// and matching the name alone made `--disable meet` a SILENT NO-OP: the panel
+// an operator asked to withhold stayed listed, routed and reachable. A refusal
+// would be recoverable; serving it anyway is not.
+func TestDisableAcceptsThePublicMountName(t *testing.T) {
+	for _, name := range []string{"meet", "relay"} {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHandler(t, Options{Disable: []string{name}})
+			// An unmounted path falls through to the launcher's SPA route, so
+			// the test is "this is no longer the ROOM", not "this is a 404" —
+			// the same distinction TestEveryAvailablePanelIsMountedAtItsAdvertisedPath
+			// draws from the other side.
+			if body := do(h, "GET", "/meet/api/rooms", "127.0.0.1:5555", nil).Body.String(); !strings.Contains(body, "bashy apps") {
+				t.Errorf("--disable %s left the room answering its own API: %.120q", name, body)
+			}
+			for _, p := range findPanels(t, h) {
+				if p.Name == "relay" {
+					t.Errorf("--disable %s left the room listed as a tile", name)
+				}
+			}
+		})
+	}
+}
+
+// findPanels reads the tile list the console actually serves.
+func findPanels(t *testing.T, h http.Handler) []Panel {
+	t.Helper()
+	w := do(h, "GET", "/api/apps", "127.0.0.1:5555", nil)
+	var got struct {
+		Apps []Panel `json:"apps"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode /api/apps: %v", err)
+	}
+	return got.Apps
 }

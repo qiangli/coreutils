@@ -11,7 +11,7 @@ import (
 
 // Per-session panel scope: a paired phone is not silently a shell.
 //
-// THE PROBLEM. The console serves five panels — board, files, mb, relay,
+// THE PROBLEM. The console serves five panels — sprint, files, mb, meet,
 // terminal. Anything that signs in on the LAN today gets ALL of them, so a
 // phone on an untrusted network that acquires a credential acquires a SHELL
 // (/term/, spawning a real bashy as this OS user) and the home directory
@@ -38,6 +38,12 @@ import (
 
 // defaultDeviceScope is what a QR pairing confers when --allow is not given:
 // the read-and-communicate panels. Not terminal. Not files.
+//
+// Held as panel NAMES, not as the mounts a person sees ("sprint", "meet").
+// newScopeSet expands a name to its mount, and the reverse does not hold: the
+// board's own API is /api/board, whose scope segment is the NAME, so a scope of
+// {"sprint"} would serve the page and refuse the data behind it. The operator
+// may still TYPE either — ValidateScope accepts both.
 var defaultDeviceScope = []string{"board", "mb", "relay"}
 
 // consoleWidePaths are reachable by ANY admitted session regardless of scope,

@@ -25,6 +25,7 @@ import {
   memberIsLive,
   memberName,
   memberRole,
+  type Member,
   type RoomSummary,
   type AgentOption,
   type DMSummary,
@@ -49,6 +50,25 @@ interface RoomSidebarProps {
   onCreateDM: (agent: string) => Promise<boolean>
   onModeChange: (kind: "room" | "dm") => void
   className?: string
+}
+
+/** rosterOf is who to show under "In this room".
+ *
+ * The participants, plus the OWNER when it is not among them. A meeting's
+ * facilitator runs the floor without being seated, and a sprint room's seat
+ * holder may not have spoken yet — so the roster could list every agent in the
+ * room and omit the one person accountable for it, which is the opposite of
+ * what a roster is for.
+ */
+function rosterOf(state: State | null): Member[] {
+  const participants = state?.participants ?? []
+  const owner = state?.owner ?? ""
+  if (!owner) return participants
+  const seated = participants.some(
+    (member) => memberName(member).toLocaleLowerCase() === owner.toLocaleLowerCase(),
+  )
+  if (seated) return participants
+  return [{ name: owner, role: state?.owner_title || "owner", live: false }, ...participants]
 }
 
 export function RoomSidebar({
@@ -235,15 +255,22 @@ export function RoomSidebar({
           {dms.length === 0 && <p className="px-2 py-3 text-[11px] leading-5 text-sidebar-foreground/45">No chats yet. Start one with a registered agent.</p>}
           </>}
 
-          {viewKind === "room" && selectedKind === "room" && <><div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
+          {viewKind === "room" && selectedKind === "room" && state && <><div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
             <span>In this room</span>
             <Radio className="size-3.5" />
           </div>
           <div className="space-y-1">
-            {state?.participants.map((member) => {
+            {rosterOf(state).map((member) => {
               const name = memberName(member)
               const role = memberRole(member)
               const human = role === "human" || name === state.human
+              // The room's OWNER — its project manager when the room belongs to
+              // a sprint. The server resolves the seat; the roster only has to
+              // point at whoever holds it, which is the one thing a reader
+              // could not work out from a list of equal-looking agents.
+              const owner =
+                Boolean(state.owner) &&
+                name.toLocaleLowerCase() === state.owner.toLocaleLowerCase()
               return (
                 <div
                   className="flex items-center gap-2.5 rounded-lg px-2.5 py-2"
@@ -272,13 +299,28 @@ export function RoomSidebar({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[12px] font-medium">{name}</div>
-                    <div className="truncate text-[10px] capitalize text-sidebar-foreground/42">
-                      {human ? "You" : role || "Agent"}
+                    {/* The owner's title goes in the ROLE line rather than in a
+                        second badge beside it: a 280px row that says
+                        "Project Manager" twice spends its width restating
+                        itself. Colour carries the emphasis instead. */}
+                    <div
+                      className={cn(
+                        "truncate text-[10px] capitalize",
+                        owner
+                          ? "font-semibold text-sidebar-primary"
+                          : "text-sidebar-foreground/42",
+                      )}
+                    >
+                      {owner
+                        ? state.owner_title || "owner"
+                        : human
+                          ? "You"
+                          : role || "Agent"}
                     </div>
                   </div>
-                  {name === state.initiator && (
+                  {!owner && name === state.initiator && (
                     <Badge
-                      className="border-white/10 bg-white/5 px-1.5 py-0 text-[9px] text-sidebar-foreground/55"
+                      className="shrink-0 border-white/10 bg-white/5 px-1.5 py-0 text-[9px] text-sidebar-foreground/55"
                       variant="outline"
                     >
                       host

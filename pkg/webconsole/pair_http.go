@@ -117,7 +117,7 @@ func (s *server) pairFailure(w http.ResponseWriter, peer, reason, human string, 
 
 // landingFor picks the page a freshly paired device opens: the LAUNCHER.
 //
-// It used to open the first panel in scope (board, then mb, relay, files,
+// It used to open the first panel in scope (sprint, then mb, meet, files,
 // terminal), which dropped a phone straight into the board with no sense of
 // where it was or what else it could reach. The launcher is the console's one
 // nav with everything deep-linked beneath it, it lists exactly the panels this

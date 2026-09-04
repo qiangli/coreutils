@@ -1,3 +1,5 @@
+//go:build !meetspa
+
 package meet
 
 import (
@@ -17,6 +19,12 @@ import (
 // room is in every build; web/dist stays ignored as the SPA's own scratch, and
 // the build script promotes dist -> artifact as a deliberate, reviewable step.
 // The whole bundle is ~650 KB.
+//
+// `-tags meetspa` (embed_spa_dist.go) embeds web/dist INSTEAD, for the one
+// caller that must test the bundle it just built rather than the last one
+// promoted: the Playwright harness. The tag exists only for that, and the
+// DEFAULT is still artifact/ — which is what removed the old dilemma, since an
+// untagged build is never left with no UI.
 
 //go:embed all:artifact
 var spaEmbed embed.FS
