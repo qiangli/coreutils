@@ -4,6 +4,7 @@
 package webconsole
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -392,4 +393,92 @@ func (c *inboxCache) Snapshot() (*bus.Inboxes, error) {
 	}
 	c.snap = snap
 	return snap, nil
+}
+
+// inboxMarkBody is a mark-read request: exactly one of `seq` or `all`.
+type inboxMarkBody struct {
+	// Seq marks ONE message read. Preferred over `all` wherever the reader
+	// acted on one message, because it consumes exactly what they acted on.
+	Seq int64 `json:"seq,omitempty"`
+	// All marks everything currently in the reader's own inbox read.
+	All bool `json:"all,omitempty"`
+}
+
+// handleInboxMarkRead marks mail read in the CALLER'S OWN inbox, and only there.
+//
+// THE ROUTE CARRIES NO NAME, and that absence is the enforcement. A
+// `POST /api/inbox/{name}/read` would work exactly as well until the day the
+// `name == viewer` check was refactored, mis-cased, or forgotten — and the
+// failure would be silent, because marking another agent's mail read does not
+// look like an error from anywhere: the message is still on the timeline, still
+// durable, and simply never handed over. With no parameter there is nothing to
+// validate and no check to get wrong. Same shape as the board's rule that a
+// sender is derived and never supplied, and the same shape as the fact store
+// having no export path at all.
+//
+// This is the ONE write on this surface, and it is not an exception to the
+// panel's invariant — it is the invariant stated precisely. "An observer must
+// never consume" is about mail belonging to someone else. Your own inbox is not
+// something you observe; it is something you read, and a human-first interface
+// that could not do that would be asking the person to go find a terminal to
+// finish a thing they had already done.
+//
+// It goes through bus.SnapshotInbox — the SAME path `bashy inbox` uses for its
+// own reader — rather than writing a cursor directly, so the web and the CLI
+// cannot drift into two ideas of what reading means. That path materializes
+// addressed backlog before acknowledging it, which is exactly why the read side
+// of this panel must not use it for anybody else.
+func (s *server) handleInboxMarkRead(w http.ResponseWriter, r *http.Request) {
+	var in inboxMarkBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "malformed request"})
+		return
+	}
+	if (in.Seq > 0) == in.All {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "mark read needs exactly one of seq or all",
+		})
+		return
+	}
+
+	viewer := s.viewerName(r)
+	if strings.TrimSpace(viewer) == "" {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "no identity to read as",
+		})
+		return
+	}
+
+	snap, err := bus.SnapshotInbox(viewer)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if in.All {
+		err = snap.Commit()
+	} else {
+		// CommitItem, not a cursor write: it acknowledges exactly this record
+		// and advances the timeline cursor only once nothing earlier is still
+		// unread. Marking one message must not consume the ones above it.
+		err = snap.CommitItem(in.Seq)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Answer with the reader's own state so the page and the launcher badge can
+	// repaint from the server's count rather than decrementing a local one —
+	// two places keeping a tally is two places to disagree about it.
+	view, err := bus.InspectInbox(viewer, viewer)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"schema_version": inboxSchemaVersion,
+		"viewer":         viewer,
+		"viewer_unread":  view.Unread,
+		"cursor":         view.Cursor,
+	})
 }

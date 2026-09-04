@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -97,23 +99,138 @@ func TestInboxPanelIsReadOnlyOnDisk(t *testing.T) {
 	}
 }
 
-// There is no write route AT ALL, and this is the guard against one being added
-// by reflex later: a "mark read" button on this page would mark the message read
-// for the AGENT, which is the one thing an observer must never do.
+// There is exactly ONE write route and it is NAMELESS.
 //
-// A non-GET falls through to the SPA catch-all, so the observable form of "no
-// route" is that nothing answers with the panel's own payload — the console has
-// no method-based dispatch that could 405 here.
-func TestInboxPanelExposesNoWriteRoute(t *testing.T) {
+// The panel has one write — mark my own mail read — and no route through which
+// any OTHER inbox can be named. That is stronger than a `name == viewer` check
+// on a `/{name}/read` route, because a check can be refactored, mis-cased or
+// forgotten and the failure is SILENT: marking another agent's mail read looks
+// like nothing from anywhere, the message stays durable on the timeline and is
+// simply never handed over.
+//
+// A non-GET on the read routes falls through to the SPA catch-all, so the
+// observable form of "no route" is that nothing answers with the panel's own
+// payload — the console has no method-based dispatch that could 405 here.
+func TestInboxPanelHasNoPerNameWriteRoute(t *testing.T) {
 	inboxInTemp(t, room.Event{Principal: "operator", To: "cairn", Topic: "t", Body: "b"})
 	h := newTestHandler(t, Options{})
 	for _, m := range []string{"POST", "PUT", "DELETE", "PATCH"} {
-		for _, p := range []string{"/api/inbox", "/api/inbox/cairn"} {
+		for _, p := range []string{
+			"/api/inbox", "/api/inbox/cairn",
+			// The shapes somebody would reach for to mark ANOTHER inbox read.
+			"/api/inbox/cairn/read", "/api/inbox/read/cairn",
+		} {
 			w := do(h, m, p, "127.0.0.1:5555", nil)
 			if strings.Contains(w.Header().Get("Content-Type"), "json") ||
 				strings.Contains(w.Body.String(), inboxSchemaVersion) {
-				t.Errorf("%s %s answered with the panel's payload; it must have no write surface", m, p)
+				t.Errorf("%s %s answered with the panel's payload; only the nameless "+
+					"POST /api/inbox/read may write", m, p)
 			}
+		}
+	}
+}
+
+// postJSON to the mark-read route.
+func markRead(h http.Handler, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", "/api/inbox/read", strings.NewReader(body))
+	r.RemoteAddr = "127.0.0.1:5555"
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+// Marking read touches the VIEWER'S OWN stores and nothing else.
+//
+// This is the boundary the whole panel is built around, so it is asserted
+// positively (the viewer's count actually falls) AND negatively (every other
+// name's files are byte-identical afterwards). A write that worked but also
+// consumed an agent's mail would pass a test that only checked the first half.
+func TestInboxMarkReadTouchesOnlyTheViewersOwnInbox(t *testing.T) {
+	dir := inboxInTemp(t,
+		room.Event{Principal: "cairn", To: "operator", Topic: "done", Body: "merged"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "gate", Body: "86/86"},
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		room.Event{Principal: "operator", To: "lintel", Topic: "gate", Body: "rerun"},
+	)
+	h := newTestHandler(t, Options{})
+
+	if got, _ := getJSON(t, h, "/api/inbox?summary=1")["viewer_unread"].(float64); got != 2 {
+		t.Fatalf("viewer_unread = %v before marking, want 2", got)
+	}
+	before := roomFingerprint(t, dir)
+
+	w := markRead(h, `{"all":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("mark all read = %d (%s)", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+
+	// The viewer's own count falls to zero...
+	sum := getJSON(t, h, "/api/inbox?summary=1")
+	if got, _ := sum["viewer_unread"].(float64); got != 0 {
+		t.Errorf("viewer_unread = %v after marking all read, want 0", got)
+	}
+	// ...and NOBODY else's does. cairn and lintel were never handed anything.
+	if got, _ := sum["unread"].(float64); got != 2 {
+		t.Errorf("fleet unread = %v, want 2 — marking my own mail read must not "+
+			"consume cairn's or lintel's", got)
+	}
+
+	// The negative half: no file belonging to another name changed. The viewer's
+	// own cursor and pending buffer are expected to; every other path is not.
+	after := roomFingerprint(t, dir)
+	for path, sum := range after {
+		if before[path] == sum {
+			continue
+		}
+		if !strings.Contains(path, "operator") && !strings.HasSuffix(path, "timeline.jsonl") {
+			t.Errorf("marking the viewer's mail read rewrote %s, which is not theirs", path)
+		}
+	}
+	for _, name := range []string{"cairn", "lintel"} {
+		for _, sub := range []string{"cursors/" + name, "pending/" + name + ".jsonl"} {
+			if before[sub] != after[sub] {
+				t.Errorf("%s changed while marking the VIEWER's mail read", sub)
+			}
+		}
+	}
+}
+
+// Marking ONE message read consumes exactly that message.
+//
+// A cursor write would have swallowed everything below it; CommitItem does not,
+// which is what makes a per-message control safe to offer at all.
+func TestInboxMarkOneReadDoesNotConsumeTheRest(t *testing.T) {
+	inboxInTemp(t,
+		room.Event{Principal: "cairn", To: "operator", Topic: "one", Body: "first"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "two", Body: "second"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "three", Body: "third"},
+	)
+	h := newTestHandler(t, Options{})
+
+	// Take the NEWEST message's seq and mark only it.
+	items := getJSON(t, h, "/api/inbox/operator")["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("operator has %d items, want 3", len(items))
+	}
+	newest := int64(items[2].(map[string]any)["seq"].(float64))
+
+	w := markRead(h, `{"seq":`+strconv.FormatInt(newest, 10)+`}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("mark one read = %d (%s)", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+	if got, _ := getJSON(t, h, "/api/inbox?summary=1")["viewer_unread"].(float64); got != 2 {
+		t.Fatalf("viewer_unread = %v after marking the NEWEST of three read, want 2 — "+
+			"a cursor write would have consumed the two below it", got)
+	}
+}
+
+func TestInboxMarkReadRefusesAnAmbiguousRequest(t *testing.T) {
+	inboxInTemp(t, room.Event{Principal: "cairn", To: "operator", Topic: "t", Body: "b"})
+	h := newTestHandler(t, Options{})
+	for _, body := range []string{`{}`, `{"all":true,"seq":1}`, `{`, `{"seq":0}`} {
+		if w := markRead(h, body); w.Code != http.StatusBadRequest {
+			t.Errorf("mark read %s = %d, want 400", body, w.Code)
 		}
 	}
 }

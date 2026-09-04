@@ -11,9 +11,15 @@
 // actually has — what is waiting across the whole fleet, and who is sitting on
 // a backlog — has no CLI form. That is this page.
 //
-// WHAT IT DELIBERATELY DOES NOT DO: write. No cursor moves, no record is marked
-// read, no subscription is opened. There is no POST route at all. Opening a tab
-// must not consume mail that an agent has not been handed yet.
+// WHAT IT DOES NOT DO: consume anybody ELSE's mail. Every other name is a PEEK
+// — no cursor moves, no record is marked read, no subscription is opened, and
+// there is no route through which another inbox can even be named. Opening a
+// tab must not eat a message an agent has not been handed yet.
+//
+// Your OWN inbox is not something you observe, it is something you read, so it
+// has the controls a person expects: mark one, or mark all. They go through the
+// nameless POST api/inbox/read, which acts on the caller's own inbox and has no
+// parameter for any other.
 const url = (p) => new URL(p, document.baseURI);
 
 // Theme follows the launcher's saved preference so the pages match.
@@ -40,6 +46,9 @@ const state = {
   facets: "",
   newestFirst: false,
   items: [],
+  // Set from the LIST response's own `kind`, never inferred by comparing two
+  // fetches. See mine().
+  isMine: false,
   // Nothing has come back yet. Without this the empty list renders "Nothing in
   // this inbox matches" before the first response — a filter verdict, stated
   // over data that has not been asked for.
@@ -163,6 +172,49 @@ function renderRoster() {
     : shown + " of " + plural(total, "inbox");
 }
 
+// mine reports whether the open inbox is the viewer's own — the only one this
+// page may write to. The server enforces it with a nameless route; this only
+// decides whether to OFFER a control that would be refused.
+//
+// It reads a flag the LIST response set, not `state.name === state.viewer`.
+// The viewer's name arrives with the ROSTER and the open inbox with the LIST,
+// and those are two fetches started together: whichever lost the race decided
+// whether your own inbox showed its controls. The browser test caught it as an
+// intermittent pill. One response carries both facts — the server already
+// classified the inbox as `person` by comparing it to the viewer — so taking
+// the answer from there removes the race instead of ordering it.
+const mine = () => state.isMine;
+
+// markRead posts to the nameless route, then repaints from the server's own
+// count rather than decrementing a local one: two places keeping a tally is two
+// places to disagree about it.
+async function markRead(body, el) {
+  if (el) el.disabled = true;
+  try {
+    const r = await fetch(url("api/inbox/read"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      if (el) {
+        el.disabled = false;
+        el.textContent = d.error || "refused";
+      }
+      return;
+    }
+  } catch (_) {
+    if (el) {
+      el.disabled = false;
+      el.textContent = "no answer";
+    }
+    return;
+  }
+  state.loaded = false;
+  await Promise.all([loadList(), loadRoster()]);
+}
+
 // ---- the message list ------------------------------------------------------
 
 function itemEl(it) {
@@ -214,6 +266,20 @@ function itemEl(it) {
   if (it.demoted) bits.push("demoted: " + it.demoted);
   if (it.match_reason) bits.push("matched by " + it.match_reason);
   foot.textContent = bits.join(" · ");
+  // Marking one message is offered only on your own inbox, and only for
+  // something actually unread. It acknowledges exactly this record — the server
+  // uses CommitItem, not a cursor write, so the messages below it survive.
+  if (mine() && !it.read) {
+    const btn = el("button", "mark", "mark read");
+    btn.type = "button";
+    btn.title = "mark this message read in your inbox";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      markRead({ seq: it.seq }, btn);
+    });
+    foot.append(document.createTextNode(" · "));
+    foot.append(btn);
+  }
   card.append(foot);
   return card;
 }
@@ -266,6 +332,8 @@ function fillSelect(sel, facets, want) {
 }
 
 function renderMeta(d) {
+  state.viewer = d.viewer;
+  state.isMine = d.kind === "person";
   $("ib-title").textContent = d.name;
   const kind = $("ib-kind");
   kind.textContent = d.kind === "person" ? "you" : d.kind;
@@ -294,12 +362,35 @@ function renderMeta(d) {
     $("f-age").value = f.age;
   }
 
+  // The header pill states what THIS inbox is, and it has to be per-inbox: a
+  // standing "read-only" was true of the page as a whole until your own inbox
+  // gained controls, and a banner that contradicts the buttons under it is
+  // worse than no banner. Your own inbox says nothing (the YOU chip beside the
+  // title already does); every other name says PEEK.
+  const mode = $("ib-mode");
+  mode.hidden = mine();
+  mode.textContent = "peek";
+  mode.title = "reading here advances no cursor and marks nothing — only " +
+    d.name + " can consume " + d.name + "'s mail";
+
+  // Mark-all acts on the WHOLE inbox, never on the filtered view: marking
+  // "everything" while a filter is on would consume messages that were never
+  // shown, which is the one thing a bulk control must not do. It is hidden
+  // rather than disabled when there is nothing to mark — a control that can
+  // never do anything is noise.
+  const all = $("ib-markall");
+  all.hidden = !(mine() && d.unread > 0);
+  all.textContent = "Mark all read (" + d.unread + ")";
+  all.title = "mark all " + d.unread + " unread in your inbox read" +
+    (d.matched !== d.total ? " — all of them, not just the " + d.matched + " matching this filter" : "");
+
   const capped = d.matched > d.items.length
     ? " Showing the newest " + d.items.length + " of " + d.matched + " matching."
     : "";
-  $("ib-foot").textContent =
-    "Read-only: this page never advances a cursor and never marks a message read — " +
-    "`bashy inbox --as " + d.name + "` is what actually consumes it." + capped;
+  $("ib-foot").textContent = (mine()
+    ? "Your inbox. Marking read here is the same act as `bashy inbox` — it advances your own cursor and nobody else's."
+    : "A peek at " + d.name + "'s inbox: nothing here advances a cursor or marks a message read, " +
+      "so only " + d.name + " can consume it.") + capped;
 }
 
 // ---- loading ---------------------------------------------------------------
@@ -388,6 +479,10 @@ function select(name, silent) {
     state.facets = "";
     state.items = [];
     state.loaded = false;
+    // Until the new inbox's response says otherwise, assume it is not yours.
+    // Carrying the previous answer forward would flash write controls over
+    // somebody else's mail for one frame.
+    state.isMine = false;
   }
   writeHash(currentHash());
   renderRoster();
@@ -416,6 +511,7 @@ function onHashChange() {
     state.name = f.name;
     state.items = [];
     state.loaded = false;
+    state.isMine = false;
   }
   renderRoster();
   loadList();
@@ -452,6 +548,7 @@ function init() {
     for (const k of FILTERS) $(k === "q" ? "f-q" : "f-" + k).value = "";
     apply();
   });
+  $("ib-markall").addEventListener("click", (e) => markRead({ all: true }, e.currentTarget));
   $("f-order").addEventListener("click", () => {
     state.newestFirst = !state.newestFirst;
     syncOrderButton();

@@ -18,7 +18,7 @@
     <span id="wordmark">bashy<b>inbox</b></span>
   </a>
   <span class="spacer"></span>
-  <span id="ib-readonly" class="ro" title="this page never advances anybody's cursor — reading it here does not consume an agent's mail">read-only</span>
+  <span id="ib-mode" class="ro" hidden></span>
   <span id="ib-who"></span>
 </header>
 
@@ -63,6 +63,7 @@
       </label>
       <input id="f-q" type="search" placeholder="Search messages" autocomplete="off" spellcheck="false">
       <span class="ib-actions">
+        <button id="ib-markall" class="btn primary" type="button" hidden>Mark all read</button>
         <button id="f-order" class="btn" type="button" aria-pressed="false" title="oldest first (chronological)">Oldest first</button>
         <button id="f-clear" class="btn" type="button">Clear</button>
       </span>

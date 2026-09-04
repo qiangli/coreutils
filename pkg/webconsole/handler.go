@@ -357,6 +357,11 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.Handle("GET /inbox", redirectTo("/inbox/"))
 		mux.HandleFunc("GET /api/inbox", s.handleInboxRoster)
 		mux.HandleFunc("GET /api/inbox/{name}", s.handleInboxList)
+		// The ONE write, and it takes NO NAME: it marks mail read in the
+		// caller's own inbox and there is no parameter through which another
+		// could be named. See handleInboxMarkRead — the absence IS the
+		// enforcement.
+		mux.HandleFunc("POST /api/inbox/read", s.handleInboxMarkRead)
 	}
 
 	// The steward board, same shape again: the tile is an atlas declaration,

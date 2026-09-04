@@ -1233,3 +1233,181 @@ func TestDOMInboxTileHasNoBadgeWhenNothingIsWaitingForYou(t *testing.T) {
 		t.Errorf("tooltip does not state the fleet backlog: %q", tip)
 	}
 }
+
+// seedInbox points the bus stores at a scratch dir and seeds addressed mail.
+func seedInbox(t *testing.T, events ...room.Event) {
+	t.Helper()
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("USER", "operator")
+	for _, e := range events {
+		e.Type = room.EventNotify
+		if err := room.Notify(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// inboxText reads a selector's text off the open page.
+func inboxText(sel string) string {
+	return `(document.querySelector(` + "`" + sel + "`" + `)?.innerText||"NONE").trim()`
+}
+
+// Mark-read is offered on YOUR inbox and nowhere else.
+//
+// The server refuses regardless — the route takes no name — but a control that
+// is offered and then refused teaches the reader that the page lies. This is
+// also the assertion no byte-level test can make: the buttons are created at
+// render time from a fetch, so "absent" and "never rendered" are the same bytes.
+func TestDOMInboxMarkReadIsOfferedOnlyOnYourOwnInbox(t *testing.T) {
+	seedInbox(t,
+		room.Event{Principal: "cairn", To: "operator", Topic: "done", Body: "merged"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "gate", Body: "86/86"},
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+	)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var mineAll, mineOne, mineFoot, mineMode string
+	var peekAll, peekOne, peekFoot, peekMode string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/inbox/#name=operator"),
+		chromedp.Sleep(2000*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const b=document.getElementById("ib-markall");
+			return b&&!b.hidden?b.innerText.trim():"HIDDEN";})()`, &mineAll),
+		chromedp.Evaluate(`String(document.querySelectorAll("#ib-list .mark").length)`, &mineOne),
+		chromedp.Evaluate(inboxText("#ib-foot"), &mineFoot),
+		chromedp.Evaluate(`(()=>{const m=document.getElementById("ib-mode");
+			return m&&!m.hidden?m.innerText.trim():"HIDDEN";})()`, &mineMode),
+
+		chromedp.Navigate(base+"/inbox/#name=cairn"),
+		chromedp.Sleep(2000*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const b=document.getElementById("ib-markall");
+			return b&&!b.hidden?b.innerText.trim():"HIDDEN";})()`, &peekAll),
+		chromedp.Evaluate(`String(document.querySelectorAll("#ib-list .mark").length)`, &peekOne),
+		chromedp.Evaluate(inboxText("#ib-foot"), &peekFoot),
+		chromedp.Evaluate(`(()=>{const m=document.getElementById("ib-mode");
+			return m&&!m.hidden?m.innerText.trim():"HIDDEN";})()`, &peekMode),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "inbox mark-read offer", errs())
+
+	if mineAll != "Mark all read (2)" {
+		t.Errorf("own inbox mark-all = %q, want the count", mineAll)
+	}
+	if mineOne != "2" {
+		t.Errorf("own inbox per-message controls = %s, want 2 (one per unread)", mineOne)
+	}
+	if !strings.Contains(mineFoot, "Your inbox") {
+		t.Errorf("own inbox footer = %q", mineFoot)
+	}
+
+	if peekAll != "HIDDEN" {
+		t.Errorf("cairn's inbox offers mark-all (%q) — every other name is a peek", peekAll)
+	}
+	if peekOne != "0" {
+		t.Errorf("cairn's inbox offers %s per-message controls, want 0", peekOne)
+	}
+	if !strings.Contains(peekFoot, "peek") || !strings.Contains(peekFoot, "only cairn can consume it") {
+		t.Errorf("peek footer does not say whose mail it is: %q", peekFoot)
+	}
+
+	// The header pill must agree with the buttons underneath it. A standing
+	// "read-only" banner was true of the whole page until your own inbox gained
+	// controls; a banner contradicting the controls below it is worse than none.
+	if mineMode != "HIDDEN" {
+		t.Errorf("own inbox shows the %q pill while offering mark-read controls", mineMode)
+	}
+	// innerText is the RENDERED text, so it carries the pill's uppercase
+	// transform. Compare on the word, not the casing the stylesheet chose.
+	if !strings.EqualFold(peekMode, "peek") {
+		t.Errorf("cairn's inbox pill = %q, want peek", peekMode)
+	}
+}
+
+// Marking works end to end, and the badge on the launcher follows.
+//
+// "Perform as expected" is the whole requirement here: a person reads their
+// mail in a browser and it becomes read, without going to find a terminal.
+func TestDOMInboxMarkAllReadClearsYourCountAndTheLauncherBadge(t *testing.T) {
+	seedInbox(t,
+		room.Event{Principal: "cairn", To: "operator", Topic: "done", Body: "merged"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "gate", Body: "86/86"},
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+	)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var before, after, fleetAfter, badgeAfter string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/inbox/#name=operator"),
+		chromedp.Sleep(2000*time.Millisecond),
+		chromedp.Evaluate(inboxText("#ib-stats"), &before),
+		chromedp.Click("#ib-markall", chromedp.ByID),
+		chromedp.Sleep(1800*time.Millisecond),
+		chromedp.Evaluate(inboxText("#ib-stats"), &after),
+		// cairn still has its message: marking mine read consumed nothing of theirs.
+		chromedp.Navigate(base+"/inbox/#name=cairn"),
+		chromedp.Sleep(1800*time.Millisecond),
+		chromedp.Evaluate(inboxText("#ib-stats"), &fleetAfter),
+		// And the launcher badge, which reads the viewer's count, is gone.
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(2000*time.Millisecond),
+		chromedp.Evaluate(`(()=>{const t=[...document.querySelectorAll(".tile")]
+			.find(x=>(x.querySelector(".label")||{}).textContent==="Inbox");
+			return t?(t.querySelector(".count")?"BADGE":"none"):"NO TILE";})()`, &badgeAfter),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "inbox mark all", errs())
+
+	if !strings.Contains(before, "2 unread") {
+		t.Fatalf("stats before = %q, want 2 unread", before)
+	}
+	if strings.Contains(after, "unread") {
+		t.Errorf("stats after marking all read = %q, want no unread", after)
+	}
+	if !strings.Contains(fleetAfter, "1 unread") {
+		t.Errorf("cairn = %q after the OPERATOR marked their own mail read; "+
+			"cairn's message must be untouched", fleetAfter)
+	}
+	if badgeAfter != "none" {
+		t.Errorf("launcher badge = %q after clearing your inbox, want none", badgeAfter)
+	}
+}
+
+// One message, not the ones below it.
+//
+// The server uses CommitItem rather than a cursor write; this proves the page
+// gets that behaviour rather than a bulk consume dressed as a per-item control.
+func TestDOMInboxMarkOneReadLeavesTheOthersWaiting(t *testing.T) {
+	seedInbox(t,
+		room.Event{Principal: "cairn", To: "operator", Topic: "one", Body: "first"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "two", Body: "second"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "three", Body: "third"},
+	)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var stats, remaining string
+	if err := chromedp.Run(ctx,
+		// Newest first, so the FIRST control on the page is the newest message —
+		// the one whose acknowledgement a cursor write would use to swallow the
+		// two below it.
+		chromedp.Navigate(base+"/inbox/#name=operator&order=new"),
+		chromedp.Sleep(2000*time.Millisecond),
+		chromedp.Click("#ib-list .mark", chromedp.ByQuery),
+		chromedp.Sleep(1800*time.Millisecond),
+		chromedp.Evaluate(inboxText("#ib-stats"), &stats),
+		chromedp.Evaluate(`String(document.querySelectorAll("#ib-list .mark").length)`, &remaining),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "inbox mark one", errs())
+
+	if !strings.Contains(stats, "2 unread") {
+		t.Errorf("stats = %q after marking the NEWEST of three read, want 2 unread — "+
+			"a cursor write would have consumed the two below it", stats)
+	}
+	if remaining != "2" {
+		t.Errorf("%s per-message controls remain, want 2", remaining)
+	}
+}
