@@ -398,12 +398,19 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 }
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	// Preflight, so a missing CLI is reported as a missing CLI. Left to os/exec
+	// it surfaces as `exec: "claude": executable file not found in $PATH` — which
+	// names a $PATH the operator never set and cannot see, since the launcher is
+	// usually a daemon. 127 is the shell's own "command not found".
+	if ResolveToolBinary(agent) == "" {
+		return "", 127, ErrToolNotFound(agent)
+	}
 	// macOS: a cask/download-installed agent (e.g. codex) carries
 	// com.apple.quarantine, so a background/CI launch (act_runner) hangs on the
 	// Gatekeeper "downloaded from the Internet" popup. The operator explicitly
 	// configured this agent as the conductor — strip the quarantine best-effort
 	// so the headless launch proceeds. No-op off darwin / when already clear.
-	if p, err := exec.LookPath(agent); err == nil {
+	if p := ResolveToolBinary(agent); p != "" {
 		stripQuarantine(p)
 	}
 	cmd := agentCommand(ctx, agent, args, cwd)
@@ -510,7 +517,17 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 // turn and a steerable Session (coach). The caller chooses argv and attachment;
 // cwd and environment must not drift with that choice.
 func agentCommand(ctx context.Context, agent string, args []string, cwd string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, agent, args...)
+	// Resolve before constructing: exec resolves a bare name against the
+	// LAUNCHER's PATH, which under a supervised daemon is a service PATH rather
+	// than the operator's. ResolveToolBinary falls back to the per-user binary
+	// homes so the same agent launches from a login shell and from `apps serve`.
+	// "" means unresolvable — left as the bare name so the caller's own preflight
+	// reports it, rather than substituting an empty argv[0].
+	bin := agent
+	if p := ResolveToolBinary(agent); p != "" {
+		bin = p
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -565,6 +582,10 @@ func agentChildEnv(ctx context.Context) []string {
 			}
 		}
 	}
+	// Give the child the same search path its launcher just used to find it.
+	// Appended, so nothing already on PATH is shadowed; applied BEFORE the shim
+	// dir is prepended, so shell forcing keeps priority.
+	env = toolPathEnv(env)
 	if forceAgentShell() {
 		if bashy, err := os.Executable(); err == nil && bashy != "" {
 			env = forcedShellEnv(env, bashy, ensureShims(bashy))

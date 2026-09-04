@@ -207,13 +207,21 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, l.Tool, argv...)
+	// Same resolution as agentCommand: a supervised daemon's PATH is not the
+	// operator's, and a live session must not be reachable only from a terminal.
+	tool := l.Tool
+	if p := ResolveToolBinary(tool); p != "" {
+		tool = p
+	}
+	cmd := exec.CommandContext(runCtx, tool, argv...)
 	cmd.Dir = cwd
 	if native {
 		// Native env: a first-party harness uses the operator's real env + its own
 		// key/config, so it is truly "identical to `ycode --model x`" for auth. bashy
 		// adds only the control channel + membership, never a governance override.
-		cmd.Env = os.Environ()
+		// The per-user binary homes are still appended — that is the environment
+		// the operator's own shell has, not a governance override.
+		cmd.Env = toolPathEnv(os.Environ())
 	} else {
 		// agentChildEnv is the one choke point that scrubs the operator's vault
 		// secrets, grants back only this model's one API key, forces the child's
