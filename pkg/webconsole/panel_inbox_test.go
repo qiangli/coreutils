@@ -1,0 +1,247 @@
+// Copyright (c) 2025 qiangli
+// See LICENSE for licensing information
+
+package webconsole
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/qiangli/coreutils/pkg/bus"
+	"github.com/qiangli/coreutils/pkg/room"
+)
+
+// inboxInTemp points the bus stores at a scratch directory and seeds mail.
+//
+// A REAL server against a REAL room on disk, for the same reason the board
+// panel's tests insist on it: the console has already shipped bugs whose only
+// cause was a contract modelled on a mock.
+func inboxInTemp(t *testing.T, events ...room.Event) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("BASHY_ROOM_DIR", dir)
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("USER", "operator")
+	for _, e := range events {
+		if e.Type == "" {
+			e.Type = room.EventNotify
+		}
+		if err := room.Notify(e); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	return dir
+}
+
+func roomFingerprint(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		rel, _ := filepath.Rel(dir, path)
+		sum := sha256.Sum256(b)
+		out[rel] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// THE panel's defining property. Polling this page must not consume mail.
+//
+// The page repaints every five seconds, so a read path that materialized
+// backlog or advanced a cursor — which the CLI's own read path does, correctly,
+// for its own single reader — would drain the entire fleet's inbox while nobody
+// was even looking at a message. And it would do so INVISIBLY: the mail is not
+// lost, just marked handed-over to an agent that was never handed it.
+func TestInboxPanelIsReadOnlyOnDisk(t *testing.T) {
+	dir := inboxInTemp(t,
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		room.Event{Principal: "cairn", To: "lintel", Topic: "gate", Body: "86/86"},
+	)
+	h := newTestHandler(t, Options{})
+
+	before := roomFingerprint(t, dir)
+	for _, p := range []string{
+		"/api/inbox", "/api/inbox/cairn", "/api/inbox/lintel",
+		"/api/inbox/operator", "/api/inbox/nobody-here",
+		"/api/inbox/cairn?state=unread", "/api/inbox/cairn?q=pick",
+	} {
+		if w := do(h, "GET", p, "127.0.0.1:5555", nil); w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d (%s)", p, w.Code, strings.TrimSpace(w.Body.String()))
+		}
+	}
+	after := roomFingerprint(t, dir)
+
+	if len(before) != len(after) {
+		t.Fatalf("the panel changed the file set: %d before, %d after", len(before), len(after))
+	}
+	for path, sum := range before {
+		if after[path] != sum {
+			t.Errorf("the panel rewrote %s — a read of somebody else's inbox must not consume it", path)
+		}
+	}
+}
+
+// There is no write route AT ALL, and this is the guard against one being added
+// by reflex later: a "mark read" button on this page would mark the message read
+// for the AGENT, which is the one thing an observer must never do.
+//
+// A non-GET falls through to the SPA catch-all, so the observable form of "no
+// route" is that nothing answers with the panel's own payload — the console has
+// no method-based dispatch that could 405 here.
+func TestInboxPanelExposesNoWriteRoute(t *testing.T) {
+	inboxInTemp(t, room.Event{Principal: "operator", To: "cairn", Topic: "t", Body: "b"})
+	h := newTestHandler(t, Options{})
+	for _, m := range []string{"POST", "PUT", "DELETE", "PATCH"} {
+		for _, p := range []string{"/api/inbox", "/api/inbox/cairn"} {
+			w := do(h, m, p, "127.0.0.1:5555", nil)
+			if strings.Contains(w.Header().Get("Content-Type"), "json") ||
+				strings.Contains(w.Body.String(), inboxSchemaVersion) {
+				t.Errorf("%s %s answered with the panel's payload; it must have no write surface", m, p)
+			}
+		}
+	}
+}
+
+// The viewer is the page's fixed point and comes first in the nav.
+func TestInboxRosterPutsTheViewerFirst(t *testing.T) {
+	inboxInTemp(t,
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		room.Event{Principal: "cairn", To: "operator", Topic: "done", Body: "merged"},
+	)
+	h := newTestHandler(t, Options{})
+	d := getJSON(t, h, "/api/inbox")
+
+	if d["viewer"] != "operator" {
+		t.Fatalf("viewer = %v, want operator", d["viewer"])
+	}
+	groups, _ := d["groups"].([]any)
+	if len(groups) == 0 {
+		t.Fatal("no groups in the roster")
+	}
+	first, _ := groups[0].(map[string]any)
+	if first["kind"] != bus.InboxKindPerson {
+		t.Fatalf("first group = %v, want the viewer's own — the human's row must not move as the fleet talks", first["kind"])
+	}
+	names, _ := first["names"].([]any)
+	if len(names) != 1 || names[0] != "operator" {
+		t.Fatalf("first group names = %v, want [operator]", names)
+	}
+}
+
+// A name that was written to but never registered still has mail waiting, and a
+// roster built from the catalog alone would hide exactly the backlog nobody owns.
+func TestInboxRosterListsUnregisteredRecipients(t *testing.T) {
+	inboxInTemp(t, room.Event{Principal: "cairn", To: "codex-w12", Topic: "issue", Body: "take #12"})
+	h := newTestHandler(t, Options{})
+	d := getJSON(t, h, "/api/inbox")
+
+	found := false
+	for _, raw := range d["holders"].([]any) {
+		if h, _ := raw.(map[string]any); h["name"] == "codex-w12" {
+			found = true
+			if h["unread"].(float64) != 1 {
+				t.Errorf("codex-w12 unread = %v, want 1", h["unread"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("codex-w12 is missing: an addressed name with no catalog entry is exactly what this page is for")
+	}
+}
+
+func TestInboxListFiltersAndFacets(t *testing.T) {
+	inboxInTemp(t,
+		room.Event{Principal: "operator", To: "cairn", Topic: "sprint", Body: "pick up #12"},
+		room.Event{Principal: "lintel", To: "cairn", Topic: "gate", Body: "86/86 green"},
+		room.Event{Principal: "lintel", To: "cairn", Topic: "gate", Body: "rerun requested"},
+	)
+	h := newTestHandler(t, Options{})
+
+	all := getJSON(t, h, "/api/inbox/cairn")
+	if all["total"].(float64) != 3 || all["unread"].(float64) != 3 {
+		t.Fatalf("cairn = %v total / %v unread, want 3/3", all["total"], all["unread"])
+	}
+	// Chronological: the API answers oldest-first, which is the order the page
+	// renders and the order the conversation happened in.
+	items := all["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("got %d items, want 3", len(items))
+	}
+	var last float64
+	for _, raw := range items {
+		seq := raw.(map[string]any)["seq"].(float64)
+		if seq < last {
+			t.Fatalf("items are not chronological: %v after %v", seq, last)
+		}
+		last = seq
+	}
+
+	// Facets come from the WHOLE inbox, not the filtered slice: a dropdown that
+	// listed only what the current filter matched could not change the filter.
+	filtered := getJSON(t, h, "/api/inbox/cairn?from=lintel")
+	if filtered["matched"].(float64) != 2 {
+		t.Errorf("from=lintel matched %v, want 2", filtered["matched"])
+	}
+	facets := filtered["facets"].(map[string]any)["from"].([]any)
+	if len(facets) != 2 {
+		t.Errorf("from facet has %d entries under a from filter, want 2 (the whole inbox)", len(facets))
+	}
+
+	if got := getJSON(t, h, "/api/inbox/cairn?q=green")["matched"].(float64); got != 1 {
+		t.Errorf("q=green matched %v, want 1", got)
+	}
+	if got := getJSON(t, h, "/api/inbox/cairn?state=read")["matched"].(float64); got != 0 {
+		t.Errorf("state=read matched %v, want 0 — nothing has been read", got)
+	}
+}
+
+func TestInboxTileIsDeclaredAndNotDoubleMounted(t *testing.T) {
+	var found bool
+	for _, p := range Discover() {
+		if p.Name == "inbox" {
+			found = true
+			if p.Path != "/inbox/" || p.Source != "atlas" || !p.Available {
+				t.Fatalf("inbox panel = %+v, want an available atlas panel at /inbox/", p)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no inbox tile: the atlas WebSurface declaration is what Discover reads")
+	}
+	// Like the terminal and the board, the page is served at the launcher's root
+	// so it keeps the launcher's <base href>; panelHandler must claim nothing.
+	s := &server{}
+	if h, _ := s.panelHandler(Panel{Name: "inbox", Path: "/inbox/"}); h != nil {
+		t.Fatal("inbox must not also be mounted: coopauth.Mount would take the <base href> with it")
+	}
+}
+
+// A disabled panel must be UNROUTED, not merely untiled. Dropping it from the
+// tile list alone would leave every agent's mail readable by anyone who typed
+// the path.
+func TestDisabledInboxIsAlsoUnrouted(t *testing.T) {
+	inboxInTemp(t, room.Event{Principal: "operator", To: "cairn", Topic: "t", Body: "b"})
+	h := newTestHandler(t, Options{Disable: []string{"inbox"}})
+	for _, p := range []string{"/inbox/", "/api/inbox", "/api/inbox/cairn"} {
+		if w := do(h, "GET", p, "127.0.0.1:5555", nil); w.Code == http.StatusOK &&
+			strings.Contains(w.Header().Get("Content-Type"), "json") {
+			t.Errorf("GET %s still answers with the disabled panel's data", p)
+		}
+	}
+}

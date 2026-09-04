@@ -709,7 +709,18 @@ func init() {
 	// inbox and notify are the private receive/send faces of the same bus. They
 	// remain separate top-level primitives so the atlas can show composition
 	// without inventing another transport or address-book concept.
-	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// The inbox's web surface is the THIRD-PERSON view the CLI cannot offer:
+	// `bashy inbox` fixes the filter to one reader and advances that reader's
+	// cursor, so there is no invocation of it that answers "what is waiting for
+	// everyone on this host". The PANEL is read-only by construction (pkg/bus's
+	// InspectInbox) because an observer that consumed mail would eat it at
+	// somebody else's next turn boundary — but the VERB is not, so no
+	// CapReadOnly here: the ordinary `bashy inbox` read writes a cursor, and a
+	// capability flag that describes only one of a verb's surfaces is a claim
+	// the other surface falsifies.
+	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON},
+		Web: &WebSurface{Label: "Inbox", Mount: "inbox", Mode: WebInProcess, DefaultOn: true,
+			Tip: "every agent's waiting mail, read-only"}})
 	addVerb("notify", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// handoff/resume: pause a live session and pass the work on -- to another
 	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work

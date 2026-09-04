@@ -697,3 +697,167 @@ body.standalone #bar { flex: none; }
    rather than in a paragraph above it. */
 .pair-scope-row { text-transform: none; }
 .pair-scope-warn { color: var(--muted-foreground); font-size: .72rem; }
+
+/* ---- the system-wide inbox (inbox.html) ----
+ *
+ * Two panes, and the split IS the feature: the left names every inbox on the
+ * host, the right is one of them in full. The message board next door is a
+ * single stream because a board has one audience; an inbox does not, so a
+ * roster is the only way to ask "who is sitting on a backlog".
+ *
+ * Same vocabulary as the board and the sprint page — uniform dense rows, the
+ * card as the unit, three colours and no more. Only two things break the
+ * uniformity, and each earns it: mail nobody has read (an obligation), and an
+ * interrupt (a claim on somebody's running turn).
+ */
+#ib-page { flex: 1; min-height: 0; display: flex; width: 100%; }
+
+#ib-readonly {
+  font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted-foreground); border: 1px solid var(--border);
+  border-radius: 9999px; padding: .05rem .45rem; margin-right: .6rem;
+}
+#ib-who { font-size: .75rem; color: var(--muted-foreground); }
+
+/* --- left: the roster --- */
+#ib-nav {
+  flex: none; width: 15.5rem; min-width: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: color-mix(in srgb, var(--card) 45%, transparent);
+}
+.ib-nav-head { flex: none; display: flex; flex-direction: column; gap: .35rem; padding: .6rem .6rem .5rem; }
+.ib-nav-head input[type="search"] {
+  font: inherit; font-size: .8rem; width: 100%; padding: .3rem .45rem;
+  border: 1px solid var(--border); border-radius: .45rem;
+  background: var(--background); color: var(--foreground);
+}
+.ib-nav-head .chk {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: .72rem; color: var(--muted-foreground);
+}
+#ib-roster { flex: 1; min-height: 0; overflow-y: auto; padding: 0 .4rem .4rem; }
+#ib-roster .empty { font-size: .78rem; color: var(--muted-foreground); padding: 1rem .3rem; }
+#ib-nav-foot {
+  flex: none; margin: 0; padding: .4rem .6rem; font-size: .68rem;
+  color: var(--muted-foreground); border-top: 1px solid var(--border);
+}
+
+.ib-group + .ib-group { margin-top: .5rem; }
+.ib-group > header {
+  display: flex; align-items: baseline; gap: .4rem; padding: .35rem .3rem .2rem;
+}
+.ib-group > header .t {
+  font-size: .64rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted-foreground);
+}
+.ib-group > header .u { font-size: .64rem; color: var(--primary); font-variant-numeric: tabular-nums; }
+
+.ib-row {
+  display: flex; align-items: center; gap: .4rem; width: 100%;
+  font: inherit; font-size: .8rem; text-align: left; cursor: pointer;
+  background: none; border: 0; border-left: 2px solid transparent;
+  border-radius: .4rem; padding: .28rem .4rem; color: var(--foreground);
+}
+.ib-row:hover { background: var(--muted); }
+.ib-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.ib-row.on { background: var(--card); border-left-color: var(--primary); font-weight: 600; }
+.ib-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-row .c {
+  flex: none; font-size: .68rem; font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground); border-radius: 9999px; padding: 0 .35rem;
+}
+.ib-row .c.unread { background: var(--primary); color: #fff; font-weight: 700; }
+
+/* --- right: one inbox --- */
+#ib-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 0 1rem 1rem; }
+
+#ib-head { display: flex; align-items: baseline; gap: .5rem; padding: .75rem 0 .35rem; }
+#ib-title { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
+#ib-stats { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.ib-chip {
+  font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  border: 1px solid currentColor; border-radius: .3rem; padding: 0 .35rem;
+  color: var(--muted-foreground);
+}
+.ib-chip.k-person { color: var(--primary); }
+.ib-chip.k-role { color: var(--warn); }
+
+#ib-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .45rem;
+  padding: .35rem 0 .6rem; font-size: .78rem; color: var(--muted-foreground);
+}
+#ib-filters label { display: inline-flex; align-items: center; gap: .3rem; }
+#ib-filters select, #ib-filters input[type="search"] {
+  font: inherit; font-size: .78rem; color: var(--foreground); background: var(--card);
+  border: 1px solid var(--border); border-radius: .45rem; padding: .22rem .35rem;
+  max-width: 11rem;
+}
+#ib-filters input[type="search"] { flex: 1; min-width: 7rem; max-width: none; }
+/* The two controls that act on the WHOLE view rather than narrowing it. Kept as
+ * one group pushed to the trailing edge so that when the bar wraps they wrap
+ * together — a lone "Clear" on a second line reads as an orphan. */
+.ib-actions { display: inline-flex; gap: .45rem; margin-left: auto; }
+#ib-filters .btn { flex: none; }
+
+#ib-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .4rem; }
+#ib-list .empty { color: var(--muted-foreground); padding: 2rem 0; text-align: center; }
+
+.ib-msg {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: .5rem; padding: .5rem .7rem;
+}
+/* Unread is the one class of message that carries an obligation — somebody has
+ * not been handed this yet — so it is the one that gets the accent. */
+.ib-msg.unread { border-left-color: var(--primary); }
+.ib-msg.urgent { border-left-color: var(--warn); }
+/* Published to the timeline but never folded into this inbox's own buffer. The
+ * dashed edge says "durable, not yet handed over" without a second colour.
+ * The LEFT edge stays solid: it is the unread/interrupt accent, and dashing it
+ * would make two independent facts share one stroke. */
+.ib-msg.pendingless {
+  border-top-style: dashed; border-right-style: dashed; border-bottom-style: dashed;
+}
+
+.ib-msg header {
+  display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
+  font-size: .74rem; color: var(--muted-foreground);
+}
+.ib-msg .seq { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .68rem; }
+.ib-msg .from {
+  font: inherit; font-size: .74rem; font-weight: 600; color: var(--foreground);
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.ib-msg .from:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.ib-msg .topic {
+  font: inherit; font-size: .7rem; cursor: pointer;
+  background: var(--muted); color: var(--muted-foreground);
+  border: 1px solid var(--border); border-radius: .3rem; padding: 0 .35rem;
+}
+.ib-msg .topic:hover { color: var(--primary); border-color: var(--primary); }
+.ib-msg .room {
+  font-size: .68rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted-foreground);
+}
+.ib-msg .tag.urgent {
+  background: var(--warn); color: var(--card); border-radius: .3rem;
+  padding: 0 .35rem; font-size: .66rem; font-weight: 700;
+}
+.ib-msg .at { font-variant-numeric: tabular-nums; }
+.ib-msg .body { margin: .3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.ib-msg .state {
+  margin-top: .35rem; padding-top: .3rem; border-top: 1px dashed var(--border);
+  font-size: .7rem; color: var(--muted-foreground);
+}
+
+#ib-foot { flex: none; padding-top: .5rem; font-size: .7rem; color: var(--muted-foreground); }
+
+/* Phone: the roster becomes a band across the top rather than a column, so the
+ * message pane keeps the full width it needs to be readable at all. */
+@media (max-width: 46rem) {
+  #ib-page { flex-direction: column; }
+  #ib-nav {
+    width: 100%; border-right: 0; border-bottom: 1px solid var(--border);
+    max-height: 42svh;
+  }
+  #ib-main { padding: 0 .75rem .75rem; }
+  #ib-filters select { max-width: 8.5rem; }
+}

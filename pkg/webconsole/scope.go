@@ -44,6 +44,14 @@ import (
 // board's own API is /api/board, whose scope segment is the NAME, so a scope of
 // {"sprint"} would serve the page and refuse the data behind it. The operator
 // may still TYPE either — ValidateScope accepts both.
+//
+// INBOX IS DELIBERATELY NOT HERE, even though it is read-only and looks like a
+// sibling of the board. The board is public by construction — every agent on
+// the host can already read every post on it — whereas the inbox panel is the
+// aggregate of DIRECTED 1:1 mail for every name on the machine, which no single
+// principal is otherwise entitled to read in one place. Default-deny applies to
+// reach, not only to danger: `--allow inbox` costs one flag when a phone is
+// genuinely meant to see the fleet's mail.
 var defaultDeviceScope = []string{"board", "mb", "relay"}
 
 // consoleWidePaths are reachable by ANY admitted session regardless of scope,
@@ -53,7 +61,7 @@ func consoleWidePath(p string) bool {
 	switch p {
 	case "/", "/api/apps", "/api/session", "/api/login", "/api/logout",
 		"/healthz", "/meta", "/login", "/favicon.ico",
-		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js", "/term.js",
+		"/app.css", "/backgrounds.css", "/app.js", "/board.js", "/mb.js", "/inbox.js", "/term.js",
 		"/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js":
 		return true
 	}

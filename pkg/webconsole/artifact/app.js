@@ -148,6 +148,10 @@ const SVG = {
   mb:       "M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4.4 8.6L12 14l7.6-5.4",
   // Columns of differing height: a kanban, read at a glance.
   board:    { paths: ["M6 19V9", "M12 19V5", "M18 19v-6", "M4 21h16"] },
+  // A tray with mail arriving into it. Deliberately NOT the envelope: the board
+  // next door is already an envelope, and two apps sharing a mark is the one
+  // thing a grid of icons must not do.
+  inbox:    { paths: ["M4 14h4l1.6 2.4h4.8L16 14h4M4 14l2.4-7.2h11.2L20 14v5.5H4z"] },
   settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
   moon:     "M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
   sun:      "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
@@ -162,7 +166,7 @@ const SVG = {
 const COLORS = {
   ycode: "#1f2328", shell: "#0a0e1a", terminal: "#0a0e1a", desktop: "#af52de",
   ssh: "#0f766e", files: "#3478f6", relay: "#f59e0b", dag: "#ef4444", loom: "#8b5cf6",
-  mb: "#0ea5e9", board: "#16a34a",
+  mb: "#0ea5e9", board: "#16a34a", inbox: "#6366f1",
 };
 const ICON_PALETTE = ["#4f46e5","#3478f6","#ec4899","#f59e0b","#10b981","#8b5cf6",
   "#5ac8fa","#ef4444","#06b6d4","#22c55e","#0ea5e9","#a855f7","#84cc16"];

@@ -346,6 +346,18 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.HandleFunc("GET /api/mb/{seq}/viewers", s.handleMBViewers)
 	}
 
+	// The inbox, same shape again — and read-only by construction on BOTH
+	// sides: there is no POST here at all, and the handlers behind these routes
+	// go through pkg/bus's inspection API, which never advances a cursor, never
+	// materializes a pending record and never opens a subscription. A page that
+	// wrote would consume mail belonging to an agent that had not read it yet.
+	if on["inbox"] {
+		mux.HandleFunc("GET /inbox/", s.handleInboxPage)
+		mux.Handle("GET /inbox", redirectTo("/inbox/"))
+		mux.HandleFunc("GET /api/inbox", s.handleInboxRoster)
+		mux.HandleFunc("GET /api/inbox/{name}", s.handleInboxList)
+	}
+
 	// The steward board, same shape again: the tile is an atlas declaration,
 	// the page is served at the launcher's root, and panelHandler claims
 	// nothing. Read-only by construction — `board` is the one work verb the
@@ -409,7 +421,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 // when the console has nothing to serve for it.
 func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	switch p.Name {
-	case "terminal", "mb", "board":
+	case "terminal", "mb", "board", "inbox":
 		// Served above, at the launcher's own root, not mounted here.
 		return nil, nil
 	case "files":

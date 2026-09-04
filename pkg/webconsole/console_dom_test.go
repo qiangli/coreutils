@@ -251,7 +251,7 @@ func TestDOMPairingSection(t *testing.T) {
 // Every panel must load and throw nothing. This is the sweep that catches a fix
 // in one app breaking another.
 func TestDOMEveryPanelLoadsCleanly(t *testing.T) {
-	for _, panel := range []string{"/", "/sprint/", "/mb/", "/files/", "/meet/", "/term/"} {
+	for _, panel := range []string{"/", "/sprint/", "/mb/", "/inbox/", "/files/", "/meet/", "/term/"} {
 		t.Run(panel, func(t *testing.T) {
 			base, ctx, errs := domEnv(t, Options{})
 			var title string
@@ -804,7 +804,7 @@ func TestDOMOneMarkEverywhere(t *testing.T) {
 
 	seen := map[string]string{}
 	for _, theme := range []string{"light", "dark"} {
-		for _, page := range []string{"/sprint/", "/mb/", "/term/", "/meet/"} {
+		for _, page := range []string{"/sprint/", "/mb/", "/inbox/", "/term/", "/meet/"} {
 			var got string
 			if err := chromedp.Run(ctx,
 				chromedp.Navigate(base+page),

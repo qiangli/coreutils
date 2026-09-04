@@ -22,7 +22,10 @@ var assetRe = regexp.MustCompile(`(?:src|href)="([^":?#][^":]*)"`)
 func TestServedPagesReferenceOnlyResolvableAssets(t *testing.T) {
 	h := newTestHandler(t, Options{})
 
-	for _, page := range []string{"/", "/term/"} {
+	// Every page the console serves at its own root, not just the launcher: a
+	// standalone app page that referenced a script nobody shipped would render
+	// its chrome and do nothing, with a 200 on every server-side check.
+	for _, page := range []string{"/", "/term/", "/mb/", "/sprint/", "/inbox/"} {
 		w := do(h, "GET", page, "127.0.0.1:5555", nil)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", page, w.Code)
@@ -72,19 +75,25 @@ func TestLauncherScriptDefinesItsEntryPoint(t *testing.T) {
 // exact bytes served to the browser and reject tree-sitter recovery nodes.
 func TestLauncherScriptIsValidJavaScript(t *testing.T) {
 	h := newTestHandler(t, Options{})
-	w := do(h, "GET", "/app.js", "127.0.0.1:5555", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("app.js = %d", w.Code)
-	}
-
-	tree, err := treesitter.NewParser().Parse(context.Background(), w.Body.Bytes(), "javascript")
-	if err != nil {
-		t.Fatalf("parse app.js: %v", err)
-	}
-	if tree.Root == nil || tree.Root.HasError() {
-		t.Fatal("app.js contains invalid JavaScript syntax")
+	for _, script := range consoleScripts {
+		w := do(h, "GET", script, "127.0.0.1:5555", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s = %d", script, w.Code)
+		}
+		tree, err := treesitter.NewParser().Parse(context.Background(), w.Body.Bytes(), "javascript")
+		if err != nil {
+			t.Fatalf("parse %s: %v", script, err)
+		}
+		if tree.Root == nil || tree.Root.HasError() {
+			t.Errorf("%s contains invalid JavaScript syntax", script)
+		}
 	}
 }
+
+// consoleScripts is every script the console ships. Held in one place so the
+// syntax check and the validator check cannot cover different subsets — the
+// gap that lets an unparseable page slip through with a green suite.
+var consoleScripts = []string{"/app.js", "/term.js", "/mb.js", "/board.js", "/inbox.js"}
 
 // Embedded assets must carry a validator.
 //
@@ -95,7 +104,7 @@ func TestLauncherScriptIsValidJavaScript(t *testing.T) {
 func TestAssetsAreRevalidatable(t *testing.T) {
 	h := newTestHandler(t, Options{})
 
-	for _, asset := range []string{"/app.js", "/app.css", "/term.js", "/backgrounds.css"} {
+	for _, asset := range append(append([]string{}, consoleScripts...), "/app.css", "/backgrounds.css") {
 		w := do(h, "GET", asset, "127.0.0.1:5555", nil)
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s = %d", asset, w.Code)
