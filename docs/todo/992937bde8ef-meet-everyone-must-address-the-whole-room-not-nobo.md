@@ -3,10 +3,11 @@ id: 992937bde8ef
 kind: task
 title: 'Meet: ''Everyone'' must address the whole room, not nobody (and not the sprint''s conductor)'
 seq: 40
-status: todo
+status: done
 priority: p0
 created: 2026-09-04T09:40:25.283819Z
 sprint: 122
+closed: 2026-09-04T09:41:36.174354Z
 ---
 
 REPORTED: a message with no recipient shows in the transcript but is not dispatched.
