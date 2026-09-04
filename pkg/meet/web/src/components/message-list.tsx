@@ -23,6 +23,10 @@ interface MessageListProps {
   live: LiveEvent | null
   human: string
   kind?: "room" | "dm"
+  // debugRaw is the reader's raw-transport view. `raw` is only ever present on
+  // an event when it is on, so this prop is what tells an empty `raw` apart
+  // from a message that simply was not transport.
+  debugRaw?: boolean
 }
 
 const systemKinds = new Set([
@@ -40,7 +44,13 @@ const systemKinds = new Set([
   "question",
 ])
 
-export function MessageList({ events, live, human, kind = "room" }: MessageListProps) {
+export function MessageList({
+  events,
+  live,
+  human,
+  kind = "room",
+  debugRaw = false,
+}: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -67,6 +77,7 @@ export function MessageList({ events, live, human, kind = "room" }: MessageListP
               <SystemEvent event={event} key={eventKey(event, index)} />
             ) : (
               <Message
+                debugRaw={debugRaw}
                 event={event}
                 human={human}
                 key={eventKey(event, index)}
@@ -81,7 +92,15 @@ export function MessageList({ events, live, human, kind = "room" }: MessageListP
   )
 }
 
-function Message({ event, human }: { event: MeetEvent; human: string }) {
+function Message({
+  event,
+  human,
+  debugRaw = false,
+}: {
+  event: MeetEvent
+  human: string
+  debugRaw?: boolean
+}) {
   const isHuman = event.kind === "human" || event.speaker === human
   return (
     <article className="group flex gap-3 rounded-xl px-2 py-4 transition-colors hover:bg-white/55 sm:gap-4 sm:px-3">
@@ -129,8 +148,28 @@ function Message({ event, human }: { event: MeetEvent; human: string }) {
             </ReactMarkdown>
           </div>
         )}
+        {debugRaw && event.raw && <RawTransport raw={event.raw} />}
       </div>
     </article>
+  )
+}
+
+// RawTransport shows what the message above was extracted FROM.
+//
+// Collapsed by default even with the debug view on: a turn's transport is every
+// tool call and every command output the agent produced, which is exactly the
+// wall of JSON this seam exists to keep out of the conversation. The reader
+// opens the one message they are debugging.
+function RawTransport({ raw }: { raw: string }) {
+  return (
+    <details className="mt-2 rounded-lg border border-border/70 bg-muted/40">
+      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Raw transport ({raw.split("\n").length} lines)
+      </summary>
+      <pre className="max-h-[420px] overflow-auto px-2.5 pb-2.5 text-[11px] leading-5 text-muted-foreground">
+        {raw}
+      </pre>
+    </details>
   )
 }
 

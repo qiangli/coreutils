@@ -153,7 +153,7 @@ func TestWebStartWorkUsesManagedContainedSession(t *testing.T) {
 	if gotAgent != "codex" || got.Prompt != "edit and test" || got.ReadOnly || got.Attended || !got.AllowUnsafe || got.Mode != "meet-work" {
 		t.Fatalf("managed session options = agent %q %+v", gotAgent, got)
 	}
-	events, err := relayDMEvents("codex")
+	events, err := relayDMEvents("codex", false)
 	if err != nil {
 		t.Fatal(err)
 	}

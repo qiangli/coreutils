@@ -73,6 +73,9 @@ export const eventSchema = z
     choice: z.string().optional(),
     choices: z.array(z.string()).optional(),
     ledger: z.unknown().optional(),
+    // The agent's un-normalized output, sent only when the reader turned the
+    // raw-transport view on. Absent on every ordinary frame.
+    raw: z.string().optional(),
   })
   .passthrough()
 
@@ -161,6 +164,7 @@ export const dmEventSchema = z.object({
   text: z.string(),
   ts: z.union([z.string(), z.number()]),
   status: z.string().optional(),
+  raw: z.string().optional(),
 })
 
 export const dmDetailSchema = z.object({

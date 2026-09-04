@@ -80,6 +80,12 @@ type Event struct {
 	// Ledger is set on a `ledger` event: the chair's structured decision for
 	// that turn.
 	Ledger *Ledger `json:"ledger,omitempty"`
+
+	// Raw is the agent's UN-normalized output, carried to a client only when it
+	// explicitly asked to debug the transport (see renderEvent). It is never
+	// stored — the record holds prose — and is absent from every ordinary read,
+	// so a transcript's wire size does not double for a feature that is off.
+	Raw string `json:"raw,omitempty"`
 }
 
 // EventOrigin is the durable identity of the source record copied into Meet.

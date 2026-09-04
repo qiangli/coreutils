@@ -1,5 +1,6 @@
 import { useState } from "react"
 import {
+  Braces,
   ChevronRight,
   Menu,
   PanelRightClose,
@@ -169,6 +170,23 @@ export function App() {
               </div>
             </div>
 
+            <Button
+              aria-label={
+                meet.debugRaw
+                  ? "Hide the raw agent transport"
+                  : "Show the raw agent transport"
+              }
+              aria-pressed={meet.debugRaw}
+              className="h-7 px-2 text-[10px] font-semibold uppercase tracking-wide"
+              onClick={() => meet.setDebugRaw(!meet.debugRaw)}
+              size="sm"
+              title="Show the raw JSON an agent CLI streamed, under each message it was extracted from"
+              variant={meet.debugRaw ? "secondary" : "ghost"}
+            >
+              <Braces className="size-3.5" />
+              JSON
+            </Button>
+
             {meet.selectedKind === "room" && <Button
               aria-label={detailsOpen ? "Hide room details" : "Show room details"}
               className="hidden xl:inline-flex"
@@ -210,6 +228,7 @@ export function App() {
           </header>
 
           <MessageList
+            debugRaw={meet.debugRaw}
             events={meet.events}
             human={meet.state?.human ?? ""}
             kind={meet.selectedKind}

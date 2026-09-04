@@ -788,6 +788,12 @@ func handleObserveWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// ?raw=1 asks for the agent's un-normalized output alongside the prose, so an
+	// operator debugging a harness can see the transport this seam dropped. Off by
+	// default and per-connection: the browser reconnects with it when the reader
+	// turns the debug view on, so an ordinary session never carries the bytes.
+	debugRaw := truthy(r.URL.Query().Get("raw"))
+
 	rec := &lineTail{path: filepath.Join(dir, "transcript.jsonl")}
 	live := &lineTail{path: filepath.Join(dir, "live.jsonl")}
 	// The view is followed forward only; its history is already in the record as whole turns.
@@ -814,7 +820,7 @@ func handleObserveWS(w http.ResponseWriter, r *http.Request) {
 	backlog, err := readEvents(rec)
 	if err == nil {
 		for _, e := range backlog {
-			if writeFrame(wsFrame{Kind: "event", Data: e}) != nil {
+			if writeFrame(wsFrame{Kind: "event", Data: renderEvent(e, debugRaw)}) != nil {
 				return
 			}
 		}
@@ -849,7 +855,7 @@ func handleObserveWS(w http.ResponseWriter, r *http.Request) {
 		}
 		if events, err := readEvents(rec); err == nil {
 			for _, e := range events {
-				if writeFrame(wsFrame{Kind: "event", Data: e}) != nil {
+				if writeFrame(wsFrame{Kind: "event", Data: renderEvent(e, debugRaw)}) != nil {
 					return
 				}
 			}
@@ -869,7 +875,7 @@ func handleObserveWS(w http.ResponseWriter, r *http.Request) {
 		if cur, err := loadState(id); err == nil && cur.Status != "open" {
 			if rest, err := readEvents(rec); err == nil {
 				for _, e := range rest {
-					if writeFrame(wsFrame{Kind: "event", Data: e}) != nil {
+					if writeFrame(wsFrame{Kind: "event", Data: renderEvent(e, debugRaw)}) != nil {
 						return
 					}
 				}

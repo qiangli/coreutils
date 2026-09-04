@@ -58,8 +58,9 @@ export async function createDM(agent: string): Promise<DMSummary> {
   }))
 }
 
-export async function getDM(agent: string): Promise<DMDetail> {
-  return dmDetailSchema.parse(await request(`api/dms/${encodeURIComponent(agent)}`))
+export async function getDM(agent: string, debugRaw = false): Promise<DMDetail> {
+  const url = `api/dms/${encodeURIComponent(agent)}${debugRaw ? "?raw=1" : ""}`
+  return dmDetailSchema.parse(await request(url))
 }
 
 export async function postDM(agent: string, text: string): Promise<void> {
@@ -81,10 +82,12 @@ export function observeDM(
   agent: string,
   onEvent: (event: DMEvent) => void,
   onStatus: (status: "connecting" | "open" | "closed") => void,
+  debugRaw = false,
 ): () => void {
   const url = new URL("observe-dm", document.baseURI)
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
   url.searchParams.set("agent", agent)
+  if (debugRaw) url.searchParams.set("raw", "1")
   let stopped = false
   let socket: WebSocket | null = null
   let retry: number | null = null
@@ -237,6 +240,7 @@ export function observeRoom(
   ref: string,
   onFrame: (frame: ObserveFrame) => void,
   onStatus: (status: "connecting" | "open" | "closed") => void,
+  debugRaw = false,
 ): () => void {
   if (usingMock) {
     onStatus("open")
@@ -250,6 +254,10 @@ export function observeRoom(
   const url = new URL("observe", document.baseURI)
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
   url.searchParams.set("room", ref)
+  // The raw view is a per-CONNECTION choice, not a per-message one: asking for
+  // it on every socket would double the wire size of a transcript to serve a
+  // debugging aid that is off by default. Toggling it reconnects.
+  if (debugRaw) url.searchParams.set("raw", "1")
 
   let stopped = false
   let socket: WebSocket | null = null

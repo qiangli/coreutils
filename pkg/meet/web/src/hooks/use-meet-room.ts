@@ -45,6 +45,11 @@ export function useMeetRoom() {
   const [connection, setConnection] =
     useState<ConnectionStatus>("connecting")
   const [observeRevision, setObserveRevision] = useState(0)
+  // The raw-transport view, off by default. It lives here rather than in the
+  // message list because the server decides what to send: turning it on
+  // reconnects the socket with ?raw=1, so an ordinary session never carries the
+  // extra bytes.
+  const [debugRaw, setDebugRaw] = useState(false)
   const [queued, setQueued] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -75,7 +80,10 @@ export function useMeetRoom() {
     setLive(null)
     setError(null)
     if (selectedKind === "dm") {
-      getDM(selectedRef)
+      // Fetch and observe the SAME projection. If the HTTP snapshot omitted
+      // raw while the socket included it, their identical event keys made the
+      // winner timing-dependent when the reader toggled the debug view.
+      getDM(selectedRef, debugRaw)
         .then((nextDetail) => {
           if (!active) return
           setDetail(null)
@@ -94,6 +102,7 @@ export function useMeetRoom() {
           }
         },
         setConnection,
+        debugRaw,
       )
       return () => {
         active = false
@@ -137,12 +146,13 @@ export function useMeetRoom() {
         }
       },
       setConnection,
+      debugRaw,
     )
     return () => {
       active = false
       stop()
     }
-  }, [selectedRef, selectedKind, observeRevision])
+  }, [selectedRef, selectedKind, observeRevision, debugRaw])
 
   const send = useCallback(
     async (text: string, agent?: string) => {
@@ -321,6 +331,8 @@ export function useMeetRoom() {
     creating,
     isOrganizer,
     usingMock,
+    debugRaw,
+    setDebugRaw,
   }
 }
 
@@ -356,6 +368,7 @@ function dmMeetEvent(event: DMEvent): MeetEvent {
     text: event.text,
     ts: event.ts,
     status: event.status,
+    raw: event.raw,
   }
 }
 

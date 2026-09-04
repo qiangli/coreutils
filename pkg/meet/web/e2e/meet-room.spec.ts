@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, readFileSync, writeFileSync } from "node:fs";
 
 import { expect, test, type Page } from "@playwright/test";
 
@@ -252,6 +252,48 @@ test("posts a human message through the composer and reloads it from the transcr
   await expect(page.getByText(message)).toBeVisible();
   await page.reload();
   await expect(page.getByText(message)).toBeVisible();
+});
+
+test("normalizes a legacy transport turn and reveals raw JSON only on request", async ({ page }) => {
+  const topic = unique("Browser legacy transport");
+  const seeded = await createRoom(topic, [primaryAgent]);
+  const prose = unique("legacy codex answer");
+  const raw = [
+    JSON.stringify({ type: "thread.started", thread_id: "thread-e2e" }),
+    JSON.stringify({
+      type: "item.completed",
+      item: { id: "item-e2e", type: "agent_message", text: prose },
+    }),
+    JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: 10, output_tokens: 3 },
+    }),
+  ].join("\n");
+  appendFileSync(
+    path.join(meetDir, seeded.id, "transcript.jsonl"),
+    `${JSON.stringify({
+      round: 1,
+      speaker: primaryAgent,
+      role: "participant",
+      kind: "turn",
+      text: raw,
+      ts: new Date().toISOString(),
+    })}\n`,
+  );
+
+  await openMeet(page);
+  await page.getByRole("button", { name: new RegExp(topic) }).click();
+  await expect(page.getByText(prose, { exact: true })).toBeVisible();
+  await expect(page.getByText(/thread\.started/)).toHaveCount(0);
+  await expect(page.getByText(/Raw transport/)).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Show the raw agent transport" }).click();
+  await expect(page.getByText(/Raw transport \(3 lines\)/)).toBeVisible();
+  await page.getByText(/Raw transport \(3 lines\)/).click();
+  await expect(page.getByText(/thread\.started/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Hide the raw agent transport" }).click();
+  await expect(page.getByText(/Raw transport/)).toHaveCount(0);
 });
 
 // The one that needed a deterministic agent: addressing runs a real turn through

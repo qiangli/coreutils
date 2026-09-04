@@ -294,7 +294,7 @@ func (w *liveWriter) emit(line string, ch liveChannel) {
 	// this classification, decides how the line is reconciled — the sink is the only
 	// honest signal of which source a byte came from. Prose emits live in order;
 	// the event channel is held and reconciled against prose at close.
-	human, class := classifyEventLine(line)
+	human, class, _ := classifyEventLine(line)
 	if class == lineDrop {
 		return
 	}

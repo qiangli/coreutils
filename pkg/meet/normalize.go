@@ -71,6 +71,20 @@ type eventProbe struct {
 	SessionID string          `json:"session_id"`
 	Message   json.RawMessage `json:"message"`
 	Data      json.RawMessage `json:"data"`
+
+	// codex `--json`: a thread id on the opening line, an `item` envelope on the
+	// event that carries words, and usage/error on the closing ones.
+	ThreadID string          `json:"thread_id"`
+	Item     json.RawMessage `json:"item"`
+	Usage    json.RawMessage `json:"usage"`
+	Error    json.RawMessage `json:"error"`
+
+	// opencode `--format json`: `sessionID` is camelCase and therefore a
+	// DIFFERENT key from Claude's `session_id` — encoding/json matches field
+	// names case-insensitively but not across separators, so the two never
+	// collide. `part` carries the payload.
+	SessionIDCamel string          `json:"sessionID"`
+	Part           json.RawMessage `json:"part"`
 }
 
 // classifyEventLine decides what one physical line of agent output is, and, when
@@ -87,18 +101,26 @@ type eventProbe struct {
 //     an exact event name (turn.start/tool.call/turn.end) AND the `data` object,
 //     with turn.end additionally carrying the configured `status`. A foreign
 //     {"type":"turn.end","data":{"text":…}} that lacks that shape is preserved.
-func classifyEventLine(line string) (string, lineClass) {
+//   - codex is keyed on the shape of each named event (see classifyCodex).
+//   - opencode is keyed on `sessionID` + `part` together (see classifyOpencode).
+//
+// The third result is a SUPERSESSION KEY, non-empty only for a transport that
+// re-emits one message as it grows (codex item.started → item.completed,
+// opencode's streamed text part). The whole-turn seam keeps the last line
+// carrying a given key, so a streamed answer is not concatenated with every
+// prefix of itself. "" means the line stands on its own.
+func classifyEventLine(line string) (string, lineClass, string) {
 	s := strings.TrimSpace(line)
 	if s == "" || s[0] != '{' {
 		// Not even shaped like a JSON object — ordinary prose. Preserve it.
-		return line, linePlain
+		return line, linePlain, ""
 	}
 	var p eventProbe
 	if err := json.Unmarshal([]byte(s), &p); err != nil {
 		// It OPENS like a JSON object but does not parse. In practice that is a
 		// torn or malformed transport line, and showing half an event to a watcher
 		// is worse than showing nothing — fail-closed and drop it.
-		return "", lineDrop
+		return "", lineDrop, ""
 	}
 
 	// Claude stream-json. The session_id fingerprint — present on EVERY Claude line
@@ -112,10 +134,10 @@ func classifyEventLine(line string) (string, lineClass) {
 	if p.SessionID != "" {
 		if p.Type == "assistant" && len(p.Message) > 0 {
 			if t := claudeAssistantText(p.Message); t != "" {
-				return t, lineText
+				return t, lineText, ""
 			}
 		}
-		return "", lineDrop
+		return "", lineDrop, ""
 	}
 
 	// ycode / first-party NDJSON: the configured event vocabulary is exactly
@@ -123,13 +145,175 @@ func classifyEventLine(line string) (string, lineClass) {
 	// chat/events.go). Recognition is bound to that configured shape so a foreign
 	// JSON that merely names one of those types is not mistaken for transport.
 	if t, class, ok := classifyNDJSON(p); ok {
-		return t, class
+		return t, class, ""
+	}
+
+	// codex `--json`. Recognized after the two above because its `turn.*`
+	// vocabulary is adjacent to ycode's (`turn.started` vs `turn.start`), and the
+	// more strongly fingerprinted transports must claim their lines first.
+	if t, class, ok := classifyCodex(s, p); ok {
+		return t, class, codexKey(p)
+	}
+
+	// opencode `--format json`.
+	if t, class, ok := classifyOpencode(p); ok {
+		return t, class, opencodeKey(p)
 	}
 
 	// A JSON object that is neither configured transport. It may be an agent's own
 	// JSON answer or another harness's output; preserving it is the safe default,
 	// since eating a real answer is worse than showing one machine-shaped line.
-	return line, linePlain
+	return line, linePlain, ""
+}
+
+// codexItem is the `item` envelope on codex's item.* events. `agent_message` is
+// the only item type carrying words a human is meant to read; command_execution,
+// collab_tool_call and the rest are the agent's machinery.
+type codexItem struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// classifyCodex recognizes a codex `--json` envelope.
+//
+// Same discipline as the transports above: each event name is admitted only with
+// the SHAPE codex actually emits, so a foreign JSON answer that merely borrows a
+// type name is preserved rather than eaten.
+//
+//	{"type":"thread.started","thread_id":"…"}
+//	{"type":"turn.started"}
+//	{"type":"item.started","item":{"id":"item_1","type":"command_execution",…}}
+//	{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"…"}}
+//	{"type":"turn.completed","usage":{…}}
+//
+// codex has no per-line fingerprint the way Claude's `session_id` is one — the
+// bare `{"type":"turn.started"}` carries nothing else at all. So THAT line is
+// bound by its key set instead: an object whose only member is `type` cannot be
+// carrying an answer, so admitting it eats nothing even if some other tool one
+// day emits the same name.
+func classifyCodex(line string, p eventProbe) (text string, class lineClass, ok bool) {
+	switch p.Type {
+	case "thread.started":
+		if strings.TrimSpace(p.ThreadID) == "" {
+			return "", linePlain, false
+		}
+		return "", lineDrop, true
+	case "turn.started":
+		if jsonKeyCount(line) != 1 {
+			return "", linePlain, false
+		}
+		return "", lineDrop, true
+	case "turn.completed":
+		if !hasJSONObject(p.Usage) {
+			return "", linePlain, false
+		}
+		return "", lineDrop, true
+	case "turn.failed":
+		if !hasJSONObject(p.Error) {
+			return "", linePlain, false
+		}
+		return "", lineDrop, true
+	case "item.started", "item.updated", "item.completed":
+		it, ok := codexItemOf(p)
+		if !ok {
+			return "", linePlain, false
+		}
+		// Words only from the COMPLETED item: an item.started/updated for the
+		// same message carries a partial that the completed line supersedes, and
+		// the whole-turn seam keys on the item id to keep exactly one of them.
+		if it.Type == "agent_message" {
+			if t := strings.TrimSpace(it.Text); t != "" {
+				return t, lineText, true
+			}
+		}
+		return "", lineDrop, true
+	}
+	return "", linePlain, false
+}
+
+// codexItemOf parses the `item` envelope, reporting false unless it carries the
+// id + type every real codex item has.
+func codexItemOf(p eventProbe) (codexItem, bool) {
+	var it codexItem
+	if !hasJSONObject(p.Item) || json.Unmarshal(p.Item, &it) != nil {
+		return codexItem{}, false
+	}
+	if strings.TrimSpace(it.ID) == "" || strings.TrimSpace(it.Type) == "" {
+		return codexItem{}, false
+	}
+	return it, true
+}
+
+// codexKey identifies the message an item.* line belongs to, so a partial and
+// the completed line that supersedes it collapse to one entry.
+func codexKey(p eventProbe) string {
+	if it, ok := codexItemOf(p); ok && it.Type == "agent_message" {
+		return "codex:" + it.ID
+	}
+	return ""
+}
+
+// opencodePart is the payload on an opencode event. Only a `text` part is prose;
+// `tool`, `step-start` and `step-finish` are machinery.
+type opencodePart struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// classifyOpencode recognizes an opencode `--format json` envelope:
+//
+//	{"type":"step_start","timestamp":…,"sessionID":"ses_…","part":{…}}
+//	{"type":"tool_use","timestamp":…,"sessionID":"ses_…","part":{"type":"tool",…}}
+//	{"type":"text","timestamp":…,"sessionID":"ses_…","part":{"type":"text","text":"…"}}
+//
+// The fingerprint is `sessionID` + a `part` object together — present on every
+// opencode line, and a pair no foreign answer carries by accident. As with
+// Claude, an unenumerated event inside a fingerprinted stream is dropped rather
+// than leaked.
+func classifyOpencode(p eventProbe) (text string, class lineClass, ok bool) {
+	if strings.TrimSpace(p.SessionIDCamel) == "" || !hasJSONObject(p.Part) {
+		return "", linePlain, false
+	}
+	if p.Type == "text" {
+		if part, ok := opencodePartOf(p); ok && part.Type == "text" {
+			if t := strings.TrimSpace(part.Text); t != "" {
+				return t, lineText, true
+			}
+		}
+	}
+	return "", lineDrop, true
+}
+
+func opencodePartOf(p eventProbe) (opencodePart, bool) {
+	var part opencodePart
+	if json.Unmarshal(p.Part, &part) != nil {
+		return opencodePart{}, false
+	}
+	return part, true
+}
+
+// opencodeKey identifies the message part a text line belongs to. opencode
+// re-emits a growing part as the model streams, so without this the whole-turn
+// seam would concatenate every prefix of the answer ahead of the answer itself.
+func opencodeKey(p eventProbe) string {
+	if part, ok := opencodePartOf(p); ok && part.Type == "text" && strings.TrimSpace(part.ID) != "" {
+		return "opencode:" + part.ID
+	}
+	return ""
+}
+
+// jsonKeyCount reports how many top-level members a JSON object line has, or -1
+// when it is not an object. Used where an event name alone is too weak a
+// fingerprint and the ABSENCE of any other member is what makes the line safe to
+// drop.
+func jsonKeyCount(line string) int {
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(strings.TrimSpace(line)), &m) != nil {
+		return -1
+	}
+	return len(m)
 }
 
 // classifyNDJSON recognizes a first-party/ycode NDJSON envelope, bound to the
@@ -209,7 +393,7 @@ func claudeAssistantText(raw json.RawMessage) string {
 // and whether to show it at all. A dropped transport line returns keep=false so
 // the observer's idle notice can still tell a quiet meeting from a busy one.
 func normalizeLiveLine(line string) (text string, keep bool) {
-	t, class := classifyEventLine(line)
+	t, class, _ := classifyEventLine(line)
 	if class == lineDrop {
 		return "", false
 	}
@@ -230,12 +414,23 @@ func normalizeTurnText(raw string) string {
 	}
 	lines := strings.Split(raw, "\n")
 	out := make([]string, 0, len(lines))
+	// at[key] is the slot a superseding line writes back into, so a streamed
+	// answer keeps its ORIGINAL position in the turn instead of jumping to the
+	// end when its final, complete form arrives.
+	at := map[string]int{}
 	recognized := false
 	for _, line := range lines {
-		text, class := classifyEventLine(line)
+		text, class, key := classifyEventLine(line)
 		switch class {
 		case lineText:
 			recognized = true
+			if key != "" {
+				if i, seen := at[key]; seen {
+					out[i] = text
+					continue
+				}
+				at[key] = len(out)
+			}
 			out = append(out, text)
 		case lineDrop:
 			recognized = true
@@ -247,4 +442,45 @@ func normalizeTurnText(raw string) string {
 		return raw // no transport seen — preserve the original exactly.
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
+}
+
+// renderEvent prepares one recorded event for a READER.
+//
+// The CLI observer has normalized at render since transport recognition landed
+// (see writeEvent), for a reason that applies just as much to the browser: a
+// turn recorded by an older build — or by a build that did not yet know the
+// tool's transport — still holds the raw envelope in its Text, and a record
+// already written cannot be fixed by improving the capture seam alone. The web
+// room read the stored bytes straight out of transcript.jsonl, so every such
+// turn rendered as a wall of JSON in the one surface most likely to be read by
+// someone who did not run the meeting.
+//
+// Normalizing here fixes the display for rooms that ALREADY happened, without
+// rewriting the record: e is a value copy, and the file on disk is untouched.
+//
+// With debugRaw, the original is carried alongside as Raw — but only when
+// normalization actually changed something, so the field marks "this line was
+// transport" rather than duplicating every ordinary message.
+func renderEvent(e Event, debugRaw bool) Event {
+	raw := e.Text
+	text := normalizeTurnText(raw)
+	// Raw is a response-only field. Clear any value that may have arrived on an
+	// Event before deciding whether this particular reader asked for it; this
+	// keeps the default view fail-closed even if a future caller accidentally
+	// passes a previously rendered Event back through this seam.
+	e.Raw = ""
+	if debugRaw && text != raw {
+		e.Raw = raw
+	}
+	e.Text = text
+	return e
+}
+
+// truthy reads a query-string flag the way a browser writes one.
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

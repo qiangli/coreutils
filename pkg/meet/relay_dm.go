@@ -36,6 +36,9 @@ type relayDMEvent struct {
 	Text    string    `json:"text"`
 	TS      time.Time `json:"ts"`
 	Status  string    `json:"status,omitempty"`
+	// Raw carries the agent's un-normalized output when the reader asked to see
+	// the transport (?raw=1). Never stored; see renderEvent.
+	Raw string `json:"raw,omitempty"`
 }
 
 type relayDMDetail struct {
@@ -129,7 +132,7 @@ func ensureRelayDM(agent, human string) (relayDM, error) {
 	return relayDM{Agent: canonAgent(agent), Human: who, Created: st.Created, Updated: nowFn()}, nil
 }
 
-func relayDMEvents(agent string) ([]relayDMEvent, error) {
+func relayDMEvents(agent string, debugRaw bool) ([]relayDMEvent, error) {
 	st, err := dmRoomFor(agent, "")
 	if err != nil {
 		return nil, err
@@ -148,10 +151,19 @@ func relayDMEvents(agent string) ([]relayDMEvent, error) {
 		if e.Status != "" {
 			status = e.Status
 		}
-		out = append(out, relayDMEvent{
+		// Normalize at RENDER as well as at capture: a DM recorded before this
+		// build (or by a build that did not know the tool's transport) still holds
+		// the raw envelope on disk, and the record is not rewritten to fix a
+		// display. See renderEvent.
+		text := normalizeTurnText(e.Text)
+		ev := relayDMEvent{
 			ID: fmt.Sprintf("%d", i+1), Speaker: e.Speaker, Role: role,
-			Text: e.Text, TS: e.TS, Status: status,
-		})
+			Text: text, TS: e.TS, Status: status,
+		}
+		if debugRaw && text != e.Text {
+			ev.Raw = e.Text
+		}
+		out = append(out, ev)
 	}
 	return out, nil
 }
@@ -244,7 +256,7 @@ func handleRelayDMGet(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
-	events, err := relayDMEvents(agent)
+	events, err := relayDMEvents(agent, truthy(r.URL.Query().Get("raw")))
 	if err != nil {
 		apiErr(w, err)
 		return
@@ -410,7 +422,11 @@ func runRelayDMTurn(ctx context.Context, st relayDM, prompt string) {
 	res, err := invokeRelayDM(turnCtx, chat.Options{
 		Agent: st.Agent, Instruction: prompt, Cwd: "", ReadOnly: true,
 	}, nil)
-	event := relayDMEvent{Speaker: st.Agent, Role: "assistant", Text: strings.TrimSpace(res.Output), Status: "ok"}
+	// Extract the assistant's words from whatever structured transport the tool
+	// streamed, exactly as the room engine does at classifyTurn. A DM is the
+	// surface a human is MOST likely to read directly, so storing the raw
+	// envelope here was the most visible form of the same defect.
+	event := relayDMEvent{Speaker: st.Agent, Role: "assistant", Text: strings.TrimSpace(normalizeTurnText(res.Output)), Status: "ok"}
 	if err != nil {
 		event.Status = "error"
 		if event.Text == "" {
@@ -440,9 +456,10 @@ func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	debugRaw := truthy(r.URL.Query().Get("raw"))
 	rec := &lineTail{path: filepath.Join(dir, "transcript.jsonl")}
 	write := func(kind string, data any) error { return conn.WriteJSON(wsFrame{Kind: kind, Data: data}) }
-	if events, err := relayDMEvents(agent); err == nil {
+	if events, err := relayDMEvents(agent, debugRaw); err == nil {
 		for _, event := range events {
 			if write("dm-event", event) != nil {
 				return
@@ -463,6 +480,15 @@ func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
 		for _, line := range lines {
 			var event relayDMEvent
 			if json.Unmarshal(line, &event) == nil {
+				// Same render seam as the backlog above — a tailed line is read
+				// straight off disk and has had no capture-time normalization
+				// applied by THIS process.
+				if text := normalizeTurnText(event.Text); text != event.Text {
+					if debugRaw {
+						event.Raw = event.Text
+					}
+					event.Text = text
+				}
 				if write("dm-event", event) != nil {
 					return
 				}

@@ -95,7 +95,7 @@ func TestClassifyEventLine(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, class := classifyEventLine(c.line)
+			got, class, _ := classifyEventLine(c.line)
 			if class != c.class {
 				t.Errorf("class = %d, want %d", class, c.class)
 			}
@@ -111,7 +111,7 @@ func TestClassifyEventLine(t *testing.T) {
 // future Claude event we have never seen must not appear raw in the meeting.
 func TestClassifyDropsUnknownClaudeEventByFingerprint(t *testing.T) {
 	line := `{"type":"stream_event","event":{"type":"content_block_delta"},"session_id":"s-1"}`
-	if got, class := classifyEventLine(line); class != lineDrop || got != "" {
+	if got, class, _ := classifyEventLine(line); class != lineDrop || got != "" {
 		t.Errorf("an unknown Claude event must be dropped by its session_id fingerprint, got (%q, %d)", got, class)
 	}
 }
@@ -782,5 +782,187 @@ func TestWriteLiveNormalizesRecordedTransport(t *testing.T) {
 	}
 	if got := buf.String(); !strings.Contains(got, "The cache should be write-through.") || strings.Contains(got, "session_id") {
 		t.Errorf("writeLive text = %q", got)
+	}
+}
+
+// --- codex `--json` ---------------------------------------------------------
+
+// The exact lines codex 0.141 emits, captured from a real meeting turn. Before
+// these were recognized, a whole codex turn — thread id, every shell command it
+// ran, its token usage — was stored and DISPLAYED verbatim as the agent's
+// message.
+const (
+	fxCodexThread   = `{"type":"thread.started","thread_id":"01a06b24-5eba-7ae2-8b94-347dbe1aa92a"}`
+	fxCodexTurnUp   = `{"type":"turn.started"}`
+	fxCodexMsg      = `{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"The sh lane is green."}}`
+	fxCodexCmd      = `{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"git status"}}`
+	fxCodexTurnDone = `{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}`
+)
+
+func TestClassifyCodexTransport(t *testing.T) {
+	cases := []struct {
+		name  string
+		line  string
+		want  string
+		class lineClass
+	}{
+		{"thread id", fxCodexThread, "", lineDrop},
+		{"turn started", fxCodexTurnUp, "", lineDrop},
+		{"agent message", fxCodexMsg, "The sh lane is green.", lineText},
+		{"command execution", fxCodexCmd, "", lineDrop},
+		{"turn completed", fxCodexTurnDone, "", lineDrop},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, class, _ := classifyEventLine(c.line)
+			if class != c.class || got != c.want {
+				t.Errorf("classifyEventLine = (%q, %d), want (%q, %d)", got, class, c.want, c.class)
+			}
+		})
+	}
+}
+
+// A whole codex turn reduces to the words, in order.
+func TestNormalizeCodexTurn(t *testing.T) {
+	raw := strings.Join([]string{fxCodexThread, fxCodexTurnUp, fxCodexCmd, fxCodexMsg, fxCodexTurnDone}, "\n")
+	if got := normalizeTurnText(raw); got != "The sh lane is green." {
+		t.Errorf("normalizeTurnText = %q, want the agent message alone", got)
+	}
+}
+
+// A partial item superseded by its completed form is ONE message, not two — the
+// answer must not be preceded by every prefix of itself.
+func TestNormalizeCodexSupersedesPartialItem(t *testing.T) {
+	partial := `{"type":"item.updated","item":{"id":"item_0","type":"agent_message","text":"The sh"}}`
+	raw := strings.Join([]string{fxCodexTurnUp, partial, fxCodexMsg}, "\n")
+	if got := normalizeTurnText(raw); got != "The sh lane is green." {
+		t.Errorf("normalizeTurnText = %q, want only the completed item", got)
+	}
+}
+
+// The fingerprint rule, applied to codex: a foreign answer that merely borrows an
+// event name — without the shape codex actually emits — is PRESERVED. Eating a
+// real answer is the worst failure this seam has.
+func TestClassifyPreservesCodexLookalikes(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"thread.started","summary":"how I started the thread"}`,
+		`{"type":"turn.started","text":"my answer about turns"}`,
+		`{"type":"turn.completed","answer":"done, and here is why"}`,
+		`{"type":"item.completed","item":{"type":"agent_message","text":"no id"}}`,
+	} {
+		got, class, _ := classifyEventLine(line)
+		if class != linePlain || got != line {
+			t.Errorf("a codex look-alike must be preserved: %s -> (%q, %d)", line, got, class)
+		}
+	}
+}
+
+// --- opencode `--format json` -----------------------------------------------
+
+const (
+	fxOpencodeStep = `{"type":"step_start","timestamp":1786578934733,"sessionID":"ses_007","part":{"id":"prt_1","messageID":"msg_1","sessionID":"ses_007","type":"step-start"}}`
+	fxOpencodeTool = `{"type":"tool_use","timestamp":1786578938126,"sessionID":"ses_007","part":{"type":"tool","tool":"read","callID":"call_1","state":{"status":"completed"}}}`
+	fxOpencodeText = `{"type":"text","timestamp":1786578956736,"sessionID":"ses_007","part":{"id":"prt_9","messageID":"msg_2","sessionID":"ses_007","type":"text","text":"Two weave campaigns, one foreman track."}}`
+)
+
+func TestClassifyOpencodeTransport(t *testing.T) {
+	cases := []struct {
+		name  string
+		line  string
+		want  string
+		class lineClass
+	}{
+		{"step start", fxOpencodeStep, "", lineDrop},
+		{"tool use", fxOpencodeTool, "", lineDrop},
+		{"text part", fxOpencodeText, "Two weave campaigns, one foreman track.", lineText},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, class, _ := classifyEventLine(c.line)
+			if class != c.class || got != c.want {
+				t.Errorf("classifyEventLine = (%q, %d), want (%q, %d)", got, class, c.want, c.class)
+			}
+		})
+	}
+}
+
+func TestNormalizeOpencodeTurn(t *testing.T) {
+	raw := strings.Join([]string{fxOpencodeStep, fxOpencodeTool, fxOpencodeText}, "\n")
+	if got := normalizeTurnText(raw); got != "Two weave campaigns, one foreman track." {
+		t.Errorf("normalizeTurnText = %q, want the text part alone", got)
+	}
+}
+
+// opencode re-emits a growing text part as the model streams. Without
+// supersession the record would read "Two" / "Two weave" / "Two weave campaigns"
+// stacked above the answer.
+func TestNormalizeOpencodeSupersedesGrowingPart(t *testing.T) {
+	grow := func(text string) string {
+		return `{"type":"text","timestamp":1,"sessionID":"ses_007","part":{"id":"prt_9","type":"text","text":"` + text + `"}}`
+	}
+	raw := strings.Join([]string{grow("Two"), grow("Two weave"), grow("Two weave campaigns.")}, "\n")
+	if got := normalizeTurnText(raw); got != "Two weave campaigns." {
+		t.Errorf("normalizeTurnText = %q, want only the final form of the streamed part", got)
+	}
+}
+
+// An unenumerated opencode event still carries the sessionID+part fingerprint, so
+// it is dropped rather than leaked — the same fail-closed rule Claude gets.
+func TestClassifyDropsUnknownOpencodeEventByFingerprint(t *testing.T) {
+	line := `{"type":"reasoning","timestamp":1,"sessionID":"ses_007","part":{"type":"reasoning","text":"interior"}}`
+	if got, class, _ := classifyEventLine(line); class != lineDrop || got != "" {
+		t.Errorf("an unknown opencode event must be dropped by its fingerprint, got (%q, %d)", got, class)
+	}
+}
+
+// …but a foreign answer that names an opencode event WITHOUT the fingerprint is
+// preserved.
+func TestClassifyPreservesOpencodeLookalike(t *testing.T) {
+	line := `{"type":"text","part":"the part I played"}`
+	if got, class, _ := classifyEventLine(line); class != linePlain || got != line {
+		t.Errorf("an opencode look-alike must be preserved, got (%q, %d)", got, class)
+	}
+}
+
+// A turn RECORDED before the transport was recognized still holds the raw
+// envelope on disk. The record is not rewritten, so the reader's seam is what
+// has to fix the display — the web room read stored bytes straight through and
+// showed a wall of JSON for every such turn.
+func TestRenderEventNormalizesAStoredRawTurn(t *testing.T) {
+	raw := strings.Join([]string{fxCodexThread, fxCodexCmd, fxCodexMsg, fxCodexTurnDone}, "\n")
+	got := renderEvent(Event{Kind: "turn", Speaker: "codex", Text: raw}, false)
+	if got.Text != "The sh lane is green." {
+		t.Errorf("Text = %q, want the prose", got.Text)
+	}
+	if got.Raw != "" {
+		t.Errorf("Raw = %q, want it withheld unless the reader asked for it", got.Raw)
+	}
+}
+
+// ?raw=1 is the debugging view: the prose AND what it was extracted from.
+func TestRenderEventCarriesRawOnlyWhenAsked(t *testing.T) {
+	raw := strings.Join([]string{fxCodexMsg, fxCodexTurnDone}, "\n")
+	got := renderEvent(Event{Kind: "turn", Speaker: "codex", Text: raw}, true)
+	if got.Text != "The sh lane is green." || got.Raw != raw {
+		t.Errorf("renderEvent(raw=true) = (%q, %q), want the prose plus the original", got.Text, got.Raw)
+	}
+}
+
+// An ordinary message is not transport, so the debug view must not duplicate it:
+// Raw marks "this WAS an envelope", it is not a copy of every event.
+func TestRenderEventLeavesPlainTextAlone(t *testing.T) {
+	got := renderEvent(Event{Kind: "human", Speaker: "qiangli", Text: "ship it"}, true)
+	if got.Text != "ship it" || got.Raw != "" {
+		t.Errorf("renderEvent = (%q, %q), want the text unchanged and no raw copy", got.Text, got.Raw)
+	}
+}
+
+// Raw is a response-only projection, not trusted input. In particular, turning
+// the debug view back off must not leak a Raw value attached by an earlier
+// render (or accidentally supplied by another in-process caller).
+func TestRenderEventClearsRawWhenDebugIsOff(t *testing.T) {
+	got := renderEvent(Event{Kind: "turn", Speaker: "codex", Text: "answer", Raw: "transport"}, false)
+	if got.Text != "answer" || got.Raw != "" {
+		t.Errorf("renderEvent = (%q, %q), want prose with raw withheld", got.Text, got.Raw)
 	}
 }
