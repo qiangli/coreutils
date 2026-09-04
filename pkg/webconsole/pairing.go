@@ -59,13 +59,36 @@ const pairQRVersion = "1"
 // because it only has to survive the walk from the terminal to the phone.
 const defaultTicketWindow = 2 * time.Minute
 
-// defaultDeviceTTL is how long a paired device keeps access when --ttl is not
+// defaultDeviceTTL is how long a paired device keeps access when no TTL is
 // given.
-const defaultDeviceTTL = 4 * time.Hour
+//
+// A day rather than the original four hours. The four-hour figure was chosen
+// for a pairing you do once to try something; the actual use is a phone that
+// stays paired to the machine on the desk, and re-scanning a QR every half
+// working day is a cost paid every day to bound a risk that has not changed —
+// the device is scoped (no terminal, no files), single-use to obtain, and
+// revocable at any time from the same page that minted it.
+const defaultDeviceTTL = 24 * time.Hour
+
+// neverExpiresTTL is what "never expire" actually stores.
+//
+// A century, not a zero and not a null. Every reader of a device record —
+// `apps pair list`, the Settings table, the gate — compares against a time, and
+// a sentinel would have to be understood by all of them; the one that forgot
+// would treat "never" as "expired at the epoch" and lock the phone out, or as
+// "always valid" for a record that really had run out. A date past every
+// machine that will ever read it needs no special case anywhere.
+const neverExpiresTTL = 100 * 365 * 24 * time.Hour
+
+// neverExpiresAfter is the threshold at which a stored expiry is DISPLAYED as
+// "never" rather than as a date in 2126. Anything beyond ten years was asked
+// for, not accumulated.
+const neverExpiresAfter = 10 * 365 * 24 * time.Hour
 
 // operatorGrantTTL is the ceiling a pairing may inherit: the same 12h an
 // interactive operator login gets. A device session inherits but never exceeds
-// the operator authority that minted it.
+// the operator authority that minted it — UNLESS the operator explicitly asks
+// for longer, which is what issueTicket's grant extension is for. See there.
 const operatorGrantTTL = sessionTTLSeconds * time.Second
 
 // deviceSubjectSep separates the OS user from the device id inside a session
@@ -379,7 +402,19 @@ func (s *pairStore) issueTicket(scope []string, ttl, window time.Duration) (tick
 		}
 		deviceExp := now.Add(ttl)
 		if deviceExp.After(st.Grant.Expires) {
-			deviceExp = st.Grant.Expires
+			// THE OPERATOR ASKED FOR LONGER THAN THEIR OWN GRANT RUNS.
+			//
+			// Clamping silently is what this used to do, and it made a longer
+			// TTL a setting that appeared to work: a 24-hour pairing came back
+			// as 24 hours in the response and expired with the 12-hour grant,
+			// with nothing anywhere saying why the phone stopped working
+			// overnight. Extending is the honest reading of the request — the
+			// operator is deliberately granting a device authority that outlives
+			// the session they granted it from, which is exactly what "keep my
+			// phone paired" means — and it stays revocable: `apps pair revoke`
+			// (and the Settings list) ends a device whenever the operator wants,
+			// which is a better control than an expiry nobody chose.
+			st.Grant.Expires = deviceExp
 		}
 		id, err := randToken(6)
 		if err != nil {

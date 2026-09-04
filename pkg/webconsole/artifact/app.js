@@ -388,6 +388,36 @@ function buildPairScope() {
   host.replaceChildren(head, ...rows);
 }
 
+// PAIR_TTL_KEY remembers the operator's last choice, per browser. It is a
+// convenience, not state the console depends on: a missing or unreadable value
+// falls back to the marked-up default, which is the same 24 hours the server
+// applies when no choice is sent at all.
+const PAIR_TTL_KEY = "bashy.apps.pairTTL";
+
+function selectedPairTTL() {
+  const sel = document.getElementById("pair-ttl");
+  if (!sel) return undefined; // no control on this page: let the server decide
+  const hours = Number(sel.value);
+  if (!Number.isFinite(hours) || hours < 0) return undefined;
+  try {
+    localStorage.setItem(PAIR_TTL_KEY, String(hours));
+  } catch (_) {}
+  // 0 is a real answer here — it is how the operator spells "never expires" —
+  // so it must survive as a number rather than being coalesced away.
+  return hours;
+}
+
+function restorePairTTL() {
+  const sel = document.getElementById("pair-ttl");
+  if (!sel) return;
+  try {
+    const saved = localStorage.getItem(PAIR_TTL_KEY);
+    if (saved !== null && [...sel.options].some((o) => o.value === saved)) {
+      sel.value = saved;
+    }
+  } catch (_) {}
+}
+
 function selectedPairScope() {
   const boxes = [...document.querySelectorAll(".pair-scope-box")];
   const on = boxes.filter((b) => b.checked).map((b) => b.value);
@@ -589,6 +619,7 @@ function buildPairing() {
   if (!b) return;
   resetPairing();
   buildPairScope();
+  restorePairTTL();
   const instructions = document.getElementById("pair-instructions-host");
   if (instructions) instructions.replaceChildren(pairInstructions());
   const hint = document.getElementById("pair-armed-hint");
@@ -624,7 +655,7 @@ async function mintPairing() {
     const res = await fetch(url("api/pair"), {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ scope: selectedPairScope() }),
+      body: JSON.stringify({ scope: selectedPairScope(), ttl_hours: selectedPairTTL() }),
     });
     data = await res.json();
   } catch (e) {
@@ -707,8 +738,17 @@ function pairCodes(data) {
 
   const meta = document.createElement("p");
   meta.className = "hint";
+  // Two clocks, and they are not the same thing: the CODE is single-use and
+  // stale in about two minutes, while the DEVICE keeps access for as long as
+  // the operator chose. Saying "never expires" in words matters — the server
+  // stores that as a date a century out, and a reader should not have to
+  // decode a year to learn there is nothing to renew.
   meta.textContent = `Scope: ${(data.scope || []).join(", ")} · code is single-use and expires in ~2 min` +
-    (data.device_ttl ? ` · device access lasts ${data.device_ttl}` : "") + ".";
+    (data.never_expires
+      ? " · the phone stays paired until you revoke it"
+      : data.device_ttl
+        ? ` · device access lasts ${data.device_ttl}`
+        : "") + ".";
   box.append(meta);
 
   if (data.note) {

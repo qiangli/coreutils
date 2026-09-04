@@ -272,11 +272,21 @@ func TestUnknownPanelInAllowIsRejected(t *testing.T) {
 	}
 }
 
-// TestDeviceTTLNeverExceedsTheOperatorGrant.
-func TestDeviceTTLNeverExceedsTheOperatorGrant(t *testing.T) {
+// A DEVICE NEVER OUTLIVES ITS GRANT — and an explicit request EXTENDS the grant
+// rather than being quietly shortened to fit it.
+//
+// This replaces an assertion that the grant ceiling always wins. That rule read
+// as safety and behaved as a silent failure: an operator who asked for a day
+// got a day back in the response and a phone that stopped working after twelve
+// hours, with nothing anywhere connecting the two. The property worth keeping
+// is the RELATIONSHIP (a device session hangs off a grant and cannot outlast
+// it), not the ceiling's fixed value — the operator is allowed to say how long
+// their own authority runs, and revocation, not expiry, is the control that
+// ends a device early.
+func TestAnExplicitDeviceTTLExtendsTheGrantRatherThanBeingClamped(t *testing.T) {
 	store := newPairStore(filepath.Join(t.TempDir(), "pairing.json"))
-	// Ask for a year. The grant ceiling must win.
-	tk, _, err := store.issueTicket(nil, 365*24*time.Hour, time.Minute)
+	asked := 365 * 24 * time.Hour
+	tk, _, err := store.issueTicket(nil, asked, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,8 +294,98 @@ func TestDeviceTTLNeverExceedsTheOperatorGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ttl > operatorGrantTTL {
-		t.Fatalf("device TTL %s exceeds the operator grant %s", ttl, operatorGrantTTL)
+	if ttl < asked {
+		t.Fatalf("device TTL %s is shorter than the %s that was asked for", ttl, asked)
+	}
+
+	st, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Grant == nil {
+		t.Fatal("a ticket was issued with no grant behind it")
+	}
+	// The device deadline is TTL from issue — the ticket's own Expires is the
+	// SCAN window, a different and much shorter clock. Asserting on that one
+	// instead is how this test could look right and check nothing.
+	deviceExpires := tk.Issued.Add(ttl)
+	if deviceExpires.After(st.Grant.Expires) {
+		t.Errorf("device would expire %s, after its grant %s — a device must not outlive the authority it hangs off",
+			deviceExpires, st.Grant.Expires)
+	}
+}
+
+// The DEFAULT is a day, and it is the value applied when no TTL is asked for.
+//
+// Asserted separately from the extension above because the two answer different
+// questions: how long an unattended pairing lasts, versus whether an explicit
+// request is honoured. The default is the one every operator gets without
+// choosing.
+func TestTheDefaultDeviceTTLIsADay(t *testing.T) {
+	store := newPairStore(filepath.Join(t.TempDir(), "pairing.json"))
+	tk, _, err := store.issueTicket(nil, 0, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ttl, err := time.ParseDuration(tk.TTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl != defaultDeviceTTL {
+		t.Fatalf("default device TTL = %s, want %s", ttl, defaultDeviceTTL)
+	}
+	if defaultDeviceTTL != 24*time.Hour {
+		t.Errorf("the default is %s; the documented default is 24h", defaultDeviceTTL)
+	}
+}
+
+// "Never expires" is a DATE, not a sentinel.
+//
+// Every reader of a device record compares against a time — the gate, the CLI
+// listing, the Settings table — so a zero or a null would have to be understood
+// by all of them, and the one that forgot would either lock the phone out or
+// keep a genuinely expired device alive. A century out needs no special case
+// anywhere, and is still recognisably "never" to the one place that says so in
+// words.
+func TestNeverExpiresIsStoredAsADateFarEnoughOut(t *testing.T) {
+	store := newPairStore(filepath.Join(t.TempDir(), "pairing.json"))
+	tk, _, err := store.issueTicket(nil, neverExpiresTTL, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ttl, err := time.ParseDuration(tk.TTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl <= neverExpiresAfter {
+		t.Fatalf("a never-expiring device lasts %s, inside the %s window that still reads as a date",
+			ttl, neverExpiresAfter)
+	}
+	// And the ticket itself is still SHORT-LIVED. The two clocks are
+	// independent, and confusing them would turn "the phone stays paired" into
+	// "the code on this screen is good for a century".
+	if window := tk.Expires.Sub(tk.Issued); window > time.Hour {
+		t.Errorf("the scan window grew to %s along with the device TTL", window)
+	}
+}
+
+// The mint endpoint's own reading of the operator's choice, where ZERO IS THE
+// SPELLING FOR NEVER — the opposite of the store's convention one layer down,
+// which is exactly why this conversion exists at the boundary rather than being
+// left for the store to guess.
+func TestTheMintEndpointReadsZeroHoursAsNever(t *testing.T) {
+	hours := func(h float64) *float64 { return &h }
+	if got := deviceTTLFrom(nil); got != 0 {
+		t.Errorf("an absent choice = %s, want the store's default (0)", got)
+	}
+	if got := deviceTTLFrom(hours(-1)); got != 0 {
+		t.Errorf("a negative choice = %s, want the store's default (0)", got)
+	}
+	if got := deviceTTLFrom(hours(0)); got != neverExpiresTTL {
+		t.Errorf("zero hours = %s, want never (%s)", got, neverExpiresTTL)
+	}
+	if got := deviceTTLFrom(hours(24)); got != 24*time.Hour {
+		t.Errorf("24 hours = %s, want 24h", got)
 	}
 }
 

@@ -116,6 +116,11 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 	// the fail-safe is still sprint/mb/meet.
 	var req struct {
 		Scope []string `json:"scope"`
+		// TTLHours is how long the paired device keeps access. Absent or
+		// negative means the default; ZERO MEANS NEVER — the operator asking
+		// for a phone that stays paired until they revoke it, which is the
+		// ordinary case for the machine on their own desk.
+		TTLHours *float64 `json:"ttl_hours"`
 	}
 	if r.Body != nil {
 		// Ignore a decode error deliberately: no body is the normal case and
@@ -131,9 +136,10 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ttl/window 0: the four-hour-device, two-minute-window a bare
-	// `bashy apps pair` confers.
-	t, secret, err := s.pairing.issueTicket(req.Scope, 0, 0)
+	// window 0: the two-minute scan window a bare `bashy apps pair` confers —
+	// it only has to survive the walk from the screen to the phone, and it is
+	// not the clock anyone was fighting.
+	t, secret, err := s.pairing.issueTicket(req.Scope, deviceTTLFrom(req.TTLHours), 0)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"enabled": true,
@@ -150,18 +156,53 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":         true,
-		"schema":          "bashy-apps-pair-v1",
-		"ticket_id":       t.ID,
-		"scope":           t.Scope,
-		"device_ttl":      t.TTL,
-		"expires":         t.Expires,
+		"enabled":    true,
+		"schema":     "bashy-apps-pair-v1",
+		"ticket_id":  t.ID,
+		"scope":      t.Scope,
+		"device_ttl": t.TTL,
+		"expires":    t.Expires,
+		// Said in words as well as in a date, because "expires 2126-09-04" is a
+		// date a reader has to decode before they can tell it means never.
+		//
+		// Computed from the DEVICE TTL, not from t.Expires: that field is the
+		// scan window (about two minutes), so reading it here answered "does
+		// the code on screen never expire" — always no — while appearing to
+		// answer the question the operator asked.
+		"never_expires":   neverExpires(t.TTL),
 		"payload_version": pairQRVersion,
 		"encrypted":       false,
 		"note": "Plaintext HTTP on your LAN: this keeps your OS password off the wire, it does " +
 			"not encrypt the link. Fine at home; not on shared wifi.",
 		"addresses": addrs,
 	})
+}
+
+// deviceTTLFrom reads the operator's chosen device lifetime.
+//
+// Three cases, and the middle one is the point: absent means "whatever the
+// default is" (issueTicket applies it), zero means NEVER, and a positive value
+// is taken literally. Zero cannot mean "default" here as it does deeper in the
+// store, because zero is the spelling the operator picks in the UI for never —
+// so it is resolved to the century-long TTL at this boundary and the store
+// keeps its own convention unchanged.
+func deviceTTLFrom(hours *float64) time.Duration {
+	switch {
+	case hours == nil || *hours < 0:
+		return 0 // the store's default
+	case *hours == 0:
+		return neverExpiresTTL
+	default:
+		return time.Duration(*hours * float64(time.Hour))
+	}
+}
+
+// neverExpires reads a stored device TTL back as the answer the operator gave.
+// A TTL that fails to parse is not "never" — an unreadable value must not be
+// reported as the most permissive one.
+func neverExpires(ttl string) bool {
+	d, err := time.ParseDuration(ttl)
+	return err == nil && d > neverExpiresAfter
 }
 
 // pairAddresses builds the labelled codes for the Settings page. Both addresses

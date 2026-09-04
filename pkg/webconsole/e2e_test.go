@@ -1095,3 +1095,103 @@ func TestE2EMeetAnswersThroughItsMount(t *testing.T) {
 			ellipsize(strings.TrimSpace(body), 200))
 	}
 }
+
+// ------------------------------------------------------------- QR pairing --
+
+// THE PHONE STAYS PAIRED FOR AS LONG AS THE OPERATOR SAID, and "never" is a
+// real answer.
+//
+// End to end because the value crosses four layers on its way to mattering — a
+// select on the Settings page, a JSON field, a boundary that reads ZERO AS
+// NEVER (the opposite of the store's own convention one layer down), and a
+// grant that used to silently shorten anything past twelve hours. A unit test
+// on any single one of them would have passed while a phone still stopped
+// working overnight, which is exactly what happened.
+func TestE2EPairingHonoursTheChosenExpiry(t *testing.T) {
+	stubPairAddresses(t, "workshop.local", "192.168.1.20")
+	base := serve(t, Options{
+		RequireLogin:  true,
+		Pairing:       true,
+		Auth:          stubAuth{password: "correct-horse"},
+		Sessions:      websession.NewStore(12*time.Hour, []byte("test-key-test-key-test-key-32byt")),
+		PairStorePath: filepath.Join(t.TempDir(), "pairing.json"),
+	})
+
+	client := &http.Client{Jar: newJar(t), CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.PostForm(base+"/api/login", map[string][]string{
+		"user": {currentOSUser()}, "password": {"correct-horse"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want 303", resp.StatusCode)
+	}
+
+	mint := func(t *testing.T, body string) struct {
+		Enabled      bool   `json:"enabled"`
+		DeviceTTL    string `json:"device_ttl"`
+		NeverExpires bool   `json:"never_expires"`
+		Error        string `json:"error"`
+	} {
+		t.Helper()
+		var out struct {
+			Enabled      bool   `json:"enabled"`
+			DeviceTTL    string `json:"device_ttl"`
+			NeverExpires bool   `json:"never_expires"`
+			Error        string `json:"error"`
+		}
+		resp, err := client.Post(base+"/api/pair", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST /api/pair: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST /api/pair %s = %d", body, resp.StatusCode)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatalf("decode mint: %v", err)
+		}
+		if out.Error != "" {
+			t.Fatalf("mint %s: %s", body, out.Error)
+		}
+		return out
+	}
+
+	// No choice at all is a DAY. This is the value every operator who never
+	// opens the control gets, and it is the one the four-hour default made
+	// annoying enough to be worth changing.
+	got := mint(t, `{}`)
+	if got.DeviceTTL != (24 * time.Hour).String() {
+		t.Errorf("default device TTL = %q, want %q", got.DeviceTTL, (24 * time.Hour).String())
+	}
+	if got.NeverExpires {
+		t.Error("the default pairing reported itself as never expiring")
+	}
+
+	// An explicit choice is honoured PAST THE OPERATOR GRANT. Seven days is
+	// longer than the twelve-hour session that minted it, which is precisely
+	// the case that used to come back looking granted and expire overnight.
+	got = mint(t, `{"ttl_hours":168}`)
+	if got.DeviceTTL != (168 * time.Hour).String() {
+		t.Errorf("device TTL = %q, want %q — a request past the grant was clamped",
+			got.DeviceTTL, (168 * time.Hour).String())
+	}
+
+	// Zero means NEVER, and the response says so in words rather than leaving a
+	// reader to decode a year.
+	got = mint(t, `{"ttl_hours":0}`)
+	if !got.NeverExpires {
+		t.Errorf("ttl_hours:0 reported never_expires=false with TTL %q", got.DeviceTTL)
+	}
+	ttl, err := time.ParseDuration(got.DeviceTTL)
+	if err != nil {
+		t.Fatalf("device TTL %q does not parse: %v", got.DeviceTTL, err)
+	}
+	if ttl <= neverExpiresAfter {
+		t.Errorf("never-expiring device lasts %s, inside the window that still reads as a date", ttl)
+	}
+}
