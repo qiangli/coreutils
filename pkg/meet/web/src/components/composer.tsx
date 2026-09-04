@@ -80,7 +80,14 @@ export function Composer({
   // whether or not this is open.
   const [confirming, setConfirming] = useState(false)
   const holding = pending?.phase === "holding"
-  const inFlight = Boolean(pending) && !holding
+  // A delivered message is recallable only while the box is EMPTY. Writing the
+  // next one is itself the decision not to recall the last, and the send button
+  // is the same control — so as soon as there is something to send, it goes
+  // back to being a send button. Without this the recall offer sat on top of
+  // the one control the sender needs next.
+  const inFlight = Boolean(pending) && !holding && !text.trim()
+  // Whether the control is currently the pending-message control at all.
+  const pendingControl = holding || inFlight
 
   // cancel is one call for both branches — the HOOK decides which one applies,
   // and for a dispatched message the SERVER does. The composer only reports the
@@ -288,7 +295,14 @@ export function Composer({
             aria-label={kind === "dm" ? `Message ${dmAgent || "agent"}` : "Message the room"}
             className="max-h-40 min-h-[56px] resize-none border-0 bg-transparent px-4 pb-2 pt-3.5 text-[14px] leading-6 shadow-none focus-visible:ring-0"
             disabled={!state || state.status === "closed"}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value)
+              // Typing withdraws the retraction question along with the recall
+              // offer it belongs to — otherwise it would come back the moment
+              // the box was emptied again, asking about a message the sender
+              // has already moved on from.
+              if (confirming) setConfirming(false)
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
@@ -411,7 +425,7 @@ export function Composer({
                 still works and still overrides the selection for one message —
                 the mention list above the box completes it. */}
             <div className="ml-auto flex items-center gap-2">
-              {!pending && text.trim() && (
+              {!pendingControl && text.trim() && (
                 <span className="hidden text-[10px] text-muted-foreground sm:block">
                   Enter to send · Shift+Enter for a new line
                 </span>
@@ -448,13 +462,13 @@ export function Composer({
                 }
                 className={cn(
                   "relative size-8 rounded-lg transition-all",
-                  pending
+                  pendingControl
                     ? "bg-secondary text-foreground hover:bg-amber-100 hover:text-amber-900"
                     : text.trim()
                       ? "bg-primary text-primary-foreground"
                       : "bg-secondary text-muted-foreground",
                 )}
-                disabled={pending ? recalling : !text.trim() || sending}
+                disabled={pendingControl ? recalling : !text.trim() || sending}
                 onClick={() => {
                   if (holding) {
                     void cancel()
@@ -468,7 +482,7 @@ export function Composer({
                 }}
                 size="icon-sm"
               >
-                {pending ? (
+                {pendingControl ? (
                   <>
                     <LoaderCircle className="size-4 animate-spin opacity-60" />
                     <X className="absolute size-3" />

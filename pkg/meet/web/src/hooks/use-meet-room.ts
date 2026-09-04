@@ -44,17 +44,28 @@ export type ConnectionStatus = "connecting" | "open" | "closed"
  * almost every time. During the hold nothing has left the page, so cancelling
  * is a local fact rather than a claim about the server.
  *
- * Five seconds is the undo-send window people already know from mail clients.
- * It costs an agent conversation nothing: a turn takes minutes.
+ * Three seconds is the undo-send window: long enough to catch the click you
+ * regret the instant you make it, short enough that the pause is not felt as
+ * latency. It costs an agent conversation nothing — a turn takes minutes.
  */
-export const DEFAULT_HOLD_MS = 5_000
+export const DEFAULT_HOLD_MS = 3_000
+
+/** RECALL_WINDOW_MS is how long a DELIVERED message stays recallable.
+ *
+ * It exists because the recall offer and the send button are the same control:
+ * an undo that never expires does not just linger, it STRANDS THE COMPOSER —
+ * the next message finds a pending send still sitting there and is refused.
+ * The window is therefore a property of the UI, not of the server, which will
+ * answer "gone" on its own once the message has been read and answered.
+ */
+export const RECALL_WINDOW_MS = 15_000
 
 /** holdMs is the hold this page is actually using.
  *
  * Configurable for two different readers. An operator who does not want the
  * pause sets it to 0 and gets the old behaviour — dispatch on click, with a
  * recall afterwards that will usually have to retract. A test sets it on the
- * URL so the suite does not spend five seconds per message proving something
+ * URL so the suite does not spend three seconds per message proving something
  * else, and so the hold itself can be the subject of a test that asks for it.
  *
  * Storage is per-browser on purpose: how long you want to be able to change
@@ -341,6 +352,15 @@ export function useMeetRoom() {
         }
       } catch (reason) {
         if (selectedKind === "dm") setLive(null)
+        // A send that FAILED leaves nothing to recall, so the pending record
+        // must go with it. Leaving it behind stranded the composer on the one
+        // occasion the sender most needs it: the guard in `send` would then
+        // refuse the retry, silently.
+        if (pendingRef.current) {
+          window.clearTimeout(pendingRef.current.timer)
+          pendingRef.current = null
+          setPending(null)
+        }
         if (reason instanceof ApiError && reason.status === 409) {
           setQueued(
             agent
@@ -367,7 +387,21 @@ export function useMeetRoom() {
   const send = useCallback(
     async (text: string, agent?: string) => {
       if (!selectedRef || !state) return
-      if (pendingRef.current) return
+      // Only a message that has not been delivered yet may refuse the next
+      // one. A DELIVERED one is merely still recallable, and writing the next
+      // message is itself the decision not to recall it — so it is superseded,
+      // never allowed to swallow what was typed after it. Refusing here
+      // silently was the bug: the composer had already cleared the box.
+      const inflight = pendingRef.current
+      if (inflight && inflight.phase !== "sent") return
+      if (inflight) {
+        window.clearTimeout(inflight.timer)
+        // The ref too, not just the state: `dispatch` reads it back through
+        // markSent before React has had a chance to re-render, and it must not
+        // find the message this one replaces.
+        pendingRef.current = null
+        setPending(null)
+      }
       setError(null)
       setQueued(null)
       const hold = holdMs()
@@ -398,12 +432,32 @@ export function useMeetRoom() {
 
   // markSent records the handles the server just gave us. Called from inside
   // dispatch, at the moment the message stops being ours to withhold.
+  //
+  // It also ARMS THE EXPIRY of the recall offer. Nothing else would ever clear
+  // this state: a delivered message gets no further event, so without a timer
+  // the pending send outlives the conversation — the send button stays a
+  // Recall button forever and every later message is refused by the guard in
+  // `send`. The window is UI-side only; recalling after it has passed is still
+  // possible from the transcript, and the server is the one that decides.
   function markSent(handle: { job?: string; ts?: string }) {
-    setPending((current) =>
-      current
-        ? { ...current, phase: "sent", job: handle.job, ts: handle.ts }
-        : current,
-    )
+    // Guarded on the ref rather than the setter so the no-hold path (which has
+    // no pending send at all) does not arm a timer for a message nobody can
+    // see, and so the updater below stays free of side effects.
+    if (!pendingRef.current) return
+    const timer = window.setTimeout(() => {
+      setPending((now) => (now && now.phase === "sent" ? null : now))
+    }, RECALL_WINDOW_MS)
+    setPending((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        phase: "sent",
+        job: handle.job,
+        ts: handle.ts,
+        timer,
+        until: Date.now() + RECALL_WINDOW_MS,
+      }
+    })
   }
 
   // cancelSend is the one control, and it does one of two things depending on
@@ -421,6 +475,9 @@ export function useMeetRoom() {
       setQueued("Canceled — the message was not sent.")
       return "canceled"
     }
+    // The recall was taken before the offer expired; the timer that would have
+    // withdrawn it has nothing left to do.
+    window.clearTimeout(current.timer)
     setRecalling(true)
     try {
       const result =
