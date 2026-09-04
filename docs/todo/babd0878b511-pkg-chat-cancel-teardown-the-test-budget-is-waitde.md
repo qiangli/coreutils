@@ -41,3 +41,32 @@ Do not "fix" this by enlarging the test budget alone: that would hide defect 2,
 which is the one that strands descendants in production.
 
 Verify with: go test ./pkg/chat -run TestCancelKillsDescendants -count=10
+
+## 2026-09-04 — probe results (darwin dev host, NOT the CI runner)
+
+The suspected fallback was NOT observed here. An instrumented copy of
+`killProcessTree` counting which branch it takes, 150 iterations under eight
+busy CPU burners:
+
+    group-kill ok=150   bare-pid fallback=0   slow(>500ms)=0   worst=0.007s
+
+So on this host `kill(-pid)` never returns ESRCH, the grandchild never orphans,
+and Wait returns ~1 ms after cancel — three orders of magnitude under WaitDelay.
+An unmodified `-count=20` also passes.
+
+What that does and does not settle:
+
+  * It does NOT clear defect 2. A negative on a host that has never reproduced
+    the failure is not evidence about the host that does — the failing runs are
+    both macos-latest GitHub runners, and the difference is the runner, not the
+    code path. Do not close this on a local green.
+  * It DOES say the ESRCH-fallback hypothesis cannot be confirmed by local
+    reproduction, so the next step is instrumentation that survives to CI:
+    record the branch and the errno at the point of the kill and print it on
+    failure, rather than trying to provoke it here.
+
+Defect 1 (the test budget equalling WaitDelay) is independent of all of this and
+is still worth fixing first: while the two numbers are the same, a genuine
+defect-2 failure and a merely slow runner produce the SAME message, so CI cannot
+tell them apart — which is why this entry has stayed a `sometimes` for three
+days without an answer.
