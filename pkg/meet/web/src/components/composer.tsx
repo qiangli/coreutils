@@ -38,6 +38,7 @@ import { isGenericTitle, seatOf } from "@/lib/seats"
 import { cn } from "@/lib/utils"
 
 interface ComposerProps {
+  initialDraft?: string
   state: State | null
   sending: boolean
   queued: string | null
@@ -52,6 +53,7 @@ interface ComposerProps {
 }
 
 export function Composer({
+  initialDraft = "",
   state,
   sending,
   queued,
@@ -63,7 +65,9 @@ export function Composer({
   onStartWork,
   kind = "room",
 }: ComposerProps) {
-  const [text, setText] = useState("")
+  // A cross-app shortcut may supply an editable starting point. It is a draft,
+  // never an instruction: opening a link must not spend tokens or start work.
+  const [text, setText] = useState(initialDraft)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const agents = useMemo(
     () => {

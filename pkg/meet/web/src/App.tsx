@@ -236,6 +236,7 @@ export function App() {
           />
           <Composer
             error={meet.error}
+            initialDraft={meet.draft}
             onDismissQueued={meet.dismissQueued}
             onRecipientChange={meet.setRecipient}
             onSend={meet.send}

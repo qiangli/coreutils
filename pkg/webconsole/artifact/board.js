@@ -77,6 +77,50 @@ function stat(label, value, cls) {
   return n;
 }
 
+// The Sprint and Meet apps share the launcher's <base href>, including when
+// the launcher itself is reached through an outpost proxy. Build links from
+// that base rather than spelling a root-relative /meet/ that would jump out of
+// the mounted app on a remote host.
+function meetHref(kind, ref) {
+  const target = url("meet/");
+  target.searchParams.set(kind, ref);
+  return target.href;
+}
+
+const NEW_SPRINT_DRAFT = "Create a new sprint. Help me define its title, project manager, scope, stories, acceptance criteria, and gate, then use bashy sprint to create and start it.";
+
+function newSprintLink() {
+  const a = conversationLink("chat", "1", "Create a new sprint in Chat");
+  const target = new URL(a.href);
+  target.searchParams.set("draft", NEW_SPRINT_DRAFT);
+  a.href = target.href;
+  a.classList.add("new-sprint-link");
+  a.append(el("span", null, "New sprint"));
+  return a;
+}
+
+function conversationLink(kind, ref, label) {
+  const a = el("a", "conversation-link");
+  a.href = meetHref(kind, ref);
+  a.title = label;
+  a.setAttribute("aria-label", label);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.9");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", kind === "dm"
+    ? "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"
+    : "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18");
+  svg.append(path);
+  a.append(svg);
+  return a;
+}
+
 function renderSummary(d) {
   const s = d.summary || {};
   const host = d.resources || {};
@@ -341,11 +385,26 @@ function sprintEl(sp, stories) {
     head.append(chip);
   }
   n.append(head);
-  n.append(el("p", "label", sp.title || ""));
 
-  const holder = sp.conductor || sp.lease_holder;
-  if (holder) {
-    n.append(el("div", "meta", (sp.lease_stale ? "lease STALE — " : "held by ") + holder));
+  const title = el("div", "sprint-title");
+  title.append(el("p", "label", sp.title || ""));
+  if (sp.meet_room_ref) {
+    title.append(conversationLink(
+      "room",
+      sp.meet_room_ref,
+      "Open sprint " + sp.id + " Meet room",
+    ));
+  }
+  n.append(title);
+
+  const manager = sp.manager || sp.conductor || sp.lease_holder;
+  if (manager) {
+    const meta = el("div", "meta manager");
+    meta.append(document.createTextNode(
+      (sp.lease_stale ? "lease STALE — " : "project manager ") + manager,
+    ));
+    meta.append(conversationLink("dm", manager, "Chat 1:1 with " + manager));
+    n.append(meta);
   }
 
   const refs = sp.run_refs || [];
@@ -407,6 +466,7 @@ function renderSprints(d) {
   const h = el("header");
   h.append(el("span", "t", "Sprints"));
   h.append(el("span", "n", sps.length + (d.all ? "" : " of " + d.sprint_total)));
+  h.append(newSprintLink());
   const body = el("div", "cards");
   if (!sps.length) {
     body.append(el("p", "empty", d.all ? "No sprints." : "No sprint is open. Tick “include history” for the finished ones."));

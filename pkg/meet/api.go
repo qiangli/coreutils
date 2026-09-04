@@ -130,6 +130,11 @@ type JobRef struct {
 const OutStore = "store"
 
 type CreateOptions struct {
+	// Name is an optional stable, human-facing room name. Ordinary ad-hoc
+	// meetings leave it empty; rooms owned by another durable object use it so
+	// every surface calls the conversation the same thing. It is deliberately
+	// distinct from Topic, which may carry a longer description.
+	Name          string
 	Topic         string
 	Participants  []string
 	Secretary     string
@@ -285,6 +290,7 @@ func Create(opts CreateOptions) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	st.Name = strings.TrimSpace(opts.Name)
 	st.DefaultTo = strings.TrimSpace(opts.DefaultTo)
 	if strings.TrimSpace(st.Secretary) == "" && !opts.NoSecretary && StartRoomSecretary != nil {
 		st.SecretaryPending = true
@@ -328,6 +334,23 @@ func SetDefaultTo(ref, label string) error {
 		return nil
 	}
 	st.DefaultTo = label
+	return st.save()
+}
+
+// SetName gives an existing object-owned room its stable human-facing name.
+// It is the migration half of CreateOptions.Name: sprint rooms opened before
+// names existed must become "sprint <id>" when their lifecycle next touches
+// them, without replacing the room and losing its transcript.
+func SetName(ref, name string) error {
+	st, err := roomOf(ref)
+	if err != nil {
+		return err
+	}
+	name = strings.TrimSpace(name)
+	if st.Name == name {
+		return nil
+	}
+	st.Name = name
 	return st.save()
 }
 

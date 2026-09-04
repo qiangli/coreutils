@@ -114,6 +114,10 @@ func ensureSprintRoom(s *weaveStory, conductor string) string {
 		// field was added to close. Best-effort; a room without one is no worse
 		// off than it was.
 		_ = meetroom.EnsureDefaultTo(s.Contact, sprintAssignment(s.ID, s.Title))
+		// Same migration rule for the human-facing room name. Rename metadata in
+		// place; replacing the room would discard the session history this room
+		// exists to preserve.
+		_ = meetroom.EnsureName(s.Contact, sprintAssignment(s.ID, s.Title))
 		return ""
 	}
 	c, err := openSprintRoom(s, conductor)

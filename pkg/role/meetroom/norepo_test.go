@@ -71,6 +71,20 @@ func TestRoleRoomDeclaresItsSeatAsDefaultAddressee(t *testing.T) {
 	if got.DefaultTo == "trestle" {
 		t.Fatal("the room stored its holder — mail would not survive a handover")
 	}
+	if got.Name != "sprint 99" {
+		t.Fatalf("Name = %q, want the sprint's stable room name", got.Name)
+	}
+}
+
+func TestSprintRoomNameDoesNotDependOnManagerOrTitle(t *testing.T) {
+	first := role.Assignment{Kind: role.Conductor, Ref: "123", Title: "initial title"}
+	second := role.Assignment{Kind: role.Conductor, Ref: "123", Title: "renamed later"}
+	if got := roomNameFor(first); got != "sprint 123" {
+		t.Fatalf("roomNameFor(first) = %q", got)
+	}
+	if got := roomNameFor(second); got != "sprint 123" {
+		t.Fatalf("roomNameFor(second) = %q; a title edit changed room identity", got)
+	}
 }
 
 // A ROOM THAT PREDATES THE FIELD MUST STILL GET ONE.
@@ -111,5 +125,23 @@ func TestEnsureDefaultToIsAQuietNoOpWithoutARoom(t *testing.T) {
 		if err := EnsureDefaultTo(c, role.Assignment{Kind: role.Conductor, Ref: "99"}); err != nil {
 			t.Fatalf("EnsureDefaultTo(%+v) = %v, want nil", c, err)
 		}
+	}
+}
+
+func TestEnsureNameHealsAnExistingSprintRoomInPlace(t *testing.T) {
+	var gotRef, gotName string
+	prev := setRoomName
+	setRoomName = func(ref, name string) error {
+		gotRef, gotName = ref, name
+		return nil
+	}
+	t.Cleanup(func() { setRoomName = prev })
+
+	c := &role.Contact{Kind: "meet", Ref: "durable-room-id"}
+	if err := EnsureName(c, role.Assignment{Kind: role.Conductor, Ref: "99"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotRef != c.Ref || gotName != "sprint 99" {
+		t.Fatalf("EnsureName set (%q, %q), want (%q, %q)", gotRef, gotName, c.Ref, "sprint 99")
 	}
 }

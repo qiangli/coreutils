@@ -41,6 +41,7 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 		subject = "Steward"
 	}
 	st, err := create(meet.CreateOptions{
+		Name:         roomNameFor(a),
 		Topic:        subject,
 		Participants: []string{holder},
 		Initiator:    holder,
@@ -70,6 +71,19 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	return &role.Contact{Kind: kind, Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: contactHolder}, nil
 }
 
+// roomNameFor gives a bounded role room the name of the durable work object
+// whose history it carries. A sprint room is the bashy equivalent of an
+// agentic tool session: managers may change, and the descriptive sprint title
+// may be edited, but "sprint <id>" stays the one name of its conversation.
+// Permanent steward rooms already receive their configured name through their
+// separate creation path.
+func roomNameFor(a role.Assignment) string {
+	if a.Kind == role.Conductor {
+		return fmt.Sprintf("sprint %s", strings.TrimSpace(a.Ref))
+	}
+	return ""
+}
+
 // EnsureDefaultTo declares the seat as an EXISTING room's default addressee.
 //
 // Assume sets it for rooms it opens; this is for the ones that were already
@@ -85,6 +99,21 @@ func EnsureDefaultTo(c *role.Contact, a role.Assignment) error {
 }
 
 var setRoomDefaultTo = meet.SetDefaultTo
+
+// EnsureName heals a role room opened before stable object-owned names existed.
+// It changes metadata in place: the room ID and transcript remain untouched.
+func EnsureName(c *role.Contact, a role.Assignment) error {
+	if c == nil || strings.TrimSpace(c.Ref) == "" {
+		return nil
+	}
+	name := roomNameFor(a)
+	if name == "" {
+		return nil
+	}
+	return setRoomName(c.Ref, name)
+}
+
+var setRoomName = meet.SetName
 
 // Release closes a bounded role room on a graceful handoff. A permanent
 // steward room stays open; release clears only its current @steward routing

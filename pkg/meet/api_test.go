@@ -88,6 +88,7 @@ func TestCreateHoldsTheRoleInvariants(t *testing.T) {
 	}
 
 	st, err := Create(CreateOptions{
+		Name:   "sprint 123",
 		Topic:  "Should the cache be write-through?",
 		Agenda: []string{"the write path"}, Participants: []string{"codex"},
 	})
@@ -96,6 +97,13 @@ func TestCreateHoldsTheRoleInvariants(t *testing.T) {
 	}
 	if st.Room < 1 {
 		t.Error("a created room needs a door to attach to")
+	}
+	if st.Name != "sprint 123" {
+		t.Errorf("room name = %q, want the durable object's name", st.Name)
+	}
+	reloaded, _, err := Room(st.ID)
+	if err != nil || reloaded.Name != "sprint 123" {
+		t.Fatalf("reloaded room name = %q, %v", reloaded.Name, err)
 	}
 	if st.Status != "open" || st.Out != "docs" || st.TurnTimeout == "" {
 		t.Errorf("defaults did not land: %+v", st)

@@ -125,6 +125,39 @@ test("renders room list from the real server and opens a live observe socket", a
   await expect(page.getByRole("link", { name: "Back to all apps" })).toBeVisible();
 });
 
+test("a room deep link opens the requested sprint conversation", async ({ page }) => {
+  await createRoom(unique("Different room"), [primaryAgent]);
+  const topic = unique("Sprint linked room");
+  const room = await createRoom(topic, [primaryAgent]);
+
+  await page.goto(`${baseURL}/?room=${encodeURIComponent(room.id)}`);
+
+  await expect(page.locator("main header").getByText(topic, { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`room=${encodeURIComponent(room.id)}`));
+});
+
+test("a manager chat deep link creates and opens the durable 1:1", async ({ page }) => {
+  await page.goto(`${baseURL}/?dm=${encodeURIComponent(primaryAgent)}`);
+
+  await expect(page.getByRole("heading", { name: primaryAgent })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Chat/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(new RegExp(`dm=${primaryAgent}`));
+});
+
+test("the New sprint Chat shortcut preserves an editable draft", async ({ page }) => {
+  const draft = "Create a new sprint with an explicit project manager.";
+  await page.goto(`${baseURL}/?mock=0&chat=1&draft=${encodeURIComponent(draft)}`);
+
+  // The agent picker is modal, so while it is open the tabs behind it are
+  // intentionally hidden from the accessibility tree. Assert the selected tab
+  // after choosing the recipient.
+  const choices = page.getByRole("menuitem", { name: new RegExp(primaryAgent) });
+  await expect(choices.first()).toBeVisible();
+  await choices.first().click();
+  await expect(page.getByRole("tab", { name: /Chat/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel(`Message ${primaryAgent}`)).toHaveValue(draft);
+});
+
 test("creates a room from the sidebar and selects it with one agent seated", async ({ page }) => {
   const topic = unique("Browser created room");
   await openMeet(page);
@@ -138,7 +171,9 @@ test("creates a room from the sidebar and selects it with one agent seated", asy
   const roomButton = page.getByRole("button", { name: new RegExp(topic) });
   const sidebar = page.locator("aside").first();
   await expect(roomButton).toBeVisible();
-  await expect(sidebar.getByText(primaryAgent)).toBeVisible();
+  // A prior durable DM may also contain the agent name in its channel title;
+  // the roster entry itself is the exact-name element this assertion means.
+  await expect(sidebar.getByText(primaryAgent, { exact: true })).toBeVisible();
   await expect(page.getByLabel("Message the room")).toBeEnabled();
 });
 

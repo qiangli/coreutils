@@ -568,6 +568,16 @@ body.standalone #bar { flex: none; }
 #bd-sprints > header { display: flex; align-items: baseline; gap: .5rem; margin: 1rem 0 .4rem; }
 #bd-sprints > header .t { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-foreground); }
 #bd-sprints > header .n { font-size: .72rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+#bd-sprints > header .new-sprint-link {
+  display: inline-flex; align-items: center; gap: .3rem; border-radius: .4rem;
+  padding: .18rem .4rem; color: var(--primary); font-size: .7rem;
+  font-weight: 600; text-decoration: none;
+}
+#bd-sprints > header .new-sprint-link svg { width: .9rem; height: .9rem; }
+#bd-sprints > header .new-sprint-link:hover { background: var(--muted); }
+#bd-sprints > header .new-sprint-link:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 1px;
+}
 #bd-sprints .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .5rem; }
 #bd-sprints .empty { font-size: .78rem; color: var(--muted-foreground); }
 
@@ -647,6 +657,23 @@ body.standalone #bar { flex: none; }
   font-size: .64rem; color: var(--primary);
 }
 .bd-sprint .stories.past { color: var(--ok); }
+
+/* Sprint ↔ Meet navigation. The title and project-manager lines each keep the
+   link next to the noun it opens, while the icon has a full touch target and a
+   visible keyboard focus ring. */
+.bd-sprint .sprint-title,
+.bd-sprint .manager { display: flex; align-items: center; gap: .35rem; min-width: 0; }
+.bd-sprint .sprint-title .label { flex: 1; min-width: 0; }
+.bd-sprint .conversation-link {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 1.65rem; height: 1.65rem; border-radius: .4rem;
+  color: var(--muted-foreground); text-decoration: none;
+}
+.bd-sprint .conversation-link svg { width: 1rem; height: 1rem; }
+.bd-sprint .conversation-link:hover { color: var(--primary); background: var(--muted); }
+.bd-sprint .conversation-link:focus-visible {
+  color: var(--primary); outline: 2px solid var(--primary); outline-offset: 1px;
+}
 
 /* A story link. The chip and the list row are BUTTONS now — a thing that
    responds to a click must be keyboard-reachable and announce itself — so they

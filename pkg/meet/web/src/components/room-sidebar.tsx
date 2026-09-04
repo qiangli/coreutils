@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Bot,
   ChevronRight,
@@ -92,6 +92,16 @@ export function RoomSidebar({
 }: RoomSidebarProps) {
   const [newRoomOpen, setNewRoomOpen] = useState(false)
   const [dmMenuOpen, setDMMenuOpen] = useState(false)
+
+  // The Sprint page's New sprint shortcut opens Chat without choosing an
+  // agent on the user's behalf. Put the existing agent picker in front of the
+  // reader immediately; after they choose, the prefilled draft becomes an
+  // ordinary editable DM input.
+  useEffect(() => {
+    if (viewKind === "dm" && selectedKind === "dm" && !selectedRef) {
+      setDMMenuOpen(true)
+    }
+  }, [viewKind, selectedKind, selectedRef])
 
   function openChannels() {
     onModeChange("room")

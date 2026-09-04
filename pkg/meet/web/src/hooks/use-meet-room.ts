@@ -32,7 +32,29 @@ import type {
 
 export type ConnectionStatus = "connecting" | "open" | "closed"
 
+type ConversationKind = "room" | "dm"
+
+function linkedConversation(): { kind: ConversationKind; ref: string } | null {
+  const params = new URLSearchParams(window.location.search)
+  const dm = params.get("dm")?.trim()
+  if (dm) return { kind: "dm", ref: dm }
+  const room = params.get("room")?.trim()
+  if (room) return { kind: "room", ref: room }
+  return null
+}
+
+function rememberConversation(kind: ConversationKind, ref: string) {
+  const next = new URL(window.location.href)
+  next.searchParams.delete("room")
+  next.searchParams.delete("dm")
+  next.searchParams.set(kind, ref)
+  window.history.replaceState(null, "", next)
+}
+
 export function useMeetRoom() {
+  const [draft] = useState(
+    () => new URLSearchParams(window.location.search).get("draft") ?? "",
+  )
   const [rooms, setRooms] = useState<RoomSummary[]>([])
   const [dms, setDMs] = useState<DMSummary[]>([])
   const [agents, setAgents] = useState<AgentOption[]>([])
@@ -58,13 +80,33 @@ export function useMeetRoom() {
 
   useEffect(() => {
     let active = true
-    Promise.all([listRooms(), listAgents(), listDMs()])
+    const linked = linkedConversation()
+    const openChat =
+      new URLSearchParams(window.location.search).get("chat") === "1"
+    // Opening a 1:1 link is the same operation as choosing an agent from the
+    // Chat picker: ensure its durable DM exists, then load the ordinary lists.
+    // A sprint-room link is read-only and needs no corresponding mutation.
+    const prepare = linked?.kind === "dm" && !usingMock
+      ? createDMRequest(linked.ref)
+      : Promise.resolve()
+    prepare
+      .then(() => Promise.all([listRooms(), listAgents(), listDMs()]))
       .then(([nextRooms, nextAgents, nextDMs]) => {
         if (!active) return
         setRooms(nextRooms)
         setAgents(nextAgents)
         setDMs(nextDMs)
-        setSelectedRef((current) => current || nextRooms[0]?.id || "")
+        if (linked) {
+          setSelectedKind(linked.kind)
+          setViewKind(linked.kind)
+          setSelectedRef(linked.ref)
+        } else if (openChat) {
+          setSelectedKind("dm")
+          setViewKind("dm")
+          setSelectedRef("")
+        } else {
+          setSelectedRef((current) => current || nextRooms[0]?.id || "")
+        }
       })
       .catch((reason: unknown) => {
         if (active) setError(messageFor(reason))
@@ -72,6 +114,20 @@ export function useMeetRoom() {
     return () => {
       active = false
     }
+  }, [])
+
+  const selectRoom = useCallback((ref: string) => {
+    setViewKind("room")
+    setSelectedKind("room")
+    setSelectedRef(ref)
+    rememberConversation("room", ref)
+  }, [])
+
+  const selectDM = useCallback((agent: string) => {
+    setViewKind("dm")
+    setSelectedKind("dm")
+    setSelectedRef(agent)
+    rememberConversation("dm", agent)
   }, [])
 
   useEffect(() => {
@@ -258,9 +314,7 @@ export function useMeetRoom() {
         const created = await createRoomRequest({ topic, owner, participants })
         const nextRooms = await listRooms()
         setRooms(nextRooms)
-        setSelectedKind("room")
-        setViewKind("room")
-        setSelectedRef(created.id)
+        selectRoom(created.id)
         return true
       } catch (reason) {
         setError(messageFor(reason))
@@ -269,7 +323,7 @@ export function useMeetRoom() {
         setCreating(false)
       }
     },
-    [],
+    [selectRoom],
   )
 
   const createDM = useCallback(async (agent: string) => {
@@ -278,9 +332,7 @@ export function useMeetRoom() {
     try {
       await createDMRequest(agent)
       setDMs(await listDMs())
-      setSelectedKind("dm")
-      setViewKind("dm")
-      setSelectedRef(agent)
+      selectDM(agent)
       return true
     } catch (reason) {
       setError(messageFor(reason))
@@ -288,7 +340,7 @@ export function useMeetRoom() {
     } finally {
       setCreating(false)
     }
-  }, [])
+  }, [selectDM])
 
   const startWork = useCallback(async (text: string) => {
     if (!selectedRef || selectedKind !== "dm") return false
@@ -357,8 +409,8 @@ export function useMeetRoom() {
     selectedKind,
     viewKind,
     selectMode: setViewKind,
-    selectRoom: (ref: string) => { setViewKind("room"); setSelectedKind("room"); setSelectedRef(ref) },
-    selectDM: (agent: string) => { setViewKind("dm"); setSelectedKind("dm"); setSelectedRef(agent) },
+    selectRoom,
+    selectDM,
     detail,
     state,
     events,
@@ -380,6 +432,7 @@ export function useMeetRoom() {
     usingMock,
     debugRaw,
     setDebugRaw,
+    draft,
   }
 }
 

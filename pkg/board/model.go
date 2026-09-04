@@ -175,12 +175,19 @@ type Story struct {
 }
 
 type Sprint struct {
-	ID            int64    `json:"id"`
-	Title         string   `json:"title"`
-	Epic          string   `json:"epic,omitempty"`
-	Column        string   `json:"column"`
-	Continuity    string   `json:"continuity,omitempty"`
-	Conductor     string   `json:"conductor,omitempty"`
+	ID         int64  `json:"id"`
+	Title      string `json:"title"`
+	Epic       string `json:"epic,omitempty"`
+	Column     string `json:"column"`
+	Continuity string `json:"continuity,omitempty"`
+	Conductor  string `json:"conductor,omitempty"`
+	// Manager is the durable project-manager identity. Conductor is the live
+	// lease holder; during a pause the manager remains the right 1:1 chat even
+	// though no process currently holds the lease.
+	Manager string `json:"manager,omitempty"`
+	// MeetRoomRef is meet's durable room identity, never its reusable short
+	// number. The browser uses it to open this sprint's session history.
+	MeetRoomRef   string   `json:"meet_room_ref,omitempty"`
 	LeaseStale    bool     `json:"lease_stale,omitempty"`
 	GateState     string   `json:"gate_state,omitempty"`
 	LeaseHolder   string   `json:"lease_holder,omitempty"`

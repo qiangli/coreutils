@@ -23,7 +23,7 @@ func fakeBoard(t *testing.T) *board.Board {
 	t.Helper()
 	src := board.SourceFunc{SourceName: "fake", Func: func(_ context.Context, b *board.Board, _ board.Options) error {
 		b.Sprints = []board.Sprint{
-			{ID: 1, Title: "live sprint", Column: "doing"},
+			{ID: 1, Title: "live sprint", Column: "doing", Manager: "agent-one", MeetRoomRef: "durable-room-one"},
 			{ID: 2, Title: "finished sprint", Column: "done"},
 			{ID: 3, Title: "another finished", Column: "done"},
 		}
@@ -83,6 +83,10 @@ func TestBoardOverviewHidesHistoryByDefault(t *testing.T) {
 	// "1 of 3" and a filtered view reads as an empty machine.
 	if d["sprint_total"].(float64) != 3 || d["run_total"].(float64) != 3 {
 		t.Errorf("totals = %v/%v, want the unfiltered 3/3", d["sprint_total"], d["run_total"])
+	}
+	sp := d["sprints"].([]any)[0].(map[string]any)
+	if sp["manager"] != "agent-one" || sp["meet_room_ref"] != "durable-room-one" {
+		t.Errorf("sprint navigation = manager:%v room:%v", sp["manager"], sp["meet_room_ref"])
 	}
 
 	all := getJSON(t, h, "/api/board?all=1")

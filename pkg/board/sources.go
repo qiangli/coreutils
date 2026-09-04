@@ -230,9 +230,13 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 			Column     string   `json:"column"`
 			Continuity string   `json:"continuity"`
 			Acceptance string   `json:"acceptance"`
+			Owner      string   `json:"owner"`
 			Runs       []RunRef `json:"runs"`
 			StoryRoots []string `json:"story_roots"`
-			Lease      *struct {
+			Contact    *struct {
+				Ref string `json:"ref"`
+			} `json:"contact"`
+			Lease *struct {
 				Holder      string
 				At          time.Time
 				AttachedPID int `json:"attached_pid"`
@@ -246,7 +250,10 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 		if !o.All && x.Column == "done" {
 			continue
 		}
-		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, RunRefs: x.Runs, StoryRoots: x.StoryRoots}
+		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, Manager: x.Owner, RunRefs: x.Runs, StoryRoots: x.StoryRoots}
+		if x.Contact != nil {
+			s.MeetRoomRef = x.Contact.Ref
+		}
 		if x.Acceptance != "" {
 			s.GateState = "pending"
 		}

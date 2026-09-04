@@ -910,6 +910,7 @@ func stubBoard(t *testing.T) {
 			SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
 			Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
 			Sprints: []board.Sprint{{ID: 42, Title: "A sprint with stories", Column: "doing",
+				Manager: "project-agent", MeetRoomRef: "2026-room-ref-42",
 				StoryTotal: 4, StoryOpen: 2, StoryClosed: 2,
 				Continuity: "STATE: mid-flight\n\nNEXT ACTION: keep going"}},
 			Todos: []board.Todo{
@@ -928,6 +929,53 @@ func stubBoard(t *testing.T) {
 					Rows:    [][]string{{"#7", "working", "3.0GiB", "/repo", "/work/issue-7"}}},
 				{ID: "utilization", Title: "Utilization health"}},
 		}, nil
+	}
+}
+
+func TestDOMSprintLinksToItsMeetRoomAndManagerChat(t *testing.T) {
+	stubBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var roomHref, roomLabel, dmHref, dmLabel, manager, newSprintHref, newSprintLabel, newSprintDraft string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`document.querySelector('.sprint-title .conversation-link')?.href || ''`, &roomHref),
+		chromedp.Evaluate(`document.querySelector('.sprint-title .conversation-link')?.getAttribute('aria-label') || ''`, &roomLabel),
+		chromedp.Evaluate(`document.querySelector('.manager .conversation-link')?.href || ''`, &dmHref),
+		chromedp.Evaluate(`document.querySelector('.manager .conversation-link')?.getAttribute('aria-label') || ''`, &dmLabel),
+		chromedp.Evaluate(`document.querySelector('.bd-sprint .manager')?.textContent || ''`, &manager),
+		chromedp.Evaluate(`document.querySelector('#bd-sprints .new-sprint-link')?.href || ''`, &newSprintHref),
+		chromedp.Evaluate(`document.querySelector('#bd-sprints .new-sprint-link')?.textContent || ''`, &newSprintLabel),
+		chromedp.Evaluate(`new URL(document.querySelector('#bd-sprints .new-sprint-link').href).searchParams.get('draft') || ''`, &newSprintDraft),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "sprint conversation links", errs())
+
+	if !strings.Contains(roomHref, "/meet/?room=2026-room-ref-42") {
+		t.Errorf("sprint room href = %q", roomHref)
+	}
+	if roomLabel != "Open sprint 42 Meet room" {
+		t.Errorf("sprint room label = %q", roomLabel)
+	}
+	if !strings.Contains(dmHref, "/meet/?dm=project-agent") {
+		t.Errorf("manager chat href = %q", dmHref)
+	}
+	if dmLabel != "Chat 1:1 with project-agent" {
+		t.Errorf("manager chat label = %q", dmLabel)
+	}
+	if !strings.Contains(manager, "project manager project-agent") {
+		t.Errorf("manager line = %q", manager)
+	}
+	if !strings.Contains(newSprintHref, "/meet/?chat=1&draft=") {
+		t.Errorf("new sprint href = %q", newSprintHref)
+	}
+	if newSprintLabel != "New sprint" {
+		t.Errorf("new sprint label = %q", newSprintLabel)
+	}
+	if !strings.HasPrefix(newSprintDraft, "Create a new sprint.") {
+		t.Errorf("new sprint draft = %q", newSprintDraft)
 	}
 }
 

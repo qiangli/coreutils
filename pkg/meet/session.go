@@ -213,10 +213,12 @@ type State struct {
 	Schema string `json:"schema"`
 	ID     string `json:"id"`
 
-	// Name is the stable, host-local address of a configured permanent room.
-	// Ordinary meetings have no name: their durable identity is ID and their
-	// short Room number is only a reusable pointer. A permanent room may be
-	// addressed as either "steward" or "@steward" across restarts.
+	// Name is the stable, human-facing name of a room that belongs to another
+	// durable object (for example "sprint 99"), or the host-local address of a
+	// configured permanent room. Ordinary ad-hoc meetings have no name: their
+	// durable identity is ID and their short Room number is only a reusable
+	// pointer. A permanent room may be addressed as either "steward" or
+	// "@steward" across restarts.
 	Name      string `json:"name,omitempty"`
 	Permanent bool   `json:"permanent,omitempty"`
 	// RoleHolders maps stable room aliases (for example "steward") to the
