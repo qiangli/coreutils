@@ -107,10 +107,10 @@ conductor lease; use sprint take.`,
 					}
 					if owner != "" && owner != s.Owner {
 						if strings.TrimSpace(s.Owner) != expectedOwner {
-							return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
+							return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 						}
 						if sprintColumnOpen(s.Column) || s.currentBox().Running() {
-							return "", fmt.Errorf("sprint #%d is active — change its project manager with `sprint take %d --owner %s`", id, id, owner)
+							return "", fmt.Errorf("sprint #%d is active — change its sprint manager with `sprint take %d --owner %s`", id, id, owner)
 						}
 						record("owner", s.Owner, owner)
 						s.Owner = owner
@@ -138,7 +138,7 @@ conductor lease; use sprint take.`,
 				}
 				expectedOwner = strings.TrimSpace(before.Owner)
 				if owner != expectedOwner && (sprintColumnOpen(before.Column) || before.currentBox().Running()) {
-					return fmt.Errorf("sprint #%d is active — change its project manager with `sprint take %d --owner %s`", id, id, owner)
+					return fmt.Errorf("sprint #%d is active — change its sprint manager with `sprint take %d --owner %s`", id, id, owner)
 				}
 				if expectedOwner != "" && !strings.EqualFold(expectedOwner, owner) {
 					cwd, _ := os.Getwd()
@@ -155,7 +155,7 @@ conductor lease; use sprint take.`,
 	cmd.Flags().StringVar(&acceptance, "acceptance", "", "new acceptance / done criteria")
 	cmd.Flags().StringVar(&epic, "epic", "", "new epic grouping label")
 	role.AttachOwner(cmd.Flags(), &owner, role.ProjectManager,
-		"new project manager; must be a NAME shown by bashy agents list")
+		"new sprint manager; must be a NAME shown by bashy agents list")
 	cmd.Flags().StringVar(&reason, "reason", "", "why this edit is correct — required to amend a done sprint's acceptance")
 	flags.attach(cmd)
 	return cmd

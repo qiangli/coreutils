@@ -15,7 +15,7 @@ import (
 func SprintClaimIdentity(id int64, explicit string, _ bool) (string, error) {
 	explicit = strings.TrimSpace(explicit)
 	if explicit == "" {
-		return "", fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+		return "", fmt.Errorf("--owner is required: choose a sprint manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
 	}
 	dir, err := sprintStoreDir()
 	if err != nil {

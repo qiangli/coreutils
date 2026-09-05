@@ -224,7 +224,7 @@ func formatUnreadReminder(n int, oldest time.Duration, owner string) string {
 func validateSprintOwner(name string) error {
 	n := strings.TrimSpace(name)
 	if n == "" {
-		return fmt.Errorf("a sprint owner (project manager) is required: pass --owner NAME from `bashy agents list`")
+		return fmt.Errorf("a sprint manager (the sprint owner) is required: pass --owner NAME from `bashy agents list`")
 	}
 	if isPlaceholderConductorName(n) {
 		return fmt.Errorf("%q is a placeholder, not an agent — it addresses nobody and collides "+

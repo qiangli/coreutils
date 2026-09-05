@@ -827,7 +827,7 @@ you still gate, converge and report.`,
 			}
 			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint take", "transfer managed sprint owner", func() error {
 				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
-					return fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+					return fmt.Errorf("--owner is required: choose a sprint manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
 				}
 				who := strings.TrimSpace(as)
 				if err := validateSprintClaimant(who); err != nil {
@@ -851,7 +851,7 @@ you still gate, converge and report.`,
 				}
 				return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
 					if strings.TrimSpace(s.Owner) != expectedOwner {
-						return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
+						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 					}
 					prev, stale, free := weaveStoryLeaseState(s)
 					if !free && !stale && prev != who && !force {
@@ -1007,7 +1007,7 @@ is still running. External managers remain the caller's responsibility.`,
 				}
 				return runWeaveStoryMutate(cmd, id, "sprint abort", &flags, func(s *weaveStory) (string, error) {
 					if strings.TrimSpace(s.Owner) != strings.TrimSpace(before.Owner) {
-						return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, before.Owner, s.Owner)
+						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, before.Owner, s.Owner)
 					}
 					var killed, failed []string
 					for _, r := range s.Runs {

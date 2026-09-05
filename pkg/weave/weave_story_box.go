@@ -205,7 +205,7 @@ func newSprintStartCmd() *cobra.Command {
 			cwd, _ := os.Getwd()
 			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint start", "start managed sprint owner", func() error {
 				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
-					return fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+					return fmt.Errorf("--owner is required: choose a sprint manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
 				}
 				who := strings.TrimSpace(as)
 				if err := validateSprintClaimant(who); err != nil {
@@ -242,7 +242,7 @@ func newSprintStartCmd() *cobra.Command {
 					// identity nor a manager recorded by an earlier edit/take is consent to
 					// start work now.
 					if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
-						return "", fmt.Errorf("--owner is required: choose a project manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+						return "", fmt.Errorf("--owner is required: choose a sprint manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
 					}
 					// Restarting a RUNNING box would silently discard the original
 					// commitment, which is the one number the record exists to keep
@@ -263,7 +263,7 @@ func newSprintStartCmd() *cobra.Command {
 					// live one from someone else: quietly reassigning delivery
 					// ownership is not something a start command should do.
 					if strings.TrimSpace(s.Owner) != expectedOwner {
-						return "", fmt.Errorf("sprint #%d project manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
+						return "", fmt.Errorf("sprint #%d sprint manager changed concurrently from %s to %s", id, expectedOwner, s.Owner)
 					}
 					if prev, stale, free := weaveStoryLeaseState(s); !free && !stale && prev != who {
 						return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
@@ -335,7 +335,7 @@ func newSprintStartCmd() *cobra.Command {
 	// it once resolved to nothing; the spoken word changes, the address does not.
 	role.AttachOwner(cmd.Flags(), &as, role.ProjectManager,
 		"accountable for delivery from start to end; required explicitly on every start")
-	cmd.Flags().StringVar(&instruction, "instruction", "", "launch or reuse the project manager's managed session and deliver this request once")
+	cmd.Flags().StringVar(&instruction, "instruction", "", "launch or reuse the sprint manager's managed session and deliver this request once")
 	flags.attach(cmd)
 	return cmd
 }
@@ -349,7 +349,7 @@ func newSprintInstructCmd() *cobra.Command {
 	var instruction string
 	cmd := &cobra.Command{
 		Use:   "instruct <sprint>",
-		Short: "Deliver one instruction to an active sprint's managed project manager",
+		Short: "Deliver one instruction to an active sprint's managed sprint manager",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -378,7 +378,7 @@ func newSprintInstructCmd() *cobra.Command {
 				}
 				owner := strings.TrimSpace(s.Owner)
 				if owner == "" {
-					return fmt.Errorf("sprint #%d has no project manager", id)
+					return fmt.Errorf("sprint #%d has no sprint manager", id)
 				}
 				cwd, _ := os.Getwd()
 				note, _, err := ensureSprintOwnerSession(cmd.Context(), id, owner, instruction, cwd, time.Until(box.Cutoff))
@@ -399,7 +399,7 @@ func newSprintInstructCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&instruction, "instruction", "", "exact request to deliver once to the current project manager")
+	cmd.Flags().StringVar(&instruction, "instruction", "", "exact request to deliver once to the current sprint manager")
 	flags.attach(cmd)
 	return cmd
 }

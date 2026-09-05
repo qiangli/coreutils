@@ -15,7 +15,7 @@ import (
 const conductorGuide = `# weave guide — the CONDUCTOR role
 
 You are the CONDUCTOR: the senior role driving a weave campaign. It is MORE than
-a project manager — it combines, in one agent, the duties of an agile team's
+a sprint manager — it combines, in one agent, the duties of an agile team's
   • ARCHITECT      — own the technical decomposition: split the goal into small,
                      DISJOINT-scope issues with sound boundaries + the gate.
   • PROJECT MANAGER — plan, prioritize, and sequence the work; track state; keep
