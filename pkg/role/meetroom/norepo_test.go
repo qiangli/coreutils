@@ -1,6 +1,7 @@
 package meetroom
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/meet"
@@ -143,5 +144,65 @@ func TestEnsureNameHealsAnExistingSprintRoomInPlace(t *testing.T) {
 	}
 	if gotRef != c.Ref || gotName != "sprint 99" {
 		t.Fatalf("EnsureName set (%q, %q), want (%q, %q)", gotRef, gotName, c.Ref, "sprint 99")
+	}
+	// The heal is not just a write to the room's persisted metadata — the
+	// contact a caller already holds must reflect it too, or every surface
+	// that renders this same *role.Contact keeps showing the old, nameless
+	// string until something reloads it from disk.
+	if c.Name != "sprint 99" {
+		t.Fatalf("c.Name = %q, want %q — in-place healing must update the caller's Contact", c.Name, "sprint 99")
+	}
+}
+
+// A LEGACY ROOM'S CONTACT MUST NOT GAIN A NAME IT COULD NOT PERSIST.
+//
+// If the underlying room store rejects the rename, the in-memory Contact
+// must not silently claim a name that was never recorded — a caller that
+// looks again later would find no evidence for the string it already
+// printed.
+func TestEnsureNameLeavesContactAloneOnFailure(t *testing.T) {
+	prev := setRoomName
+	setRoomName = func(ref, name string) error { return errors.New("room store unavailable") }
+	t.Cleanup(func() { setRoomName = prev })
+
+	c := &role.Contact{Kind: "meet", Ref: "durable-room-id"}
+	if err := EnsureName(c, role.Assignment{Kind: role.Conductor, Ref: "99"}); err == nil {
+		t.Fatal("want the store error surfaced, got nil")
+	}
+	if c.Name != "" {
+		t.Fatalf("c.Name = %q, want empty — the rename was never persisted", c.Name)
+	}
+}
+
+// ASSUME MUST HAND BACK A CONTACT THAT ALREADY CARRIES THE STABLE NAME.
+//
+// meet.CreateOptions.Name is what gets persisted on the room; role.Contact.Name
+// is the separate field every sprint-facing surface renders through
+// Contact.String(). A room opened with the right persisted name but a
+// Contact missing the field would still print "meet #25 · bus conductor.126"
+// — the exact gap this story exists to close.
+func TestAssumeContactCarriesTheStableName(t *testing.T) {
+	prev := createRoom
+	createRoom = func(opts meet.CreateOptions) (*meet.State, error) {
+		return &meet.State{ID: "room-1", Room: 25}, nil
+	}
+	t.Cleanup(func() { createRoom = prev })
+
+	c, err := Assume(role.Assignment{Kind: role.Conductor, Ref: "126"}, "trestle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "sprint 126" {
+		t.Fatalf("Assume contact Name = %q, want %q", c.Name, "sprint 126")
+	}
+}
+
+// The steward's singleton seat has no id to be stable about, so its contact
+// must not pick up a synthesized name — Assume derives Contact.Name from the
+// same roomNameFor every kind goes through, and roomNameFor is empty for
+// role.Steward.
+func TestAssumeStewardContactHasNoName(t *testing.T) {
+	if got := roomNameFor(role.Assignment{Kind: role.Steward}); got != "" {
+		t.Fatalf("roomNameFor(Steward) = %q, want empty", got)
 	}
 }

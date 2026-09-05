@@ -68,7 +68,7 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	if kind == "meet-permanent" {
 		contactHolder = ""
 	}
-	return &role.Contact{Kind: kind, Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: contactHolder}, nil
+	return &role.Contact{Kind: kind, Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: contactHolder, Name: roomNameFor(a)}, nil
 }
 
 // roomNameFor gives a bounded role room the name of the durable work object
@@ -102,6 +102,13 @@ var setRoomDefaultTo = meet.SetDefaultTo
 
 // EnsureName heals a role room opened before stable object-owned names existed.
 // It changes metadata in place: the room ID and transcript remain untouched.
+//
+// On success it also sets c.Name, so the *role.Contact the caller already
+// holds renders the stable name immediately through Contact.String() —
+// without that, every surface sharing this contact would keep printing the
+// old, nameless string until something reloaded it from disk. On failure
+// c.Name is left untouched: a Contact must never claim a name the room store
+// never actually recorded.
 func EnsureName(c *role.Contact, a role.Assignment) error {
 	if c == nil || strings.TrimSpace(c.Ref) == "" {
 		return nil
@@ -110,7 +117,11 @@ func EnsureName(c *role.Contact, a role.Assignment) error {
 	if name == "" {
 		return nil
 	}
-	return setRoomName(c.Ref, name)
+	if err := setRoomName(c.Ref, name); err != nil {
+		return err
+	}
+	c.Name = name
+	return nil
 }
 
 var setRoomName = meet.SetName

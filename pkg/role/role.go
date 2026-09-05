@@ -120,6 +120,15 @@ type Contact struct {
 	// resolves against it.
 	Room  int    `json:"room,omitempty"`
 	Topic string `json:"topic,omitempty"`
+	// Name is the stable object name the room was opened for — "sprint 126" —
+	// the same string meetroom writes into the room's own metadata. Unlike
+	// Room it survives a manager handoff, a title edit and a pause/resume
+	// cycle, which is exactly why sprint-facing contact output leads with
+	// this instead of the reusable, display-only room number. Empty for
+	// roles with no durable object to name (the steward's singleton seat) and
+	// for contacts opened before this field existed — see meetroom.EnsureName
+	// for healing the latter in place.
+	Name string `json:"name,omitempty"`
 	// Holder is who CONVENED this room, and it is recorded because meet lets any
 	// member post but only the ORGANIZER change the roster.
 	//
@@ -140,14 +149,24 @@ func (c *Contact) RefID() string {
 }
 
 // String renders a contact for someone deciding how to reach in.
+//
+// The stable Name leads when there is one — it is the identity that survives
+// a handoff, a title edit or a pause/resume, where the short Room number is
+// only ever a reusable, display-only pointer. A contact with no Name (the
+// steward's singleton seat, or a legacy room nothing has healed yet) renders
+// exactly as it always has.
 func (c *Contact) String() string {
 	if c == nil || c.Ref == "" {
 		return ""
 	}
+	room := fmt.Sprintf("meet %s", c.Ref)
 	if c.Room > 0 {
-		return fmt.Sprintf("meet #%d · bus %s", c.Room, c.Topic)
+		room = fmt.Sprintf("meet #%d", c.Room)
 	}
-	return fmt.Sprintf("meet %s · bus %s", c.Ref, c.Topic)
+	if c.Name == "" {
+		return fmt.Sprintf("%s · bus %s", room, c.Topic)
+	}
+	return fmt.Sprintf("%s · %s · bus %s", c.Name, room, c.Topic)
 }
 
 // Occupied is one role's room plus the caller's verdict on whether its holder
