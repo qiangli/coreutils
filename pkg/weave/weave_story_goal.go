@@ -7,6 +7,7 @@ package weave
 
 import (
 	"fmt"
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"io"
 	"path/filepath"
 	"sort"
@@ -79,6 +80,41 @@ func sprintInboxDeliveryLive(owner string) bool {
 // condition rather than an action and sent an agent off to arrange machinery.
 // Reading your inbox is the whole job: it is how mail arrives and it is what
 // keeps the seat live (RefreshSprintOwnerActivity).
+// sprintSeatToolMismatch reports when the caller's harness is not the tool the
+// seat's name is bound to — i.e. somebody is about to work under a name that
+// belongs to a different agent.
+//
+// It WARNS rather than refuses, and the boundary is deliberate. The host can
+// see the mismatch: fleet.DetectTool names the harness actually running, and the
+// agent record names the tool the seat is bound to. What the host CANNOT see is
+// whether the name is legitimately the caller's own — an agent may hold a name
+// across sessions and know it from its own memory. So the host reports the fact
+// it can prove and leaves the judgement to whoever can make it.
+//
+// Observed 2026-09-05: a codex CLI picked up a sprint under a name bound to
+// claude:opus5, because `sprint show` named the previous holder next to a resume
+// hint. The fleet then reports the wrong tool for the seat, band and routing read
+// that binding, and the work is attributed to an agent that did none of it.
+func sprintSeatToolMismatch(owner string) string {
+	tool, detected := fleet.DetectTool()
+	if !detected || strings.TrimSpace(tool) == "" {
+		return ""
+	}
+	a, ok := fleetCatalog().Agent(strings.TrimSpace(owner))
+	if !ok || strings.TrimSpace(a.Tool) == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(a.Tool), strings.TrimSpace(tool)) {
+		return ""
+	}
+	return fmt.Sprintf("\n  NOTE: this seat's name is bound to %s:%s, and you are running under %s.\n"+
+		"  If %q is genuinely your own name, carry on. If you adopted it from the sprint\n"+
+		"  record, take the seat under YOUR name instead — `bashy agents add <name> --tool %s\n"+
+		"  --model <model>` — or the fleet reports the wrong tool for this seat and the work\n"+
+		"  is attributed to an agent that did none of it.",
+		a.Tool, a.Model, tool, owner, tool)
+}
+
 func sprintReadyLine(id int64, owner string) string {
 	// Name the MANAGER'S job first. This line used to offer only "read your
 	// mail", which reads as an individual-contributor next step and is how a
@@ -92,7 +128,8 @@ func sprintReadyLine(id int64, owner string) string {
 		"next: `bashy skills show conductor` — the PROCEDURE for this seat, written for an agent: "+
 		"decompose, file stories, launch and monitor the fleet, gate every merge. Then "+
 		"`bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
-		"the seat live; `--watch` to stay attached; `bashy skills show inbox` for how mail works)", id, id, owner)
+		"the seat live; `--watch` to stay attached; `bashy skills show inbox` for how mail works)"+
+		sprintSeatToolMismatch(owner), id, id, owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {

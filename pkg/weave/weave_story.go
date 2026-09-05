@@ -687,7 +687,20 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 		}
 		fmt.Fprintf(out, "  conductor:  %s (%s)\n", h, st)
 	} else if s.Owner != "" {
-		fmt.Fprintf(out, "  conductor:  %s (owner; lease unclaimed — `sprint resume %d`)\n", s.Owner, s.ID)
+		// NAME THE LAST HOLDER, DO NOT INVITE ITS REUSE.
+		//
+		// This line used to read "<name> (owner; lease unclaimed — sprint resume
+		// N)", which a different tool reasonably reads as "resume as that name" —
+		// and observed: a codex CLI picked up a sprint under a name bound to
+		// claude:opus5. The fleet then reports the wrong tool for the seat,
+		// routing and qualification read that binding, and the work is attributed
+		// to an agent that did none of it.
+		//
+		// The seat's ADDRESS survives a handover (conductor:N); the HOLDER does
+		// not. So the hint names its own identity as the thing to pass.
+		fmt.Fprintf(out, "  conductor:  %s (LAST holder; lease free — take it with "+
+			"`sprint start %d --owner <your own name>`; reuse the name above only if you ARE it)\n",
+			s.Owner, s.ID)
 	} else {
 		fmt.Fprintf(out, "  conductor:  (unclaimed — `sprint take %d`)\n", s.ID)
 	}
