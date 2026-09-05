@@ -844,7 +844,13 @@ you still gate, converge and report.`,
 			}
 			return runSprintOwnerLifecycle(cmd, &flags, id, "sprint take", "transfer managed sprint owner", func() error {
 				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
-					return fmt.Errorf("--owner is required: choose a sprint manager NAME from `bashy agents list`; the calling agent must ask the user rather than guess")
+					return fmt.Errorf("--owner is required, and there are two cases.\n" +
+						"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
+						"    `bashy agents list` to find it, or register one:\n" +
+						"    `bashy agents add <name> --tool <tool> --model <model>`\n" +
+						"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
+						"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agents list`\n" +
+						"    and ask the user rather than guessing on their behalf.")
 				}
 				who := strings.TrimSpace(as)
 				if err := validateSprintClaimant(who); err != nil {
