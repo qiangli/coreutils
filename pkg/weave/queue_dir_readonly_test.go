@@ -10,7 +10,7 @@ import (
 // RESOLVING a queue dir must not CREATE it.
 //
 // The regression: weaveQueueDir ended in an unconditional MkdirAll, and every
-// read path goes through it — `weave list`, the `bashy board` collectors, and
+// read path goes through it — `weave list`, the dashboard collectors, and
 // the conductor-address lookup behind `bashy mb`. So merely LOOKING at a repo
 // minted a permanent ~/.bashy/weave/<repo>-<hash> tag for it, one per working
 // directory anyone ever read from. They were empty, indistinguishable at a

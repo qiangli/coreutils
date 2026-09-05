@@ -75,18 +75,6 @@ func NewMeetCmd() *cobra.Command {
 	return cmd
 }
 
-// NewRelayCmd is the canonical communication surface. Its web UI presents
-// Meet rooms as channels and governed Chat invocations as direct messages;
-// the precise `meet` and `chat` commands remain available for automation.
-func NewRelayCmd() *cobra.Command {
-	cmd := NewMeetCmd()
-	cmd.Use = "relay"
-	cmd.Short = "one plain communication surface for Meet channels and Chat direct messages"
-	cmd.Long = "Open Bashy Meet: meeting rooms appear as channels and governed Chat conversations appear as direct messages.\n" +
-		"Use `bashy relay serve` for the local-first web UI. The precise `bashy meet` and `bashy chat` commands remain available for scripts."
-	return cmd
-}
-
 func newReferenceCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reference",

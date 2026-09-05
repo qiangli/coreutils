@@ -458,7 +458,7 @@ func TestDOMPairingScopeIsChosenByTheOperator(t *testing.T) {
 	if strings.Contains(checkedByDefault, "terminal") || strings.Contains(checkedByDefault, "files") {
 		t.Errorf("terminal/files are pre-granted by default: %s", checkedByDefault)
 	}
-	if !strings.Contains(checkedByDefault, "board") {
+	if !strings.Contains(checkedByDefault, "sprint") {
 		t.Errorf("the read-and-communicate default is missing: %s", checkedByDefault)
 	}
 	// And the choice must actually reach the ticket.

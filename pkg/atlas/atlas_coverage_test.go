@@ -224,6 +224,21 @@ func TestMeetSecurityMetadataIncludesDurableConversationState(t *testing.T) {
 			t.Errorf("meet effects = %v, missing %q", e.Effects, effect)
 		}
 	}
+	if e.Web == nil || e.Web.Mount != "meet" || !slices.Equal(e.Web.Start, []string{"meet", "serve"}) {
+		t.Errorf("meet web surface = %+v, want canonical meet owner and start command", e.Web)
+	}
+}
+
+func TestMeetAndSprintOwnTheirWebSurfaces(t *testing.T) {
+	sprint, ok := atlas.Lookup("sprint")
+	if !ok || sprint.Web == nil || sprint.Web.Mount != "sprint" {
+		t.Fatalf("sprint web surface = %+v, want canonical sprint owner", sprint.Web)
+	}
+	for _, retired := range []string{"board", "relay"} {
+		if _, ok := atlas.Lookup(retired); ok {
+			t.Errorf("retired verb %q remains in the atlas", retired)
+		}
+	}
 }
 
 // These POSIX communication applets have deliberately local implementations.

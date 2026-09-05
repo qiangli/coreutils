@@ -57,7 +57,7 @@ var collectBoardFn = collectBoard
 func collectBoard(ctx context.Context) (*board.Board, error) {
 	// All:true matches the CLI exactly — "steward scope is always the
 	// machine-global union, including completed records". The panel filters for
-	// DISPLAY; it does not collect a different board than `bashy board` does.
+	// DISPLAY; it does not collect a different board than the role dashboards do.
 	return board.Collect(ctx, board.Options{All: true}, board.DefaultSources(), nil)
 }
 

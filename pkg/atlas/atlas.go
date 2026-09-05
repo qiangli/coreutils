@@ -660,7 +660,8 @@ func init() {
 
 	// orchestration
 	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON},
+		Web: &WebSurface{Label: "Sprint", Mount: "sprint", Mode: WebInProcess, DefaultOn: true}})
 	// `dag --serve` HAS a browser view, but proxying it through the launcher does
 	// not work properly yet, so it declares no WebSurface and gets no tile. The
 	// declaration is what the launcher discovers, so removing it is the whole
@@ -675,15 +676,9 @@ func init() {
 	addVerb("invoke", Entry{Stage: StageCode, Group: GroupOrch, AliasOf: "chat", Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("delegate", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
-	addVerb("relay", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses},
+	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses},
 		Web: &WebSurface{Label: "Meet", Mount: "meet", Mode: WebInProcess, Port: 8637,
-			Start: []string{"relay", "serve"}, DefaultOn: true}})
-	// `meet` deliberately declares NO surface: relay owns the mount, and two verbs
-	// claiming it would trip the duplicate-mount panic. They are one room — which
-	// is exactly why the MOUNT is /meet/ while the VERB stays `relay`: the app is
-	// called Meet everywhere a person sees it, and the internal name is nobody's
-	// business but the code's. Same split the board made when it became /sprint/.
+			Start: []string{"meet", "serve"}, DefaultOn: true}})
 	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// leaderboard: the account of what the fleet actually did, where capability
@@ -789,15 +784,6 @@ func init() {
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
 	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	// board is the read-only projection of todo, sprint, weave, and fleet state.
-	// It reports across the machine but never starts, merges, or kills work.
-	// Its browser surface is the §2 Boards shape a third time: read-heavy,
-	// list-shaped, and scanned far more often than written. The terminal
-	// renderer answers "what is the state right now" in one screen; the panel
-	// is the same projection with the history filterable rather than hardcoded.
-	addVerb("board", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace,
-		Caps: []string{CapJSON, CapReadOnly},
-		Web:  &WebSurface{Label: "Sprint", Mount: "sprint", Mode: WebInProcess, DefaultOn: true}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 	// recall was a top-level verb until 2026-08-05 and is now `kb recall` — the
@@ -997,7 +983,7 @@ func init() {
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
-		"doctor", "otel", "audit", "check", "sprint", "board",
+		"doctor", "otel", "audit", "check", "sprint",
 		// apps READS every store its panels render, and the Files panel reads the
 		// filesystem under its scope — the whole point of the tile.
 		"apps",
@@ -1058,7 +1044,7 @@ func init() {
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search", "ping",
-		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "relay", "pair", "judge", "tools", "models", "agents", "act", "sota",
+		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
 		"herald",
 		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
@@ -1074,7 +1060,7 @@ func init() {
 		"newgrp", "ping",
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
-		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "relay", "pair", "judge", "supervise", "schedule", "act", "sota",
+		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
@@ -1116,7 +1102,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "relay", "pair", "judge", "supervise", "sdlc", "weave", "sphere", "ollama", "sota", "herald")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "sphere", "ollama", "sota", "herald")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip

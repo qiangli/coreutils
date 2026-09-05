@@ -12,7 +12,7 @@ as the board's `resources` panel.
 bashy resources system                 # human table
 bashy resources system --json          # bashy-resources-v1 envelope
 bashy resources system --interval 2s   # widen the rate sample window
-bashy board --expand resources         # the panel, inside the steward board
+bashy steward dashboard --expand resources  # the panel, inside the steward dashboard
 bashy steward dashboard --expand resources
 ```
 

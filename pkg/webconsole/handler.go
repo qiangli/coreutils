@@ -114,21 +114,17 @@ type Options struct {
 	Disable []string
 }
 
-// disabled reports whether a panel was turned off for this console.
 // disabled reports whether --disable named this panel, by its internal NAME or
-// by the MOUNT a person actually sees.
-//
-// The two differ wherever an app was renamed without renaming its verb — the
-// room is `relay` at /meet/, the board is `board` at /sprint/ — and matching
-// the name alone means an operator who types the app's own name gets a SILENT
-// NO-OP: the panel they meant to remove is still listed, still routed, still
-// reachable. A refusal would be recoverable; quietly serving what was asked to
-// be withheld is not.
+// mount. The retired board/relay spellings remain accepted as web aliases.
 func (o Options) disabled(p Panel) bool {
 	mount := strings.Trim(p.Path, "/")
 	for _, d := range o.Disable {
 		d = strings.TrimSpace(d)
 		if strings.EqualFold(d, p.Name) || (mount != "" && strings.EqualFold(d, mount)) {
+			return true
+		}
+		if (p.Name == "meet" && strings.EqualFold(d, "relay")) ||
+			(p.Name == "sprint" && strings.EqualFold(d, "board")) {
 			return true
 		}
 	}
@@ -309,7 +305,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// /meet/ now — the app is called Meet everywhere a person sees it, and
 	// "Relay" on the address bar of a page titled Meet is the kind of
 	// inconsistency a reader has to stop and resolve. Old links still land.
-	if on["relay"] {
+	if on["meet"] {
 		mux.Handle("GET /meet", redirectTo("/meet/"))
 		mux.Handle("GET /relay", redirectTo("/meet/"))
 		mux.Handle("GET /relay/", redirectTo("/meet/"))
@@ -366,9 +362,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 
 	// The steward board, same shape again: the tile is an atlas declaration,
 	// the page is served at the launcher's root, and panelHandler claims
-	// nothing. Read-only by construction — `board` is the one work verb the
-	// atlas marks CapReadOnly, and the panel must not erode that.
-	if on["board"] {
+	// nothing. Read-only by construction: Sprint's browser projection must not
+	// acquire the command's lifecycle mutations merely because it shares a noun.
+	if on["sprint"] {
 		mux.HandleFunc("GET /sprint/", s.handleBoardPage)
 		mux.Handle("GET /sprint", redirectTo("/sprint/"))
 		// Keep old bookmarks working while Sprint becomes the public app name.
@@ -427,7 +423,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 // when the console has nothing to serve for it.
 func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	switch p.Name {
-	case "terminal", "mb", "board", "inbox":
+	case "terminal", "mb", "sprint", "inbox":
 		// Served above, at the launcher's own root, not mounted here.
 		return nil, nil
 	case "files":
@@ -439,8 +435,8 @@ func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 			return nil, nil
 		}
 		return h, closer
-	case "relay":
-		// The room is MOUNTED, not proxied to a separate `relay serve`: one
+	case "meet":
+		// The room is MOUNTED, not proxied to a separate `meet serve`: one
 		// engine, one lease, one transcript. The pass-through gate is required —
 		// see meet.MountOptions.
 		return meet.HandlerWith(s.opts.Ctx, meet.MountOptions{Gate: passthrough}), nil

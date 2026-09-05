@@ -205,7 +205,7 @@ func TestBoardPageAndTile(t *testing.T) {
 
 	var found bool
 	for _, p := range Discover() {
-		if p.Name == "board" {
+		if p.Name == "sprint" {
 			found = true
 			if p.Label != "Sprint" || p.Path != "/sprint/" || p.Source != "atlas" || !p.Available {
 				t.Fatalf("board panel = %+v, want the available Sprint app at /sprint/", p)
@@ -216,7 +216,7 @@ func TestBoardPageAndTile(t *testing.T) {
 		t.Fatal("no board tile: the atlas WebSurface declaration is what Discover reads")
 	}
 	s := &server{}
-	if hh, _ := s.panelHandler(Panel{Name: "board", Path: "/sprint/"}); hh != nil {
+	if hh, _ := s.panelHandler(Panel{Name: "sprint", Path: "/sprint/"}); hh != nil {
 		t.Fatal("board must not also be mounted: coopauth.Mount would take the <base href> with it")
 	}
 }

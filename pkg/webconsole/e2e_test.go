@@ -136,8 +136,8 @@ func TestE2ELauncherServesItsApps(t *testing.T) {
 	// tile whose path serves the launcher back is the exact defect this loop
 	// catches, and it can only catch it for apps it names.
 	want := map[string]bool{
-		"terminal": false, "files": false, "relay": false,
-		"board": false, "inbox": false, "mb": false,
+		"terminal": false, "files": false, "meet": false,
+		"sprint": false, "inbox": false, "mb": false,
 	}
 	for _, a := range apps.Apps {
 		if _, ok := want[a.Name]; ok {

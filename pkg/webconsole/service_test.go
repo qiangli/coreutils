@@ -72,7 +72,7 @@ func TestServicePairingIsExplicitAndDoesNotMutateTheBaseSpec(t *testing.T) {
 // disabling the Terminal only hid the tile, sharing the console would still
 // hand out a shell to anyone who typed /term/.
 func TestDisabledPanelIsUnroutedNotJustHidden(t *testing.T) {
-	h := newTestHandler(t, Options{Disable: []string{"terminal", "board"}})
+	h := newTestHandler(t, Options{Disable: []string{"terminal", "sprint"}})
 
 	// The SPA catch-all answers unrouted paths, so the check is that the PANEL
 	// did not answer — a 404 is not what this console does. Match on the page's
@@ -93,7 +93,7 @@ func TestDisabledPanelIsUnroutedNotJustHidden(t *testing.T) {
 	// It is absent from the tile list too, so nothing advertises a dead link.
 	d := getJSON(t, h, "/api/apps")
 	for _, a := range d["apps"].([]any) {
-		if n := a.(map[string]any)["name"]; n == "terminal" || n == "board" {
+		if n := a.(map[string]any)["name"]; n == "terminal" || n == "sprint" {
 			t.Errorf("disabled panel %v is still advertised in /api/apps", n)
 		}
 	}

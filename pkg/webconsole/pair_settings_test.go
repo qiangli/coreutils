@@ -110,8 +110,8 @@ func TestPairMintOperatorSuccess(t *testing.T) {
 		t.Fatal("mint did not report enabled")
 	}
 	// Default scope is the read-and-communicate set — not the terminal, not files.
-	if got := strings.Join(resp.Scope, ","); got != "board,mb,relay" {
-		t.Fatalf("scope = %q, want board,mb,relay", got)
+	if got := strings.Join(resp.Scope, ","); got != "meet,mb,sprint" {
+		t.Fatalf("scope = %q, want meet,mb,sprint", got)
 	}
 
 	// Exactly one ticket was minted, and it is open.

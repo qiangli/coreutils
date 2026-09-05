@@ -135,13 +135,13 @@ func TestAppsListsTheBuiltinSurfaces(t *testing.T) {
 			t.Errorf("proxy surface %q has no start hint", a.Name)
 		}
 	}
-	for _, want := range []string{"terminal", "relay"} {
+	for _, want := range []string{"terminal", "meet"} {
 		if _, ok := seen[want]; !ok {
 			t.Errorf("surface %q missing from /api/apps (have %v)", want, seen)
 		}
 	}
-	if labels["relay"] != "Meet" {
-		t.Errorf("relay mount label = %q, want Meet", labels["relay"])
+	if labels["meet"] != "Meet" {
+		t.Errorf("meet mount label = %q, want Meet", labels["meet"])
 	}
 }
 
@@ -222,11 +222,8 @@ func TestEveryAvailablePanelIsMountedAtItsAdvertisedPath(t *testing.T) {
 // The room is Meet everywhere a PERSON meets it: the tile, the page title, and
 // the address bar.
 //
-// It was renamed to Meet in the launcher and left mounted at /relay/, so the
-// one place a reader can copy, paste and bookmark still said Relay — a name
-// that appears nowhere else in the product. The verb stays `relay`, which is
-// nobody's business but the code's; this asserts the split, which is the same
-// one the board made when it became /sprint/.
+// Its command, tile, and mount all use the same public noun. The retired
+// /relay bookmark remains only as a redirect.
 func TestTheRoomIsMountedUnderItsPublicName(t *testing.T) {
 	h := newTestHandler(t, Options{})
 
@@ -235,7 +232,7 @@ func TestTheRoomIsMountedUnderItsPublicName(t *testing.T) {
 		t.Fatalf("/meet/api/rooms = %d, want the room served at its public mount", w.Code)
 	}
 	for _, p := range findPanels(t, h) {
-		if p.Name == "relay" && p.Path != "/meet/" {
+		if p.Name == "meet" && p.Path != "/meet/" {
 			t.Errorf("the room's tile points at %q, not /meet/", p.Path)
 		}
 	}
@@ -259,7 +256,7 @@ func TestDisableAcceptsThePublicMountName(t *testing.T) {
 				t.Errorf("--disable %s left the room answering its own API: %.120q", name, body)
 			}
 			for _, p := range findPanels(t, h) {
-				if p.Name == "relay" {
+				if p.Name == "meet" {
 					t.Errorf("--disable %s left the room listed as a tile", name)
 				}
 			}

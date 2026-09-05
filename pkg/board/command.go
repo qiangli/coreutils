@@ -9,9 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewCommand constructs the top-level, read-only `bashy board` command. A host
-// mounts it beside todo/sprint/weave. Passing nil uses the machine-global P1
-// sources; tests and P2 can inject a conductor-specific source set.
+// NewCommand constructs the read-only machine-global board projection used by
+// the Sprint web panel and role dashboards. Passing nil uses the machine-global
+// P1 sources; tests and P2 can inject a conductor-specific source set.
 func NewCommand(sources []Source) *cobra.Command {
 	var jsonOut, htmlOut bool
 	var outPath string

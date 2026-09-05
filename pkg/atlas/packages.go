@@ -132,7 +132,7 @@ var packages = map[string]Package{
 	"agentcmd":   cmdPkg("agent"),
 	"admission":  libPkg("bus", "store-neutral deterministic byte budgeting, priority projection, overflow digests, and prepared acknowledgements behind Bus/chat turn preambles; it owns no messages and therefore has no command surface"),
 	"ask":        cmdPkg("ask"),
-	"board":      cmdPkg("board"),
+	"board":      libPkg("sprint", "read-only machine-global projection behind the Sprint web panel and steward/conductor dashboards; it no longer owns a top-level verb"),
 	"browser":    cmdPkg("browser"),
 	"bus":        cmdPkg("bus"),
 	"capability": cmdPkg("capability"),
