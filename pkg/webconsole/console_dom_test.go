@@ -1459,3 +1459,53 @@ func TestDOMInboxMarkOneReadLeavesTheOthersWaiting(t *testing.T) {
 		t.Errorf("%s per-message controls remain, want 2", remaining)
 	}
 }
+
+// EVERY TILE ON THE LAUNCHER SHOWS A DRAWN MARK, NOT A LETTER.
+//
+// appIcon falls back to the app's initial when it has no mark for the name.
+// For a third-party app that is honest; for one of ours it is a bug that
+// renders — the grid still looks fine, so nothing fails and nobody is told.
+//
+// It shipped that way: `relay` and `board` were renamed to `meet` and
+// `sprint` without rekeying the SVG table, which is keyed by PANEL NAME, so
+// Meet and Sprint dropped to "M" and "S" while every byte-level test stayed
+// green. The chrome_test companion pins the table; this pins what the browser
+// actually paints, which is the only place the fallback is visible.
+func TestDOMEveryTileShowsAMarkNotALetter(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	// label -> "svg" | the text it fell back to. Read off the rendered tiles,
+	// so a tile that never rendered is a missing key, not a silent pass.
+	probe := `(()=>{const o={};
+		for (const b of document.querySelectorAll(".tile")) {
+			const l = b.querySelector(".label"), i = b.querySelector(".icon");
+			if (!l || !i) continue;
+			o[l.textContent] = i.querySelector("svg") ? "svg" : i.textContent.trim();
+		}
+		return JSON.stringify(o);})()`
+
+	var raw string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/"),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(probe, &raw),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "launcher marks", errs())
+
+	got := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("decode tile marks: %v (%s)", err, raw)
+	}
+	for _, p := range Discover() {
+		mark, ok := got[p.Label]
+		if !ok {
+			t.Errorf("tile %q never rendered; the launcher shows %v", p.Label, got)
+			continue
+		}
+		if mark != "svg" {
+			t.Errorf("tile %q renders the placeholder %q instead of its mark", p.Label, mark)
+		}
+	}
+}

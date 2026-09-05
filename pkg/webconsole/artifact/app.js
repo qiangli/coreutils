@@ -141,18 +141,18 @@ function recordVisit(name) {
 const SVG = {
   terminal: "M5 8l4 4-4 4M13 16h6",
   files:    "M4 8a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
-  relay:    "M4 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5L4.5 16.5zM18.5 10.5H19a2 2 0 0 1 2 2v5l-2.8-2H13",
+  meet:     "M4 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5L4.5 16.5zM18.5 10.5H19a2 2 0 0 1 2 2v5l-2.8-2H13",
   // A DAG is nodes and edges; a single stroked path could only ever suggest it.
   dag:      { paths: ["M7.6 8.4l3.2 6", "M16.4 8.4l-3.2 6"],
               circles: [[6, 6.5, 2.1], [18, 6.5, 2.1], [12, 17.3, 2.1]] },
   loom:     "M6 4.5v15M18 4.5v15M6 9.5h12M6 14.5h12",
-  // An envelope: the board is mail, not a conversation.
+  // An envelope: the message board is mail, not a conversation.
   mb:       "M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4.4 8.6L12 14l7.6-5.4",
   // Columns of differing height: a kanban, read at a glance.
-  board:    { paths: ["M6 19V9", "M12 19V5", "M18 19v-6", "M4 21h16"] },
-  // A tray with mail arriving into it. Deliberately NOT the envelope: the board
-  // next door is already an envelope, and two apps sharing a mark is the one
-  // thing a grid of icons must not do.
+  sprint:   { paths: ["M6 19V9", "M12 19V5", "M18 19v-6", "M4 21h16"] },
+  // A tray with mail arriving into it. Deliberately NOT the envelope: the
+  // message board next door is already an envelope, and two apps sharing a
+  // mark is the one thing a grid of icons must not do.
   inbox:    { paths: ["M4 14h4l1.6 2.4h4.8L16 14h4M4 14l2.4-7.2h11.2L20 14v5.5H4z"] },
   settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
   moon:     "M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
@@ -167,8 +167,8 @@ const SVG = {
 // without anyone assigning one.
 const COLORS = {
   ycode: "#1f2328", shell: "#0a0e1a", terminal: "#0a0e1a", desktop: "#af52de",
-  ssh: "#0f766e", files: "#3478f6", relay: "#f59e0b", dag: "#ef4444", loom: "#8b5cf6",
-  mb: "#0ea5e9", board: "#16a34a", inbox: "#6366f1",
+  ssh: "#0f766e", files: "#3478f6", meet: "#f59e0b", dag: "#ef4444", loom: "#8b5cf6",
+  mb: "#0ea5e9", sprint: "#16a34a", inbox: "#6366f1",
 };
 const ICON_PALETTE = ["#4f46e5","#3478f6","#ec4899","#f59e0b","#10b981","#8b5cf6",
   "#5ac8fa","#ef4444","#06b6d4","#22c55e","#0ea5e9","#a855f7","#84cc16"];

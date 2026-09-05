@@ -534,3 +534,53 @@ func TestChromePreservesRoutePrefix(t *testing.T) {
 		t.Errorf("unprefixed term page lost its relative links")
 	}
 }
+
+// ---- launcher tile marks --------------------------------------------------
+
+// EVERY BUILT-IN TILE MUST HAVE A DRAWN MARK.
+//
+// appIcon's fallback chain is server icon → our own mark for a known name →
+// the app's initial letter. The letter is honest for a third-party app we know
+// nothing about; for one of OUR panels it is a bug, and a silent one — the
+// grid still renders, so nothing fails.
+//
+// That is exactly how it shipped: `relay` and `board` were renamed to `meet`
+// and `sprint` without rekeying the SVG map, so two of the six built-ins
+// dropped to "M" and "S". The lookup is by PANEL NAME, so this test pins the
+// join the rename broke.
+func TestEveryBuiltinTileHasItsOwnMark(t *testing.T) {
+	h := newTestHandler(t, Options{})
+	w := do(h, "GET", "/app.js", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("app.js = %d, want 200", w.Code)
+	}
+	js := w.Body.String()
+
+	block := regexp.MustCompile(`(?s)const SVG = \{(.*?)\n\};`).FindStringSubmatch(js)
+	if block == nil {
+		t.Fatal("app.js has no SVG mark table")
+	}
+	marks := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^  ([A-Za-z]\w*):`).FindAllStringSubmatch(block[1], -1) {
+		marks[m[1]] = true
+	}
+	colors := map[string]bool{}
+	if b := regexp.MustCompile(`(?s)const COLORS = \{(.*?)\n\};`).FindStringSubmatch(js); b != nil {
+		for _, m := range regexp.MustCompile(`([A-Za-z]\w*):`).FindAllStringSubmatch(b[1], -1) {
+			colors[m[1]] = true
+		}
+	}
+
+	for _, p := range Discover() {
+		if p.Icon != "" {
+			continue // the panel describes its own mark; the table is not consulted
+		}
+		if !marks[p.Name] {
+			t.Errorf("panel %q has no mark in app.js's SVG table — its tile falls back to the letter %q",
+				p.Name, strings.ToUpper(p.Name[:1]))
+		}
+		if !colors[p.Name] {
+			t.Errorf("panel %q has no pinned tile colour — it would be hashed into the generic palette", p.Name)
+		}
+	}
+}
