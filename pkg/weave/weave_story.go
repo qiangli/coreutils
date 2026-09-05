@@ -415,6 +415,32 @@ the position, and the seat is whoever holds it now. See pkg/role, which separate
 title / qualification / position / occupancy precisely because three of those
 four are routinely all called "role".
 
+THE TICK — autopilot is a loop, not a wait. Never block on a worker; take a
+turn, act, come back. Each step can invalidate the ones after it, which is why
+this is an order rather than a checklist:
+
+  1 MAIL FIRST      human instructions, then your inbox. It can replace the
+                    assignment, and reading it is what keeps your seat live.
+  2 RE-PRIORITIZE   update the board BEFORE staffing — file what became
+                    visible, correct status/priority/body. Staffing a stale
+                    board buys work nobody needed.
+  3 STAFF           ready INDEPENDENT stories to agents that can actually run
+                    (installed is not signed in), capability to difficulty,
+                    flat-billed over metered, widen to ready stories not roster.
+  4 MONITOR         progress, not liveness — a worker can be alive and stuck.
+                    Nothing across two ticks is a decision, not a wait.
+  5 INTEGRATE       run the gate YOURSELF, read the verdict from bashy and not
+                    from a worker's prose; review, merge, clean up what this
+                    sprint owns.
+  6 CHECKPOINT      your context does not survive; the brief is what reaches
+                    the next manager, who may be a different tool.
+  7 REPEAT          until the sprint's acceptance gate passes — then stop and
+                    hand off. "All stories closed" is not delivery; the gate is.
+
+Steps 2-5 are where the sprint moves. A tick spending its whole budget on 1 and
+6 is administering the sprint rather than delivering it. Full procedure:
+bashy skills show conductor.
+
 QUALIFICATION — who should hold this seat. A sprint manager is judged on six
 measured dimensions, not on coding ability, and the fleet has already produced
 each failure signature at least once:
