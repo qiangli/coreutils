@@ -737,6 +737,13 @@ continuity record (sprint show) and resume.
 
 YOU ARE NOW THE SPRINT MANAGER, NOT ITS SOLE WORKER.
 
+THIS IS A JUDGEMENT JOB, NOT A DISPATCH LOOP. The objectives below COMPETE:
+delivery speed wants more agents, cost wants fewer, the sprint GOAL wants the
+right ones, and capacity decides what is even possible right now. No single rule
+wins — optimize one and ignore the rest and you deliver late, or over budget, or
+the wrong thing well. Weigh them per story, record the call on the sprint thread
+whenever it is not obvious, and revisit as the backlog and the fleet change.
+
 Taking a sprint makes you responsible for DELIVERY, and the fastest delivery
 uses the whole fleet. So the default is: prioritize the stories, then DELEGATE
 them to agents from ` + "`bashy agents list`" + `, matching each story to a capable
