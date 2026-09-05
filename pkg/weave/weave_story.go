@@ -441,6 +441,14 @@ Steps 2-5 are where the sprint moves. A tick spending its whole budget on 1 and
 6 is administering the sprint rather than delivering it. Full procedure:
 bashy skills show conductor.
 
+sprint tick <id> gathers the INPUTS to steps 1-7 in one command — unread and
+directed mail, the board delta since you last acted, who is assignable, runs
+that are running and have committed nothing (step 4's "alive and stuck"), work
+awaiting merge, how old your brief is, and whether the gate can close. It
+DECIDES NOTHING and writes nothing: it will not refresh your seat, mark mail
+read, or probe the fleet. Deciding is the job. Add --wait to block, bounded,
+until mail or the board moves.
+
 QUALIFICATION — who should hold this seat. A sprint manager is judged on six
 measured dimensions, not on coding ability, and the fleet has already produced
 each failure signature at least once:
@@ -541,6 +549,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintGoalCmd(),
 		newSprintTrackCmd(),
 		newSprintNextCmd(),
+		newSprintTickCmd(),
 		newSprintFocusCmd(),
 		newSprintCommitMsgCmd(),
 		newSprintHooksCmd(),
