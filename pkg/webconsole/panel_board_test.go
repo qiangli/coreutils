@@ -72,7 +72,7 @@ func TestBoardOverviewHidesHistoryByDefault(t *testing.T) {
 	s.boards.board, s.boards.at = b, time.Now()
 	s.boards.mu.Unlock()
 
-	d := getJSON(t, h, "/api/board")
+	d := getJSON(t, h, "/api/sprint")
 	if got := len(d["sprints"].([]any)); got != 1 {
 		t.Errorf("default view shows %d sprints, want 1 live (of 3)", got)
 	}
@@ -89,7 +89,7 @@ func TestBoardOverviewHidesHistoryByDefault(t *testing.T) {
 		t.Errorf("sprint navigation = manager:%v room:%v", sp["manager"], sp["meet_room_ref"])
 	}
 
-	all := getJSON(t, h, "/api/board?all=1")
+	all := getJSON(t, h, "/api/sprint?all=1")
 	if got := len(all["sprints"].([]any)); got != 3 {
 		t.Errorf("?all=1 shows %d sprints, want all 3", got)
 	}
@@ -117,11 +117,11 @@ func TestBoardOverviewCapsRowsAndDropsDagRuns(t *testing.T) {
 	s.boards.board, s.boards.at = b, time.Now()
 	s.boards.mu.Unlock()
 
-	w := do(h, "GET", "/api/board", "127.0.0.1:5555", nil)
+	w := do(h, "GET", "/api/sprint", "127.0.0.1:5555", nil)
 	if strings.Contains(w.Body.String(), "dag_runs") {
 		t.Error("overview carries dag_runs; it must never ship the raw pipeline log")
 	}
-	d := getJSON(t, h, "/api/board")
+	d := getJSON(t, h, "/api/sprint")
 	p := d["panels"].([]any)[0].(map[string]any)
 	if got := len(p["rows"].([]any)); got != boardPanelRows {
 		t.Errorf("panel carries %d rows, want the %d cap", got, boardPanelRows)
@@ -133,18 +133,18 @@ func TestBoardOverviewCapsRowsAndDropsDagRuns(t *testing.T) {
 	}
 
 	// The full set is reachable, deliberately, one request at a time.
-	full := getJSON(t, h, "/api/board/panel/big?limit=500")
+	full := getJSON(t, h, "/api/sprint/panel/big?limit=500")
 	if got := len(full["rows"].([]any)); got != 500 {
 		t.Errorf("panel fetch returned %d rows, want 500", got)
 	}
 	if full["row_total"].(float64) != 5000 {
 		t.Errorf("panel row_total = %v, want 5000", full["row_total"])
 	}
-	page2 := getJSON(t, h, "/api/board/panel/big?limit=10&offset=4995")
+	page2 := getJSON(t, h, "/api/sprint/panel/big?limit=10&offset=4995")
 	if got := len(page2["rows"].([]any)); got != 5 {
 		t.Errorf("offset past the end returned %d rows, want the remaining 5", got)
 	}
-	if got := do(h, "GET", "/api/board/panel/nope", "127.0.0.1:5555", nil).Code; got != http.StatusNotFound {
+	if got := do(h, "GET", "/api/sprint/panel/nope", "127.0.0.1:5555", nil).Code; got != http.StatusNotFound {
 		t.Errorf("unknown panel = %d, want 404", got)
 	}
 }
@@ -221,12 +221,15 @@ func TestBoardPageAndTile(t *testing.T) {
 	}
 }
 
-func TestOldBoardRouteRedirectsToSprint(t *testing.T) {
+func TestRetiredBoardRouteIsNotMounted(t *testing.T) {
 	h, _ := newBoardTestServer(t)
 	for _, oldPath := range []string{"/board", "/board/"} {
 		w := do(h, "GET", oldPath, "127.0.0.1:5555", nil)
-		if w.Code != http.StatusFound || w.Header().Get("Location") != "/sprint/" {
-			t.Errorf("GET %s = %d Location %q, want 302 to /sprint/", oldPath, w.Code, w.Header().Get("Location"))
+		if location := w.Header().Get("Location"); location != "" {
+			t.Errorf("GET %s redirects to %q", oldPath, location)
+		}
+		if !strings.Contains(w.Body.String(), `id="grid-host"`) {
+			t.Errorf("GET %s was claimed by an app instead of falling through to the launcher", oldPath)
 		}
 	}
 }
@@ -246,7 +249,7 @@ func TestBoardServesNoMutatingMethod(t *testing.T) {
 	s.boards.board, s.boards.at = fakeBoard(t), time.Now()
 	s.boards.mu.Unlock()
 
-	for _, path := range []string{"/api/board", "/api/board/panel/sprints", "/sprint/"} {
+	for _, path := range []string{"/api/sprint", "/api/sprint/panel/sprints", "/sprint/"} {
 		for _, m := range []string{"POST", "PUT", "DELETE", "PATCH"} {
 			body := do(h, m, path, "127.0.0.1:5555", nil).Body.String()
 			if strings.Contains(body, boardSchemaVersion) {
@@ -256,8 +259,8 @@ func TestBoardServesNoMutatingMethod(t *testing.T) {
 	}
 	// And the read path really is registered, so the check above is not passing
 	// merely because nothing is mounted.
-	if !strings.Contains(do(h, "GET", "/api/board", "127.0.0.1:5555", nil).Body.String(), boardSchemaVersion) {
-		t.Fatal("GET /api/board returned no board payload — the negative test above proves nothing")
+	if !strings.Contains(do(h, "GET", "/api/sprint", "127.0.0.1:5555", nil).Body.String(), boardSchemaVersion) {
+		t.Fatal("GET /api/sprint returned no board payload — the negative test above proves nothing")
 	}
 }
 
@@ -277,7 +280,7 @@ func TestBoardOverviewCarriesStories(t *testing.T) {
 	s.boards.board, s.boards.at = b, time.Now()
 	s.boards.mu.Unlock()
 
-	d := getJSON(t, h, "/api/board")
+	d := getJSON(t, h, "/api/sprint")
 	todos, ok := d["todos"].([]any)
 	if !ok {
 		t.Fatalf("the overview carries no `todos` field at all: keys=%v", keysOf(d))
@@ -324,7 +327,7 @@ func TestBoardOverviewCarriesPerSprintStoryProgress(t *testing.T) {
 	s.boards.board, s.boards.at = b, time.Now()
 	s.boards.mu.Unlock()
 
-	d := getJSON(t, h, "/api/board")
+	d := getJSON(t, h, "/api/sprint")
 	sp := d["sprints"].([]any)[0].(map[string]any)
 	if sp["story_total"] != float64(3) || sp["story_open"] != float64(2) || sp["story_closed"] != float64(1) {
 		t.Fatalf("story progress = total:%v open:%v closed:%v, want 3/2/1", sp["story_total"], sp["story_open"], sp["story_closed"])
@@ -341,7 +344,7 @@ func TestBoardOverviewAllIncludesFinishedStories(t *testing.T) {
 	s.boards.board, s.boards.at = b, time.Now()
 	s.boards.mu.Unlock()
 
-	d := getJSON(t, h, "/api/board?all=1")
+	d := getJSON(t, h, "/api/sprint?all=1")
 	if got := len(d["todos"].([]any)); got != 5 {
 		t.Errorf("all=1 shows %d stories, want all 5", got)
 	}
@@ -371,7 +374,7 @@ func TestBoardStoryDetail(t *testing.T) {
 	// A story the board does not know must 404 naming the id, never 200 with
 	// an empty pane — a detail view that silently shows nothing is the defect
 	// class this board exists to report on.
-	w := do(h, "GET", "/api/board/story/nosuchstory", "127.0.0.1:5555", nil)
+	w := do(h, "GET", "/api/sprint/story/nosuchstory", "127.0.0.1:5555", nil)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("unknown story = %d, want 404", w.Code)
 	}
@@ -382,7 +385,7 @@ func TestBoardStoryDetail(t *testing.T) {
 	// A known story resolves far enough to attempt the lookup. The fake board
 	// carries no real register behind it, so the honest outcome is a NAMED
 	// upstream failure rather than a silent empty body.
-	w = do(h, "GET", "/api/board/story/aaa", "127.0.0.1:5555", nil)
+	w = do(h, "GET", "/api/sprint/story/aaa", "127.0.0.1:5555", nil)
 	if w.Code == http.StatusNotFound {
 		t.Fatalf("a story the board knows about was reported unknown: %q", w.Body.String())
 	}
@@ -394,17 +397,17 @@ func TestBoardStoryDetail(t *testing.T) {
 // TestBoardStoryEmptyIDMatchesItsSibling records what an empty id actually
 // does, rather than asserting a rule the codebase does not hold.
 //
-// `/api/board/story/` does not match the {id} pattern at all, so it falls
+// `/api/sprint/story/` does not match the {id} pattern at all, so it falls
 // through to the SPA catch-all and returns the page — exactly as
-// `/api/board/panel/` already does. That is arguably wrong for an /api/ path
+// `/api/sprint/panel/` already does. That is arguably wrong for an /api/ path
 // (a JSON caller gets HTML), but it is ONE pre-existing routing behaviour
 // shared by every /api/ typo, not something this endpoint introduced, and
 // fixing it here alone would make the two siblings disagree. Pinned so the
 // next reader sees it is known rather than rediscovering it.
 func TestBoardStoryEmptyIDMatchesItsSibling(t *testing.T) {
 	h, _ := newBoardTestServer(t)
-	story := do(h, "GET", "/api/board/story/", "127.0.0.1:5555", nil).Code
-	panel := do(h, "GET", "/api/board/panel/", "127.0.0.1:5555", nil).Code
+	story := do(h, "GET", "/api/sprint/story/", "127.0.0.1:5555", nil).Code
+	panel := do(h, "GET", "/api/sprint/panel/", "127.0.0.1:5555", nil).Code
 	if story != panel {
 		t.Fatalf("empty-id handling diverged from the sibling endpoint: story=%d panel=%d",
 			story, panel)

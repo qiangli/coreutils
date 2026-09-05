@@ -1,7 +1,7 @@
 // The steward board page.
 //
 // A full browser page like the terminal and the message board, and its
-// <base href> is the LAUNCHER's, so "api/board" and "./" resolve correctly at /
+// <base href> is the LAUNCHER's, so "api/sprint" and "./" resolve correctly at /
 // on loopback and under outpost's /matrix/h/<host>/app/<name>/ prefix alike.
 //
 // READ-ONLY BY CONSTRUCTION. `board` is the one work verb the atlas marks
@@ -232,7 +232,7 @@ function runRefsEl(refs) {
 const storyCache = new Map();
 async function storyDetail(id) {
   if (storyCache.has(id)) return storyCache.get(id);
-  const p = fetch(url("api/board/story/" + encodeURIComponent(id)))
+  const p = fetch(url("api/sprint/story/" + encodeURIComponent(id)))
     .then(async (r) => {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
@@ -524,7 +524,7 @@ async function loadPanelRows(p, body, more) {
   more.disabled = true;
   more.textContent = "loading…";
   try {
-    const d = await fetch(url("api/board/panel/" + encodeURIComponent(p.id) + "?limit=500")).then((r) => r.json());
+    const d = await fetch(url("api/sprint/panel/" + encodeURIComponent(p.id) + "?limit=500")).then((r) => r.json());
     body.replaceChildren(table(d.columns, d.rows));
     if (d.row_total > (d.rows || []).length) {
       body.append(el("p", "dropped", "showing " + d.rows.length + " of " + d.row_total));
@@ -589,7 +589,7 @@ let inflight = null;
 async function load() {
   if (inflight) return;
   const q = state.all ? "?all=1" : "";
-  inflight = fetch(url("api/board" + q)).then((r) => r.json());
+  inflight = fetch(url("api/sprint" + q)).then((r) => r.json());
   let d;
   try {
     d = await inflight;

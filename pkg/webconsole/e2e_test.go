@@ -656,17 +656,16 @@ func TestE2ESprintServesItsBoard(t *testing.T) {
 	if !strings.Contains(body, "board.js") {
 		t.Error("/sprint/ did not serve the board page")
 	}
-	// The app was renamed without renaming its verb, so both old mounts must
-	// still land on it: a bookmark that 404s is how a rename loses a reader.
+	// The retired mount is not an alias for Sprint.
 	for _, old := range []string{"/board", "/board/"} {
-		if c, b2, _ := get(t, base+old); c != http.StatusOK || !strings.Contains(b2, "board.js") {
-			t.Errorf("%s = %d; it must still reach the Sprint page", old, c)
+		if _, b2, _ := get(t, base+old); strings.Contains(b2, "<title>Sprint") {
+			t.Errorf("%s still reaches the Sprint page", old)
 		}
 	}
 
-	code, body, _ = get(t, base+"/api/board")
+	code, body, _ = get(t, base+"/api/sprint")
 	if code != http.StatusOK {
-		t.Fatalf("/api/board = %d (%s)", code, ellipsize(strings.TrimSpace(body), 200))
+		t.Fatalf("/api/sprint = %d (%s)", code, ellipsize(strings.TrimSpace(body), 200))
 	}
 	var view struct {
 		Schema  string `json:"schema_version"`
@@ -682,10 +681,10 @@ func TestE2ESprintServesItsBoard(t *testing.T) {
 		SprintTotal int `json:"sprint_total"`
 	}
 	if err := json.Unmarshal([]byte(body), &view); err != nil {
-		t.Fatalf("decode /api/board: %v", err)
+		t.Fatalf("decode /api/sprint: %v", err)
 	}
 	if view.Schema == "" {
-		t.Error("/api/board carries no schema_version")
+		t.Error("/api/sprint carries no schema_version")
 	}
 	// The seeded board reaches the browser, not an empty projection: this
 	// endpoint has shipped a summary strip whose counts had nothing behind them.
@@ -696,16 +695,16 @@ func TestE2ESprintServesItsBoard(t *testing.T) {
 		}
 	}
 	if !live {
-		t.Errorf("the live sprint is missing from /api/board: %+v", view.Sprints)
+		t.Errorf("the live sprint is missing from /api/sprint: %+v", view.Sprints)
 	}
 	if len(view.Todos) == 0 {
-		t.Error("/api/board carries no stories; a sprint whose stories are invisible reads as empty")
+		t.Error("/api/sprint carries no stories; a sprint whose stories are invisible reads as empty")
 	}
 
 	// An id nothing matches is a 404 with a message, never an empty 200 — a
 	// detail pane that silently shows nothing is indistinguishable from a story
 	// with no body.
-	code, body, _ = get(t, base+"/api/board/story/no-such-story")
+	code, body, _ = get(t, base+"/api/sprint/story/no-such-story")
 	if code != http.StatusNotFound {
 		t.Errorf("story detail for an unknown id = %d, want 404", code)
 	}

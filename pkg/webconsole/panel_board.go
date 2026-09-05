@@ -34,7 +34,7 @@ const boardTTL = 30 * time.Second
 // the relay fail-closed, and a board panel shipping megabytes per poll has
 // quietly grown a data plane. The overview carries every panel's COLLAPSED
 // summary line — which is what a scan actually reads — plus a capped window of
-// rows; the full set is one deliberate request away at /api/board/panel/{id}.
+// rows; the full set is one deliberate request away at /api/sprint/panel/{id}.
 const boardPanelRows = 25
 
 // boardCache serves the last collected board while a refresh runs behind it.

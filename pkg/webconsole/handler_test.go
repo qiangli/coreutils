@@ -145,16 +145,26 @@ func TestAppsListsTheBuiltinSurfaces(t *testing.T) {
 	}
 }
 
-func TestDeepLinkAliasesSurvive(t *testing.T) {
+func TestCanonicalDeepLinkRedirectsSurvive(t *testing.T) {
 	h := newTestHandler(t, Options{})
-	// /relay is the OLD mount and must keep landing: the room moved to /meet/
-	// with the app's public name, and a bookmark is not a thing to break for a
-	// rename.
 	for path, want := range map[string]string{
-		"/shell": "/term/", "/meet": "/meet/", "/relay": "/meet/"} {
+		"/shell": "/term/", "/meet": "/meet/", "/sprint": "/sprint/"} {
 		w := do(h, "GET", path, "127.0.0.1:5555", nil)
 		if w.Code != http.StatusFound || w.Header().Get("Location") != want {
 			t.Errorf("%s -> %d %q, want 302 %q", path, w.Code, w.Header().Get("Location"), want)
+		}
+	}
+}
+
+func TestRetiredWebAliasesAreNotMounted(t *testing.T) {
+	h := newTestHandler(t, Options{})
+	for _, path := range []string{"/board", "/board/", "/relay", "/relay/"} {
+		w := do(h, "GET", path, "127.0.0.1:5555", nil)
+		if location := w.Header().Get("Location"); location != "" {
+			t.Errorf("retired path %s redirects to %q", path, location)
+		}
+		if !strings.Contains(w.Body.String(), `id="grid-host"`) {
+			t.Errorf("retired path %s was claimed by an app instead of falling through to the launcher", path)
 		}
 	}
 }
@@ -222,8 +232,7 @@ func TestEveryAvailablePanelIsMountedAtItsAdvertisedPath(t *testing.T) {
 // The room is Meet everywhere a PERSON meets it: the tile, the page title, and
 // the address bar.
 //
-// Its command, tile, and mount all use the same public noun. The retired
-// /relay bookmark remains only as a redirect.
+// Its command, tile, and mount all use the same public noun.
 func TestTheRoomIsMountedUnderItsPublicName(t *testing.T) {
 	h := newTestHandler(t, Options{})
 
@@ -245,7 +254,7 @@ func TestTheRoomIsMountedUnderItsPublicName(t *testing.T) {
 // an operator asked to withhold stayed listed, routed and reachable. A refusal
 // would be recoverable; serving it anyway is not.
 func TestDisableAcceptsThePublicMountName(t *testing.T) {
-	for _, name := range []string{"meet", "relay"} {
+	for _, name := range []string{"meet"} {
 		t.Run(name, func(t *testing.T) {
 			h := newTestHandler(t, Options{Disable: []string{name}})
 			// An unmounted path falls through to the launcher's SPA route, so

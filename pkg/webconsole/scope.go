@@ -39,8 +39,9 @@ import (
 // defaultDeviceScope is what a QR pairing confers when --allow is not given:
 // the read-and-communicate panels. Not terminal. Not files.
 //
-// Held as the canonical panel NAMES. Legacy board/relay names are expanded by
-// newScopeSet so already-paired devices survive the command retirement.
+// Held as the canonical panel NAMES. Retired names are deliberately not
+// expanded: a stored scope is authority, so an obsolete spelling must fail
+// closed instead of silently granting a renamed surface.
 //
 // INBOX IS DELIBERATELY NOT HERE, even though it is read-only and looks like a
 // sibling of the board. The board is public by construction — every agent on
@@ -70,7 +71,7 @@ func consoleWidePath(p string) bool {
 //
 // The first-segment rule must hold for the scope check exactly as it does for
 // the tier check, and /api/<panel> is the case where a naive first-segment read
-// gets it wrong: /api/board would resolve to "api", which owns nothing, and an
+// gets it wrong: /api/sprint would resolve to "api", which owns nothing, and an
 // out-of-scope panel's data would be readable through its API while its page
 // was refused. So "api" defers to the SECOND segment.
 func scopeSegment(p string) string {
@@ -97,18 +98,6 @@ func (s *server) newScopeSet(names []string) scopeSet {
 			continue
 		}
 		set[n] = true
-		// Compatibility is deliberately limited to stored/web scope names. The
-		// retired CLI verbs are not restored by these aliases.
-		switch n {
-		case "board":
-			set["sprint"] = true
-		case "sprint":
-			set["board"] = true
-		case "relay":
-			set["meet"] = true
-		case "meet":
-			set["relay"] = true
-		}
 		if seg, ok := s.scopeSegments[n]; ok {
 			set[seg] = true
 		}
@@ -174,14 +163,6 @@ func ValidateScope(names []string, panels []Panel) error {
 		if seg := strings.Trim(p.Path, "/"); seg != "" {
 			known[strings.ToLower(seg)] = true
 		}
-	}
-	// Web/scope compatibility only: these names remain valid for existing
-	// pairings and --allow invocations, but no longer name Bashy commands.
-	if known["sprint"] {
-		known["board"] = true
-	}
-	if known["meet"] {
-		known["relay"] = true
 	}
 	sort.Strings(list)
 	for _, n := range names {

@@ -114,17 +114,12 @@ type Options struct {
 	Disable []string
 }
 
-// disabled reports whether --disable named this panel, by its internal NAME or
-// mount. The retired board/relay spellings remain accepted as web aliases.
+// disabled reports whether --disable named this panel, by its NAME or mount.
 func (o Options) disabled(p Panel) bool {
 	mount := strings.Trim(p.Path, "/")
 	for _, d := range o.Disable {
 		d = strings.TrimSpace(d)
 		if strings.EqualFold(d, p.Name) || (mount != "" && strings.EqualFold(d, mount)) {
-			return true
-		}
-		if (p.Name == "meet" && strings.EqualFold(d, "relay")) ||
-			(p.Name == "sprint" && strings.EqualFold(d, "board")) {
 			return true
 		}
 	}
@@ -304,11 +299,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// each only while its target panel is enabled. The room is mounted at
 	// /meet/ now — the app is called Meet everywhere a person sees it, and
 	// "Relay" on the address bar of a page titled Meet is the kind of
-	// inconsistency a reader has to stop and resolve. Old links still land.
+	// inconsistency a reader has to stop and resolve.
 	if on["meet"] {
 		mux.Handle("GET /meet", redirectTo("/meet/"))
-		mux.Handle("GET /relay", redirectTo("/meet/"))
-		mux.Handle("GET /relay/", redirectTo("/meet/"))
 	}
 
 	// The terminal is served by the launcher itself rather than mounted, so it
@@ -367,12 +360,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	if on["sprint"] {
 		mux.HandleFunc("GET /sprint/", s.handleBoardPage)
 		mux.Handle("GET /sprint", redirectTo("/sprint/"))
-		// Keep old bookmarks working while Sprint becomes the public app name.
-		mux.Handle("GET /board", redirectTo("/sprint/"))
-		mux.Handle("GET /board/", redirectTo("/sprint/"))
-		mux.HandleFunc("GET /api/board", s.handleBoardOverview)
-		mux.HandleFunc("GET /api/board/panel/{id}", s.handleBoardPanel)
-		mux.HandleFunc("GET /api/board/story/{id}", s.handleBoardStory)
+		mux.HandleFunc("GET /api/sprint", s.handleBoardOverview)
+		mux.HandleFunc("GET /api/sprint/panel/{id}", s.handleBoardPanel)
+		mux.HandleFunc("GET /api/sprint/story/{id}", s.handleBoardStory)
 	}
 
 	closers := []func() error{}

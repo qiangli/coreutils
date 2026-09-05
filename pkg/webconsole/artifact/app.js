@@ -339,7 +339,7 @@ function tile(a, opts = {}) {
 
 // WHAT THE PHONE MAY REACH.
 //
-// A pass used to be board/mb/relay always, with `bashy apps pair --allow ...`
+// A pass defaults to meet/mb/sprint, with `bashy apps pair --allow ...`
 // the only way to widen it — so a phone that hit "terminal is not in the
 // scope" got a refusal and no way to act on it. The choice belongs here: the
 // console already required an OS login to reach this page, the chooser is the
@@ -349,7 +349,7 @@ function tile(a, opts = {}) {
 // The shell and the filesystem stay OFF by default. Default-deny is the point:
 // granting them is a decision, and a decision made by ticking a box you can
 // see is a different thing from one made by a default you never read.
-const PAIR_SCOPE_DEFAULT = ["board", "mb", "relay"];
+const PAIR_SCOPE_DEFAULT = ["meet", "mb", "sprint"];
 const PAIR_SCOPE_SENSITIVE = { terminal: "a full shell as your OS user", files: "read your files" };
 
 function pairScopeNames() {

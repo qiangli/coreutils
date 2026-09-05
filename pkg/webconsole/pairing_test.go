@@ -70,7 +70,7 @@ func TestScanOneQRReachesTheConsoleWithoutAPassword(t *testing.T) {
 	}
 	cookie := redeemScan(t, h, store, nil, time.Hour)
 	if got := do(h, "GET", "/sprint/", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusOK {
-		t.Fatalf("paired device on /board/ = %d, want 200", got)
+		t.Fatalf("paired device on /sprint/ = %d, want 200", got)
 	}
 }
 
@@ -200,6 +200,23 @@ func TestDefaultScopeIsNotAShell(t *testing.T) {
 	}
 }
 
+// Stored grants are authority, not a migration surface. A device carrying a
+// retired scope spelling fails closed instead of inheriting the renamed app.
+func TestRetiredStoredScopesDoNotGrantCanonicalPanels(t *testing.T) {
+	for retired, canonicalPath := range map[string]string{
+		"board": "/sprint/",
+		"relay": "/meet/",
+	} {
+		t.Run(retired, func(t *testing.T) {
+			h, store := pairEnv(t)
+			cookie := redeemScan(t, h, store, []string{retired}, time.Hour)
+			if got := do(h, "GET", canonicalPath, "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusForbidden {
+				t.Fatalf("stored %q scope reached %s with status %d", retired, canonicalPath, got)
+			}
+		})
+	}
+}
+
 // TestAllowGrantsExactlyWhatItNames.
 func TestAllowGrantsExactlyWhatItNames(t *testing.T) {
 	h, store := pairEnv(t)
@@ -214,7 +231,7 @@ func TestAllowGrantsExactlyWhatItNames(t *testing.T) {
 
 // TestScopeHoldsOnTheAPISurfaceToo is the acceptance line that makes the
 // first-segment property real: an out-of-scope panel's DATA must be as
-// unreachable as its page. /api/board would otherwise resolve to segment
+// unreachable as its page. /api/sprint would otherwise resolve to segment
 // "api", which owns nothing, and sail straight through.
 func TestScopeHoldsOnTheAPISurfaceToo(t *testing.T) {
 	h, store := pairEnv(t)
@@ -223,8 +240,8 @@ func TestScopeHoldsOnTheAPISurfaceToo(t *testing.T) {
 	if got := do(h, "GET", "/api/mb", "192.168.1.44:5555", withCookie(cookie)).Code; got == http.StatusForbidden {
 		t.Fatal("an in-scope panel's API is refused")
 	}
-	if got := do(h, "GET", "/api/board", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusForbidden {
-		t.Fatalf("/api/board reachable (%d) by a device scoped to mb only", got)
+	if got := do(h, "GET", "/api/sprint", "192.168.1.44:5555", withCookie(cookie)).Code; got != http.StatusForbidden {
+		t.Fatalf("/api/sprint reachable (%d) by a device scoped to mb only", got)
 	}
 	// The console-wide surfaces must stay reachable or the launcher cannot render.
 	for _, p := range []string{"/", "/api/apps", "/api/session"} {
@@ -238,12 +255,12 @@ func TestScopeHoldsOnTheAPISurfaceToo(t *testing.T) {
 // deferral and the name-vs-mount difference (terminal lives at /term/).
 func TestScopeSegmentResolution(t *testing.T) {
 	cases := map[string]string{
-		"/sprint/":           "sprint",
-		"/api/board":         "board",
-		"/api/board/panel/7": "board",
-		"/term/ws":           "term",
-		"/files/x/y":         "files",
-		"/":                  "",
+		"/sprint/":            "sprint",
+		"/api/sprint":         "sprint",
+		"/api/sprint/panel/7": "sprint",
+		"/term/ws":            "term",
+		"/files/x/y":          "files",
+		"/":                   "",
 	}
 	for path, want := range cases {
 		if got := scopeSegment(path); got != want {
@@ -256,8 +273,13 @@ func TestScopeSegmentResolution(t *testing.T) {
 // leave the operator believing they granted something they did not.
 func TestUnknownPanelInAllowIsRejected(t *testing.T) {
 	panels := Discover()
-	if err := ValidateScope([]string{"board"}, panels); err != nil {
+	if err := ValidateScope([]string{"sprint"}, panels); err != nil {
 		t.Fatalf("a real panel was rejected: %v", err)
+	}
+	for _, retired := range []string{"board", "relay"} {
+		if err := ValidateScope([]string{retired}, panels); err == nil {
+			t.Errorf("retired panel name %q was accepted", retired)
+		}
 	}
 	err := ValidateScope([]string{"nosuchpanel"}, panels)
 	if err == nil {
@@ -472,7 +494,7 @@ func TestPairingIsOffByDefault(t *testing.T) {
 // TestDevicesJSONIsTypedData, not a rendered table.
 func TestDevicesJSONIsTypedData(t *testing.T) {
 	h, store := pairEnv(t)
-	redeemScan(t, h, store, []string{"board"}, time.Hour)
+	redeemScan(t, h, store, []string{"sprint"}, time.Hour)
 	st, err := store.load()
 	if err != nil {
 		t.Fatal(err)
@@ -490,7 +512,7 @@ func TestDevicesJSONIsTypedData(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope, ok := back["scope"].([]any)
-	if !ok || len(scope) != 1 || scope[0] != "board" {
+	if !ok || len(scope) != 1 || scope[0] != "sprint" {
 		t.Fatalf("scope is not typed data: %#v", back["scope"])
 	}
 }
@@ -518,7 +540,7 @@ func TestPairAuditRecordsTheGrant(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
 	t.Setenv("BASHY_AUDIT", "") // explicitly off for commands
-	auditPairEvent("pair.issued", map[string]string{"ticket": "abc", "scope": "board"})
+	auditPairEvent("pair.issued", map[string]string{"ticket": "abc", "scope": "sprint"})
 
 	logPath := filepath.Join(home, "audit", "audit.jsonl")
 	raw, err := os.ReadFile(logPath)
@@ -680,7 +702,7 @@ func TestUnreadableTTLIsRefusedNotDefaulted(t *testing.T) {
 // the segment back would hand the reader a remedy they have to translate.
 func TestScopeDenialNamesThePanelTheOperatorTypes(t *testing.T) {
 	h, store := pairEnv(t)
-	cookie := redeemScan(t, h, store, []string{"board"}, time.Hour)
+	cookie := redeemScan(t, h, store, []string{"sprint"}, time.Hour)
 	body := do(h, "GET", "/term/", "192.168.1.44:5555", withCookie(cookie)).Body.String()
 	if !strings.Contains(body, "--allow terminal") {
 		t.Fatalf("denial suggests a name --allow does not take: %q", body)
@@ -713,7 +735,7 @@ func TestAuditRecordsAreTimestamped(t *testing.T) {
 }
 
 // A freshly paired phone lands on the LAUNCHER, not on whichever panel happens
-// to be first in its scope. Dropping a device straight into /board/ gives it no
+// to be first in its scope. Dropping a device straight into /sprint/ gives it no
 // sense of where it is or what else it can reach; "/" is the console's one nav,
 // it lists exactly the panels this device is scoped to, and it is a
 // consoleWidePath, so the landing can never be a page the device is refused.

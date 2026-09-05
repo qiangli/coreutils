@@ -83,7 +83,7 @@ func TestDisabledPanelIsUnroutedNotJustHidden(t *testing.T) {
 		{"/term", "<title>Terminal"},
 		{"/shell", "<title>Terminal"},
 		{"/sprint/", "<title>Sprint"},
-		{"/api/board", boardSchemaVersion},
+		{"/api/sprint", boardSchemaVersion},
 	} {
 		if body := do(h, "GET", tc.path, "127.0.0.1:5555", nil).Body.String(); strings.Contains(body, tc.mustNot) {
 			t.Errorf("%s was still served after the panel was disabled", tc.path)
