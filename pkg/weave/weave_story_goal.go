@@ -83,13 +83,16 @@ func sprintReadyLine(id int64, owner string) string {
 	// Name the MANAGER'S job first. This line used to offer only "read your
 	// mail", which reads as an individual-contributor next step and is how a
 	// conductor ends up working a whole sprint alone beside an idle fleet.
-	return fmt.Sprintf("you are the MANAGER of this sprint: prioritize its stories, then delegate them "+
+	return fmt.Sprintf("you are the MANAGER of this sprint — its conductor, which is what `conductor:%d` addresses: "+
+		"prioritize its stories, then delegate them "+
 		"to agents from `bashy agents list` (run independent stories in parallel; work one yourself only "+
 		"if it finishes immediately; the roster is yours to extend — `bashy agents add`/`clone`; widen to the "+
 		"number of READY INDEPENDENT stories, not the size of the roster — agents cost tokens and contend for "+
 		"rate limits, see `bashy weave fleet`)\n"+
-		"next: `bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
-		"the seat live; `--watch` to stay attached) · procedure: `bashy skills show inbox`", id, owner)
+		"next: `bashy skills show conductor` — the PROCEDURE for this seat, written for an agent: "+
+		"decompose, file stories, launch and monitor the fleet, gate every merge. Then "+
+		"`bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
+		"the seat live; `--watch` to stay attached; `bashy skills show inbox` for how mail works)", id, id, owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {

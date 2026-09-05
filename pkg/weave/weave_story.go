@@ -398,6 +398,23 @@ Install the local fail-closed guard with ` + "`bashy sprint hooks install`" + `.
 The subject remains a normal conventional-commit summary; the trailers are
 the authoritative trace from delivered code back to sprint work.
 
+VOCABULARY — one seat, three words, and they are not three things.
+
+  conductor        the TITLE (role.Conductor). Generic: a conductor conducts one
+                   thing, named by the position it is bound to. It is also the
+                   ADDRESS — conductor:126, topic conductor.126 — and the name of
+                   the procedure skill.
+  sprint manager   the conductor OF A SPRINT. The everyday name for the occupant
+                   of that position, and what this help calls the job. A sprint
+                   manager IS a conductor; the phrase only says which position.
+  owner            the RECORD FIELD storing who holds it (the --owner flag,
+                   Story.Owner). A field name, never a role.
+
+The same shape as the host seat: steward is the title, "this host's steward" is
+the position, and the seat is whoever holds it now. See pkg/role, which separates
+title / qualification / position / occupancy precisely because three of those
+four are routinely all called "role".
+
 QUALIFICATION — who should hold this seat. A sprint manager is judged on six
 measured dimensions, not on coding ability, and the fleet has already produced
 each failure signature at least once:
