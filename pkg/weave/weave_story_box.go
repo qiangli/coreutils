@@ -315,7 +315,7 @@ func newSprintStartCmd() *cobra.Command {
 					// know how mail reaches it.
 					return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s\n%s",
 						id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote+sessionNote,
-						sprintReadyLine(who)), nil
+						sprintReadyLine(id, who)), nil
 				})
 				if err != nil && launched {
 					_ = retireSprintOwnerSession(cmd.Context(), id, who, cwd)

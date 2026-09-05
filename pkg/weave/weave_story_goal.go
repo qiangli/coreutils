@@ -79,9 +79,15 @@ func sprintInboxDeliveryLive(owner string) bool {
 // condition rather than an action and sent an agent off to arrange machinery.
 // Reading your inbox is the whole job: it is how mail arrives and it is what
 // keeps the seat live (RefreshSprintOwnerActivity).
-func sprintReadyLine(owner string) string {
-	return fmt.Sprintf("next: `bashy inbox --as %s` (reads your mail and keeps the seat live; "+
-		"`--watch` to stay attached) · procedure: `bashy skills show inbox`", owner)
+func sprintReadyLine(id int64, owner string) string {
+	// Name the MANAGER'S job first. This line used to offer only "read your
+	// mail", which reads as an individual-contributor next step and is how a
+	// conductor ends up working a whole sprint alone beside an idle fleet.
+	return fmt.Sprintf("you are the MANAGER of this sprint: prioritize its stories, then delegate them "+
+		"to agents from `bashy agents list` (run independent stories in parallel; work one yourself only "+
+		"if it finishes immediately)\n"+
+		"next: `bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
+		"the seat live; `--watch` to stay attached) · procedure: `bashy skills show inbox`", id, owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {

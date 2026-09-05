@@ -733,7 +733,20 @@ func newWeaveStoryTakeCmd() *cobra.Command {
 the human-directed switch, or recovery after the previous conductor died
 (SIGKILL / token exhaustion). A free or STALE lease is taken directly; a
 FRESH lease requires --force (and is recorded). After taking, read the
-continuity record (sprint show) and resume.`,
+continuity record (sprint show) and resume.
+
+YOU ARE NOW THE SPRINT MANAGER, NOT ITS SOLE WORKER.
+
+Taking a sprint makes you responsible for DELIVERY, and the fastest delivery
+uses the whole fleet. So the default is: prioritize the stories, then DELEGATE
+them to agents from ` + "`bashy agents list`" + `, matching each story to a capable
+agent and running independent stories in parallel. Working through a sprint
+alone is the EXCEPTION, justified only for a story short enough to finish
+immediately and needing no other agent.
+
+An idle fleet beside a queued backlog is the failure this seat exists to
+prevent. Delegation transfers execution; it never transfers accountability —
+you still gate, converge and report.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -807,7 +820,7 @@ continuity record (sprint show) and resume.`,
 					default:
 						weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
 					}
-					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(who), brief), nil
+					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(id, who), brief), nil
 				})
 			})
 		},
