@@ -85,18 +85,22 @@ func (r *Resolver) resolveRole(name string) (Resolution, bool) {
 // same thing again somewhere else.
 func roleSummary(hr HostRole) string {
 	if h := strings.TrimSpace(hr.Holder); h != "" {
-		// A HELD seat is only addressable if something can carry mail to the
-		// holder. Claiming otherwise is the exact failure pkg/role names: "an
-		// open room with no live holder is a LIE — someone posts into it and
-		// waits for an answer that is never coming."
+		// A held seat with no LIVE reader is still a mailbox — say which it is.
 		//
-		// The transport rule already exists and is already enforced elsewhere —
-		// `sprint ping` refuses a sprint whose conductor is not live — so this
-		// was two implementations of one rule disagreeing, and the one a human
-		// reads first was the wrong one.
-		if t, why := room.OwnerTransportFor(h); !t.Deliverable() {
+		// Two wrong answers are possible here and the summary must avoid both.
+		// Claiming "mail survives a handover" when nothing is live is the
+		// failure pkg/role names: "an open room with no live holder is a LIE."
+		// But claiming UNREACHABLE is just as wrong in the other direction,
+		// because the bus stores mail regardless of liveness — deliveryState
+		// returns `queued` for a recipient that is simply behind, and an
+		// external agentic CLI is only live at its turn boundaries, so it would
+		// read as unreachable between every turn while its mail piles up
+		// correctly.
+		//
+		// So the distinction is PUSH vs QUEUE, not reachable vs not.
+		if t, _ := room.OwnerTransportFor(h); !t.Deliverable() {
 			return "seat on this host, held by " + h +
-				" but NOT reachable — " + why
+				" — no live session, so mail QUEUES for its next read rather than being pushed"
 		}
 		return "addressable seat on this host, currently held by " + h +
 			" — mail to it survives a handover"

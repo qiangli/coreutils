@@ -54,7 +54,22 @@ func ResolveAuthoredActor(explicit string) (string, error) {
 			}
 			claimed, registered := resolveAgentName(requested)
 			if !registered {
-				return "", fmt.Errorf("authored communication: --as %q is not a registered Bashy agent", requested)
+				// A HUMAN speaking as themselves from inside an agent session is
+				// the case BoardIdentity already documents and tells people to
+				// use — "a human meaning to speak as themselves here passes
+				// --as <name>" — and it was refused here, so the two halves of
+				// one rule disagreed.
+				//
+				// The contract this guard implements is about AGENT names: an
+				// agent harness must not author as a different registered agent.
+				// A person is not an agent identity to impersonate, and for
+				// non-agent names the OS account remains the trust boundary, as
+				// the plain-host branch below already states. So a registered
+				// person is allowed through and canonicalized.
+				if addr, kind, ok := resolvePrincipalTarget(requested); ok && kind == TargetPerson {
+					return addr, nil
+				}
+				return "", fmt.Errorf("authored communication: --as %q names no registered agent or person", requested)
 			}
 			return resolveRegisteredActorClaim(claimed, tool)
 		}

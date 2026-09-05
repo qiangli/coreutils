@@ -190,8 +190,14 @@ func TestRoleSummarySaysWhenAHeldSeatIsUnreachable(t *testing.T) {
 	if strings.Contains(held, "addressable seat") {
 		t.Errorf("a seat whose holder has no transport must not read as addressable: %q", held)
 	}
-	if !strings.Contains(held, "NOT reachable") {
-		t.Errorf("the summary must say the seat is unreachable: %q", held)
+	// It must say mail QUEUES rather than claiming the seat is unreachable:
+	// the bus stores mail regardless of liveness, and an external CLI is live
+	// only at its turn boundaries.
+	if !strings.Contains(held, "QUEUES") {
+		t.Errorf("the summary must say mail queues for the next read: %q", held)
+	}
+	if strings.Contains(held, "NOT reachable") {
+		t.Errorf("must not claim unreachable — the inbox is durable: %q", held)
 	}
 
 	// A vacant seat is a different answer and keeps its own wording: mail waits
