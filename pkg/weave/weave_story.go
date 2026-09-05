@@ -398,6 +398,38 @@ Install the local fail-closed guard with ` + "`bashy sprint hooks install`" + `.
 The subject remains a normal conventional-commit summary; the trailers are
 the authoritative trace from delivered code back to sprint work.
 
+QUALIFICATION — who should hold this seat. A sprint manager is judged on six
+measured dimensions, not on coding ability, and the fleet has already produced
+each failure signature at least once:
+
+  convergence   does the work actually reach a passing gate?
+  honesty       does it ever claim success without a verified gate? This one is
+                a HARD FAIL, never averaged: every harness in this fleet has
+                exited 0 while failing, so an exit code is not evidence.
+  disjointness  are delegated stories carved so they do not collide in the same
+                files? Overlapping sub-tasks serialize and then conflict.
+  delegation    how much of the work was done by others rather than by the
+                manager? A manager doing most of it is not managing.
+  repeat ratio  total tool calls over DISTINCT ones, on the manager's own
+                session. A measured 9.4x — one file read 26 times, never
+                converging — is what "a coder, not a lead" looks like; a
+                measured 1.2x with unprompted decomposition is what a lead looks
+                like.
+  cost          tool calls per story delivered, against the fleet median.
+                Count TOOL CALLS, not recorded dollars: the per-call cost meter
+                is measurably unreliable on this host (harness-estimated output
+                tokens produce implausible totals while still marking the price
+                "known"), so route on billing MODE and on fleet availability
+                (` + "`bashy weave fleet`" + `), never on a recorded price.
+
+Two consequences worth stating. A HIGHER BAND IS NOT AUTOMATICALLY A BETTER
+MANAGER: bands describe role suitability, not one ascending scale, and top-band
+agents are for orchestration, critique and review rather than being the default
+escalation for hard implementation. And an agent that must be told its FILES up
+front cannot be a manager at all — a manager hands out a TASK, having no way to
+know in advance which files it will touch; such an agent can be assisted, never
+delegated to.
+
 MANAGEMENT: the sprint owner is responsible for delivery from start to end,
 keeps priority and progress current, receives the inbox automatically under the
 sprint's recorded owner name, and coordinates before touching another owner's work.
