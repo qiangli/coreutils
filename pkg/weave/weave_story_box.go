@@ -593,6 +593,18 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					if strings.TrimSpace(note) != "" {
 						msg += ": " + strings.TrimSpace(note)
 					}
+					// STOP PARKS THE WORK; IT DOES NOT VACATE THE SEAT.
+					//
+					// A manager told to "stop everything and wrap up" runs this,
+					// reads success, and reports done — while still holding the
+					// lease, so the next manager's take is refused and the operator
+					// has to diagnose it. Naming the remaining step here is the
+					// difference between a wrap-up and a half-finished handover.
+					if !ending && s.Lease != nil && strings.TrimSpace(s.Lease.Holder) != "" {
+						msg += "\n  the SEAT is still yours — `bashy sprint handoff " +
+							strconv.FormatInt(id, 10) + " -m '<where it stands>'` releases it " +
+							"so another manager can take over; keep it if you are resuming"
+					}
 					closedOwner = strings.TrimSpace(s.Owner)
 					if ending {
 						// "done" must mean done. end deliberately carries no
