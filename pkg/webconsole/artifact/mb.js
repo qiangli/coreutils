@@ -312,13 +312,17 @@ async function send(e) {
       return;
     }
     $("c-body").value = "";
-    // Report the DELIVERY STATE, not a generic "sent": queued, delivered and
-    // unverified are different facts and the sender is entitled to which one.
+    // A SendResult is already the board's delivery truth. Keep every recipient
+    // beside its canonical state and the transport's own reason: reducing this
+    // to unique state names loses who is waiting (and why) on a group send.
     const r = d.result || {};
-    const states = (r.deliveries || []).map((x) => x.state).filter(Boolean);
-    const uniq = [...new Set(states)];
     out.className = "ok";
-    out.textContent = "#" + r.seq + " to " + r.label + (uniq.length ? " · " + uniq.join(", ") : "");
+    out.replaceChildren(document.createTextNode("#" + r.seq + " to " + r.label));
+    for (const delivery of r.deliveries || []) {
+      const line = [delivery.to, delivery.state, delivery.reason].filter(Boolean).join(" · ");
+      if (!line) continue;
+      out.append(document.createElement("br"), el("span", "delivery", line));
+    }
     await load(false);
   } catch (_) {
     out.className = "bad";

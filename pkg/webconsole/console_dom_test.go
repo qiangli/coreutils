@@ -212,6 +212,57 @@ func TestDOMPasswordToggleSwaps(t *testing.T) {
 	}
 }
 
+// A send receipt is per recipient. The result must keep the recipient, the
+// canonical state, and the transport's reason together rather than reducing a
+// multi-recipient reply to a misleading generic "sent" confirmation.
+func TestDOMMessageSendRendersEveryDelivery(t *testing.T) {
+	base, ctx, errs := domEnv(t, Options{})
+
+	var receipt string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/mb/"),
+		chromedp.WaitVisible(`#mb-composer`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+(() => {
+  const realFetch = window.fetch;
+  window.fetch = async (input, init = {}) => {
+    if (init.method === "POST") {
+      return new Response(JSON.stringify({result: {
+        seq: 17, label: "release crew", deliveries: [
+          {to: "ada", state: "accepted", reason: "role seat"},
+          {to: "bea", state: "queued", reason: "reader is behind"},
+          {to: "cam", state: "delivered", reason: "live session"},
+          {to: "dee", state: "read", reason: "cursor caught up"},
+          {to: "eli", state: "failed", reason: "not running"},
+          {to: "fay", state: "unverified", reason: "no cursor"}
+        ]
+      }}), {status: 200, headers: {"Content-Type": "application/json"}});
+    }
+    return realFetch(input, init);
+  };
+})();`, nil),
+		chromedp.SetValue(`#c-body`, "receipt test", chromedp.ByQuery),
+		chromedp.Evaluate(`document.getElementById("mb-composer").requestSubmit()`, nil),
+		chromedp.WaitReady(`#c-result.ok`, chromedp.ByQuery),
+		chromedp.Evaluate(`document.getElementById("c-result").innerText`, &receipt),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "message send", errs())
+	for _, want := range []string{
+		"ada · accepted · role seat",
+		"bea · queued · reader is behind",
+		"cam · delivered · live session",
+		"dee · read · cursor caught up",
+		"eli · failed · not running",
+		"fay · unverified · no cursor",
+	} {
+		if !strings.Contains(receipt, want) {
+			t.Errorf("send receipt = %q, missing %q", receipt, want)
+		}
+	}
+}
+
 // Pairing: no on/off switch, a QR when asked, and Refresh only once there is a
 // code to replace.
 func TestDOMPairingSection(t *testing.T) {
