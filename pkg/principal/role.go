@@ -12,7 +12,11 @@ package principal
 // bridges its HostRoles registry — the very table the addresser consults —
 // into here from its own init(). One table, two front doors, no drift.
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/qiangli/coreutils/pkg/room"
+)
 
 // HostRole is an addressable seat on this host. Label is what a person types
 // ("steward", "conductor:22"); Topic is the stable board address it resolves
@@ -81,6 +85,19 @@ func (r *Resolver) resolveRole(name string) (Resolution, bool) {
 // same thing again somewhere else.
 func roleSummary(hr HostRole) string {
 	if h := strings.TrimSpace(hr.Holder); h != "" {
+		// A HELD seat is only addressable if something can carry mail to the
+		// holder. Claiming otherwise is the exact failure pkg/role names: "an
+		// open room with no live holder is a LIE — someone posts into it and
+		// waits for an answer that is never coming."
+		//
+		// The transport rule already exists and is already enforced elsewhere —
+		// `sprint ping` refuses a sprint whose conductor is not live — so this
+		// was two implementations of one rule disagreeing, and the one a human
+		// reads first was the wrong one.
+		if t, why := room.OwnerTransportFor(h); !t.Deliverable() {
+			return "seat on this host, held by " + h +
+				" but NOT reachable — " + why
+		}
 		return "addressable seat on this host, currently held by " + h +
 			" — mail to it survives a handover"
 	}

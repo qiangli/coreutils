@@ -177,3 +177,27 @@ func TestWhoisReportsAVacantSeatAsVacant(t *testing.T) {
 		t.Errorf("summary = %q, want the vacancy stated", ans.Matches[0].Summary)
 	}
 }
+
+// A HELD seat whose holder nothing can reach must not be reported as
+// addressable. The transport rule already exists and `sprint ping` already
+// enforces it by refusing; whois claimed the opposite about the same seat in
+// the same second, which is the "two name systems disagree" defect in its
+// sharpest form — and the one a human reads first was the wrong one.
+func TestRoleSummarySaysWhenAHeldSeatIsUnreachable(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir()) // no live members at all
+
+	held := roleSummary(HostRole{Label: "conductor:1", Topic: "conductor.1", Holder: "nobody-live"})
+	if strings.Contains(held, "addressable seat") {
+		t.Errorf("a seat whose holder has no transport must not read as addressable: %q", held)
+	}
+	if !strings.Contains(held, "NOT reachable") {
+		t.Errorf("the summary must say the seat is unreachable: %q", held)
+	}
+
+	// A vacant seat is a different answer and keeps its own wording: mail waits
+	// for a holder rather than going nowhere.
+	vacant := roleSummary(HostRole{Label: "steward", Topic: "steward.host"})
+	if !strings.Contains(vacant, "VACANT") {
+		t.Errorf("vacant summary changed: %q", vacant)
+	}
+}
