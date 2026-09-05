@@ -44,6 +44,7 @@ package weave
 // Liveness is REPORTED instead, where it is actionable.
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -51,6 +52,8 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/room"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // sprintUnansweredAge is how long a message addressed to a sprint's owner may
@@ -87,16 +90,19 @@ func sprintOwnerRegistered(name string) bool {
 	if n == "" {
 		return false
 	}
-	_, ok := fleetCatalog().Agent(n)
+	// A sprint manager is a principal that can be REACHED and held accountable —
+	// an agent or a person. Restricting it to agents refused the operator from
+	// managing their own sprint, which is the case this sprint exists to fix.
+	_, _, ok := fleetCatalog().CanonicalPrincipal(n)
 	return ok
 }
 
 func canonicalFleetAgentName(name string) (string, bool) {
-	a, ok := fleetCatalog().Agent(strings.TrimSpace(name))
+	canonical, _, ok := fleetCatalog().CanonicalPrincipal(strings.TrimSpace(name))
 	if !ok {
 		return "", false
 	}
-	return a.Name, true
+	return canonical, true
 }
 
 // sprintOwnerInRoster reports whether the name is currently present in the host
@@ -223,14 +229,20 @@ func validateSprintOwner(name string) error {
 	if isPlaceholderConductorName(n) {
 		return fmt.Errorf("%q is a placeholder, not an agent — it addresses nobody and collides "+
 			"across every sprint on this host.\n"+
-			"  pass --owner NAME, where NAME appears in `bashy agents list`", n)
+			"  pass --owner NAME from `bashy agents list` or `bashy people list`", n)
 	}
 	if sprintOwnerRegistered(n) {
 		return nil
 	}
-	return fmt.Errorf("sprint manager %q is not a registered agent, so mb/chat/inbox cannot reach it.\n"+
-		"  choose NAME from: bashy agents list\n"+
-		"  then re-run with --owner %s", n, n)
+	// A manager must be REACHABLE over mb/chat/inbox — which an agent and a
+	// registered person both are. Naming only the agent list here was how the
+	// operator got told to pick from a list they could never appear in.
+	if errors.Is(ownerErr(n), fleet.ErrPrincipalAmbiguous) {
+		return fmt.Errorf("sprint manager %q is ambiguous — more than one registered principal answers to it; qualify it", n)
+	}
+	return fmt.Errorf("sprint manager %q owns nothing here, so mb/chat/inbox cannot reach it.\n"+
+		"  %s\n"+
+		"  then re-run with --owner %s", n, fleet.UnknownPrincipalHint(n), n)
 }
 
 // isPlaceholderConductorName catches the generic fallbacks that used to be
@@ -317,4 +329,11 @@ func renderSprintReachability(w interface{ Write([]byte) (int, error) }, s *weav
 	for _, p := range r.Problems {
 		fmt.Fprintf(w, "  UNREACHABLE: %s\n", p)
 	}
+}
+
+// ownerErr reports why a name does not resolve to one owner, for the message
+// only — the decision itself stays with sprintOwnerRegistered.
+func ownerErr(name string) error {
+	_, _, err := fleetCatalog().ResolvePrincipal(name)
+	return err
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/coopauth"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -334,17 +335,34 @@ func decodeBody(r *http.Request, v any) error {
 // The default is THIS HOST's human, never the room's. Defaulting to the room's
 // own human would make requireOrganizer vacuous: every request would arrive
 // already wearing the name of whoever convened the room it is addressing.
-func actorOf(r *http.Request, stated string) string {
+func actorOf(r *http.Request) string {
+	// WHO IS ACTING COMES FROM THE REQUEST, NEVER FROM THE BODY.
+	//
+	// This used to accept a caller-stated name on any ungated path, which is the
+	// hole the console had already closed on its own send path: "a browser that
+	// could name its own from could sign as any agent on the host"
+	// (pkg/webconsole/panel_mb.go). /meet/ is a panel of that same console, so a
+	// page could be signed one way in Messages and another way here.
+	//
+	// It also took the cloud identity's User — the EMAIL — where the console
+	// takes Username, the collision-free app handle. One cloud human was
+	// therefore two names on one page load, which fragments their inbox and
+	// makes attribution unreliable. Same source, same field, same
+	// canonicalization as pkg/webconsole/api.go userOf.
+	var user string
 	if id, ok := coopauth.IdentityOf(r); ok {
-		if n := strings.TrimSpace(id.User); n != "" {
-			return n
+		user = strings.TrimSpace(id.Username)
+		if user == "" {
+			return "" // vouched but unnamed: let requireOrganizer refuse it
 		}
-		return "" // vouched but unnamed: let requireOrganizer refuse it
 	}
-	if n := strings.TrimSpace(stated); n != "" {
-		return n
+	if user == "" {
+		user = humanName()
 	}
-	return humanName()
+	if canon, err := bus.BoardIdentity(user); err == nil && strings.TrimSpace(canon) != "" {
+		return canon
+	}
+	return user
 }
 
 // --- Room routes -------------------------------------------------------------
@@ -417,7 +435,7 @@ func handleRoomCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	opts := CreateOptions{
 		Topic: body.Topic, Participants: body.Participants, Chair: owner,
-		NoSecretary: true, Human: actorOf(r, body.Human),
+		NoSecretary: true, Human: actorOf(r),
 	}
 	if strings.TrimSpace(opts.Human) == "" {
 		// Vouched but unnamed. Falling back to this host's user would file the room
@@ -489,7 +507,7 @@ func handleRecall(w http.ResponseWriter, r *http.Request) {
 	}
 	// The retraction is attributed to the caller, resolved the same way a post
 	// is: a withdrawal signed by anyone but the sender is not a withdrawal.
-	res, err := Recall(st, body.Job, body.TS, actorOf(r, st.Human))
+	res, err := Recall(st, body.Job, body.TS, actorOf(r))
 	if err != nil {
 		apiErr(w, err)
 		return
@@ -522,7 +540,7 @@ func handleRoster(w http.ResponseWriter, r *http.Request, verb func(ref, actor, 
 		apiErr(w, err)
 		return
 	}
-	if err := verb(ref, actorOf(r, body.Actor), body.Agent); err != nil {
+	if err := verb(ref, actorOf(r), body.Agent); err != nil {
 		apiErr(w, err)
 		return
 	}
@@ -549,7 +567,7 @@ func handleClose(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
-	if err := Close(r.PathValue("ref"), actorOf(r, body.Actor)); err != nil {
+	if err := Close(r.PathValue("ref"), actorOf(r)); err != nil {
 		apiErr(w, err)
 		return
 	}
@@ -562,7 +580,7 @@ func handleOpen(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
-	st, err := Open(r.PathValue("ref"), actorOf(r, body.Actor))
+	st, err := Open(r.PathValue("ref"), actorOf(r))
 	if err != nil {
 		apiErr(w, err)
 		return

@@ -1,9 +1,12 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // SprintClaimIdentity resolves the exact durable address a start/take command
@@ -29,9 +32,12 @@ func SprintClaimIdentity(id int64, explicit string, _ bool) (string, error) {
 	if err := validateSprintOwner(explicit); err != nil {
 		return "", err
 	}
-	canonical, ok := canonicalFleetAgentName(explicit)
-	if !ok {
-		return "", fmt.Errorf("sprint manager %q is not a registered agent", explicit)
+	canonical, _, err := fleetCatalog().ResolvePrincipal(explicit)
+	if errors.Is(err, fleet.ErrPrincipalAmbiguous) {
+		return "", fmt.Errorf("sprint manager %q is ambiguous — more than one registered principal answers to it; qualify it", explicit)
+	}
+	if err != nil {
+		return "", fmt.Errorf("sprint manager %q owns nothing here — %s", explicit, fleet.UnknownPrincipalHint(explicit))
 	}
 	return canonical, nil
 }

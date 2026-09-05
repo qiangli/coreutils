@@ -488,13 +488,22 @@ func TestAPIRoomCreateSeatsTheCloudIdentity(t *testing.T) {
 	if err := json.Unmarshal(body, &st); err != nil {
 		t.Fatalf("decode: %v (%s)", err, body)
 	}
-	// An email is a legitimate principal — the identity that called is the identity
-	// recorded, not an OS-shaped approximation of it.
-	if st.Human != cloudUser {
-		t.Errorf("human = %q, want the authenticated caller %q", st.Human, cloudUser)
+	// The identity that called is the identity recorded — still NOT an OS-shaped
+	// approximation. What changed is WHICH form of it: the collision-free handle
+	// derived from the verified email, which is what the rest of the console
+	// signs with (pkg/webconsole userOf -> bus.BoardIdentity).
+	//
+	// Recording the raw email here instead made one cloud human TWO principals on
+	// a single page load — the handle in Messages and inbox, the email in this
+	// room — which fragments their mail and breaks attribution. The email remains
+	// on Identity.User/Email for audit; addressing keys on the handle because
+	// that is what bus and inbox key on.
+	want := coopauth.Username(cloudUser)
+	if st.Human != want {
+		t.Errorf("human = %q, want the caller's canonical handle %q", st.Human, want)
 	}
-	if st.Initiator != cloudUser {
-		t.Errorf("initiator = %q, want the authenticated caller %q", st.Initiator, cloudUser)
+	if st.Initiator != want {
+		t.Errorf("initiator = %q, want the caller's canonical handle %q", st.Initiator, want)
 	}
 	// Derived, never stored: an initiator who IS the human is a human.
 	if st.initiatorKind() != "human" {
@@ -507,8 +516,8 @@ func TestAPIRoomCreateSeatsTheCloudIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the created room must be on disk: %v", err)
 	}
-	if saved.Human != cloudUser || saved.Initiator != cloudUser {
-		t.Fatalf("saved header = human %q initiator %q", saved.Human, saved.Initiator)
+	if saved.Human != want || saved.Initiator != want {
+		t.Fatalf("saved header = human %q initiator %q, want %q", saved.Human, saved.Initiator, want)
 	}
 
 	// The whole point of recording it: the creator can now act on their own room.
@@ -807,25 +816,28 @@ func TestGateEntrances(t *testing.T) {
 	}
 }
 
-// A vouched caller is named by its VERIFIED identity, and the body cannot
-// override it. A room whose organizer check could be passed by typing somebody
-// else's name into JSON would not have an organizer check.
-func TestActorOfPrefersTheVouchedIdentity(t *testing.T) {
+// The actor is named by the REQUEST, never by the body — on every path, not
+// just the vouched one. /meet/ is a panel of the same console whose message
+// board already refuses a body-supplied sender, so a page that could sign one
+// way in Messages and another way here would let one human be two principals.
+//
+// The vouched name is the collision-free Username, exactly as
+// pkg/webconsole/api.go userOf derives it — not the raw email, which is what
+// made one cloud human two names on a single page load.
+func TestActorOfIsDerivedFromTheRequestNotTheBody(t *testing.T) {
 	t.Setenv("USER", "owner")
 
-	// Ungated loopback: the caller may name itself, defaulting to the host human.
+	// Ungated loopback: the host's human, and no way to state somebody else.
 	plain := httptest.NewRequest("POST", "/api/rooms/1/invite", nil)
-	if got := actorOf(plain, ""); got != "owner" {
-		t.Errorf("actorOf(unstated) = %q, want the host's human", got)
-	}
-	if got := actorOf(plain, "qiangli"); got != "qiangli" {
-		t.Errorf("actorOf(stated) = %q", got)
+	if got := actorOf(plain); got != "owner" {
+		t.Errorf("actorOf(loopback) = %q, want the host's human", got)
 	}
 
-	// Vouched: the body is ignored entirely.
+	// Vouched: the verified identity, canonicalized the same way the console
+	// canonicalizes it.
 	var seen string
 	gate(serveGuard(), func(w http.ResponseWriter, r *http.Request) {
-		seen = actorOf(r, "somebody-else")
+		seen = actorOf(r)
 	}).ServeHTTP(httptest.NewRecorder(), func() *http.Request {
 		r := httptest.NewRequest("POST", "/api/rooms/1/invite", nil)
 		r.RemoteAddr = "127.0.0.1:51234"
@@ -833,8 +845,8 @@ func TestActorOfPrefersTheVouchedIdentity(t *testing.T) {
 		r.Header.Set("Remote-User", "vouched@example.com")
 		return r
 	}())
-	if seen != "vouched@example.com" {
-		t.Errorf("actorOf(vouched) = %q — a body field must not be able to impersonate", seen)
+	if want := coopauth.Username("vouched@example.com"); seen != want {
+		t.Errorf("actorOf(vouched) = %q, want %q — the same handle the console signs with", seen, want)
 	}
 }
 

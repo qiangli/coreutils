@@ -240,7 +240,7 @@ func handleRelayDMList(w http.ResponseWriter, r *http.Request) {
 		}
 		lock := relayDMLock(canonAgent(body.Agent))
 		lock.Lock()
-		st, err := ensureRelayDM(body.Agent, actorOf(r, ""))
+		st, err := ensureRelayDM(body.Agent, actorOf(r))
 		lock.Unlock()
 		if err != nil {
 			apiErr(w, err)
@@ -262,7 +262,7 @@ func handleRelayDMGet(w http.ResponseWriter, r *http.Request) {
 	lock := relayDMLock(agent)
 	lock.Lock()
 	defer lock.Unlock()
-	st, err := ensureRelayDM(agent, actorOf(r, ""))
+	st, err := ensureRelayDM(agent, actorOf(r))
 	if err != nil {
 		apiErr(w, err)
 		return
@@ -290,7 +290,7 @@ func handleRelayDMMessage(ctx context.Context) http.HandlerFunc {
 		}
 		lock := relayDMLock(agent)
 		lock.Lock()
-		st, err := ensureRelayDM(agent, actorOf(r, ""))
+		st, err := ensureRelayDM(agent, actorOf(r))
 		if err != nil {
 			lock.Unlock()
 			apiErr(w, err)
@@ -394,7 +394,7 @@ func handleRelayDMWork(ctx context.Context) http.HandlerFunc {
 
 		lock := relayDMLock(agent)
 		lock.Lock()
-		st, err := ensureRelayDM(agent, actorOf(r, ""))
+		st, err := ensureRelayDM(agent, actorOf(r))
 		lock.Unlock()
 		if err != nil {
 			apiErr(w, err)
@@ -633,7 +633,7 @@ func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
 	agent := canonAgent(r.URL.Query().Get("agent"))
 	lock := relayDMLock(agent)
 	lock.Lock()
-	_, ensureErr := ensureRelayDM(agent, actorOf(r, ""))
+	_, ensureErr := ensureRelayDM(agent, actorOf(r))
 	lock.Unlock()
 	if ensureErr != nil {
 		http.Error(w, ensureErr.Error(), http.StatusBadRequest)
@@ -777,7 +777,7 @@ func handleRelayDMRecall(w http.ResponseWriter, r *http.Request) {
 			turn.cancel()
 		}
 	}
-	res, err := Recall(st, "", body.TS, actorOf(r, st.Human))
+	res, err := Recall(st, "", body.TS, actorOf(r))
 	if err != nil {
 		apiErr(w, err)
 		return

@@ -93,7 +93,10 @@ func TestSprintRefusesAnOwnerThatResolvesToNobody(t *testing.T) {
 	}
 	// The refusal must point to the canonical roster rather than suggesting an
 	// ad-hoc live seat that will disappear when its process exits.
-	for _, want := range []string{"sprint manager", "not a registered agent", "bashy agents list", "--owner"} {
+	// It must also name the PEOPLE registry: pointing a human at the agent list
+	// alone was how the operator got told to choose from a list they can never
+	// appear in.
+	for _, want := range []string{"sprint manager", "owns nothing here", "bashy agents list", "bashy people list", "--owner"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("refusal missing %q:\n%s", want, out)
 		}
@@ -388,8 +391,8 @@ func TestSprintOwnerMustBeAnAddressableAgent(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a sprint was seated to a name that is in no roster:\n%s", out)
 	}
-	if !strings.Contains(out, "not a registered agent") {
-		t.Errorf("refusal must say the name is absent from the fleet:\n%s", out)
+	if !strings.Contains(out, "owns nothing here") || !strings.Contains(out, "bashy people list") {
+		t.Errorf("refusal must say the name owns nothing and name both registries:\n%s", out)
 	}
 
 	// 2. A placeholder — REFUSED. "conductor" is not unique: every sprint on

@@ -48,8 +48,10 @@ func TestSprintManagerRejectsAmbiguousAgentIdentity(t *testing.T) {
 
 	for _, owner := range []string{"duplicate-owner", "shared-owner"} {
 		t.Run(owner, func(t *testing.T) {
+			// Ambiguous, not unknown: the name is real and answers for more than
+			// one principal, so the fix is to qualify it rather than register it.
 			if err := validateSprintOwner(owner); err == nil ||
-				!strings.Contains(err.Error(), "not a registered agent") {
+				!strings.Contains(err.Error(), "ambiguous") {
 				t.Fatalf("ambiguous sprint manager %q was not rejected: %v", owner, err)
 			}
 		})

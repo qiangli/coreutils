@@ -19,6 +19,7 @@
 package todo
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,11 +56,20 @@ func canonicalAssignee(name string) (string, error) {
 	if n == "" {
 		return "", nil
 	}
-	a, ok := todoAgentCatalog().Agent(n)
-	if !ok {
-		return "", fmt.Errorf("todo: assignee %q is not a registered agent — choose NAME from `bashy agents list`", n)
+	// An assignee is a principal that can OWN the item — an agent or a person.
+	// It used to be agents only, which refused every human by construction while
+	// the message board accepted the same name, so an assigned human was both
+	// addressable and unassignable. See fleet.CanonicalPrincipal.
+	canonical, _, err := todoAgentCatalog().ResolvePrincipal(n)
+	switch {
+	case errors.Is(err, fleet.ErrPrincipalAmbiguous):
+		// Ambiguous is not unknown: the name is real and answers for more than
+		// one principal, so the fix is to qualify it, never to register it again.
+		return "", fmt.Errorf("todo: assignee %q is ambiguous — more than one registered principal answers to it; qualify it", n)
+	case err != nil:
+		return "", fmt.Errorf("todo: assignee %q owns nothing here — %s", n, fleet.UnknownPrincipalHint(n))
 	}
-	return a.Name, nil
+	return canonical, nil
 }
 
 // ValidStatus reports whether s is a known todo status.

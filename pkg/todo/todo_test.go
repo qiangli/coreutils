@@ -55,7 +55,7 @@ func TestTodoAssigneeRejectsAmbiguousAgentIdentity(t *testing.T) {
 	for _, owner := range []string{"duplicate-owner", "shared-owner"} {
 		t.Run(owner, func(t *testing.T) {
 			if _, err := Add(st, "ambiguous assignment", "", "", nil, "", owner); err == nil ||
-				!strings.Contains(err.Error(), "not a registered agent") {
+				!strings.Contains(err.Error(), "ambiguous") {
 				t.Fatalf("ambiguous assignee %q was not rejected: %v", owner, err)
 			}
 		})
