@@ -753,8 +753,32 @@ fleet to the backlog is part of managing the sprint, not a request to escalate �
 a manager who leaves a story unstarted because no listed agent fits has stopped
 one step short of the job.
 
+BUT MORE AGENTS IS NOT AUTOMATICALLY FASTER, AND IT IS NEVER FREE. Parallelism
+pays only across INDEPENDENT stories; dependent ones serialize no matter how many
+agents hold them, and a worker started on blocked work burns tokens to wait.
+Every agent also spends a real budget and contends for the same seats and rate
+limits — a flat-quota model that runs out BLOCKS, and a flat-then-metered one
+keeps working and starts charging, which is the silent one. Check
+` + "`bashy weave fleet`" + ` for who is actually available (installed, signed in,
+not cooling down) before widening, and widen to the number of ready independent
+stories rather than to the size of the roster.
+
+MATCH THE AGENT TO THE STORY, AND PREFER THE ONE THAT DOES NOT METER. Two
+routing rules, both ordinary service economics rather than anything specific to
+this fleet:
+
+  - Capability to difficulty. A band is a peg (` + "`bashy agents list --min-band`" + `);
+    spending an L4 on a mechanical story buys nothing and consumes the seat the
+    hard story will need. Send the easy work to the cheaper, smaller agent.
+  - Billing before auth. Prefer FLAT-BILLED agents over metered ones, and read
+    ` + "`Model.Billing`" + `, never ` + "`Model.Kind`" + `: the two are orthogonal on purpose,
+    because a plan can be flat-rate and still authenticate with an API key. An
+    agent that looks metered by its auth may be prepaid, and routing on the
+    wrong field sends work to the one that bills per token.
+
 An idle fleet beside a queued backlog is the failure this seat exists to
-prevent. Delegation transfers execution; it never transfers accountability —
+prevent; a crowd of agents on one serialized story is the opposite failure and
+costs more. Delegation transfers execution; it never transfers accountability —
 you still gate, converge and report.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
