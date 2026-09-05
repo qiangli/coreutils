@@ -60,6 +60,13 @@ type LiveEvent struct {
 	Text    string    `json:"text,omitempty"`
 	Status  string    `json:"status,omitempty"` // on `spoke`
 	TS      time.Time `json:"ts"`
+	// Lines, Bytes, and ElapsedMS are populated by the DM observer's bounded
+	// progress projection. They are counters over the live prose seen so far,
+	// not transcript fields, and therefore remain absent from ordinary meeting
+	// live events.
+	Lines     int   `json:"lines,omitempty"`
+	Bytes     int64 `json:"bytes,omitempty"`
+	ElapsedMS int64 `json:"elapsed_ms,omitempty"`
 
 	// CtlSock is set on `speaking`: the socket that steers THIS turn.
 	//
@@ -138,6 +145,10 @@ type liveWriter struct {
 	round   int
 	speaker string
 	role    string
+	// activity optionally projects a structured transport line into a short,
+	// human-readable progress line. Meeting turns leave it nil; Chat enables it
+	// so tool activity can prove motion before the assistant starts its answer.
+	activity func(string) string
 
 	mu       sync.Mutex
 	proseBuf bytes.Buffer // partial-line buffer for the stdout tee (chanProse)
@@ -295,6 +306,11 @@ func (w *liveWriter) emit(line string, ch liveChannel) {
 	// honest signal of which source a byte came from. Prose emits live in order;
 	// the event channel is held and reconciled against prose at close.
 	human, class, _ := classifyEventLine(line)
+	if w.activity != nil {
+		if activity := w.activity(line); activity != "" {
+			w.publish(activity)
+		}
+	}
 	if class == lineDrop {
 		return
 	}

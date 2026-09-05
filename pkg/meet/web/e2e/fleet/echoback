@@ -30,4 +30,18 @@ while [ $# -gt 1 ]; do
     *) shift ;;
   esac
 done
-printf 'ECHO[%s] %s\n' "$model" "${1:-}"
+prompt="${1:-}"
+case "$prompt" in
+  *"show sampled progress"*)
+    line=1
+    while [ "$line" -le 8 ]; do
+      printf 'progress line %s: inspecting deterministic fixture output\n' "$line"
+      sleep 0.2
+      line=$((line + 1))
+    done
+    # Leave the sampled card on screen long enough for the browser assertion;
+    # the completed transcript remains deterministic and contains every line.
+    sleep 1
+    ;;
+esac
+printf 'ECHO[%s] %s\n' "$model" "$prompt"

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/chat"
 	"github.com/qiangli/coreutils/pkg/coopauth"
@@ -447,6 +448,16 @@ func runRelayDMTurn(ctx context.Context, st relayDM, prompt string) {
 	defer lock.Unlock()
 	turnCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
+	roomState, err := dmRoomFor(st.Agent, st.Human)
+	if err != nil {
+		return
+	}
+	// A DM uses the same ephemeral live channel as a meeting turn. The DM
+	// websocket projects this verbose local view into a bounded progress stream;
+	// the durable transcript still receives only the complete final answer.
+	live := newLiveWriter(roomState, st.Agent, "assistant", "")
+	live.activity = dmActivitySummary
+	defer live.close(statusError)
 	// A chat seat ACTS: this is the surface a steward drives the machine from,
 	// so a turn that could only speak would make it a suggestion box. Same
 	// authority as `Start work` above, which had it already. See turnAuthority.
@@ -454,6 +465,7 @@ func runRelayDMTurn(ctx context.Context, st relayDM, prompt string) {
 	res, err := invokeRelayDM(turnCtx, chat.Options{
 		Agent: st.Agent, Instruction: prompt, Cwd: "",
 		ReadOnly: dmReadOnly, AllowUnsafe: dmAllowUnsafe,
+		Stream: live, EventStream: live.eventStream(),
 	}, nil)
 	// Extract the assistant's words from whatever structured transport the tool
 	// streamed, exactly as the room engine does at classifyTurn. A DM is the
@@ -470,7 +482,151 @@ func runRelayDMTurn(ctx context.Context, st relayDM, prompt string) {
 		event.Text = "(agent returned no text)"
 	}
 	_ = appendRelayDMEvent(st.Agent, event)
+	live.close(event.Status)
 	_, _ = ensureRelayDM(st.Agent, st.Human)
+}
+
+const (
+	dmProgressHeartbeat = 5 * time.Second
+	dmProgressSampleMax = 360
+)
+
+// dmProgressSampler turns the local line-granular live channel into a small
+// remote-safe view. It reports Fibonacci-numbered lines (1, 2, 3, 5, 8, ...)
+// and a counter-only heartbeat every five seconds. A thousand-line tool log is
+// therefore a few dozen short frames, while the complete final answer remains
+// available through the transcript.
+type dmProgressSampler struct {
+	speaker    string
+	started    time.Time
+	lastReport time.Time
+	lines      int
+	bytes      int64
+	fibA       int
+	fibB       int
+}
+
+func (s *dmProgressSampler) reset(e LiveEvent) LiveEvent {
+	s.speaker = e.Speaker
+	s.started = e.TS
+	if s.started.IsZero() {
+		s.started = nowFn()
+	}
+	s.lastReport = s.started
+	s.lines, s.bytes = 0, 0
+	s.fibA, s.fibB = 1, 2
+	return s.frame(liveSpeaking, "", "working", s.started)
+}
+
+func (s *dmProgressSampler) add(e LiveEvent) []LiveEvent {
+	var out []LiveEvent
+	for line := range strings.SplitSeq(e.Text, "\n") {
+		s.lines++
+		s.bytes += int64(len(line))
+		if s.lines != s.fibA {
+			continue
+		}
+		next := s.fibA + s.fibB
+		s.fibA, s.fibB = s.fibB, next
+		out = append(out, s.frame(liveLine, progressSnippet(line), "working", e.TS))
+		s.lastReport = e.TS
+	}
+	return out
+}
+
+func (s *dmProgressSampler) heartbeat(at time.Time) (LiveEvent, bool) {
+	if s.started.IsZero() || at.Sub(s.lastReport) < dmProgressHeartbeat {
+		return LiveEvent{}, false
+	}
+	s.lastReport = at
+	return s.frame(liveLine, "", "working", at), true
+}
+
+func (s *dmProgressSampler) finish(e LiveEvent) LiveEvent {
+	return s.frame(liveSpoke, "", e.Status, e.TS)
+}
+
+func (s *dmProgressSampler) frame(kind, text, status string, at time.Time) LiveEvent {
+	if at.IsZero() {
+		at = nowFn()
+	}
+	elapsed := at.Sub(s.started)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return LiveEvent{
+		Kind: kind, Speaker: s.speaker, Role: "assistant", Text: text,
+		Status: status, TS: at, Lines: s.lines, Bytes: s.bytes,
+		ElapsedMS: elapsed.Milliseconds(),
+	}
+}
+
+func progressSnippet(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) <= dmProgressSampleMax {
+		return line
+	}
+	line = line[:dmProgressSampleMax]
+	for !utf8.ValidString(line) {
+		line = line[:len(line)-1]
+	}
+	return line + "…"
+}
+
+// dmActivitySummary extracts only the public shape of tool activity from the
+// configured agent transports. It deliberately excludes thinking, tool input,
+// command output, usage, ids, and raw JSON: the progress card should say what
+// is moving without becoming a second debug console or leaking an expensive
+// transport over a remote connection.
+func dmActivitySummary(line string) string {
+	var e struct {
+		Type string `json:"type"`
+		Item struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		} `json:"item"`
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			} `json:"content"`
+		} `json:"message"`
+		Data struct {
+			Name string `json:"name"`
+		} `json:"data"`
+		Part struct {
+			Type string `json:"type"`
+			Tool string `json:"tool"`
+		} `json:"part"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(line)), &e) != nil {
+		return ""
+	}
+	if (e.Type == "item.started" || e.Type == "item.completed") && e.Item.Type == "command_execution" {
+		verb := "Running"
+		if e.Type == "item.completed" {
+			verb = "Finished"
+		}
+		command := progressSnippet(e.Item.Command)
+		if command == "" {
+			command = "command"
+		}
+		return verb + ": " + command
+	}
+	if e.Type == "assistant" {
+		for _, block := range e.Message.Content {
+			if block.Type == "tool_use" && strings.TrimSpace(block.Name) != "" {
+				return "Using tool: " + progressSnippet(block.Name)
+			}
+		}
+	}
+	if e.Type == "tool.call" && strings.TrimSpace(e.Data.Name) != "" {
+		return "Using tool: " + progressSnippet(e.Data.Name)
+	}
+	if e.Part.Type == "tool" && strings.TrimSpace(e.Part.Tool) != "" {
+		return "Using tool: " + progressSnippet(e.Part.Tool)
+	}
+	return ""
 }
 
 func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
@@ -491,6 +647,7 @@ func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	debugRaw := truthy(r.URL.Query().Get("raw"))
 	rec := &lineTail{path: filepath.Join(dir, "transcript.jsonl")}
+	live := &lineTail{path: filepath.Join(dir, "live.jsonl")}
 	write := func(kind string, data any) error { return conn.WriteJSON(wsFrame{Kind: kind, Data: data}) }
 	if events, err := relayDMEvents(agent, debugRaw); err == nil {
 		for _, event := range events {
@@ -500,11 +657,45 @@ func handleRelayDMObserve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec.skipToEnd()
+	// The live view is forward-only. Replaying it would resurrect the progress
+	// card for a turn whose completed answer is already in the transcript.
+	live.skipToEnd()
+	var progress dmProgressSampler
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-time.After(observePoll):
+		}
+		liveLines, err := live.next()
+		if err == nil {
+			for _, line := range liveLines {
+				var event LiveEvent
+				if json.Unmarshal(line, &event) != nil || event.Speaker != agent {
+					continue
+				}
+				switch event.Kind {
+				case liveSpeaking:
+					if write("dm-progress", progress.reset(event)) != nil {
+						return
+					}
+				case liveLine:
+					for _, sample := range progress.add(event) {
+						if write("dm-progress", sample) != nil {
+							return
+						}
+					}
+				case liveSpoke:
+					if write("dm-progress", progress.finish(event)) != nil {
+						return
+					}
+				}
+			}
+		}
+		if heartbeat, ok := progress.heartbeat(nowFn()); ok {
+			if write("dm-progress", heartbeat) != nil {
+				return
+			}
 		}
 		lines, err := rec.next()
 		if err != nil {

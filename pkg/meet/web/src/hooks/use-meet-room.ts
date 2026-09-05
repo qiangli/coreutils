@@ -258,6 +258,20 @@ export function useMeetRoom() {
             if (event.role === "assistant") setLive(null)
           }
         },
+        (progress) => {
+          if (!active) return
+          if (progress.kind === "spoke") {
+            setLive(null)
+            return
+          }
+          setLive((current) => ({
+            ...progress,
+            text:
+              progress.text && current?.speaker === progress.speaker && current.text
+                ? `${current.text}\n${progress.text}`
+                : progress.text || current?.text || "",
+          }))
+        },
         setConnection,
         debugRaw,
       )
@@ -329,6 +343,9 @@ export function useMeetRoom() {
             role: "assistant",
             text: "",
             status: "working",
+            lines: 0,
+            bytes: 0,
+            elapsed_ms: 0,
           })
           const at = await postDM(selectedRef, text)
           markSent({ ts: at })

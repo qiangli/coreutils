@@ -327,6 +327,7 @@ function LiveMessage({
   state: State | null
 }) {
   const seat = seatOf(live.speaker, state, live.role)
+  const boundedProgress = live.status === "working"
   return (
     <article className="flex gap-3 rounded-xl bg-teal-50/45 px-2 py-4 sm:gap-4 sm:px-3">
       <Avatar className="mt-0.5 size-9 shrink-0 border border-teal-200 shadow-sm">
@@ -344,8 +345,30 @@ function LiveMessage({
             speaking
           </Badge>
         </div>
+        {boundedProgress && (
+          <div
+            aria-live="polite"
+            className="mb-2 flex flex-wrap items-center gap-x-2 text-[10px] font-medium uppercase tracking-wide text-teal-700/75"
+            data-live-progress
+          >
+            <span>{(live.lines ?? 0).toLocaleString()} lines observed</span>
+            <span aria-hidden="true">·</span>
+            <span>{formatBytes(live.bytes ?? 0)}</span>
+            <span aria-hidden="true">·</span>
+            <span>{formatElapsed(live.elapsed_ms ?? 0)}</span>
+          </div>
+        )}
         {live.text ? (
-          <p className="text-[14px] leading-6 text-foreground/85">{live.text}</p>
+          <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-foreground/75">
+            {live.text}
+          </pre>
+        ) : boundedProgress ? (
+          <div
+            aria-label={`${live.speaker} is typing`}
+            className="text-[12px] text-muted-foreground"
+          >
+            Waiting for the first output line…
+          </div>
         ) : (
           <div
             aria-label={`${live.speaker} is typing`}
@@ -363,6 +386,18 @@ function LiveMessage({
       </div>
     </article>
   )
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_000) return `${bytes} B`
+  if (bytes < 1_000_000) return `${(bytes / 1_000).toFixed(1)} kB`
+  return `${(bytes / 1_000_000).toFixed(1)} MB`
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000))
+  if (seconds < 60) return `${seconds}s elapsed`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed`
 }
 
 function SystemEvent({

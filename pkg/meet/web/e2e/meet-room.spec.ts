@@ -370,6 +370,26 @@ test("opens a Chat-backed direct message and streams its reply", async ({ page }
   await expect(page.getByText(/ECHO\[fixed\]/).first()).toBeVisible({ timeout: 60_000 });
 });
 
+test("a long Chat reply shows bounded real output and cumulative progress", async ({ page }) => {
+  await createDM(primaryAgent);
+  await openMeet(page);
+  await openChat(page, primaryAgent);
+
+  await page.locator("textarea").fill("show sampled progress");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const progress = page.locator("[data-live-progress]");
+  await expect(progress).toBeVisible({ timeout: 60_000 });
+  await expect(progress).toContainText(/lines observed/);
+  await expect(progress).toContainText(/B/);
+  await expect(progress).toContainText(/elapsed/);
+  await expect(page.locator("pre").filter({ hasText: /progress line/ })).toBeVisible();
+
+  // Completion replaces the sampled card with the full, durable answer.
+  await expect(page.getByText(/ECHO\[fixed\].*show sampled progress/).first()).toBeVisible({ timeout: 60_000 });
+  await expect(progress).toHaveCount(0);
+});
+
 test("a long Chat turn visibly shows the agent working", async ({ page }) => {
   await createDM(primaryAgent);
   await openMeet(page);

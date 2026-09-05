@@ -22,6 +22,7 @@ import {
   type DMDetail,
   type DMEvent,
   type DMSummary,
+  type LiveEvent,
   type RecallResult,
 } from "./contracts"
 import {
@@ -101,6 +102,7 @@ export async function recallDM(agent: string, ts: string): Promise<RecallResult>
 export function observeDM(
   agent: string,
   onEvent: (event: DMEvent) => void,
+  onProgress: (event: LiveEvent) => void,
   onStatus: (status: "connecting" | "open" | "closed") => void,
   debugRaw = false,
 ): () => void {
@@ -125,7 +127,12 @@ export function observeDM(
     next.addEventListener("error", () => next.close())
     next.addEventListener("message", (message) => {
       const result = dmObserveFrameSchema.safeParse(JSON.parse(String(message.data)))
-      if (result.success) onEvent(dmEventSchema.parse(result.data.data))
+      if (!result.success) return
+      if (result.data.kind === "dm-event") {
+        onEvent(dmEventSchema.parse(result.data.data))
+      } else {
+        onProgress(result.data.data)
+      }
     })
   }
   connect()

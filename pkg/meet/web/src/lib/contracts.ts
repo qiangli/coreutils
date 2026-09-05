@@ -110,6 +110,10 @@ export const liveEventSchema = z.object({
   status: z.string().default(""),
   ts: z.union([z.string(), z.number()]).optional(),
   ctl_sock: z.string().optional(),
+  // Bounded Chat progress counters. Ordinary Meet live frames omit them.
+  lines: z.number().optional(),
+  bytes: z.number().optional(),
+  elapsed_ms: z.number().optional(),
 })
 
 // The server's State marshals most fields with `omitempty`, so a room that has
@@ -210,10 +214,10 @@ export const dmDetailSchema = z.object({
   events: z.array(dmEventSchema).nullish().transform((events) => events ?? []),
 })
 
-export const dmObserveFrameSchema = z.object({
-  kind: z.literal("dm-event"),
-  data: dmEventSchema,
-})
+export const dmObserveFrameSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("dm-event"), data: dmEventSchema }),
+  z.object({ kind: z.literal("dm-progress"), data: liveEventSchema }),
+])
 
 export const jobRefSchema = z.object({
   id: z.string().optional(),
