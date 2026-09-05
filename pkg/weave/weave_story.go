@@ -744,6 +744,15 @@ agent and running independent stories in parallel. Working through a sprint
 alone is the EXCEPTION, justified only for a story short enough to finish
 immediately and needing no other agent.
 
+THE ROSTER IS YOURS TO CHANGE, NOT A FIXED MENU. ` + "`bashy agents list`" + ` is a
+living roster the manager MAINTAINS: register a new binding with
+` + "`bashy agents add`" + `, branch one for a single task with ` + "`bashy agents clone`" + `
+(` + "`--ephemeral --task`" + ` so it is reaped when the work closes), and adjust an
+entry when the work needs something the fleet does not yet have. Matching the
+fleet to the backlog is part of managing the sprint, not a request to escalate —
+a manager who leaves a story unstarted because no listed agent fits has stopped
+one step short of the job.
+
 An idle fleet beside a queued backlog is the failure this seat exists to
 prevent. Delegation transfers execution; it never transfers accountability —
 you still gate, converge and report.`,

@@ -85,7 +85,7 @@ func sprintReadyLine(id int64, owner string) string {
 	// conductor ends up working a whole sprint alone beside an idle fleet.
 	return fmt.Sprintf("you are the MANAGER of this sprint: prioritize its stories, then delegate them "+
 		"to agents from `bashy agents list` (run independent stories in parallel; work one yourself only "+
-		"if it finishes immediately)\n"+
+		"if it finishes immediately; the roster is yours to extend — `bashy agents add`/`clone`)\n"+
 		"next: `bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
 		"the seat live; `--watch` to stay attached) · procedure: `bashy skills show inbox`", id, owner)
 }
