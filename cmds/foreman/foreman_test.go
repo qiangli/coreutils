@@ -16,14 +16,42 @@ import (
 
 type stubRunner struct {
 	prompts []string
+	args    [][]string
 	out     string
 }
 
 func (s *stubRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	s.args = append(s.args, append([]string(nil), args...))
 	if len(args) > 0 {
 		s.prompts = append(s.prompts, args[len(args)-1])
 	}
 	return s.out, 0, nil
+}
+
+func TestOnceYoloUsesOneCanonicalCodexBypassFlag(t *testing.T) {
+	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	old := runner
+	r := &stubRunner{out: "done"}
+	runner = r
+	t.Cleanup(func() { runner = old })
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := run(rc, []string{"--once", "--agent", "codex", "--instruction", "hello", "--yolo"})
+	if code != 0 {
+		t.Fatalf("code = %d, err = %s", code, errb.String())
+	}
+	if len(r.args) != 1 {
+		t.Fatalf("launches = %d, want 1", len(r.args))
+	}
+	count := 0
+	for _, arg := range r.args[0] {
+		if arg == "--dangerously-bypass-approvals-and-sandbox" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("codex bypass count = %d, argv = %q", count, r.args[0])
+	}
 }
 
 func TestRegistered(t *testing.T) {

@@ -24,6 +24,7 @@ var unsafeFlagList = []string{
 	"--dangerously-bypass-approvals-and-sandbox",
 	"--yolo",
 	"--yes-always",
+	"--auto",
 }
 
 // The seeded fallback profiles (the last-resort contract for an unregistered

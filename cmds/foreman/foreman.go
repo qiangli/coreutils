@@ -99,6 +99,7 @@ func runOnce(rc *tool.RunContext, flags map[string]string) int {
 		Instruction: flags["instruction"],
 		Cwd:         rc.Dir,
 		JSON:        flags["json"] == "true",
+		AllowUnsafe: flags["yolo"] == "true",
 	}, runner)
 	if flags["json"] == "true" {
 		return emitJSON(rc, res)

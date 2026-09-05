@@ -17,16 +17,15 @@ func pinFleet(t *testing.T) {
 	t.Cleanup(func() { fleetCatalog = prev })
 }
 
-// THE GOLDEN TEST. Weave's headless invocations must not move an argument when
-// they start coming from the registry. These are the exact arg lists the
-// hardcoded seededLaunchContracts map produced.
+// THE GOLDEN TEST. Weave's headless invocations must match the fleet baseline.
+// Keep this table explicit so permission and prompt-mode flags cannot drift.
 func TestSeededContractArgsUnchanged(t *testing.T) {
 	pinFleet(t)
 	legacy := map[string][]string{
 		"claude":   {"--dangerously-skip-permissions", "-p"},
 		"codex":    {"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		"agy":      {"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
-		"opencode": {"run"},
+		"opencode": {"--auto", "run"},
 	}
 	for tool, want := range legacy {
 		got, ok := seededContract(tool)
@@ -35,7 +34,7 @@ func TestSeededContractArgsUnchanged(t *testing.T) {
 			continue
 		}
 		if strings.Join(got.HeadlessArgs, "\x00") != strings.Join(want, "\x00") {
-			t.Errorf("%s: HeadlessArgs =\n  %q\nwant (legacy table)\n  %q", tool, got.HeadlessArgs, want)
+			t.Errorf("%s: HeadlessArgs =\n  %q\nwant (baseline table)\n  %q", tool, got.HeadlessArgs, want)
 		}
 		if got.Tool != tool {
 			t.Errorf("%s: Tool = %q", tool, got.Tool)

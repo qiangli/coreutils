@@ -326,6 +326,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			Role:        s.state.Role,
 			Instruction: s.composePrompt(cmd.Message, prior),
 			Cwd:         s.state.Cwd,
+			AllowUnsafe: s.state.AllowUnsafe,
 		}, s.runner)
 		if out := strings.TrimSpace(res.Output); out != "" {
 			if rerr := s.record(RoleAgent, "", out); rerr != nil {

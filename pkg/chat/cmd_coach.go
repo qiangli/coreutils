@@ -16,21 +16,22 @@ import (
 // speak, never write. See dhnt live-agent-coaching design (P0).
 func NewCoachCmd() *cobra.Command {
 	var (
-		agent     string
-		message   string
-		cwd       string
-		repeat    int
-		ratio     float64
-		minCalls  int
-		cooldown  int
-		maxSteers int
-		steer     string
-		noInt     bool
-		quiet     time.Duration
-		timeout   time.Duration
-		logPath   string
-		readOnly  bool
-		asJSON    bool
+		agent       string
+		message     string
+		cwd         string
+		repeat      int
+		ratio       float64
+		minCalls    int
+		cooldown    int
+		maxSteers   int
+		steer       string
+		noInt       bool
+		quiet       time.Duration
+		timeout     time.Duration
+		logPath     string
+		readOnly    bool
+		allowUnsafe bool
+		asJSON      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "coach --agent AGENT -m TASK",
@@ -100,11 +101,12 @@ func NewCoachCmd() *cobra.Command {
 			defer cancel()
 
 			sess, err := Start(ctx, launchAgent, SessionOptions{
-				Prompt:   message,
-				Cwd:      cwd,
-				Timeout:  timeout,
-				Stream:   os.Stderr, // the agent's own output tees to stderr
-				ReadOnly: readOnly,
+				Prompt:      message,
+				Cwd:         cwd,
+				Timeout:     timeout,
+				Stream:      os.Stderr, // the agent's own output tees to stderr
+				ReadOnly:    readOnly,
+				AllowUnsafe: allowUnsafe && !readOnly,
 			})
 			if err != nil {
 				return fmt.Errorf("coach: start %s: %w", launchAgent, err)
@@ -182,6 +184,7 @@ func NewCoachCmd() *cobra.Command {
 	f.DurationVar(&timeout, "timeout", 0, "overall session timeout, e.g. 15m")
 	f.StringVar(&logPath, "log", "", "append one JSON line per steer here (the training record)")
 	f.BoolVar(&readOnly, "read-only", false, "strip write authority (a talk-only session)")
+	f.BoolVar(&allowUnsafe, "yolo", false, "disable the agent's approval gate and accept the uncontained-host risk")
 	f.BoolVar(&asJSON, "json", false, "print a JSON result with the coach report")
 
 	// attach: coach a session that is ALREADY RUNNING, rather than launching one.

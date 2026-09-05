@@ -93,6 +93,7 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 		Role:        s.state.Role,
 		Instruction: prompt,
 		Cwd:         firstNonEmpty(s.state.Cwd, dir),
+		AllowUnsafe: s.state.AllowUnsafe,
 	}, s.runner)
 	if out := strings.TrimSpace(res.Output); out != "" {
 		if rerr := s.record(RoleAgent, task.Name, out); rerr != nil {

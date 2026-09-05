@@ -82,8 +82,8 @@ func TestAnAgentCannotPairWithItself(t *testing.T) {
 
 func TestAgentFlagAliasesPair(t *testing.T) {
 	cmd := NewPairCmd()
-	if cmd.Flags().Lookup("agent") == nil || cmd.Flags().Lookup("pair") == nil {
-		t.Fatal("pair must accept both --agent (orchestration) and --pair (interactive) spellings")
+	if cmd.Flags().Lookup("agent") == nil || cmd.Flags().Lookup("pair") == nil || cmd.Flags().Lookup("yolo") == nil {
+		t.Fatal("pair must accept --agent/--pair and an explicit --yolo permission opt-in")
 	}
 }
 

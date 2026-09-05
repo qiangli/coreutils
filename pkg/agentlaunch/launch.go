@@ -148,7 +148,7 @@ var SeededProfiles = map[string]LaunchProfile{
 	"claude":   {Args: []string{"-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
 	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
-	"opencode": {Args: []string{"run"}},
+	"opencode": {Args: []string{"run"}, UnsafeArgs: []string{"--auto"}},
 	"aider":    {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
 	"ycode":    {Args: []string{"prompt", "--print"}, UnsafeArgs: []string{"--danger-skip-permissions"}},
 }
@@ -359,6 +359,7 @@ var UnsafeLaunchFlags = map[string]string{
 	"--dangerously-bypass-approvals-and-sandbox": "disables the agent's approval gate AND its sandbox",
 	"--yolo":       "disables the agent's approval gate",
 	"--yes-always": "auto-confirms every action, disabling the agent's approval gate",
+	"--auto":       "auto-approves the agent's permission requests",
 
 	// ycode's own. It belongs here for the same reason as everyone else's: the
 	// guard must REFUSE it on an uncontained host, and ReadOnly must STRIP it so a
@@ -418,6 +419,7 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		args = StripKillSwitches(tool, args) // a human is at the terminal → approval ON
 	}
 	args = ApplySandbox(tool, args, opt)
+	args = normalizeUnsafeFlags(tool, args)
 	if opt.DryRun {
 		return args, nil
 	}
@@ -477,14 +479,11 @@ func ApplySandbox(agent string, args []string, opt Options) []string {
 		case sb == "danger-full-access":
 			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
 		case sb != "":
-			// An explicit sandbox override always wins (a reviewer's read-only, etc.).
-			for i := 0; i < len(args)-1; i++ {
-				if args[i] == "--sandbox" {
-					args[i+1] = sb
-					return args
-				}
-			}
-			return append(args, "--sandbox", sb)
+			// An explicit safe sandbox override also removes a stale bypass
+			// flag from a host-local profile. Supplying both makes the bypass
+			// win, which would turn a requested read-only/workspace-write launch
+			// into full host access.
+			return replaceSandboxMode(args, sb)
 		case opt.AllowUnsafe && !opt.ReadOnly:
 			// --yolo with no explicit override. codex's approval gate is a SANDBOX
 			// VALUE, not a boolean kill-switch, so --yolo has to map it to codex's own
@@ -686,12 +685,71 @@ func replaceSandboxFlag(args []string, flag string) []string {
 	out := make([]string, 0, len(args)+1)
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--sandbox" {
-			i++
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		// A host-local tool override may already carry the canonical bypass
+		// flag. AllowUnsafe is a policy transform, not a second request to the
+		// CLI, so normalize it to one occurrence. Codex rejects duplicates.
+		if args[i] == flag {
 			continue
 		}
 		out = append(out, args[i])
 	}
 	return append(out, flag)
+}
+
+func replaceSandboxMode(args []string, mode string) []string {
+	out := make([]string, 0, len(args)+2)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--sandbox":
+			if i+1 < len(args) {
+				i++
+			}
+		case "--dangerously-bypass-approvals-and-sandbox":
+			// The explicit sandbox mode supersedes the bypass.
+		default:
+			out = append(out, args[i])
+		}
+	}
+	return append(out, "--sandbox", mode)
+}
+
+var canonicalUnsafeFlag = map[string]string{
+	"codex":    "--dangerously-bypass-approvals-and-sandbox",
+	"claude":   "--dangerously-skip-permissions",
+	"agy":      "--dangerously-skip-permissions",
+	"opencode": "--auto",
+	"aider":    "--yes-always",
+	"ycode":    "--danger-skip-permissions",
+}
+
+// normalizeUnsafeFlags makes a fleet template's dangerous-permission request
+// valid for the selected CLI. Local overrides survive baseline upgrades, so an
+// old template can otherwise combine a former spelling with a newly applied
+// one. Keep at most one canonical flag and discard another tool's spelling.
+func normalizeUnsafeFlags(tool string, args []string) []string {
+	canonical := canonicalUnsafeFlag[tool]
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		if _, unsafe := UnsafeLaunchFlags[arg]; !unsafe {
+			out = append(out, arg)
+			continue
+		}
+		if canonical != "" && arg != canonical {
+			continue
+		}
+		if seen[arg] {
+			continue
+		}
+		seen[arg] = true
+		out = append(out, arg)
+	}
+	return out
 }
 
 var ErrNoAgent = errors.New("agent launch: not an agent")

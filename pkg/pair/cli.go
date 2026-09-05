@@ -38,15 +38,16 @@ const ExitUnmeasured = 7
 // mapping to `--role refute`, so existing scripts and the steward skill keep working.
 func NewPairCmd() *cobra.Command {
 	var (
-		roleName  string
-		proposer  string
-		pairAgent string
-		gateOvr   string
-		diffRef   string
-		file      string
-		timeout   time.Duration
-		asJSON    bool
-		listRoles bool
+		roleName    string
+		proposer    string
+		pairAgent   string
+		gateOvr     string
+		diffRef     string
+		file        string
+		timeout     time.Duration
+		asJSON      bool
+		listRoles   bool
+		allowUnsafe bool
 	)
 
 	cmd := &cobra.Command{
@@ -68,7 +69,7 @@ the work is done, because a gate is a command and a model is not.`,
 				return printRoles(cmd)
 			}
 			task := strings.TrimSpace(strings.Join(args, " "))
-			return runPair(cmd, task, roleName, proposer, pairAgent, gateOvr, diffRef, file, timeout, asJSON)
+			return runPair(cmd, task, roleName, proposer, pairAgent, gateOvr, diffRef, file, timeout, asJSON, allowUnsafe)
 		},
 	}
 
@@ -86,6 +87,7 @@ the work is done, because a gate is a command and a model is not.`,
 	f.DurationVar(&timeout, "timeout", 20*time.Minute, "per-agent timeout")
 	f.BoolVar(&asJSON, "json", false, "emit "+SchemaVersion)
 	f.BoolVar(&listRoles, "roles", false, "list the available roles and what each produces")
+	f.BoolVar(&allowUnsafe, "yolo", false, "disable the acting agent's approval gate and accept the uncontained-host risk")
 	return cmd
 }
 
@@ -108,7 +110,7 @@ func printRoles(cmd *cobra.Command) error {
 	return nil
 }
 
-func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, diffRef, file string, timeout time.Duration, asJSON bool) error {
+func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, diffRef, file string, timeout time.Duration, asJSON, allowUnsafe bool) error {
 	if task == "" {
 		return fmt.Errorf("pair: a task is required")
 	}
@@ -173,6 +175,7 @@ func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, d
 			Instruction: instruction,
 			Timeout:     timeout,
 			ReadOnly:    !acts,
+			AllowUnsafe: allowUnsafe && acts,
 		}, nil)
 		if err != nil {
 			return "", err

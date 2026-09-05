@@ -121,7 +121,7 @@ func TestModelIsTheProviderSideID(t *testing.T) {
 	if tool != "opencode" || model != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
-	if strings.Join(args, " ") != "run --model deepseek/deepseek-v4-pro" {
+	if strings.Join(args, " ") != "--auto run --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("args = %q", args)
 	}
 }

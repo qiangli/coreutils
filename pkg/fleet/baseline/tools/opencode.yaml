@@ -9,14 +9,17 @@ cli:
     # text, and step_finish NDJSON records. A step_finish with reason=tool-calls
     # is intermediate, so do not declare a naive events_done matcher here.
     events_stdout: --format json
-    exec: opencode run --model {model} {prompt}
+    # OpenCode 1.18 exposes its unattended permission mode explicitly as
+    # --auto. Config pre-seeding establishes project trust but does not answer
+    # later tool permission requests, so governed acting sessions need both.
+    exec: opencode --auto run --model {model} {prompt}
     acp_exec: opencode acp
     prompt_position: last
     trust_preseed: opencode.json
-    steer_exec: opencode --model {model}
+    steer_exec: opencode --auto --model {model}
     supports_say: true
     supports_graceful_quit: true
-    notes: headless `run`; judge by committed artifacts, not exit code. --model takes provider/model.
+    notes: headless `run`; --auto is the explicit unattended permission mode; judge by committed artifacts, not exit code. --model takes provider/model.
     watchdog:
       max_runtime: 45m
       mem_limit: 12g

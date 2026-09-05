@@ -40,7 +40,7 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "run --model deepseek/deepseek-v4-pro" {
+	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "--auto run --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("launch = %+v", l)
 	}
 }
@@ -65,6 +65,91 @@ func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
 		if slices.Contains(l.Args, "--effort") {
 			t.Errorf("argv for %s unexpectedly carries --effort: %q", tc.name, l.Args)
 		}
+	}
+}
+
+func TestDangerousPermissionFlagsAreCanonicalAndSingular(t *testing.T) {
+	want := map[string]string{
+		"codex":    "--dangerously-bypass-approvals-and-sandbox",
+		"claude":   "--dangerously-skip-permissions",
+		"agy":      "--dangerously-skip-permissions",
+		"opencode": "--auto",
+		"ycode":    "--danger-skip-permissions",
+	}
+	for toolName, wantFlag := range want {
+		for _, steer := range []bool{false, true} {
+			mode := "headless"
+			if steer {
+				mode = "steer"
+			}
+			t.Run(toolName+"/"+mode, func(t *testing.T) {
+				l, err := ResolveWithCatalog(toolName, Options{
+					AllowUnsafe: true,
+					DryRun:      true,
+					Steer:       steer,
+				}, testCatalog(t.TempDir()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				count := 0
+				for _, arg := range l.Args {
+					if arg == wantFlag {
+						count++
+					}
+					if _, unsafe := UnsafeLaunchFlags[arg]; unsafe && arg != wantFlag {
+						t.Errorf("%s launch carries foreign dangerous flag %q: %q", toolName, arg, l.Args)
+					}
+				}
+				if count != 1 {
+					t.Errorf("%s launch has %d copies of %q, want exactly one: %q", toolName, count, wantFlag, l.Args)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexUnsafeTransformDeduplicatesLocalBypassOverride(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "codex", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "codex", Launch: fleet.ToolLaunch{
+			Exec:      "codex exec --dangerously-bypass-approvals-and-sandbox --sandbox workspace-write {prompt}",
+			SteerExec: "codex --dangerously-bypass-approvals-and-sandbox",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, steer := range []bool{false, true} {
+		l, err := ResolveWithCatalog("codex", Options{AllowUnsafe: true, DryRun: true, Steer: steer}, testCatalog(root))
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, arg := range l.Args {
+			if arg == "--dangerously-bypass-approvals-and-sandbox" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("steer=%v: bypass count = %d, argv = %q", steer, count, l.Args)
+		}
+		if slices.Contains(l.Args, "--sandbox") {
+			t.Fatalf("steer=%v: bypass launch retained --sandbox: %q", steer, l.Args)
+		}
+	}
+}
+
+func TestCodexExplicitSandboxRemovesLocalBypassOverride(t *testing.T) {
+	got, err := FinalizeArgs("codex", []string{
+		"exec", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access",
+	}, Options{Sandbox: "workspace-write", DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(got, "--dangerously-bypass-approvals-and-sandbox") ||
+		!ContainsArgSequence(got, []string{"--sandbox", "workspace-write"}) {
+		t.Fatalf("explicit safe sandbox did not supersede local bypass: %q", got)
 	}
 }
 

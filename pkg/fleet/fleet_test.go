@@ -111,7 +111,7 @@ func TestArgvDropsOrphanedModelFlag(t *testing.T) {
 		"claude":   {"claude", "--dangerously-skip-permissions", "-p"},
 		"codex":    {"codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		"agy":      {"agy", "--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
-		"opencode": {"opencode", "run"},
+		"opencode": {"opencode", "--auto", "run"},
 		"aider":    {"aider", "--yes-always", "--no-git", "--message"},
 	}
 	for name, want := range legacy {
@@ -204,7 +204,7 @@ func TestArgvSubstitutesModel(t *testing.T) {
 	oc, _ := c.Tool("opencode")
 	m, _ := c.Model("deepseek-v4-pro")
 	got = oc.Argv(m.Target(), "hi")
-	want = []string{"opencode", "run", "--model", "deepseek/deepseek-v4-pro", "hi"}
+	want = []string{"opencode", "--auto", "run", "--model", "deepseek/deepseek-v4-pro", "hi"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("Argv = %q, want %q", got, want)
 	}
