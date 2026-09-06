@@ -207,3 +207,34 @@ store, no new transport, no second channel, no new panel.
 
 A UI bug fixed without a failing browser case is indistinguishable from one that
 was never there.
+
+## MVP probe result — 2026-09-05
+
+For Sprint 126's narrowed human-interaction and sprint-management MVP, the
+existing path is coherent and no M3 production defect was reproduced:
+
+- **G1 confirmed, deferred.** Ordinary multi-party room frames omit the bounded
+  counters that Chat/DM frames carry. The MVP uses the existing one-to-one Chat
+  path for human-to-agent work; extending room progress is a later feature.
+- **G2 confirmed, deferred.** A `JobRef` can be recalled but has no separate
+  status-read verb. The human MVP observes the existing live/transcript stream;
+  adding a job-status surface is not required.
+- **G3 passed.** The Meet Playwright suite drives a deterministic agent through
+  the real HTTP, process-launch, WebSocket, transcript, and rendered-DOM path.
+  It proves accepted work, a visible working indicator, bounded cumulative
+  progress, final response rendering, and visible failure. A new regression
+  case also proves two agent Chats do not leak messages into each other. The
+  full suite passes 29/29. The console `verifydom` suite passes independently.
+- **G4 confirmed.** Delivery remains the six-state bus receipt rendered by the
+  Messages app; execution remains the Meet/Chat live and transcript state. The
+  integration gate proves both without collapsing them.
+
+The command-level gate in `script/e2e-sprint-modes.sh` passes 22/22 with a
+freshly built Bashy binary: one human principal can own a sprint, keep its inbox
+watch live, send durable MB and Meet instructions, observe truthful delivery,
+and steer a managed sprint owner. The one production defect found by that gate
+was the managed-owner control-socket readiness race, tracked and fixed as Sprint
+127 story #235.
+
+Therefore #216 has no evidenced MVP fix to make. It remains a valid container
+for future operator-reproduced UI defects, but is not a Sprint 126 deliverable.
