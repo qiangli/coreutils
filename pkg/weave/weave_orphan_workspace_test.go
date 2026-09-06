@@ -166,6 +166,33 @@ func TestOrphanWorkspaceTargetsMissingDirIsNotAnError(t *testing.T) {
 	}
 }
 
+// Pin the command wiring, not only the discovery primitive: prune must remove
+// an unclaimed clean directory and refuse one whose tree holds loose work.
+func TestWeavePruneSweepsCleanOrphanAndKeepsDirtyOrphan(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	dir, _ := weaveQueueDir(root)
+	clean := orphanTestClone(t, dir, "clean-orphan")
+	dirty := orphanTestClone(t, dir, "dirty-orphan")
+	if err := os.WriteFile(filepath.Join(dirty, "loose.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "prune", "--yes", "--json")
+	if code != 0 {
+		t.Fatalf("prune exit=%d: %s", code, out)
+	}
+	if _, err := os.Stat(clean); !os.IsNotExist(err) {
+		t.Fatalf("clean unclaimed workspace survived prune: %v", err)
+	}
+	if _, err := os.Stat(dirty); err != nil {
+		t.Fatalf("dirty unclaimed workspace was not safely retained: %v", err)
+	}
+	if !strings.Contains(out, "orphaned-workspace") || !strings.Contains(out, "uncommitted file") {
+		t.Fatalf("prune did not report the retained orphan and reason: %s", out)
+	}
+}
+
 // Every advisory that offers to merge, inspect or diff a branch presupposes the
 // workspace that holds it. Once pruned, the branch is gone with it.
 func TestWorkspacePresentGatesAdvisories(t *testing.T) {

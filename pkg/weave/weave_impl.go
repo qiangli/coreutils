@@ -2983,9 +2983,8 @@ func truncate(s string, n int) string {
 // when launched without -p) never exit on their own and need a
 // heuristic kill on idle.
 type weaveStartOptions struct {
-	noSpawn    bool
-	resume     bool
-	autoCommit bool
+	noSpawn bool
+	resume  bool
 	// clone runs this issue under a per-issue EPHEMERAL clone of the named agent
 	// instead of the agent itself, so several issues can run in parallel without
 	// sharing one identity's cursor, kb attribution and ledger. Without it, an
@@ -3818,8 +3817,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// still-prove-itself.
 	//
 	// The commit message says plainly which of the two happened.
-	autoCommitEligible := opts.autoCommit &&
-		(ev.VerifyExit == nil || *ev.VerifyExit == 0) &&
+	autoCommitEligible := (ev.VerifyExit == nil || *ev.VerifyExit == 0) &&
 		(ev.Dirty || ev.UntrackedFiles > 0)
 	if autoCommitEligible {
 		msg := weaveAutoCommitMessageWithContext(it, ev)
@@ -5070,7 +5068,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 					dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace)
 					if ahead > 0 || dirty {
 						if !force {
-							why := strings.Replace(weavePruneHoldReason(ahead, dirtyFiles, untracked), "<id>", fmt.Sprint(id), 1)
+							why := strings.ReplaceAll(weavePruneHoldReason(ahead, dirtyFiles, untracked), "<id>", fmt.Sprint(id))
 							return fmt.Errorf("run #%d holds unmerged work — refusing to abandon: %s", id, why)
 						}
 						// Commit a dirty tree BEFORE preserving, so --force means
@@ -6989,7 +6987,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				strings.TrimPrefix(r.Action, "preserved: "))
 		case strings.HasPrefix(r.Action, "skipped:"):
 			fmt.Fprintf(cmd.OutOrStdout(), "  %s: KEPT — %s\n", label,
-				strings.Replace(strings.TrimPrefix(r.Action, "skipped: "), "<id>", fmt.Sprint(r.Issue), 1))
+				strings.ReplaceAll(strings.TrimPrefix(r.Action, "skipped: "), "<id>", fmt.Sprint(r.Issue)))
 		case strings.HasPrefix(r.Action, "failed:"):
 			fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", label, r.Action)
 		}
@@ -7223,12 +7221,12 @@ func weavePruneHoldReason(ahead, dirtyFiles, untracked int) string {
 		parts = append(parts, fmt.Sprintf("%d unmerged commit(s) — `weave salvage %s --review-agent <agent>` to keep them", ahead, "<id>"))
 	}
 	if n := dirtyFiles + untracked; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d uncommitted file(s)", n))
+		parts = append(parts, fmt.Sprintf("%d uncommitted file(s) — `weave abandon %s --force --yes` preserves them under a salvage ref before removal", n, "<id>"))
 	}
 	if len(parts) == 0 {
 		return "holds unmerged work"
 	}
-	return strings.Join(parts, "; ") + " (--force to delete anyway)"
+	return strings.Join(parts, "; ") + " (--force preserves queue-backed work before removal)"
 }
 
 // weaveCrashedAutoCommitMessage labels work preserved from a run that did not

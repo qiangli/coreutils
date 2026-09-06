@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,9 @@ func TestPruneHoldReasonNamesWhatWouldBeLost(t *testing.T) {
 	if !strings.Contains(got, "4 uncommitted file") {
 		t.Errorf("reason must count dirty + untracked: %q", got)
 	}
+	if !strings.Contains(got, "salvage") || !strings.Contains(got, "preserve") {
+		t.Errorf("reason must name a recoverable exit for uncommitted work: %q", got)
+	}
 
 	// Both.
 	got = weavePruneHoldReason(2, 1, 0)
@@ -58,5 +62,41 @@ func TestPruneHoldReasonNamesWhatWouldBeLost(t *testing.T) {
 func TestPruneHoldReasonIsNeverEmpty(t *testing.T) {
 	if got := weavePruneHoldReason(0, 0, 0); strings.TrimSpace(got) == "" {
 		t.Error("hold reason must never be empty")
+	}
+}
+
+// --force is an override of the retention decision, not permission to erase
+// the only copy. A dirty terminal tree is committed, imported into the live
+// repository, and only then is its workspace removed.
+func TestWeavePruneForcePreservesDirtyTreeBeforeRemoval(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	dir, _ := weaveQueueDir(root)
+	workspace := dir + "/workspaces/issue-1"
+	if err := os.MkdirAll(dir+"/workspaces", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, root, "clone", "-q", root, workspace)
+	gitT(t, workspace, "checkout", "-qb", "agent/weave-issue-1")
+	gitT(t, workspace, "commit", "--allow-empty", "-qm", "agent work")
+	if err := os.WriteFile(workspace+"/uncommitted.txt", []byte("recover me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
+		ID: 1, Title: "dirty terminal work", State: "failed", Workspace: workspace,
+		Branch: "agent/weave-issue-1", CommitsAhead: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "prune", "--yes", "--force", "--json")
+	if code != 0 || !strings.Contains(out, "refs/salvage/abandoned-1") {
+		t.Fatalf("forced prune did not report preservation: exit=%d out=%s", code, out)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("preserved workspace was not removed: %v", err)
+	}
+	if got := gitT(t, root, "show", "refs/salvage/abandoned-1:uncommitted.txt"); got != "recover me" {
+		t.Fatalf("salvage ref lost the dirty tree: %q", got)
 	}
 }

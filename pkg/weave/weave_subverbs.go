@@ -153,15 +153,16 @@ PTY output goes to a per-issue log file under the queue dir and
 the file path appears in the result envelope.
 
 On exit, the queue item's state becomes "submitted" (exit 0 with commits),
-"no-op" (exit 0 with a clean tree and no commits), or "failed" (non-zero
-or uncommitted changes), with exit_code and finished_at persisted.
+"no-op" (exit 0 with a clean tree and no commits), or "failed" (non-zero).
+A dirty terminal tree is committed to its isolated branch for recovery before
+that state is recorded; this preservation does not assert that the work passed.
+The exit_code and finished_at are persisted.
 "weave pull" picks up submitted branches; "weave wait --issue N"
 blocks until N reaches a terminal state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveStart(cmd, issue, tool, args, weaveStartOptions{
 				noSpawn:     noSpawn,
 				resume:      resume,
-				autoCommit:  autoCommit,
 				clone:       cloneAgent,
 				pty:         ptyMode,
 				idleTimeout: idleTimeout,
@@ -176,7 +177,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
 	cmd.Flags().BoolVar(&cloneAgent, "clone", false, "If the named agent is already working another run, mint a per-issue ephemeral clone (own name, own context) instead of waiting for it")
-	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty workspace changes before recording terminal state")
+	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "Compatibility flag; dirty terminal trees are preserved automatically when verification permits")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
 	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling; pointed runs derive 1=3m45s,2=7m30s,3=11m15s,5=18m45s,8=30m and reject a larger explicit value; unpointed default off")
@@ -711,7 +712,9 @@ func newWeavePruneCmd() *cobra.Command {
 
 It REFUSES to delete a workspace that still holds work: unmerged commits, or an
 uncommitted tree. Those are skipped with a reason, and --force is required to
-delete them anyway.
+remove them. For a queue-backed run, --force first commits a dirty tree and
+imports its tip as refs/salvage/abandoned-<issue>; a preservation failure
+refuses the removal.
 
 That guard is the load-bearing one. An agent branch lives ONLY inside its
 workspace clone until "weave pull" fetches it — so deleting the workspace does
@@ -727,7 +730,7 @@ Use --yes to skip the confirmation prompt.`,
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
-	cmd.Flags().BoolVar(&force, "force", false, "Delete workspaces even if they hold unmerged commits or uncommitted changes (destroys that work permanently — an agent branch exists only in its workspace)")
+	cmd.Flags().BoolVar(&force, "force", false, "Remove guarded workspaces; queue-backed work is first preserved under refs/salvage/abandoned-<issue>")
 	cmd.Flags().BoolVar(&stale, "stale", false, "Also sweep orphaned 'allocated' items (workspace created but never launched / launched-and-died with no commits) — clears leftover clutter from prior sessions; never touches items with committed work")
 	return cmd
 }
