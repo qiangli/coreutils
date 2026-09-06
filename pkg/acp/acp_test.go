@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -339,6 +340,77 @@ func TestAgentCancelledTurnIsSuccessfulResponse(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancelled prompt did not return")
+	}
+}
+
+type lifecycleRunner struct{ sessions map[string]Session }
+
+func (r *lifecycleRunner) Run(context.Context, TurnRequest) (TurnResponse, error) {
+	return TurnResponse{StopReason: StopReasonEndTurn}, nil
+}
+func (r *lifecycleRunner) NewSession(_ context.Context, cwd string) (Session, error) {
+	value := Session{ID: "durable-1", Cwd: cwd}
+	r.sessions[value.ID] = value
+	return value, nil
+}
+func (r *lifecycleRunner) ResumeSession(_ context.Context, id, cwd string) (Session, error) {
+	value, ok := r.sessions[id]
+	if !ok || value.Cwd != cwd {
+		return Session{}, fmt.Errorf("missing")
+	}
+	return value, nil
+}
+func (r *lifecycleRunner) ListSessions(context.Context, string) ([]Session, error) {
+	out := make([]Session, 0, len(r.sessions))
+	for _, value := range r.sessions {
+		out = append(out, value)
+	}
+	return out, nil
+}
+func (r *lifecycleRunner) CloseSession(_ context.Context, id string) error {
+	delete(r.sessions, id)
+	return nil
+}
+func (r *lifecycleRunner) ForkSession(_ context.Context, id, cwd string) (Session, error) {
+	if _, ok := r.sessions[id]; !ok {
+		return Session{}, fmt.Errorf("missing")
+	}
+	value := Session{ID: "fork-1", Cwd: cwd}
+	r.sessions[value.ID] = value
+	return value, nil
+}
+
+func TestAgentAdvertisesAndDelegatesDurableSessionLifecycle(t *testing.T) {
+	runner := &lifecycleRunner{sessions: map[string]Session{}}
+	agent := NewAgent(runner, AgentOptions{}, strings.NewReader(""), io.Discard)
+	initialized, err := agent.Initialize(context.Background(), sdk.InitializeRequest{ProtocolVersion: ProtocolVersionNumber})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities := initialized.AgentCapabilities
+	if !capabilities.LoadSession || capabilities.SessionCapabilities.Resume == nil || capabilities.SessionCapabilities.List == nil || capabilities.SessionCapabilities.Close == nil || capabilities.SessionCapabilities.Fork == nil {
+		t.Fatalf("capabilities=%#v", capabilities)
+	}
+	created, err := agent.NewSession(context.Background(), sdk.NewSessionRequest{Cwd: "/workspace", McpServers: []sdk.McpServer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.ResumeSession(context.Background(), sdk.ResumeSessionRequest{SessionId: created.SessionId, Cwd: "/workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.LoadSession(context.Background(), sdk.LoadSessionRequest{SessionId: created.SessionId, Cwd: "/workspace", McpServers: []sdk.McpServer{}}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := agent.ListSessions(context.Background(), sdk.ListSessionsRequest{})
+	if err != nil || len(listed.Sessions) != 1 {
+		t.Fatalf("listed=%#v err=%v", listed, err)
+	}
+	forked, err := agent.UnstableForkSession(context.Background(), sdk.UnstableForkSessionRequest{SessionId: created.SessionId, Cwd: "/workspace"})
+	if err != nil || forked.SessionId == created.SessionId {
+		t.Fatalf("fork=%#v err=%v", forked, err)
+	}
+	if _, err := agent.CloseSession(context.Background(), sdk.CloseSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -12,6 +12,7 @@ package acp
 
 import (
 	"context"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/gate"
 )
@@ -105,6 +106,26 @@ type TurnResponse struct {
 // ACP client sends session/cancel.
 type Runner interface {
 	Run(context.Context, TurnRequest) (TurnResponse, error)
+}
+
+// Session describes durable runner-owned session state. SessionLifecycle is
+// optional; Agent advertises no lifecycle capabilities unless Runner
+// implements it, preserving compatibility with existing runners.
+type Session struct {
+	ID        string
+	Cwd       string
+	Title     string
+	UpdatedAt time.Time
+}
+
+// SessionLifecycle lets a runner own durable identifiers and lineage while
+// the ACP adapter remains a policy-free framing boundary.
+type SessionLifecycle interface {
+	NewSession(context.Context, string) (Session, error)
+	ResumeSession(context.Context, string, string) (Session, error)
+	ListSessions(context.Context, string) ([]Session, error)
+	CloseSession(context.Context, string) error
+	ForkSession(context.Context, string, string) (Session, error)
 }
 
 // RunnerFunc adapts a function to Runner.

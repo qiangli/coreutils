@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
 	"github.com/qiangli/coreutils/pkg/gate"
@@ -217,6 +218,7 @@ func (a *Agent) LastResult(sessionID string) (AgentResult, bool) {
 
 // Compile-time check that Agent satisfies the SDK's agent interface.
 var _ sdk.Agent = (*Agent)(nil)
+var _ sdk.AgentLoader = (*Agent)(nil)
 
 func (a *Agent) Initialize(_ context.Context, req sdk.InitializeRequest) (sdk.InitializeResponse, error) {
 	if int(req.ProtocolVersion) != ProtocolVersionNumber {
@@ -236,14 +238,35 @@ func (a *Agent) Initialize(_ context.Context, req sdk.InitializeRequest) (sdk.In
 	}
 	a.mu.Unlock()
 
+	capabilities := sdk.AgentCapabilities{}
+	if _, ok := a.runner.(SessionLifecycle); ok {
+		capabilities.LoadSession = true
+		capabilities.SessionCapabilities = sdk.SessionCapabilities{
+			Close: &sdk.SessionCloseCapabilities{}, List: &sdk.SessionListCapabilities{},
+			Resume: &sdk.SessionResumeCapabilities{}, Fork: &sdk.SessionForkCapabilities{},
+		}
+	}
 	return sdk.InitializeResponse{
 		ProtocolVersion:   sdk.ProtocolVersion(ProtocolVersionNumber),
-		AgentCapabilities: sdk.AgentCapabilities{},
+		AgentCapabilities: capabilities,
 		AuthMethods:       []sdk.AuthMethod{},
 	}, nil
 }
 
-func (a *Agent) NewSession(_ context.Context, req sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
+func (a *Agent) NewSession(ctx context.Context, req sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
+	if lifecycle, ok := a.runner.(SessionLifecycle); ok {
+		session, err := lifecycle.NewSession(ctx, req.Cwd)
+		if err != nil {
+			return sdk.NewSessionResponse{}, err
+		}
+		if session.ID == "" || session.Cwd != req.Cwd {
+			return sdk.NewSessionResponse{}, fmt.Errorf("acp: runner returned invalid session")
+		}
+		a.mu.Lock()
+		a.sessions[session.ID] = session.Cwd
+		a.mu.Unlock()
+		return sdk.NewSessionResponse{SessionId: sdk.SessionId(session.ID)}, nil
+	}
 	id := fmt.Sprintf("bashy-%d", a.nextSession.Add(1))
 	a.mu.Lock()
 	a.sessions[id] = req.Cwd
@@ -359,16 +382,112 @@ func (*Agent) Logout(context.Context, sdk.LogoutRequest) (sdk.LogoutResponse, er
 	return sdk.LogoutResponse{}, fmt.Errorf("acp: logout not offered")
 }
 
-func (*Agent) CloseSession(context.Context, sdk.CloseSessionRequest) (sdk.CloseSessionResponse, error) {
-	return sdk.CloseSessionResponse{}, fmt.Errorf("acp: session close not offered")
+func (a *Agent) CloseSession(ctx context.Context, req sdk.CloseSessionRequest) (sdk.CloseSessionResponse, error) {
+	lifecycle, ok := a.runner.(SessionLifecycle)
+	if !ok {
+		return sdk.CloseSessionResponse{}, fmt.Errorf("acp: session close not offered")
+	}
+	if err := lifecycle.CloseSession(ctx, string(req.SessionId)); err != nil {
+		return sdk.CloseSessionResponse{}, err
+	}
+	a.mu.Lock()
+	delete(a.sessions, string(req.SessionId))
+	a.mu.Unlock()
+	return sdk.CloseSessionResponse{}, nil
 }
 
-func (*Agent) ListSessions(context.Context, sdk.ListSessionsRequest) (sdk.ListSessionsResponse, error) {
-	return sdk.ListSessionsResponse{}, fmt.Errorf("acp: session list not offered")
+func (a *Agent) ListSessions(ctx context.Context, req sdk.ListSessionsRequest) (sdk.ListSessionsResponse, error) {
+	lifecycle, ok := a.runner.(SessionLifecycle)
+	if !ok {
+		return sdk.ListSessionsResponse{}, fmt.Errorf("acp: session list not offered")
+	}
+	if req.Cursor != nil {
+		return sdk.ListSessionsResponse{}, fmt.Errorf("acp: session list cursor is not supported")
+	}
+	cwd := ""
+	if req.Cwd != nil {
+		cwd = *req.Cwd
+	}
+	sessions, err := lifecycle.ListSessions(ctx, cwd)
+	if err != nil {
+		return sdk.ListSessionsResponse{}, err
+	}
+	result := sdk.ListSessionsResponse{Sessions: make([]sdk.SessionInfo, 0, len(sessions))}
+	for _, session := range sessions {
+		if session.ID == "" || session.Cwd == "" {
+			return sdk.ListSessionsResponse{}, fmt.Errorf("acp: runner returned invalid session")
+		}
+		info := sdk.SessionInfo{SessionId: sdk.SessionId(session.ID), Cwd: session.Cwd}
+		if session.Title != "" {
+			title := session.Title
+			info.Title = &title
+		}
+		if !session.UpdatedAt.IsZero() {
+			updated := session.UpdatedAt.UTC().Format(time.RFC3339Nano)
+			info.UpdatedAt = &updated
+		}
+		result.Sessions = append(result.Sessions, info)
+	}
+	return result, nil
 }
 
-func (*Agent) ResumeSession(context.Context, sdk.ResumeSessionRequest) (sdk.ResumeSessionResponse, error) {
-	return sdk.ResumeSessionResponse{}, fmt.Errorf("acp: session resume not offered")
+func (a *Agent) ResumeSession(ctx context.Context, req sdk.ResumeSessionRequest) (sdk.ResumeSessionResponse, error) {
+	lifecycle, ok := a.runner.(SessionLifecycle)
+	if !ok {
+		return sdk.ResumeSessionResponse{}, fmt.Errorf("acp: session resume not offered")
+	}
+	session, err := lifecycle.ResumeSession(ctx, string(req.SessionId), req.Cwd)
+	if err != nil {
+		return sdk.ResumeSessionResponse{}, err
+	}
+	if session.ID != string(req.SessionId) || session.Cwd != req.Cwd {
+		return sdk.ResumeSessionResponse{}, fmt.Errorf("acp: runner returned invalid resumed session")
+	}
+	a.mu.Lock()
+	a.sessions[session.ID] = session.Cwd
+	a.mu.Unlock()
+	return sdk.ResumeSessionResponse{}, nil
+}
+
+// LoadSession restores durable runner state through ACP's baseline load
+// operation. ResumeSession exposes the newer no-replay lifecycle operation;
+// both attach the same runner-owned session to this connection exactly once.
+func (a *Agent) LoadSession(ctx context.Context, req sdk.LoadSessionRequest) (sdk.LoadSessionResponse, error) {
+	lifecycle, ok := a.runner.(SessionLifecycle)
+	if !ok {
+		return sdk.LoadSessionResponse{}, fmt.Errorf("acp: session load not offered")
+	}
+	session, err := lifecycle.ResumeSession(ctx, string(req.SessionId), req.Cwd)
+	if err != nil {
+		return sdk.LoadSessionResponse{}, err
+	}
+	if session.ID != string(req.SessionId) || session.Cwd != req.Cwd {
+		return sdk.LoadSessionResponse{}, fmt.Errorf("acp: runner returned invalid loaded session")
+	}
+	a.mu.Lock()
+	a.sessions[session.ID] = session.Cwd
+	a.mu.Unlock()
+	return sdk.LoadSessionResponse{}, nil
+}
+
+// UnstableForkSession is implemented only because ACP v1 currently exposes
+// fork under its unstable extension. Capability advertisement remains exact.
+func (a *Agent) UnstableForkSession(ctx context.Context, req sdk.UnstableForkSessionRequest) (sdk.UnstableForkSessionResponse, error) {
+	lifecycle, ok := a.runner.(SessionLifecycle)
+	if !ok {
+		return sdk.UnstableForkSessionResponse{}, fmt.Errorf("acp: session fork not offered")
+	}
+	session, err := lifecycle.ForkSession(ctx, string(req.SessionId), req.Cwd)
+	if err != nil {
+		return sdk.UnstableForkSessionResponse{}, err
+	}
+	if session.ID == "" || session.ID == string(req.SessionId) || session.Cwd != req.Cwd {
+		return sdk.UnstableForkSessionResponse{}, fmt.Errorf("acp: runner returned invalid forked session")
+	}
+	a.mu.Lock()
+	a.sessions[session.ID] = session.Cwd
+	a.mu.Unlock()
+	return sdk.UnstableForkSessionResponse{SessionId: sdk.SessionId(session.ID)}, nil
 }
 
 func (*Agent) SetSessionConfigOption(context.Context, sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
