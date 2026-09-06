@@ -306,8 +306,94 @@ func newSprintTrackCmd() *cobra.Command {
 
 func newSprintGoalCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "goal", Short: "Manage the durable, derived sprint goal checklist"}
-	cmd.AddCommand(newSprintGoalAddCmd(), newSprintGoalLinkCmd(), newSprintGoalEvidenceCmd())
+	cmd.AddCommand(newSprintGoalAddCmd(), newSprintGoalLinkCmd(), newSprintGoalEvidenceCmd(), newSprintGoalRmCmd())
 	return cmd
+}
+
+// newSprintGoalRmCmd removes a required outcome from the checklist.
+//
+// WHY THIS EXISTS. A goal item checks only when every story linked to it is
+// closed (sprintGoalDone), and `sprint move <id> done` refuses over any
+// unchecked item — a refusal --force deliberately does NOT cover, because a
+// plan you did not finish is not a plan you may declare finished.
+//
+// That left one state with no exit. Move a sprint's remaining open stories to
+// a successor sprint — the ordinary way to close a sprint that ran out of time
+// — and its goal items keep pointing at stories that now belong to the other
+// card. They can never close HERE, `goal link` refuses to re-point them
+// (it requires it.Sprint == id), and there was no way to retire the item. The
+// sprint was then permanently unclosable: observed on #123 and #126, and
+// recorded in #126's own continuity as "the CLI has no unlink operation".
+//
+// WHAT IT IS NOT. This is not a way to make a red sprint look green. Removing
+// an outcome says it is no longer required OF THIS SPRINT — because it moved
+// to a successor, or because the operator dropped it from scope. It never says
+// the outcome was achieved. So --reason is mandatory and the removed item is
+// written to the thread VERBATIM (text, gate flag, story refs, evidence), which
+// is the durable record; the checklist is only its index. A reader of the
+// closed card can still see every outcome that was ever required of it, who
+// retired it, and why.
+func newSprintGoalRmCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var reason string
+	cmd := &cobra.Command{
+		Use:   "rm <sprint> <goal>",
+		Short: "Retire a required outcome from the checklist — it moved elsewhere or left scope, never because it was met",
+		Args:  cobra.ExactArgs(2),
+	}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		id, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("sprint must be an integer: %q", args[0])
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return fmt.Errorf("--reason is required: say where this outcome went (a successor sprint) or who took it out of scope")
+		}
+		return runWeaveStoryMutate(cmd, id, "sprint goal rm", &flags, func(s *weaveStory) (string, error) {
+			idx := -1
+			for i := range s.Goal {
+				if s.Goal[i].ID == args[1] {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				return "", fmt.Errorf("goal item %q not found", args[1])
+			}
+			g := s.Goal[idx]
+			s.Goal = append(s.Goal[:idx], s.Goal[idx+1:]...)
+			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "decision", sprintGoalEpitaph(g, reason))
+			return fmt.Sprintf("sprint #%d retired goal %s (%d remaining); recorded on the thread", id, g.ID, len(s.Goal)), nil
+		})
+	}
+	cmd.Flags().StringVar(&reason, "reason", "", "where the outcome went, or who took it out of scope — recorded on the card")
+	flags.attach(cmd)
+	return cmd
+}
+
+// sprintGoalEpitaph renders everything the checklist knew about a retired goal,
+// so removing the index entry loses nothing. The removal is only as honest as
+// this line is complete.
+func sprintGoalEpitaph(g sprintGoalItem, reason string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "retired goal item %s — %s", g.ID, reason)
+	fmt.Fprintf(&b, "\n  outcome was: %s", g.Text)
+	if g.GateRequired {
+		b.WriteString("\n  gate-required: yes")
+	}
+	for _, ref := range g.Stories {
+		story := resolveSprintStory(ref)
+		status := story.Status
+		if story.Missing {
+			status = "missing"
+		}
+		fmt.Fprintf(&b, "\n  story: %s (%s) [%s]", ref.ID, filepath.Base(ref.Repo), status)
+	}
+	if e := strings.TrimSpace(g.Evidence); e != "" {
+		fmt.Fprintf(&b, "\n  evidence on record: %s", e)
+	}
+	return b.String()
 }
 
 func findSprintGoal(s *weaveStory, id string) *sprintGoalItem {
