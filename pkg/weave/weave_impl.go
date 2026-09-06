@@ -2159,7 +2159,10 @@ func weaveRenderItemRows(w io.Writer, q *weaveQueue, items []*weaveItem) {
 		}
 		// "!" outranks "*": a stale wrapper is a run to re-attach, an
 		// escaped run is a tree to inspect before anything else happens.
-		if it.IsolationViolated {
+		// Gated on the workspace still existing, for the same reason the
+		// footer is: there is no tree left to inspect once it is pruned, and
+		// a marker whose footer no longer prints is an unexplained one.
+		if it.IsolationViolated && weaveWorkspacePresent(it) {
 			state = it.State + "!"
 		}
 		toolCol := it.Tool
@@ -2479,10 +2482,17 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 			it.Stale = true
 			anyStale = true
 		}
-		if it.IsolationViolated {
+		// Both advisories describe a WORKSPACE — an escaped run's branch is
+		// "not the whole diff", and a worker touched paths outside its clone.
+		// Once that workspace is pruned the branch is gone with it, so the
+		// footers name work that cannot be pulled, inspected or diffed and
+		// their own advice (`weave pull`) cannot run. The fact stays on the
+		// item and `weave status N` still reports it; what stops is presenting
+		// a closed run as pending work.
+		if it.IsolationViolated && weaveWorkspacePresent(it) {
 			violated = append(violated, it)
 		}
-		if len(it.OutsideWorkspacePaths) > 0 {
+		if len(it.OutsideWorkspacePaths) > 0 && weaveWorkspacePresent(it) {
 			outsideRefs = append(outsideRefs, it)
 		}
 		// The reaper's other determinate outcome: a submission nobody
@@ -5042,6 +5052,21 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 							why := strings.Replace(weavePruneHoldReason(ahead, dirtyFiles, untracked), "<id>", fmt.Sprint(id), 1)
 							return fmt.Errorf("run #%d holds unmerged work — refusing to abandon: %s", id, why)
 						}
+						// Commit a dirty tree BEFORE preserving, so --force means
+						// the same thing for uncommitted work as for commits.
+						// Only a commit is reachable by a ref, so without this
+						// step the preserve below saves the branch tip and drops
+						// the working tree on the floor — silently, because the
+						// success line only ever named the commits.
+						if dirty {
+							committed, cerr := maybeAutoCommit(it.Workspace, weaveForcedSalvageCommitMessage(it))
+							if cerr != nil {
+								return fmt.Errorf("run #%d: --force could not commit %d uncommitted file(s) for preservation, refusing to destroy them: %w", id, dirtyFiles+untracked, cerr)
+							}
+							if committed {
+								ahead, head = weaveUnmergedAhead(root, base, it)
+							}
+						}
 						if ahead > 0 && head != "" {
 							ref, ferr := weavePreserveAbandonedTip(root, it.Workspace, id, head)
 							if ferr != nil {
@@ -6667,7 +6692,21 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
 			weavecli.ExitGenericFail, err))
 	}
-	if pendingCount == 0 && len(cacheTargets) == 0 {
+	// Directories under workspaces/ that no item claims. The loop above cannot
+	// see them at any flag setting, so without this pass they are unreclaimable
+	// for the life of the queue.
+	orphanTargets, err := weaveOrphanWorkspaceTargets(dir, q)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
+			weavecli.ExitGenericFail, err))
+	}
+	orphanSweepable := 0
+	for _, o := range orphanTargets {
+		if force || o.Hold == "" {
+			orphanSweepable++
+		}
+	}
+	if pendingCount == 0 && len(cacheTargets) == 0 && len(orphanTargets) == 0 {
 		if mode == weavecli.OutputJSON {
 			return ec(emitOK(cmd.OutOrStdout(), mode, "weave prune", map[string]any{
 				"removed":       0,
@@ -6683,6 +6722,10 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	if len(cacheTargets) > 0 {
 		prompt = fmt.Sprintf("weave prune: will clean up %d terminal item(s) and %d managed GOCACHE director%s.",
 			pendingCount, len(cacheTargets), map[bool]string{true: "y", false: "ies"}[len(cacheTargets) == 1])
+	}
+	if orphanSweepable > 0 {
+		prompt += fmt.Sprintf(" Also %d unclaimed workspace director%s.",
+			orphanSweepable, map[bool]string{true: "y", false: "ies"}[orphanSweepable == 1])
 	}
 	if err := weaveConfirmBatch(cmd, mode, "prune",
 		prompt, yes); err != nil {
@@ -6757,6 +6800,45 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				}
 			}
 
+			// --force used to mean "destroy it anyway", which for a workspace
+			// meant the commits and the tree both went with it — the branch
+			// exists nowhere else. Preserve first, exactly as `weave abandon
+			// --force` does, so --force means "I accept the risk" and not
+			// "make it disappear". A tree is committed first, because only a
+			// commit is reachable by a ref.
+			if force && it.Workspace != "" && !merged {
+				if _, statErr := os.Stat(it.Workspace); statErr == nil {
+					ahead, head := weaveUnmergedAhead(root, base, it)
+					if dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace); dirty || untracked > 0 {
+						committed, cerr := maybeAutoCommit(it.Workspace, weaveForcedSalvageCommitMessage(it))
+						if cerr != nil {
+							results = append(results, pruneResult{
+								Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: false,
+								Action: fmt.Sprintf("failed: --force could not commit %d uncommitted file(s) for preservation, refusing to destroy them: %v", dirtyFiles+untracked, cerr),
+							})
+							continue
+						}
+						if committed {
+							ahead, head = weaveUnmergedAhead(root, base, it)
+						}
+					}
+					if ahead > 0 && head != "" {
+						ref, perr := weavePreserveAbandonedTip(root, it.Workspace, it.ID, head)
+						if perr != nil {
+							results = append(results, pruneResult{
+								Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: false,
+								Action: fmt.Sprintf("failed: --force could not preserve %d unmerged commit(s) as %s, refusing to destroy them: %v", ahead, ref, perr),
+							})
+							continue
+						}
+						results = append(results, pruneResult{
+							Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: false,
+							Action: "preserved: " + ref,
+						})
+					}
+				}
+			}
+
 			if it.Workspace != "" {
 				if _, statErr := os.Stat(it.Workspace); statErr == nil {
 					if rmErr := safeRemoveWorkspace(dir, it.Workspace); rmErr == nil {
@@ -6775,6 +6857,31 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				if exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run() == nil {
 					results = append(results, pruneResult{Issue: it.ID, State: it.State, Branch: it.Branch, Merged: merged, Action: "branch_deleted"})
 				}
+			}
+		}
+		// Unclaimed workspace directories. Recomputed under the lock, like the
+		// cache targets, so the sweep acts on the queue it just reconciled.
+		orphans, oerr := weaveOrphanWorkspaceTargets(dir, q)
+		if oerr != nil {
+			return oerr
+		}
+		for _, o := range orphans {
+			if o.Hold != "" && !force {
+				results = append(results, pruneResult{
+					State: "orphaned-workspace", Workspace: o.Path,
+					Action: "skipped: " + o.Hold,
+				})
+				continue
+			}
+			if rmErr := safeRemoveWorkspace(dir, o.Path); rmErr == nil {
+				swept++
+				results = append(results, pruneResult{
+					State: "orphaned-workspace", Workspace: o.Path, Action: "removed",
+				})
+			} else {
+				results = append(results, pruneResult{
+					State: "orphaned-workspace", Workspace: o.Path, Action: "failed: " + rmErr.Error(),
+				})
 			}
 		}
 		cacheTargets, err := weaveManagedGOCacheSweepTargets(dir, q, stale)
@@ -6825,13 +6932,20 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 
 	// Human-readable output
 	for _, r := range results {
+		// An unclaimed directory has no run and no branch, so "run #0" and
+		// "NOT merged" would both be inventions. Name it by what it is.
+		orphan := r.State == "orphaned-workspace"
+		label := fmt.Sprintf("run #%d (%s)", r.Issue, r.State)
+		if orphan {
+			label = "unclaimed workspace " + filepath.Base(r.Workspace)
+		}
 		switch {
 		case r.Action == "removed":
 			merged := ""
-			if !r.Merged {
+			if !r.Merged && !orphan {
 				merged = " (NOT merged into " + base + ")"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): removed workspace%s\n", r.Issue, r.State, merged)
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: removed workspace%s\n", label, merged)
 		case r.Action == "cache_removed":
 			if r.Issue > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): removed managed GOCACHE %s\n", r.Issue, r.State, r.Cache)
@@ -6839,12 +6953,15 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s: removed managed GOCACHE %s\n", r.State, r.Cache)
 			}
 		case r.Action == "branch_deleted":
-			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): deleted merged branch %s\n", r.Issue, r.State, r.Branch)
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: deleted merged branch %s\n", label, r.Branch)
+		case strings.HasPrefix(r.Action, "preserved:"):
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: work preserved at %s before removal\n", label,
+				strings.TrimPrefix(r.Action, "preserved: "))
 		case strings.HasPrefix(r.Action, "skipped:"):
-			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): KEPT — %s\n", r.Issue, r.State,
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: KEPT — %s\n", label,
 				strings.Replace(strings.TrimPrefix(r.Action, "skipped: "), "<id>", fmt.Sprint(r.Issue), 1))
 		case strings.HasPrefix(r.Action, "failed:"):
-			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): %s\n", r.Issue, r.State, r.Action)
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", label, r.Action)
 		}
 	}
 	// COUNT WHAT HAPPENED, NOT WHAT WAS CONSIDERED.
