@@ -20,3 +20,4 @@
 {"op":"add","slug":"patch-input-format-auto-detection-must-require-an-addressed-ed-c","tool":"claude-opus5-h","host":"dragon","episode":"weave-issue-34","at":"2026-08-28T12:53:02.030091Z"}
 {"op":"add","slug":"priority-admission-must-not-encode-gaps-in-a-monotonic-cursor","tool":"codex-gpt5.6-sol-b","host":"dragon","episode":"weave-issue-2","at":"2026-08-29T21:03:10.784592Z"}
 {"op":"add","slug":"unread-peek-is-not-delivery-proof-for-a-shared-identity-cursor","tool":"codex-gpt5.6-sol-k","host":"dragon","episode":"weave-issue-11","at":"2026-09-06T04:13:24.989459Z"}
+{"op":"add","slug":"tick-waits-need-a-single-board-snapshot","tool":"codex-gpt5.6-terra-l","host":"dragon","episode":"weave-issue-12","at":"2026-09-06T04:26:42.486481Z"}

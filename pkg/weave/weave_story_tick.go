@@ -376,6 +376,7 @@ func sprintTickReadMail(who string) sprintTickMail {
 func sprintTickReadBoard(s *weaveStory, since time.Time) sprintTickBoard {
 	b := sprintTickBoard{}
 	seen := map[string]bool{}
+	var stories []sprintStoryState
 	for _, root := range sprintStoryRoots(s) {
 		items, err := todopkg.List(todopkg.RepoStore(root), "")
 		if err != nil {
@@ -407,11 +408,35 @@ func sprintTickReadBoard(s *weaveStory, since time.Time) sprintTickBoard {
 			if strings.TrimSpace(it.Assignee) == "" {
 				b.Unowned++
 			}
+			stories = append(stories, sprintStoryState{
+				Ref:      sprintStoryRef{Repo: root, ID: it.ID},
+				Title:    it.Title,
+				Status:   it.Status,
+				Priority: it.Priority,
+				Seq:      it.Seq,
+			})
 		}
 	}
-	if next, err := nextSprintStory(s); err == nil && next != nil {
-		b.Next = next.Ref.ID
-		b.NextTitle = next.Title
+	// Next must come from the same scan as the counts above. A story is written
+	// in two steps by the todo helper, so separately re-reading it could pair a
+	// newly visible Next with an older Open count and wake --wait on that torn
+	// worksheet.
+	sort.SliceStable(stories, func(i, j int) bool {
+		if a, b := todopkg.PriorityRank(stories[i].Priority), todopkg.PriorityRank(stories[j].Priority); a != b {
+			return a < b
+		}
+		if stories[i].Seq != stories[j].Seq {
+			return stories[i].Seq < stories[j].Seq
+		}
+		return stories[i].Ref.ID < stories[j].Ref.ID
+	})
+	for _, story := range stories {
+		if story.Status == todopkg.StatusDone || story.Status == issue.StatusClosed || story.Status == todopkg.StatusBlocked {
+			continue
+		}
+		b.Next = story.Ref.ID
+		b.NextTitle = story.Title
+		break
 	}
 	return b
 }
