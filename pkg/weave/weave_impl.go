@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
@@ -446,6 +447,26 @@ func isPrunableState(s string) bool {
 		return true
 	}
 	return false
+}
+
+// weaveItemVisibleInList reports whether an item belongs in the default
+// (active) list. Failed and killed runs remain actionable only while their
+// workspace still exists: that clone is what can be inspected, resumed, or
+// salvaged. Once it is gone, keeping the terminal record in the active table
+// creates a ghost row with no possible next action. --history still shows the
+// durable record.
+func weaveItemVisibleInList(it *weaveItem, includeHistory bool) bool {
+	if it == nil || includeHistory {
+		return it != nil
+	}
+	switch it.State {
+	case "done", "abandoned", "no-op":
+		return false
+	case "failed", "killed":
+		return weaveWorkspacePresent(it)
+	default:
+		return true
+	}
 }
 
 // weaveRunConsumesCapacity reports whether a queue item still occupies an
@@ -2341,7 +2362,7 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 			if activeOnly && isTerminalState(it.State) {
 				continue
 			}
-			if !includeHistory && !activeOnly && (it.State == "done" || it.State == "abandoned") {
+			if !activeOnly && !weaveItemVisibleInList(it, includeHistory) {
 				continue
 			}
 			if it.State == "working" && it.WrapperPid > 0 && !pidAlive(it.WrapperPid) {
@@ -2471,7 +2492,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 				reclaimable++
 			}
 		}
-		if !includeHistory && (it.State == "done" || it.State == "abandoned") {
+		if !weaveItemVisibleInList(it, includeHistory) {
 			continue
 		}
 		// Computed, never persisted: a "working" item whose wrapper
@@ -5731,11 +5752,20 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
 			weavecli.ExitGenericFail, lockErr))
 	}
-	// Best-effort: also remove the workspaces/ tree (+ the legacy
-	// sandboxes/ tree from before the rename) in case the individual
-	// removals left empty dirs behind.
-	_ = os.RemoveAll(filepath.Join(dir, "workspaces"))
-	_ = os.RemoveAll(filepath.Join(dir, "sandboxes"))
+	// Reset means the project has no weave state left. Removing only the clone
+	// directories and emptying queue.json left logs, locks, agent data, and the
+	// queue itself behind forever; an idle machine therefore accumulated one
+	// state root per repo even after an explicit reset. The queue lock has been
+	// released at this point, so remove the whole project root, then remove the
+	// shared parent if this was its last child. A later write recreates both.
+	if err := os.RemoveAll(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
+			weavecli.ExitGenericFail, fmt.Errorf("remove project state: %w", err)))
+	}
+	if err := os.Remove(filepath.Dir(dir)); err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTEMPTY) {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
+			weavecli.ExitGenericFail, fmt.Errorf("remove empty weave root: %w", err)))
+	}
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave reset", map[string]any{
 			"teardowns": teardowns,
@@ -5933,7 +5963,7 @@ func runWeaveListWatch(cmd *cobra.Command, includeHistory bool, flags *weaveOutp
 		cur := map[int64]string{}
 		var items []*weaveItem
 		for _, it := range q.Items {
-			if !includeHistory && (it.State == "done" || it.State == "abandoned") {
+			if !weaveItemVisibleInList(it, includeHistory) {
 				continue
 			}
 			cur[it.ID] = it.State

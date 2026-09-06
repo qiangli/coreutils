@@ -904,7 +904,7 @@ func newWeaveResetCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "reset",
-		Short: "Tear down every weave for this project (preserves labels + issues)",
+		Short: "Tear down every weave and remove all weave state for this project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveReset(cmd, yes, &flags)
 		},
