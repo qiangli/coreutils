@@ -62,6 +62,11 @@ type UnreadRecord struct {
 // UnreadRecords is the cursor-safe, sequence-preserving Meet snapshot used by
 // aggregate readers. It never marks the room; acknowledge through the returned
 // high-water mark only after every returned record was rendered.
+//
+// This is a work view, not delivery proof. Two consumers reading as the same
+// identity deliberately share one cursor, so one may acknowledge a record
+// before the other's later --peek. Use HistoryRecords when auditing whether an
+// addressed record was durably appended for that reader.
 func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord, older int, through int64, err error) {
 	events, err := readRoomTranscript(id)
 	if err != nil {
@@ -74,8 +79,8 @@ func UnreadRecords(id, reader string, limit int) (directed, other []UnreadRecord
 
 // HistoryRecords returns the full sequence-preserving transcript visible to
 // reader. Unlike UnreadRecords it neither consults nor advances the reader's
-// native Meet cursor, so durable mailbox views can keep stable record IDs and
-// their local marks after another inbox consumer acknowledges the room.
+// native Meet cursor, so durable mailbox views and delivery checks can keep
+// stable record IDs after another inbox consumer acknowledges the room.
 func HistoryRecords(id, reader string, limit int) (directed, other []UnreadRecord, older int, err error) {
 	events, err := readRoomTranscript(id)
 	if err != nil {

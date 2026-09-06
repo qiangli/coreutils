@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 func TestMeetSeenPathIsRoomLocalAndSafe(t *testing.T) {
@@ -200,6 +202,75 @@ func TestHistoryRecordsIgnoresNativeCursorAndPreservesRecipientFiltering(t *test
 	}
 	if got := SeenSeq(st.ID, "agent-b"); got != 3 {
 		t.Fatalf("HistoryRecords changed native cursor to %d", got)
+	}
+}
+
+// A resident manager and a CLI assertion read as the same identity and
+// therefore share one cursor. This is the deterministic form of Sprint 127's
+// H4 flake: depending on scheduling, `inbox --as mgr-agent --peek` ran before
+// or after the resident consumed the Meet message. An empty later peek does not
+// mean the send missed; the sequence-preserving history is the durable proof.
+//
+// Keep the public invocation's exact author, addressee, and body here. In
+// particular, operator is not mgr-agent: using the recipient as the fixture
+// author would correctly classify the record as its own outbound post and
+// test a different contract.
+func TestHumanMeetMessageRemainsDurableAfterResidentManagerConsumesIt(t *testing.T) {
+	st := newRoom(t)
+	catalog := fleet.New()
+	if err := catalog.SavePerson(fleet.Person{Handle: "operator"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SaveAgent(fleet.Agent{Name: "mgr-agent", Tool: "claude", Model: "opus5"}); err != nil {
+		t.Fatal(err)
+	}
+	st.Participants = []string{"mgr-agent"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	const body = "apps meet steering probe"
+	ev, err := PostAs(st.ID, "operator", "mgr-agent", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Speaker != "operator" || ev.To != "mgr-agent" || ev.Text != body {
+		t.Fatalf("appended event changed the public message: %+v", ev)
+	}
+
+	directed, other, _, through, err := UnreadRecords(st.ID, "mgr-agent", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed) != 1 || len(other) != 0 || directed[0].Event.Text != body {
+		t.Fatalf("manager projection = directed %+v other %+v", directed, other)
+	}
+	if err := MarkSeenThrough(st.ID, "mgr-agent", through); err != nil {
+		t.Fatal(err)
+	}
+
+	// This is the losing side of the old H4 race: another read as mgr-agent
+	// observes no unread data after the resident manager acknowledges it.
+	directed, other, _, _, err = UnreadRecords(st.ID, "mgr-agent", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directed)+len(other) != 0 {
+		t.Fatalf("acknowledged message remained unread: directed %+v other %+v", directed, other)
+	}
+
+	// Delivery proof must ignore that shared work cursor and match the exact
+	// durable record, not merely the successful return from PostAs.
+	history, roomHistory, older, err := HistoryRecords(st.ID, "mgr-agent", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 0 || len(roomHistory) != 0 || len(history) != 1 {
+		t.Fatalf("durable manager history = directed %+v other %+v older %d", history, roomHistory, older)
+	}
+	got := history[0]
+	if got.Seq != 1 || got.Event.Speaker != "operator" || got.Event.To != "mgr-agent" || got.Event.Text != body {
+		t.Fatalf("durable delivery proof changed: %+v", got)
 	}
 }
 
