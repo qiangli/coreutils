@@ -36,7 +36,7 @@ import (
 // bump is a deliberate, reviewed change. Non-default versions fall back to a
 // live SHASUMS256 fetch (still fail-closed in binmgr).
 //
-//go:embed node-22.11.0.sums
+//go:embed node-22.23.2.sums
 var embeddedSums string
 
 // pinnedSHA returns the embedded (pinned, offline) sha256 for filename, or "".
@@ -51,7 +51,19 @@ func pinnedSHA(filename string) string {
 }
 
 // DefaultVersion is the Node.js provisioned when none is requested. Active LTS.
-const DefaultVersion = "22.11.0"
+//
+// THIS PIN IS COUPLED TO pkg/meet/web/package.json's `packageManager` field, and
+// the coupling is easy to miss because the two live in different trees. corepack
+// honours that field, so `bashy pnpm` runs the pnpm the SPA asks for — and a pnpm
+// release can raise its own Node floor. When 22.11.0 was pinned here, pnpm@11.17.0
+// began requiring Node >= 22.13, so `bashy pnpm` failed on every clean provision
+// with "This version of pnpm requires at least Node.js v22.13" and the meet SPA
+// could not be built on a machine with no system Node — which is exactly the
+// machine this provisioner exists for.
+//
+// So: when bumping the SPA's packageManager, check its Node floor against this
+// constant. TestPnpmFloorSatisfiedByDefaultNode pins the relationship.
+const DefaultVersion = "22.23.2"
 
 // nodePlatform maps Go's GOOS/GOARCH to Node's dist naming (os, arch, ext).
 func nodePlatform() (nos, narch, ext string, err error) {
