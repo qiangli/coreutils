@@ -229,12 +229,14 @@ existing path is coherent and no M3 production defect was reproduced:
   Messages app; execution remains the Meet/Chat live and transcript state. The
   integration gate proves both without collapsing them.
 
-The command-level gate in `script/e2e-sprint-modes.sh` passes 22/22 with a
-freshly built Bashy binary: one human principal can own a sprint, keep its inbox
-watch live, send durable MB and Meet instructions, observe truthful delivery,
-and steer a managed sprint owner. The one production defect found by that gate
-was the managed-owner control-socket readiness race, tracked and fixed as Sprint
-127 story #235.
+The command-level gate in `script/e2e-sprint-modes.sh` passed 22/22 with a
+freshly built Bashy binary, but two assertions in that run were subsequently
+declared obsolete: a person must not own a production sprint seat or hold its
+manager watch. Sprint 127 story #237 owns that correction. The supported MVP
+subset passed: a human principal can send durable MB and Meet instructions,
+observe truthful delivery, and steer a registered agent managing a sprint. The
+production defect found on that path was the managed-owner control-socket
+readiness race, fixed as Sprint 127 story #235.
 
 Therefore #216 has no evidenced MVP fix to make. It remains a valid container
 for future operator-reproduced UI defects, but is not a Sprint 126 deliverable.
