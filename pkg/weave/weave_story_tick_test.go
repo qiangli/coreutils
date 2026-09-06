@@ -356,3 +356,67 @@ func TestSprintTickWaitHonoursTheCeiling(t *testing.T) {
 		t.Fatalf("quiet wait took %s, want ~250ms (the ceiling)", elapsed)
 	}
 }
+
+// TestSprintCheckpointAndCommentFileUnderTheHoldersName drives the REAL verbs.
+//
+// checkpoint and comment used to resolve their author BEFORE the sprint was
+// loaded, through weaveConductorName — which consults only the ephemeral session
+// identity and falls back to the literal string "conductor". A manager holding
+// the seat under its own name therefore filed its checkpoints as "conductor",
+// while `sprint goal evidence` filed under the real name: one actor, two names,
+// on one sprint. checkpoint's own success line named the holder correctly at the
+// same time, which is how it stayed unnoticed.
+//
+// The consequence is not cosmetic, which is why this test sits beside the tick:
+// the tick measures "what changed since you last acted" from the manager's own
+// thread entries, so an entry filed under a foreign name is invisible to the
+// manager who wrote it — the baseline never advances and every tick re-reports
+// the same delta. That was observed live on sprint 126.
+//
+// It runs the cobra commands rather than the helpers they call. An earlier
+// version of this test asserted on weaveStoryConductorName directly and passed
+// against the BROKEN code, because it reimplemented the fix instead of exercising
+// it.
+func TestSprintCheckpointAndCommentFileUnderTheHoldersName(t *testing.T) {
+	const holder = "named-manager"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	// The ambient session identity is deliberately something ELSE, so a fix that
+	// merely reads the environment cannot pass.
+	t.Setenv("WEAVE_CONDUCTOR", "some-other-session")
+	seedLiveAgent(t, holder)
+
+	if out, code := runSprint(t, "add", "authorship"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", holder, "--for", "1h"); code != 0 {
+		t.Fatalf("start exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "checkpoint", "1", "-m", "where it stands"); code != 0 {
+		t.Fatalf("checkpoint exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "comment", "1", "-m", "a note"); code != 0 {
+		t.Fatalf("comment exit=%d: %s", code, out)
+	}
+
+	out, code := runSprint(t, "show", "1")
+	if code != 0 {
+		t.Fatalf("show exit=%d: %s", code, out)
+	}
+	thread := out
+	if i := strings.Index(out, "── thread ──"); i >= 0 {
+		thread = out[i:]
+	}
+	for _, line := range strings.Split(thread, "\n") {
+		if !strings.Contains(line, "(progress):") && !strings.Contains(line, "(note):") {
+			continue
+		}
+		if strings.Contains(line, "conductor (") || strings.Contains(line, "some-other-session (") {
+			t.Errorf("entry filed under a name its author does not hold:\n  %s\nfull thread:\n%s", strings.TrimSpace(line), thread)
+		}
+		if !strings.Contains(line, holder+" (") {
+			t.Errorf("entry not attributed to the seat holder %q:\n  %s", holder, strings.TrimSpace(line))
+		}
+	}
+}

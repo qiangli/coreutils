@@ -1131,11 +1131,13 @@ func newWeaveStoryCommentCmd() *cobra.Command {
 			if strings.TrimSpace(body) == "" {
 				return fmt.Errorf("text required (positional or -m)")
 			}
-			who := author
-			if who == "" {
-				who = weaveConductorName("")
-			}
 			return runWeaveStoryMutate(cmd, id, "sprint comment", &flags, func(s *weaveStory) (string, error) {
+				// Resolved INSIDE the closure, where the sprint exists. Resolving it
+				// outside meant falling back to the literal "conductor" even when the
+				// sprint knew its owner — see the note in checkpoint above; a comment
+				// filed under a name its author does not tick as is invisible to that
+				// author's own board delta.
+				who := weaveStoryConductorName(s, author)
 				weaveStoryAppend(s, who, kind, body)
 				return fmt.Sprintf("sprint #%d +comment", id), nil
 			})
@@ -1383,7 +1385,6 @@ successor can take over.
 			if strings.TrimSpace(message) == "" {
 				return fmt.Errorf("-m <resume brief> required")
 			}
-			who := weaveConductorName("")
 			return runWeaveStoryMutate(cmd, id, "sprint checkpoint", &flags, func(s *weaveStory) (string, error) {
 				prev, stale, free := weaveStoryLeaseState(s)
 				if free {
@@ -1394,7 +1395,25 @@ successor can take over.
 				}
 				s.Continuity = message
 				s.Lease = &weaveStoryLease{Holder: prev, At: time.Now().UTC()}
-				weaveStoryAppend(s, who, "progress", "checkpoint")
+				// AUTHOR WITH THE HOLDER THIS COMMAND JUST VALIDATED.
+				//
+				// It used to resolve the author BEFORE the sprint was loaded, through
+				// weaveConductorName, which consults only the ephemeral session
+				// identity and falls back to the literal string "conductor". So a
+				// manager holding the seat under its own name filed its checkpoints
+				// as "conductor" while this function's own success line named the
+				// holder correctly — one actor, two names, in one command.
+				//
+				// That is not cosmetic. The continuity record is what a successor
+				// reads cold, and `sprint tick` measures "what changed since you last
+				// acted" from the manager's own thread entries: an entry filed under
+				// a different name is invisible to the manager who wrote it, so the
+				// baseline never advances and every tick re-reports the same delta.
+				//
+				// prev is the right identity by construction — the branches above
+				// refuse unless the lease is live and held, so prev IS whoever is
+				// acting, already verified.
+				weaveStoryAppend(s, prev, "progress", "checkpoint")
 				return fmt.Sprintf("sprint #%d: continuity updated, lease refreshed (%s)%s",
 					id, prev, sprintUnreadReminder(prev)), nil
 			})
