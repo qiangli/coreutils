@@ -184,6 +184,27 @@ func TestReduceDuplicateAnnotationMustFitTotalBudget(t *testing.T) {
 	}
 }
 
+func TestTelemetryHintsOnlyDoesNotEnableGeneralElision(t *testing.T) {
+	store := newTestStore(t)
+	ordinary := []byte(strings.Repeat("ordinary output\n", 100))
+	res, err := Reduce(store, ordinary, Config{BudgetBytes: 80, TelemetryHintsOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Reduced || !bytes.Equal([]byte(res.Text), ordinary) {
+		t.Fatalf("telemetry-only mode changed ordinary output: %+v", res)
+	}
+
+	hint := telemetryHint("http://collector:4317", "bashy")
+	res, err = Reduce(store, []byte(hint+hint+hint), Config{BudgetBytes: 512, TelemetryHintsOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Reduced || res.SuppressedHints != 2 || strings.Count(res.Text, hint) != 1 {
+		t.Fatalf("telemetry-only mode did not suppress exact hints: %+v text=%q", res, res.Text)
+	}
+}
+
 func TestReduceDuplicateAndHeadElisionShareTotalBudget(t *testing.T) {
 	store := newTestStore(t)
 	hint := telemetryHint("http://collector:4317", "bashy")

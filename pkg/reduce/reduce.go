@@ -41,6 +41,11 @@ type Config struct {
 	// token counts are analysis only and never on this path (contract §2.4).
 	BudgetBytes int
 
+	// TelemetryHintsOnly enables the always-safe Stage 0.1 view without enabling
+	// general head elision. If no duplicate classified hints exist, output is
+	// returned complete even when it exceeds BudgetBytes.
+	TelemetryHintsOnly bool
+
 	// HomeDir, when non-empty, is canonicalized to $HOME before redaction,
 	// duplicate comparison, spilling, or view construction.
 	HomeDir string
@@ -116,6 +121,11 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 	if !binary {
 		view, res.SuppressedHints, res.SuppressedBytes = deduplicateTelemetryHints(body)
 	}
+	if cfg.TelemetryHintsOnly && (binary || res.SuppressedHints == 0) {
+		res.Text = string(body)
+		res.KeptBytes = len(body)
+		return res, nil
+	}
 
 	// Fast path: valid text that already fits. Nothing is elided, so — per the
 	// §2.1 corollary — no marker is emitted, because there is no region an agent
@@ -138,6 +148,20 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 	res.Binary = binary
 	res.Digest = digest
 	res.Handle = store.shortestHandle(strings.TrimPrefix(digest, digestPrefix))
+	if cfg.TelemetryHintsOnly {
+		res.KeptBytes = len(view)
+		res.OmittedBytes = res.SuppressedBytes
+		res.OmittedLines = countLines(body) - countLines(view)
+		res.Marker = buildMarker(res, verb, keep)
+		res.Text = joinMarker(string(view), res.Marker)
+		if len(res.Text) < budget {
+			res.Text += "\n"
+		}
+		if len(res.Text) > budget {
+			return Result{}, fmt.Errorf("reduce: telemetry view requires %d bytes, budget is %d", len(res.Text), budget)
+		}
+		return res, nil
+	}
 
 	if binary {
 		// detect, do not repair: never inline raw binary into agent context.
