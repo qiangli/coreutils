@@ -666,6 +666,14 @@ func loadWeaveQueue(dir string) (*weaveQueue, error) {
 	// written before the explicit execution-policy field existed. Story priority
 	// remains the only ordering source; this flag records that the policy applies.
 	for i := range q.Stories {
+		// Sprint-level review was an unenforced duplicate of story submission:
+		// no command entered it automatically and it behaved exactly like doing.
+		// Keep existing cards active when reading queues written before the
+		// column was removed; the next ordinary write persists the canonical
+		// value without making a read-only command mutate disk.
+		if q.Stories[i].Column == "review" {
+			q.Stories[i].Column = "doing"
+		}
 		q.Stories[i].Execution.PriorityFirst = true
 	}
 	return &q, nil

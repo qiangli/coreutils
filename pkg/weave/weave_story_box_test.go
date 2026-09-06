@@ -21,7 +21,7 @@ func TestBox_ConcurrentSprintsKeepIndependentClocks(t *testing.T) {
 		Boxes: []weaveStoryBox{{StartedAt: base, Cutoff: base.Add(45 * time.Minute), Planned: 45 * time.Minute}}}
 	migration := &weaveStory{ID: 2, Column: "doing",
 		Boxes: []weaveStoryBox{{StartedAt: base, Cutoff: base.Add(4 * time.Hour), Planned: 4 * time.Hour}}}
-	yesterday := &weaveStory{ID: 3, Column: "review",
+	yesterday := &weaveStory{ID: 3, Column: "doing",
 		Boxes: []weaveStoryBox{{StartedAt: base.Add(-20 * time.Hour), Cutoff: base.Add(-18 * time.Hour), Planned: 2 * time.Hour}}}
 	unboxed := &weaveStory{ID: 4, Column: "backlog"}
 

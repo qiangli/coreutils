@@ -63,7 +63,7 @@ EPHEMERAL; the durable unit you own/hand off is the SPRINT. Each card:
 SPEC-REF, ACCEPTANCE, column, CONTINUITY (resume brief), conductor LEASE,
 and cross-repo run links {repo, id}.
   • ` + "`sprint add \"<title>\" --epic E --spec docs/X.md --acceptance \"...\"`" + `
-  • ` + "`sprint move <id> doing|review|done`" + ` · ` + "`sprint link <id> --repo <name> --task N`" + `
+  • ` + "`sprint move <id> backlog|doing|done`" + ` · ` + "`sprint link <id> --repo <name> --task N`" + `
   • ` + "`sprint show <id>`" + ` — spec + acceptance + continuity + thread + runs
 
 ## Conductor DURABILITY (survive Ctrl+C / SIGKILL / token exhaustion)

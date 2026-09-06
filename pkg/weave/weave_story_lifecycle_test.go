@@ -2,10 +2,47 @@ package weave
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSprintColumnsAreBacklogDoingDone(t *testing.T) {
+	if got := strings.Join(weaveStoryColumns, "|"); got != "backlog|doing|done" {
+		t.Fatalf("sprint columns = %q, want backlog|doing|done", got)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if out, code := runSprint(t, "add", "no review column", "--column", "review"); code == 0 {
+		t.Fatalf("review column accepted: %s", out)
+	}
+	if out, code := runSprint(t, "add", "transition test"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "move", "1", "review"); code == 0 {
+		t.Fatalf("move to review accepted: %s", out)
+	}
+}
+
+func TestSprintLegacyReviewColumnLoadsAsDoing(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"next_id":1,"stories":[{"id":1,"title":"legacy","column":"review"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "queue.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findWeaveStory(q, 1).Column; got != "doing" {
+		t.Fatalf("legacy review column loaded as %q, want doing", got)
+	}
+}
 
 func TestSprintLifecycleSurface(t *testing.T) {
 	cmd := NewSprintCmd()

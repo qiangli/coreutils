@@ -31,7 +31,7 @@ type weaveStory struct {
 	Epic       string           `json:"epic,omitempty"`        // grouping label
 	SpecRef    string           `json:"spec_ref,omitempty"`    // handoff/spec doc reference
 	Acceptance string           `json:"acceptance,omitempty"`  // done criteria
-	Column     string           `json:"column"`                // backlog|doing|review|done
+	Column     string           `json:"column"`                // backlog|doing|done
 	Continuity string           `json:"continuity,omitempty"`  // the resume brief
 	Owner      string           `json:"owner,omitempty"`       // durable coordination identity across pauses
 	Goal       []sprintGoalItem `json:"goal,omitempty"`        // durable outcomes; completion is derived
@@ -124,7 +124,7 @@ type weaveStoryLease struct {
 // of that agreement a compiler checks.
 const SprintLeaseTTL = 30 * time.Minute
 
-var weaveStoryColumns = []string{"backlog", "doing", "review", "done"}
+var weaveStoryColumns = []string{"backlog", "doing", "done"}
 
 func isValidColumn(c string) bool {
 	for _, v := range weaveStoryColumns {
@@ -768,7 +768,7 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 	var force bool
 	var forceReason string
 	cmd := &cobra.Command{
-		Use:   "move <sprint> <backlog|doing|review|done>",
+		Use:   "move <sprint> <backlog|doing|done>",
 		Short: "Move a sprint to a kanban column",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

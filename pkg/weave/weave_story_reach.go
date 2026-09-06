@@ -71,7 +71,7 @@ const sprintUnansweredAge = 30 * time.Minute
 // design and neither needs a room standing by.
 func sprintColumnOpen(col string) bool {
 	switch strings.ToLower(strings.TrimSpace(col)) {
-	case "doing", "review":
+	case "doing":
 		return true
 	}
 	return false

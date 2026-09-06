@@ -186,7 +186,7 @@ It refuses while anything still depends on the card:
 
   a live conductor lease   somebody is working it right now
   linked runs              unlink or finish them first; the runs outlive the card
-  an open column           move it out of doing/review first, which also closes its room
+  an open column           move it out of doing first, which also closes its room
 
 --force waives the column and lease checks for a card that was created by
 mistake. It does NOT waive the linked-run check: a card with runs is the only

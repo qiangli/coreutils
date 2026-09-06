@@ -2,7 +2,7 @@ package weave
 
 // THE TIME-BOX — the half of a sprint the kanban column cannot express.
 //
-// A column says WHERE work is (backlog, doing, review, done). Nothing says how
+// A column says WHERE work is (backlog, doing, done). Nothing says how
 // long it has. That gap is not cosmetic when the worker is an agent: a session
 // has no natural end. It does not get hungry, notice the light change, or feel
 // a day turning into an evening. Left alone it will follow the next reasonable
