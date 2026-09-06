@@ -4,7 +4,7 @@ kind: task
 title: 'GATED: seam 1 — bound chat.Invoke output (every agentic turn)'
 seq: 45
 status: todo
-priority: p2
+priority: p1
 created: 2026-09-04T09:52:41.239162Z
 sprint: 123
 ---

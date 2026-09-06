@@ -4,7 +4,7 @@ kind: task
 title: 'GATED: uniform --full override + BASHY_OUTPUT_REDUCE + bashy full --'
 seq: 44
 status: todo
-priority: p2
+priority: p1
 created: 2026-09-04T09:52:41.216938Z
 sprint: 123
 ---

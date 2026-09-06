@@ -4,7 +4,7 @@ kind: task
 title: 'GATED: pkg reducer core — spill store, elision marker, and the bashy out verb'
 seq: 42
 status: todo
-priority: p2
+priority: p1
 created: 2026-09-04T09:52:41.171005Z
 sprint: 123
 ---

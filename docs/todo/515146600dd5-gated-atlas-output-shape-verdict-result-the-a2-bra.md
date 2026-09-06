@@ -4,7 +4,7 @@ kind: task
 title: 'GATED: atlas output shape (verdict|result) — the A2 branch is invalid without it'
 seq: 43
 status: todo
-priority: p2
+priority: p1
 created: 2026-09-04T09:52:41.194334Z
 sprint: 123
 ---
