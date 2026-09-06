@@ -324,6 +324,9 @@ var packages = map[string]Package{
 		"build matrix, deterministic archives, sha256 ledger (`bashy-release-v1`). No importer and " +
 		"no front-door verb yet — the `bashy release` cobra tree is the wiring that lands in bashy, " +
 		"not here; reclassify to command/library when it does."},
+	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +
+		"NewOutCmd is not mounted and no execution seam imports the package yet; the Sprint 123 chat and shell " +
+		"seam stories own that wiring. Reclassify when the first front door lands."},
 }
 
 func init() {
