@@ -3,10 +3,11 @@ id: b1f8e659957c
 kind: task
 title: 'sprint goal rm: a sprint whose stories moved to a successor could never be closed'
 seq: 70
-status: todo
+status: done
 priority: p1
 created: 2026-09-06T11:18:31.875384Z
 sprint: 130
+closed: 2026-09-06T11:30:42.361971Z
 ---
 
 DEFECT (fixed here). A goal item checks only when every story linked to it is closed (sprintGoalDone), and `sprint move <id> done` refuses over any unchecked item — a refusal --force deliberately does NOT cover, because a plan you did not finish is not a plan you may declare finished.
