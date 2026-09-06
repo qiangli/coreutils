@@ -1358,7 +1358,11 @@ func weaveCollectVerifyEvidence(workspace, queueDir, command string, it *weaveIt
 		verifyTree = "head"
 	}
 	if len(vo) > 2000 {
-		vo = vo[len(vo)-2000:]
+		// weaveRunVerify already preserves salient failure lines when it
+		// limits output. Adding the dirty-tree attestation can take that
+		// result over the budget, so use the same reducer here rather than
+		// reverting to a tail cut and discarding the evidence we just kept.
+		vo = weaveTrimVerifyOutput(vo, 2000)
 	}
 	return &ve, vo, verifyTree
 }

@@ -2,6 +2,8 @@ package weave
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,42 @@ func TestVerifyTrimKeepsEarliestFailuresWhenOverBudget(t *testing.T) {
 	got := weaveTrimVerifyOutput(b.String(), 2000)
 	if !strings.Contains(got, "failing000") {
 		t.Error("the FIRST failure was dropped; it is the one most likely to be the cause")
+	}
+}
+
+// The dirty-tree attestation is appended after weaveRunVerify has already
+// selected salient output. A second tail-only budget enforcement here used to
+// erase the leading failure line precisely when the tree was dirty.
+func TestCollectVerifyEvidenceKeepsFailureWithDirtyLargeOutput(t *testing.T) {
+	workspace := t.TempDir()
+	gitT(t, workspace, "init", "-q")
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, workspace, "add", "tracked.txt")
+	gitT(t, workspace, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "seed")
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirty, dirtyFiles, _ := weaveMeasureDirtiness(workspace)
+	if !dirty || dirtyFiles != 1 {
+		t.Fatalf("temporary worktree is not dirty as expected: dirty=%t files=%d", dirty, dirtyFiles)
+	}
+
+	command := "printf 'FAIL\\tpkg/regression\\t0.01s\\n'; " +
+		"i=0; while [ $i -lt 500 ]; do printf 'ok filler%03d\\n' $i; i=$((i + 1)); done; exit 1"
+	exit, output, tree := weaveCollectVerifyEvidence(workspace, "", command, nil, dirty, dirtyFiles)
+	if exit == nil || *exit == 0 {
+		t.Fatalf("verify exit=%v, want a failing exit", exit)
+	}
+	if tree != "working-tree-dirty" {
+		t.Fatalf("verify tree=%q, want working-tree-dirty", tree)
+	}
+	if !strings.Contains(output, "FAIL\tpkg/regression\t0.01s") {
+		t.Fatalf("salient FAIL line was discarded after dirty-tree attestation:\n%s", output)
+	}
+	if !strings.Contains(output, "VERIFY ATTESTED A DIRTY WORKING TREE") {
+		t.Fatalf("dirty-tree attestation was discarded:\n%s", output)
 	}
 }
