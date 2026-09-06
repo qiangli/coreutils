@@ -17,14 +17,15 @@ func TestSprintColumnsAreBacklogDoingDone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	if out, code := runSprint(t, "add", "no review column", "--column", "review"); code == 0 {
-		t.Fatalf("review column accepted: %s", out)
+	t.Setenv("BASHY_AGENTIC", "")
+	if _, stderr, code, _ := runSprintStreams(t, "add", "no review column", "--column", "review"); code == 0 || !strings.Contains(stderr, "column must be one of backlog|doing|done") {
+		t.Fatalf("review column rejection: exit=%d stderr=%q", code, stderr)
 	}
 	if out, code := runSprint(t, "add", "transition test"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "move", "1", "review"); code == 0 {
-		t.Fatalf("move to review accepted: %s", out)
+	if _, stderr, code, _ := runSprintStreams(t, "move", "1", "review"); code == 0 || !strings.Contains(stderr, "column must be one of backlog|doing|done") {
+		t.Fatalf("move-to-review rejection: exit=%d stderr=%q", code, stderr)
 	}
 }
 

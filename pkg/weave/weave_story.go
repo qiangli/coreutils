@@ -605,7 +605,8 @@ func newWeaveStoryAddCmd() *cobra.Command {
 				column = "backlog"
 			}
 			if !isValidColumn(column) {
-				return fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint add", weavecli.ExitInvalidArg,
+					fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))))
 			}
 			return runWeaveStoryAdd(cmd, strings.Join(args, " "), epic, spec, acceptance, column, &flags)
 		},
@@ -778,7 +779,8 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 			}
 			col := strings.ToLower(strings.TrimSpace(args[1]))
 			if !isValidColumn(col) {
-				return fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint move", weavecli.ExitInvalidArg,
+					fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))))
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint move", &flags, func(s *weaveStory) (string, error) {
 				if col == "done" {
