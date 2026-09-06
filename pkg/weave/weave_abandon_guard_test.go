@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -81,6 +82,46 @@ func TestWeaveAbandonForcePreservesRefBeforeDestroying(t *testing.T) {
 	got := gitT(t, root, "rev-parse", "refs/salvage/abandoned-1")
 	if got != sha {
 		t.Fatalf("preserved ref must point at the commit that would otherwise be lost: got %s want %s", got, sha)
+	}
+}
+
+// A killed run may already have left the legacy salvage ref behind before a
+// resumed worker amends its WIP commit. Reusing the fixed ref makes git fetch
+// reject that non-fast-forward update and strands the workspace. The older tip
+// must remain recoverable while abandon preserves the resumed tip separately.
+func TestWeaveAbandonForcePreservesAmendedTipAlongsideOlderSalvage(t *testing.T) {
+	root, workspace, oldSHA := setupAbandonGuardFixture(t)
+	t.Chdir(root)
+	gitT(t, root, "fetch", "-q", workspace, "agent/weave-issue-1:refs/salvage/abandoned-1")
+	gitT(t, workspace, "commit", "--allow-empty", "--amend", "-qm", "resumed WIP")
+	newSHA := gitT(t, workspace, "rev-parse", "HEAD")
+	if newSHA == oldSHA {
+		t.Fatal("fixture did not create an amended WIP tip")
+	}
+
+	dir, _ := weaveQueueDir(root)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
+		ID: 1, State: "killed", Workspace: workspace, Branch: "agent/weave-issue-1", CommitsAhead: 1,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "abandon", "1", "--yes", "--force", "--json")
+	if code != 0 {
+		t.Fatalf("--force abandon must preserve both tips and succeed: exit=%d output=%s", code, out)
+	}
+	newRef := fmt.Sprintf("refs/salvage/abandoned-1-%s", newSHA)
+	if !strings.Contains(out, newRef) {
+		t.Fatalf("output must report the SHA-qualified preserved ref: %s", out)
+	}
+	if got := gitT(t, root, "rev-parse", "refs/salvage/abandoned-1"); got != oldSHA {
+		t.Fatalf("older salvage ref was overwritten: got %s want %s", got, oldSHA)
+	}
+	if got := gitT(t, root, "rev-parse", newRef); got != newSHA {
+		t.Fatalf("resumed WIP tip was not preserved: got %s want %s", got, newSHA)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("successful abandon must remove workspace: %v", err)
 	}
 }
 

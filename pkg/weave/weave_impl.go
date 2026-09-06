@@ -5030,10 +5030,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 							why := strings.Replace(weavePruneHoldReason(ahead, dirtyFiles, untracked), "<id>", fmt.Sprint(id), 1)
 							return fmt.Errorf("run #%d holds unmerged work — refusing to abandon: %s", id, why)
 						}
-						if ahead > 0 && it.Branch != "" && head != "" {
-							ref := fmt.Sprintf("refs/salvage/abandoned-%d", id)
-							fetchSpec := fmt.Sprintf("%s:%s", it.Branch, ref)
-							if _, ferr := gitOut(root, "fetch", "--no-tags", it.Workspace, fetchSpec); ferr != nil {
+						if ahead > 0 && head != "" {
+							ref, ferr := weavePreserveAbandonedTip(root, it.Workspace, id, head)
+							if ferr != nil {
 								return fmt.Errorf("run #%d: --force could not preserve %d unmerged commit(s) as %s, refusing to destroy them: %w", id, ahead, ref, ferr)
 							}
 							preservedRef = ref
@@ -5101,6 +5100,54 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned\n", it.ID)
 	}
 	return nil
+}
+
+// weavePreserveAbandonedTip imports a workspace HEAD before removing that
+// workspace. The original abandoned-N name remains the pleasant common case,
+// but it is not a namespace that belongs to a single lifetime of an issue:
+// resuming a killed run can amend its WIP, and queues/history can reuse IDs.
+// Never move an existing salvage ref; a distinct tip receives a deterministic
+// SHA-qualified name instead.
+func weavePreserveAbandonedTip(root, workspace string, id int64, head string) (string, error) {
+	base := fmt.Sprintf("refs/salvage/abandoned-%d", id)
+	if _, err := gitOut(root, "fetch", "--no-tags", workspace, "HEAD"); err != nil {
+		return base, err
+	}
+
+	for n := 0; ; n++ {
+		ref := base
+		if n == 0 {
+			// Keep the established ref for the first preserved tip.
+		} else if n == 1 {
+			ref += "-" + head
+		} else {
+			// A manually-created ref can occupy even the SHA-qualified name.
+			// Preserve it too and continue deterministically rather than replacing it.
+			ref += fmt.Sprintf("-%s-%d", head, n)
+		}
+		out, err := gitOut(root, "rev-parse", "--verify", "--quiet", ref)
+		if err == nil {
+			if strings.TrimSpace(out) == head {
+				return ref, nil
+			}
+			continue
+		}
+		// The empty old value makes this an atomic create: a concurrent abandon
+		// cannot turn this operation into an overwrite.
+		if _, err := gitOut(root, "update-ref", ref, head, ""); err == nil {
+			return ref, nil
+		} else {
+			// If it was not a competing create, report the actual failure instead
+			// of retrying forever (for example, a malformed or missing object).
+			out, checkErr := gitOut(root, "rev-parse", "--verify", "--quiet", ref)
+			if checkErr != nil {
+				return ref, err
+			}
+			if strings.TrimSpace(out) == head {
+				return ref, nil
+			}
+		}
+	}
 }
 
 // runWeaveStatus answers the single most common operator question about
