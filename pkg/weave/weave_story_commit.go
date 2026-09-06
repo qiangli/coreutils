@@ -33,6 +33,67 @@ type commitTrace struct {
 	Stories []commitStoryRef `json:"stories"`
 }
 
+// weaveMergeCommitMessage carries provenance from the commits being integrated
+// onto the merge commit itself. A commit-msg hook validates the commit Git is
+// about to create, so valid source commits do not exempt an untraced merge.
+//
+// Only a fully attributable range is propagated: every source commit must have
+// valid provenance and all of them must name the same sprint. Otherwise the
+// historical subject-only message is retained, leaving any repository hook to
+// make the same accept/reject decision it made before this propagation existed.
+func weaveMergeCommitMessage(root, branch, subject string) string {
+	raw, err := gitOut(root, "log", "--reverse", "--format=%B%x00", "HEAD.."+branch)
+	if err != nil {
+		return subject
+	}
+
+	var merged commitTrace
+	seenNumbers := make(map[int]string)
+	seenIDs := make(map[string]int)
+	commits := 0
+	for _, message := range strings.Split(raw, "\x00") {
+		message = strings.TrimSpace(message)
+		if message == "" {
+			continue
+		}
+		trace, err := parseCommitTrace(message)
+		if err != nil {
+			return subject
+		}
+		commits++
+		if merged.Sprint == 0 {
+			merged.Sprint = trace.Sprint
+		} else if merged.Sprint != trace.Sprint {
+			return subject
+		}
+		for _, story := range trace.Stories {
+			if id, ok := seenNumbers[story.Number]; ok {
+				if id != story.ID {
+					return subject
+				}
+				continue
+			}
+			if number, ok := seenIDs[story.ID]; ok && number != story.Number {
+				return subject
+			}
+			seenNumbers[story.Number] = story.ID
+			seenIDs[story.ID] = story.Number
+			merged.Stories = append(merged.Stories, story)
+		}
+	}
+	if commits == 0 || merged.Sprint == 0 || len(merged.Stories) == 0 {
+		return subject
+	}
+
+	var b strings.Builder
+	b.WriteString(subject)
+	fmt.Fprintf(&b, "\n\nSprint: #%d", merged.Sprint)
+	for _, story := range merged.Stories {
+		fmt.Fprintf(&b, "\nStory: #%d\nStory-ID: %s", story.Number, story.ID)
+	}
+	return b.String()
+}
+
 func parseCommitTrace(message string) (commitTrace, error) {
 	message = strings.TrimRight(strings.ReplaceAll(message, "\r\n", "\n"), " \t\n")
 	rawLines := strings.Split(message, "\n")

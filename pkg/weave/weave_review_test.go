@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,5 +140,51 @@ func TestRequireReviewGateBlocksUnreviewedAndBlockedAllowsPass(t *testing.T) {
 				t.Fatalf("weaveRequireReviewGate() err=%v wantErr=%v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestWeavePullRequireReviewPreservesSourceProvenanceInMerge(t *testing.T) {
+	root, _ := weaveReviewFixture(t, "true", true)
+	t.Chdir(root)
+
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it == nil {
+		t.Fatal("issue disappeared")
+	}
+	const provenance = "Sprint: #127\nStory: #236\nStory-ID: d284cf3e8ad2"
+	weaveTestGit(t, it.Workspace, "commit", "--amend", "-qm", "reviewed source\n\n"+provenance)
+
+	hook := filepath.Join(root, ".git", "hooks", "commit-msg")
+	hookBody := `#!/bin/sh
+set -eu
+message=$(cat "$1")
+case "$message" in
+  *'
+Sprint: #127
+Story: #236
+Story-ID: d284cf3e8ad2') exit 0 ;;
+  *) echo "commit-msg: missing Sprint/Story provenance" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(hook, []byte(hookBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runReviewInRoot(t, root)
+	out, code := runWeave(t, "pull", "1", "--require-review")
+	if code != 0 {
+		t.Fatalf("reviewed pull was rejected by commit-msg hook (exit %d): %s", code, out)
+	}
+	message := weaveTestGit(t, root, "log", "-1", "--format=%B")
+	if !strings.HasSuffix(message, provenance) {
+		t.Fatalf("merge commit lost source provenance:\n%s", message)
 	}
 }

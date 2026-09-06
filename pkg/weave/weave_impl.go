@@ -4831,7 +4831,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 						Detail: "branch has 0 commits ahead of HEAD; nothing mergeable"})
 					return nil
 				}
-				mergeMsg := fmt.Sprintf("weave: merge run #%d — %s", it.ID, it.Title)
+				mergeSubject := fmt.Sprintf("weave: merge run #%d — %s", it.ID, it.Title)
+				mergeMsg := weaveMergeCommitMessage(root, it.Branch, mergeSubject)
 				mc := exec.Command("git", "-C", root, "merge", "--no-ff", "-m", mergeMsg, it.Branch)
 				out, err := mc.CombinedOutput()
 				if err != nil {
