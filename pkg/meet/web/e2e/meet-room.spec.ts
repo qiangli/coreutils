@@ -370,6 +370,33 @@ test("opens a Chat-backed direct message and streams its reply", async ({ page }
   await expect(page.getByText(/ECHO\[fixed\]/).first()).toBeVisible({ timeout: 60_000 });
 });
 
+test("two agent Chats keep their messages in separate conversations", async ({ page }) => {
+  const primaryMessage = unique("primary sprint instruction");
+  const alternateMessage = unique("alternate sprint instruction");
+  await createDM(primaryAgent);
+  await createDM(invitedAgent);
+  await openMeet(page);
+
+  await openChat(page, primaryAgent);
+  await page.locator("textarea").fill(primaryMessage);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText(new RegExp(`ECHO\\[fixed\\].*${primaryMessage}`)).first()).toBeVisible({
+    timeout: 60_000,
+  });
+
+  await openChat(page, invitedAgent);
+  await expect(page.getByText(primaryMessage, { exact: true })).toHaveCount(0);
+  await page.locator("textarea").fill(alternateMessage);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText(new RegExp(`ECHO\\[fixed\\].*${alternateMessage}`)).first()).toBeVisible({
+    timeout: 60_000,
+  });
+
+  await openChat(page, primaryAgent);
+  await expect(page.getByText(primaryMessage, { exact: true })).toBeVisible();
+  await expect(page.getByText(alternateMessage, { exact: true })).toHaveCount(0);
+});
+
 test("a long Chat reply shows bounded real output and cumulative progress", async ({ page }) => {
   await createDM(primaryAgent);
   await openMeet(page);
