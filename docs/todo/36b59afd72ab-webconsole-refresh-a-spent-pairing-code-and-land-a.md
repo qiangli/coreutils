@@ -3,11 +3,12 @@ id: 36b59afd72ab
 kind: task
 title: 'webconsole: refresh a spent pairing code, and land a paired device on the launcher'
 seq: 27
-status: todo
+status: done
 priority: p2
 created: 2026-09-01T19:21:46.314873Z
 assignee: ci-repair
 sprint: 101
+closed: 2026-09-06T08:12:15.560705Z
 ---
 
 A pairing pass is single-use, so the code on screen is spent the moment a phone redeems it and a retry reports 'that code has already been used'. Added a Refresh control beside Show pairing code, hidden until there is a code to replace.

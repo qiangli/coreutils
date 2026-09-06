@@ -3,11 +3,12 @@ id: b5af634ddde6
 kind: task
 title: 'webconsole: browser e2e suite for the bashy apps console'
 seq: 28
-status: todo
+status: done
 priority: p1
 created: 2026-09-01T19:54:30.947912Z
 assignee: ci-repair
 sprint: 101
+closed: 2026-09-06T08:12:15.878289Z
 ---
 
 Byte-level tests cannot see the cascade, the DOM, or a script that throws. Four UI defects shipped through that gap in one day; the worst was a fix in the pairing section that stopped the Settings dialog opening entirely while every existing test still passed.

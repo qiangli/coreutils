@@ -3,11 +3,12 @@ id: 9f98d7080d45
 kind: task
 title: 'webconsole: phone pairing is an action, not an on/off setting'
 seq: 26
-status: todo
+status: done
 priority: p1
 created: 2026-09-01T19:06:58.158276Z
 assignee: ci-repair
 sprint: 101
+closed: 2026-09-06T08:12:15.825496Z
 ---
 
 The Settings section carried an 'Enable phone pairing' switch. A switch implies a persistent setting; a pairing pass is a single-use, time-boxed credential, and it is wanted once. Operator direction: always show the section, drop the on/off control, make it read like the Background section.

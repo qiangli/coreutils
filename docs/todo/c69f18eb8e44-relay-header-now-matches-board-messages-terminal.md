@@ -3,11 +3,12 @@ id: c69f18eb8e44
 kind: task
 title: 'relay: header now matches board/messages/terminal'
 seq: 31
-status: todo
+status: done
 priority: p2
 created: 2026-09-01T22:52:46.934149Z
 assignee: ci-repair
 sprint: 101
+closed: 2026-09-06T08:12:15.930964Z
 ---
 
 relay's header had no brand block and used lucide's LayoutGrid for the return control, so it did not read as one of the console's apps.

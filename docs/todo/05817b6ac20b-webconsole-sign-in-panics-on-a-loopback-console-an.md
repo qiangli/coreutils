@@ -3,11 +3,12 @@ id: 05817b6ac20b
 kind: task
 title: 'webconsole: sign-in panics on a loopback console, and the login eye toggle never swaps'
 seq: 24
-status: todo
+status: done
 priority: p0
 created: 2026-09-01T18:53:43.945476Z
 assignee: ci-repair
 sprint: 101
+closed: 2026-09-06T08:12:15.452038Z
 ---
 
 Three defects found while verifying the uncommitted apps-surface work.

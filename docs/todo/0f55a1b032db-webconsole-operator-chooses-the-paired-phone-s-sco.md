@@ -3,11 +3,12 @@ id: 0f55a1b032db
 kind: task
 title: 'webconsole: operator chooses the paired phone''s scope in Settings'
 seq: 30
-status: todo
+status: done
 priority: p1
 created: 2026-09-01T20:41:53.951989Z
 assignee: ci-repair
 sprint: 101
+closed: 2026-09-06T08:12:15.504951Z
 ---
 
 A pass was always board/mb/relay, and 'bashy apps pair --allow ...' was the only way to widen it -- so a phone that hit 'terminal is not in the scope' got a refusal and no way to act on it.
