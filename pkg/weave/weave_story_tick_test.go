@@ -305,33 +305,37 @@ func TestSprintTickWaitReturnsOnTheFirstChange(t *testing.T) {
 	sprintTickPoll = 20 * time.Millisecond
 	t.Cleanup(func() { sprintTickPoll = old })
 
-	root := t.TempDir()
-	dir := t.TempDir()
-	s := &weaveStory{ID: 99405, Title: "wait", StoryRoots: []string{root}, Created: time.Now().Add(-time.Hour)}
-	writeTickQueue(t, dir, s)
+	// Repeat the dynamic add because the race was only exposed when one scan saw
+	// an issue's initial write and another saw its sprint-stamped rewrite.
+	for attempt := 0; attempt < 25; attempt++ {
+		root := t.TempDir()
+		dir := t.TempDir()
+		s := &weaveStory{ID: 99405, Title: "wait", StoryRoots: []string{root}, Created: time.Now().Add(-time.Hour)}
+		writeTickQueue(t, dir, s)
 
-	base, err := collectSprintTick(dir, 99405, "waiter")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if base.Board.Open != 0 {
-		t.Fatalf("fixture started with %d open stories, want 0", base.Board.Open)
-	}
-
-	done := make(chan sprintTick, 1)
-	go func() { done <- waitForSprintChange(dir, 99405, "waiter", base, 30*time.Second) }()
-
-	// Give the waiter one poll of quiet, then move the board.
-	time.Sleep(60 * time.Millisecond)
-	sprintTestStory(t, root, 99405, "arrived mid-wait", "p0", todopkg.StatusTodo)
-
-	select {
-	case got := <-done:
-		if got.Board.Open != 1 {
-			t.Fatalf("returned with Open=%d, want 1 — it did not observe the new story", got.Board.Open)
+		base, err := collectSprintTick(dir, 99405, "waiter")
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("wait did not return early on a board change; the ceiling was 30s")
+		if base.Board.Open != 0 {
+			t.Fatalf("attempt %d: fixture started with %d open stories, want 0", attempt, base.Board.Open)
+		}
+
+		done := make(chan sprintTick, 1)
+		go func() { done <- waitForSprintChange(dir, 99405, "waiter", base, 30*time.Second) }()
+
+		// Give the waiter one poll of quiet, then move the board.
+		time.Sleep(60 * time.Millisecond)
+		sprintTestStory(t, root, 99405, "arrived mid-wait", "p0", todopkg.StatusTodo)
+
+		select {
+		case got := <-done:
+			if got.Board.Open != 1 {
+				t.Fatalf("attempt %d: returned with Open=%d, want 1 — it did not observe the new story", attempt, got.Board.Open)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("attempt %d: wait did not return early on a board change; the ceiling was 30s", attempt)
+		}
 	}
 }
 
