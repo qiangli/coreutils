@@ -6,7 +6,7 @@ seq: 19
 status: todo
 priority: p1
 created: 2026-09-01T14:02:20.869035Z
-sprint: 101
+sprint: 129
 ---
 
 CI-blocking and INTERMITTENT. macos-latest: PASSED in GitHub Actions run

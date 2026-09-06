@@ -6,7 +6,7 @@ seq: 21
 status: todo
 priority: p2
 created: 2026-09-01T14:31:46.174722Z
-sprint: 101
+sprint: 129
 ---
 
 `pkg/foreman TestServeControlStopCancelsActiveTurn` failed on ubuntu-latest in
