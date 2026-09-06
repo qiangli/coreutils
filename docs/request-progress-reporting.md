@@ -109,6 +109,86 @@ and all four already exist:
 weave run points, stories closed of N, gate steps completed. That is a different
 measurement and must not be generalized back onto a single turn.
 
+## Agent-to-agent: the same mechanism, and the cost is the whole point
+
+This is not primarily a UI feature. The same question — *did my request land, is
+it moving, is it done* — is what one bashy agent must ask about work it delegated
+to another, and there the cost is not cosmetic: every coordination message a
+recipient reads is context it pays for, in tokens, on every turn thereafter.
+
+**The measured warning is already on file.** `docs/agent-comms-retention.md`
+measured a real board: 54% of it had been written that same day, so a one-day
+retention window still cost ~19k tokens against ~34k for the entire history.
+The conclusion transfers directly — *retention by age cannot fix a token problem
+caused by today's volume*. Coordination gets cheaper by projecting better, never
+by sending more and trimming later.
+
+### Pull is free; push is expensive. Progress is PULL.
+
+| mode | cost to the reader | right for |
+|---|---|---|
+| PULL — a projection on disk, read when the agent chooses | ~zero; nothing enters context until asked, and only the answer does | progress, status, "where is it now" |
+| PUSH — a message into an inbox | every arrival is context the recipient pays for, forever | a state CHANGE the recipient declared it needs to act on |
+
+So: **an agent monitoring delegated work polls a projection at its own turn
+boundary. It does not receive a message per progress frame.** A progress channel
+implemented as messages would bill every watcher for every increment — N agents ×
+M frames — which is precisely the overwhelm to avoid.
+
+Push stays for genuine state CHANGES (submitted, failed, blocked, needs a
+decision), and it already has the machinery: `pkg/bus`'s sidecar holds the
+subscription, matches topics and applies governance and rate rules OFF the
+agent's critical path, leaving a pre-resolved buffer to read at a turn boundary —
+under **demote, never drop**.
+
+### Why cumulative counters are the cheap shape
+
+`Lines`, `Bytes`, `ElapsedMS` are **cumulative, not deltas**, and that is what
+makes a poll cheap:
+
+- **One read gives the whole state.** A counter is idempotent — the reader needs
+  the latest value only. A stream of deltas has to be replayed from a cursor to
+  mean anything, so a watcher that missed frames must fetch and pay for all of
+  them.
+- **Missing frames costs nothing.** The Fibonacci sampler can drop density as
+  output grows precisely because no single frame carries irreplaceable state.
+- **The answer is bounded.** "Where is it now" is one small object per task,
+  whatever happened in between — so a manager polling ten delegated runs pays for
+  ten lines, not ten transcripts.
+
+This is the same rule `pkg/foreman` already follows: state changes are sequenced
+and **digested** for `status --wait`, and its prompts carry a bounded checkpoint
+plus a recent window, never the whole history
+(`docs/foreman-context-contract.md`).
+
+### The shape a coordinating agent should get
+
+One bounded line per delegated task, answering only what a routing decision
+needs:
+
+```
+task            state       elapsed   produced      last
+weave/3         working     4m12s     318 lines     running the gate
+weave/4         done        7m52s     1 commit      submitted
+meet/ask-9f2    working     0m31s     12 lines      reading pkg/meet
+meet/ask-a03    QUIET       6m04s     0 lines       no output since start
+```
+
+`QUIET` is the line that earns the feature — alive but producing nothing is the
+failure a manager currently catches last, and it is derivable for free from a
+heartbeat plus a flat counter. It is the same signal `sprint tick` reports as
+`silent` for weave runs; this extends it to in-flight conversations.
+
+### Rules
+
+1. **Progress is polled, never mailed.** No progress frame becomes an inbox item.
+2. **One digest per task, not a stream.** The reader asks "where is it now".
+3. **Cumulative counters, so a missed frame costs nothing.**
+4. **Push only what needs a decision** — and through the existing sidecar, under
+   its rate rules, demote-never-drop.
+5. **No model tokens on the producing side, ever.** Everything is a projection
+   over bytes already written.
+
 ## Constraint on any fix
 
 `JobRef`'s own doc is binding:
