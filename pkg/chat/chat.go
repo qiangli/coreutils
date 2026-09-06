@@ -26,6 +26,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/procguard"
 	"github.com/qiangli/coreutils/pkg/recall"
+	"github.com/qiangli/coreutils/pkg/reduce"
 	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/telemetry"
@@ -362,10 +363,6 @@ func agenticMode() bool {
 func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 	var buf bytes.Buffer
 	sink := io.Writer(&buf)
-	if r.stream != nil {
-		// Tee to the live watcher, exactly as the pipe path does.
-		sink = io.MultiWriter(&buf, r.stream)
-	}
 	// Reflex coach (P2a): a pty invoke/delegate HAS a control socket, so this is
 	// the full detect+steer path — the same protection weave gets. Off with
 	// BASHY_NO_COACH.
@@ -383,7 +380,7 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 		// one, is watching through an observer rather than typing at the agent.
 		Capture: true,
 	})
-	NoteCoach(coach, r.stream)
+	NoteCoach(coach, nil)
 	out := buf.String()
 	if err != nil {
 		return out, exit, err
@@ -453,12 +450,6 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// append stderr so the error is still visible to the caller.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	if r.stream != nil {
-		// A tee, never a redirect: the caller still gets the whole captured
-		// output, so the turn that gets RECORDED is byte-for-byte what it was
-		// before anyone was watching. Observing must not change the record.
-		cmd.Stdout = io.MultiWriter(&stdout, r.stream)
-	}
 	cmd.Stderr = &stderr
 	// Reflex coach (P2a), pipe path: a plain one-shot has NO control socket, so
 	// the coach is DETECT-ONLY here (NewCtlSteerer("") is a no-op) — it watches
@@ -497,7 +488,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	if parentGuard != nil {
 		parentGuard.Disarm()
 	}
-	NoteCoach(coach, r.stream)
+	NoteCoach(coach, nil)
 	out := stdout.String()
 	if ctx.Err() != nil {
 		return appendStderr(out, stderr.String()), 124, ctx.Err()
@@ -623,6 +614,61 @@ func chatStateDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".bashy", "chat")
+}
+
+// reduceInvokeOutput is the agent-context boundary for every one-shot turn.
+//
+// Invoke is shared by chat, delegate, meet, foreman, and supervise.  Its result
+// is consequently agent-read context, not a human-facing command format: put
+// the reduction here once rather than letting each workflow invent a different
+// truncation rule.  Reduce spills before it returns an elided view, so a model
+// can recover the complete turn from the marker instead of silently reasoning
+// from a partial answer.
+//
+// The chat state root already owns per-agent conversation data.  Keeping the
+// content-addressed output blobs beside it avoids a new, private artifact store
+// for one-shot turns.
+func reduceInvokeOutput(out string) (string, error) {
+	return reduceChatBytes([]byte(out))
+}
+
+func reduceChatBytes(out []byte) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("chat: no state directory for reduced output")
+	}
+	root := filepath.Join(home, ".bashy", "chat")
+	// Stage0 removes machine-specific home paths before any secret masking,
+	// spilling, reduction, or model-visible stream can observe the bytes.
+	out = reduce.CanonicalizeHome(out, home)
+	redactor := secrets.NewRedactor()
+	values := make(map[string]string)
+	for _, entry := range os.Environ() {
+		if name, value, ok := strings.Cut(entry, "="); ok {
+			values[name] = value
+		}
+	}
+	for name := range secrets.VaultEnvNames() {
+		if value, ok := values[name]; ok {
+			_ = redactor.Register(name, value)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("BASHY_OUTPUT_REDUCE")), "off") {
+		return string(redactor.Redact(out)), nil
+	}
+	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{Redactor: redactor})
+	if err != nil {
+		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
+	}
+	return result.Text, nil
+}
+
+func emitReduced(dst io.Writer, text string) error {
+	if dst == nil || text == "" {
+		return nil
+	}
+	_, err := io.WriteString(dst, text)
+	return err
 }
 
 // appendStderr joins captured stderr onto stdout for error reporting.
@@ -929,7 +975,7 @@ func stdinIsTTY(cmd *cobra.Command) bool {
 // Invoke resolves the agent, builds the prompt, and runs it.
 func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
-		runner = execRunner{stream: opt.Stream, pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit}
+		runner = execRunner{pty: opt.PTY, ctlSock: opt.CtlSock, killOnParentExit: opt.KillOnParentExit}
 	}
 	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {
@@ -980,7 +1026,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// registry is the adapter: AGY receives stream-json flags, while tools with
 	// no stdout event contract keep their existing argv.
 	var eventPath string
-	if opt.Stream != nil {
+	if opt.Stream != nil || opt.EventStream != nil {
 		args = agentlaunch.InsertBeforePrompt(args,
 			agentlaunch.EventStdoutArgs(toAgentLaunch(lnch)))
 		// ycode exposes the same structured stream through a file side-channel
@@ -1081,30 +1127,43 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// act, so it is the only place that can tell the spawned process who it
 	// is. execRunner reads this back out to stamp the child's environment.
 	callCtx, endObservation := startGenAIObservation(ctx, lnch)
-	var stopEvents context.CancelFunc
-	var eventsDone <-chan struct{}
-	if eventPath != "" {
-		eventCtx, cancel := context.WithCancel(callCtx)
-		stopEvents = cancel
-		done := make(chan struct{})
-		eventsDone = done
-		// The event side-channel gets its OWN sink when the caller offered one, so a
-		// framing consumer keeps the structured events apart from the stdout prose
-		// tee. Otherwise it folds into Stream exactly as before.
-		evSink := opt.Stream
-		if opt.EventStream != nil {
-			evSink = opt.EventStream
-		}
-		go streamEventFile(eventCtx, eventPath, evSink, done)
-	}
 	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
-	if stopEvents != nil {
-		stopEvents()
-		<-eventsDone
-	}
 	endGenAIObservation(endObservation, lnch, prompt, out, "", err)
-	res.Output, res.ExitCode = out, code
 	recordLaunchUsage(ctx, lnch, prompt, out)
+	// This is the shared return seam for every unattended agent turn.  Do not
+	// return an over-budget transcript: its complete bytes have first been
+	// spilled by reduceInvokeOutput, and the bounded view tells the next agent
+	// exactly how to recover them.
+	res.ExitCode = code
+	reduced, reduceErr := reduceInvokeOutput(out)
+	if reduceErr != nil {
+		return res, reduceErr
+	}
+	res.Output = reduced
+	// A stream is model-visible context. Buffer until this spill-backed view is
+	// available; raw process output must never race out through a tee.
+	if writeErr := emitReduced(opt.Stream, reduced); writeErr != nil {
+		return res, fmt.Errorf("chat: emit reduced stream: %w", writeErr)
+	}
+	if eventPath != "" {
+		events, readErr := os.ReadFile(eventPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return res, fmt.Errorf("chat: read event channel: %w", readErr)
+		}
+		if len(events) > 0 {
+			reducedEvents, eventErr := reduceChatBytes(events)
+			if eventErr != nil {
+				return res, eventErr
+			}
+			evSink := opt.Stream
+			if opt.EventStream != nil {
+				evSink = opt.EventStream
+			}
+			if writeErr := emitReduced(evSink, reducedEvents); writeErr != nil {
+				return res, fmt.Errorf("chat: emit reduced event stream: %w", writeErr)
+			}
+		}
+	}
 	return res, err
 }
 

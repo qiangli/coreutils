@@ -1,9 +1,11 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -12,6 +14,8 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/qiangli/coreutils/pkg/reduce"
 )
 
 type fakeRunner struct {
@@ -19,6 +23,19 @@ type fakeRunner struct {
 	args   []string
 	cwd    string
 	output string
+}
+
+type eventRunner struct{ output, events string }
+
+func (r eventRunner) Run(_ context.Context, _ string, args []string, _ string) (string, int, error) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--events" {
+			if err := os.WriteFile(args[i+1], []byte(r.events), 0o600); err != nil {
+				return "", 1, err
+			}
+		}
+	}
+	return r.output, 0, nil
 }
 
 func (f *fakeRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
@@ -110,6 +127,158 @@ func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
 	}
 	if r.args[len(r.args)-1] != "review this" {
 		t.Fatalf("last arg should be prompt, got %#v", r.args)
+	}
+}
+
+func TestInvokeReducesOversizeAgentTurnAndSpillsFullOutput(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	full := strings.Repeat("agent progress at "+filepath.Join(home, "fixture", "result")+" must remain recoverable\n", 1400)
+	canonical := strings.ReplaceAll(full, home, "$HOME")
+	r := &fakeRunner{output: full}
+
+	res, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: "summarize", Cwd: t.TempDir(),
+	}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Output) > reduce.DefaultBudgetBytes {
+		t.Fatalf("reduced output = %d bytes, budget = %d", len(res.Output), reduce.DefaultBudgetBytes)
+	}
+	if !strings.Contains(res.Output, "full: bashy out ") {
+		t.Fatalf("result has no recovery marker: %q", res.Output[len(res.Output)-min(len(res.Output), 300):])
+	}
+	entries, err := os.ReadDir(filepath.Join(home, ".bashy", "chat", "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("spill entries = %d, want 1", len(entries))
+	}
+	spilled, err := os.ReadFile(filepath.Join(home, ".bashy", "chat", "output", entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(spilled) != canonical {
+		t.Fatalf("spilled output differs from canonical complete turn")
+	}
+	if strings.Contains(res.Output, home) || strings.Contains(string(spilled), home) {
+		t.Fatalf("raw fixture home reached reduced diagnostics or recovery artifact")
+	}
+	var recovered bytes.Buffer
+	handle := strings.Fields(strings.SplitN(strings.SplitN(res.Output, "full: bashy out ", 2)[1], " |", 2)[0])[0]
+	if err := reduce.Recover(reduce.NewStore(filepath.Join(home, ".bashy", "chat", "output")), handle, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.String() != canonical {
+		t.Fatal("recovery did not return the canonical complete turn")
+	}
+}
+
+func TestInvokeKeepsSmallAgentTurnInline(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	r := &fakeRunner{output: "small answer at " + filepath.Join(home, "fixture") + "\n"}
+
+	res, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: "summarize", Cwd: t.TempDir(),
+	}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "small answer at " + filepath.Join("$HOME", "fixture") + "\n"
+	if res.Output != want {
+		t.Fatalf("small output = %q, want %q", res.Output, want)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bashy", "chat", "output")); !os.IsNotExist(err) {
+		t.Fatalf("small output created a spill store: %v", err)
+	}
+}
+
+func TestInvokeRedactsBeforeInlineSpillAndStream(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	if err := os.MkdirAll(filepath.Join(home, "config", "bashy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config", "bashy", "secrets.map"), []byte("CHAT_TEST_SECRET=@chat-test-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "synthetic-chat-secret-9f6d"
+	t.Setenv("CHAT_TEST_SECRET", secret)
+	full := strings.Repeat("progress "+secret+" at "+filepath.Join(home, "fixture")+"\n", 3000)
+	var stream bytes.Buffer
+	res, err := Invoke(context.Background(), Options{Agent: "codex", Instruction: "summarize", Cwd: t.TempDir(), Stream: &stream}, &fakeRunner{output: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Output) > reduce.DefaultBudgetBytes || stream.Len() > reduce.DefaultBudgetBytes {
+		t.Fatal("unbounded reduced view")
+	}
+	if strings.Contains(res.Output, secret) || strings.Contains(stream.String(), secret) {
+		t.Fatal("secret reached a model-visible view")
+	}
+	if strings.Contains(res.Output, home) || strings.Contains(stream.String(), home) {
+		t.Fatal("raw fixture home reached result or Stream")
+	}
+	entries, err := os.ReadDir(filepath.Join(home, ".bashy", "chat", "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		blob, err := os.ReadFile(filepath.Join(home, ".bashy", "chat", "output", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(blob), secret) {
+			t.Fatal("secret reached recovery artifact")
+		}
+	}
+}
+
+func TestInvokeReductionOptOutStillRedacts(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BASHY_OUTPUT_REDUCE", "off")
+	full := strings.Repeat("complete answer\n", 4000)
+	res, err := Invoke(context.Background(), Options{Agent: "codex", Instruction: "summarize", Cwd: t.TempDir()}, &fakeRunner{output: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != full {
+		t.Fatal("explicit opt-out did not retain complete output")
+	}
+}
+
+func TestInvokeBoundsEventStream(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var events bytes.Buffer
+	full := strings.Repeat("{\"type\":\"tool.call\",\"path\":\""+filepath.Join(home, "fixture")+"\"}\n", 2000)
+	_, err := Invoke(context.Background(), Options{Agent: "ycode", Instruction: "summarize", Cwd: t.TempDir(), EventStream: &events}, eventRunner{output: "ok\n", events: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events.Len() > reduce.DefaultBudgetBytes {
+		t.Fatal("unbounded event view")
+	}
+	if !strings.Contains(events.String(), "full: bashy out ") {
+		t.Fatal("event recovery marker missing")
+	}
+	if strings.Contains(events.String(), home) {
+		t.Fatal("raw fixture home reached EventStream")
 	}
 }
 
