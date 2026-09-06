@@ -3,10 +3,11 @@ id: 66a612deb300
 kind: task
 title: weave prune cannot see workspace dirs with no queue item
 seq: 68
-status: todo
+status: done
 priority: p1
 created: 2026-09-06T10:43:43.115005Z
 sprint: 115
+closed: 2026-09-06T14:06:54.131028Z
 ---
 
 INVARIANT (weave's own contract, from `weave prune --help`): "Removes lingering

@@ -3,10 +3,11 @@ id: 82dad91cbb41
 kind: task
 title: uncommitted weave work has no salvage path, so its workspace is unfreeable
 seq: 69
-status: todo
+status: done
 priority: p1
 created: 2026-09-06T10:43:55.580223Z
 sprint: 115
+closed: 2026-09-06T14:06:54.199866Z
 ---
 
 DEFECT: committed and uncommitted work are treated asymmetrically, so a terminal
