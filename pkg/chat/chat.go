@@ -638,9 +638,6 @@ func reduceChatBytes(out []byte) (string, error) {
 		return "", errors.New("chat: no state directory for reduced output")
 	}
 	root := filepath.Join(home, ".bashy", "chat")
-	// Stage0 removes machine-specific home paths before any secret masking,
-	// spilling, reduction, or model-visible stream can observe the bytes.
-	out = reduce.CanonicalizeHome(out, home)
 	redactor := secrets.NewRedactor()
 	values := make(map[string]string)
 	for _, entry := range os.Environ() {
@@ -654,9 +651,10 @@ func reduceChatBytes(out []byte) (string, error) {
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("BASHY_OUTPUT_REDUCE")), "off") {
+		out = reduce.CanonicalizeHome(out, home)
 		return string(redactor.Redact(out)), nil
 	}
-	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{Redactor: redactor})
+	result, err := reduce.Reduce(reduce.NewStore(filepath.Join(root, "output")), out, reduce.Config{HomeDir: home, Redactor: redactor})
 	if err != nil {
 		return "", fmt.Errorf("chat: reduce invocation output: %w", err)
 	}

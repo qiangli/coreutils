@@ -41,6 +41,10 @@ type Config struct {
 	// token counts are analysis only and never on this path (contract §2.4).
 	BudgetBytes int
 
+	// HomeDir, when non-empty, is canonicalized to $HOME before redaction,
+	// duplicate comparison, spilling, or view construction.
+	HomeDir string
+
 	// Redactor, when non-nil, masks the complete bytes BEFORE they are spilled,
 	// so the retrievable artifact inherits the secret gate (contract §2.7). The
 	// host is responsible for wiring it; this package cannot enforce it.
@@ -65,10 +69,15 @@ type Result struct {
 	Handle string // runnable digest-prefix handle; empty when not Reduced
 	Marker string // the elision marker line; empty when not Reduced
 
-	FullBytes    int // length of the complete (redacted) output
+	FullBytes    int // length of the complete canonicalized/redacted output
 	KeptBytes    int // bytes retained inline in Text
 	OmittedBytes int // bytes elided behind the handle
 	OmittedLines int // newline-delimited lines elided behind the handle
+
+	// SuppressedHints is the number of later, byte-exact telemetry hint lines
+	// represented by the single recovery annotation.
+	SuppressedHints int
+	SuppressedBytes int
 }
 
 // Reduce enforces the byte ceiling on full and, when it must elide, writes the
@@ -96,18 +105,22 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 		keep = DefaultKeepHint
 	}
 
-	body := full
+	body := CanonicalizeHome(full, cfg.HomeDir)
 	if cfg.Redactor != nil {
-		body = cfg.Redactor.Redact(full)
+		body = cfg.Redactor.Redact(body)
 	}
 
 	res := Result{FullBytes: len(body)}
 	binary := !utf8.Valid(body)
+	view := body
+	if !binary {
+		view, res.SuppressedHints, res.SuppressedBytes = deduplicateTelemetryHints(body)
+	}
 
 	// Fast path: valid text that already fits. Nothing is elided, so — per the
 	// §2.1 corollary — no marker is emitted, because there is no region an agent
 	// could mistake a partial view for.
-	if !binary && len(body) <= budget {
+	if !binary && res.SuppressedHints == 0 && len(body) <= budget {
 		res.Text = string(body)
 		res.KeptBytes = len(body)
 		return res, nil
@@ -146,6 +159,7 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 	// omitted counts, which depend on the head length, so converge by fixpoint —
 	// a couple of iterations, since only decimal digit counts can move.
 	totalLines := countLines(body)
+	viewLines := countLines(view)
 	res.KeptBytes = 0
 	res.OmittedBytes = len(body)
 	res.OmittedLines = totalLines
@@ -153,13 +167,12 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 	if len(res.Marker) > budget {
 		return Result{}, fmt.Errorf("reduce: recovery marker requires %d bytes, budget is %d", len(res.Marker), budget)
 	}
-	var head string
-	for range len(body) + 2 {
-		headMax := budget
-		if len(head) > 0 {
-			headMax = len(head)
-		}
-		h, perr := admission.UTF8Prefix(string(body), headMax)
+	// Start with the entire Stage 0.1 view. If its mandatory annotation pushes
+	// the result over budget, converge on a UTF-8-safe prefix.
+	head := string(view)
+	for range len(view) + 2 {
+		headMax := len(head)
+		h, perr := admission.UTF8Prefix(string(view), headMax)
 		if perr != nil {
 			// body validated above, so this cannot fail; treat defensively.
 			return Result{}, perr
@@ -178,10 +191,7 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 			res.Marker = buildMarker(res, verb, keep)
 			break
 		}
-		separator := 0
-		if len(h) > 0 {
-			separator = 1
-		}
+		separator := markerSeparatorBytes(h)
 		trailing := 0
 		if len(h)+separator+len(res.Marker) < budget {
 			trailing = 1
@@ -199,7 +209,7 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 			res.Marker = buildMarker(res, verb, keep)
 			break
 		}
-		next, nerr := admission.UTF8Prefix(string(body), nextMax)
+		next, nerr := admission.UTF8Prefix(string(view), nextMax)
 		if nerr != nil {
 			return Result{}, nerr
 		}
@@ -212,14 +222,17 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 	res.KeptBytes = len(head)
 	res.OmittedBytes = len(body) - len(head)
 	res.OmittedLines = totalLines - countLines([]byte(head))
+	// If only duplicates were removed, the accounting above is equivalent to
+	// suppressedBytes/viewLines; keep the explicit values live as invariants.
+	if len(head) == len(view) {
+		res.OmittedBytes = res.SuppressedBytes
+		res.OmittedLines = totalLines - viewLines
+	}
 	res.Marker = buildMarker(res, verb, keep)
 	if len(res.Marker) > budget {
 		return Result{}, fmt.Errorf("reduce: recovery marker requires %d bytes, budget is %d", len(res.Marker), budget)
 	}
-	res.Text = res.Marker
-	if len(head) > 0 {
-		res.Text = head + "\n" + res.Marker
-	}
+	res.Text = joinMarker(head, res.Marker)
 	if len(res.Text) < budget {
 		res.Text += "\n"
 	}
@@ -233,14 +246,34 @@ func Reduce(store *Store, full []byte, cfg Config) (Result, error) {
 // the digest, the RUNNABLE recovery command, and — for the shell path — the
 // prevention command, all in a single byte-budgeted line.
 func buildMarker(r Result, verb, keep string) string {
-	var what string
+	var parts []string
+	if r.SuppressedHints > 0 {
+		parts = append(parts, fmt.Sprintf("%s duplicate telemetry hints suppressed", commaInt(r.SuppressedHints)))
+	}
 	if r.Binary {
-		what = humanBytes(r.OmittedBytes) + " binary output elided"
-	} else {
-		what = fmt.Sprintf("%s lines / %s elided", commaInt(r.OmittedLines), humanBytes(r.OmittedBytes))
+		parts = append(parts, humanBytes(r.OmittedBytes)+" binary output elided")
+	} else if r.SuppressedHints == 0 || r.OmittedBytes > r.SuppressedBytes {
+		parts = append(parts, fmt.Sprintf("%s lines / %s elided", commaInt(r.OmittedLines), humanBytes(r.OmittedBytes)))
 	}
 	return fmt.Sprintf("[bashy: %s · %s · full: %s %s · keep: %s]",
-		what, shortDigest(r.Digest), verb, r.Handle, keep)
+		strings.Join(parts, " · "), shortDigest(r.Digest), verb, r.Handle, keep)
+}
+
+func markerSeparatorBytes(head string) int {
+	if head == "" || strings.HasSuffix(head, "\n") {
+		return 0
+	}
+	return 1
+}
+
+func joinMarker(head, marker string) string {
+	if head == "" {
+		return marker
+	}
+	if strings.HasSuffix(head, "\n") {
+		return head + marker
+	}
+	return head + "\n" + marker
 }
 
 func shortDigest(digest string) string {

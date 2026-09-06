@@ -1,11 +1,11 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-// Package reduce implements Stage A1 of the command-output-reduction contract:
-// a content-addressed spill written BEFORE any reduced view is emitted, and an
-// inline elision marker that carries a RUNNABLE recovery command. It is the
-// enabler that turns every later reduction stage from lossy into
-// lossy-in-context / lossless-in-system.
+// Package reduce implements the shared command-output-reduction pipeline. Its
+// conservative Stage 0.1 removes only exact repeats from a closed telemetry
+// hint registry; Stage A1 writes the complete pre-reduction artifact BEFORE any
+// reduced view is emitted and carries a RUNNABLE recovery command inline. This
+// turns every reduction from lossy into lossy-in-context / lossless-in-system.
 //
 // This package owns no store LOCATION. Like pkg/admission it is a primitive: the
 // embedding host points Store at its existing command/session/run artifact path

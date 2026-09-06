@@ -178,6 +178,55 @@ func TestInvokeReducesOversizeAgentTurnAndSpillsFullOutput(t *testing.T) {
 	}
 }
 
+func TestInvokeDeduplicatesTelemetryHintsWithRecoverableArtifact(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	if err := os.MkdirAll(filepath.Join(home, "config", "bashy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config", "bashy", "secrets.map"), []byte("CHAT_HINT_SECRET=@chat-hint-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "synthetic-hint-secret-285"
+	t.Setenv("CHAT_HINT_SECRET", secret)
+	hint := "bashy: telemetry on → " + filepath.Join(home, ".agents", "otel", "spool", "spans.jsonl") + " (service=bashy)\n"
+	full := "start " + secret + "\n" + hint + "work remains\n" + hint + hint + "done\n"
+	canonicalRedacted := strings.ReplaceAll(strings.ReplaceAll(full, home, "$HOME"), secret, "[redacted:CHAT_HINT_SECRET]")
+	var stream bytes.Buffer
+
+	res, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: "summarize", Cwd: t.TempDir(), Stream: &stream,
+	}, &fakeRunner{output: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != stream.String() {
+		t.Fatalf("result and model-visible stream diverged:\nresult=%q\nstream=%q", res.Output, stream.String())
+	}
+	if strings.Count(res.Output, "bashy: telemetry on") != 1 ||
+		strings.Count(res.Output, "2 duplicate telemetry hints suppressed") != 1 {
+		t.Fatalf("duplicate telemetry view = %q", res.Output)
+	}
+	if len(res.Output) > reduce.DefaultBudgetBytes || strings.Contains(res.Output, home) || strings.Contains(res.Output, secret) {
+		t.Fatalf("unbounded or private model-visible view: %q", res.Output)
+	}
+	parts := strings.SplitN(res.Output, "full: bashy out ", 2)
+	if len(parts) != 2 {
+		t.Fatalf("missing runnable recovery: %q", res.Output)
+	}
+	handle := strings.Fields(parts[1])[0]
+	var recovered bytes.Buffer
+	if err := reduce.Recover(reduce.NewStore(filepath.Join(home, ".bashy", "chat", "output")), handle, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.String() != canonicalRedacted {
+		t.Fatalf("recovered artifact is not complete canonicalized/redacted input:\ngot  %q\nwant %q", recovered.String(), canonicalRedacted)
+	}
+}
+
 func TestInvokeKeepsSmallAgentTurnInline(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
