@@ -147,11 +147,13 @@ NON-GOALS
 CROSS-REPO NOTE
   Most of S1-S4 and S6 land in outpost (internal/agent/sshclient, tunnel.go,
   cmd/outpost/reach.go); S5 lands in coreutils (pkg/webterm, pkg/webconsole).
-  Sprint 130 currently tracks dhnt, coreutils and bashy — NOT outpost. Before
-  the first outpost commit, run `bashy sprint track 130 --repo` inside
-  outpost, or the commit-provenance guard will not resolve the story
-  reference. Filed here in coreutils so the two survival stories stay
-  together.
+  Sprint 130 tracks dhnt, coreutils, bashy and outpost (outpost added
+  2026-09-06 for this story), so a Story trailer resolves from either repo
+  and no further tracking step is needed. Filed here in coreutils so the two
+  survival stories stay together.
+  Trailer discipline: Story-ID must be the FULL 12-character hex id — the
+  commit-provenance guard rejects a truncated one, and Story:#N is per-repo
+  sequence, so an outpost commit needs outpost's own number, not #84.
 
 SPRINT NOTE
   Filed at p2 and deliberately NOT linked to a #130 goal item, for the same
