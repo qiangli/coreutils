@@ -86,6 +86,16 @@ const (
 	StageCross  = "cross"  // serves every stage: skills, secrets, doctor, the userland
 )
 
+// Output shapes describe what a successful command invocation means to an
+// output reducer. A verdict reports a decision (and may be silent on success);
+// a result reports the answer in its output, so its bytes must be retained.
+type OutputShape string
+
+const (
+	ShapeVerdict = "verdict"
+	ShapeResult  = "result"
+)
+
 // Agentic capability flags (closed vocabulary; curated, never inferred —
 // absence means unknown, not no).
 const (
@@ -141,8 +151,9 @@ const (
 type Entry struct {
 	Group    string
 	Tier     string
-	Stage    string // SDLC stage (closed vocab); every VERB declares one
-	Subclass string // verbs only: provisioner | managed-external | ""
+	Stage    string      // SDLC stage (closed vocab); every VERB declares one
+	Shape    OutputShape // output shape: verdict | result; unknown values are result
+	Subclass string      // verbs only: provisioner | managed-external | ""
 	Caps     []string
 	Effects  []string // security effects (closed vocab); every entry has ≥1
 	AliasOf  string   // e.g. docker → podman, upgrade → self
@@ -151,6 +162,56 @@ type Entry struct {
 	// to put on the start page without a hardcoded table. Nil = no web surface.
 	// See web.go.
 	Web *WebSurface
+}
+
+// Shapes returns the closed output-shape vocabulary.
+func Shapes() []OutputShape { return []OutputShape{ShapeResult, ShapeVerdict} }
+
+// NormalizeShape returns the safe reducer interpretation of shape. Unknown
+// and empty values deliberately remain result-shaped: under-compressing is
+// visible, while discarding a command's answer is not.
+func NormalizeShape(shape OutputShape) OutputShape {
+	if shape == ShapeVerdict {
+		return ShapeVerdict
+	}
+	return ShapeResult
+}
+
+// OutputShape returns the reducer shape for an entry, applying the
+// conservative result default to unclassified or future values.
+func (e Entry) OutputShape() OutputShape { return NormalizeShape(e.Shape) }
+
+// verdictSubcommands is intentionally small and positive-only. Atlas entries
+// are keyed by argv[0], but a compiler or VCS front door can have commands
+// whose output is either the answer or merely a pass/fail verdict. Anything
+// absent from this table remains result-shaped.
+var verdictSubcommands = map[string]map[string]OutputShape{
+	"go":    {"build": ShapeVerdict, "test": ShapeVerdict, "vet": ShapeVerdict},
+	"git":   {"push": ShapeVerdict},
+	"cargo": {"build": ShapeVerdict, "test": ShapeVerdict},
+	"npm":   {"test": ShapeVerdict},
+}
+
+// ResolveOutputShape returns the reducer shape for an argv. A known external
+// subcommand receives its curated shape; unknown programs and subcommands
+// fail closed to result so their output is never discarded. This supplements,
+// rather than replaces, the argv[0]-keyed Entry shape.
+func ResolveOutputShape(argv []string) OutputShape {
+	if len(argv) == 0 {
+		return ShapeResult
+	}
+	if subcommands, ok := verdictSubcommands[argv[0]]; ok {
+		if len(argv) > 1 {
+			if shape, ok := subcommands[argv[1]]; ok {
+				return shape
+			}
+		}
+		return ShapeResult
+	}
+	if entry, ok := Lookup(argv[0]); ok {
+		return entry.OutputShape()
+	}
+	return ShapeResult
 }
 
 // Idiom is one curated composite: commands naturally used together.
@@ -215,9 +276,13 @@ func Effects() []string {
 // declarative-registry CLIs are the embedder's to merge (see RegistryEntry).
 func Lookup(name string) (Entry, bool) {
 	if e, ok := tools[name]; ok {
+		e.Shape = NormalizeShape(e.Shape)
 		return e, true
 	}
 	e, ok := verbs[name]
+	if ok {
+		e.Shape = NormalizeShape(e.Shape)
+	}
 	return e, ok
 }
 
@@ -253,6 +318,7 @@ func RegistryEntry(tier int) Entry {
 		Group:    GroupClusterCloud,
 		Tier:     TierName(tier),
 		Stage:    stage,
+		Shape:    ShapeResult,
 		Subclass: SubclassManagedExternal,
 		Caps: []string{
 			CapCached, CapNeedsNetwork, CapSelfProvisioning, CapSpawnsProcesses,
@@ -353,7 +419,7 @@ func addTools(group string, names ...string) {
 		// The userland serves every stage — `grep` is not a "test" command any
 		// more than it is a "deploy" one. Only front-door VERBS take a position
 		// on the spine.
-		tools[n] = Entry{Group: group, Tier: TierUserland, Stage: StageCross}
+		tools[n] = Entry{Group: group, Tier: TierUserland, Stage: StageCross, Shape: ShapeResult}
 	}
 }
 
@@ -364,6 +430,7 @@ func addVerb(name string, e Entry) {
 	if e.Tier == "" {
 		e.Tier = TierUserland
 	}
+	e.Shape = NormalizeShape(e.Shape)
 	// A verb MUST place itself on the SDLC spine. This panics at init rather
 	// than failing a test, because a test can be defaulted around and this one
 	// was: bashy's verbAtlasRecord used to invent a valid-looking group/tier for
@@ -468,6 +535,28 @@ func capTools(capability string, names ...string) {
 		}
 		e.Caps = append(e.Caps, capability)
 		tools[n] = e
+	}
+}
+
+// shape marks the output contract of existing entries. Unknown names and
+// shapes panic during atlas construction so a typo cannot silently alter
+// reducer behavior.
+func shape(outputShape OutputShape, names ...string) {
+	if outputShape != ShapeVerdict && outputShape != ShapeResult {
+		panic(fmt.Sprintf("atlas: invalid output shape %q (one of %v)", outputShape, Shapes()))
+	}
+	for _, n := range names {
+		if e, ok := tools[n]; ok {
+			e.Shape = outputShape
+			tools[n] = e
+			continue
+		}
+		if e, ok := verbs[n]; ok {
+			e.Shape = outputShape
+			verbs[n] = e
+			continue
+		}
+		panic(fmt.Sprintf("atlas: shape %q names unknown command %q", outputShape, n))
 	}
 }
 
@@ -927,6 +1016,11 @@ func init() {
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
 	addVerb("login", Entry{Stage: StageCross, Group: GroupAccount, Tier: TierAccount,
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
+
+	// These commands answer a pass/fail question. Their successful exit status
+	// is the useful result, and an empty stdout is expected. Everything else
+	// remains result-shaped (including unclassified/future entries).
+	shape(ShapeVerdict, "check", "conform", "false", "gate", "judge", "true", "verify")
 
 	// --- security-effect classification ------------------------------------
 	//

@@ -21,8 +21,8 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-func sliceSet(items []string) map[string]bool {
-	out := make(map[string]bool, len(items))
+func sliceSet[T ~string](items []T) map[T]bool {
+	out := make(map[T]bool, len(items))
 	for _, s := range items {
 		out[s] = true
 	}
@@ -50,6 +50,7 @@ func TestClosedVocabularies(t *testing.T) {
 	groups := sliceSet(atlas.Groups())
 	tiers := sliceSet(atlas.Tiers())
 	stages := sliceSet(atlas.Stages())
+	shapes := sliceSet(atlas.Shapes())
 	caps := sliceSet(atlas.Capabilities())
 	effects := sliceSet(atlas.Effects())
 
@@ -69,6 +70,9 @@ func TestClosedVocabularies(t *testing.T) {
 			// on a missing stage, so this guards the value, not the presence.
 			if !stages[e.Stage] {
 				t.Errorf("%s: sdlc stage %q not in vocabulary %v", n, e.Stage, atlas.Stages())
+			}
+			if !shapes[e.OutputShape()] {
+				t.Errorf("%s: output shape %q not in vocabulary %v", n, e.OutputShape(), atlas.Shapes())
 			}
 			if !sort.StringsAreSorted(e.Caps) {
 				t.Errorf("%s: caps not sorted: %v", n, e.Caps)
@@ -120,6 +124,68 @@ func TestClosedVocabularies(t *testing.T) {
 		if e, _ := atlas.Lookup(n); e.Tier != atlas.TierUserland {
 			t.Errorf("tool %s: tier %q (tools are userland by definition)", n, e.Tier)
 		}
+	}
+}
+
+func TestOutputShapeDefaultsToResult(t *testing.T) {
+	for _, shape := range []atlas.OutputShape{"", "future", "VERDICT", atlas.ShapeResult} {
+		if got := (atlas.Entry{Shape: shape}).OutputShape(); got != atlas.ShapeResult {
+			t.Errorf("OutputShape(%q) = %q, want %q", shape, got, atlas.ShapeResult)
+		}
+	}
+	if got := (atlas.Entry{Shape: atlas.ShapeVerdict}).OutputShape(); got != atlas.ShapeVerdict {
+		t.Errorf("OutputShape(%q) = %q, want %q", atlas.ShapeVerdict, got, atlas.ShapeVerdict)
+	}
+}
+
+func TestOutputShapeClassifiesDecisionCommands(t *testing.T) {
+	for _, name := range []string{"check", "conform", "false", "gate", "judge", "true", "verify"} {
+		e, ok := atlas.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is absent from atlas", name)
+		}
+		if got := e.OutputShape(); got != atlas.ShapeVerdict {
+			t.Errorf("%s output shape = %q, want %q", name, got, atlas.ShapeVerdict)
+		}
+	}
+	for _, name := range []string{"[", "cmp", "diff", "find", "grep", "ls", "test", "go", "git"} {
+		e, ok := atlas.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is absent from atlas", name)
+		}
+		if got := e.OutputShape(); got != atlas.ShapeResult {
+			t.Errorf("%s output shape = %q, want conservative %q", name, got, atlas.ShapeResult)
+		}
+	}
+}
+
+func TestResolveOutputShape(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want atlas.OutputShape
+	}{
+		{name: "go build", argv: []string{"go", "build"}, want: atlas.ShapeVerdict},
+		{name: "go test", argv: []string{"go", "test", "./..."}, want: atlas.ShapeVerdict},
+		{name: "go vet", argv: []string{"go", "vet"}, want: atlas.ShapeVerdict},
+		{name: "git push", argv: []string{"git", "push"}, want: atlas.ShapeVerdict},
+		{name: "cargo build", argv: []string{"cargo", "build"}, want: atlas.ShapeVerdict},
+		{name: "cargo test", argv: []string{"cargo", "test"}, want: atlas.ShapeVerdict},
+		{name: "npm test", argv: []string{"npm", "test"}, want: atlas.ShapeVerdict},
+		{name: "go list", argv: []string{"go", "list"}, want: atlas.ShapeResult},
+		{name: "git log", argv: []string{"git", "log"}, want: atlas.ShapeResult},
+		{name: "git status", argv: []string{"git", "status"}, want: atlas.ShapeResult},
+		{name: "git diff", argv: []string{"git", "diff"}, want: atlas.ShapeResult},
+		{name: "git show", argv: []string{"git", "show"}, want: atlas.ShapeResult},
+		{name: "go unknown", argv: []string{"go", "future"}, want: atlas.ShapeResult},
+		{name: "unknown program", argv: []string{"future-tool", "test"}, want: atlas.ShapeResult},
+		{name: "empty argv", want: atlas.ShapeResult},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := atlas.ResolveOutputShape(tc.argv); got != tc.want {
+				t.Errorf("ResolveOutputShape(%q) = %q, want %q", tc.argv, got, tc.want)
+			}
+		})
 	}
 }
 
