@@ -54,6 +54,22 @@ func seedAgent(t *testing.T, name string) {
 	}
 }
 
+func seedPerson(t *testing.T, handle string) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("home: %v", err)
+	}
+	people := filepath.Join(home, ".config", "bashy", "people")
+	if err := os.MkdirAll(people, 0o755); err != nil {
+		t.Fatalf("mkdir people: %v", err)
+	}
+	body := "handle: " + handle + "\n"
+	if err := os.WriteFile(filepath.Join(people, handle+".yaml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write person: %v", err)
+	}
+}
+
 // seedLiveAgent registers the agent AND publishes a live room card for it, so
 // the name is claimable. Claiming a sprint now requires the seat to be RUNNING
 // — a sprint seated to a name with no process behind it accepts room messages
@@ -91,12 +107,10 @@ func TestSprintRefusesAnOwnerThatResolvesToNobody(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("start accepted an owner that resolves to no agent:\n%s", out)
 	}
-	// The refusal must point to the canonical roster rather than suggesting an
-	// ad-hoc live seat that will disappear when its process exits.
-	// It must also name the PEOPLE registry: pointing a human at the agent list
-	// alone was how the operator got told to choose from a list they can never
-	// appear in.
-	for _, want := range []string{"sprint manager", "owns nothing here", "bashy agents list", "bashy people list", "--owner"} {
+	// The refusal must point to the canonical agent roster rather than
+	// suggesting an ad-hoc live seat or a human principal that cannot take an
+	// autonomous turn.
+	for _, want := range []string{"sprint manager", "owns nothing here", "bashy agents list", "--owner"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("refusal missing %q:\n%s", want, out)
 		}
@@ -391,8 +405,8 @@ func TestSprintOwnerMustBeAnAddressableAgent(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a sprint was seated to a name that is in no roster:\n%s", out)
 	}
-	if !strings.Contains(out, "owns nothing here") || !strings.Contains(out, "bashy people list") {
-		t.Errorf("refusal must say the name owns nothing and name both registries:\n%s", out)
+	if !strings.Contains(out, "owns nothing here") || !strings.Contains(out, "bashy agents list") {
+		t.Errorf("refusal must say the name owns nothing and identify the agent registry:\n%s", out)
 	}
 
 	// 2. A placeholder — REFUSED. "conductor" is not unique: every sprint on
@@ -402,7 +416,18 @@ func TestSprintOwnerMustBeAnAddressableAgent(t *testing.T) {
 		t.Error("a placeholder name was accepted as a sprint owner")
 	}
 
-	// 3. Registered but not currently running — ACCEPTED. This is the change.
+	// 3. A registered person — REFUSED. A human is addressable, but cannot take
+	// autonomous turns; they manage by steering a registered agent.
+	seedPerson(t, "operator")
+	out, code = runSprint(t, "start", "1", "--owner", "operator", "--for", "1h")
+	if code == 0 {
+		t.Fatalf("a person was seated as a production sprint manager:\n%s", out)
+	}
+	if !strings.Contains(out, "registered person, not an agent") || !strings.Contains(out, "humans manage sprints by steering a registered agent") {
+		t.Errorf("person refusal must explain the supported human-to-agent path:\n%s", out)
+	}
+
+	// 4. Registered but not currently running — ACCEPTED. This is the change.
 	// The name addresses a real agent, mail is durable, and it will be read
 	// when the agent next looks. Nothing is lost, so nothing is refused.
 	seedAgent(t, "seatless")

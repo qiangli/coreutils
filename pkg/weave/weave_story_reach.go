@@ -90,16 +90,16 @@ func sprintOwnerRegistered(name string) bool {
 	if n == "" {
 		return false
 	}
-	// A sprint manager is a principal that can be REACHED and held accountable —
-	// an agent or a person. Restricting it to agents refused the operator from
-	// managing their own sprint, which is the case this sprint exists to fix.
-	_, _, ok := fleetCatalog().CanonicalPrincipal(n)
-	return ok
+	// A production sprint manager must be able to take autonomous turns. Humans
+	// steer that agent through Apps, Meet, MB, or Inbox; registering a person
+	// makes them addressable but does not make them runnable.
+	_, kind, err := fleetCatalog().ResolvePrincipal(n)
+	return err == nil && kind == fleet.KindAgent
 }
 
 func canonicalFleetAgentName(name string) (string, bool) {
-	canonical, _, ok := fleetCatalog().CanonicalPrincipal(strings.TrimSpace(name))
-	if !ok {
+	canonical, kind, err := fleetCatalog().ResolvePrincipal(strings.TrimSpace(name))
+	if err != nil || kind != fleet.KindAgent {
 		return "", false
 	}
 	return canonical, true
@@ -229,20 +229,23 @@ func validateSprintOwner(name string) error {
 	if isPlaceholderConductorName(n) {
 		return fmt.Errorf("%q is a placeholder, not an agent — it addresses nobody and collides "+
 			"across every sprint on this host.\n"+
-			"  pass --owner NAME from `bashy agents list` or `bashy people list`", n)
+			"  pass --owner NAME from `bashy agents list`", n)
 	}
-	if sprintOwnerRegistered(n) {
+	_, kind, err := fleetCatalog().ResolvePrincipal(n)
+	if err == nil && kind == fleet.KindAgent {
 		return nil
 	}
-	// A manager must be REACHABLE over mb/chat/inbox — which an agent and a
-	// registered person both are. Naming only the agent list here was how the
-	// operator got told to pick from a list they could never appear in.
-	if errors.Is(ownerErr(n), fleet.ErrPrincipalAmbiguous) {
+	if err == nil {
+		return fmt.Errorf("sprint manager %q is a registered person, not an agent.\n"+
+			"  humans manage sprints by steering a registered agent through Apps, Meet, MB, or Inbox\n"+
+			"  pass --owner NAME from `bashy agents list`", n)
+	}
+	if errors.Is(err, fleet.ErrPrincipalAmbiguous) {
 		return fmt.Errorf("sprint manager %q is ambiguous — more than one registered principal answers to it; qualify it", n)
 	}
 	return fmt.Errorf("sprint manager %q owns nothing here, so mb/chat/inbox cannot reach it.\n"+
-		"  %s\n"+
-		"  then re-run with --owner %s", n, fleet.UnknownPrincipalHint(n), n)
+		"  choose an agent from `bashy agents list`\n"+
+		"  then re-run with --owner %s", n, n)
 }
 
 // isPlaceholderConductorName catches the generic fallbacks that used to be
