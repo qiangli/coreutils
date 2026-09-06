@@ -32,6 +32,76 @@ func runListJSON(t *testing.T, sf storeFunc, args ...string) []byte {
 	return buf.Bytes()
 }
 
+// runShow drives `todo show` through its Cobra command so display tests cover
+// both the human-facing text and the structured JSON output.
+func runShow(t *testing.T, sf storeFunc, args ...string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	cmd := newShowCmd(sf)
+	cmd.SetOut(&buf)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("todo show %v: %v", args, err)
+	}
+	return buf.String()
+}
+
+func TestShowRendersSprintAssociationTruthfully(t *testing.T) {
+	st := &issue.Store{Root: t.TempDir()}
+	associated, err := Add(st, "associated story", "", "", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	associated.Sprint = 127
+	if _, err := st.Save(associated); err != nil {
+		t.Fatal(err)
+	}
+	unassociated, err := Add(st, "independent task", "", "", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf := func() (*issue.Store, string, error) { return st, "test", nil }
+
+	if got := runShow(t, sf, associated.ID); !strings.Contains(got, "  sprint    #127\n") {
+		t.Errorf("associated text output omitted sprint:\n%s", got)
+	}
+	if got := runShow(t, sf, unassociated.ID); strings.Contains(got, "  sprint") {
+		t.Errorf("unassociated text output invented a sprint:\n%s", got)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		id         string
+		wantSprint int64
+		present    bool
+	}{
+		{name: "associated", id: associated.ID, wantSprint: 127, present: true},
+		{name: "unassociated", id: unassociated.ID, present: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got map[string]json.RawMessage
+			out := runShow(t, sf, tc.id, "--json")
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatalf("show JSON did not parse: %v\n%s", err, out)
+			}
+			raw, present := got["sprint"]
+			if present != tc.present {
+				t.Fatalf("sprint field present = %t, want %t:\n%s", present, tc.present, out)
+			}
+			if tc.present {
+				var sprint int64
+				if err := json.Unmarshal(raw, &sprint); err != nil {
+					t.Fatalf("decode sprint: %v", err)
+				}
+				if sprint != tc.wantSprint {
+					t.Errorf("sprint = %d, want %d", sprint, tc.wantSprint)
+				}
+			}
+		})
+	}
+}
+
 // envelopeShape mirrors the on-the-wire shape with the production result/item
 // types, so a schema drift in listResult/listItem fails to parse here.
 type envelopeShape struct {
