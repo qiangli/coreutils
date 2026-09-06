@@ -116,7 +116,7 @@ it moving, is it done* — is what one bashy agent must ask about work it delega
 to another, and there the cost is not cosmetic: every coordination message a
 recipient reads is context it pays for, in tokens, on every turn thereafter.
 
-**The measured warning is already on file.** `docs/agent-comms-retention.md`
+**The measured warning is already on file.** `../docs/agent-comms-retention.md` (umbrella)
 measured a real board: 54% of it had been written that same day, so a one-day
 retention window still cost ~19k tokens against ~34k for the entire history.
 The conclusion transfers directly — *retention by age cannot fix a token problem
@@ -159,7 +159,7 @@ makes a poll cheap:
 This is the same rule `pkg/foreman` already follows: state changes are sequenced
 and **digested** for `status --wait`, and its prompts carry a bounded checkpoint
 plus a recent window, never the whole history
-(`docs/foreman-context-contract.md`).
+(`docs/foreman-context-contract.md`, in this repo).
 
 ### The shape a coordinating agent should get
 
