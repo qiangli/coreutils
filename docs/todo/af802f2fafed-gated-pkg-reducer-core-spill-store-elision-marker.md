@@ -3,10 +3,13 @@ id: af802f2fafed
 kind: task
 title: 'GATED: pkg reducer core — spill store, elision marker, and the bashy out verb'
 seq: 42
-status: todo
+status: done
 priority: p1
 created: 2026-09-04T09:52:41.171005Z
+weave: 9
+assignee: qiangli
 sprint: 123
+closed: 2026-09-06T06:25:00Z
 ---
 
 OPEN. The operator opened Sprint #123 on 2026-09-04, superseding the original
