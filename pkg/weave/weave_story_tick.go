@@ -109,13 +109,13 @@ type sprintTick struct {
 
 	Mail sprintTickMail `json:"mail"`
 	// Board is the story census plus what demonstrably moved since Since.
-	Board sprintTickBoard `json:"board"`
-	Fleet  sprintTickFleet  `json:"fleet"`
-	Silent []sprintTickRun  `json:"silent,omitempty"`
-	Review []sprintTickRun  `json:"review,omitempty"`
-	Brief  sprintTickBrief  `json:"brief"`
-	Gate   sprintTickGate   `json:"gate"`
-	Seat   sprintTickSeat   `json:"seat"`
+	Board  sprintTickBoard `json:"board"`
+	Fleet  sprintTickFleet `json:"fleet"`
+	Silent []sprintTickRun `json:"silent,omitempty"`
+	Review []sprintTickRun `json:"review,omitempty"`
+	Brief  sprintTickBrief `json:"brief"`
+	Gate   sprintTickGate  `json:"gate"`
+	Seat   sprintTickSeat  `json:"seat"`
 }
 
 type sprintTickMail struct {
@@ -123,7 +123,7 @@ type sprintTickMail struct {
 	// Directed is the subset addressed to this manager by name rather than
 	// reaching it through a topic or a room. It is broken out because a
 	// directed post is somebody waiting on an answer, and a broadcast is not.
-	Directed int `json:"directed"`
+	Directed int    `json:"directed"`
 	Read     string `json:"read"`
 }
 
