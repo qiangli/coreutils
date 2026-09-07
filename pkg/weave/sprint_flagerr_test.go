@@ -128,3 +128,59 @@ func TestSprintValidFlagsStillWork(t *testing.T) {
 		}
 	}
 }
+
+// TestSprintMissingRequiredFlagFailsLoud pins the fix for todo 75d1842bc4c9.
+//
+// TestSprintUnknownFlagFailsLoud above covers the flag-PARSE path, which cobra
+// routes through FlagErrorFunc and flagerr.go reports. A guard that runs INSIDE
+// RunE — "--reason is required", "-m required", "sprint must be an integer" —
+// never touches that path: it is an ordinary error returned from RunE, and with
+// SilenceErrors set on every sprint command nothing prints it at all.
+//
+// The cost is recorded on the story and is worse than an error: a conductor ran
+// two `sprint goal rm` calls, saw nothing, believed both goals were retired, and
+// printed a "corrected" sprint that still carried them. A silent exit 1 does not
+// stop you — it produces a confident wrong belief.
+//
+// Every case below was measured FAILING (exit=1, out=0B, err=0B) before the fix.
+// The sprint ids are deliberately absent (#999999) so a case can never mutate a
+// real card: each guard returns before the store is opened.
+func TestSprintMissingRequiredFlagFailsLoud(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "")
+
+	cases := []struct {
+		name string
+		args []string
+		want string // a substring naming what is missing
+	}{
+		// The two the conductor of sprint #135 actually hit.
+		{"goal rm without --reason", []string{"goal", "rm", "999999", "some-goal"}, "--reason"},
+		{"handoff without -m", []string{"handoff", "999999"}, "-m"},
+		// Same shape, found by auditing the siblings rather than patching the
+		// two above: a positional that fails to parse is also a bare RunE error.
+		{"non-integer sprint id", []string{"handoff", "notanumber", "-m", "x"}, "integer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code, structured := runSprintStreams(t, tc.args...)
+			if strings.TrimSpace(stderr) == "" {
+				t.Fatalf("SILENT FAILURE: stderr empty for `sprint %s` (stdout=%q, exit=%d)",
+					strings.Join(tc.args, " "), stdout, code)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("stderr should say what is missing (%q), got %q", tc.want, stderr)
+			}
+			if !strings.Contains(stderr, "sprint") {
+				t.Errorf("stderr should name the command, got %q", stderr)
+			}
+			if code == 0 {
+				t.Errorf("exit = 0 for a refused invocation; stderr=%q", stderr)
+			}
+			// Structured means the tree reported it, so a host that prints only
+			// when IsStructuredExit is false stays silent instead of double-printing.
+			if !structured {
+				t.Errorf("want a structured exit so the host does not double-print; stderr=%q", stderr)
+			}
+		})
+	}
+}
