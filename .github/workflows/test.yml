@@ -87,6 +87,23 @@ jobs:
             # job exercises the portable room, shell and agent surfaces.
             go test -run '^$' $pkgs
           fi
+      # Process lifecycle regressions must pass every repetition. Keep this
+      # outside the ratchet so a retry cannot hide an intermittent failure,
+      # and retain package-level JSON diagnostics even when all tests pass.
+      - name: Repeated process lifecycle tests (no retries or baseline)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          go test -json ./pkg/chat ./pkg/foreman -run 'Test(Cancel|HungChild|KillProcessTree|ServeControl|ControlStop|ApplyCancelled)' -count=10 -timeout 5m | tee "$RUNNER_TEMP/process-lifecycle.jsonl"
+
+      - name: Retain process lifecycle diagnostics
+        if: always() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-lifecycle-${{ runner.os }}
+          path: ${{ runner.temp }}/process-lifecycle.jsonl
+          if-no-files-found: error
+
       # The suite runs through the RATCHET, not `go test` directly: tests for
       # open stories are committed red on purpose, so a plain gate is
       # permanently red and therefore reports nothing. The script derives the
