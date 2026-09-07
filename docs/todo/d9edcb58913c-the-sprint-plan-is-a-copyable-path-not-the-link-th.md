@@ -3,10 +3,11 @@ id: d9edcb58913c
 kind: task
 title: The sprint plan is a copyable path, not the link the story asked for
 seq: 97
-status: todo
+status: done
 priority: p1
 created: 2026-09-07T19:51:31.571672Z
 sprint: 136
+closed: 2026-09-07T21:06:09.745723Z
 ---
 
 THE THIRD CARRIED ITEM FROM SPRINT #135, and the one that was nearly lost: it was recorded as evidence on the plan-link goal and given no story of its own, so unlike 86a6cc12 and 312252ae it had nothing tracking it.
