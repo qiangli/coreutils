@@ -633,7 +633,11 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						s.Lease = nil
 						msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
 						weaveStoryAppend(s, who, kindStage, msg)
-						return fmt.Sprintf("sprint #%d %s", id, msg), nil
+						// Ending is irreversible and closes the card, so if the
+						// seat could not be woken by mail the reader should be
+						// told here too — see sprintSeatDeliveryAdvisory.
+						return fmt.Sprintf("sprint #%d %s%s", id, msg,
+							sprintSeatDeliveryAdvisory(who)), nil
 					}
 					weaveStoryAppend(s, weaveConductorName(""), kindStage, msg)
 					return fmt.Sprintf("sprint #%d %s", id, msg), nil
