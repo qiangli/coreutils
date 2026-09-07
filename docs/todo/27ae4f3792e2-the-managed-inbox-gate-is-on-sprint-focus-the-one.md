@@ -3,10 +3,11 @@ id: 27ae4f3792e2
 kind: task
 title: The managed-inbox gate is on sprint focus, the one verb that changes nothing
 seq: 99
-status: todo
-priority: p2
+status: done
+priority: p1
 created: 2026-09-07T20:29:00.658455Z
 sprint: 136
+closed: 2026-09-07T21:04:39.085862Z
 ---
 
 MEASURED 2026-09-07 while conducting sprint #135 as owner `mullion`:

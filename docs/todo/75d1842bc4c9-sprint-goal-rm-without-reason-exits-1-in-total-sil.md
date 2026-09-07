@@ -3,10 +3,11 @@ id: 75d1842bc4c9
 kind: task
 title: sprint goal rm without --reason exits 1 in total silence
 seq: 98
-status: todo
-priority: p2
+status: done
+priority: p0
 created: 2026-09-07T20:25:16.995932Z
 sprint: 136
+closed: 2026-09-07T21:01:05.289529Z
 ---
 
 MEASURED 2026-09-07 while splitting sprint #129:

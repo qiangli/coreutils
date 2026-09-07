@@ -3,10 +3,11 @@ id: 86a6cc12c1e4
 kind: task
 title: 'The meet e2e suite has one pre-existing red case: bounded Chat progress never renders'
 seq: 95
-status: todo
+status: done
 priority: p2
 created: 2026-09-07T19:02:55.442436Z
 sprint: 136
+closed: 2026-09-07T20:56:14.706443Z
 ---
 
 FOUND while gating story e9f5d325eded on 2026-09-07, and it is NOT a regression from that work.

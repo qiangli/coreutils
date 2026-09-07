@@ -4,7 +4,7 @@ kind: task
 title: 'mb has no selector for what an agent is DOING: address the live sprint managers'
 seq: 96
 status: todo
-priority: p2
+priority: p3
 created: 2026-09-07T19:27:40.311501Z
 sprint: 136
 ---
