@@ -54,6 +54,12 @@ type boardCache struct {
 // does not fan out across the host's real weave queues.
 var collectBoardFn = collectBoard
 
+// storyDetailFn is the one-story lookup, as a var for the same reason
+// collectBoardFn is one: a browser case about how a BODY renders must be able
+// to supply that body, and driving it through a real todo store would make the
+// assertion about the store instead.
+var storyDetailFn = board.StoryDetail
+
 func collectBoard(ctx context.Context) (*board.Board, error) {
 	// All:true matches the CLI exactly — "steward scope is always the
 	// machine-global union, including completed records". The panel filters for
@@ -331,7 +337,7 @@ func (s *server) handleBoardStory(w http.ResponseWriter, r *http.Request) {
 			"error": "no story " + id + " on this board"})
 		return
 	}
-	st, err := board.StoryDetail(*found)
+	st, err := storyDetailFn(*found)
 	if err != nil {
 		// Name what failed. A detail pane that silently shows nothing is the
 		// same defect class this sprint is about.

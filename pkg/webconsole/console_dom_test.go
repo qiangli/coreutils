@@ -32,6 +32,7 @@ package webconsole
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	goruntime "runtime"
 	"strconv"
@@ -1160,6 +1161,237 @@ func TestDOMUnownedSprintSaysSoAndOffersToStaffIt(t *testing.T) {
 	}
 	if assignMark != "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" {
 		t.Errorf("assign mark = %q, want the conversation mark", assignMark)
+	}
+}
+
+// A STORY BODY IS ORDINARY MARKDOWN and must survive to the DOM as itself.
+//
+// The regression this pins: openStory pushed the body through
+// continuitySections — the splitter written for a conductor's continuity
+// brief, which splits on blank lines and relabels any paragraph opening with
+// ALL-CAPS and a colon. Every heading, list, fence and indented transcript was
+// flattened into label/value pairs. The story bodies in this repo carry
+// command transcripts; those were the worst casualties.
+//
+// The fixture below is deliberately one of each, INCLUDING a "NOTE:"
+// paragraph, because that is the shape the old splitter would silently eat.
+func TestDOMStoryBodyKeepsItsMarkdownShape(t *testing.T) {
+	stubBoardWith(t, func() *board.Board {
+		return &board.Board{
+			SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
+			Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
+			Sprints: []board.Sprint{{ID: 5, Title: "A sprint", Column: "doing", Manager: "pm"}},
+			Todos:   []board.Todo{{ID: "story01", Number: 1, Title: "shaped body", Status: "todo", SprintID: 5}},
+		}
+	})
+	origStory := storyDetailFn
+	t.Cleanup(func() { storyDetailFn = origStory })
+	storyDetailFn = func(board.Todo) (*board.Story, error) {
+		return &board.Story{
+			ID: "story01", Seq: 1, Title: "shaped body", Status: "todo", Priority: "p1",
+			Body: "# The heading\n\n" +
+				"An ordinary paragraph that\nwraps across two source lines.\n\n" +
+				"- first bullet\n- second bullet\n\n" +
+				"```\nfenced code line\n  indented inside the fence\n```\n\n" +
+				"    $ bashy sprint status\n    ON THE CLOCK (2)\n\n" +
+				"NOTE: a paragraph that opens like a continuity label.\n",
+		}, nil
+	}
+	base, ctx, errs := domEnv(t, Options{})
+
+	var heading, paras, bullets, code, overflow string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Click(`.bd-sprint .refs .ref.link`, chromedp.ByQuery),
+		chromedp.Sleep(1*time.Second),
+		chromedp.Evaluate(`document.querySelector('.story-body .story-h')?.textContent || ''`, &heading),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll('.story-body .story-p')).map(n => n.textContent).join('|')`, &paras),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll('.story-body .story-list li')).map(n => n.textContent).join('|')`, &bullets),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll('.story-body .story-code')).map(n => n.textContent).join('~~')`, &code),
+		chromedp.Evaluate(`getComputedStyle(document.querySelector('.story-body')).overflowY`, &overflow),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "story body", errs())
+
+	if heading != "The heading" {
+		t.Errorf("heading = %q", heading)
+	}
+	// A wrapped paragraph is ONE paragraph, joined — the source line break is
+	// not a break in the prose.
+	if !strings.Contains(paras, "An ordinary paragraph that wraps across two source lines.") {
+		t.Errorf("paragraphs = %q", paras)
+	}
+	// THE OLD SPLITTER'S FAVOURITE VICTIM: this must stay a paragraph, not
+	// become a "NOTE" label with a value beside it.
+	if !strings.Contains(paras, "NOTE: a paragraph that opens like a continuity label.") {
+		t.Errorf("the NOTE paragraph was relabelled or lost: %q", paras)
+	}
+	if bullets != "first bullet|second bullet" {
+		t.Errorf("bullets = %q", bullets)
+	}
+	// The fence keeps its interior indentation, and the indented transcript is
+	// a block of its own rather than two paragraphs.
+	if !strings.Contains(code, "fenced code line\n  indented inside the fence") {
+		t.Errorf("fenced code = %q", code)
+	}
+	if !strings.Contains(code, "$ bashy sprint status") || !strings.Contains(code, "ON THE CLOCK (2)") {
+		t.Errorf("indented transcript = %q", code)
+	}
+	// Nothing is cut: a long record scrolls inside its pane.
+	if overflow != "auto" && overflow != "scroll" {
+		t.Errorf("story body overflow-y = %q, want it to scroll rather than clip", overflow)
+	}
+}
+
+// A STORY'S STAGE, and the worker behind it.
+//
+// The regression this pins: storyIsClosed sorted every story into done-or-not,
+// so a story with an agent on it right now rendered identically to one nobody
+// had touched. The board's whole job is answering "what is moving?".
+//
+// The second half is the harder one and is asserted just as hard: a weave run
+// does NOT record the story it executes, so the correlation is by agent
+// identity within the sprint and its LIMITS must be reported rather than
+// papered over. Three outcomes, three fixtures: one run (named), two runs
+// (ambiguous), no run (said so).
+func TestDOMStoryStagesAndWorkerCorrelation(t *testing.T) {
+	stubBoardWith(t, func() *board.Board {
+		return &board.Board{
+			SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
+			Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
+			Sprints: []board.Sprint{{ID: 9, Title: "Staged", Column: "doing", Manager: "pm"}},
+			Todos: []board.Todo{
+				{ID: "s1", Number: 1, Title: "nobody has this", Status: "todo", SprintID: 9},
+				{ID: "s2", Number: 2, Title: "assigned not started", Status: "todo", SprintID: 9, Assignee: "solo"},
+				{ID: "s3", Number: 3, Title: "being worked", Status: "doing", SprintID: 9, Assignee: "solo"},
+				{ID: "s4", Number: 4, Title: "waiting on review", Status: "submitted", SprintID: 9, Assignee: "twin"},
+				{ID: "s5", Number: 5, Title: "finished", Status: "done", SprintID: 9},
+			},
+			Runs: []board.Run{
+				{ID: 11, Repo: "coreutils", State: "working", Agent: "solo", Tool: "claude", Model: "opus5", Band: 4, SprintID: 9, AgeSeconds: 120},
+				{ID: 12, Repo: "coreutils", State: "working", Agent: "twin", SprintID: 9},
+				{ID: 13, Repo: "bashy", State: "working", Agent: "twin", SprintID: 9},
+			},
+		}
+	})
+	stories := map[string]*board.Story{
+		"s2": {ID: "s2", Seq: 2, Title: "assigned not started", Status: "todo", Assignee: "solo", Sprint: 9, Body: "b"},
+		"s4": {ID: "s4", Seq: 4, Title: "waiting on review", Status: "submitted", Assignee: "twin", Sprint: 9, Body: "b"},
+		"s5": {ID: "s5", Seq: 5, Title: "finished", Status: "done", Sprint: 9, Body: "b"},
+	}
+	origStory := storyDetailFn
+	t.Cleanup(func() { storyDetailFn = origStory })
+	storyDetailFn = func(td board.Todo) (*board.Story, error) {
+		if st, ok := stories[td.ID]; ok {
+			return st, nil
+		}
+		return nil, fmt.Errorf("no fixture for %s", td.ID)
+	}
+	base, ctx, errs := domEnv(t, Options{})
+
+	var stages, oneRun, ambiguous, unassigned string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll('.bd-sprint .refs .ref.link'))
+			.map(n => n.textContent + "=" + Array.from(n.classList).filter(c => c.startsWith('stage-')).join('')).join(",")`, &stages),
+		// ONE run correlates: it is named, with its tool, model and band.
+		chromedp.Evaluate(`(() => { document.querySelectorAll('.bd-sprint .refs .ref.link')[1].click(); return "" })()`, nil),
+		chromedp.Sleep(1*time.Second),
+		chromedp.Evaluate(`document.querySelector('.story-detail')?.textContent || ''`, &oneRun),
+		// TWO runs under one agent: ambiguous, and it says so.
+		chromedp.Evaluate(`(() => { document.querySelectorAll('.bd-sprint .refs .ref.link')[3].click(); return "" })()`, nil),
+		chromedp.Sleep(1*time.Second),
+		chromedp.Evaluate(`document.querySelector('.story-detail')?.textContent || ''`, &ambiguous),
+		// No assignee at all.
+		chromedp.Evaluate(`(() => { document.querySelectorAll('.bd-sprint .refs .ref.link')[4].click(); return "" })()`, nil),
+		chromedp.Sleep(1*time.Second),
+		chromedp.Evaluate(`document.querySelector('.story-detail')?.textContent || ''`, &unassigned),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "story stages", errs())
+
+	// FIVE distinct stages, not two.
+	for _, want := range []string{
+		"#1=stage-unstarted", "#2=stage-assigned", "#3=stage-working",
+		"#4=stage-needs", "#5=stage-closed",
+	} {
+		if !strings.Contains(stages, want) {
+			t.Errorf("stage chips = %q, missing %s", stages, want)
+		}
+	}
+	if !strings.Contains(oneRun, "@solo") {
+		t.Errorf("worker line = %q", oneRun)
+	}
+	if !strings.Contains(oneRun, "coreutils#11") || !strings.Contains(oneRun, "claude:opus5") ||
+		!strings.Contains(oneRun, "L4") {
+		t.Errorf("correlated run = %q, want it to name the run, binding and band", oneRun)
+	}
+	// THE LIMIT IS REPORTED. Two runs under one agent cannot be told apart, and
+	// picking one would be a guess an operator would act on.
+	if !strings.Contains(ambiguous, "cannot tell which is this story") {
+		t.Errorf("ambiguous correlation = %q", ambiguous)
+	}
+	if !strings.Contains(unassigned, "unassigned — nobody is working this story") {
+		t.Errorf("unassigned story detail = %q", unassigned)
+	}
+}
+
+// A SPRINT'S PLAN IS ON THE RECORD AND WAS INVISIBLE.
+//
+// The gap was two layers deep, which is why the fix is not only a render:
+// weaveStory.SpecRef exists and `sprint show` prints it as "spec:", but
+// board.Sprint did not carry the field at all, so the browser could not have
+// shown it even if it wanted to. This asserts both halves — the field survives
+// the projection, and the card renders it.
+//
+// It is a REFERENCE, not an anchor, and that is asserted too: SpecRef is
+// repo-relative and a sprint spans repos, so any href built here would work on
+// one host and 404 behind the tunnel on another.
+func TestDOMSprintShowsItsPlanReference(t *testing.T) {
+	stubBoardWith(t, func() *board.Board {
+		return &board.Board{
+			SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
+			Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
+			Sprints: []board.Sprint{
+				{ID: 3, Title: "Has a plan", Column: "doing", Manager: "pm", SpecRef: "docs/master-execution-plan.md"},
+				{ID: 4, Title: "Has no plan", Column: "doing", Manager: "pm"},
+			},
+		}
+	})
+	base, ctx, errs := domEnv(t, Options{})
+
+	var planText, planRef, planRows, anchors string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`document.querySelector('.bd-sprint .plan')?.textContent || ''`, &planText),
+		chromedp.Evaluate(`document.querySelector('.bd-sprint .plan .plan-ref')?.textContent || ''`, &planRef),
+		chromedp.Evaluate(`String(document.querySelectorAll('.bd-sprint .plan').length)`, &planRows),
+		chromedp.Evaluate(`String(document.querySelectorAll('.bd-sprint .plan a').length)`, &anchors),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "sprint plan", errs())
+
+	if !strings.Contains(planText, "plan") {
+		t.Errorf("plan row = %q, want it labelled", planText)
+	}
+	// THE FIELD SURVIVED THE PROJECTION. Without the model change this is "".
+	if planRef != "docs/master-execution-plan.md" {
+		t.Errorf("plan ref = %q", planRef)
+	}
+	// A sprint with no spec gains NO row — an empty label is worse than nothing.
+	if planRows != "1" {
+		t.Errorf("plan rows = %s, want exactly one across two sprints", planRows)
+	}
+	// No dead link: a repo-relative path cannot be an href that resolves on
+	// both loopback and a proxied host.
+	if anchors != "0" {
+		t.Errorf("plan row rendered %s anchor(s); a repo-relative path must not become a link", anchors)
 	}
 }
 

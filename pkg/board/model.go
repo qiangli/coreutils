@@ -134,6 +134,12 @@ type Todo struct {
 	Overdue  bool       `json:"overdue,omitempty"`
 	Created  time.Time  `json:"created,omitempty,omitzero"`
 
+	// Assignee is who is working this story, empty when nobody is. It is the
+	// only signal on the OVERVIEW that separates an assigned story from an
+	// untouched one — a weave run does not name the story it executes, so the
+	// worker cannot be derived from the run side.
+	Assignee string `json:"assignee,omitempty"`
+
 	// SprintID is the sprint card this todo is a story of, 0 when unlinked.
 	// It is what lets a reader group stories under their card; without it the
 	// board could only ever show a flat list, which is what it did.
@@ -185,6 +191,12 @@ type Sprint struct {
 	// lease holder; during a pause the manager remains the right 1:1 chat even
 	// though no process currently holds the lease.
 	Manager string `json:"manager,omitempty"`
+	// SpecRef is the sprint's plan: the spec/handoff document `sprint add
+	// --spec` recorded and `sprint show` prints as its "spec:" line. It is a
+	// REPO-RELATIVE path, and a sprint spans repos — see StoryRoots — so it is
+	// carried as the reference it is and never resolved to a URL here.
+	SpecRef string `json:"spec_ref,omitempty"`
+
 	// MeetRoomRef is meet's durable room identity, never its reusable short
 	// number. The browser uses it to open this sprint's session history.
 	MeetRoomRef   string   `json:"meet_room_ref,omitempty"`

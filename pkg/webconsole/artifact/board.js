@@ -28,7 +28,7 @@ const el = (tag, cls, text) => {
 // with replaceChildren, so anything a reader opened lives here or it collapses
 // under them mid-read: `open` is the panels, `stories`/`cont` are a sprint
 // card's two disclosures, and `story` is the one story whose body is showing.
-const state = { all: false, open: {}, stories: {}, cont: {}, story: {} };
+const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [] };
 
 // disclose wires a toggle button to its body and REMEMBERS the answer under
 // key, so the next render restores it. Every disclosure on this page goes
@@ -256,6 +256,159 @@ function runRefsEl(refs) {
 // costs no CSS: an always-visible chip line (what runRefsEl does for runs, so a
 // scan sees at once that a card has seven stories, not zero) and a collapsible
 // list carrying each story's status, priority and title.
+// A STORY BODY IS ORDINARY MARKDOWN, and it was being read as a continuity
+// brief. continuitySections below splits on blank lines and treats a leading
+// ALL-CAPS token before a colon as a section label — exactly right for the
+// brief a conductor writes, and wrong for everything else. Pushed through it, a
+// story body lost its headings, its lists and its code fences, and any
+// paragraph that happened to open with capitals and a colon was silently
+// relabelled. The bodies in this repo carry indented command transcripts;
+// those were the worst casualties.
+//
+// So the two callers are separated. The card's continuity keeps the splitter.
+// A story body gets this: a small block renderer, no dependency, no framework.
+//
+// SAFE BY CONSTRUCTION. Bodies are written by agents, so nothing here ever
+// touches innerHTML — every character reaches the page as a text node. That is
+// not a hardening pass bolted on afterwards; it is why this is a DOM builder
+// rather than a markdown-to-HTML string.
+const FENCE = /^\s*```/;
+const HEADING = /^(#{1,6})\s+(.*)$/;
+const BULLET = /^\s*([-*+]|\d+[.)])\s+/;
+
+function storyBodyEl(text) {
+  const host = el("div", "story-body");
+  const lines = String(text || "").split("\n");
+  let i = 0;
+  // A block is emitted only when its shape is recognised; anything else falls
+  // through to a paragraph, which is what unstructured prose should be.
+  while (i < lines.length) {
+    const line = lines[i];
+    if (FENCE.test(line)) {
+      // A FENCE IS VERBATIM to its closer, including blank lines and the
+      // indentation that carries meaning inside it. An unterminated fence runs
+      // to the end of the body rather than being abandoned — a truncated code
+      // block is the failure this story is about.
+      const buf = [];
+      i++;
+      while (i < lines.length && !FENCE.test(lines[i])) buf.push(lines[i++]);
+      if (i < lines.length) i++;
+      host.append(el("pre", "story-code", buf.join("\n")));
+      continue;
+    }
+    const h = HEADING.exec(line);
+    if (h) {
+      host.append(el("div", "story-h h" + h[1].length, h[2].trim()));
+      i++;
+      continue;
+    }
+    if (BULLET.test(line)) {
+      const list = el("ul", "story-list");
+      while (i < lines.length && BULLET.test(lines[i])) {
+        list.append(el("li", null, lines[i].replace(BULLET, "")));
+        i++;
+      }
+      host.append(list);
+      continue;
+    }
+    if (/^\s{4,}\S/.test(line)) {
+      // An INDENTED BLOCK is a transcript. Keeping it as one <pre> preserves
+      // the alignment that makes command output readable; splitting it into
+      // paragraphs is what destroyed it.
+      const buf = [];
+      while (i < lines.length && (/^\s{4,}/.test(lines[i]) || lines[i].trim() === "")) {
+        // A trailing run of blank lines belongs to the gap after the block,
+        // not inside it.
+        if (lines[i].trim() === "" && !/^\s{4,}\S/.test(lines[i + 1] || "")) break;
+        buf.push(lines[i++]);
+      }
+      host.append(el("pre", "story-code", buf.join("\n")));
+      continue;
+    }
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+    // A PARAGRAPH is its consecutive non-blank lines, joined — markdown's own
+    // rule, and the one that keeps a wrapped sentence a sentence.
+    const buf = [];
+    while (i < lines.length && lines[i].trim() !== "" && !FENCE.test(lines[i]) &&
+           !HEADING.test(lines[i]) && !BULLET.test(lines[i]) && !/^\s{4,}\S/.test(lines[i])) {
+      buf.push(lines[i].trim());
+      i++;
+    }
+    host.append(el("p", "story-p", buf.join(" ")));
+  }
+  if (!host.childNodes.length) host.append(el("p", "story-p", "(no body)"));
+  return host;
+}
+
+// WHO IS ACTUALLY RUNNING THIS, and the honest answer is often "cannot tell".
+//
+// A weave run does NOT record the story it executes — board.Run carries
+// agent/model/band/state and a sprint id, board.Todo carries an assignee, and
+// nothing joins them. So the only correlation available is by AGENT IDENTITY
+// within the sprint, and it is reported as a correlation, never as a fact the
+// records assert.
+//
+// Its limit is stated rather than hidden: if one agent holds two runs in the
+// same sprint, which run belongs to which story is genuinely unknown, and
+// saying "ambiguous" is the only truthful answer. Picking the first would be a
+// guess an operator would then act on.
+function runsForStory(story) {
+  const who = String(story.assignee || "").trim().toLowerCase();
+  if (!who) return [];
+  return (state.runs || []).filter((r) =>
+    String(r.agent || "").trim().toLowerCase() === who &&
+    (!story.sprint || !r.sprint_id || r.sprint_id === story.sprint));
+}
+
+// workerRows renders the worker line and, when a run can be correlated, what
+// that run is doing. Every branch says which of the three states it is in.
+function workerRows(d) {
+  const rows = [];
+  const who = d.assignee && !/^(unassigned|-|none)$/i.test(d.assignee) ? d.assignee : "";
+  if (!who) {
+    const row = el("div", "sec");
+    row.append(el("div", "sec-k", "worker"));
+    row.append(el("div", "sec-v", "unassigned — nobody is working this story"));
+    rows.push(row);
+    return rows;
+  }
+  const row = el("div", "sec");
+  row.append(el("div", "sec-k", "worker"));
+  row.append(el("div", "sec-v", "@" + who));
+  rows.push(row);
+
+  const runs = runsForStory(d);
+  const run = el("div", "sec");
+  run.append(el("div", "sec-k", "run"));
+  if (runs.length === 1) {
+    const r = runs[0];
+    const parts = [
+      (r.repo || "?") + "#" + r.id,
+      r.state || "",
+      [r.tool, r.model].filter(Boolean).join(":"),
+      r.band ? "L" + r.band : "",
+      r.elapsed_seconds ? dur(r.elapsed_seconds) : "",
+      r.stale ? "STALE" : "",
+    ].filter(Boolean);
+    run.append(el("div", "sec-v " + stateClass(r.state), parts.join(" · ")));
+  } else if (runs.length > 1) {
+    // AMBIGUOUS, and named as such. Two runs under one agent in one sprint
+    // cannot be told apart from here.
+    run.append(el("div", "sec-v needs",
+      runs.length + " runs held by @" + who + " in this sprint — cannot tell which is this story"));
+  } else {
+    // NOT A FAILURE. A story can be assigned and worked without a weave run at
+    // all, and a run does not name its story, so "no run" is a report about the
+    // records rather than about the work.
+    run.append(el("div", "sec-v", "no run correlated — a run does not record the story it executes"));
+  }
+  rows.push(run);
+  return rows;
+}
+
 // storyDetail fetches ONE story's full record. Cached per id for the life of
 // the page: a body does not change under a reader, and a second click on the
 // same story should not re-hit the host.
@@ -304,21 +457,11 @@ async function openStory(id, host, sprintID) {
       m.append(el("div", "sec-v", meta));
       rows.push(m);
     }
-    // The body is written as labelled paragraphs, exactly like a continuity
-    // brief, so it is rendered with the same splitter rather than as one wall.
-    const secs = continuitySections(d.body);
-    if (secs.length) {
-      for (const sec of secs) {
-        const row = el("div", "sec");
-        if (sec.label) row.append(el("div", "sec-k", sec.label));
-        row.append(el("div", "sec-v", sec.body));
-        rows.push(row);
-      }
-    } else {
-      const row = el("div", "sec");
-      row.append(el("div", "sec-v", "(no body)"));
-      rows.push(row);
-    }
+    rows.push(...workerRows(d));
+    // THE BODY, whole and in its own shape. Never truncated — a long record
+    // scrolls inside its pane, because a detail view that quietly stops
+    // mid-sentence is the defect class this page exists to report on.
+    rows.push(storyBodyEl(d.body));
     host.replaceChildren(...rows);
   } catch (e) {
     // Name the failure. A detail pane that silently shows nothing is the same
@@ -337,9 +480,14 @@ function storiesEl(stories, detailHost, sprintID) {
   for (const t of shown) {
     // A button, not a span: a thing that responds to a click has to be
     // reachable by keyboard and announce itself as activatable.
-    const chip = el("button", "ref link " + stateClass(t.status), "#" + (t.number || t.id));
+    const stage = storyStage(t);
+    const chip = el("button", "ref link stage-" + stage + " " + STAGE_CLASS[stage],
+      "#" + (t.number || t.id));
     chip.type = "button";
-    chip.title = [t.priority, t.status, t.title].filter(Boolean).join(" · ");
+    // The tooltip names the stage AND its evidence, so a colour never has to be
+    // decoded from memory.
+    chip.title = [t.priority, stage, t.assignee ? "@" + t.assignee : "", t.title]
+      .filter(Boolean).join(" · ");
     chip.addEventListener("click", () => openStory(t.id, detailHost, sprintID));
     wrap.append(chip);
   }
@@ -348,6 +496,40 @@ function storiesEl(stories, detailHost, sprintID) {
   }
   return wrap;
 }
+
+// A STORY HAS STAGES, and the card knew only two of them. storyIsClosed sorted
+// every story into done-or-not, so one with a worker on it right now rendered
+// identically to one nobody had touched — and "what is actually moving?" is the
+// question a scan of this board is asking.
+//
+// Five stages, each sourced from a field that actually exists. There is no
+// guessing here and there deliberately cannot be: a weave run does not name the
+// story it executes, so a story's worker is read from the STORY's own assignee
+// and never inferred from a nearby run.
+//
+//   closed     done / closed / cancelled
+//   needs      submitted / review / failed / blocked — waiting on a person
+//   working    doing — someone is on it
+//   assigned   named owner, not started yet
+//   unstarted  nobody, nothing
+function storyStage(t) {
+  const st = String(t.status || "").toLowerCase();
+  if (storyIsClosed(t)) return "closed";
+  if (NEEDS.has(st)) return "needs";
+  if (LIVE.has(st)) return "working";
+  return t.assignee ? "assigned" : "unstarted";
+}
+
+// The stage's CSS class. `needs`, `live` and `past` already exist and are
+// reused rather than duplicated; the two new ones are the states the card
+// could not previously express.
+const STAGE_CLASS = {
+  closed: "past",
+  needs: "needs",
+  working: "live",
+  assigned: "assigned",
+  unstarted: "unstarted",
+};
 
 function storyIsClosed(story) {
   return ["done", "closed", "cancelled", "canceled"].includes(String(story.status || "").toLowerCase());
@@ -375,11 +557,15 @@ function storyListEl(sp, stories, detailHost, sprintID) {
     if (!items.length) continue;
     body.append(el("div", "story-group", label + " — " + items.length));
     for (const t of items) {
-      const row = el("button", "sec link " + (storyIsClosed(t) ? "past" : ""));
+      const stage = storyStage(t);
+      const row = el("button", "sec link stage-" + stage + " " + STAGE_CLASS[stage]);
       row.type = "button";
-      row.append(el("div", "sec-k " + stateClass(t.status),
+      row.append(el("div", "sec-k " + STAGE_CLASS[stage],
         "#" + (t.number || t.id) + (t.priority ? " " + t.priority : "")));
       row.append(el("div", "sec-v", t.title || ""));
+      // The worker is named on the ROW, not only in the detail: an operator
+      // scanning for "who has what" should not have to open seven stories.
+      if (t.assignee) row.append(el("div", "sec-who", "@" + t.assignee));
       row.addEventListener("click", () => openStory(t.id, detailHost, sprintID));
       body.append(row);
     }
@@ -415,6 +601,40 @@ function sprintEl(sp, stories) {
     head.append(chip);
   }
   n.append(head);
+
+  // THE PLAN. A sprint's spec/handoff document is on the record — `sprint show`
+  // prints it as "spec:" — and the card showed nothing, so the one document
+  // that says what the sprint is FOR was invisible from the browser.
+  //
+  // RENDERED AS A REFERENCE, NOT AN ANCHOR, and that is the decision rather
+  // than an omission. SpecRef is REPO-RELATIVE ("docs/plan.md") and a sprint
+  // spans repos by definition, so there is no one root to resolve it against;
+  // the Files panel is optional, scoped to home by default, and this page is
+  // reached both on loopback and under outpost's /matrix/h/<host>/app/<name>/
+  // prefix. An href built from any of that is a link that works on one host and
+  // 404s on another, which is worse than a path — and inventing a file-serving
+  // route for it is a data plane this read-only page must not grow.
+  //
+  // So: the path, selectable and labelled, next to the title where the reader
+  // already is. A sprint with no spec gains no row at all.
+  const planRow = (sp) => {
+    if (!sp.spec_ref) return null;
+    const row = el("div", "meta plan");
+    row.append(el("span", "k", "plan"));
+    const ref = el("code", "plan-ref", sp.spec_ref);
+    // Selectable by click, so copying it costs one gesture and no dependency.
+    ref.tabIndex = 0;
+    ref.title = "The sprint's plan document, relative to its repo — select to copy";
+    ref.addEventListener("click", () => {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ref);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+    row.append(ref);
+    return row;
+  };
 
   const title = el("div", "sprint-title");
   title.append(el("p", "label", sp.title || ""));
@@ -458,6 +678,9 @@ function sprintEl(sp, stories) {
     meta.append(a);
   }
   n.append(meta);
+
+  const plan = planRow(sp);
+  if (plan) n.append(plan);
 
   const refs = sp.run_refs || [];
   if (refs.length) n.append(runRefsEl(refs));
@@ -656,6 +879,7 @@ async function load() {
   }
   renderWarnings(d);
   renderSummary(d);
+  state.runs = d.runs || [];
   renderSprints(d);
   renderLanes(d);
   renderPanels(d);

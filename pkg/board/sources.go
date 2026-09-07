@@ -230,6 +230,7 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 			Column     string   `json:"column"`
 			Continuity string   `json:"continuity"`
 			Acceptance string   `json:"acceptance"`
+			SpecRef    string   `json:"spec_ref"`
 			Owner      string   `json:"owner"`
 			Runs       []RunRef `json:"runs"`
 			StoryRoots []string `json:"story_roots"`
@@ -250,7 +251,7 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 		if !o.All && x.Column == "done" {
 			continue
 		}
-		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, Manager: x.Owner, RunRefs: x.Runs, StoryRoots: x.StoryRoots}
+		s := Sprint{ID: x.ID, Title: x.Title, Epic: x.Epic, Column: x.Column, Continuity: x.Continuity, ContinuityRef: x.Continuity, Manager: x.Owner, SpecRef: x.SpecRef, RunRefs: x.Runs, StoryRoots: x.StoryRoots}
 		if x.Contact != nil {
 			s.MeetRoomRef = x.Contact.Ref
 		}
@@ -298,6 +299,21 @@ type todoItem struct {
 	Overdue  bool       `json:"overdue"`
 	Created  time.Time  `json:"created"`
 	Sprint   int64      `json:"sprint"`
+	// Assignee is WHO IS WORKING IT, and `todo list --json` has always carried
+	// it — this decoder simply did not read it. Without it the board could
+	// only sort stories into closed and not-closed, so a story with a worker
+	// on it right now rendered identically to one nobody had touched.
+	Assignee string `json:"assignee"`
+}
+
+// assignee drops todo's placeholder for "nobody". Rendering "unassigned" as a
+// name invents a person, and the board must never do that.
+func (t todoItem) assignee() string {
+	switch strings.ToLower(strings.TrimSpace(t.Assignee)) {
+	case "", "unassigned", "-", "none":
+		return ""
+	}
+	return strings.TrimSpace(t.Assignee)
 }
 
 func (t todoItem) status() string {
@@ -479,7 +495,7 @@ func (todoSource) Load(_ context.Context, b *Board, o Options) error {
 			continue
 		}
 		for _, x := range items {
-			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint, Store: sc.args})
+			b.Todos = append(b.Todos, Todo{ID: x.ID, Number: x.Seq, Title: x.Title, Status: x.status(), Priority: x.Priority, Scope: sc.scope, Due: x.Due, Overdue: x.Overdue, Created: x.Created, SprintID: x.Sprint, Assignee: x.assignee(), Store: sc.args})
 		}
 	}
 	sort.SliceStable(b.Todos, func(i, j int) bool {

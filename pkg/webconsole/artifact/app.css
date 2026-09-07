@@ -662,6 +662,35 @@ body.standalone #bar { flex: none; }
    link next to the noun it opens, while the icon has a full touch target and a
    visible keyboard focus ring. */
 .bd-sprint .sprint-title,
+.bd-sprint .plan { display: flex; align-items: baseline; gap: .4rem; min-width: 0; }
+.bd-sprint .plan .k { opacity: .65; flex: 0 0 auto; }
+.bd-sprint .plan .plan-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; overflow-wrap: anywhere; cursor: text; }
+
+/* THE FIVE STORY STAGES. `past`, `needs` and `live` already carry the card's
+   colours and are reused; these two are the states the card could not express
+   before, and they are deliberately quieter than "needs a decision". */
+.bd-sprint .stage-assigned { border-color: var(--accent, currentColor); opacity: .95; }
+.bd-sprint .stage-unstarted { opacity: .62; }
+.bd-sprint .sec-who { flex: 0 0 auto; margin-left: .5rem; opacity: .7; font-size: .9em; }
+
+/* A STORY BODY IS A DOCUMENT, so it is given a document's shapes and a bound
+   on its height rather than a bound on its content: it scrolls, it is never
+   cut. The 60vh ceiling keeps a seventy-line record from pushing the rest of
+   the card off the screen. */
+.bd-sprint .story-body { max-height: 60vh; overflow-y: auto; overflow-x: hidden; margin-top: .4rem; }
+.bd-sprint .story-body .story-p { margin: .45rem 0; line-height: 1.5; }
+.bd-sprint .story-body .story-h { font-weight: 700; margin: .7rem 0 .3rem; }
+.bd-sprint .story-body .story-h.h1 { font-size: 1.05em; }
+.bd-sprint .story-body .story-h.h2 { font-size: 1em; }
+.bd-sprint .story-body .story-list { margin: .35rem 0; padding-left: 1.1rem; }
+.bd-sprint .story-body .story-list li { margin: .15rem 0; line-height: 1.45; }
+/* Code and transcripts keep their own alignment and scroll SIDEWAYS on their
+   own, so a long command line never widens the card. */
+.bd-sprint .story-body .story-code {
+  margin: .4rem 0; padding: .45rem .6rem; overflow-x: auto;
+  white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .92em; border-radius: 4px; background: rgba(127,127,127,.12);
+}
 .bd-sprint .manager { display: flex; align-items: center; gap: .35rem; min-width: 0; }
 /* An unowned sprint reads as a GAP, not as decoration. It reuses the card's
    own "needs attention" colour rather than introducing a palette, so it sorts
