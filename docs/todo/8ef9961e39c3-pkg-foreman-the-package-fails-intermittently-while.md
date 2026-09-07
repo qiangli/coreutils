@@ -3,10 +3,11 @@ id: 8ef9961e39c3
 kind: task
 title: 'pkg/foreman: the PACKAGE fails intermittently while every test in it passes'
 seq: 21
-status: todo
+status: done
 priority: p2
 created: 2026-09-01T14:31:46.174722Z
 sprint: 137
+closed: 2026-09-07T23:16:39.06021Z
 ---
 
 `pkg/foreman TestServeControlStopCancelsActiveTurn` failed on ubuntu-latest in
@@ -78,3 +79,19 @@ Evidence files are retained under the umbrella's ignored `.agents/sprint137/`:
 `foreman-after-control.json`, and `foreman-race.log`.
 No retry was added inside a test and no baseline entry was added. Story closure
 is pending Sprint 137 integration gates and CI evidence.
+
+
+## Closure verification — 2026-09-07
+
+Actions run [34168966573](https://github.com/qiangli/coreutils/actions/runs/34168966573)
+passed the complete macOS, Ubuntu, and Windows legs on delivery commit b1e900e4.
+The owner downloaded both Unix process-lifecycle JSON artifacts: each contains
+150 passing events (15 tests, 10 repetitions each), no failing events, and ten
+passes of both TestCancelKillsDescendants and
+TestServeControlStopCancelsActiveTurn. Local verification also passed 234
+ordinary affected-package tests, 150 race-enabled lifecycle cases, and the full
+crossvet scope. No baseline was added; the chat entry was deleted.
+
+Closure addresses the independently reproduced lifecycle defects described
+above. It does not claim that the historical logs identify an exact signal
+branch or fully reconstruct the original intermittent event.

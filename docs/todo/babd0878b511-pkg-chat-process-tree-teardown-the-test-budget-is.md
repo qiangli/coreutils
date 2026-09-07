@@ -3,10 +3,11 @@ id: babd0878b511
 kind: task
 title: 'pkg/chat process-tree teardown: the test budget IS WaitDelay, and hitting the fallback means the group kill missed a pipe holder'
 seq: 19
-status: todo
+status: done
 priority: p1
 created: 2026-09-01T14:02:20.869035Z
 sprint: 137
+closed: 2026-09-07T23:16:39.0342Z
 ---
 
 CI-blocking and INTERMITTENT. macos-latest: PASSED in GitHub Actions run
@@ -98,3 +99,19 @@ launcher-policy global race, reproduced against original chat.go and recorded
 separately as b0268293747e. No baseline entry was added for it. The full-package
 race run must not be described as green; targeted lifecycle race checks and
 ordinary full-package checks are separate evidence.
+
+
+## Closure verification — 2026-09-07
+
+Actions run [34168966573](https://github.com/qiangli/coreutils/actions/runs/34168966573)
+passed the complete macOS, Ubuntu, and Windows legs on delivery commit b1e900e4.
+The owner downloaded both Unix process-lifecycle JSON artifacts: each contains
+150 passing events (15 tests, 10 repetitions each), no failing events, and ten
+passes of both TestCancelKillsDescendants and
+TestServeControlStopCancelsActiveTurn. Local verification also passed 234
+ordinary affected-package tests, 150 race-enabled lifecycle cases, and the full
+crossvet scope. No baseline was added; the chat entry was deleted.
+
+Closure addresses the independently reproduced lifecycle defects described
+above. It does not claim that the historical logs identify an exact signal
+branch or fully reconstruct the original intermittent event.
