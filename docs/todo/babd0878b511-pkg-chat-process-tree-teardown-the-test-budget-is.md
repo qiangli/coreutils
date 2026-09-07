@@ -70,3 +70,31 @@ is still worth fixing first: while the two numbers are the same, a genuine
 defect-2 failure and a merely slow runner produce the SAME message, so CI cannot
 tell them apart — which is why this entry has stayed a `sometimes` for three
 days without an answer.
+
+
+## 2026-09-07 — Sprint 137 root-cause fix and independent reproduction
+
+The direct child's exit ended os/exec's cancellation watcher while Cmd.Wait
+could still be draining pipes inherited by descendants. The new real-process
+TestCancelKillsDescendantsAfterLeaderExit waits until the wrapper is reaped,
+then cancels. The sprint owner ran it with original chat.go via a Go source
+overlay: cancellation took 4.995579292s and the grandchild survived. This is
+positive reproduction of a product defect, not a green-run inference.
+
+The fix owns cancellation until Wait completes, retries group signals while
+teardown remains pending, and stops permanently on ESRCH to avoid signaling a
+reused group number. It retains signal/fallback errno and Wait errors, with
+separate 10s hang detection and a 3s promptness assertion. WaitDelay remains 5s.
+A controlled missed-signal fixture verifies retries; additional tests verify
+ESRCH cessation and fallback diagnostics. The baseline entry is deleted.
+
+The original macOS CI log did not record signal outcomes, so its exact failure
+cannot be attributed conclusively to ESRCH or a particular kernel race. That
+historical uncertainty is preserved. Owner focused tests passed ten repetitions
+on Darwin; macOS CI verification remains pending.
+
+The expanded full-package race check independently exposed a PRE-EXISTING
+launcher-policy global race, reproduced against original chat.go and recorded
+separately as b0268293747e. No baseline entry was added for it. The full-package
+race run must not be described as green; targeted lifecycle race checks and
+ordinary full-package checks are separate evidence.
