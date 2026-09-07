@@ -1,9 +1,12 @@
 package foreman
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -295,4 +298,207 @@ func TestServeControlDeadlineCancelsActiveTurn(t *testing.T) {
 	if !st.Stopped || st.Status != StatusBlocked || st.StopReason != "max runtime 80ms exceeded" {
 		t.Fatalf("expired state = %+v", st)
 	}
+}
+
+// A runner may need time to finish its own cleanup after cancellation. Returning
+// from ServeControl must join that work and the subsequent state persistence.
+type cleanupRunner struct {
+	started   chan struct{}
+	cancelled chan struct{}
+	release   chan struct{}
+}
+
+func (r *cleanupRunner) Run(ctx context.Context, _ string, _ []string, _ string) (string, int, error) {
+	close(r.started)
+	<-ctx.Done()
+	close(r.cancelled)
+	<-r.release
+	return "", 1, ctx.Err()
+}
+
+func TestServeControlJoinsCancelledTurn(t *testing.T) {
+	if !ControlSupported() {
+		t.Skip("Unix control sockets are unsupported")
+	}
+	r := &cleanupRunner{started: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
+	s, err := Start(context.Background(), Options{
+		ID: "join-turn", Goal: "finish cleanup", Agent: "stub", Root: t.TempDir(), Runner: r,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan string, 1)
+	done := make(chan struct{})
+	var serveErr error
+	go func() {
+		serveErr = s.ServeControl(ctx, ready)
+		close(done)
+	}()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(r.release) }) }
+	t.Cleanup(func() {
+		cancel()
+		release()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("control server cleanup did not finish")
+		}
+	})
+	select {
+	case <-ready:
+	case <-done:
+		t.Fatalf("ServeControl before ready: %v", serveErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("control socket did not become ready")
+	}
+	if _, err := SendCommand(s.store.Root, s.store.ID, Command{Verb: CommandTell, Message: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("turn did not start")
+	}
+	cancel()
+	select {
+	case <-r.cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("turn did not receive cancellation")
+	}
+	select {
+	case <-done:
+		t.Error("ServeControl returned while its turn still owned session state")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-done:
+		if serveErr != nil {
+			t.Fatalf("ServeControl: %v", serveErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("control server did not join completed turn")
+	}
+}
+
+func TestServeControlClosesIdleConnections(t *testing.T) {
+	if !ControlSupported() {
+		t.Skip("Unix control sockets are unsupported")
+	}
+	s, err := Start(context.Background(), Options{ID: "idle-conn", Goal: "close connections", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan string, 1)
+	done := make(chan struct{})
+	var serveErr error
+	go func() {
+		serveErr = s.ServeControl(ctx, ready)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("control server cleanup did not finish")
+		}
+	})
+	var path string
+	select {
+	case path = <-ready:
+	case <-done:
+		t.Fatalf("ServeControl before ready: %v", serveErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("control socket did not become ready")
+	}
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// A complete exchange proves this socket was accepted, then leaves its
+	// handler blocked waiting for another command on the same connection.
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("invalid-json\n")); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-done:
+		if serveErr != nil {
+			t.Fatal(serveErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("control server did not stop")
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadByte(); err == nil {
+		t.Fatal("idle connection still readable after shutdown")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatal("idle connection outlived ServeControl")
+	}
+}
+
+func TestApplyCancelledCommandPreservesTerminalState(t *testing.T) {
+	s, err := Start(context.Background(), Options{ID: "cancelled-command", Goal: "stay stopped", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.markStopped(StatusDone, "stopped by operator")
+	before := s.State()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Apply(ctx, Command{Verb: CommandTell, Message: "queued before shutdown"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Apply = %v, want context cancellation", err)
+	}
+	if after := s.State(); CanonicalDigest(after) != CanonicalDigest(before) {
+		t.Fatalf("cancelled command changed terminal state: before %+v, after %+v", before, after)
+	}
+}
+
+func TestControlStopDoesNotWaitForUnreadAck(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	s := &Session{stopCh: make(chan string, 1)}
+	var workers sync.WaitGroup
+	workers.Add(1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer workers.Done()
+		s.handleControlConn(context.Background(), server, &workers)
+	}()
+	t.Cleanup(func() {
+		_ = client.Close()
+		<-done
+	})
+	if err := client.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Write([]byte("{\"verb\":\"stop\"}\n")); err != nil {
+		t.Fatal(err)
+	}
+	// net.Pipe has no write buffer: the server's ACK cannot finish while the
+	// client intentionally never reads, so only its write bound releases stop.
+	select {
+	case reason := <-s.stopCh:
+		if reason != "stopped by operator" {
+			t.Fatalf("stop reason = %q", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unread ACK prevented stop cancellation")
+	}
+	<-done
 }

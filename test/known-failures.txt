@@ -49,13 +49,6 @@
 # every permission-based test — use --user, or believe the runner.
 linux github.com/qiangli/coreutils/cmds/mv TestMvNoTargetDirectoryTrailingSlashOnExistingDir
 
-# babd0878b511 — pkg/chat process-tree teardown. The test's 5s budget IS
-# cmd.WaitDelay, so the test deadline and the implementation's fallback are the
-# same number; reaching the fallback at all means the group kill missed a pipe
-# holder. Observed passing (run 33513814323) and failing (33515325794) on the
-# same macOS runner.
-darwin github.com/qiangli/coreutils/pkg/chat TestCancelKillsDescendants sometimes
-
 # 95fcce29a7cc — sprint 100 pax cluster. Linux only: PATH_MAX is 4096 there
 # against 1024 on darwin, so the near-limit tree lands in a different regime.
 linux github.com/qiangli/coreutils/cmds/pax TestFollowedSymlinkBelowOperandNearPathMaxIsArchived
