@@ -459,7 +459,23 @@ test("two agent Chats keep their messages in separate conversations", async ({ p
   await expect(page.getByText(alternateMessage, { exact: true })).toHaveCount(0);
 });
 
+// EXPECTED-FAIL, and the marker is the alarm. Measured 2026-09-07 (story
+// 86a6cc12c1e4, follow-on 041bf670): the sampled `<pre>` can never be observed
+// because chat.Invoke does not stream. It buffers the whole turn and writes
+// opt.Stream ONCE at process exit, so all five sampled frames reach the browser
+// in a 0.3ms burst 2.9s after the turn starts, and the turn-end frame unmounts
+// the card 23ms later. The counters above it come from the `speaking` frame and
+// are all zero, which is why the three assertions before line 475 pass on an
+// EMPTY card — the case is kept in full, and running, for exactly that reason.
+//
+// This is `test.fail()` rather than a `--grep-invert` because the suite must
+// keep running it: docs/fleet-evidence-invariant.md forbids reaching a green
+// state through the ABSENCE of evidence, and a permanently excluded case is
+// that absence. When 041bf670 lands, this case starts PASSING, `test.fail()`
+// turns the run red, and whoever fixed the stream deletes this marker. That
+// red is the intended notification, not a regression.
 test("a long Chat reply shows bounded real output and cumulative progress", async ({ page }) => {
+  test.fail();
   await createDM(primaryAgent);
   await openMeet(page);
   await openChat(page, primaryAgent);
