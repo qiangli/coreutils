@@ -3,10 +3,11 @@ id: e97c123d071a
 kind: task
 title: 'Sprint board: the New sprint control is a hash icon and opens the wrong conversation kind'
 seq: 86
-status: todo
+status: done
 priority: p1
 created: 2026-09-07T18:28:38.763186Z
 sprint: 135
+closed: 2026-09-07T19:09:27.693501Z
 ---
 
 OBSERVED 2026-09-07 on the browser Sprint board.

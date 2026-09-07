@@ -3,10 +3,11 @@ id: 131a68c509d4
 kind: task
 title: 'Sprint board: a story chip shows closed-or-not, never who is working it'
 seq: 90
-status: todo
+status: done
 priority: p1
 created: 2026-09-07T18:29:41.0671Z
 sprint: 135
+closed: 2026-09-07T19:19:48.508721Z
 ---
 
 OBSERVED 2026-09-07. On a sprint card, every open story looks identical. board.js storyIsClosed() sorts stories into exactly two buckets — done/closed/cancelled/canceled versus everything else — so a story that has a worker agent running right now renders the same as one nobody has touched. The one question a scan of the board is asking ("what is actually moving?") is the one it cannot answer.

@@ -3,10 +3,11 @@ id: e852de18d41d
 kind: task
 title: 'Sprint board: an unowned sprint says nothing and offers no way to staff one'
 seq: 87
-status: todo
+status: done
 priority: p1
 created: 2026-09-07T18:28:53.012378Z
 sprint: 135
+closed: 2026-09-07T19:09:27.718136Z
 ---
 
 OBSERVED 2026-09-07. Sprint #130 is a live example: `bashy sprint show 130` reports "UNREACHABLE: no owner — nobody is accountable and no name can be addressed", and the browser card for it renders NOTHING where a manager would be.

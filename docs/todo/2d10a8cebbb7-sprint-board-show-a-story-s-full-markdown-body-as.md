@@ -3,10 +3,11 @@ id: 2d10a8cebbb7
 kind: task
 title: 'Sprint board: show a story''s full markdown body, as the todo file actually holds it'
 seq: 91
-status: todo
+status: done
 priority: p1
 created: 2026-09-07T18:29:57.206156Z
 sprint: 135
+closed: 2026-09-07T19:19:48.482804Z
 ---
 
 OBSERVED 2026-09-07. A story IS a markdown file — docs/todo/<12-hex>-<slug>.md, YAML frontmatter then a body — and the board reaches it correctly: GET /api/sprint/story/{id} -> handleBoardStory -> board.StoryDetail, which returns board.Story with Body. So the plumbing is there and the endpoint is right.

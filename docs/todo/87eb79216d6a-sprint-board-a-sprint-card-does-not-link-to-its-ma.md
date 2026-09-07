@@ -3,10 +3,11 @@ id: 87eb79216d6a
 kind: task
 title: 'Sprint board: a sprint card does not link to its master execution plan'
 seq: 92
-status: todo
+status: done
 priority: p2
 created: 2026-09-07T18:30:12.960018Z
 sprint: 135
+closed: 2026-09-07T19:19:48.534114Z
 ---
 
 OBSERVED 2026-09-07. Every sprint has a plan document and the record already holds it: weaveStory.SpecRef is the sprint's spec/handoff doc reference, set by `sprint add --spec` and shown by `sprint show` as the "spec:" line. Sprint #130 carries docs/bashy-yoke-framework.md; sprint #117's plan is docs/bashpp-go127-master-execution-plan.md. The browser card shows none of it.

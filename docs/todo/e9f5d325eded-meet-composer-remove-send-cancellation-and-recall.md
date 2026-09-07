@@ -3,10 +3,11 @@ id: e9f5d325eded
 kind: task
 title: 'Meet composer: remove send cancellation and recall, restore the plain send'
 seq: 89
-status: todo
+status: done
 priority: p0
 created: 2026-09-07T18:29:23.764992Z
 sprint: 135
+closed: 2026-09-07T19:02:55.417068Z
 ---
 
 OPERATOR DECISION, 2026-09-07: the improved send never worked. Take it out. This is a REMOVAL story, not a repair — a dedicated sprint owns fixing it properly later, and nothing here is a judgement that the idea was wrong.

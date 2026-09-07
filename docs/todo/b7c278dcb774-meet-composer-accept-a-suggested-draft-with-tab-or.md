@@ -3,10 +3,11 @@ id: b7c278dcb774
 kind: task
 title: 'Meet composer: accept a suggested draft with Tab or Space instead of pre-filling the box'
 seq: 88
-status: todo
+status: done
 priority: p2
 created: 2026-09-07T18:29:05.887551Z
 sprint: 135
+closed: 2026-09-07T19:21:13.287922Z
 ---
 
 OBSERVED 2026-09-07 following a New sprint link into the Meet Chat composer.

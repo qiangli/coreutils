@@ -321,8 +321,8 @@ func newSprintStartCmd() *cobra.Command {
 						s.Column = "doing"
 						moved = " (backlog → doing)"
 					}
-					weaveStoryAppend(s, who, "system",
-						fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
+					weaveStoryAppend(s, who, kindStage,
+						fmt.Sprintf("started a %s box%s, cutoff %s", roundDur(forDur), moved, now.Add(forDur).Format(time.RFC3339)))
 					// The same advisory `take` gives. `start` is the more common
 					// entry point — it is how a sprint BEGINS — and it was the one
 					// that said nothing, so an agent seated by it had to already
@@ -632,10 +632,10 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						_ = closeSprintRoom(s, who)
 						s.Lease = nil
 						msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
-						weaveStoryAppend(s, who, "system", msg)
+						weaveStoryAppend(s, who, kindStage, msg)
 						return fmt.Sprintf("sprint #%d %s", id, msg), nil
 					}
-					weaveStoryAppend(s, weaveConductorName(""), "system", msg)
+					weaveStoryAppend(s, weaveConductorName(""), kindStage, msg)
 					return fmt.Sprintf("sprint #%d %s", id, msg), nil
 				})
 				if err != nil {

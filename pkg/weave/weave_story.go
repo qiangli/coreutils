@@ -372,6 +372,9 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 func NewSprintCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var epic string
+	// ONE switch for the whole tree rather than a flag per stage verb: the
+	// thing being turned off is a property of the seat, not of a command.
+	announce := true
 	cmd := &cobra.Command{
 		Use:   "sprint",
 		Short: "Plan/handoff: the cross-repo sprint kanban above weave's per-repo runs",
@@ -395,6 +398,16 @@ for each story it advances:
   Story-ID: d1e86f29d7a7
 
 Install the local fail-closed guard with ` + "`bashy sprint hooks install`" + `.
+
+TELL THE OTHER MANAGERS. Several sprints run at once on one host against
+shared repos and a shared gate, so a stage change — created, moved, started,
+stopped, ended, taken, handed off, aborted — is posted to the message board
+under the 'sprint' topic. Declare that concern with
+'bashy bus subscribe --topic sprint' to see every one of them uncapped.
+Only real TRANSITIONS announce: re-taking a lease you already hold, a
+checkpoint and a comment do not, so a conductor recovering in a loop does
+not fill the board. '--announce=false' turns it off, and a failed post never
+fails the state change it was reporting.
 The subject remains a normal conventional-commit summary; the trailers are
 the authoritative trace from delivered code back to sprint work.
 
@@ -498,6 +511,9 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 	// surface, not an interactive human shell (mirrors NewWeaveCmd).
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().StringVar(&epic, "epic", "", "filter to one epic")
+	cmd.PersistentFlags().BoolVar(&announce, "announce", true,
+		"post this sprint's stage changes to the message board (also $BASHY_SPRINT_ANNOUNCE=0)")
+	cobra.OnInitialize(func() { announceEnabled = announce })
 	flags.attach(cmd)
 
 	// SELF-REPORTING STRUCTURAL ERRORS — the same two installs NewWeaveCmd
@@ -638,7 +654,7 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column 
 			Execution: sprintExecution{PriorityFirst: true},
 			Created:   time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		}
-		weaveStoryAppend(s, "conductor", "system", fmt.Sprintf("created in %s", column))
+		weaveStoryAppend(s, "conductor", kindStage, fmt.Sprintf("created in %s", column))
 		q.Stories = append(q.Stories, s)
 		return nil
 	})
@@ -809,7 +825,7 @@ func newWeaveStoryMoveCmd() *cobra.Command {
 				if sprintColumnOpen(from) && !sprintColumnOpen(col) {
 					_ = closeSprintRoom(s, weaveStoryConductorName(s, ""))
 				}
-				weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", fmt.Sprintf("moved %s → %s", from, col))
+				weaveStoryAppend(s, weaveStoryConductorName(s, ""), kindStage, fmt.Sprintf("moved %s → %s", from, col))
 				return fmt.Sprintf("sprint #%d %s → %s", id, from, col), nil
 			})
 		},
@@ -957,13 +973,13 @@ you still gate, converge and report.`,
 					}
 					switch {
 					case free:
-						weaveStoryAppend(s, who, "system", "took conductor lease (was unclaimed)")
+						weaveStoryAppend(s, who, kindStage, "took conductor lease (was unclaimed)")
 					case stale:
-						weaveStoryAppend(s, who, "system", fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
+						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("took STALE conductor lease from %s (recovery)", prev))
 					case prev == who:
-						weaveStoryAppend(s, who, "system", "resumed own conductor lease and delivery stream")
+						weaveStoryAppend(s, who, kindSystem, "resumed own conductor lease and delivery stream")
 					default:
-						weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
+						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("force-took conductor lease from %s", prev))
 					}
 					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(id, who), brief), nil
 				})
@@ -1037,7 +1053,7 @@ close the cadence, end when the sprint is finished.`,
 				// stranger's cold start with no brief. That is why the lease is
 				// a heartbeat; the brief follows the same reasoning.
 				s.Continuity = message + sprintStateAddendum(s)
-				weaveStoryAppend(s, who, "system", "handed off — released conductor lease"+roomNote)
+				weaveStoryAppend(s, who, kindStage, "handed off — released conductor lease"+roomNote)
 				s.Lease = nil
 				return fmt.Sprintf("sprint #%d: lease released; continuity recorded for the next conductor", id), nil
 			})
@@ -1097,7 +1113,7 @@ is still running. External managers remain the caller's responsibility.`,
 					}
 					s.Lease = nil
 					s.Column = "backlog"
-					weaveStoryAppend(s, who, "system", fmt.Sprintf("ABORTED — killed %d run(s), cleared lease, parked in backlog", len(killed)))
+					weaveStoryAppend(s, who, kindStage, fmt.Sprintf("ABORTED — killed %d run(s), cleared lease, parked in backlog", len(killed)))
 					msg := fmt.Sprintf("sprint #%d ABORTED — killed [%s]; lease cleared; parked in backlog", id, strings.Join(killed, " "))
 					if len(s.Runs) == 0 {
 						msg = fmt.Sprintf("sprint #%d ABORTED — no linked runs; lease cleared; parked in backlog", id)
@@ -1441,6 +1457,13 @@ func weaveStoryAppend(s *weaveStory, author, kind, body string) {
 	}
 	s.Thread = append(s.Thread, weaveComment{At: time.Now().UTC(), Author: author, Kind: kind, Body: body})
 	s.UpdatedAt = time.Now().UTC()
+	// THE ONE HOOK. Announcing is a projection of this log rather than a post
+	// call in each verb, so a stage verb added later is announced for free and
+	// the board can never disagree with the thread. See sprint_stage_announce.go
+	// for the kind taxonomy and why re-taking your own lease is not a stage.
+	if kind == kindStage {
+		announceStage(s, author, body)
+	}
 }
 
 // weaveStoryDir resolves the USER-GLOBAL sprint board dir
@@ -1506,6 +1529,7 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprint": id, "ok": true}))
 	}
+	reportAnnounceFailure(cmd.ErrOrStderr(), op)
 	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", op, line)
 	return nil
 }

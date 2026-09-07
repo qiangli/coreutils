@@ -3,10 +3,11 @@ id: f1c221d2f05e
 kind: task
 title: 'Sprint status names a manager but cannot say what it is: join the seat to the fleet record'
 seq: 93
-status: todo
+status: done
 priority: p2
 created: 2026-09-07T18:40:25.19013Z
 sprint: 135
+closed: 2026-09-07T19:22:45.425551Z
 ---
 
 OBSERVED 2026-09-07, answering "which sprints are active and who manages them". Both halves exist and NOTHING JOINS THEM, so the operator runs one command per name to finish the answer.
