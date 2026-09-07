@@ -199,6 +199,21 @@ func runLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
 // observable a gate script may already read, and renaming it to match this
 // package would break those scripts for no gain.
 func attestEnv(dir string) []string {
+	return Env(dir)
+}
+
+// Env is attestEnv exported for the OTHER gate executors.
+//
+// Every executor that runs a gate — a command whose exit code becomes a VERDICT
+// — must build its environment here rather than from os.Environ(). The list is
+// an ALLOWLIST on purpose: a denylist is fail-open against variable names that
+// do not exist yet, and the whole point is that a control invented next year
+// cannot silently change what a gate decides. A gate that inherits an ambient
+// control is a verdict whose meaning depends on where it ran.
+//
+// PATH and HOME are preserved because a gate is usually a build or test
+// command; the Go cache variables for the same reason.
+func Env(dir string) []string {
 	keep := []string{"PATH", "HOME", "LANG", "TMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH"}
 	env := make([]string, 0, len(keep)+2)
 	for _, k := range keep {
@@ -216,4 +231,47 @@ func truncateTail(s string, n int) string {
 		return s
 	}
 	return "…(truncated)…\n" + s[len(s)-n:]
+}
+
+// controlPrefixes are the environment namespaces that carry BASHY'S OWN
+// controls — the variables that change what a command DOES rather than what it
+// reports. They are the ones a gate must never inherit.
+var controlPrefixes = []string{"BASHY_", "AGENTIC"}
+
+// ScrubControls removes bashy's control variables from an otherwise inherited
+// environment.
+//
+// It exists for executors that CANNOT use Env: weave's verify runs an arbitrary
+// operator-supplied build or test command, which legitimately needs the wider
+// toolchain environment (GOFLAGS, CGO_ENABLED, SSH_AUTH_SOCK, proxy settings, a
+// compiler's own variables) that no fixed allowlist can enumerate without
+// breaking real commands.
+//
+// The guarantee is deliberately NARROWER than Env's and the difference matters:
+// Env is fail-closed against every unknown name, while this is fail-closed only
+// within the namespaces bashy controls. That is sound for the threat it
+// addresses — an ambient bashy control reaching a gate — because those controls
+// live in a namespace we own, so a new one is caught by prefix without being
+// added here. It is NOT sound against a third-party variable that changes
+// behavior, and callers should prefer Env whenever their gate's environment can
+// actually be enumerated.
+func ScrubControls(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, ok := strings.Cut(kv, "=")
+		if ok && hasControlPrefix(name) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+func hasControlPrefix(name string) bool {
+	for _, p := range controlPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }

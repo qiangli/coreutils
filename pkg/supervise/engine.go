@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	gatepkg "github.com/qiangli/coreutils/pkg/gate"
+
 	"github.com/qiangli/coreutils/pkg/chat"
 )
 
@@ -36,6 +38,11 @@ func runGate(ctx context.Context, cwd, gate string) (pass bool, exit int, tail s
 	defer cancel()
 	cmd := exec.CommandContext(gctx, sh, "-c", gate)
 	cmd.Dir = cwd
+	// A gate's exit code is a VERDICT, so it must not inherit ambient controls:
+	// a gate that behaves differently because of what was set in the shell that
+	// launched it is a verdict whose meaning depends on where it ran. The
+	// allowlist keeps what a build or test command needs and drops the rest.
+	cmd.Env = gatepkg.Env(cwd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf

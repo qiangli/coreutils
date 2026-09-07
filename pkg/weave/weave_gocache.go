@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/qiangli/coreutils/pkg/gate"
 )
 
 const (
@@ -47,6 +49,13 @@ func weaveVerifyEnv(parentEnv []string, workspace, queueDir string, it *weaveIte
 		env = append(env, kv)
 	}
 	env = append(env, "PWD="+workspace)
+	// A verify command's exit code is a VERDICT. It must not inherit bashy's own
+	// controls, or a gate would decide differently depending on the shell that
+	// launched the run. gate.Env's strict allowlist is not usable here: verify
+	// runs an arbitrary operator-supplied build or test command, which needs the
+	// wider toolchain environment no fixed list can enumerate. ScrubControls is
+	// the narrower guarantee that fits — see its doc comment for the difference.
+	env = gate.ScrubControls(env)
 	return weaveApplyManagedGOCache(env, parentEnv, queueDir, it)
 }
 
