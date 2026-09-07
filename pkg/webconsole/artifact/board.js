@@ -87,10 +87,29 @@ function meetHref(kind, ref) {
   return target.href;
 }
 
+// The draft for an EXISTING sprint that has nobody. It carries the sprint's id
+// and title because the agent on the other end has neither, and it names the
+// command that actually installs a manager rather than describing the goal in
+// the abstract. Like every draft on this page it is EDITABLE and is never sent
+// by opening the link.
+function unassignedDraft(sp) {
+  return "Sprint #" + sp.id + " (" + (sp.title || "untitled") +
+    ") has no project manager, so nobody is accountable for it and no name can be addressed. " +
+    "Help me pick a suitable agent from `bashy agents list` and install it with " +
+    "`bashy sprint take " + sp.id + " --owner <agent>`.";
+}
+
 const NEW_SPRINT_DRAFT = "Create a new sprint. Help me define its title, project manager, scope, stories, acceptance criteria, and gate, then use bashy sprint to create and start it.";
 
+// THE COUNTERPART IS CHOSEN, NOT ASSUMED, and that is the whole answer to
+// "which agent does a new sprint talk to". A 1:1 needs a counterpart and a
+// sprint that does not exist yet has no manager by definition — so routing to
+// a steward seat or a hardcoded default would name an agent the operator never
+// picked. `chat=1` opens Chat's agent PICKER and the chosen agent becomes the
+// 1:1, with the draft carried into it intact. The chooser IS the 1:1 path
+// here; what was wrong was the glyph in front of it.
 function newSprintLink() {
-  const a = conversationLink("chat", "1", "Create a new sprint in Chat");
+  const a = conversationLink("chat", "1", "Create a new sprint: chat 1:1 with an agent");
   const target = new URL(a.href);
   target.searchParams.set("draft", NEW_SPRINT_DRAFT);
   a.href = target.href;
@@ -98,6 +117,19 @@ function newSprintLink() {
   a.append(el("span", null, "New sprint"));
   return a;
 }
+
+// THE GLYPH MUST AGREE WITH THE DESTINATION, and it did not.
+//
+// Two marks, and which one applies is a question about the DESTINATION, not
+// about the parameter name. A hash is the channel mark — this page already
+// uses it for "Everyone" in the composer's recipient menu — and a Meet room
+// IS a channel, so `room` keeps it. A speech bubble is the conversation mark.
+//
+// `chat` fell through to the hash because the branch tested only for `dm`. So
+// the one control that starts a CONVERSATION with an agent was drawn as a
+// broadcast marker: the icon said "everyone", the link meant "one agent".
+const CHANNEL_MARK = "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18";
+const CONVERSATION_MARK = "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z";
 
 function conversationLink(kind, ref, label) {
   const a = el("a", "conversation-link");
@@ -113,9 +145,7 @@ function conversationLink(kind, ref, label) {
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", kind === "dm"
-    ? "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"
-    : "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18");
+  path.setAttribute("d", kind === "room" ? CHANNEL_MARK : CONVERSATION_MARK);
   svg.append(path);
   a.append(svg);
   return a;
@@ -397,15 +427,37 @@ function sprintEl(sp, stories) {
   }
   n.append(title);
 
+  // WHO IS ACCOUNTABLE — and an UNOWNED sprint is not a sprint with one less
+  // field, it is a sprint that CANNOT BE ADDRESSED. Rendering absence as
+  // absence hid the single most actionable fact on the card, on the one
+  // surface that sees every sprint at once.
+  //
+  // Three states, and they are not two: an owned sprint names its manager, a
+  // STALE lease names a manager nothing is currently driving, and an unowned
+  // sprint names nobody. The stale label was already here and keeps its own
+  // wording — a dead conductor is not the same problem as no conductor.
   const manager = sp.manager || sp.conductor || sp.lease_holder;
+  const meta = el("div", "meta manager" + (manager ? "" : " unassigned"));
   if (manager) {
-    const meta = el("div", "meta manager");
     meta.append(document.createTextNode(
       (sp.lease_stale ? "lease STALE — " : "project manager ") + manager,
     ));
     meta.append(conversationLink("dm", manager, "Chat 1:1 with " + manager));
-    n.append(meta);
+  } else {
+    meta.append(document.createTextNode("project manager — unassigned"));
+    // The same control as New sprint, for the same reason: staffing a sprint
+    // is a conversation with an agent, and the operator should not have to
+    // leave the board to have it. chat=1 opens Chat's picker, so the
+    // counterpart is CHOSEN rather than assumed — this sprint has no manager
+    // by definition, so there is nobody to address yet.
+    const a = conversationLink("chat", "1", "Assign a project manager to sprint " + sp.id);
+    const target = new URL(a.href);
+    target.searchParams.set("draft", unassignedDraft(sp));
+    a.href = target.href;
+    a.classList.add("assign-manager-link");
+    meta.append(a);
   }
+  n.append(meta);
 
   const refs = sp.run_refs || [];
   if (refs.length) n.append(runRefsEl(refs));

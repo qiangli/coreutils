@@ -663,6 +663,10 @@ body.standalone #bar { flex: none; }
    visible keyboard focus ring. */
 .bd-sprint .sprint-title,
 .bd-sprint .manager { display: flex; align-items: center; gap: .35rem; min-width: 0; }
+/* An unowned sprint reads as a GAP, not as decoration. It reuses the card's
+   own "needs attention" colour rather than introducing a palette, so it sorts
+   visually with the other things asking for a decision. */
+.bd-sprint .manager.unassigned { color: var(--warn); font-style: italic; }
 .bd-sprint .sprint-title .label { flex: 1; min-width: 0; }
 .bd-sprint .conversation-link {
   flex: none; display: inline-flex; align-items: center; justify-content: center;

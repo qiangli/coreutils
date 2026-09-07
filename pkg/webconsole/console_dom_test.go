@@ -949,6 +949,17 @@ func TestDOMFilesFollowsTheConsoleTheme(t *testing.T) {
 	}
 }
 
+// stubBoardWith serves ONE caller-supplied board, for the cases whose subject
+// is a board shape the default fixture does not have — an unowned sprint, a
+// story in a particular state. It is the same seam stubBoard uses; only the
+// payload differs.
+func stubBoardWith(t *testing.T, make func() *board.Board) {
+	t.Helper()
+	orig := collectBoardFn
+	t.Cleanup(func() { collectBoardFn = orig })
+	collectBoardFn = func(context.Context) (*board.Board, error) { return make(), nil }
+}
+
 // stubBoard makes the Sprint page deterministic: one live sprint carrying two
 // open and two closed stories. Without it these assertions would be about
 // whatever the developer's host happens to be working on.
@@ -1027,6 +1038,128 @@ func TestDOMSprintLinksToItsMeetRoomAndManagerChat(t *testing.T) {
 	}
 	if !strings.HasPrefix(newSprintDraft, "Create a new sprint.") {
 		t.Errorf("new sprint draft = %q", newSprintDraft)
+	}
+}
+
+// THE GLYPH MUST AGREE WITH THE DESTINATION.
+//
+// The regression this pins: conversationLink drew the speech bubble only when
+// kind was exactly "dm", so the "chat" kind fell through to the hash — the
+// same mark the composer uses for "Everyone". The one control that starts a
+// conversation with a single agent was drawn as a broadcast marker.
+//
+// Asserting on the path DATA rather than on a class, because a class can be
+// right while the shape is wrong, and the shape is the thing a reader sees.
+func TestDOMConversationMarksMatchTheirDestinations(t *testing.T) {
+	stubBoard(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	const (
+		channel      = "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"
+		conversation = "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"
+	)
+	var roomMark, dmMark, newSprintMark, newSprintLabel, newSprintHref string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`document.querySelector('.sprint-title .conversation-link path')?.getAttribute('d') || ''`, &roomMark),
+		chromedp.Evaluate(`document.querySelector('.manager .conversation-link path')?.getAttribute('d') || ''`, &dmMark),
+		chromedp.Evaluate(`document.querySelector('#bd-sprints .new-sprint-link path')?.getAttribute('d') || ''`, &newSprintMark),
+		chromedp.Evaluate(`document.querySelector('#bd-sprints .new-sprint-link')?.getAttribute('aria-label') || ''`, &newSprintLabel),
+		chromedp.Evaluate(`document.querySelector('#bd-sprints .new-sprint-link')?.href || ''`, &newSprintHref),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "conversation marks", errs())
+
+	// A Meet room IS a channel, so it keeps the channel mark.
+	if roomMark != channel {
+		t.Errorf("sprint room mark = %q, want the channel mark", roomMark)
+	}
+	// A manager chat is one agent.
+	if dmMark != conversation {
+		t.Errorf("manager chat mark = %q, want the conversation mark", dmMark)
+	}
+	// THE DEFECT: this one was the channel mark.
+	if newSprintMark != conversation {
+		t.Errorf("new sprint mark = %q, want the conversation mark", newSprintMark)
+	}
+	// And the label says which of the two it is, so the mark is not the only
+	// thing carrying it.
+	if !strings.Contains(newSprintLabel, "1:1") {
+		t.Errorf("new sprint label = %q, want it to name the 1:1", newSprintLabel)
+	}
+	// The destination is unchanged and still carries the draft: chat=1 opens
+	// Chat's agent picker, and the chosen agent becomes the 1:1.
+	if !strings.Contains(newSprintHref, "/meet/?chat=1&draft=") {
+		t.Errorf("new sprint href = %q", newSprintHref)
+	}
+}
+
+// AN UNOWNED SPRINT MUST SAY SO, and must offer the way out.
+//
+// The regression this pins: sprintEl appended the manager row only `if
+// (manager)`, so absence rendered as absence. `bashy sprint show` calls the
+// same state "UNREACHABLE: no owner — nobody is accountable and no name can be
+// addressed"; the card rendered nothing at all, on the one surface that sees
+// every sprint at once.
+//
+// The fixture carries BOTH an owned and an unowned sprint, because the failure
+// mode of a fix here is flattening the two into one treatment.
+func TestDOMUnownedSprintSaysSoAndOffersToStaffIt(t *testing.T) {
+	stubBoardWith(t, func() *board.Board {
+		return &board.Board{
+			SchemaVersion: board.SchemaVersion, Role: "steward", Scope: "machine-global",
+			Title: "Bashy Steward Board", GeneratedAt: time.Now().UTC(),
+			Sprints: []board.Sprint{
+				{ID: 7, Title: "An owned sprint", Column: "doing", Manager: "project-agent"},
+				{ID: 8, Title: "An unowned sprint", Column: "backlog"},
+			},
+		}
+	})
+	base, ctx, errs := domEnv(t, Options{})
+
+	var owned, unowned, assignHref, assignLabel, assignDraft, assignMark string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`document.querySelectorAll('.bd-sprint')[0]?.querySelector('.manager')?.textContent || ''`, &owned),
+		chromedp.Evaluate(`document.querySelectorAll('.bd-sprint')[1]?.querySelector('.manager')?.textContent || ''`, &unowned),
+		chromedp.Evaluate(`document.querySelector('.manager.unassigned .assign-manager-link')?.href || ''`, &assignHref),
+		chromedp.Evaluate(`document.querySelector('.manager.unassigned .assign-manager-link')?.getAttribute('aria-label') || ''`, &assignLabel),
+		chromedp.Evaluate(`document.querySelector('.manager.unassigned .assign-manager-link') ? new URL(document.querySelector('.manager.unassigned .assign-manager-link').href).searchParams.get('draft') || '' : ''`, &assignDraft),
+		chromedp.Evaluate(`document.querySelector('.manager.unassigned .assign-manager-link path')?.getAttribute('d') || ''`, &assignMark),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "unowned sprint", errs())
+
+	// The owned card is UNCHANGED. A fix that makes every card say something
+	// about its manager has not distinguished the two states.
+	if !strings.Contains(owned, "project manager project-agent") {
+		t.Errorf("owned manager line = %q", owned)
+	}
+	if strings.Contains(owned, "unassigned") {
+		t.Errorf("owned card claims to be unassigned: %q", owned)
+	}
+	// THE DEFECT: this row did not exist.
+	if !strings.Contains(unowned, "project manager — unassigned") {
+		t.Errorf("unowned manager line = %q, want it to state the gap", unowned)
+	}
+	// And it offers the way out, as a conversation rather than a channel.
+	if !strings.Contains(assignHref, "/meet/?chat=1&draft=") {
+		t.Errorf("assign href = %q", assignHref)
+	}
+	if !strings.Contains(assignLabel, "sprint 8") {
+		t.Errorf("assign label = %q, want it to name the sprint", assignLabel)
+	}
+	// The draft carries the sprint the agent is being asked about — it has no
+	// other way to know which one — and stays editable.
+	if !strings.Contains(assignDraft, "#8") || !strings.Contains(assignDraft, "An unowned sprint") {
+		t.Errorf("assign draft = %q, want it to name sprint 8", assignDraft)
+	}
+	if assignMark != "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" {
+		t.Errorf("assign mark = %q, want the conversation mark", assignMark)
 	}
 }
 
