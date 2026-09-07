@@ -3,6 +3,8 @@
 package chat
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -20,6 +22,8 @@ func setProcessGroup(cmd *exec.Cmd) {
 	}
 	cmd.SysProcAttr.CreationFlags |= syscall.CREATE_NEW_PROCESS_GROUP
 }
+
+func processTreeGone(err error) bool { return errors.Is(err, os.ErrProcessDone) }
 
 func killProcessTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {

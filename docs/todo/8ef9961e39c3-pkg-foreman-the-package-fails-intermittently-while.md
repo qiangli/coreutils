@@ -3,10 +3,11 @@ id: 8ef9961e39c3
 kind: task
 title: 'pkg/foreman: the PACKAGE fails intermittently while every test in it passes'
 seq: 21
-status: todo
+status: done
 priority: p2
 created: 2026-09-01T14:31:46.174722Z
 sprint: 137
+closed: 2026-09-07T23:16:39.06021Z
 ---
 
 `pkg/foreman TestServeControlStopCancelsActiveTurn` failed on ubuntu-latest in
@@ -33,3 +34,64 @@ disposition.
 
 The POSIX half of this story (cmds/dd status output, a conformance rule on a
 certified utility) was split out to 5db8d65e under the POSIX cert sprint.
+
+## Sprint 137 investigation and implementation
+
+The audit started outside the test bodies. `pkg/foreman` has no `TestMain` or
+package exit check. `ServeControl` closed its listener but did not join its
+lifetime watcher, accepted connection handlers, or the detached
+`Apply`/`saveState` workers. Closing a listener also leaves already accepted
+connections open, so idle handlers remained blocked in `Scanner.Scan`.
+
+Two controlled regressions reproduce the lifetime defect against the unchanged
+implementation: `TestServeControlJoinsCancelledTurn` holds a cancelled runner in
+its cleanup and observes `ServeControl` return while the turn still owns session
+state; `TestServeControlClosesIdleConnections` completes a protocol exchange and
+then observes its accepted socket survive server shutdown. Both fail without
+retries. Late turn persistence can race a caller tearing down the session store
+(in tests, `TempDir` cleanup); this is a concrete ownership defect, even when an
+individual test's assertions have finished successfully.
+
+The historical evidence is narrower than the story's local report: Actions run
+33518958296 retained only a ratchet summary naming
+`TestServeControlStopCancelsActiveTurn` as a failing **test**, without its raw
+failure output. The current unmodified implementation passed 200 repetitions of
+that test locally. We therefore cannot establish the exact cause of either
+historical failure from those records alone, and do not claim to have reproduced
+the historical package-only output.
+
+`ServeControl` now cancels and joins all work it starts, closes accepted sockets,
+and waits for final state persistence before returning. Its handler remains
+counted while it launches a turn, preventing a WaitGroup Add/Wait gap. Commands
+queued behind an active turn check cancellation under the state lock before
+mutating it. A stop ACK is attempted before socket teardown with a 100 ms write
+bound; an unread ACK cannot suppress cancellation. The new unread-ACK regression
+uses an unbuffered `net.Pipe`, so that backpressure condition is deterministic.
+An injected Runner must honor its context and complete cleanup; Go cannot safely
+force an arbitrary caller-provided goroutine to terminate.
+
+Validation in the isolated worktree: the two lifecycle regressions failed before
+the implementation. Final race-enabled stress passed 100 repetitions of all
+eight control/cancellation regressions (800 test PASS events and package PASS).
+The full package passed with `-race`; Linux and Windows package vet passed.
+Evidence files are retained under the umbrella's ignored `.agents/sprint137/`:
+`foreman-regression-red.log`, `foreman-before.json`,
+`foreman-after-control.json`, and `foreman-race.log`.
+No retry was added inside a test and no baseline entry was added. Story closure
+is pending Sprint 137 integration gates and CI evidence.
+
+
+## Closure verification — 2026-09-07
+
+Actions run [34168966573](https://github.com/qiangli/coreutils/actions/runs/34168966573)
+passed the complete macOS, Ubuntu, and Windows legs on delivery commit b1e900e4.
+The owner downloaded both Unix process-lifecycle JSON artifacts: each contains
+150 passing events (15 tests, 10 repetitions each), no failing events, and ten
+passes of both TestCancelKillsDescendants and
+TestServeControlStopCancelsActiveTurn. Local verification also passed 234
+ordinary affected-package tests, 150 race-enabled lifecycle cases, and the full
+crossvet scope. No baseline was added; the chat entry was deleted.
+
+Closure addresses the independently reproduced lifecycle defects described
+above. It does not claim that the historical logs identify an exact signal
+branch or fully reconstruct the original intermittent event.

@@ -436,11 +436,11 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// session leader to own the terminal), Setsid and Setpgid together are invalid,
 	// and agentpty.Run already does its own tree teardown.
 	setProcessGroup(cmd)
-	// Replace CommandContext's default cancel — Process.Kill, which is exactly one
-	// pid — with a group kill. Without it, a wedged agent's shell/MCP grandchildren
-	// survive the deadline still holding the stdout pipe, and the turn runs past
-	// its budget while they orphan.
-	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	// Own cancellation until Wait finishes draining the pipes. os/exec's context
+	// watcher stops when the direct child exits, even if descendants still hold
+	// those pipes. waitForProcessTree below also retries a successful group kill:
+	// on macOS a concurrent fork can miss the kernel's membership snapshot.
+	cmd.Cancel = nil
 
 	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on
 	// stdout; CLI chrome (banners, warnings, progress) goes to stderr and would
@@ -484,14 +484,17 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	if startErr != nil {
 		return "", 127, startErr
 	}
-	err := cmd.Wait()
+	err := waitForProcessTree(ctx, cmd, func() error { return killProcessTree(cmd) })
 	if parentGuard != nil {
 		parentGuard.Disarm()
 	}
 	NoteCoach(coach, nil)
 	out := stdout.String()
 	if ctx.Err() != nil {
-		return appendStderr(out, stderr.String()), 124, ctx.Err()
+		if !errors.Is(err, ctx.Err()) {
+			err = errors.Join(ctx.Err(), err)
+		}
+		return appendStderr(out, stderr.String()), 124, err
 	}
 	if err == nil {
 		return out, 0, nil

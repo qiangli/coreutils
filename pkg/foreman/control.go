@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
@@ -19,6 +20,9 @@ import (
 // socket calls but cannot run them, so callers must refuse before mutating work.
 func ControlSupported() bool { return runtime.GOOS != "windows" }
 
+// ServeControl serves commands until cancellation, stop, or the runtime bound.
+// It joins accepted turns before returning, including their state persistence.
+// An injected Runner must honor context cancellation and finish its cleanup.
 func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 	if !ControlSupported() {
 		return fmt.Errorf("foreman: managed control sessions are not supported on native Windows")
@@ -41,16 +45,38 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 	if err != nil {
 		return err
 	}
+	// The listener, watcher, connections, and accepted turns share one lifetime.
+	// Merely closing the listener leaves handlers in Scan and turns persisting
+	// state after ServeControl's caller has started tearing down the store.
+	var workers sync.WaitGroup
+	var connsMu sync.Mutex
+	conns := make(map[net.Conn]struct{})
+	watchDone := make(chan struct{})
+	watchExited := make(chan struct{})
+	go func() {
+		defer close(watchExited)
+		s.watchControlLifetime(serveCtx, cancel, ln, watchDone, initial.Deadline, initial.MaxRuntime)
+	}()
 	defer func() {
+		cancel()
+		close(watchDone)
 		_ = ln.Close()
+		connsMu.Lock()
+		for conn := range conns {
+			_ = conn.Close()
+		}
+		connsMu.Unlock()
+		workers.Wait()
+		<-watchExited
 		_ = os.Remove(path)
 	}()
 	if ready != nil {
-		ready <- path
+		select {
+		case ready <- path:
+		case <-serveCtx.Done():
+			return nil
+		}
 	}
-	watchDone := make(chan struct{})
-	defer close(watchDone)
-	go s.watchControlLifetime(serveCtx, cancel, ln, watchDone, initial.Deadline, initial.MaxRuntime)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -63,7 +89,19 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 		// for all of it. Handling connections inline meant the listener stopped
 		// accepting the moment an agent started working — so the one time you most
 		// need to say "stop, wrong file", the socket would not even take the call.
-		go s.handleControlConn(serveCtx, conn)
+		connsMu.Lock()
+		conns[conn] = struct{}{}
+		connsMu.Unlock()
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer func() {
+				connsMu.Lock()
+				delete(conns, conn)
+				connsMu.Unlock()
+			}()
+			s.handleControlConn(serveCtx, conn, &workers)
+		}()
 	}
 }
 
@@ -111,10 +149,13 @@ func (s *Session) markStopped(status, reason string) {
 	s.persistLocked()
 }
 
-func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
+func (s *Session) handleControlConn(ctx context.Context, conn net.Conn, workers *sync.WaitGroup) {
 	defer conn.Close()
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
 		var cmd Command
 		if err := json.Unmarshal(sc.Bytes(), &cmd); err != nil {
 			fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", err.Error())
@@ -164,9 +205,12 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 		// until the agent had already finished. Wake the lifetime watcher through
 		// its independent channel so it cancels the process tree immediately.
 		if strings.EqualFold(strings.TrimSpace(cmd.Verb), CommandStop) {
-			s.requestStop("stopped by operator")
+			// Publish the ACK before cancellation closes accepted connections, but
+			// a peer that stops reading must not withhold stop from the watcher.
+			_ = conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 			fmt.Fprintln(conn, `{"ok":true,"accepted":true}`)
-			continue
+			s.requestStop("stopped by operator")
+			return
 		}
 
 		// No live agent: this command STARTS a turn, which can take many minutes.
@@ -176,7 +220,11 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 		// The outcome lands in state.json (status / steering / steer_why_not), which
 		// is where `foreman status` reads it from, and is the honest place for it: a
 		// 3-second ack could never have carried the result of a ten-minute turn.
+		// This handler remains counted until after Add, so shutdown cannot see
+		// zero workers while a handler is still able to launch another turn.
+		workers.Add(1)
 		go func(cmd Command) {
+			defer workers.Done()
 			if err := s.Apply(ctx, cmd); err != nil {
 				_ = s.saveState()
 				return

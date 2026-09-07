@@ -3,6 +3,8 @@
 package chat
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"syscall"
 )
@@ -44,15 +46,24 @@ func setProcessGroup(cmd *exec.Cmd) {
 // wall-clock spent on a process that is by definition not responding.
 //
 // Falls back to killing the bare pid when the group is unavailable (the child
-// raced us and exited, or Setpgid did not take), so the caller never ends up
-// with no kill at all.
+// raced us and exited, or was launched without its own group), so the caller
+// never ends up with no kill at all. Preserve the group error even when the
+// fallback succeeds, because a pid kill says nothing about descendants.
 func killProcessTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
 	pid := cmd.Process.Pid
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err == nil {
+	groupErr := syscall.Kill(-pid, syscall.SIGKILL)
+	if groupErr == nil {
 		return nil
 	}
-	return cmd.Process.Kill()
+	pidErr := cmd.Process.Kill()
+	if pidErr == nil {
+		return fmt.Errorf("kill process group %d: %w (fallback kill pid succeeded)", pid, groupErr)
+	}
+	return errors.Join(fmt.Errorf("kill process group %d: %w", pid, groupErr),
+		fmt.Errorf("fallback kill pid %d: %w", pid, pidErr))
 }
+
+func processTreeGone(err error) bool { return errors.Is(err, syscall.ESRCH) }
