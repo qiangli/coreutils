@@ -6,7 +6,7 @@ seq: 96
 status: todo
 priority: p3
 created: 2026-09-07T19:27:40.311501Z
-sprint: 136
+sprint: 139
 ---
 
 SPLIT OUT OF 365ed78773c4 on 2026-09-07, with the rest of that story delivered. This is its point 1, held back for a reason that is not effort.
