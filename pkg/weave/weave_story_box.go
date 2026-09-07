@@ -58,6 +58,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/fleet"
+
 	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -726,8 +728,83 @@ func newSprintExtendCmd() *cobra.Command {
 // It reads, and changes nothing. A steward deciding to stop or extend does that
 // deliberately, per sprint; a status view that also acted would make the survey
 // and the intervention the same keystroke.
+// managerAgent is a lease holder JOINED to the fleet record that says what it
+// IS. The sprint stores a NAME and only a name — deliberately, because pinning
+// a binding into the sprint would rot the moment the agent is re-bound — so the
+// binding is resolved at read time from the catalog that owns it.
+//
+// An UNRESOLVABLE holder is a FINDING, not a blank. A sprint whose manager is
+// not in the fleet is precisely the state an operator must see: the name was
+// mistyped, the agent was removed, or the seat was taken by something nothing
+// can push to. The row keeps its name and says the join failed.
+type managerAgent struct {
+	Name     string `json:"name"`
+	Resolved bool   `json:"resolved"`
+	Tool     string `json:"tool,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Binding  string `json:"binding,omitempty"`
+	Band     int    `json:"band,omitempty"`
+	Nick     string `json:"nick,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// resolveManager is a CATALOG READ and nothing more.
+//
+// It must not probe: `sprint tick` already states the cost — a probe is a real
+// headless turn per row, and installed is NOT signed in. It must not write:
+// `sprint status` reports and changes nothing, so resolution can never become a
+// liveness signal for a seat nobody is driving.
+func resolveManager(cat *fleet.Catalog, name string) *managerAgent {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	m := &managerAgent{Name: name}
+	a, ok := cat.Agent(name)
+	if !ok {
+		m.Reason = "not in the fleet — `bashy agents list` does not name it"
+		return m
+	}
+	m.Resolved = true
+	m.Tool, m.Model, m.Binding, m.Nick = a.Tool, a.Model, a.MatrixKey(), a.NickName()
+	// The band is the MODEL's peg, inherited — an agent never carries its own,
+	// except a cascade, whose served band is its contract.
+	if a.BandSource == fleet.BandCascade && a.Band > 0 {
+		m.Band = a.Band
+	} else if _, _, mod, err := cat.Binding(a.Name); err == nil {
+		m.Band = mod.Band
+	}
+	return m
+}
+
+// label renders the join for the text view, in one short parenthetical that
+// says which of the three states this is.
+func (m *managerAgent) label() string {
+	if m == nil {
+		return ""
+	}
+	if !m.Resolved {
+		return "  (UNRESOLVED: " + m.Reason + ")"
+	}
+	parts := m.Binding
+	if m.Band > 0 {
+		parts += " L" + strconv.Itoa(m.Band)
+	}
+	if m.Nick != "" && !strings.EqualFold(m.Nick, m.Name) {
+		parts += " · " + m.Nick
+	}
+	return "  (" + parts + ")"
+}
+
 func newSprintStatusCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	// WHY A FLAG IN TEXT AND ALWAYS-ON IN JSON. The envelope is consumed by
+	// tools, where an extra object is free and additive. The text view is
+	// width-constrained and the holder line already carries a name, a liveness
+	// mark and a contact string; a binding on every row by default would push
+	// the contact off a normal terminal. So JSON always answers "what is this
+	// manager", and the terminal answers it when asked.
+	var withAgents bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Every sprint on this host: what is on the clock, what is over, what is idle",
@@ -762,7 +839,14 @@ func newSprintStatusCmd() *cobra.Command {
 				Holder  string `json:"lease_holder,omitempty"`
 				Contact string `json:"contact,omitempty"`
 				Stale   bool   `json:"lease_stale,omitempty"`
+				// Agent is the holder joined to its fleet record; nil when the
+				// sprint is unowned. Always present in JSON, so a consumer never
+				// has to make a second lookup per row.
+				Agent *managerAgent `json:"agent,omitempty"`
 			}
+			// ONE catalog for the whole sweep. Building it per row would re-read
+			// every asset file once per sprint.
+			cat := fleet.New()
 			// ONE CONDUCTOR IS ACCOUNTABLE FOR EVERY IN-PROGRESS SPRINT — that
 			// is the rule `start` enforces by claiming the lease. But a lease
 			// is a heartbeat with a TTL, so it can go STALE while the box is
@@ -782,6 +866,7 @@ func newSprintStatusCmd() *cobra.Command {
 				}
 				r := row{ID: s.ID, Title: s.Title, Epic: s.Epic, Column: s.Column,
 					Status: s.lastBox().Status(now), Cycles: len(s.Boxes), Contact: s.Contact.String(), Overdue: s.currentBox().Overdue(now), Holder: h, Stale: stale}
+				r.Agent = resolveManager(cat, h)
 				switch {
 				case s.currentBox().Running() && (stale || free):
 					orphaned = append(orphaned, r)
@@ -821,6 +906,9 @@ func newSprintStatusCmd() *cobra.Command {
 						mark = "STALE"
 					}
 					lease = fmt.Sprintf("  [%s %s]", r.Holder, mark)
+					if withAgents {
+						lease += r.Agent.label()
+					}
 				}
 				st := ""
 				if r.Status != "" {
@@ -885,6 +973,8 @@ func newSprintStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&withAgents, "agents", false,
+		"resolve each manager to its fleet record (tool:model, band); always present in --json")
 	flags.attach(cmd)
 	return cmd
 }
