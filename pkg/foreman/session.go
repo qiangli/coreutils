@@ -273,6 +273,12 @@ func (s *Session) record(role, target, text string) error {
 func (s *Session) Apply(ctx context.Context, cmd Command) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// An accepted control command may have queued behind an active turn when
+	// shutdown cancelled its context. Do not start it or overwrite terminal
+	// state after that turn releases the lock.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(cmd.Verb)) {
 	case CommandTell:
 		if strings.TrimSpace(cmd.Message) == "" {
