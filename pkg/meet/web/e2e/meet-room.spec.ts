@@ -666,24 +666,16 @@ async function selectRecipient(page: Page, name: string) {
   await page.getByRole("menuitem", { name: new RegExp(name) }).click();
 }
 
-/** openMeet opens the app with the SEND HOLD OFF.
+/** openMeet opens the app.
  *
- * The composer holds a clicked message for a few seconds before dispatching
- * it, so that cancelling can truthfully mean "not sent". Every test below is
- * about something else, and paying that hold per message would make the suite
- * slow and its assertions racy against the hold rather than against the room.
- * The hold has its own tests, which ask for it explicitly — see openMeetHolding.
+ * There is no `hold` parameter any more. The composer used to withhold a
+ * clicked message for a few seconds so that a cancel could truthfully say
+ * "not sent", and every test that was about something else had to switch that
+ * off. The send is plain again (story e9f5d325eded), so opening the app is
+ * just opening the app.
  */
 async function openMeet(page: Page) {
-  await page.goto(`${baseURL}/?mock=0&hold=0`);
-  await expect(page.getByText("bashymeet", { exact: true })).toBeVisible();
-}
-
-/** openMeetHolding opens the app with a send hold, for the tests that are about
- * it. The window is passed explicitly rather than relying on the default so a
- * change to that default cannot silently make these tests flaky. */
-async function openMeetHolding(page: Page, ms: number) {
-  await page.goto(`${baseURL}/?mock=0&hold=${ms}`);
+  await page.goto(`${baseURL}/?mock=0`);
   await expect(page.getByText("bashymeet", { exact: true })).toBeVisible();
 }
 
@@ -804,141 +796,74 @@ function unique(prefix: string) {
   return `${prefix} ${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-// --- Taking a message back ---------------------------------------------------
+// --- The send is plain -------------------------------------------------------
 
-// IN TIME: the message never went out, and the sender gets their text back.
+// THE GATE FOR STORY e9f5d325eded. A hold-then-cancel-then-recall machine sat
+// on this control and never worked; it is removed, and these are the
+// assertions that keep it removed.
 //
-// This is the branch that can honestly say "not sent", and it can only say it
-// because nothing has left the browser yet — an aborted request would prove
-// nothing, since the server may have committed a microsecond earlier. The test
-// therefore asserts on the ROOM as well as on the banner: a UI that said
-// "canceled" over a message that reached the transcript would be the exact lie
-// the design exists to prevent.
-test("cancelling during the hold sends nothing and restores the text", async ({ page }) => {
-  const topic = unique("Browser cancel room");
-  const message = unique("never actually sent");
-  await openMeetHolding(page, 5_000);
+// The point is not that the old controls are absent from one render — it is
+// that the send path no longer has a state in which they could appear. So the
+// test sends TWICE and checks after each: the second send is what caught the
+// original defect, where a delivered message left a pending record behind and
+// the composer refused everything typed after it.
+test("sending is one act: no hold, no cancel, no recall", async ({ page }) => {
+  const topic = unique("Browser plain send room");
+  const first = unique("the first message");
+  const second = unique("the second message");
+  await openMeet(page);
   await createRoomFromUI(page, topic, primaryAgent);
-
   await selectRecipient(page, "Everyone");
-  await page.getByLabel("Message the room").fill(message);
-  await page.getByRole("button", { name: "Send message" }).click();
 
-  // While it is held, the SEND button is the CANCEL button and says so.
-  const cancel = page.getByRole("button", { name: /^Cancel send/ });
-  await expect(cancel).toBeVisible();
-  await expect(page.getByText(/Sending in \d+s · click to cancel/)).toBeVisible();
-  await cancel.click();
-
-  await expect(page.getByText("Canceled — the message was not sent.")).toBeVisible();
-  // The text comes back for editing rather than being lost, and the room never
-  // saw it — before OR after a reload, which is what rules out a UI that merely
-  // hid what it had already sent.
-  await expect(page.getByLabel("Message the room")).toHaveValue(message);
-  // Scoped to the TRANSCRIPT, not the page: the composer legitimately holds
-  // this text now, and a page-wide search would match the textarea it was
-  // restored into — passing the moment the feature broke the other way.
-  const inRoom = page.locator("article").filter({ hasText: message });
-  await expect(inRoom).toHaveCount(0);
-  await page.reload();
-  await expect(page.locator("article").filter({ hasText: message })).toHaveCount(0);
-});
-
-// THE SECOND MESSAGE. The hold leaves a record of the delivered message behind
-// so it can still be recalled, and that record used to outlive its usefulness:
-// nothing ever cleared it, so the send button stayed a Recall button and the
-// hook refused every later send — silently, after the composer had already
-// emptied the box. One message per page load, and the text of the second one
-// gone. The whole suite missed it because every other test runs with hold=0,
-// where no such record is kept, and the two hold tests each send exactly once.
-//
-// So this test sends TWICE with the hold on, and asserts on the ROOM: a
-// composer that merely looked willing while dropping the message would pass a
-// button-state check.
-test("a second message sends after the first was delivered", async ({ page }) => {
-  const topic = unique("Browser two-message room");
-  const first = unique("the first thing said");
-  const second = unique("and the second thing");
-  await openMeetHolding(page, 500);
-  await createRoomFromUI(page, topic, primaryAgent);
-
-  await selectRecipient(page, "Everyone");
-  const box = page.getByLabel("Message the room");
-  await box.fill(first);
-  await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator("article").filter({ hasText: first })).toHaveCount(1);
-
-  // Typing hands the one control back: a sender who is writing the next
-  // message has decided not to recall the last one.
-  await box.fill(second);
   const send = page.getByRole("button", { name: "Send message" });
-  await expect(send).toBeEnabled();
+  await page.getByLabel("Message the room").fill(first);
   await send.click();
 
-  await expect(page.locator("article").filter({ hasText: second })).toHaveCount(1);
-  await expect(box).toHaveValue("");
-  // Both survive a reload, which is what rules out a transcript that only
-  // echoed the second message locally.
-  await page.reload();
-  await expect(page.locator("article").filter({ hasText: first })).toHaveCount(1);
-  await expect(page.locator("article").filter({ hasText: second })).toHaveCount(1);
-});
+  // DELIVERED, not held: the message is in the transcript with no countdown in
+  // front of it.
+  await expect(page.getByText(first).first()).toBeVisible();
+  await expect(page.getByText(/Sending in \d+s/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Cancel send/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Recall message" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Post retraction" })).toHaveCount(0);
 
-// THE OFFER EXPIRES ON ITS OWN. A sender who sends one message and then does
-// nothing must not be left holding a Recall button: the control they need next
-// is Send, and nothing but a timer can give it back, since a delivered message
-// produces no further event.
-test("the recall offer expires and the control returns to Send", async ({ page }) => {
-  const topic = unique("Browser recall expiry room");
-  const message = unique("left alone after sending");
-  await openMeetHolding(page, 1);
-  await createRoomFromUI(page, topic, primaryAgent);
-
-  await selectRecipient(page, "Everyone");
-  await page.getByLabel("Message the room").fill(message);
-  await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByRole("button", { name: "Recall message" })).toBeVisible();
-
-  // RECALL_WINDOW_MS is 10s; the box stays empty so the offer is not withdrawn
-  // by typing, which is the other way it ends.
-  await expect(page.getByRole("button", { name: "Recall message" })).toHaveCount(0, {
-    timeout: 20_000,
-  });
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
-});
-
-// TOO LATE: the message is out, so it is withdrawn IN THE ROOM rather than
-// pretended away — and the composer asks first, because a retraction is a
-// permanent record everyone can see.
-test("recalling after the hold posts a retraction beside the message", async ({ page }) => {
-  const topic = unique("Browser retract room");
-  const message = unique("please disregard this");
-  // A hold short enough that the message is already dispatched by the time the
-  // test clicks, which is the state this branch is about.
-  await openMeetHolding(page, 1);
-  await createRoomFromUI(page, topic, primaryAgent);
-
-  await selectRecipient(page, "Everyone");
-  await page.getByLabel("Message the room").fill(message);
-  await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText(message).first()).toBeVisible();
-
-  const recall = page.getByRole("button", { name: "Recall message" });
-  await expect(recall).toBeVisible();
-  await recall.click();
-
-  // The confirm names the consequence rather than asking a bare "are you sure".
-  await expect(page.getByText("Already delivered.")).toBeVisible();
-  await page.getByRole("button", { name: "Post retraction" }).click();
-
+  // ACCEPTED, and said so. "Delivered to everyone" is the honest claim for a
+  // broadcast: it reached every participant's inbox, which is not the same as
+  // anyone having answered.
   await expect(
-    page.getByText(/Too late to unsend — the message was already delivered/),
+    page.getByText(/Delivered to everyone in the room/),
   ).toBeVisible();
-  // BOTH records survive: the withdrawn message stays where it was, marked, and
-  // the retraction sits beside it. Deleting would leave a hole in an
-  // append-only log and tell a reader who saw the original nothing.
-  await expect(page.getByText("Retracted").first()).toBeVisible();
+
+  // THE SECOND MESSAGE. Nothing from the first is still holding the control.
+  await expect(send).toBeVisible();
+  await page.getByLabel("Message the room").fill(second);
+  await send.click();
+  await expect(page.getByText(second).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recall message" })).toHaveCount(0);
+
+  // Both survive a reload: the transcript is the record, and neither message
+  // was withheld, superseded or retracted.
   await page.reload();
+  await expect(page.getByText(first).first()).toBeVisible();
+  await expect(page.getByText(second).first()).toBeVisible();
+  await expect(page.getByText("Retracted")).toHaveCount(0);
+});
+
+// A 1:1 is the other synchronous path, and it carried the same machine. Its
+// accepted indicator is the one that matters most: a Chat turn takes minutes,
+// so between the click and the reply the banner is all the sender has.
+test("a chat send is accepted immediately and shows the reply when it lands", async ({ page }) => {
+  const message = unique("plain chat send");
+  await openMeet(page);
+  await openChat(page, primaryAgent);
+
+  await page.getByLabel(new RegExp(`Message ${primaryAgent}`)).fill(message);
+  await page.getByRole("button", { name: "Send message" }).click();
+
   await expect(page.getByText(message).first()).toBeVisible();
-  await expect(page.getByText("Retracted").first()).toBeVisible();
+  await expect(
+    page.getByText(new RegExp(`Your message to ${primaryAgent} was accepted`)),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Cancel send/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Recall message" })).toHaveCount(0);
 });

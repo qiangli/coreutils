@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { ZodError } from "zod"
 
 import {
@@ -14,8 +14,6 @@ import {
   observeDM,
   postMessage,
   postDM,
-  recall,
-  recallDM,
   runActionJob,
   runAction,
   usingMock,
@@ -34,93 +32,24 @@ import type {
 
 export type ConnectionStatus = "connecting" | "open" | "closed"
 
-/** HOLD_MS is how long a clicked message waits in this browser before it is
- * dispatched.
+/* THE SEND IS PLAIN, AND THAT IS A DECISION.
  *
- * It exists so that "cancel" can mean SOMETHING TRUE. Aborting an in-flight
- * request does not: it cancels the response, never the effect, and the two
- * synchronous send paths — a plain post and a 1:1 — write their record inside
- * that request, so a post-dispatch cancel there is a race the sender loses
- * almost every time. During the hold nothing has left the page, so cancelling
- * is a local fact rather than a claim about the server.
+ * A hold-then-dispatch machine with a cancel and a server-side recall lived
+ * here and did not work. It is removed rather than repaired: story
+ * e9f5d325eded records what came out, and a later sprint owns rebuilding it.
  *
- * Three seconds is the undo-send window: long enough to catch the click you
- * regret the instant you make it, short enough that the pause is not felt as
- * latency. It costs an agent conversation nothing — a turn takes minutes.
+ * The reasoning is worth keeping because whoever rebuilds it will need it.
+ * Aborting an in-flight request cannot mean "not sent": it cancels the
+ * RESPONSE, never the effect, and both synchronous paths — a plain post and a
+ * 1:1 — write their record inside the request, so a post-dispatch cancel is a
+ * race the sender loses. Only a hold before dispatch can promise a message
+ * never left the browser. That is what made the feature expensive: it needed
+ * its own state machine, an expiry timer, a superseding rule for the next
+ * message, and a confirm on the delivered branch but not the held one.
+ *
+ * What replaces it is what the composer actually needs: send, an accepted
+ * indicator, and the response when it arrives.
  */
-export const DEFAULT_HOLD_MS = 3_000
-
-/** RECALL_WINDOW_MS is how long a DELIVERED message stays recallable.
- *
- * It exists because the recall offer and the send button are the same control:
- * an undo that never expires does not just linger, it STRANDS THE COMPOSER —
- * the next message finds a pending send still sitting there and is refused.
- * The window is therefore a property of the UI, not of the server, which will
- * answer "gone" on its own once the message has been read and answered.
- */
-export const RECALL_WINDOW_MS = 10_000
-
-/** holdMs is the hold this page is actually using.
- *
- * Configurable for two different readers. An operator who does not want the
- * pause sets it to 0 and gets the old behaviour — dispatch on click, with a
- * recall afterwards that will usually have to retract. A test sets it on the
- * URL so the suite does not spend three seconds per message proving something
- * else, and so the hold itself can be the subject of a test that asks for it.
- *
- * Storage is per-browser on purpose: how long you want to be able to change
- * your mind is a personal setting, not something to impose on everyone else who
- * opens the same room.
- */
-export function holdMs(): number {
-  const param = new URLSearchParams(window.location.search).get("hold")
-  if (param !== null) {
-    const ms = Number(param)
-    if (Number.isFinite(ms) && ms >= 0) return ms
-  }
-  try {
-    const saved = window.localStorage.getItem("bashy.meet.holdMs")
-    if (saved !== null) {
-      const ms = Number(saved)
-      if (Number.isFinite(ms) && ms >= 0) return ms
-    }
-  } catch (_) {
-    // A browser with storage blocked still has to be able to send a message.
-  }
-  return DEFAULT_HOLD_MS
-}
-
-/** RecallOutcome mirrors the server's verdict vocabulary exactly, plus the one
- * verdict the client may reach on its own — "canceled" during the hold, which
- * it may claim because nothing was sent. */
-export type RecallOutcome = "canceled" | "retracted" | "gone"
-
-/** PendingSend is a message between the click and the delivery.
- *
- * `phase` is the whole state machine: "holding" is ours to withdraw, "sending"
- * and "sent" are the server's to answer for. `job` and `ts` are the handles the
- * server gave us, and which one exists depends on the path — a room's addressed
- * send answers with a job, everything else with a record timestamp.
- */
-export type PendingSend = {
-  phase: "holding" | "sending" | "sent"
-  text: string
-  agent?: string
-  ref: string
-  kind: ConversationKind
-  timer: number
-  until: number
-  job?: string
-  ts?: string
-}
-
-/** stampOf reads the handle off a record the server just returned. */
-function stampOf(event: MeetEvent): string {
-  const ts = event.ts
-  if (typeof ts === "string") return ts
-  if (typeof ts === "number") return new Date(ts).toISOString()
-  return ""
-}
 
 type ConversationKind = "room" | "dm"
 
@@ -167,16 +96,6 @@ export function useMeetRoom() {
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [creating, setCreating] = useState(false)
-  // THE PENDING SEND — the one piece of state that makes a truthful "not sent"
-  // possible. While `phase` is "holding", the message is still in this browser
-  // and cancelling it is a local fact needing no server's permission. Once it
-  // is "sent", only the server can say what a recall achieved, so the handles
-  // it answers with (a job for a room, a record timestamp for a chat) are kept
-  // here for exactly that call.
-  const [pending, setPending] = useState<PendingSend | null>(null)
-  const pendingRef = useRef<PendingSend | null>(null)
-  pendingRef.current = pending
-  const [recalling, setRecalling] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -325,10 +244,9 @@ export function useMeetRoom() {
     }
   }, [selectedRef, selectedKind, observeRevision, debugRaw])
 
-  // dispatch is the send itself, once the hold has expired. It is separate from
-  // `send` so the hold has something to call and the tests have something to
-  // drive; nothing here decides whether to wait.
-  const dispatch = useCallback(
+  // send posts the message and reports what the host said about it. There is
+  // no hold and no pending record: the click sends.
+  const send = useCallback(
     async (text: string, agent?: string) => {
       if (!selectedRef || !state) return
       setSending(true)
@@ -347,8 +265,7 @@ export function useMeetRoom() {
             bytes: 0,
             elapsed_ms: 0,
           })
-          const at = await postDM(selectedRef, text)
-          markSent({ ts: at })
+          await postDM(selectedRef, text)
           setQueued(`Your message to ${selectedRef} was accepted; the reply will appear here.`)
         } else if (agent === ALL_SEATS) {
           // A broadcast is MAIL, not a floor: it lands in every participant's
@@ -356,28 +273,16 @@ export function useMeetRoom() {
           // message is what `meet round` is for, and it is chaired.
           const event = await postMessage(selectedRef, state.human, text, ALL_SEATS)
           setEvents((current) => addUnique(current, event))
-          markSent({ ts: stampOf(event) })
           setQueued("Delivered to everyone in the room. Each participant sees it as their own mail.")
         } else if (agent) {
-          const job = await runActionJob(selectedRef, "address", { agent, text })
-          markSent({ job })
+          await runActionJob(selectedRef, "address", { agent, text })
           setQueued(`Your message to ${agent} was accepted; the reply will appear here.`)
         } else {
           const event = await postMessage(selectedRef, state.human, text)
           setEvents((current) => addUnique(current, event))
-          markSent({ ts: stampOf(event) })
         }
       } catch (reason) {
         if (selectedKind === "dm") setLive(null)
-        // A send that FAILED leaves nothing to recall, so the pending record
-        // must go with it. Leaving it behind stranded the composer on the one
-        // occasion the sender most needs it: the guard in `send` would then
-        // refuse the retry, silently.
-        if (pendingRef.current) {
-          window.clearTimeout(pendingRef.current.timer)
-          pendingRef.current = null
-          setPending(null)
-        }
         if (reason instanceof ApiError && reason.status === 409) {
           setQueued(
             agent
@@ -393,165 +298,6 @@ export function useMeetRoom() {
     },
     [selectedRef, selectedKind, state],
   )
-
-  // send HOLDS first, then dispatches.
-  //
-  // The hold is the only mechanism that can promise a message was not sent,
-  // because during it nothing has left this browser — an aborted request proves
-  // nothing, since the server may have committed a microsecond earlier. It is
-  // also the only thing that gives the two synchronous paths (a plain post and
-  // a 1:1) a cancel at all: both write their record inside the request.
-  const send = useCallback(
-    async (text: string, agent?: string) => {
-      if (!selectedRef || !state) return
-      // Only a message that has not been delivered yet may refuse the next
-      // one. A DELIVERED one is merely still recallable, and writing the next
-      // message is itself the decision not to recall it — so it is superseded,
-      // never allowed to swallow what was typed after it. Refusing here
-      // silently was the bug: the composer had already cleared the box.
-      const inflight = pendingRef.current
-      if (inflight && inflight.phase !== "sent") return
-      if (inflight) {
-        window.clearTimeout(inflight.timer)
-        // The ref too, not just the state: `dispatch` reads it back through
-        // markSent before React has had a chance to re-render, and it must not
-        // find the message this one replaces.
-        pendingRef.current = null
-        setPending(null)
-      }
-      setError(null)
-      setQueued(null)
-      const hold = holdMs()
-      if (hold <= 0) {
-        await dispatch(text, agent)
-        return
-      }
-      const timer = window.setTimeout(() => {
-        setPending((current) =>
-          current && current.phase === "holding"
-            ? { ...current, phase: "sending" }
-            : current,
-        )
-        void dispatch(text, agent)
-      }, hold)
-      setPending({
-        phase: "holding",
-        text,
-        agent,
-        ref: selectedRef,
-        kind: selectedKind,
-        timer,
-        until: Date.now() + hold,
-      })
-    },
-    [dispatch, selectedRef, selectedKind, state],
-  )
-
-  // markSent records the handles the server just gave us. Called from inside
-  // dispatch, at the moment the message stops being ours to withhold.
-  //
-  // It also ARMS THE EXPIRY of the recall offer. Nothing else would ever clear
-  // this state: a delivered message gets no further event, so without a timer
-  // the pending send outlives the conversation — the send button stays a
-  // Recall button forever and every later message is refused by the guard in
-  // `send`. The window is UI-side only; recalling after it has passed is still
-  // possible from the transcript, and the server is the one that decides.
-  function markSent(handle: { job?: string; ts?: string }) {
-    // Guarded on the ref rather than the setter so the no-hold path (which has
-    // no pending send at all) does not arm a timer for a message nobody can
-    // see, and so the updater below stays free of side effects.
-    if (!pendingRef.current) return
-    const timer = window.setTimeout(() => {
-      setPending((now) => (now && now.phase === "sent" ? null : now))
-    }, RECALL_WINDOW_MS)
-    setPending((current) => {
-      if (!current) return current
-      return {
-        ...current,
-        phase: "sent",
-        job: handle.job,
-        ts: handle.ts,
-        timer,
-        until: Date.now() + RECALL_WINDOW_MS,
-      }
-    })
-  }
-
-  // cancelSend is the one control, and it does one of two things depending on
-  // where the message actually is — never on how long ago it was clicked.
-  const cancelSend = useCallback(async (): Promise<RecallOutcome> => {
-    const current = pendingRef.current
-    if (!current) return "gone"
-    if (current.phase === "holding") {
-      // Nothing has been sent, and SAYING SO is half the feature: a control
-      // that silently stops something leaves the sender wondering whether it
-      // went out. This is the only branch allowed to make that claim.
-      window.clearTimeout(current.timer)
-      setPending(null)
-      setError(null)
-      setQueued("Canceled — the message was not sent.")
-      return "canceled"
-    }
-    // The recall was taken before the offer expired; the timer that would have
-    // withdrawn it has nothing left to do.
-    window.clearTimeout(current.timer)
-    setRecalling(true)
-    try {
-      const result =
-        current.kind === "dm"
-          ? await recallDM(current.ref, current.ts ?? "")
-          : await recall(current.ref, { job: current.job, ts: current.ts })
-      setPending(null)
-      if (result.verdict === "retracted") {
-        if (result.event) setEvents((rows) => addUnique(rows, result.event!))
-        if (current.kind === "dm") setLive(null)
-        setQueued(
-          "Too late to unsend — the message was already delivered, so a retraction was posted beside it.",
-        )
-      } else if (result.verdict === "canceled") {
-        if (current.kind === "dm") setLive(null)
-        setQueued("Canceled — the message was not sent.")
-      } else {
-        setQueued(
-          "Nothing to cancel: that message has already been delivered and answered.",
-        )
-      }
-      return result.verdict
-    } catch (reason) {
-      setError(messageFor(reason))
-      return "gone"
-    } finally {
-      setRecalling(false)
-    }
-  }, [])
-
-  // The hold is a live countdown, so the button can show what is left of it.
-  // It is a timer rather than a derived value because nothing else re-renders
-  // while a message waits.
-  const [heldFor, setHeldFor] = useState(0)
-  useEffect(() => {
-    if (!pending || pending.phase !== "holding") {
-      setHeldFor(0)
-      return
-    }
-    const tick = () =>
-      setHeldFor(Math.max(0, Math.ceil((pending.until - Date.now()) / 1000)))
-    tick()
-    const id = window.setInterval(tick, 200)
-    return () => window.clearInterval(id)
-  }, [pending])
-
-  // A pending send belongs to the conversation it was typed in. Switching away
-  // while one is held would otherwise deliver it into a room the sender is no
-  // longer looking at — and cancel would then act on the wrong one.
-  useEffect(() => {
-    const current = pendingRef.current
-    if (current && current.phase === "holding" && current.ref !== selectedRef) {
-      window.clearTimeout(current.timer)
-      void dispatch(current.text, current.agent)
-      setPending(null)
-    }
-  }, [selectedRef, dispatch])
 
   const act = useCallback(
     async (action: string, label: string, body?: unknown) => {
@@ -696,12 +442,6 @@ export function useMeetRoom() {
     error,
     sending,
     send,
-    // The composer needs all three: whether a message is waiting, how long it
-    // has left, and the one control that stops it.
-    pending,
-    heldFor,
-    recalling,
-    cancelSend,
     act,
     createRoom,
     createDM,
