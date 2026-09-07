@@ -1,12 +1,12 @@
 ---
 id: babd0878b511
 kind: task
-title: 'pkg/chat cancel teardown: the test budget IS WaitDelay, and hitting the fallback means the group kill missed a pipe holder'
+title: 'pkg/chat process-tree teardown: the test budget IS WaitDelay, and hitting the fallback means the group kill missed a pipe holder'
 seq: 19
 status: todo
 priority: p1
 created: 2026-09-01T14:02:20.869035Z
-sprint: 129
+sprint: 137
 ---
 
 CI-blocking and INTERMITTENT. macos-latest: PASSED in GitHub Actions run

@@ -49,7 +49,7 @@
 # every permission-based test — use --user, or believe the runner.
 linux github.com/qiangli/coreutils/cmds/mv TestMvNoTargetDirectoryTrailingSlashOnExistingDir
 
-# babd0878b511 — pkg/chat cancel teardown. The test's 5s budget IS
+# babd0878b511 — pkg/chat process-tree teardown. The test's 5s budget IS
 # cmd.WaitDelay, so the test deadline and the implementation's fallback are the
 # same number; reaching the fallback at all means the group kill missed a pipe
 # holder. Observed passing (run 33513814323) and failing (33515325794) on the
