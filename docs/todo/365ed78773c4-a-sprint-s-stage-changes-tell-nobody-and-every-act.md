@@ -3,10 +3,11 @@ id: 365ed78773c4
 kind: task
 title: A sprint's stage changes tell nobody, and 'every active sprint manager' is not an address anyone can write
 seq: 94
-status: todo
+status: done
 priority: p1
 created: 2026-09-07T18:47:58.246197Z
 sprint: 135
+closed: 2026-09-07T19:28:00.73333Z
 ---
 
 RAISED BY THE OPERATOR 2026-09-07 while sprint #135 was taken, then widened in the same conversation: should `sprint take` auto-post to mb so every active sprint manager is notified, or should the help text merely advise it? And the same for handoff, end — EVERY STAGE CHANGE of a sprint.
