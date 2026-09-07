@@ -144,7 +144,12 @@ test("a manager chat deep link creates and opens the durable 1:1", async ({ page
   await expect(page).toHaveURL(new RegExp(`dm=${primaryAgent}`));
 });
 
-test("the New sprint Chat shortcut preserves an editable draft", async ({ page }) => {
+// A DRAFT IS A SUGGESTION, and one keystroke takes it.
+//
+// It used to seed the textarea's value, which made it indistinguishable from
+// typing: already what Enter would send, and an operator who wanted their own
+// message had to select and delete a paragraph somebody else wrote.
+test("a suggested draft is ghost text until Tab accepts it", async ({ page }) => {
   const draft = "Create a new sprint with an explicit project manager.";
   await page.goto(`${baseURL}/?mock=0&chat=1&draft=${encodeURIComponent(draft)}`);
 
@@ -155,7 +160,64 @@ test("the New sprint Chat shortcut preserves an editable draft", async ({ page }
   await expect(choices.first()).toBeVisible();
   await choices.first().click();
   await expect(page.getByRole("tab", { name: /Chat/ })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByLabel(`Message ${primaryAgent}`)).toHaveValue(draft);
+
+  const box = page.getByLabel(`Message ${primaryAgent}`);
+  // NOT A VALUE. The suggestion is offered, not installed.
+  await expect(box).toHaveValue("");
+  await expect(box).toHaveAttribute("placeholder", draft);
+  // And it SAYS it is takeable — a placeholder alone does not tell anyone that.
+  await expect(page.getByText(/press Tab or Space to use it/)).toBeVisible();
+
+  await box.press("Tab");
+  await expect(box).toHaveValue(draft);
+  // Spent: the hint is gone, because there is nothing left to accept.
+  await expect(page.getByText(/press Tab or Space to use it/)).toHaveCount(0);
+});
+
+// SPACE TAKES IT TOO, and typing declines it. The two are one test because the
+// rule that makes Space safe is that there is no ghost once anything is typed.
+test("Space accepts a suggestion, and typing discards it", async ({ page }) => {
+  const draft = "Create a new sprint with an explicit project manager.";
+  await page.goto(`${baseURL}/?mock=0&chat=1&draft=${encodeURIComponent(draft)}`);
+  const choices = page.getByRole("menuitem", { name: new RegExp(primaryAgent) });
+  await expect(choices.first()).toBeVisible();
+  await choices.first().click();
+
+  const box = page.getByLabel(`Message ${primaryAgent}`);
+  await box.press(" ");
+  await expect(box).toHaveValue(draft);
+
+  // A second visit, declined by typing. The ghost does not merge with what was
+  // typed and does not come back when the box is emptied again.
+  await page.goto(`${baseURL}/?mock=0&chat=1&draft=${encodeURIComponent(draft)}`);
+  await expect(choices.first()).toBeVisible();
+  await choices.first().click();
+  const box2 = page.getByLabel(`Message ${primaryAgent}`);
+  await box2.fill("my own words");
+  await expect(box2).toHaveValue("my own words");
+  await box2.fill("");
+  await expect(box2).not.toHaveAttribute("placeholder", draft);
+  // Space is an ordinary character again the moment there is no ghost.
+  await box2.fill("a");
+  await box2.press(" ");
+  await expect(box2).toHaveValue("a ");
+});
+
+// ARRIVING AT A PAGE MUST NEVER SEND. A draft is a draft until a person takes
+// it, and Enter on an unaccepted ghost is not taking it.
+test("Enter on an unaccepted suggestion sends nothing", async ({ page }) => {
+  const draft = "Create a new sprint with an explicit project manager.";
+  await page.goto(`${baseURL}/?mock=0&chat=1&draft=${encodeURIComponent(draft)}`);
+  const choices = page.getByRole("menuitem", { name: new RegExp(primaryAgent) });
+  await expect(choices.first()).toBeVisible();
+  await choices.first().click();
+
+  const box = page.getByLabel(`Message ${primaryAgent}`);
+  await box.press("Enter");
+  await expect(box).toHaveValue("");
+  // Nothing reached the transcript, and the suggestion is still on offer.
+  await expect(page.getByText(draft, { exact: true })).toHaveCount(0);
+  await expect(box).toHaveAttribute("placeholder", draft);
 });
 
 test("creates a room from the sidebar and selects it with one agent seated", async ({ page }) => {

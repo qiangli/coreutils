@@ -57,10 +57,33 @@ export function Composer({
   onSend,
   kind = "room",
 }: ComposerProps) {
-  // A cross-app shortcut may supply an editable starting point. It is a draft,
-  // never an instruction: opening a link must not spend tokens or start work.
-  const [text, setText] = useState(initialDraft)
+  // A DRAFT IS A SUGGESTION, NOT A VALUE, and the difference is the whole
+  // feature. Seeding `text` with it made the suggestion indistinguishable from
+  // typing: it was already what Enter would send, and anyone who wanted to
+  // write their own message had to select and delete a paragraph somebody else
+  // wrote. A suggestion you must erase is a cost, not a help.
+  //
+  // So it lives beside the value. The box starts EMPTY; the suggestion shows as
+  // ghost text and one keystroke takes it.
+  const [text, setText] = useState("")
+  const [suggestion, setSuggestion] = useState(initialDraft)
+  // The ghost is showing only while there is nothing typed. Once the box has
+  // content the suggestion is spent — the operator has answered it.
+  const ghost = !text && suggestion ? suggestion : ""
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // accept turns the ghost into ordinary editable text with the cursor at the
+  // end, and spends the suggestion so it cannot come back over what was typed.
+  function acceptSuggestion() {
+    setText(suggestion)
+    setSuggestion("")
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+  }
 
   const agents = useMemo(
     () => {
@@ -159,6 +182,7 @@ export function Composer({
   }
 
   function mention(agent: Member) {
+    setSuggestion("")
     setText(`@${memberName(agent)} `)
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
@@ -222,8 +246,38 @@ export function Composer({
             aria-label={kind === "dm" ? `Message ${dmAgent || "agent"}` : "Message the room"}
             className="max-h-40 min-h-[56px] resize-none border-0 bg-transparent px-4 pb-2 pt-3.5 text-[14px] leading-6 shadow-none focus-visible:ring-0"
             disabled={!state || state.status === "closed"}
-            onChange={(event) => setText(event.target.value)}
+            aria-describedby={ghost ? "composer-suggestion-hint" : undefined}
+            onChange={(event) => {
+              // TYPING OVERWRITES. The ghost is not a prefix and never merges
+              // with what was typed — the moment there is real input the
+              // suggestion is gone, and emptying the box again does not bring
+              // back a suggestion the sender has already declined.
+              setText(event.target.value)
+              if (suggestion) setSuggestion("")
+            }}
             onKeyDown={(event) => {
+              if (ghost) {
+                // TAB OR SPACE TAKES IT. Both are guarded on the ghost actually
+                // showing, which is why Space stays an ordinary character
+                // everywhere else: there is no ghost once anything is typed.
+                //
+                // Tab is the focus key, and stealing it unconditionally would
+                // trap a keyboard-only operator in the composer. It is
+                // intercepted ONLY here, so with no suggestion Tab still moves
+                // focus and there is always a way out.
+                if (event.key === "Tab" || event.key === " ") {
+                  event.preventDefault()
+                  acceptSuggestion()
+                  return
+                }
+                // ENTER ON AN UNACCEPTED GHOST SENDS NOTHING. Arriving at a page
+                // must never be able to send a message — the draft is a draft
+                // until a person takes it.
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault()
+                  return
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
                 void submit()
@@ -232,13 +286,23 @@ export function Composer({
             placeholder={
               state?.status === "closed"
                 ? "This room is closed"
-                : kind === "dm"
-                  ? `Message @${dmAgent || "agent"}…`
-                  : "Message the room…"
+                : ghost
+                  ? ghost
+                  : kind === "dm"
+                    ? `Message @${dmAgent || "agent"}…`
+                    : "Message the room…"
             }
             ref={textareaRef}
             value={text}
           />
+          {ghost && (
+            <div
+              className="px-4 pb-1 text-[10px] text-muted-foreground"
+              id="composer-suggestion-hint"
+            >
+              Suggested — press Tab or Space to use it, or just start typing.
+            </div>
+          )}
           <div className="flex items-center gap-1.5 px-2.5 pb-2.5">
             {/* WHO THIS GOES TO, in the slot a room keeps its recipient control
                 in — a 1:1 states it, a room chooses it. The name is spelled
