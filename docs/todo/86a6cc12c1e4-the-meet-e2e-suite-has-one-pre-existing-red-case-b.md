@@ -6,7 +6,7 @@ seq: 95
 status: todo
 priority: p2
 created: 2026-09-07T19:02:55.442436Z
-sprint: 135
+sprint: 136
 ---
 
 FOUND while gating story e9f5d325eded on 2026-09-07, and it is NOT a regression from that work.
