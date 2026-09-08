@@ -146,6 +146,25 @@ func (p Post) ForReader(reader string) bool {
 	return p.forReader(reader, newAudienceSnapshot())
 }
 
+// FilterPostsForReader selects the posts that concern reader, preserving their
+// order and leaving posts unchanged. Like Post.ForReader, it includes directed
+// posts and broadcasts and excludes another reader's claimed work offers.
+//
+// Each call resolves each distinct audience at most once, including unavailable
+// or empty rosters. Call it once per read operation: membership is stable across
+// posts with the same selector and refreshes on the next call. It does not
+// advance cursors, claim offers, or record views.
+func FilterPostsForReader(posts []Post, reader string) []Post {
+	audiences := newAudienceSnapshot()
+	var out []Post
+	for _, p := range posts {
+		if p.forReader(reader, audiences) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (p Post) forReader(reader string, audiences audienceSnapshot) bool {
 	if p.Directed(reader) || p.Broadcast() {
 		return true

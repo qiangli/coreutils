@@ -541,3 +541,65 @@ func TestMessageBoard_AudienceSnapshotSharedWithReceipts(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterPostsForReaderPreservesAddressingAndRefreshes(t *testing.T) {
+	boardInTempHome(t)
+	oldSelect := FleetSelect
+	t.Cleanup(func() { FleetSelect = oldSelect })
+	calls := map[Audience]int{}
+	names := []string{"reader"}
+	FleetSelect = func(a Audience) ([]string, error) {
+		calls[a]++
+		if a.Role == "conductor" {
+			return names, nil
+		}
+		return []string{"outsider"}, nil
+	}
+	aud := &Audience{Role: "conductor"}
+	posts := []Post{
+		{Seq: 1, To: "reader", Body: "direct"},
+		{Seq: 2, Body: "broadcast"},
+		{Seq: 3, To: "outsider", Body: "another reader"},
+		{Seq: 4, Audience: aud, Body: "notice"},
+		{Seq: 5, Audience: aud, Body: "second notice"},
+		{Seq: 6, Audience: aud, Mode: ModeAny, Body: "claimed offer"},
+		{Seq: 7, Audience: &Audience{Band: 4}, Body: "another audience"},
+	}
+	if _, granted := ClaimPost(6, "peer"); !granted {
+		t.Fatal("could not seed claimed offer")
+	}
+	got := FilterPostsForReader(posts, "reader")
+	want := []int64{1, 2, 4, 5}
+	if len(got) != len(want) {
+		t.Fatalf("selected posts = %+v", got)
+	}
+	for i, seq := range want {
+		if got[i].Seq != seq {
+			t.Fatalf("selected post %d = %d, want %d", i, got[i].Seq, seq)
+		}
+	}
+	names = []string{"successor"}
+	got = FilterPostsForReader(posts, "reader")
+	if len(got) != 2 || got[0].Seq != 1 || got[1].Seq != 2 {
+		t.Fatalf("after handoff: %+v", got)
+	}
+	for _, selector := range []Audience{*aud, {Band: 4}} {
+		if calls[selector] != 2 {
+			t.Errorf("selector %+v resolved %d times, want once per call", selector, calls[selector])
+		}
+	}
+	for i, p := range posts {
+		if p.Seq != int64(i+1) {
+			t.Fatalf("input posts mutated: %+v", posts)
+		}
+		if viewers := Viewers(p.Seq); len(viewers) != 0 {
+			t.Fatalf("filter recorded views for %d: %v", p.Seq, viewers)
+		}
+	}
+	if SeenSeq("reader") != 0 {
+		t.Fatal("filter consumed the reader cursor")
+	}
+	if holder := ClaimHolder(6); holder != "peer" {
+		t.Fatalf("filter changed claim holder: %q", holder)
+	}
+}
