@@ -3,6 +3,7 @@ package weave
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,5 +97,35 @@ func TestSprintResourceInventoryRejectsFutureCacheAndPrioritizesActive(t *testin
 	}
 	if got.At.Equal(future) || len(got.Sprints) != 256 || got.Sprints[0].ID != 999 || got.Complete {
 		t.Fatalf("future cache or inactive rows hid active work: %+v", got)
+	}
+}
+
+func TestSprintResourceInventoryPrioritizesKnownActiveQueueBeforeDiscoveryCap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store := filepath.Join(home, "sprint")
+	t.Setenv("BASHY_SPRINT_DIR", store)
+	write := func(path string, q weaveQueue) {
+		t.Helper()
+		os.MkdirAll(filepath.Dir(path), 0700)
+		b, _ := json.Marshal(q)
+		if err := os.WriteFile(path, b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := weaveStateRoot(home)
+	for i := 0; i < 70; i++ {
+		write(filepath.Join(root, fmt.Sprintf("old-%03d", i), "queue.json"), weaveQueue{Root: "/old"})
+	}
+	born := time.Now().UTC()
+	write(filepath.Join(root, "active-last", "queue.json"), weaveQueue{Root: "/active", Items: []*weaveItem{{ID: 9, Created: born, State: "working", WrapperPid: 123}}})
+	write(filepath.Join(store, "queue.json"), weaveQueue{Stories: []*weaveStory{{ID: 138, Boxes: []weaveStoryBox{{StartedAt: born}}, Runs: []sprintRun{{Queue: "active-last", ID: 9, Born: born}}}}})
+	got, err := ReadSprintInventory(context.Background(), filepath.Join(home, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Complete || len(got.Workloads) != 1 || got.Workloads[0].Sprint != 138 {
+		t.Fatalf("directory cap hid linked active queue: %+v", got)
 	}
 }

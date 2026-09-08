@@ -159,6 +159,7 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 		return a.UpdatedAt.After(b.UpdatedAt)
 	})
 	linked := map[string]int64{}
+	activeQueues := map[string]bool{}
 	for _, s := range board.Stories {
 		if s == nil {
 			result.Complete = false
@@ -177,6 +178,9 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 		for _, run := range s.Runs {
 			if run.Queue != "" && !run.Born.IsZero() {
 				linked[monitorRunKey(run)] = s.ID
+				if seat.Active {
+					activeQueues[run.Queue] = true
+				}
 			}
 		}
 	}
@@ -203,10 +207,24 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 		if readErr != nil && readErr != io.EOF {
 			result.Complete = false
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
+		queueNames := make([]string, 0, len(activeQueues)+len(entries))
+		for queue := range activeQueues {
+			if filepath.Base(queue) == queue && queue != "." && queue != ".." {
+				queueNames = append(queueNames, queue)
 			}
+		}
+		sort.Strings(queueNames)
+		seenQueues := map[string]bool{}
+		for _, queue := range queueNames {
+			seenQueues[queue] = true
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && !seenQueues[entry.Name()] {
+				queueNames = append(queueNames, entry.Name())
+				seenQueues[entry.Name()] = true
+			}
+		}
+		for _, queueName := range queueNames {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
@@ -214,12 +232,14 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 				result.Complete = false
 				break
 			}
-			queueCount++
 			var q weaveQueue
-			if err := readInventoryJSON(filepath.Join(base, entry.Name(), "queue.json"), &q); err != nil {
-				result.Complete = false
+			if err := readInventoryJSON(filepath.Join(base, queueName, "queue.json"), &q); err != nil {
+				if !os.IsNotExist(err) {
+					result.Complete = false
+				}
 				continue
 			}
+			queueCount++
 			sort.SliceStable(q.Items, func(i, j int) bool {
 				a, b := q.Items[i], q.Items[j]
 				if a == nil {
@@ -246,7 +266,7 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 					result.Complete = false
 					break
 				}
-				run := sprintRun{Repo: filepath.Base(q.Root), Queue: entry.Name(), ID: it.ID, Born: it.Created}
+				run := sprintRun{Repo: filepath.Base(q.Root), Queue: queueName, ID: it.ID, Born: it.Created}
 				id := monitorRunKey(run)
 				row := SprintInventoryWorkload{ID: id, Sprint: linked[id], Run: it.ID, Repo: q.Root, Agent: it.Owner, Tool: it.Tool, Workspace: it.Workspace, PID: it.WrapperPid, StartID: it.WrapperStartID, StartedAt: it.StartedAt, State: it.State}
 				if it.LaunchSpec != nil {
