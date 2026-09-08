@@ -38,8 +38,6 @@ package weave
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -50,11 +48,15 @@ import (
 
 // sprintPruneAction is one thing prune did, or would do.
 type sprintPruneAction struct {
-	Kind   string `json:"kind"` // branch | worktree | workspace | socket | log
-	Repo   string `json:"repo,omitempty"`
-	Target string `json:"target"`
-	Done   bool   `json:"done"`
-	Err    string `json:"error,omitempty"`
+	Kind          string `json:"kind"` // branch | worktree | workspace | socket | log
+	Repo          string `json:"repo,omitempty"`
+	Target        string `json:"target"`
+	Done          bool   `json:"done"`
+	Err           string `json:"error,omitempty"`
+	ExpectedBytes uint64 `json:"expected_bytes"`
+	ActualBytes   uint64 `json:"actual_bytes"`
+	BytesComplete bool   `json:"bytes_complete"`
+	ByteKind      string `json:"byte_kind,omitempty"`
 }
 
 func newWeaveStoryPruneCmd() *cobra.Command {
@@ -152,6 +154,7 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 			"uncovered":    coverage,
 			"reachability": reach,
 			"actions":      actions,
+			"reclaim_plan": sprintPlanRunArtifacts(s),
 		}))
 	}
 
@@ -161,6 +164,11 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 		fmt.Fprintf(out, "  repos: %s\n", strings.Join(hy.Repos, ", "))
 	}
 	renderSprintHygiene(out, hy)
+	if !apply {
+		for _, a := range sprintPlanRunArtifacts(s) {
+			fmt.Fprintf(out, "  estimate %s %s: %d apparent bytes (complete=%t)\n", a.Kind, a.Target, a.ExpectedBytes, a.BytesComplete)
+		}
+	}
 	renderSprintReachability(out, s)
 	for _, c := range coverage {
 		fmt.Fprintf(out, "  UNCOVERED: %s\n", c)
@@ -189,104 +197,23 @@ func runSprintPrune(cmd *cobra.Command, id int64, apply bool, flags *weaveOutput
 // shared thing: a branch that was integrated when we looked may have gained a
 // commit since, and acting on a stale reading is how cleanup deletes work.
 func sprintApplyPrune(s *weaveStory, hy sprintHygiene) []sprintPruneAction {
-	var acts []sprintPruneAction
-	for _, root := range hy.Repos {
-		for _, wt := range gitStaleWorktrees(root) {
-			path := strings.TrimSpace(strings.SplitN(wt, " (", 2)[0])
-			a := sprintPruneAction{Kind: "worktree", Repo: root, Target: path}
-			if out, err := exec.Command("git", "-C", root, "worktree", "remove", "--force", path).CombinedOutput(); err != nil {
-				// A worktree whose directory vanished is removed by prune, not
-				// by remove; try that before reporting a failure.
-				if perr := exec.Command("git", "-C", root, "worktree", "prune").Run(); perr != nil {
-					a.Err = strings.TrimSpace(string(out))
-				} else {
-					a.Done = true
-				}
-			} else {
-				a.Done = true
-			}
-			acts = append(acts, a)
-		}
-		for _, br := range gitIntegratedBranches(root) {
-			a := sprintPruneAction{Kind: "branch", Repo: root, Target: br}
-			// Re-prove integration under current refs before deleting.
-			if !gitBranchIntegrated(root, weaveBaseBranch(root), br) {
-				a.Err = "no longer fully integrated — left alone"
-				acts = append(acts, a)
-				continue
-			}
-			// -d, never -D: git's own refusal is the last line of defence, and
-			// a force delete would discard exactly the case this guards.
-			if out, err := exec.Command("git", "-C", root, "branch", "-d", br).CombinedOutput(); err != nil {
-				a.Err = strings.TrimSpace(string(out))
-			} else {
-				a.Done = true
-			}
-			acts = append(acts, a)
-		}
-	}
-	acts = append(acts, sprintPruneRunArtifacts(s)...)
-	return acts
+	// Repository-wide stale worktrees and integrated branches are observations,
+	// not proof of this sprint's ownership. Only explicit linked run artifacts
+	// are eligible for mutation; a competitor's checkout is never swept.
+	return sprintPruneRunArtifacts(s)
 }
 
-// sprintPruneRunArtifacts reclaims host state left by terminal runs.
 func sprintPruneRunArtifacts(s *weaveStory) []sprintPruneAction {
 	var acts []sprintPruneAction
+	if s == nil {
+		return acts
+	}
 	for _, run := range s.Runs {
 		dir, err := weaveQueueDirForSprintRun(run)
 		if err != nil {
 			continue
 		}
-		q, err := loadWeaveQueue(dir)
-		if err != nil {
-			continue
-		}
-		root, ok := weaveRepoRootForQueue(dir)
-		if !ok {
-			continue
-		}
-		base := weaveBaseBranch(root)
-		for _, it := range q.Items {
-			if it.ID != run.ID || !weavePrunableForSweep(it.State, false) {
-				continue
-			}
-			// REFUSE TO REMOVE WORK THAT HAS NOWHERE ELSE TO LIVE. Same rule
-			// the per-repo sweep already enforces, restated here because this
-			// path reaches the workspace directly.
-			if it.UnmergedCommits > 0 || !weaveItemMerged(root, base, it) {
-				continue
-			}
-			if it.Workspace != "" {
-				if _, serr := os.Stat(it.Workspace); serr == nil {
-					a := sprintPruneAction{Kind: "workspace", Repo: run.Repo, Target: it.Workspace}
-					// Containment-checked: the path must live under this
-					// queue's workspaces/ dir. A cleanup verb holding an
-					// absolute path from a record is exactly where an
-					// unchecked RemoveAll becomes a catastrophe.
-					if rerr := safeRemoveWorkspace(dir, it.Workspace); rerr != nil {
-						a.Err = rerr.Error()
-					} else {
-						a.Done = true
-					}
-					acts = append(acts, a)
-				}
-			}
-			for kind, path := range map[string]string{"socket": it.CtlSock, "log": it.LogPath} {
-				if path == "" {
-					continue
-				}
-				if _, serr := os.Stat(path); serr != nil {
-					continue
-				}
-				a := sprintPruneAction{Kind: kind, Repo: run.Repo, Target: path}
-				if rerr := os.Remove(path); rerr != nil {
-					a.Err = rerr.Error()
-				} else {
-					a.Done = true
-				}
-				acts = append(acts, a)
-			}
-		}
+		acts = append(acts, weavePruneOwnedRun(dir, run.ID, run.Repo, run.Born)...)
 	}
 	return acts
 }
@@ -345,7 +272,7 @@ func runSprintPruneAll(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) 
 				"sprint": s.ID, "title": s.Title, "clean": clean,
 				"repos": hy.Repos, "problems": hy.Problems,
 				"reclaimable": hy.Reclaimable, "uncovered": coverage,
-				"reachability": reach, "actions": actions,
+				"reachability": reach, "actions": actions, "reclaim_plan": sprintPlanRunArtifacts(s),
 			})
 			continue
 		}

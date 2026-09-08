@@ -271,8 +271,13 @@ type weaveItem struct {
 	// from there to the whole subagent process group). Set when
 	// state flips to working; cleared on terminal state. Used by
 	// `weave abandon` for precise SIGTERM instead of pkill-by-name.
-	WrapperPid     int    `json:"wrapper_pid,omitempty"`
-	WrapperStartID string `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
+	WrapperPid               int    `json:"wrapper_pid,omitempty"`
+	WrapperStartID           string `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
+	PauseRequestedBy         string `json:"pause_requested_by,omitempty"`
+	PauseReason              string `json:"pause_reason,omitempty"`
+	ResourceTerminated       bool   `json:"resource_terminated,omitempty"`
+	ResourceReservationID    string `json:"resource_reservation_id,omitempty"`
+	ResourceReservationOwner string `json:"resource_reservation_owner,omitempty"`
 	// Stale is computed at read time by `weave list` (never
 	// persisted): state is "working" but the recorded wrapper PID
 	// is no longer alive — the wrapper crashed or was killed
@@ -2633,22 +2638,56 @@ func runWeavePause(cmd *cobra.Command, reason string, flags *weaveOutputFlags) e
 	dir, _ := weaveQueueDir(root)
 
 	type target struct {
-		id  int64
-		pid int
+		id      int64
+		pid     int
+		startID string
 	}
 	var targets []target
 	targetIDs := map[int64]bool{}
 	if q, err := loadWeaveQueue(dir); err == nil {
 		for _, it := range q.Items {
-			if it.State == "working" {
-				targets = append(targets, target{id: it.ID, pid: it.WrapperPid})
+			if it.State == "working" && weaveControlOwned(dir, q, it) {
+				if err := weaveVerifiedWrapper(cmd.Context(), it); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "weave pause: run #%d skipped: %v\n", it.ID, err)
+					continue
+				}
+				targets = append(targets, target{id: it.ID, pid: it.WrapperPid, startID: it.WrapperStartID})
 				targetIDs[it.ID] = true
 			}
 		}
 	}
+	// Persist explicit owner intent before signalling. The wrapper checkpoints
+	// and acknowledges paused only after its owned child exits.
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		for _, t := range targets {
+			it := findWeaveItem(q, t.id)
+			if it == nil || it.WrapperPid != t.pid || it.WrapperStartID != t.startID || !weaveControlOwned(dir, q, it) {
+				delete(targetIDs, t.id)
+				continue
+			}
+			it.PauseRequestedBy, _ = weaveConductorIdentity("")
+			it.PauseReason = reason
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	for _, t := range targets {
+		if !targetIDs[t.id] {
+			continue
+		}
 		if t.pid > 0 && pidAlive(t.pid) {
-			weaveStopWrapper(t.pid)
+			if err := weaveStopVerifiedWrapper(cmd.Context(), t.pid, t.startID, func() bool {
+				q, e := loadWeaveQueue(dir)
+				if e != nil {
+					return false
+				}
+				it := findWeaveItem(q, t.id)
+				return it != nil && it.State == "paused" && it.WrapperStartID == t.startID && it.PauseRequestedBy != ""
+			}); err != nil {
+				delete(targetIDs, t.id)
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave pause: run #%d retained: %v\n", t.id, err)
+			}
 		}
 	}
 
@@ -2657,7 +2696,7 @@ func runWeavePause(cmd *cobra.Command, reason string, flags *weaveOutputFlags) e
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		if l, ok, err := loadWeaveAutopilotLease(dir); err != nil {
 			return err
-		} else if ok {
+		} else if actor, known := weaveConductorIdentity(""); ok && known && actor == l.Holder {
 			releasedLease = &l
 			q.PausedOrchestratorLease = &l
 			if err := os.Remove(weaveAutopilotLeasePath(dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -2665,7 +2704,20 @@ func runWeavePause(cmd *cobra.Command, reason string, flags *weaveOutputFlags) e
 			}
 		}
 		for _, it := range q.Items {
-			if !targetIDs[it.ID] {
+			if !targetIDs[it.ID] || !weaveControlOwned(dir, q, it) {
+				continue
+			}
+			if it.State == "paused" && it.WrapperPid == 0 && it.PauseRequestedBy != "" {
+				results = append(results, weavePauseResult{Issue: it.ID, Tool: it.Tool, Head: it.Head, State: "paused", Reason: it.PauseReason})
+				continue
+			}
+			matched := false
+			for _, t := range targets {
+				if t.id == it.ID && t.pid == it.WrapperPid && t.startID == it.WrapperStartID {
+					matched = true
+				}
+			}
+			if !matched || pidAlive(it.WrapperPid) {
 				continue
 			}
 			alreadyDead := it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
@@ -2678,6 +2730,7 @@ func runWeavePause(cmd *cobra.Command, reason string, flags *weaveOutputFlags) e
 			it.State = "paused"
 			it.Head = head
 			it.WrapperPid = 0
+			it.WrapperStartID = ""
 			it.CtlSock = ""
 			results = append(results, weavePauseResult{
 				Issue:       it.ID,
@@ -2730,7 +2783,7 @@ func runWeaveResume(cmd *cobra.Command, issueID int64, flags *weaveOutputFlags) 
 		if issueID > 0 && findWeaveItem(q, issueID) == nil {
 			return fmt.Errorf("run #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))
 		}
-		if q.PausedOrchestratorLease != nil {
+		if actor, known := weaveConductorIdentity(""); q.PausedOrchestratorLease != nil && known && actor == q.PausedOrchestratorLease.Holder {
 			l := *q.PausedOrchestratorLease
 			now := time.Now().UTC()
 			ttl := l.ExpiresAt.Sub(l.HeartbeatAt)
@@ -2750,7 +2803,7 @@ func runWeaveResume(cmd *cobra.Command, issueID int64, flags *weaveOutputFlags) 
 			if issueID > 0 && it.ID != issueID {
 				continue
 			}
-			if it.State == "paused" {
+			if it.State == "paused" && weaveControlOwned(dir, q, it) {
 				cp := *it
 				paused = append(paused, &cp)
 			}
@@ -3236,12 +3289,43 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				weavecli.ExitStateConflict, fmt.Errorf("--resume: workspace missing on disk: %s", it.Workspace)))
 		}
 	}
+	// The wrapper owns the lifecycle lock and reservation before provisioning.
+	// A detached launcher merely starts this process; it owns no capacity.
+	lifecycle, admissionErr := weaveRunLifecycleLock(dir, it.ID)
+	if admissionErr != nil {
+		return fmt.Errorf("run #%d is active or being reclaimed: %w", it.ID, admissionErr)
+	}
+	defer lifecycle.Release()
+	memoryDemand, admissionErr := parseWeaveMemLimit(opts.memLimit)
+	if admissionErr != nil {
+		return admissionErr
+	}
+	admissionModel, admissionAgent := "", ""
+	if launchSpec != nil {
+		admissionModel, admissionAgent = launchSpec.Model, launchSpec.Agent
+	}
+	admission, admissionErr := beginWeaveAdmission(cmd.Context(), weaveResourceHooks(cmd.Context()), WeaveResourceDemand{
+		Run: filepath.Join(dir, strconv.FormatInt(it.ID, 10)), Queue: dir, Model: admissionModel, Agent: admissionAgent, Workspace: it.Workspace, MemoryBytes: uint64(memoryDemand),
+	})
+	if admissionErr != nil {
+		return admissionErr
+	}
+	if opts.ptyMode() == "never" {
+		stopSignals := weaveWatchPlainTermination(admission.cancel)
+		defer stopSignals()
+	}
+	childLaunched, childTerminated := false, false
+	defer func() {
+		if err := admission.finish(childTerminated, childLaunched); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", err)
+		}
+	}()
 	base := weaveBaseBranch(root)
 	// Snapshot the actual source commit before provisioning. `--branch main`
 	// resolves through the clone's shared refs and can silently select a newer
 	// main than a detached conductor checkout. A run's base is a commit, not a
 	// moving branch name.
-	baseOut, baseErr := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	baseOut, baseErr := exec.CommandContext(admission.ctx, "git", "-C", root, "rev-parse", "HEAD").Output()
 	if baseErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, fmt.Errorf("resolve source HEAD: %w", baseErr)))
@@ -3292,6 +3376,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			prevOwner := freshIt.Owner
 			freshIt.WrapperPid = os.Getpid()
+			weaveRecordAdmission(freshIt, admission)
 			// Flip back to working and clear the stale terminal
 			// record — otherwise `weave list` shows failed while an
 			// agent is actively running and `weave wait` returns
@@ -3369,6 +3454,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// allocation into durable failure instead of advertising a phantom
 			// worker forever.
 			freshIt.WrapperPid = os.Getpid()
+			weaveRecordAdmission(freshIt, admission)
 			it = freshIt
 			return nil
 		}); err != nil {
@@ -3396,7 +3482,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// clone, the workspace has its own `.git`; refs and HEAD
 			// can't cross the boundary, and a wandering agent hits a
 			// different git repo entirely.
-			gw := exec.Command("git", "clone", "--local", "--no-hardlinks", "--no-checkout", root, workspace)
+			gw := exec.CommandContext(admission.ctx, "git", "clone", "--local", "--no-hardlinks", "--no-checkout", root, workspace)
 			gw.Stdout = cmd.OutOrStdout()
 			gw.Stderr = cmd.ErrOrStderr()
 			if err := gw.Run(); err != nil {
@@ -3405,7 +3491,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					weavecli.ExitGenericFail, fmt.Errorf("git clone --local --no-hardlinks: %w", err)))
 			}
 			// Check out the per-issue agent branch in the clone.
-			ck := exec.Command("git", "-C", workspace, "checkout", "-b", branch, baseSHA)
+			ck := exec.CommandContext(admission.ctx, "git", "-C", workspace, "checkout", "-b", branch, baseSHA)
 			ck.Stdout = cmd.OutOrStdout()
 			ck.Stderr = cmd.ErrOrStderr()
 			if err := ck.Run(); err != nil {
@@ -3419,7 +3505,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// origin repo's master directly. Nothing in the weave flow
 			// needs the remote — `weave pull` fetches FROM the workspace
 			// path into the user's repo, never the other way around.
-			_ = exec.Command("git", "-C", workspace, "remote", "remove", "origin").Run()
+			_ = exec.CommandContext(admission.ctx, "git", "-C", workspace, "remote", "remove", "origin").Run()
 			// Scrub reflogs: `git clone` records "clone: from <abs
 			// origin path>" in .git/logs/HEAD — the breadcrumb the
 			// second workspace escape had available after the remote
@@ -3438,6 +3524,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				}
 				return nil
 			})
+			if err := admission.ctx.Err(); err != nil {
+				return err
+			}
 			if err := weaveHydrateSubmodules(root, workspace, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("hydrate submodules: %w", err))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
@@ -3479,7 +3568,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			{"user.name", fmt.Sprintf("agent-weave-issue-%d", it.ID)},
 			{"user.email", fmt.Sprintf("agent-weave-issue-%d@ycode.local", it.ID)},
 		} {
-			_ = exec.Command("git", "-C", workspace, "config", kv[0], kv[1]).Run()
+			_ = exec.CommandContext(admission.ctx, "git", "-C", workspace, "config", kv[0], kv[1]).Run()
 		}
 		// Lock around the state=working transition so concurrent
 		// `weave start --issue N` invocations targeting different
@@ -3500,6 +3589,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.Workspace = workspace
 			freshIt.Branch = branch
 			freshIt.WrapperPid = os.Getpid()
+			weaveRecordAdmission(freshIt, admission)
 			freshIt.CtlSock = ctlSock
 			freshIt.StartedAt = time.Now().UTC()
 			// Isolation baseline: fingerprint the live checkout NOW, so a
@@ -3534,7 +3624,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitStateConflict, lockErr))
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed (continuing): %v\n", lockErr)
+			return fmt.Errorf("weave start: queue write failed: %w", lockErr)
 		}
 		weaveDeliverOwnerNotices(dir)
 	}
@@ -3590,7 +3680,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if err := weaveApplyTrustPreseed(workspace, trustLaunch.Preseed); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: trust preseed failed (continuing): %v\n", err)
 	}
-	ctx, span := telemetry.Tracer().Start(context.Background(), "weave.run")
+	ctx, span := telemetry.Tracer().Start(admission.ctx, "weave.run")
 	defer span.End()
 
 	carrier := propagation.MapCarrier{}
@@ -3609,7 +3699,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, err))
 	}
-	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
+	tool := exec.CommandContext(admission.ctx, toolArgs[0], toolArgs[1:]...)
+	weaveConfigureOwnedCancellation(tool)
+	if opts.ptyMode() == "never" {
+		weavePrepareOwnedChild(tool)
+	}
 	tool.Dir = workspace
 	tool.Env = env
 
@@ -3729,6 +3823,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		tool.Stdin = os.Stdin
 		tool.Stdout = stdoutCapture
 		tool.Stderr = stderrCapture
+		childLaunched = true
 		runErr = tool.Run()
 		if err := stdoutCapture.Close(); runErr == nil && err != nil {
 			runErr = fmt.Errorf("flush redacted tool stdout: %w", err)
@@ -3750,6 +3845,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// (no user input source); stdout/stderr go to the PTY
 			// master which we copy to logFile.
 			logCapture := captureRedaction.Writer(logFile)
+			childLaunched = true
 			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, logCapture, guards)
 			if err := logCapture.Close(); runErr == nil && err != nil {
 				runErr = fmt.Errorf("flush redacted PTY log: %w", err)
@@ -3759,6 +3855,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 		} else {
 			// Interactive TTY pass-through.
+			childLaunched = true
 			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, nil, guards)
 		}
 	}
@@ -3770,6 +3867,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// pattern) don't clobber each other's terminal-state updates.
 	// We re-load inside the lock to pick up any updates that
 	// landed while the tool was running.
+	childLaunched = tool.Process != nil
+	childTerminated = weaveOwnedChildTerminated(tool)
 	finishedAt := time.Now().UTC()
 	// Measure the branch outside the lock: this is the substrate
 	// evidence for the terminal state. A non-zero exit (crash,
@@ -3848,6 +3947,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			it = freshIt
 			return nil
 		}
+		freshIt.ResourceTerminated = childTerminated
 		freshIt.FinishedAt = finishedAt
 		freshIt.ExitCode = &exitCode
 		freshIt.KilledBy = killReason
@@ -3877,6 +3977,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.LogPath = logPath
 		}
 		freshIt.State = weaveTerminalState(exitCode, runErr, killReason, ev)
+		if freshIt.PauseRequestedBy != "" {
+			freshIt.State = "paused"
+			weaveAppendComment(freshIt, freshIt.PauseRequestedBy, "system", "paused with progress preserved: "+freshIt.PauseReason)
+		}
 		weaveQueueOwnerNotice(dir, freshQ, freshIt, "run-terminal")
 		if freshIt.State == "killed" {
 			// Signal death (watchdog, weave kill escalation, external
