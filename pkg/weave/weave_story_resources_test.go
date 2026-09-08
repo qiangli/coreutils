@@ -68,3 +68,33 @@ func TestSprintResourceOwnerFenceRefusesFormerOwner(t *testing.T) {
 		t.Fatal("observation changed lease")
 	}
 }
+
+func TestSprintResourceInventoryRejectsFutureCacheAndPrioritizesActive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store := filepath.Join(home, "sprint")
+	t.Setenv("BASHY_SPRINT_DIR", store)
+	cache := filepath.Join(home, "cache")
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	b, _ := json.Marshal(SprintInventory{At: future, ExpiresAt: future.Add(time.Hour), Complete: true})
+	os.WriteFile(filepath.Join(cache, "sprint-inventory.json"), b, 0600)
+	board := weaveQueue{Stories: []*weaveStory{nil}}
+	for i := int64(1); i <= 300; i++ {
+		board.Stories = append(board.Stories, &weaveStory{ID: i})
+	}
+	board.Stories = append(board.Stories, &weaveStory{ID: 999, Owner: "active", Boxes: []weaveStoryBox{{StartedAt: time.Now()}}})
+	os.MkdirAll(store, 0700)
+	b, _ = json.Marshal(board)
+	os.WriteFile(filepath.Join(store, "queue.json"), b, 0600)
+	got, err := ReadSprintInventory(context.Background(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.At.Equal(future) || len(got.Sprints) != 256 || got.Sprints[0].ID != 999 || got.Complete {
+		t.Fatalf("future cache or inactive rows hid active work: %+v", got)
+	}
+}

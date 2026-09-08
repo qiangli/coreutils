@@ -40,6 +40,19 @@ func WithSprintResources(provider SprintResourceProvider) SprintOption {
 			ctx = context.Background()
 		}
 		cmd.SetContext(context.WithValue(ctx, sprintResourceContextKey{}, provider))
+		var install func(*cobra.Command)
+		install = func(c *cobra.Command) {
+			if original := c.RunE; original != nil {
+				c.RunE = func(c *cobra.Command, args []string) error {
+					c.SetContext(context.WithValue(c.Context(), sprintResourceContextKey{}, provider))
+					return original(c, args)
+				}
+			}
+			for _, child := range c.Commands() {
+				install(child)
+			}
+		}
+		install(cmd)
 	}
 }
 func sprintResources(cmd *cobra.Command, id int64) SprintResourceSummary {
@@ -102,7 +115,7 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 	}
 	path := filepath.Join(cacheDir, "sprint-inventory.json")
 	var cached SprintInventory
-	if err := readInventoryJSON(path, &cached); err == nil && time.Now().Before(cached.ExpiresAt) {
+	if err := readInventoryJSON(path, &cached); err == nil && !time.Now().Before(cached.At) && time.Now().Before(cached.ExpiresAt) {
 		return &cached, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -118,7 +131,7 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 		return nil, err
 	}
 	defer lock.Release()
-	if err := readInventoryJSON(path, &cached); err == nil && time.Now().Before(cached.ExpiresAt) {
+	if err := readInventoryJSON(path, &cached); err == nil && !time.Now().Before(cached.At) && time.Now().Before(cached.ExpiresAt) {
 		return &cached, nil
 	}
 	result := &SprintInventory{At: time.Now().UTC(), Complete: true}
@@ -132,8 +145,25 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 	if err := readInventoryJSON(filepath.Join(store, "queue.json"), &board); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	sort.SliceStable(board.Stories, func(i, j int) bool {
+		a, b := board.Stories[i], board.Stories[j]
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		if a.currentBox().Running() != b.currentBox().Running() {
+			return a.currentBox().Running()
+		}
+		return a.UpdatedAt.After(b.UpdatedAt)
+	})
 	linked := map[string]int64{}
 	for _, s := range board.Stories {
+		if s == nil {
+			result.Complete = false
+			continue
+		}
 		if len(result.Sprints) >= 256 {
 			result.Complete = false
 			result.Warnings = append(result.Warnings, "sprint inventory row limit reached")
@@ -166,6 +196,9 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 			continue
 		}
 		entries, readErr := f.ReadDir(65)
+		if len(entries) >= 65 {
+			result.Complete = false
+		}
 		f.Close()
 		if readErr != nil && readErr != io.EOF {
 			result.Complete = false
@@ -187,7 +220,25 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 				result.Complete = false
 				continue
 			}
+			sort.SliceStable(q.Items, func(i, j int) bool {
+				a, b := q.Items[i], q.Items[j]
+				if a == nil {
+					return false
+				}
+				if b == nil {
+					return true
+				}
+				activeA, activeB := a.WrapperPid > 0 || a.State == "working", b.WrapperPid > 0 || b.State == "working"
+				if activeA != activeB {
+					return activeA
+				}
+				return a.StartedAt.After(b.StartedAt)
+			})
 			for _, it := range q.Items {
+				if it == nil {
+					result.Complete = false
+					continue
+				}
 				if isTerminalState(it.State) || (it.State == "todo" && it.WrapperPid == 0) {
 					continue
 				}

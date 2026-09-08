@@ -20,6 +20,11 @@ import (
 // socket calls but cannot run them, so callers must refuse before mutating work.
 func ControlSupported() bool { return runtime.GOOS != "windows" }
 
+// ObserveSession is a host-composed, non-inference observation lifetime. Its
+// worker must not require Session.mu, which is held while the manager is busy.
+// The returned stop function cancels and joins observation without ending work.
+var ObserveSession func(context.Context, string, string) func()
+
 // ServeControl serves commands until cancellation, stop, or the runtime bound.
 // It joins accepted turns before returning, including their state persistence.
 // An injected Runner must honor context cancellation and finish its cleanup.
@@ -70,6 +75,11 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 		<-watchExited
 		_ = os.Remove(path)
 	}()
+	if ObserveSession != nil {
+		if stop := ObserveSession(serveCtx, initial.ID, initial.Agent); stop != nil {
+			defer stop()
+		}
+	}
 	if ready != nil {
 		select {
 		case ready <- path:

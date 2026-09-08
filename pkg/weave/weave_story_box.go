@@ -898,10 +898,12 @@ func newSprintStatusCmd() *cobra.Command {
 			if mode == weavecli.OutputJSON {
 				return ec(emitOK(cmd.OutOrStdout(), mode, "sprint status", map[string]any{
 					"now": now, "overdue": over, "on_clock": onClock, "idle": idle, "stopped": done, "unowned_delivery": orphaned,
+					"resources": sprintResources(cmd, 0),
 				}))
 			}
 
 			out := cmd.OutOrStdout()
+			renderSprintResources(out, sprintResources(cmd, 0))
 			line := func(r row) {
 				lease := "  [unowned]"
 				if r.Holder != "" {

@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -154,11 +155,28 @@ func UpdateAlertState(ctx context.Context, dir string, update func(*AlertLedger)
 		return nil, err
 	}
 	revision := state.Revision
+	updatedAt := state.UpdatedAt
+	before, err := json.Marshal(state.Entries)
+	if err != nil {
+		return nil, err
+	}
 	if err := update(state); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if err := validateAlertState(state); err != nil {
+		return nil, err
+	}
+	after, err := json.Marshal(state.Entries)
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(before, after) {
+		state.Revision = revision
+		state.UpdatedAt = updatedAt
+		return state, nil
 	}
 	state.Revision = revision + 1
 	state.UpdatedAt = time.Now().UTC()
