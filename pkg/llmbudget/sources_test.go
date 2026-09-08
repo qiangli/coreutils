@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -157,6 +158,7 @@ func TestSharedSourceCacheAndFailureBackoff(t *testing.T) {
 	var fail atomic.Bool
 	g := fixtureGate(t, &Policy{Version: 1})
 	g.cfg.Adapters = []Adapter{fixtureAdapter{count: &count, fail: &fail}}
+	g.cfg.Now = func() time.Time { return now }
 	c := SourceConfig{ID: "fixture", Kind: "fixture", Enabled: true, RefreshSeconds: 60}
 	for i := 0; i < 2; i++ {
 		s, e := New(g.cfg).source(context.Background(), c, now, true)
@@ -168,11 +170,13 @@ func TestSharedSourceCacheAndFailureBackoff(t *testing.T) {
 		t.Fatal("cross-gate throttle bypass", count.Load())
 	}
 	fail.Store(true)
-	s, e := g.source(context.Background(), c, now.Add(61*time.Second), true)
-	if e == nil || s.Status != "stale" || s.Metrics[0].Classification != "stale" || !s.Metrics[0].ObservedAt.Equal(now) {
+	now = now.Add(61 * time.Second)
+	s, e := g.source(context.Background(), c, now, true)
+	if e == nil || s.Status != "stale" || s.Metrics[0].Classification != "stale" || !s.Metrics[0].ObservedAt.Equal(now.Add(-61*time.Second)) {
 		t.Fatal(s, e)
 	}
-	_, _ = g.source(context.Background(), c, now.Add(62*time.Second), true)
+	now = now.Add(time.Second)
+	_, _ = g.source(context.Background(), c, now, true)
 	if count.Load() != 2 {
 		t.Fatal("failure backoff bypass")
 	}
@@ -243,5 +247,99 @@ func TestReportRosterFilteringPreservesPoolContext(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("unused roster member omitted")
+	}
+}
+
+// Each source has its own shared file and lock. A report may reach its second
+// source after a newer report has already refreshed it: never overwrite that
+// newer observation using the earlier report timestamp.
+type processSourceAdapter struct{ directory string }
+
+func (processSourceAdapter) Kind() string { return "process-fixture" }
+func (a processSourceAdapter) Collect(_ context.Context, c SourceConfig, at time.Time) (SourceResult, error) {
+	f, err := os.OpenFile(filepath.Join(a.directory, c.ID+".calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return SourceResult{}, err
+	}
+	_, err = fmt.Fprintln(f, at.UnixNano())
+	closeErr := f.Close()
+	if err != nil {
+		return SourceResult{}, err
+	}
+	if closeErr != nil {
+		return SourceResult{}, closeErr
+	}
+	return SourceResult{Status: "ok", Metrics: []Metric{measured("usage.requests", 1, "requests", "actual", c.ID, at)}}, nil
+}
+func TestSharedSourceProcessHelper(t *testing.T) {
+	directory := os.Getenv("LLMBUDGET_SOURCE_PROCESS_DIR")
+	if directory == "" {
+		return
+	}
+	at, err := time.Parse(time.RFC3339Nano, os.Getenv("LLMBUDGET_SOURCE_PROCESS_AT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := New(Config{StatePath: filepath.Join(directory, "meter.json"), Adapters: []Adapter{processSourceAdapter{directory}}})
+	for _, id := range []string{"alpha", "beta"} {
+		result, err := g.source(context.Background(), SourceConfig{ID: id, Kind: "process-fixture", Enabled: true, RefreshSeconds: 60}, at, true)
+		if err != nil || result.Status != "ok" {
+			t.Fatal(result, err)
+		}
+	}
+}
+func TestSharedSourceTwoSourcesEightProcessesEarlierReport(t *testing.T) {
+	directory := t.TempDir()
+	at := time.Now().UTC()
+	run := func(when time.Time) *exec.Cmd {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestSharedSourceProcessHelper$")
+		cmd.Env = append(os.Environ(), "LLMBUDGET_SOURCE_PROCESS_DIR="+directory, "LLMBUDGET_SOURCE_PROCESS_AT="+when.Format(time.RFC3339Nano))
+		return cmd
+	}
+	if out, err := run(at.Add(-time.Minute - time.Second)).CombinedOutput(); err != nil {
+		t.Fatalf("seed: %v %s", err, out)
+	}
+	// One of eight clients wins both refresh locks with a slightly newer report.
+	if out, err := run(at.Add(5 * time.Millisecond)).CombinedOutput(); err != nil {
+		t.Fatalf("winner: %v %s", err, out)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 7; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if out, err := run(at).CombinedOutput(); err != nil {
+				t.Errorf("reader: %v %s", err, out)
+			}
+		}()
+	}
+	wg.Wait()
+	for _, id := range []string{"alpha", "beta"} {
+		b, err := os.ReadFile(filepath.Join(directory, id+".calls"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(strings.Fields(string(b))); got != 2 {
+			t.Errorf("%s refreshed %d times; want initial + one cadence refresh", id, got)
+		}
+	}
+}
+
+func TestSharedSourceRejectsGenuineFutureObservation(t *testing.T) {
+	now := time.Now().UTC()
+	var count atomic.Int32
+	var fail atomic.Bool
+	g := fixtureGate(t, &Policy{Version: 1})
+	g.cfg.Adapters = []Adapter{fixtureAdapter{count: &count, fail: &fail}}
+	g.cfg.Now = func() time.Time { return now }
+	c := SourceConfig{ID: "future", Kind: "fixture", Enabled: true, RefreshSeconds: 60}
+	if _, err := g.source(context.Background(), c, now.Add(time.Hour), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.source(context.Background(), c, now, false); err != nil {
+		t.Fatal(err)
+	}
+	if count.Load() != 2 {
+		t.Fatal("future observation reused", count.Load())
 	}
 }

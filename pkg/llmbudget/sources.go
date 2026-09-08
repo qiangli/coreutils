@@ -63,7 +63,13 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 			}
 		}
 		read()
-		usable := func() bool { return cached.Version == 1 && !cached.At.After(now) && now.Before(cached.Next) }
+		// now is the report's captured observation time. A concurrent report
+		// can publish a newer observation before this report reaches its second
+		// source; that newer cache entry is reusable, not a clock rollback.
+		usable := func() bool {
+			authorityNow := g.now()
+			return cached.Version == 1 && !cached.At.After(authorityNow) && authorityNow.Before(cached.Next)
+		}
 		// Explicit refresh respects cadence too: otherwise each manager bypasses
 		// the shared throttle independently. It requests refresh at next eligibility.
 		_ = refresh
