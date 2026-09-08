@@ -178,13 +178,14 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		if err != nil {
 			return err
 		}
+		audiences := newAudienceSnapshot()
 		var posts []Post
 		var older int
 		if history {
 			posts, err = Posts()
 		} else {
 			var directed, other []Post
-			directed, other, older, err = Unseen(who, limit)
+			directed, other, older, err = unseen(who, limit, audiences)
 			// Directed first: those carry an obligation, and a reader that
 			// stops after the first screen must have seen them.
 			posts = append(directed, other...)
@@ -204,7 +205,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		labels := make(map[int64]string, len(posts))
 		if !history && !peek {
 			for _, p := range posts {
-				labels[p.Seq] = resolveLabel(p, who, concerns)
+				labels[p.Seq] = resolveLabel(p, who, concerns, audiences)
 			}
 		}
 		w := cmd.OutOrStdout()
@@ -222,7 +223,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 			for _, p := range posts {
 				to, ok := labels[p.Seq]
 				if !ok {
-					to = describeFor(p, who, concerns)
+					to = describeFor(p, who, concerns, audiences)
 				}
 				if seenBy {
 					if v := Viewers(p.Seq); len(v) > 0 {
@@ -465,7 +466,7 @@ func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 // resolveLabel performs a post's read side effects — claiming an offer, or
 // recording a view — and returns how to label it. Called BEFORE any output, so
 // a broken pipe cannot lose the state change.
-func resolveLabel(p Post, who string, concerns []string) string {
+func resolveLabel(p Post, who string, concerns []string, audiences audienceSnapshot) string {
 	switch {
 	case p.Directed(who):
 		return "you"
@@ -484,13 +485,13 @@ func resolveLabel(p Post, who string, concerns []string) string {
 		// A concern read leaves the same record, and against the concern's
 		// declarers it answers "did everyone concerned read it".
 		_ = RecordView(p.Seq, who)
-		return describeFor(p, who, concerns)
+		return describeFor(p, who, concerns, audiences)
 	}
 	return p.Audiences()
 }
 
 // describeFor labels a post WITHOUT side effects, for --history and --peek.
-func describeFor(p Post, who string, concerns []string) string {
+func describeFor(p Post, who string, concerns []string, audiences audienceSnapshot) string {
 	if p.Directed(who) {
 		return "you"
 	}
@@ -505,7 +506,7 @@ func describeFor(p Post, who string, concerns []string) string {
 		return "any of " + p.Audiences() + " — unclaimed"
 	default:
 		seen := len(Viewers(p.Seq))
-		if n := AudienceSize(*p.Audience); n > 0 {
+		if n := audiences.audienceSize(*p.Audience); n > 0 {
 			base = fmt.Sprintf("%s (seen by %d of %d)", p.Audiences(), seen, n)
 		} else {
 			base = fmt.Sprintf("%s (seen by %d)", p.Audiences(), seen)

@@ -143,7 +143,7 @@ func TestBoard_WorkOffersAreNeverConcernRouted(t *testing.T) {
 	boardInTempHome(t)
 	declare(t, "watcher", "posix-cert")
 	FleetSelect = func(a Audience) ([]string, error) { return []string{"a1"}, nil }
-	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+	t.Cleanup(func() { FleetSelect = nil })
 
 	if err := PostMessage(Post{
 		From: "steward", Audience: &Audience{Band: 3}, Mode: ModeAny, Topic: "posix-cert", Body: "take the cert gate",
