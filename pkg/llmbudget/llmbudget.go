@@ -91,6 +91,7 @@ type Config struct {
 }
 
 type Gate struct {
+	publishFault  func(string) error // package tests inject process/publish failures
 	mu            sync.Mutex
 	cfg           Config
 	state         State
@@ -101,6 +102,7 @@ type Gate struct {
 }
 
 type State struct {
+	HardPolicy   bool                    `json:"hard_policy,omitempty"`
 	Integrity    string                  `json:"integrity,omitempty"`
 	Unattributed map[string]Counters     `json:"unattributed,omitempty"`
 	Version      int                     `json:"version,omitempty"`
@@ -303,7 +305,7 @@ func (g *Gate) Record(model string, promptTokens, completionTokens int64, costUS
 func (g *Gate) recordLocal(model string, promptTokens, completionTokens int64, costUSD float64) {
 	m, _ := g.model(model)
 	now := g.now()
-	totalTokens := promptTokens + completionTokens
+	totalTokens := safeAdd(promptTokens, completionTokens)
 	g.state.Models[model] = addCounters(g.state.Models[model], now, totalTokens, 1, costUSD)
 	if m.Provider != "" {
 		g.state.Providers[m.Provider] = addCounters(g.state.Providers[m.Provider], now, totalTokens, 1, costUSD)
@@ -350,10 +352,10 @@ func (g *Gate) checkSubscription(ctx context.Context, m Model, estTokens int64) 
 		limit  int64
 		actual int64
 	}{
-		{"subscription_daily_tokens", lim.DailyTokens, c.DayTokens + estTokens},
-		{"subscription_weekly_tokens", lim.WeeklyTokens, c.WeekTokens + estTokens},
-		{"subscription_daily_requests", lim.DailyRequests, c.DayRequests + 1},
-		{"subscription_weekly_requests", lim.WeeklyRequests, c.WeekRequests + 1},
+		{"subscription_daily_tokens", lim.DailyTokens, safeAdd(c.DayTokens, estTokens)},
+		{"subscription_weekly_tokens", lim.WeeklyTokens, safeAdd(c.WeekTokens, estTokens)},
+		{"subscription_daily_requests", lim.DailyRequests, safeAdd(c.DayRequests, 1)},
+		{"subscription_weekly_requests", lim.WeeklyRequests, safeAdd(c.WeekRequests, 1)},
 	}
 	for _, b := range check {
 		if b.limit <= 0 {
@@ -385,12 +387,12 @@ func (g *Gate) reserveRate(provider string, lim Limits, tokens int64, now time.T
 	if b.WindowStart.IsZero() || !now.Before(b.WindowStart.Add(lim.RatePer)) {
 		b = Bucket{WindowStart: now}
 	}
-	if b.Used+tokens > lim.RateTokens {
+	if safeAdd(b.Used, tokens) > lim.RateTokens {
 		g.state.Buckets[provider] = b
 		g.save()
 		return b.WindowStart.Add(lim.RatePer).Sub(now)
 	}
-	b.Used += tokens
+	b.Used = safeAdd(b.Used, tokens)
 	g.state.Buckets[provider] = b
 	g.save()
 	return 0
@@ -500,10 +502,10 @@ func estimateCost(m Model, tokens int64) (float64, bool) {
 
 func addCounters(c Counters, now time.Time, tokens, requests int64, cost float64) Counters {
 	c = currentCounters(c, now)
-	c.DayTokens += tokens
-	c.WeekTokens += tokens
-	c.DayRequests += requests
-	c.WeekRequests += requests
+	c.DayTokens = safeAdd(c.DayTokens, tokens)
+	c.WeekTokens = safeAdd(c.WeekTokens, tokens)
+	c.DayRequests = safeAdd(c.DayRequests, requests)
+	c.WeekRequests = safeAdd(c.WeekRequests, requests)
 	c.DayCostUSD += cost
 	c.WeekCostUSD += cost
 	c.CostUSD += cost
@@ -577,7 +579,12 @@ func firstPositive(v ...float64) float64 {
 	return 0
 }
 
-func microUSD(v float64) int64 { return int64(math.Ceil(v * 1_000_000)) }
+func microUSD(v float64) int64 {
+	if v >= float64(math.MaxInt64)/1e6 {
+		return math.MaxInt64
+	}
+	return int64(math.Ceil(v * 1_000_000))
+}
 
 func env(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {

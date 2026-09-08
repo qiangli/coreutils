@@ -19,6 +19,7 @@ func (ClaudeStatuslineAdapter) Collect(ctx context.Context, c SourceConfig, now 
 	result := SourceResult{Status: "partial", Metrics: []Metric{}, Limitations: []string{"Local Claude statusline observation; account association is explicitly configured. Session cost is estimated, not account billing."}}
 	fail := func() (SourceResult, error) {
 		result.Status = "unavailable"
+		result.Metrics = nil
 		return result, errors.New("invalid or unavailable Claude bridge snapshot")
 	}
 	if err := ctx.Err(); err != nil {
@@ -63,7 +64,7 @@ func (ClaudeStatuslineAdapter) Collect(ctx context.Context, c SourceConfig, now 
 		if value == nil {
 			return true
 		}
-		if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+		if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 || unit == "tokens" && (*value != math.Trunc(*value) || *value > 1<<53) {
 			return false
 		}
 		result.Metrics = append(result.Metrics, measured(name, *value, unit, class, "claude-statusline", at))

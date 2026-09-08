@@ -108,7 +108,7 @@ func (g *Gate) prepare(p *Policy, r Request, mutation bool) (Request, error) {
 		return r, errors.New("llmbudget: TTL must be between one second and 24 hours")
 	}
 	// Host-only work has no model/account demand and must not consume LLM units.
-	if r.Model == "" && r.Tokens == 0 && r.Concurrency == 0 && r.SpendMicroUSD == nil {
+	if r.Model == "" && !r.UnknownTokens && r.Tokens == 0 && r.Concurrency == 0 && r.SpendMicroUSD == nil {
 		return r, nil
 	}
 	model := r.Model
@@ -148,6 +148,9 @@ func (g *Gate) Preview(ctx context.Context, r Request) (Admission, error) {
 	if err != nil {
 		return refused(r, err)
 	}
+	if p.missing && s.HardPolicy {
+		return refused(r, errors.New("llmbudget: prior hard policy missing; restore it before admission"))
+	}
 	return g.evaluate(p, s, r), nil
 }
 func refused(r Request, err error) (Admission, error) {
@@ -164,6 +167,21 @@ func (g *Gate) Reserve(ctx context.Context, r Request) (Admission, error) {
 	}
 	var out Admission
 	err = g.transaction(ctx, func() error {
+		current, e := g.policy()
+		if e != nil {
+			return e
+		}
+		p = current
+		r, e = g.prepare(p, r, true)
+		if e != nil {
+			return e
+		}
+		if p.missing && g.state.HardPolicy {
+			return errors.New("llmbudget: prior hard policy missing; restore it before admission")
+		}
+		if hasHardPolicy(p) {
+			g.state.HardPolicy = true
+		}
 		if old, ok, e := g.completion(r.ID); e != nil {
 			return e
 		} else if ok {
@@ -174,6 +192,9 @@ func (g *Gate) Reserve(ctx context.Context, r Request) (Admission, error) {
 			return nil
 		}
 		if old, ok := g.state.Reservations[r.ID]; ok {
+			if !g.ownerLive(r.Owner) {
+				return errors.New("llmbudget: existing reservation owner lease is not live")
+			}
 			if !reflect.DeepEqual(old.Request, r) {
 				return errors.New("llmbudget: reused reservation id with different demand")
 			}
@@ -241,6 +262,12 @@ func (g *Gate) evaluate(p *Policy, s State, r Request) Admission {
 		}
 		// A request lacking account mapping cannot evade a matching provider cap.
 		probe := b
+		if probe.Provider == "" && (r.Model != "" || r.UnknownTokens) {
+			probe.Provider = c.Provider
+		}
+		if probe.Lane == "" && (r.Model != "" || r.UnknownTokens) {
+			probe.Lane = c.Lane
+		}
 		if probe.Account == "" {
 			probe.Account = c.Account
 		}
@@ -251,16 +278,18 @@ func (g *Gate) evaluate(p *Policy, s State, r Request) Admission {
 			continue
 		}
 		vendorCap := c.DailyTokens != nil || c.WeeklyTokens != nil || c.DailySpendMicroUSD != nil || c.WeeklySpendMicroUSD != nil || c.Concurrency != nil
-		if vendorCap && r.Model != "" && b.Account == "" {
+		if vendorCap && (r.Model != "" || r.UnknownTokens) && b.Account == "" {
 			return queue("account identity unknown under configured limit", time.Time{})
 		}
 		var dayTokens, weekTokens, daySpend, weekSpend int64
-		var concurrency, slots int
+		var concurrency, slots int64
 		var memory uint64
 		unknownSpend := false
+		unknownTokens, unknownMemory := r.UnknownTokens, r.UnknownMemory
 		for _, v := range s.Pools {
 			if matches(c, v.Binding, "") {
 				cc := currentCounters(v.Counters, now)
+				unknownTokens = unknownTokens || v.UnknownTokens && v.UnknownTokensAt != nil && ((c.DailyTokens != nil && dayStart(*v.UnknownTokensAt).Equal(dayStart(now))) || (c.WeeklyTokens != nil && weekStart(*v.UnknownTokensAt).Equal(weekStart(now))))
 				dayTokens = safeAdd(dayTokens, cc.DayTokens)
 				weekTokens = safeAdd(weekTokens, cc.WeekTokens)
 				daySpend = safeAdd(daySpend, microUSD(cc.DayCostUSD))
@@ -289,10 +318,12 @@ func (g *Gate) evaluate(p *Policy, s State, r Request) Admission {
 		for _, v := range s.Reservations {
 			if matches(c, requestBinding(v.Request), v.Request.Host) {
 				q := v.Request
+				unknownTokens = unknownTokens || q.UnknownTokens
+				unknownMemory = unknownMemory || q.UnknownMemory
 				dayTokens = safeAdd(dayTokens, q.Tokens)
 				weekTokens = safeAdd(weekTokens, q.Tokens)
-				concurrency += q.Concurrency
-				slots += q.HostSlots
+				concurrency = safeAdd(concurrency, int64(q.Concurrency))
+				slots = safeAdd(slots, int64(q.HostSlots))
 				if math.MaxUint64-memory < q.MemoryBytes {
 					memory = math.MaxUint64
 				} else {
@@ -301,15 +332,21 @@ func (g *Gate) evaluate(p *Policy, s State, r Request) Admission {
 				if q.SpendMicroUSD != nil {
 					daySpend = safeAdd(daySpend, *q.SpendMicroUSD)
 					weekSpend = safeAdd(weekSpend, *q.SpendMicroUSD)
-				} else if q.Tokens > 0 {
+				} else if q.Tokens > 0 || q.UnknownTokens {
 					unknownSpend = true
 				}
 			}
 		}
-		if c.Concurrency != nil && int64(concurrency)+int64(r.Concurrency) > int64(*c.Concurrency) {
+		if unknownTokens && (c.DailyTokens != nil || c.WeeklyTokens != nil) {
+			return queue("token demand unknown under configured hard budget", time.Time{})
+		}
+		if unknownMemory && c.MemoryBytes != nil {
+			return queue("memory demand unknown under configured hard budget", time.Time{})
+		}
+		if c.Concurrency != nil && safeAdd(concurrency, int64(r.Concurrency)) > int64(*c.Concurrency) {
 			return queue("account concurrency budget reserved", time.Time{})
 		}
-		if c.HostSlots != nil && int64(slots)+int64(r.HostSlots) > int64(*c.HostSlots) {
+		if c.HostSlots != nil && safeAdd(slots, int64(r.HostSlots)) > int64(*c.HostSlots) {
 			return queue("host work slots reserved", time.Time{})
 		}
 		if c.MemoryBytes != nil && (memory > *c.MemoryBytes || r.MemoryBytes > *c.MemoryBytes-memory) {
@@ -322,7 +359,7 @@ func (g *Gate) evaluate(p *Policy, s State, r Request) Admission {
 			return queue("weekly token budget exhausted", weekStart(now).AddDate(0, 0, 7))
 		}
 		if c.DailySpendMicroUSD != nil || c.WeeklySpendMicroUSD != nil {
-			if r.Tokens > 0 && r.SpendMicroUSD == nil || unknownSpend {
+			if (r.Tokens > 0 || r.UnknownTokens) && r.SpendMicroUSD == nil || unknownSpend {
 				return queue("spend unknown under configured hard budget", time.Time{})
 			}
 			demandSpend := int64(0)
@@ -429,7 +466,7 @@ func (g *Gate) Settle(ctx context.Context, id, owner string, a Actual) error {
 		pool.OutputTokens = safeAdd(pool.OutputTokens, a.OutputTokens)
 		pool.CachedInputTokens = safeAdd(pool.CachedInputTokens, a.CachedInputTokens)
 		pool.ObservedAt = g.now()
-		if a.SpendMicroUSD == nil && r.Request.Tokens > 0 {
+		if a.SpendMicroUSD == nil && (r.Request.Tokens > 0 || r.Request.UnknownTokens) {
 			pool.UnknownSpend = true
 			pool.UnknownSpendAt = g.now()
 		}
@@ -481,7 +518,7 @@ func (g *Gate) ReconcileTerminated(ctx context.Context, id string, p Termination
 		if !ok || r.Owner != p.Owner || r.Request.Run != p.Run || r.Request.Host != p.Host || p.VerifiedAt.Before(r.CreatedAt) {
 			return errors.New("llmbudget: termination proof identity mismatch")
 		}
-		if r.Request.Tokens > 0 || r.Request.SpendMicroUSD != nil && *r.Request.SpendMicroUSD > 0 {
+		if r.Request.UnknownTokens || r.Request.Tokens > 0 || r.Request.SpendMicroUSD != nil && *r.Request.SpendMicroUSD > 0 {
 			b := requestBinding(r.Request)
 			k := poolKey(b)
 			pool := g.state.Pools[k]
@@ -493,6 +530,11 @@ func (g *Gate) ReconcileTerminated(ctx context.Context, id string, p Termination
 			pool.Counters = addCounters(pool.Counters, g.now(), r.Request.Tokens, 1, cost)
 			pool.UnknownSpend = true
 			pool.UnknownSpendAt = g.now()
+			if r.Request.UnknownTokens {
+				pool.UnknownTokens = true
+				at := g.now()
+				pool.UnknownTokensAt = &at
+			}
 			pool.ObservedAt = g.now()
 			g.state.Pools[k] = pool
 			if r.Request.Model != "" {

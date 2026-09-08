@@ -125,6 +125,10 @@ func (a OpenAIOrganizationAdapter) Collect(ctx context.Context, c SourceConfig, 
 							break
 						}
 						totals["billing.spend"] += *row.Amount.Value
+						if !finiteNonnegative(totals["billing.spend"]) {
+							valid = false
+							break
+						}
 						have["billing.spend"] = true
 					} else {
 						if row.Object != "organization.usage.completions.result" {
@@ -143,6 +147,10 @@ func (a OpenAIOrganizationAdapter) Collect(ctx context.Context, c SourceConfig, 
 								break
 							}
 							totals[metric.name] += *metric.p
+							if totals[metric.name] > 1<<53 {
+								valid = false
+								break
+							}
 							have[metric.name] = true
 						}
 					}

@@ -70,6 +70,8 @@ type ReportOptions struct {
 // Request is a reservation, not a measurement. SpendMicroUSD=nil means no
 // trustworthy estimate; a hard spend policy must refuse that uncertainty.
 type Request struct {
+	UnknownTokens bool          `json:"unknown_tokens,omitempty"`
+	UnknownMemory bool          `json:"unknown_memory,omitempty"`
 	ID            string        `json:"id"`
 	Owner         string        `json:"owner"`
 	Provider      string        `json:"provider"`
@@ -124,6 +126,7 @@ type TerminationProof struct {
 // Policy is explicit, versioned local policy. Nil ceilings are unconfigured;
 // zero ceilings are enforced. Account and host axes share one transaction.
 type Policy struct {
+	missing     bool
 	Version     int            `json:"version"`
 	Bindings    []Binding      `json:"bindings"`
 	Constraints []Constraint   `json:"constraints"`

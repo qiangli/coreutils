@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
@@ -22,14 +23,16 @@ const maxCompletions = 8192
 // PoolCounters extend the original meter; legacy totals remain untouched.
 // Split input/cache counters cover only records made through the new API.
 type PoolCounters struct {
-	UnknownSpendAt    time.Time `json:"unknown_spend_at,omitempty"`
-	Binding           Binding   `json:"binding"`
-	Counters          Counters  `json:"counters"`
-	InputTokens       int64     `json:"input_tokens"`
-	OutputTokens      int64     `json:"output_tokens"`
-	CachedInputTokens int64     `json:"cached_input_tokens"`
-	ObservedAt        time.Time `json:"observed_at"`
-	UnknownSpend      bool      `json:"unknown_spend,omitempty"`
+	UnknownTokens     bool       `json:"unknown_tokens,omitempty"`
+	UnknownTokensAt   *time.Time `json:"unknown_tokens_at,omitempty"`
+	UnknownSpendAt    time.Time  `json:"unknown_spend_at,omitempty"`
+	Binding           Binding    `json:"binding"`
+	Counters          Counters   `json:"counters"`
+	InputTokens       int64      `json:"input_tokens"`
+	OutputTokens      int64      `json:"output_tokens"`
+	CachedInputTokens int64      `json:"cached_input_tokens"`
+	ObservedAt        time.Time  `json:"observed_at"`
+	UnknownSpend      bool       `json:"unknown_spend,omitempty"`
 }
 type Completion struct {
 	Owner       string            `json:"owner"`
@@ -165,21 +168,38 @@ func atomicJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(temp, path)
+	if err := os.Rename(temp, path); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	} // Windows does not expose directory fsync.
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 func (g *Gate) writeState() error {
 	if g.cfg.StatePath == "" {
 		return nil
 	}
+	if err := g.publishBoundary("before-marker"); err != nil {
+		return err
+	}
 	g.state.Integrity = stateDigest(g.state)
 	if err := atomicJSON(g.cfg.StatePath+".initialized", map[string]int{"version": 1}); err != nil {
+		return err
+	}
+	if err := g.publishBoundary("after-marker"); err != nil {
 		return err
 	}
 	if err := atomicJSON(g.cfg.StatePath, g.state); err != nil {
 		return fmt.Errorf("llmbudget: cannot publish meter: %w", err)
 	}
 	g.seenDisk = true
-	return nil
+	return g.publishBoundary("after-meter")
 }
 func (g *Gate) transaction(ctx context.Context, fn func() error) error {
 	if err := ctx.Err(); err != nil {
@@ -188,7 +208,7 @@ func (g *Gate) transaction(ctx context.Context, fn func() error) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cfg.StatePath != "" {
-		l, err := lockfile.AcquireWithin(g.cfg.StatePath+".lock", 5*time.Second, lockfile.Holder{Name: "llmbudget", Intent: "meter transaction"})
+		l, err := acquireMeter(ctx, g.cfg.StatePath+".lock")
 		if err != nil {
 			return fmt.Errorf("llmbudget: meter busy: %w", err)
 		}
@@ -202,6 +222,8 @@ func (g *Gate) transaction(ctx context.Context, fn func() error) error {
 		return err
 	}
 	before, _ := json.Marshal(g.state)
+	var previous State
+	_ = json.Unmarshal(before, &previous)
 	g.inTransaction = true
 	defer func() { g.inTransaction = false }()
 	err := fn()
@@ -209,13 +231,15 @@ func (g *Gate) transaction(ctx context.Context, fn func() error) error {
 		err = ctx.Err()
 	}
 	if err == nil {
-		err = g.archiveCompletions()
+		err = g.archiveCompletions(previous.Completed)
 	}
 	if err == nil {
 		err = g.writeState()
 	}
 	if err != nil {
+		g.state = State{}
 		_ = json.Unmarshal(before, &g.state)
+		normalizeState(&g.state)
 		g.stateErr = err
 	}
 	return err
@@ -262,12 +286,18 @@ func (g *Gate) completion(id string) (Completion, bool, error) {
 	}
 	return c, true, nil
 }
-func (g *Gate) archiveCompletions() error {
+func (g *Gate) archiveCompletions(committed map[string]Completion) error {
 	if g.cfg.StatePath == "" || len(g.state.Completed) <= 128 {
 		return nil
 	}
 	for id, c := range g.state.Completed {
+		if _, ok := committed[id]; !ok {
+			continue
+		}
 		if err := atomicJSON(g.receiptPath(id), c); err != nil {
+			return err
+		}
+		if err := g.publishBoundary("after-receipt"); err != nil {
 			return err
 		}
 		delete(g.state.Completed, id)
@@ -283,4 +313,26 @@ func stateDigest(s State) string {
 	b, _ := json.Marshal(s)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// Short acquisition attempts retain lockfile's kernel arbitration while honoring
+// cancellation between attempts. Legacy Record has a five-second overall bound.
+func acquireMeter(ctx context.Context, path string) (*lockfile.Lock, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		l, err := lockfile.AcquireWithin(path, 20*time.Millisecond, lockfile.Holder{Name: "llmbudget", Intent: "meter transaction"})
+		if !errors.Is(err, lockfile.ErrHeld) || !time.Now().Before(deadline) {
+			return l, err
+		}
+	}
+}
+
+func (g *Gate) publishBoundary(stage string) error {
+	if g.publishFault != nil {
+		return g.publishFault(stage)
+	}
+	return nil
 }

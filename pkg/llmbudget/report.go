@@ -2,6 +2,7 @@ package llmbudget
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,6 +22,9 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 	s, err := g.stateSnapshot()
 	if err != nil {
 		return nil, err
+	}
+	if p.missing && s.HardPolicy {
+		return nil, errors.New("llmbudget: prior hard policy missing")
 	}
 	now := opt.Now
 	if now.IsZero() {
@@ -114,6 +118,9 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		}
 	}
 	for _, a := range opt.Active {
+		if m, ok := g.model(a.Model); ok {
+			a.Model = m.Name
+		}
 		for _, b := range modelBindings[a.Model] {
 			if b.Agent != "" && a.Agent != "" && b.Agent != a.Agent {
 				continue
@@ -141,11 +148,15 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		var dayTokens, weekTokens, requests int64
 		var cost float64
 		hasLocal := false
+		unknownSpend := false
+		unknownTokens := false
 		legacy := false
 		if pool, ok := s.Pools[key]; ok {
 			cc := currentCounters(pool.Counters, now)
 			dayTokens, weekTokens, requests, cost = cc.DayTokens, cc.WeekTokens, cc.DayRequests, cc.DayCostUSD
 			hasLocal = true
+			unknownTokens = pool.UnknownTokens && pool.UnknownTokensAt != nil && dayStart(*pool.UnknownTokensAt).Equal(dayStart(now))
+			unknownSpend = pool.UnknownSpend && dayStart(pool.UnknownSpendAt).Equal(dayStart(now))
 			for _, v := range []struct {
 				name string
 				n    int64
@@ -172,6 +183,16 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 				n                 float64
 			}{{"usage.tokens", "tokens", "actual", float64(dayTokens)}, {"usage.requests", "requests", "actual", float64(requests)}, {"billing.spend", "usd", "estimated", cost}} {
 				m := measured(v.name, v.n, v.unit, v.class, "local-meter", now)
+				if v.name == "usage.tokens" && unknownTokens {
+					m.Value = nil
+					m.Classification = "unknown"
+					m.Limitation = "Some completed work has unknown token use; hard token admission retains that uncertainty."
+				}
+				if v.name == "billing.spend" && unknownSpend {
+					m.Value = nil
+					m.Classification = "unknown"
+					m.Limitation = "Some completed work has no actual spend; conservative accounting is retained for admission."
+				}
 				m.WindowStart = &start
 				m.WindowEnd = &end
 				row.Metrics = append(row.Metrics, m)
@@ -182,9 +203,12 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 			row.Limitations = unique(row.Limitations, "Legacy model totals lack account/category attribution; shown conservatively and may overlap account rows.")
 		}
 		reservedTokens, reservedSpend := int64(0), int64(0)
+		reservedTokensUnknown, reservedSpendUnknown := false, false
 		for _, r := range s.Reservations {
 			if poolKey(requestBinding(r.Request)) == key {
 				row.ActiveReservations++
+				reservedTokensUnknown = reservedTokensUnknown || r.Request.UnknownTokens
+				reservedSpendUnknown = reservedSpendUnknown || (r.Request.SpendMicroUSD == nil && (r.Request.Tokens > 0 || r.Request.UnknownTokens))
 				reservedTokens = safeAdd(reservedTokens, r.Request.Tokens)
 				if r.Request.SpendMicroUSD != nil {
 					reservedSpend = safeAdd(reservedSpend, *r.Request.SpendMicroUSD)
@@ -195,11 +219,28 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 			}
 		}
 		row.Metrics = append(row.Metrics, measured("budget.reserved_tokens", float64(reservedTokens), "tokens", "actual", "local-reservations", now), measured("budget.reserved_spend", float64(reservedSpend)/1e6, "usd", "estimated", "local-reservations", now))
+		if reservedTokensUnknown {
+			i := len(row.Metrics) - 2
+			row.Metrics[i].Value = nil
+			row.Metrics[i].Classification = "unknown"
+			row.Metrics[i].Limitation = "An active operation has unknown token demand."
+		}
+		if reservedSpendUnknown {
+			i := len(row.Metrics) - 1
+			row.Metrics[i].Value = nil
+			row.Metrics[i].Classification = "unknown"
+			row.Metrics[i].Limitation = "An active operation has unknown spend demand."
+		}
 		for _, c := range p.Constraints {
 			if c.Host != "" || !matches(c, b, "") {
 				continue
 			}
 			row.Metrics = append(row.Metrics, constraintMetrics(c, now)...)
+		}
+		for _, model := range row.Models {
+			if m, ok := g.model(model); ok {
+				row.Metrics = append(row.Metrics, legacyMetrics(m, now)...)
+			}
 		}
 		for _, src := range p.Sources {
 			if src.Provider != row.Provider || src.Account != row.Account || src.Pool != row.Pool || src.Lane != row.Lane {
@@ -287,4 +328,25 @@ func hasAttribution(s []Attribution, a Attribution) bool {
 		}
 	}
 	return false
+}
+
+func legacyMetrics(m Model, now time.Time) []Metric {
+	var out []Metric
+	add := func(name, unit string, v float64) {
+		if v > 0 {
+			metric := measured(name, v, unit, "actual", "configured-model:"+m.Name, now)
+			metric.Limitation = "Legacy configured policy; scope follows the model/provider/plan metadata, not a vendor-reported ceiling."
+			out = append(out, metric)
+		}
+	}
+	add("budget.daily_spend", "usd", m.Limits.BudgetUSD)
+	add("budget.provider_daily_spend", "usd", firstPositive(m.Limits.ProviderQuotaUSD, m.Limits.ProviderUSD))
+	add("budget.daily_tokens", "tokens", float64(m.Limits.DailyTokens))
+	add("budget.weekly_tokens", "tokens", float64(m.Limits.WeeklyTokens))
+	add("budget.daily_requests", "requests", float64(m.Limits.DailyRequests))
+	add("budget.weekly_requests", "requests", float64(m.Limits.WeeklyRequests))
+	if m.Limits.RatePer > 0 {
+		add("limits.tokens_per_minute", "tokens/minute", float64(m.Limits.RateTokens)*float64(time.Minute)/float64(m.Limits.RatePer))
+	}
+	return out
 }
