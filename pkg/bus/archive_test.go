@@ -269,3 +269,32 @@ func TestPostMessageSeq_RotatesOpportunisticallyOnWrite(t *testing.T) {
 		t.Fatalf("live board has %d posts, want the write's own opportunistic rotation to have archived it", len(live))
 	}
 }
+
+func TestRotateBoard_AudienceSnapshotRefreshesAndResolvesOnce(t *testing.T) {
+	boardInTempHome(t)
+	disableAutoRotation(t)
+	now := time.Now()
+	calls := 0
+	names := []string{"reader"}
+	oldSelect := FleetSelect
+	FleetSelect = func(Audience) ([]string, error) { calls++; return names, nil }
+	t.Cleanup(func() { FleetSelect = oldSelect })
+	for range 7 {
+		post(t, Post{From: "tester", Audience: &Audience{Role: "conductor"}, Body: "notice", At: old(10 * 24 * time.Hour)})
+	}
+	touchReaderAt(t, "reader", now)
+	touchReaderAt(t, "outsider", now)
+	if count, err := RotateBoard(now); err != nil || count != 0 {
+		t.Fatalf("unread live manager: archived=%d error=%v", count, err)
+	}
+	if calls != 1 {
+		t.Fatalf("first scan calls=%d, want 1", calls)
+	}
+	names = nil // The former manager's lease expires before the next scan.
+	if count, err := RotateBoard(now); err != nil || count != 7 {
+		t.Fatalf("expired manager: archived=%d error=%v", count, err)
+	}
+	if calls != 2 {
+		t.Fatalf("two scans calls=%d, want 2 across all posts/readers", calls)
+	}
+}

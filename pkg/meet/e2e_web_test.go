@@ -306,6 +306,13 @@ func TestRecallOverHTTPCancelsBeforeTheAppendAndRetractsAfter(t *testing.T) {
 	if late.Event == nil || late.Event.Retracts == "" {
 		t.Fatalf("a retraction must name the record it withdraws: %+v", late.Event)
 	}
+	// The recall only CANCELS the turn; the async job that startJob launched keeps
+	// running past the 200 — the blocking runner unblocks on the cancel, records
+	// its canceled turn, and closes the live floor, all after this handler returned.
+	// Reading the transcript or tearing down the fixture's TempDir the instant the
+	// recall answers would race those writes (a file reappears mid-RemoveAll:
+	// "directory not empty"). So wait for the job to actually finish first.
+	awaitJobFinished(t, job.ID)
 	// The withdrawn message is STILL THERE. Deleting it would leave a hole in an
 	// append-only log and tell an agent that already read the line nothing.
 	var found bool
@@ -386,6 +393,34 @@ func TestRecallOverHTTPRetractsAPostedRecord(t *testing.T) {
 	if !strings.Contains(retraction.Text, "said too much") {
 		t.Errorf("the retraction does not say what it withdraws: %q", retraction.Text)
 	}
+}
+
+// awaitJobFinished blocks until the async job's goroutine has run to completion,
+// which is the point at which every write it makes to the room is on disk.
+//
+// It waits on liveJob.finished — the existing job-completion primitive. The job
+// wrapper (startJob) sets it under the job's mutex from a deferred retire(), which
+// runs only AFTER run() has returned and the "did not run" note, if any, has been
+// written; nothing the goroutine does after that touches the room. So a set
+// `finished` is the exact "all writes done" edge a snapshot or a TempDir teardown
+// must not race. This is the same primitive TestARecalledRunIsNotAlsoReportedAsAFailure
+// waits on, and the poll returns the instant it flips — it is a wait on a real
+// signal, not a fixed delay.
+func awaitJobFinished(t *testing.T, id string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if j, ok := lookupJob(id); ok {
+			j.mu.Lock()
+			done := j.finished
+			j.mu.Unlock()
+			if done {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job %s never finished; its writes may still be racing fixture cleanup", id)
 }
 
 func mustTranscript(t *testing.T, id string) []Event {
