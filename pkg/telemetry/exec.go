@@ -1,3 +1,7 @@
+//go:build !aix
+
+// The optional shell middleware follows the interpreter support boundary.
+// Portable admission telemetry remains available on AIX without importing sh.
 package telemetry
 
 import (
