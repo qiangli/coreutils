@@ -92,11 +92,27 @@ type Audience struct {
 	Provider string `json:"provider,omitempty"` // "" = any (anthropic, gemini, …)
 	Family   string `json:"family,omitempty"`   // "" = any (opus, sonnet, gemini-flash, …)
 	Version  string `json:"version,omitempty"`  // "" = any (5, 4.8, 3.6, …)
+
+	// Role selects on what an agent is DOING rather than on its binding.
+	//
+	// Every other field here is a property of the agent's tool:model — none
+	// says "is currently managing a sprint". So a manager wanting exactly its
+	// peers had to post to EVERYONE (over-broad, and capped for anyone who has
+	// not declared the concern) or hardcode names, which rot the moment a
+	// lease moves. The sprint records know every live lease holder; until now
+	// the messaging layer could not ask.
+	//
+	// Resolution is HOST policy like the rest of FleetSelect: pkg/bus is
+	// transport and must not learn to read the sprint store. LIVE holders
+	// only — a stale lease names a conductor who died without handing off and
+	// an unowned sprint names nobody; addressing either is mail nobody reads.
+	Role string `json:"role,omitempty"` // "" = any (conductor, …)
 }
 
 // Empty reports a selector that names no criterion.
 func (a Audience) Empty() bool {
-	return a.Band == 0 && a.Tool == "" && a.Provider == "" && a.Family == "" && a.Version == ""
+	return a.Band == 0 && a.Tool == "" && a.Provider == "" && a.Family == "" &&
+		a.Version == "" && a.Role == ""
 }
 
 // FleetSelect resolves an Audience to agent names, injected by the host for the

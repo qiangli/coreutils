@@ -3,6 +3,7 @@ package weave
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -207,4 +208,60 @@ func SprintOwnerLastRead(name string) (at time.Time, ok bool) {
 		}
 	}
 	return at, ok
+}
+
+// LiveSprintManagers names every agent currently HOLDING a sprint manager
+// seat on this host — the resolution behind `bashy mb send --role conductor`.
+//
+// It exists because every other mb selector (band, tool, provider, family,
+// version) is a property of an agent's BINDING, and none of them can express
+// "is managing a sprint right now". A manager wanting exactly its peers had to
+// broadcast to everyone — over-broad, and capped for any reader who has not
+// declared the concern — or hardcode names that rot the moment a lease moves.
+//
+// LIVE ONLY, and that is the whole point rather than a detail:
+//
+//   - an UNOWNED sprint names nobody;
+//   - a STALE lease names a conductor that died without handing off, so its
+//     holder is not managing anything and never reads what you send.
+//
+// Addressing either produces mail nobody answers, which is worse than a
+// broadcast because the sender believes it reached someone. Staleness is
+// judged by the same SprintLeaseTTL the board and `bashy agents` grade leases
+// with — exported for exactly this reason, so a second opinion about who is
+// live cannot drift from the first.
+//
+// Names come back deduplicated (one agent may hold several sprints) and
+// sorted, so the delivery report is stable.
+func LiveSprintManagers() ([]string, error) {
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return nil, err
+	}
+	q, err := readWeaveQueue(dir)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range q.Stories {
+		if s == nil || s.Lease == nil {
+			continue // unowned: names nobody
+		}
+		holder := strings.TrimSpace(s.Lease.Holder)
+		if holder == "" {
+			continue
+		}
+		if now.Sub(s.Lease.At) > SprintLeaseTTL {
+			continue // stale: the holder is not managing anything
+		}
+		if seen[holder] {
+			continue
+		}
+		seen[holder] = true
+		out = append(out, holder)
+	}
+	sort.Strings(out)
+	return out, nil
 }

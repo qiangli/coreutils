@@ -263,7 +263,7 @@ func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) erro
 // read could destroy history it would need a permission model, and a permission
 // model is how a messaging feature stops being one.
 func newMBSendCmd() *cobra.Command {
-	var topic, as, to, tool, provider, family, version string
+	var topic, as, to, tool, provider, family, version, role string
 	var band int
 	var any bool
 	cmd := &cobra.Command{
@@ -297,6 +297,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				Band: band, Tool: strings.TrimSpace(tool),
 				Provider: strings.TrimSpace(provider),
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
+				Role: strings.TrimSpace(role),
 			}
 			from, err := ResolveAuthoredActor(as)
 			if err != nil {
@@ -357,6 +358,8 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 	f.StringVar(&provider, "provider", "", "post to every agent whose model has this provider")
 	f.StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
 	f.StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
+	f.StringVar(&role, "role", "",
+		"post to every agent currently HOLDING that role — `--role conductor` reaches the live sprint managers, and only them (a stale or unowned lease names nobody)")
 	f.BoolVar(&any, "any", false,
 		"offer to ANY ONE of the group: the first to read it claims it and the rest never see it (default: all of them see it, and views are counted)")
 	return cmd

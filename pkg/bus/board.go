@@ -128,6 +128,7 @@ func (p Post) Audiences() string {
 	for _, kv := range [][2]string{
 		{"tool", p.Audience.Tool}, {"provider", p.Audience.Provider},
 		{"family", p.Audience.Family}, {"version", p.Audience.Version},
+		{"role", p.Audience.Role},
 	} {
 		if kv[1] != "" {
 			parts = append(parts, kv[0]+" "+kv[1])
