@@ -40,7 +40,9 @@ arrays in the request and target policy, each entry `{"path":"/absolute/resolved
 The receiver independently checks its checkout (including
 untracked/ignored files), runtime, and native resource sample before execution.
 Estimated or stale CPU/memory headroom—including Darwin sources when estimated—
-is refused. Capacity is atomically reserved on the receiving host, clamped to
+is refused. Guarded execution is supported on Linux/macOS; Windows remains
+explicitly queued because its process-group/boot-identity proof is unavailable.
+Authorized observation works independently. Capacity is atomically reserved on the receiving host, clamped to
 both policy and observed headroom. A sender's local file lock has no cross-host
 authority.
 

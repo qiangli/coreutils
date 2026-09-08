@@ -75,3 +75,35 @@ func queueCapacityRequest(r CapacityRequest, reason string) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+func clearCapacityQueuedRequest(r CapacityRequest) error {
+	dir := filepath.Join(filepath.Dir(CapacityPolicyPath()), "remote-capacity", "pending")
+	path := filepath.Join(dir, capacityOutputDigest(r.ID)+".json")
+	if _, e := os.Stat(path); os.IsNotExist(e) {
+		return nil
+	} else if e != nil {
+		return e
+	}
+	lock, e := lockfile.TryAcquire(filepath.Join(filepath.Dir(dir), "pending.lock"), lockfile.Holder{Name: "capacity-queue-complete"})
+	if e != nil {
+		return e
+	}
+	defer lock.Release()
+	f, e := os.Open(path)
+	if os.IsNotExist(e) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	var old capacityQueuedRequest
+	e = decodeCapacity(f, &old)
+	f.Close()
+	if e != nil {
+		return e
+	}
+	if capacityDigest(old.Request) != capacityDigest(r) {
+		return errors.New("completed request differs from pending request; retained for inspection")
+	}
+	return os.Remove(path)
+}

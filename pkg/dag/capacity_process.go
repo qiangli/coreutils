@@ -168,3 +168,5 @@ func runCapacityBounded(ctx context.Context, task *Task, tio TaskIO) TaskResult 
 	}
 	return res
 }
+
+func capacityPlatformSupportsExecution(goos string) bool { return goos == "linux" || goos == "darwin" }

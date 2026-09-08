@@ -345,3 +345,35 @@ func TestCapacityExternalWithoutDeclaredInventoryQueuesAndDynamicCallsRefuse(t *
 		}
 	}
 }
+
+func TestCapacityUnsupportedPlatformsNeverAdvertiseGuardedExecution(t *testing.T) {
+	for _, platform := range []string{"windows", "aix", "plan9"} {
+		if capacityPlatformSupportsExecution(platform) {
+			t.Fatalf("unsupported execution platform advertised: %s", platform)
+		}
+	}
+	if !capacityPlatformSupportsExecution("linux") || !capacityPlatformSupportsExecution("darwin") {
+		t.Fatal("supported guarded platform refused")
+	}
+}
+func TestCapacityVerifiedDispatchConsumesMatchingLocalPendingRequest(t *testing.T) {
+	c, r := capacityFixture(t)
+	resolve := c.Resolve
+	c.Resolve = func(string) (fleet.Host, bool) { return fleet.Host{}, false }
+	plan, e := c.Dispatch(context.Background(), r)
+	if e != nil || plan.Decision != "queued-local" {
+		t.Fatalf("fallback: %+v %v", plan, e)
+	}
+	path := filepath.Join(filepath.Dir(CapacityPolicyPath()), "remote-capacity", "pending", capacityOutputDigest(r.ID)+".json")
+	if _, e = os.Stat(path); e != nil {
+		t.Fatal(e)
+	}
+	c.Resolve = resolve
+	result, e := c.Dispatch(context.Background(), r)
+	if e != nil || result.Decision != "completed" {
+		t.Fatalf("retry: %+v %v", result, e)
+	}
+	if _, e = os.Stat(path); !os.IsNotExist(e) {
+		t.Fatal("completed request remained falsely pending", e)
+	}
+}

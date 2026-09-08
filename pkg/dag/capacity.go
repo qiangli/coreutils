@@ -281,7 +281,18 @@ func (c *CapacityClient) Plan(ctx context.Context, r CapacityRequest) (*Capacity
 			plan.Refusals = append(plan.Refusals, t.Worker+": unreachable")
 			continue
 		}
-		if reply.Decision != "observed" || !capacityCompatible(reply.Observation, r, time.Now()) {
+		if reply.Decision != "observed" {
+			reason := reply.Reason
+			if reason == "" {
+				reason = "remote capacity refused"
+			}
+			if len(reason) > 256 {
+				reason = reason[:256]
+			}
+			plan.Refusals = append(plan.Refusals, t.Worker+": "+reason)
+			continue
+		}
+		if !capacityCompatible(reply.Observation, r, time.Now()) {
 			plan.Refusals = append(plan.Refusals, t.Worker+": stale, unknown or incompatible headroom/platform/toolchain/data")
 			continue
 		}
@@ -320,6 +331,9 @@ func (c *CapacityClient) Dispatch(ctx context.Context, r CapacityRequest) (*Capa
 			if reply.Decision == "completed" {
 				if e = verifyCapacityResult(t, r, reply.Result); e != nil {
 					return nil, e
+				}
+				if e = clearCapacityQueuedRequest(r); e != nil {
+					reply.Reason += "; local pending request cleanup: " + e.Error()
 				}
 			}
 			return reply, nil
@@ -398,6 +412,11 @@ func receiveCapacity(ctx context.Context, p *CapacityPolicy, s CapacityServices,
 	}
 	if !permitsCapacity(*target, w.Request) {
 		reply.Reason = "receiver dispatch or data permission denied"
+		return reply, nil
+	}
+	if !capacityPlatformSupportsExecution(runtime.GOOS) {
+		reply.Decision = "queued-local"
+		reply.Reason = "guarded remote execution is unsupported on this receiver platform; observation remains available"
 		return reply, nil
 	}
 	if s.Probe == nil {
