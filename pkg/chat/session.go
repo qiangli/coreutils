@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -49,9 +50,13 @@ import (
 // able to say "stop, you're off the agenda" without killing the turn and losing
 // everything it had already said.
 type Session struct {
-	Agent   string // the canonical binding, as recorded
-	Nick    string // the name the caller used
-	CtlSock string // where a steer lands
+	budgetMu      sync.Mutex
+	budgetWorks   []*budgetWork
+	budgetClosed  bool
+	budgetCommand *exec.Cmd
+	Agent         string // the canonical binding, as recorded
+	Nick          string // the name the caller used
+	CtlSock       string // where a steer lands
 	// inboxAgent is used only by transports such as ACP that have an
 	// authenticated protocol session but no PTY control socket.
 	inboxAgent string
@@ -379,6 +384,14 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		return nil, err
 	}
 
+	budgetWork, budgetErr := reserveBudgetWork(ctx, l, opt.Prompt, card.ID, true, opt.AllowPremium)
+	if budgetErr != nil {
+		cancel()
+		_ = releaseInbox()
+		room.Leave(card.ID)
+		return nil, budgetErr
+	}
+	s.budgetWorks = append(s.budgetWorks, budgetWork)
 	started := make(chan error, 1)
 	var startedOnce sync.Once
 	reportStarted := func(err error) {
@@ -430,7 +443,10 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		reportStarted(err)
 		s.mu.Lock()
 		s.exit, s.killed, s.err = exit, killed, err
-		recordLaunchUsage(ctx, l, opt.Prompt, s.buf.String())
+		if cmd.Process == nil {
+			_ = budgetWork.abort()
+		}
+		s.err = errors.Join(s.err, s.finishBudgetWorks(s.buf.String(), budgetCompletionError(cmd)))
 		s.mu.Unlock()
 	}()
 
@@ -627,6 +643,12 @@ func (s *Session) Say(text string) error {
 		}
 		return fmt.Errorf("chat: LLM budget blocked %s: %s", s.Agent, d.Reason)
 	}
+	if s.acp == nil && s.CtlSock == "" {
+		return fmt.Errorf("chat: %s has no control channel", s.Nick)
+	}
+	if err := s.reserveTurnBudget(text); err != nil {
+		return err
+	}
 	if err := s.say(text); err != nil {
 		return err
 	}
@@ -637,7 +659,7 @@ func (s *Session) Say(text string) error {
 	// Charged on SEND, not on reply: the turn is bought the moment the agent
 	// accepts it, and a session's reply text has no boundary we could bill
 	// against anyway (that is what WaitIdle exists to guess at).
-	recordLaunchUsageTokens(context.Background(), s.launch, estimateTokens(text), 0)
+	// The turn claim is settled once with the session lifetime; text is estimated.
 	return nil
 }
 
@@ -682,7 +704,16 @@ func (s *Session) governTurn(text string) llmbudget.Decision {
 	if s.launch.ModelName == "" {
 		return llmbudget.Decision{Action: llmbudget.Allow}
 	}
-	return llmbudget.CheckWithOverride(context.Background(), s.launch.ModelName, estimateTokens(text), s.allowPremium)
+	r := opaqueBudgetRequest(s.launch, text, false)
+	r.AllowPremium = s.allowPremium
+	a, e := llmbudget.Preview(context.Background(), r)
+	if e != nil {
+		return llmbudget.Decision{Action: llmbudget.Block, Reason: e.Error()}
+	}
+	if a.Decision.Action != llmbudget.Allow {
+		return llmbudget.Decision{Action: llmbudget.Block, Reason: a.Decision.Reason}
+	}
+	return a.Decision
 }
 
 // Output is everything the agent has said so far. Safe to call while it is still

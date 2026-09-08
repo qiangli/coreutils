@@ -395,6 +395,7 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 }
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	observeBudgetProcess(ctx, nil)
 	// Preflight, so a missing CLI is reported as a missing CLI. Left to os/exec
 	// it surfaces as `exec: "claude": executable file not found in $PATH` — which
 	// names a $PATH the operator never set and cannot see, since the launcher is
@@ -411,6 +412,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		stripQuarantine(p)
 	}
 	cmd := agentCommand(ctx, agent, args, cwd)
+	defer func() { observeBudgetProcess(ctx, cmd) }()
 
 	// Attach to a PTY once the command — and above all its environment — is
 	// fully built, so the PTY path cannot diverge from the pipe path in what the
@@ -1127,10 +1129,33 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// The launcher is the only place that knows which principal is about to
 	// act, so it is the only place that can tell the spawned process who it
 	// is. execRunner reads this back out to stamp the child's environment.
+	budgetWork, budgetErr := reserveBudgetWork(ctx, lnch, prompt, taskCard.ID, true, opt.AllowPremium)
+	if budgetErr != nil {
+		res.ExitCode = 75
+		return res, budgetErr
+	}
 	callCtx, endObservation := startGenAIObservation(ctx, lnch)
+	proof := &budgetProcessProof{}
+	callCtx = context.WithValue(callCtx, budgetProcessKey{}, proof)
 	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
 	endGenAIObservation(endObservation, lnch, prompt, out, "", err)
-	recordLaunchUsage(ctx, lnch, prompt, out)
+	var finishErr error
+	if proof.Observed && !proof.Started {
+		finishErr = budgetWork.abort()
+	} else {
+		budgetErr := err
+		if proof.Observed {
+			if proof.Terminated {
+				budgetErr = nil
+			} else {
+				budgetErr = errors.New("inherited child lifetime unverified")
+			}
+		}
+		finishErr = budgetWork.finish(out, budgetErr)
+	}
+	if finishErr != nil {
+		err = errors.Join(err, finishErr)
+	}
 	// This is the shared return seam for every unattended agent turn.  Do not
 	// return an over-budget transcript: its complete bytes have first been
 	// spilled by reduceInvokeOutput, and the bounded view tells the next agent
@@ -1222,7 +1247,13 @@ func governLaunch(ctx context.Context, originalName string, l Launch, prompt str
 			return l, llmbudget.Decision{Action: llmbudget.Block, Model: l.ModelName, Reason: "budget route cycle"}, nil
 		}
 		seen[l.ModelName] = true
-		d := llmbudget.CheckWithOverride(ctx, l.ModelName, estimateTokens(prompt), opt.AllowPremium)
+		request := opaqueBudgetRequest(l, prompt, true)
+		request.AllowPremium = opt.AllowPremium
+		preview, e := llmbudget.Preview(ctx, request)
+		if e != nil {
+			return l, preview.Decision, e
+		}
+		d := preview.Decision
 		switch d.Action {
 		case "", llmbudget.Allow:
 			return l, d, nil

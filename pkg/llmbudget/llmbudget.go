@@ -7,7 +7,6 @@ package llmbudget
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -78,6 +77,11 @@ type Limits struct {
 }
 
 type Config struct {
+	PolicyPath        string
+	Policy            *Policy
+	Adapters          []Adapter
+	ResolveCredential CredentialResolver
+
 	Models       map[string]Model
 	StatePath    string
 	AllowPremium bool
@@ -87,13 +91,25 @@ type Config struct {
 }
 
 type Gate struct {
-	mu     sync.Mutex
-	cfg    Config
-	state  State
-	loaded bool
+	publishFault  func(string) error // package tests inject process/publish failures
+	mu            sync.Mutex
+	cfg           Config
+	state         State
+	loaded        bool
+	seenDisk      bool
+	inTransaction bool
+	stateErr      error
 }
 
 type State struct {
+	HardPolicy   bool                    `json:"hard_policy,omitempty"`
+	Integrity    string                  `json:"integrity,omitempty"`
+	Unattributed map[string]Counters     `json:"unattributed,omitempty"`
+	Version      int                     `json:"version,omitempty"`
+	Pools        map[string]PoolCounters `json:"pools,omitempty"`
+	Reservations map[string]Reservation  `json:"reservations,omitempty"`
+	Completed    map[string]Completion   `json:"completed,omitempty"`
+
 	Models    map[string]Counters `json:"models,omitempty"`
 	Plans     map[string]Counters `json:"plans,omitempty"`
 	Providers map[string]Counters `json:"providers,omitempty"`
@@ -128,6 +144,9 @@ var defaultGate = DefaultFromEnv()
 // exercised is exactly the kind of capability that quietly does not work.
 // Inject a Gate with a fixed clock and pre-loaded counters instead of sleeping
 // or spending real money to reach a limit.
+// DefaultGate returns the current authority for a caller to retain throughout a work lifetime.
+func DefaultGate() *Gate { return defaultGate }
+
 func SetDefault(g *Gate) (restore func()) {
 	prev := defaultGate
 	if g != nil {
@@ -235,9 +254,14 @@ func (g *Gate) CheckWithOverride(ctx context.Context, model string, estTokens in
 	if estTokens < 0 {
 		estTokens = 0
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.ensureLoaded()
+	var d Decision
+	err := g.transaction(ctx, func() error { d = g.checkLegacy(ctx, model, estTokens, allowPremium); return nil })
+	if err != nil {
+		return Decision{Action: Block, Model: model, Reason: "budget state unavailable"}
+	}
+	return d
+}
+func (g *Gate) checkLegacy(ctx context.Context, model string, estTokens int64, allowPremium bool) Decision {
 	m, ok := g.model(model)
 	if !ok {
 		g.warn("llmbudget: missing model metadata; allowing", "model", model)
@@ -270,12 +294,21 @@ func (g *Gate) Record(model string, promptTokens, completionTokens int64, costUS
 	if completionTokens < 0 {
 		completionTokens = 0
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.ensureLoaded()
+	if math.IsNaN(costUSD) || math.IsInf(costUSD, 0) || costUSD < 0 {
+		return
+	}
+	if err := g.transaction(context.Background(), func() error {
+		g.recordLocal(model, promptTokens, completionTokens, costUSD)
+		g.state.Unattributed[model] = addCounters(g.state.Unattributed[model], g.now(), promptTokens+completionTokens, 1, costUSD)
+		return nil
+	}); err != nil {
+		g.warn("llmbudget: usage was not recorded", "error", err)
+	}
+}
+func (g *Gate) recordLocal(model string, promptTokens, completionTokens int64, costUSD float64) {
 	m, _ := g.model(model)
 	now := g.now()
-	totalTokens := promptTokens + completionTokens
+	totalTokens := safeAdd(promptTokens, completionTokens)
 	g.state.Models[model] = addCounters(g.state.Models[model], now, totalTokens, 1, costUSD)
 	if m.Provider != "" {
 		g.state.Providers[m.Provider] = addCounters(g.state.Providers[m.Provider], now, totalTokens, 1, costUSD)
@@ -283,7 +316,6 @@ func (g *Gate) Record(model string, promptTokens, completionTokens int64, costUS
 	if p := planName(m); p != "" {
 		g.state.Plans[p] = addCounters(g.state.Plans[p], now, totalTokens, 1, 0)
 	}
-	g.save()
 }
 
 func (g *Gate) checkAPIKey(ctx context.Context, m Model, estTokens int64) Decision {
@@ -323,10 +355,10 @@ func (g *Gate) checkSubscription(ctx context.Context, m Model, estTokens int64) 
 		limit  int64
 		actual int64
 	}{
-		{"subscription_daily_tokens", lim.DailyTokens, c.DayTokens + estTokens},
-		{"subscription_weekly_tokens", lim.WeeklyTokens, c.WeekTokens + estTokens},
-		{"subscription_daily_requests", lim.DailyRequests, c.DayRequests + 1},
-		{"subscription_weekly_requests", lim.WeeklyRequests, c.WeekRequests + 1},
+		{"subscription_daily_tokens", lim.DailyTokens, safeAdd(c.DayTokens, estTokens)},
+		{"subscription_weekly_tokens", lim.WeeklyTokens, safeAdd(c.WeekTokens, estTokens)},
+		{"subscription_daily_requests", lim.DailyRequests, safeAdd(c.DayRequests, 1)},
+		{"subscription_weekly_requests", lim.WeeklyRequests, safeAdd(c.WeekRequests, 1)},
 	}
 	for _, b := range check {
 		if b.limit <= 0 {
@@ -358,77 +390,34 @@ func (g *Gate) reserveRate(provider string, lim Limits, tokens int64, now time.T
 	if b.WindowStart.IsZero() || !now.Before(b.WindowStart.Add(lim.RatePer)) {
 		b = Bucket{WindowStart: now}
 	}
-	if b.Used+tokens > lim.RateTokens {
+	if safeAdd(b.Used, tokens) > lim.RateTokens {
 		g.state.Buckets[provider] = b
 		g.save()
 		return b.WindowStart.Add(lim.RatePer).Sub(now)
 	}
-	b.Used += tokens
+	b.Used = safeAdd(b.Used, tokens)
 	g.state.Buckets[provider] = b
 	g.save()
 	return 0
 }
 
 func (g *Gate) ensureLoaded() {
-	if g.loaded {
-		return
-	}
-	g.loaded = true
-	if g.state.Models == nil {
-		g.state.Models = map[string]Counters{}
-	}
-	if g.state.Plans == nil {
-		g.state.Plans = map[string]Counters{}
-	}
-	if g.state.Providers == nil {
-		g.state.Providers = map[string]Counters{}
-	}
-	if g.state.Buckets == nil {
-		g.state.Buckets = map[string]Bucket{}
-	}
-	if g.cfg.StatePath == "" {
-		return
-	}
-	b, err := os.ReadFile(g.cfg.StatePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			g.warn("llmbudget: cannot read state; starting empty", "path", g.cfg.StatePath, "error", err)
-		}
-		return
-	}
-	if err := json.Unmarshal(b, &g.state); err != nil {
-		g.warn("llmbudget: cannot parse state; starting empty", "path", g.cfg.StatePath, "error", err)
-		g.state = State{Models: map[string]Counters{}, Plans: map[string]Counters{}, Providers: map[string]Counters{}, Buckets: map[string]Bucket{}}
-	}
-	if g.state.Models == nil {
-		g.state.Models = map[string]Counters{}
-	}
-	if g.state.Plans == nil {
-		g.state.Plans = map[string]Counters{}
-	}
-	if g.state.Providers == nil {
-		g.state.Providers = map[string]Counters{}
-	}
-	if g.state.Buckets == nil {
-		g.state.Buckets = map[string]Bucket{}
+	if !g.loaded {
+		g.stateErr = g.reload()
 	}
 }
-
 func (g *Gate) save() {
-	if g.cfg.StatePath == "" {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(g.cfg.StatePath), 0o755); err != nil {
-		g.warn("llmbudget: cannot create state dir", "path", g.cfg.StatePath, "error", err)
-		return
-	}
-	b, _ := json.MarshalIndent(g.state, "", "  ")
-	if err := os.WriteFile(g.cfg.StatePath, b, 0o600); err != nil {
-		g.warn("llmbudget: cannot write state", "path", g.cfg.StatePath, "error", err)
+	if !g.inTransaction {
+		g.stateErr = g.writeState()
 	}
 }
 
 func (g *Gate) model(name string) (Model, bool) {
+	// Account-only source rows have no model. A missing model is not a
+	// request to parse every embedded/local fleet model.
+	if name == "" {
+		return Model{}, false
+	}
 	if m, ok := g.cfg.Models[name]; ok {
 		m.Name = nonEmpty(m.Name, name)
 		return m, true
@@ -521,10 +510,10 @@ func estimateCost(m Model, tokens int64) (float64, bool) {
 
 func addCounters(c Counters, now time.Time, tokens, requests int64, cost float64) Counters {
 	c = currentCounters(c, now)
-	c.DayTokens += tokens
-	c.WeekTokens += tokens
-	c.DayRequests += requests
-	c.WeekRequests += requests
+	c.DayTokens = safeAdd(c.DayTokens, tokens)
+	c.WeekTokens = safeAdd(c.WeekTokens, tokens)
+	c.DayRequests = safeAdd(c.DayRequests, requests)
+	c.WeekRequests = safeAdd(c.WeekRequests, requests)
 	c.DayCostUSD += cost
 	c.WeekCostUSD += cost
 	c.CostUSD += cost
@@ -598,7 +587,12 @@ func firstPositive(v ...float64) float64 {
 	return 0
 }
 
-func microUSD(v float64) int64 { return int64(math.Ceil(v * 1_000_000)) }
+func microUSD(v float64) int64 {
+	if v >= float64(math.MaxInt64)/1e6 {
+		return math.MaxInt64
+	}
+	return int64(math.Ceil(v * 1_000_000))
+}
 
 func env(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {

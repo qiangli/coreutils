@@ -369,7 +369,7 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 // SPRINT is one initiative that spans multiple repos; its board is
 // USER-GLOBAL. `bashy weave` is the per-repo EXECUTION engine for the
 // runs a sprint links. `bashy sprint` with no subcommand shows the board.
-func NewSprintCmd() *cobra.Command {
+func NewSprintCmd(options ...SprintOption) *cobra.Command {
 	var flags weaveOutputFlags
 	var epic string
 	// ONE switch for the whole tree rather than a flag per stage verb: the
@@ -586,6 +586,9 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 	// the store is opened is not a cobra structural error, so neither
 	// reporter above sees it. See runerr.go.
 	installRunErrorReporting(cmd)
+	for _, option := range options {
+		option(cmd)
+	}
 	return cmd
 }
 
@@ -718,10 +721,12 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{
 			"sprint": s, "goal_progress": progress, "next_story": next,
+			"resources": sprintResources(cmd, id),
 		}))
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
+	renderSprintResources(out, sprintResources(cmd, id))
 	if s.Epic != "" {
 		fmt.Fprintf(out, "  epic:       %s\n", s.Epic)
 	}

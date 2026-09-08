@@ -14,6 +14,7 @@ import "sort"
 // limit reported as "unlimited" is the same class of bug as an absent test
 // result reported as a pass.
 type BudgetStatus struct {
+	Error      string `json:"error,omitempty"`
 	Model      string `json:"model"`
 	ModelKnown bool   `json:"model_known"`
 	Lane       Lane   `json:"lane,omitempty"`
@@ -52,7 +53,7 @@ func StatusAll() []BudgetStatus { return defaultGate.StatusAll() }
 func (g *Gate) Status(model string) BudgetStatus {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.ensureLoaded()
+	g.stateErr = g.reload()
 	return g.status(model)
 }
 
@@ -60,7 +61,7 @@ func (g *Gate) Status(model string) BudgetStatus {
 func (g *Gate) StatusAll() []BudgetStatus {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.ensureLoaded()
+	g.stateErr = g.reload()
 	names := make([]string, 0, len(g.state.Models))
 	for name := range g.state.Models {
 		names = append(names, name)
@@ -78,6 +79,11 @@ func (g *Gate) status(model string) BudgetStatus {
 	now := g.now()
 	m, known := g.model(model)
 	s := BudgetStatus{Model: model, ModelKnown: known}
+	if g.stateErr != nil {
+		s.Error = g.stateErr.Error()
+		s.Basis = "unavailable"
+		return s
+	}
 	if !known {
 		// No metadata at all: the counters are still real, the ceiling is not.
 		c := currentCounters(g.state.Models[model], now)

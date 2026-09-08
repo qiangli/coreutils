@@ -87,6 +87,34 @@ jobs:
             # job exercises the portable room, shell and agent surfaces.
             go test -run '^$' $pkgs
           fi
+      # Compile-only Windows checks cannot prove the native resource and
+      # admission behavior. Run this portable changed surface directly, without
+      # retries/baselines; POSIX full-suite exclusions below remain unchanged.
+      - name: Native Windows resources, budgets, and executable verification
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        shell: bash
+        env:
+          GOMAXPROCS: "2"
+          GOFLAGS: "-p=2"
+        run: |
+          set -o pipefail
+          go test -json -count=1 -timeout 3m ./pkg/resources -run 'Test(CollectLiveHost|CollectSingleSample|HostObservation|ResourceAlert|ResourcesObservationChild)' | tee "$RUNNER_TEMP/windows-resources.jsonl"
+          go test -json -count=1 -timeout 3m ./pkg/llmbudget | tee "$RUNNER_TEMP/windows-llmbudget.jsonl"
+          # Fail if build tags accidentally exclude a promised native proof.
+          go test ./pkg/dag -list '^TestCapacity(Executable|UnsupportedPlatforms)' > "$RUNNER_TEMP/windows-capacity-tests.txt"
+          grep -Fx 'TestCapacityExecutablePlatformMode' "$RUNNER_TEMP/windows-capacity-tests.txt"
+          grep -Fx 'TestCapacityUnsupportedPlatformsNeverAdvertiseGuardedExecution' "$RUNNER_TEMP/windows-capacity-tests.txt"
+          go test -json -count=1 -timeout 3m ./pkg/dag -run '^TestCapacity(Executable|UnsupportedPlatforms)' | tee "$RUNNER_TEMP/windows-capacity.jsonl"
+
+      - name: Retain native Windows resource admission diagnostics
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-resource-admission
+          path: ${{ runner.temp }}/windows-*.jsonl
+          if-no-files-found: error
+
       # Process lifecycle regressions must pass every repetition. Keep this
       # outside the ratchet so a retry cannot hide an intermittent failure,
       # and retain package-level JSON diagnostics even when all tests pass.

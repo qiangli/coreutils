@@ -109,13 +109,14 @@ type sprintTick struct {
 
 	Mail sprintTickMail `json:"mail"`
 	// Board is the story census plus what demonstrably moved since Since.
-	Board  sprintTickBoard `json:"board"`
-	Fleet  sprintTickFleet `json:"fleet"`
-	Silent []sprintTickRun `json:"silent,omitempty"`
-	Review []sprintTickRun `json:"review,omitempty"`
-	Brief  sprintTickBrief `json:"brief"`
-	Gate   sprintTickGate  `json:"gate"`
-	Seat   sprintTickSeat  `json:"seat"`
+	Board     sprintTickBoard       `json:"board"`
+	Fleet     sprintTickFleet       `json:"fleet"`
+	Silent    []sprintTickRun       `json:"silent,omitempty"`
+	Review    []sprintTickRun       `json:"review,omitempty"`
+	Brief     sprintTickBrief       `json:"brief"`
+	Gate      sprintTickGate        `json:"gate"`
+	Seat      sprintTickSeat        `json:"seat"`
+	Resources SprintResourceSummary `json:"resources"`
 }
 
 type sprintTickMail struct {
@@ -255,10 +256,12 @@ func runSprintTick(cmd *cobra.Command, id int64, as string, wait time.Duration, 
 		tick = waitForSprintChange(dir, id, as, tick, wait)
 	}
 
+	tick.Resources = sprintResources(cmd, id)
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint tick", tick))
 	}
 	renderSprintTick(cmd.OutOrStdout(), tick)
+	renderSprintResources(cmd.OutOrStdout(), tick.Resources)
 	return nil
 }
 

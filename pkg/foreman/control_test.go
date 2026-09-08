@@ -255,19 +255,39 @@ func TestServeControlStopCancelsActiveTurn(t *testing.T) {
 func TestServeControlDeadlineCancelsActiveTurn(t *testing.T) {
 	dir := t.TempDir()
 	r := &cancelRunner{started: make(chan struct{}), stopped: make(chan struct{})}
+	// This test covers expiration of an active turn. Starting an 80 ms
+	// session lifetime before socket/agent startup can correctly expire before
+	// the runner enters, which tests startup latency instead of cancellation.
 	s, err := Start(context.Background(), Options{
-		ID: "active-deadline", Goal: "bounded", Agent: "stub", Root: dir,
-		MaxRuntime: 80 * time.Millisecond, Runner: r,
+		ID: "active-deadline", Goal: "bounded", Agent: "stub", Root: dir, Runner: r,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan string, 1)
 	errC := make(chan error, 1)
-	go func() { errC <- s.ServeControl(context.Background(), ready) }()
+	serveDone := make(chan struct{})
+	var watched <-chan struct{}
+	go func() { defer close(serveDone); errC <- s.ServeControl(ctx, ready) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-serveDone:
+		case <-time.After(5 * time.Second):
+			t.Error("control server leaked after test cleanup")
+		}
+		if watched != nil {
+			select {
+			case <-watched:
+			case <-time.After(5 * time.Second):
+				t.Error("deadline watcher leaked after test cleanup")
+			}
+		}
+	})
 	select {
 	case <-ready:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("control socket did not become ready")
 	}
 	if _, err := SendCommand(dir, "active-deadline", Command{Verb: CommandTell, Message: "work"}); err != nil {
@@ -275,13 +295,38 @@ func TestServeControlDeadlineCancelsActiveTurn(t *testing.T) {
 	}
 	select {
 	case <-r.started:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("turn did not start")
 	}
 	select {
 	case <-r.stopped:
+		t.Fatal("runner stopped before deadline was armed")
+	default:
+	}
+	// Arm the production lifetime watcher only after the real runner is active.
+	// It shares the server's cancellation lifetime, so removing its cancellation
+	// or failing to join the accepted turn still makes this test fail. Its own
+	// listener is isolated from ServeControl's listener, which must close itself.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	watchExited := make(chan struct{})
+	watched = watchExited
+	go func() {
+		defer close(watchExited)
+		s.watchControlLifetime(ctx, cancel, ln, make(chan struct{}), time.Now().Add(80*time.Millisecond), "80ms")
+	}()
+	select {
+	case <-r.stopped:
 	case <-time.After(time.Second):
 		t.Fatal("deadline did not cancel active turn")
+	}
+	select {
+	case <-watched:
+	case <-time.After(time.Second):
+		t.Fatal("deadline watcher did not persist stopped state")
 	}
 	select {
 	case err := <-errC:

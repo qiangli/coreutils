@@ -67,3 +67,13 @@ func killProcessTree(cmd *exec.Cmd) error {
 }
 
 func processTreeGone(err error) bool { return errors.Is(err, syscall.ESRCH) }
+
+func budgetOwnedGroupGone(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return true
+	}
+	if cmd.ProcessState == nil || cmd.SysProcAttr == nil || !(cmd.SysProcAttr.Setsid || cmd.SysProcAttr.Setpgid && cmd.SysProcAttr.Pgid == 0) {
+		return false
+	}
+	return syscall.Kill(-cmd.Process.Pid, 0) == syscall.ESRCH
+}

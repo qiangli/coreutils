@@ -15,6 +15,7 @@ package schedule
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,15 +34,16 @@ import (
 
 // Job is one scheduled command.
 type Job struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name,omitempty"`
-	Kind     string   `json:"kind"` // cron | every | at
-	Spec     string   `json:"spec"`
-	Command  []string `json:"command"`
-	Dir      string   `json:"dir,omitempty"`
-	Queue    string   `json:"queue,omitempty"`
-	Stdin    string   `json:"stdin,omitempty"`
-	StdinSet bool     `json:"stdin_set,omitempty"`
+	WorkBudget *WorkBudget `json:"work_budget,omitempty"`
+	ID         string      `json:"id"`
+	Name       string      `json:"name,omitempty"`
+	Kind       string      `json:"kind"` // cron | every | at
+	Spec       string      `json:"spec"`
+	Command    []string    `json:"command"`
+	Dir        string      `json:"dir,omitempty"`
+	Queue      string      `json:"queue,omitempty"`
+	Stdin      string      `json:"stdin,omitempty"`
+	StdinSet   bool        `json:"stdin_set,omitempty"`
 	// POSIXCron marks jobs whose shell and umask semantics must be enforced.
 	// It makes a moved store fail closed on platforms that cannot provide them.
 	POSIXCron bool `json:"posix_cron,omitempty"`
@@ -219,6 +221,9 @@ func FireJob(j *Job, w io.Writer, deliver MailDelivery) error {
 }
 
 func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
+	return j.fireWithAdmission(w, deliver, BudgetAdmission(nil))
+}
+func (j *Job) fireWithAdmission(w io.Writer, deliver MailDelivery, admit JobAdmission) error {
 	if len(j.Command) == 0 {
 		return fmt.Errorf("job %s has no command", j.ID)
 	}
@@ -256,7 +261,27 @@ func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 	} else {
 		c.Stdout, c.Stderr = w, w
 	}
+	finish := func(error) error { return nil }
+	if admit != nil {
+		var admissionErr error
+		finish, admissionErr = admit(context.Background(), j)
+		if admissionErr != nil {
+			return admissionErr
+		}
+		if finish == nil {
+			return fmt.Errorf("schedule: admission omitted completion callback")
+		}
+	}
 	runErr := c.Run()
+	finishReason := runErr
+	if c.Process == nil {
+		finishReason = errBudgetJobNotStarted
+	} else if !budgetOwnedJobGone(c) {
+		finishReason = errBudgetJobLifetime
+	} else {
+		finishReason = nil
+	} // The group ended; preserve command error separately from lifetime proof.
+	runErr = combineAdmissionError(runErr, finish(finishReason))
 	if j.MailOutput && output.Len() > 0 {
 		if deliver == nil {
 			return errors.Join(runErr, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))
@@ -305,6 +330,9 @@ func NewScheduleCmd() *cobra.Command {
 
 func addCmd() *cobra.Command {
 	var cronExpr, every, at, name, prompt, ctx string
+	var expensive bool
+	var budgetModel string
+	var budgetMemory uint64
 	c := &cobra.Command{
 		Use:   "add [flags] -- command [args...]",
 		Short: "Add a scheduled job",
@@ -333,6 +361,14 @@ func addCmd() *cobra.Command {
 				Kind: kind, Spec: spec, Command: args, Dir: cwd,
 				Prompt: prompt, Context: ctx, Enabled: true, CreatedAt: now,
 			}
+			if expensive {
+				j.WorkBudget = &WorkBudget{Model: budgetModel}
+				if cmd.Flags().Changed("budget-memory-bytes") {
+					j.WorkBudget.MemoryBytes = &budgetMemory
+				}
+			} else if budgetModel != "" || cmd.Flags().Changed("budget-memory-bytes") {
+				return fmt.Errorf("budget demand flags require --expensive")
+			}
 			next, err := j.computeNext(now)
 			if err != nil {
 				return err
@@ -355,6 +391,9 @@ func addCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&expensive, "expensive", false, "Apply owned-work capacity admission before each run")
+	c.Flags().StringVar(&budgetModel, "budget-model", "", "Canonical model used by an expensive opaque harness job")
+	c.Flags().Uint64Var(&budgetMemory, "budget-memory-bytes", 0, "Explicit memory allocation for an expensive job")
 	c.Flags().StringVar(&cronExpr, "cron", "", "5-field cron expression (e.g. \"*/15 * * * *\")")
 	c.Flags().StringVar(&every, "every", "", "fixed interval (e.g. 30m, 2h)")
 	c.Flags().StringVar(&at, "at", "", "one-shot time (RFC3339, \"2006-01-02 15:04\", or \"15:04\")")

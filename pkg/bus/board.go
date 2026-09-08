@@ -57,10 +57,12 @@ const BoardSchema = "bashy-mb-v1"
 
 // Post is one message on the board.
 type Post struct {
-	SchemaVersion string `json:"schema_version"`
-	Seq           int64  `json:"seq"`
-	At            string `json:"at"`
-	From          string `json:"from"`
+	// IdempotencyKey is set only by PostMessageOnce for durable system notices.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	SchemaVersion  string `json:"schema_version"`
+	Seq            int64  `json:"seq"`
+	At             string `json:"at"`
+	From           string `json:"from"`
 	// To is the single agent expected to act. Empty means the post is not
 	// directed at one agent — see Audience. It is a hint about who should act,
 	// never a permission: every reader can see every post.

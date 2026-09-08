@@ -108,6 +108,33 @@ func TestThreeAcquisitionModesAndOwner(t *testing.T) {
 	}
 }
 
+func TestAcquisitionCreatesMissingParentsAndReusesSentinel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "state", "resource.lock")
+	first, err := TryAcquire(path, Holder{Name: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := TryAcquire(path, Holder{Name: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Release()
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("acquisition replaced kernel lock sentinel: %v", err)
+	}
+	if holder, ok := Owner(path); !ok || holder.Name != "second" {
+		t.Fatalf("holder diagnostics not updated: %+v, %v", holder, ok)
+	}
+}
+
 // THE HOLDER RECORD IS AN INSTANT, NOT A ZONE. A holder recorded in one zone
 // must read back as the same moment whatever zone the reader is running in —
 // the case that matters is a container on UTC reading a record written on a
