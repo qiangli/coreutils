@@ -113,3 +113,27 @@ func TestWeaveResourceCleanupRejectsRecycledSprintLink(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestWeaveResourceCleanupRejectsCleanCommitAfterClaim(t *testing.T) {
+	dir, repo, it := resourceCleanupFixture(t)
+	claim := it.Workspace + ".reclaim-fixture"
+	if e := os.Rename(it.Workspace, claim); e != nil {
+		t.Fatal(e)
+	}
+	gitE2E(t, claim, "config", "user.email", "fixture@test.local")
+	gitE2E(t, claim, "config", "user.name", "fixture")
+	if e := os.WriteFile(filepath.Join(claim, "new-work"), []byte("new committed work"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	gitE2E(t, claim, "add", ".")
+	gitE2E(t, claim, "commit", "-qm", "new work after claim")
+	if e := weaveVerifyReclaimWorkspace(repo, "main", it, claim); e == nil {
+		t.Fatal("clean unmerged commit after claim accepted")
+	}
+	if e := weaveConventionalArtifact(dir, 1, "log", filepath.Join(dir, "queue.json")); e == nil {
+		t.Fatal("queue state accepted as a log")
+	}
+	if e := weaveConventionalArtifact(dir, 1, "workspace", filepath.Join(dir, "workspaces", "shared-dependency")); e == nil {
+		t.Fatal("shared dependency accepted as run workspace")
+	}
+}

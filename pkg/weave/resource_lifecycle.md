@@ -83,3 +83,10 @@ Tests use private HOME/USERPROFILE and clear inherited Bashy/Weave overrides.
 Separate OS processes prove lifecycle exclusion and retained claims after owner
 crash. Actual command tests prove reservation before provisioning, persistent
 wrapper ownership, synchronous settlement and owned pause preserving progress.
+
+Safety follow-up: a paused acknowledgment requires verified child termination;
+an unverified prior reservation blocks every restart path even when other
+capacity is available. Cleanup accepts only the run's conventional workspace,
+log and socket paths and repeats the integration proof on the renamed workspace
+immediately before removal. A new clean commit is valuable work too. A hard
+Bashy memory floor requires a declared nonzero launch memory demand.

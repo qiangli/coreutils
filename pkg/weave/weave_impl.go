@@ -2803,7 +2803,7 @@ func runWeaveResume(cmd *cobra.Command, issueID int64, flags *weaveOutputFlags) 
 			if issueID > 0 && it.ID != issueID {
 				continue
 			}
-			if it.State == "paused" && weaveControlOwned(dir, q, it) {
+			if it.State == "paused" && weaveControlOwned(dir, q, it) && (it.ResourceReservationID == "" || it.ResourceTerminated) {
 				cp := *it
 				paused = append(paused, &cp)
 			}
@@ -3197,6 +3197,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitStateConflict, fmt.Errorf("run #%d state is %q", it.ID, it.State)))
 	}
+	if it.ResourceReservationID != "" && !it.ResourceTerminated {
+		return fmt.Errorf("run #%d prior child termination is unverified; reconcile its retained reservation before restart", it.ID)
+	}
 	boundedRuntime, budgetErr := weaveBoundRuntime(it.Points, opts.maxRuntime)
 	if budgetErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
@@ -3316,6 +3319,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	childLaunched, childTerminated := false, false
 	defer func() {
+		if !childLaunched || childTerminated {
+			_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
+				if current := findWeaveItem(q, it.ID); current != nil && current.ResourceReservationID == admission.request.ID {
+					current.ResourceTerminated = true
+				}
+				return nil
+			})
+		}
 		if err := admission.finish(childTerminated, childLaunched); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave: reservation retained: %v\n", err)
 		}
@@ -3868,7 +3879,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// We re-load inside the lock to pick up any updates that
 	// landed while the tool was running.
 	childLaunched = tool.Process != nil
-	childTerminated = weaveOwnedChildTerminated(tool)
+	childTerminated = weaveWaitOwnedChildTerminated(tool)
 	finishedAt := time.Now().UTC()
 	// Measure the branch outside the lock: this is the substrate
 	// evidence for the terminal state. A non-zero exit (crash,
@@ -3977,7 +3988,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.LogPath = logPath
 		}
 		freshIt.State = weaveTerminalState(exitCode, runErr, killReason, ev)
-		if freshIt.PauseRequestedBy != "" {
+		if freshIt.PauseRequestedBy != "" && childTerminated {
 			freshIt.State = "paused"
 			weaveAppendComment(freshIt, freshIt.PauseRequestedBy, "system", "paused with progress preserved: "+freshIt.PauseReason)
 		}

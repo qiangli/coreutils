@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -185,4 +186,17 @@ func weaveVerifiedWrapper(ctx context.Context, it *weaveItem) error {
 func weaveControlOwned(dir string, q *weaveQueue, it *weaveItem) bool {
 	actor, known := weaveConductorIdentity("")
 	return known && actor != "" && weaveOwnerFor(dir, q, it) == actor
+}
+
+func weaveWaitOwnedChildTerminated(cmd *exec.Cmd) bool {
+	deadline := time.Now().Add(time.Second)
+	for {
+		if weaveOwnedChildTerminated(cmd) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

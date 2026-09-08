@@ -232,3 +232,33 @@ func TestWeaveResourceStartQueuesBeforeProvision(t *testing.T) {
 		t.Fatal("queued run claimed active", fresh.Items[0])
 	}
 }
+
+func TestWeaveResourceStartRefusesPriorUnverifiedClaim(t *testing.T) {
+	isolateResourceLifecycle(t)
+	repo := t.TempDir()
+	initMemoryTestRepo(t, repo)
+	t.Chdir(repo)
+	dir, e := weaveQueueDir(repo)
+	if e != nil {
+		t.Fatal(e)
+	}
+	it := &weaveItem{ID: 1, State: "paused", Title: "fixture", ResourceReservationID: "prior-orphan"}
+	if e = saveWeaveQueue(dir, &weaveQueue{Root: repo, Items: []*weaveItem{it}}); e != nil {
+		t.Fatal(e)
+	}
+	cmd := NewWeaveCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"start", "--run", "1", "--no-spawn"})
+	if e = cmd.Execute(); e == nil || !strings.Contains(out.String(), "termination is unverified") {
+		t.Fatal("unverified prior work restarted", e, out.String())
+	}
+	fresh, e := loadWeaveQueue(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if fresh.Items[0].ResourceReservationID != "prior-orphan" {
+		t.Fatal("prior reservation identity overwritten")
+	}
+}

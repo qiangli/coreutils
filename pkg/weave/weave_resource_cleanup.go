@@ -120,6 +120,11 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 			continue
 		}
 		a := sprintPruneAction{Kind: artifact.kind, Repo: repo, Target: artifact.path, ByteKind: "apparent_regular_file_bytes"}
+		if err := weaveConventionalArtifact(dir, id, artifact.kind, artifact.path); err != nil {
+			a.Err = err.Error()
+			acts = append(acts, a)
+			continue
+		}
 		if err := weaveContainedArtifact(dir, artifact.path); err != nil {
 			a.Err = err.Error()
 			acts = append(acts, a)
@@ -155,7 +160,7 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 			if err != nil {
 				return err
 			}
-			if current.Workspace != it.Workspace || current.Head != it.Head || current.FinishedAt != it.FinishedAt {
+			if current.Workspace != it.Workspace || current.Head != it.Head || current.FinishedAt != it.FinishedAt || !current.Created.Equal(it.Created) || current.LogPath != it.LogPath || current.CtlSock != it.CtlSock {
 				return errors.New("run changed during cleanup")
 			}
 			if !weaveItemMerged(root, weaveBaseBranch(root), current) {
@@ -184,6 +189,14 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 			a.Err = e.Error()
 			acts = append(acts, a)
 			continue
+		}
+		if artifact.kind == "workspace" {
+			if e = weaveVerifyReclaimWorkspace(root, weaveBaseBranch(root), it, quarantine); e != nil {
+				_ = os.Rename(quarantine, artifact.path)
+				a.Err = e.Error()
+				acts = append(acts, a)
+				continue
+			}
 		}
 		if e = os.RemoveAll(quarantine); e != nil {
 			a.Err = e.Error()
@@ -246,4 +259,32 @@ func sprintPlanRunArtifacts(s *weaveStory) []sprintPruneAction {
 		}
 	}
 	return actions
+}
+
+func weaveConventionalArtifact(dir string, id int64, kind, path string) error {
+	expected := ""
+	switch kind {
+	case "workspace":
+		expected = filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", id))
+	case "log":
+		expected = filepath.Join(dir, "logs", fmt.Sprintf("issue-%d.log", id))
+	case "socket":
+		expected = weaveCtlSockPath(dir, id)
+	}
+	if expected == "" || filepath.Clean(path) != filepath.Clean(expected) {
+		return errors.New("artifact is not this run's conventional owned path")
+	}
+	return nil
+}
+func weaveVerifyReclaimWorkspace(root, base string, it *weaveItem, path string) error {
+	cp := *it
+	cp.Workspace = path
+	if !weaveItemMerged(root, base, &cp) {
+		return errors.New("claimed workspace gained unintegrated work; left alone")
+	}
+	out, e := exec.Command("git", "-C", path, "status", "--porcelain", "--untracked-files=all", "--ignored").Output()
+	if e != nil || len(out) > 0 {
+		return errors.New("claimed workspace gained uncommitted work; left alone")
+	}
+	return nil
 }
