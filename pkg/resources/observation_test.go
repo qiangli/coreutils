@@ -1,9 +1,11 @@
 package resources
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"os"
 	"os/exec"
@@ -251,18 +253,34 @@ func TestHostObservationSeparateProcessesShareRefreshAndAlerts(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			var cmds []*exec.Cmd
+			var outputs []*bytes.Buffer
+			defer func() {
+				cancel()
+				for _, cmd := range cmds {
+					if cmd.ProcessState == nil {
+						_ = cmd.Wait()
+					}
+				}
+			}()
 			for i := 0; i < 8; i++ {
 				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestResourcesObservationChild$")
 				cmd.Env = append(os.Environ(), "RESOURCE_OBSERVATION_CHILD="+mode, "RESOURCE_OBSERVATION_DIR="+dir)
+				output := new(bytes.Buffer)
+				cmd.Stdout, cmd.Stderr = output, output
 				if err := cmd.Start(); err != nil {
 					t.Fatal(err)
 				}
 				cmds = append(cmds, cmd)
+				outputs = append(outputs, output)
 			}
-			for _, cmd := range cmds {
+			var failures []string
+			for i, cmd := range cmds {
 				if err := cmd.Wait(); err != nil {
-					t.Fatalf("child failed: %v", err)
+					failures = append(failures, fmt.Sprintf("child %d failed: %v\n%s", i, err, outputs[i]))
 				}
+			}
+			if len(failures) > 0 {
+				t.Fatal(strings.Join(failures, "\n"))
 			}
 			if mode == "host" {
 				b, err := os.ReadFile(filepath.Join(dir, "refresh-count"))
