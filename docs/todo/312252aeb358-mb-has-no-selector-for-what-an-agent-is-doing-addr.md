@@ -3,12 +3,13 @@ id: 312252aeb358
 kind: task
 title: 'mb has no selector for what an agent is DOING: address the live sprint managers'
 seq: 96
-status: assigned
+status: done
 priority: p2
 created: 2026-09-07T19:27:40.311501Z
 weave: 2
 assignee: sprint139-manager
 sprint: 139
+closed: 2026-09-08T09:40:22.230667Z
 ---
 
 SPLIT OUT OF 365ed78773c4 on 2026-09-07, with the rest of that story delivered. This is its point 1, held back for a reason that is not effort.
@@ -28,3 +29,5 @@ WANTED.
 FIRST STEP IS NOT CODE: get the ack. Post to the bashy lane, or wait for their arm to close.
 
 GATE. A Go test that the selector resolves exactly the live-lease holders and excludes stale and unowned; the existing bashy/internal/agentos seam test extended to cover the new injection; and a manual check that `mb send --role conductor` reaches a second seated manager on this host.
+
+Delivery accepted 2026-09-08: coreutils PR #8 merged as affb46521ed5bbf2043d86374ad08cc19d4cbf12 (same tree as tested/pinned 6942196e). Native Linux/macOS/Windows CI run 34209811139 passed. Owner final combined Go vet/test and crossvet passed; Meet repair additionally passed 50 focused iterations plus full package. Installed clean Bashy fe53058 at ~/.local/bin/bashy passed deterministic two-live-seat delivery: role seq 3 received by peer; stage seqs 4–8 uncapped with no sprint subscription; invalid selectors append nothing; zero live recipients retains history with an honest receipt. Fixture watchers exited 0 and leases released. Evidence retained at /tmp/s139-installed-candidate-v2 and /tmp/sprint139-delivery/evidence. This is fixture-process delivery evidence, not model inference.
