@@ -31,26 +31,28 @@ type CapacityPolicy struct {
 	Targets     []CapacityTarget `json:"targets"`
 }
 type CapacityTarget struct {
-	Name        string   `json:"name"`
-	Worker      string   `json:"worker"`
-	Observe     bool     `json:"observe"`
-	Dispatch    bool     `json:"dispatch"`
-	DataClasses []string `json:"data_classes"`
-	Workspace   string   `json:"workspace"`
-	Revision    string   `json:"revision"`
-	Toolchain   string   `json:"toolchain"`
-	Slots       int      `json:"slots"`
-	MemoryBytes uint64   `json:"memory_bytes"`
+	Executables []CapacityExecutable `json:"executables,omitempty"`
+	Name        string               `json:"name"`
+	Worker      string               `json:"worker"`
+	Observe     bool                 `json:"observe"`
+	Dispatch    bool                 `json:"dispatch"`
+	DataClasses []string             `json:"data_classes"`
+	Workspace   string               `json:"workspace"`
+	Revision    string               `json:"revision"`
+	Toolchain   string               `json:"toolchain"`
+	Slots       int                  `json:"slots"`
+	MemoryBytes uint64               `json:"memory_bytes"`
 }
 type CapacityRequest struct {
-	Version   int      `json:"version"`
-	ID        string   `json:"id"`
-	Target    string   `json:"target,omitempty"`
-	Spec      TaskSpec `json:"spec"`
-	Body      string   `json:"body"`
-	DataClass string   `json:"data_class"`
-	Revision  string   `json:"revision"`
-	Toolchain string   `json:"toolchain"`
+	Executables []CapacityExecutable `json:"executables,omitempty"`
+	Version     int                  `json:"version"`
+	ID          string               `json:"id"`
+	Target      string               `json:"target,omitempty"`
+	Spec        TaskSpec             `json:"spec"`
+	Body        string               `json:"body"`
+	DataClass   string               `json:"data_class"`
+	Revision    string               `json:"revision"`
+	Toolchain   string               `json:"toolchain"`
 }
 type CapacityObservation struct {
 	Facts         HostFacts `json:"facts"`
@@ -61,12 +63,13 @@ type CapacityObservation struct {
 	Toolchain     string    `json:"toolchain"`
 }
 type CapacityResult struct {
-	Record        RunRecord `json:"record"`
-	Revision      string    `json:"revision"`
-	Toolchain     string    `json:"toolchain"`
-	RequestSHA256 string    `json:"request_sha256"`
-	Output        string    `json:"output"`
-	OutputSHA256  string    `json:"output_sha256"`
+	Executables   []CapacityExecutable `json:"executables,omitempty"`
+	Record        RunRecord            `json:"record"`
+	Revision      string               `json:"revision"`
+	Toolchain     string               `json:"toolchain"`
+	RequestSHA256 string               `json:"request_sha256"`
+	Output        string               `json:"output"`
+	OutputSHA256  string               `json:"output_sha256"`
 }
 type CapacityReply struct {
 	CapacityHeld bool                 `json:"capacity_held,omitempty"`
@@ -123,6 +126,9 @@ func LoadCapacityPolicy() (*CapacityPolicy, error) {
 		}
 		seen[t.Name] = true
 		workers[t.Worker] = true
+		if !capacityInventoryAllowed(t.Executables, t.Executables) {
+			return nil, errors.New("invalid declared executable inventory")
+		}
 		if t.Dispatch && (t.Slots == 0 || t.MemoryBytes == 0 || t.Workspace == "" || !filepath.IsAbs(t.Workspace) || t.Revision == "" || t.Toolchain == "" || len(t.DataClasses) == 0) {
 			return nil, errors.New("dispatch policy requires workspace, revision, toolchain, data classes and nonzero capacity")
 		}
@@ -223,6 +229,9 @@ func validateCapacityRequest(r CapacityRequest) error {
 	return nil
 }
 func permitsCapacity(t CapacityTarget, r CapacityRequest) bool {
+	if !capacityInventoryAllowed(t.Executables, r.Executables) {
+		return false
+	}
 	if !t.Dispatch || t.Revision != r.Revision || t.Toolchain != r.Toolchain || t.Slots < r.Spec.CPUPerTask || t.MemoryBytes < r.Spec.MemPerTask {
 		return false
 	}
@@ -242,7 +251,12 @@ func (c *CapacityClient) Plan(ctx context.Context, r CapacityRequest) (*Capacity
 	if e := validateCapacityRequest(r); e != nil {
 		return nil, e
 	}
-	plan := &CapacityReply{Version: 1, Decision: "queued-local", Reason: "no authorized compatible remote capacity; work remains queued locally"}
+	plan := &CapacityReply{Version: 1, Decision: "queued-local", Reason: "no authorized compatible remote capacity; dispatch retains a local pending request"}
+	if _, e := capacityPinnedBody(r.Body, r.Executables); e != nil {
+		plan.Reason = e.Error()
+		plan.Refusals = []string{e.Error()}
+		return plan, nil
+	}
 	targets := append([]CapacityTarget(nil), c.Policy.Targets...)
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
 	for _, t := range targets {
@@ -319,7 +333,7 @@ func capacityDigest(v any) string {
 	return hex.EncodeToString(h[:])
 }
 func verifyCapacityResult(t CapacityTarget, r CapacityRequest, result *CapacityResult) error {
-	if result == nil || result.Record.Validate() != nil || result.Record.Worker != t.Worker || result.Record.Task != r.Spec.Task || result.Revision != r.Revision || result.Toolchain != r.Toolchain || result.RequestSHA256 != capacityDigest(r) || result.OutputSHA256 != capacityOutputDigest(result.Output) {
+	if result == nil || result.Record.Validate() != nil || result.Record.Worker != t.Worker || result.Record.Task != r.Spec.Task || result.Revision != r.Revision || result.Toolchain != r.Toolchain || result.RequestSHA256 != capacityDigest(r) || result.OutputSHA256 != capacityOutputDigest(result.Output) || !capacitySameInventory(r.Executables, result.Executables) {
 		return errors.New("remote result provenance or artifact digest mismatch")
 	}
 	return nil
@@ -388,6 +402,18 @@ func receiveCapacity(ctx context.Context, p *CapacityPolicy, s CapacityServices,
 	}
 	if s.Probe == nil {
 		return nil, errors.New("native headroom observation unavailable")
+	}
+	if _, e := VerifyCapacityExecutables(ctx, w.Request.Executables); e != nil {
+		reply.Decision = "queued-local"
+		reply.Reason = "declared executable inventory unavailable or changed"
+		return reply, nil
+	}
+	if w.Operation == "execute" {
+		if _, e := capacityPinnedBody(w.Request.Body, w.Request.Executables); e != nil {
+			reply.Decision = "queued-local"
+			reply.Reason = e.Error()
+			return reply, nil
+		}
 	}
 	observation, e := s.Probe(ctx, w.Worker)
 	if e != nil {
@@ -472,7 +498,12 @@ func executeCapacity(ctx context.Context, t CapacityTarget, r CapacityRequest, r
 	defer cancel()
 	var output limitedCapacityBuffer
 	output.limit = 64 << 10
-	task := &Task{Name: r.Spec.Task, Body: r.Body, Venue: r.Spec.Venue, Lang: "bash"}
+	pinnedBody, pinErr := capacityPinnedBody(r.Body, r.Executables)
+	if pinErr != nil {
+		terminated = true
+		return nil, pinErr
+	}
+	task := &Task{Name: r.Spec.Task, Body: pinnedBody, Venue: r.Spec.Venue, Lang: "bash"}
 	res, proved := runCapacityOwnedTask(ctx, task, TaskIO{Dir: t.Workspace, Env: os.Environ(), Stdout: &output, Stderr: &output}, func(pid int) error {
 		receipt.PID = pid
 		receipt.StartID, _ = s.Identity(ctx, pid)
@@ -482,14 +513,15 @@ func executeCapacity(ctx context.Context, t CapacityTarget, r CapacityRequest, r
 	if !proved {
 		reply.Reason = capacityRetentionReason(t, r.ID)
 	}
-	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	after, verifyErr := capacityCheckoutRevision(verifyCtx, t.Workspace)
+	executableProof, executableErr := VerifyCapacityExecutables(verifyCtx, r.Executables)
 	verifyCancel()
 	record := RecordAttempt(task, &Worker{ID: t.Worker}, 1, res)
 	reply.Decision = "completed"
 	reply.Observation = nil
-	reply.Result = &CapacityResult{Record: record, Revision: r.Revision, Toolchain: capacityRuntimeToolchain(), RequestSHA256: capacityDigest(r), Output: output.String(), OutputSHA256: capacityOutputDigest(output.String())}
-	if verifyErr != nil || after != r.Revision {
+	reply.Result = &CapacityResult{Executables: executableProof, Record: record, Revision: r.Revision, Toolchain: capacityRuntimeToolchain(), RequestSHA256: capacityDigest(r), Output: output.String(), OutputSHA256: capacityOutputDigest(output.String())}
+	if verifyErr != nil || after != r.Revision || executableErr != nil {
 		reply.Decision = "result-unverified"
 		reply.Reason = "checkout provenance changed or could not be verified"
 		reply.Result.Revision = after

@@ -34,7 +34,10 @@ addresses stay in the existing fleet alias. Observation and dispatch are separat
 permissions; dispatch also requires an allowed data class. No permission is
 inferred from registration. Toolchain means the Bashy embedded Go runtime and
 OS/architecture used by its shell executor, not an attestation of arbitrary
-external compilers. The receiver independently checks its checkout (including
+external compilers. External tasks additionally require matching `executables`
+arrays in the request and target policy, each entry `{"path":"/absolute/resolved/compiler","sha256":"EXPECTED_SHA256"}`. The receiver verifies up to eight regular executables before and after the run (256MiB each, 512MiB total, three-second deadline). Parsed static direct calls are pinned to those absolute paths, preventing PATH shadowing; undeclared or dynamic direct calls stay queued. Returned provenance contains the verified inventory. This proves declared executable bytes, not arbitrary descendant executables, package dependencies, libraries, or sandbox isolation.
+
+The receiver independently checks its checkout (including
 untracked/ignored files), runtime, and native resource sample before execution.
 Estimated or stale CPU/memory headroom—including Darwin sources when estimated—
 is refused. Capacity is atomically reserved on the receiving host, clamped to

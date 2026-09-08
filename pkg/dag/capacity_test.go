@@ -67,7 +67,19 @@ func capacityFixture(t *testing.T) (*CapacityClient, CapacityRequest) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	target := CapacityTarget{Name: "fixture", Worker: "worker-fixture", Observe: true, Dispatch: true, DataClasses: []string{"fixture-public"}, Workspace: work, Revision: revision, Toolchain: capacityRuntimeToolchain(), Slots: 1, MemoryBytes: 4096}
+	shellPath, e := exec.LookPath("sh")
+	if e != nil {
+		t.Fatal(e)
+	}
+	shellPath, e = filepath.EvalSymlinks(shellPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	shellBytes, e := os.ReadFile(shellPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	target := CapacityTarget{Executables: []CapacityExecutable{{Path: shellPath, SHA256: capacityOutputDigest(string(shellBytes))}}, Name: "fixture", Worker: "worker-fixture", Observe: true, Dispatch: true, DataClasses: []string{"fixture-public"}, Workspace: work, Revision: revision, Toolchain: capacityRuntimeToolchain(), Slots: 1, MemoryBytes: 4096}
 	policy := &CapacityPolicy{Version: 1, LocalWorker: target.Worker, Targets: []CapacityTarget{target}}
 	p := filepath.Join(dir, "policy.json")
 	b, _ := json.Marshal(policy)
@@ -225,6 +237,7 @@ func TestCapacityConstrainedProofRejectsEscapeSyntax(t *testing.T) {
 func TestCapacityExternalDescendantsRetainUntilVerifiedBootReconciliation(t *testing.T) {
 	c, r := capacityFixture(t)
 	r.ID = "retained"
+	r.Executables = append([]CapacityExecutable(nil), c.Policy.Targets[0].Executables...)
 	r.Body = "sh -c 'sleep 0.1 >/dev/null 2>&1 &'"
 	result, e := c.Dispatch(context.Background(), r)
 	if e != nil || result.Decision != "completed" || !result.CapacityHeld || !strings.Contains(result.Reason, "reconcile") {
@@ -285,5 +298,50 @@ func TestCapacityTimeoutKeepsStructuredOutcomeAndQueueFallbackPersists(t *testin
 	var row capacityQueuedRequest
 	if e = decodeCapacity(f, &row); e != nil || row.Request.ID != r.ID {
 		t.Fatal("bad queued request", e)
+	}
+}
+
+func TestCapacityDeclaredExecutableProofPinsPathAndDetectsChangedInventory(t *testing.T) {
+	c, r := capacityFixture(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compiler")
+	script := "#!/bin/sh\nprintf verified-compiler\n"
+	if e := os.WriteFile(path, []byte(script), 0700); e != nil {
+		t.Fatal(e)
+	}
+	r.Executables = []CapacityExecutable{{Path: path, SHA256: capacityOutputDigest(script)}}
+	r.Body = "compiler"
+	r.ID = "declared-compiler"
+	c.Policy.Targets[0].Executables = append([]CapacityExecutable(nil), r.Executables...)
+	b, _ := json.Marshal(c.Policy)
+	os.WriteFile(CapacityPolicyPath(), b, 0600)
+	shadowDir := t.TempDir()
+	os.WriteFile(filepath.Join(shadowDir, "compiler"), []byte("#!/bin/sh\nprintf wrong-PATH-compiler\n"), 0700)
+	t.Setenv("PATH", shadowDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	result, e := c.Dispatch(context.Background(), r)
+	if e != nil || result.Decision != "completed" || result.Result.Output != "verified-compiler" || !capacitySameInventory(r.Executables, result.Result.Executables) {
+		t.Fatalf("declared direct compiler not verified/pinned: %+v %v", result, e)
+	}
+	// Receiver fingerprints the current file again before accepting another job.
+	os.WriteFile(path, []byte(script+"# changed\n"), 0700)
+	r.ID = "changed-compiler"
+	plan, e := c.Plan(context.Background(), r)
+	if e != nil || plan.Decision != "queued-local" {
+		t.Fatalf("changed declared compiler remained eligible: %+v %v", plan, e)
+	}
+}
+func TestCapacityExternalWithoutDeclaredInventoryQueuesAndDynamicCallsRefuse(t *testing.T) {
+	c, r := capacityFixture(t)
+	r.Body = "go version"
+	r.Executables = nil
+	plan, e := c.Plan(context.Background(), r)
+	if e != nil || plan.Decision != "queued-local" || !strings.Contains(plan.Reason, "executable") {
+		t.Fatalf("runtime-only external toolchain accepted: %+v %v", plan, e)
+	}
+	inventory := c.Policy.Targets[0].Executables
+	for _, body := range []string{"$SHELL -c true", "eval 'sh -c true'", "unlisted-tool"} {
+		if _, e := capacityPinnedBody(body, inventory); e == nil {
+			t.Fatalf("unverified direct call accepted: %s", body)
+		}
 	}
 }
