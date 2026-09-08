@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 
 func declaredFixture(t *testing.T) CapacityExecutable {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "compiler")
+	path := filepath.Join(t.TempDir(), "compiler.exe")
 	body := []byte("fixture compiler bytes\n")
 	if err := os.WriteFile(path, body, 0700); err != nil {
 		t.Fatal(err)
@@ -55,17 +56,23 @@ func TestCapacityExecutableDeclarationBounds(t *testing.T) {
 			}
 		})
 	}
-	if err := os.Chmod(entry.Path, 0600); err != nil {
+	if runtime.GOOS == "windows" {
+		unsupported := entry.Path + ".cmd"
+		if err := os.Rename(entry.Path, unsupported); err != nil {
+			t.Fatal(err)
+		}
+		entry.Path = unsupported
+	} else if err := os.Chmod(entry.Path, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := VerifyCapacityExecutables(context.Background(), []CapacityExecutable{entry}); err == nil {
-		t.Fatal("non-executable accepted")
+		t.Fatal("non-native or non-executable artifact accepted")
 	}
 }
 func TestCapacityExecutableSymlinkIdentityAndByteLimits(t *testing.T) {
 	entry := declaredFixture(t)
 	alias := entry
-	alias.Path = entry.Path + "-alias"
+	alias.Path = entry.Path + "-alias.exe"
 	if err := os.Symlink(entry.Path, alias.Path); err != nil {
 		t.Skip(err)
 	}
@@ -75,6 +82,10 @@ func TestCapacityExecutableSymlinkIdentityAndByteLimits(t *testing.T) {
 	if _, err := VerifyCapacityExecutables(context.Background(), []CapacityExecutable{entry, alias}); err == nil {
 		t.Fatal("aliased duplicate accepted")
 	}
+
+}
+func TestCapacityExecutableByteLimits(t *testing.T) {
+	entry := declaredFixture(t)
 	if _, _, err := fingerprintCapacityExecutable(context.Background(), entry.Path, 1); err == nil {
 		t.Fatal("total byte budget ignored")
 	}
@@ -85,6 +96,7 @@ func TestCapacityExecutableSymlinkIdentityAndByteLimits(t *testing.T) {
 		t.Fatal("oversize executable accepted")
 	}
 }
+
 func TestCapacityExecutableCancelledAndWorkerBound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -105,5 +117,27 @@ func TestCapacityExecutableCancelledAndWorkerBound(t *testing.T) {
 	defer cancel()
 	if _, err := VerifyCapacityExecutables(ctx, []CapacityExecutable{declaredFixture(t)}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
+	}
+}
+
+func TestCapacityExecutablePlatformMode(t *testing.T) {
+	for _, tc := range []struct {
+		platform, path string
+		mode           os.FileMode
+		want           bool
+	}{
+		{"windows", "compiler.EXE", 0666, true},
+		{"windows", "compiler.com", 0600, true},
+		{"windows", "compiler.exe", os.ModeDir | 0777, false},
+		{"windows", "script.cmd", 0777, false},
+		{"windows", "script.bat", 0777, false},
+		{"windows", "compiler", 0777, false},
+		{"linux", "compiler", 0700, true},
+		{"darwin", "compiler.exe", 0600, false},
+		{"linux", "compiler", os.ModeNamedPipe | 0700, false},
+	} {
+		if got := capacityExecutableMode(tc.platform, tc.path, tc.mode); got != tc.want {
+			t.Errorf("%s %s %v: got %t want %t", tc.platform, tc.path, tc.mode, got, tc.want)
+		}
 	}
 }

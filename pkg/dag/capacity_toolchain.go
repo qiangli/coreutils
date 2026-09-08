@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -108,7 +109,7 @@ func fingerprintCapacityExecutable(ctx context.Context, path string, remaining i
 	if err != nil {
 		return "", 0, err
 	}
-	if !before.Mode().IsRegular() || before.Mode().Perm()&0111 == 0 {
+	if !capacityExecutableMode(runtime.GOOS, path, before.Mode()) {
 		return "", 0, errors.New("capacity: declared artifact must be a regular executable file")
 	}
 	if before.Size() > capacityExecutableBytes || before.Size() > remaining {
@@ -163,4 +164,19 @@ func fingerprintCapacityExecutable(ctx context.Context, path string, remaining i
 		return "", 0, errors.New("capacity: executable changed during fingerprint verification")
 	}
 	return hex.EncodeToString(h.Sum(nil)), size, nil
+}
+
+// Windows has no POSIX executable permission bits. Limit direct native artifact
+// declarations to EXE/COM paths; command scripts need an interpreter whose own
+// executable must be declared explicitly. This proves artifact identity, while
+// the native process launcher remains responsible for binary-format validity.
+func capacityExecutableMode(platform, path string, mode os.FileMode) bool {
+	if !mode.IsRegular() {
+		return false
+	}
+	if platform == "windows" {
+		extension := strings.ToLower(filepath.Ext(path))
+		return extension == ".exe" || extension == ".com"
+	}
+	return mode.Perm()&0111 != 0
 }
