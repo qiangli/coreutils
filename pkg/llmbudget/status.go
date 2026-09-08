@@ -52,7 +52,7 @@ func StatusAll() []BudgetStatus { return defaultGate.StatusAll() }
 func (g *Gate) Status(model string) BudgetStatus {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.ensureLoaded()
+	g.stateErr = g.reload()
 	return g.status(model)
 }
 
@@ -60,7 +60,7 @@ func (g *Gate) Status(model string) BudgetStatus {
 func (g *Gate) StatusAll() []BudgetStatus {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.ensureLoaded()
+	g.stateErr = g.reload()
 	names := make([]string, 0, len(g.state.Models))
 	for name := range g.state.Models {
 		names = append(names, name)

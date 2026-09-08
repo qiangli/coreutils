@@ -7,7 +7,6 @@ package llmbudget
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -78,6 +77,11 @@ type Limits struct {
 }
 
 type Config struct {
+	PolicyPath        string
+	Policy            *Policy
+	Adapters          []Adapter
+	ResolveCredential CredentialResolver
+
 	Models       map[string]Model
 	StatePath    string
 	AllowPremium bool
@@ -87,13 +91,23 @@ type Config struct {
 }
 
 type Gate struct {
-	mu     sync.Mutex
-	cfg    Config
-	state  State
-	loaded bool
+	mu            sync.Mutex
+	cfg           Config
+	state         State
+	loaded        bool
+	seenDisk      bool
+	inTransaction bool
+	stateErr      error
 }
 
 type State struct {
+	Integrity    string                  `json:"integrity,omitempty"`
+	Unattributed map[string]Counters     `json:"unattributed,omitempty"`
+	Version      int                     `json:"version,omitempty"`
+	Pools        map[string]PoolCounters `json:"pools,omitempty"`
+	Reservations map[string]Reservation  `json:"reservations,omitempty"`
+	Completed    map[string]Completion   `json:"completed,omitempty"`
+
 	Models    map[string]Counters `json:"models,omitempty"`
 	Plans     map[string]Counters `json:"plans,omitempty"`
 	Providers map[string]Counters `json:"providers,omitempty"`
@@ -235,9 +249,14 @@ func (g *Gate) CheckWithOverride(ctx context.Context, model string, estTokens in
 	if estTokens < 0 {
 		estTokens = 0
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.ensureLoaded()
+	var d Decision
+	err := g.transaction(ctx, func() error { d = g.checkLegacy(ctx, model, estTokens, allowPremium); return nil })
+	if err != nil {
+		return Decision{Action: Block, Model: model, Reason: "budget state unavailable"}
+	}
+	return d
+}
+func (g *Gate) checkLegacy(ctx context.Context, model string, estTokens int64, allowPremium bool) Decision {
 	m, ok := g.model(model)
 	if !ok {
 		g.warn("llmbudget: missing model metadata; allowing", "model", model)
@@ -270,9 +289,18 @@ func (g *Gate) Record(model string, promptTokens, completionTokens int64, costUS
 	if completionTokens < 0 {
 		completionTokens = 0
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.ensureLoaded()
+	if math.IsNaN(costUSD) || math.IsInf(costUSD, 0) || costUSD < 0 {
+		return
+	}
+	if err := g.transaction(context.Background(), func() error {
+		g.recordLocal(model, promptTokens, completionTokens, costUSD)
+		g.state.Unattributed[model] = addCounters(g.state.Unattributed[model], g.now(), promptTokens+completionTokens, 1, costUSD)
+		return nil
+	}); err != nil {
+		g.warn("llmbudget: usage was not recorded", "error", err)
+	}
+}
+func (g *Gate) recordLocal(model string, promptTokens, completionTokens int64, costUSD float64) {
 	m, _ := g.model(model)
 	now := g.now()
 	totalTokens := promptTokens + completionTokens
@@ -283,7 +311,6 @@ func (g *Gate) Record(model string, promptTokens, completionTokens int64, costUS
 	if p := planName(m); p != "" {
 		g.state.Plans[p] = addCounters(g.state.Plans[p], now, totalTokens, 1, 0)
 	}
-	g.save()
 }
 
 func (g *Gate) checkAPIKey(ctx context.Context, m Model, estTokens int64) Decision {
@@ -370,61 +397,13 @@ func (g *Gate) reserveRate(provider string, lim Limits, tokens int64, now time.T
 }
 
 func (g *Gate) ensureLoaded() {
-	if g.loaded {
-		return
-	}
-	g.loaded = true
-	if g.state.Models == nil {
-		g.state.Models = map[string]Counters{}
-	}
-	if g.state.Plans == nil {
-		g.state.Plans = map[string]Counters{}
-	}
-	if g.state.Providers == nil {
-		g.state.Providers = map[string]Counters{}
-	}
-	if g.state.Buckets == nil {
-		g.state.Buckets = map[string]Bucket{}
-	}
-	if g.cfg.StatePath == "" {
-		return
-	}
-	b, err := os.ReadFile(g.cfg.StatePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			g.warn("llmbudget: cannot read state; starting empty", "path", g.cfg.StatePath, "error", err)
-		}
-		return
-	}
-	if err := json.Unmarshal(b, &g.state); err != nil {
-		g.warn("llmbudget: cannot parse state; starting empty", "path", g.cfg.StatePath, "error", err)
-		g.state = State{Models: map[string]Counters{}, Plans: map[string]Counters{}, Providers: map[string]Counters{}, Buckets: map[string]Bucket{}}
-	}
-	if g.state.Models == nil {
-		g.state.Models = map[string]Counters{}
-	}
-	if g.state.Plans == nil {
-		g.state.Plans = map[string]Counters{}
-	}
-	if g.state.Providers == nil {
-		g.state.Providers = map[string]Counters{}
-	}
-	if g.state.Buckets == nil {
-		g.state.Buckets = map[string]Bucket{}
+	if !g.loaded {
+		g.stateErr = g.reload()
 	}
 }
-
 func (g *Gate) save() {
-	if g.cfg.StatePath == "" {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(g.cfg.StatePath), 0o755); err != nil {
-		g.warn("llmbudget: cannot create state dir", "path", g.cfg.StatePath, "error", err)
-		return
-	}
-	b, _ := json.MarshalIndent(g.state, "", "  ")
-	if err := os.WriteFile(g.cfg.StatePath, b, 0o600); err != nil {
-		g.warn("llmbudget: cannot write state", "path", g.cfg.StatePath, "error", err)
+	if !g.inTransaction {
+		g.stateErr = g.writeState()
 	}
 }
 
