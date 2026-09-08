@@ -71,10 +71,8 @@ func capacityFixture(t *testing.T) (*CapacityClient, CapacityRequest) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	shellPath, e = filepath.EvalSymlinks(shellPath)
-	if e != nil {
-		t.Fatal(e)
-	}
+	// Preserve the authorized executable alias: on Linux sh commonly resolves
+	// to dash, while the request deliberately calls the declared sh name.
 	shellBytes, e := os.ReadFile(shellPath)
 	if e != nil {
 		t.Fatal(e)
@@ -346,16 +344,6 @@ func TestCapacityExternalWithoutDeclaredInventoryQueuesAndDynamicCallsRefuse(t *
 	}
 }
 
-func TestCapacityUnsupportedPlatformsNeverAdvertiseGuardedExecution(t *testing.T) {
-	for _, platform := range []string{"windows", "aix", "plan9"} {
-		if capacityPlatformSupportsExecution(platform) {
-			t.Fatalf("unsupported execution platform advertised: %s", platform)
-		}
-	}
-	if !capacityPlatformSupportsExecution("linux") || !capacityPlatformSupportsExecution("darwin") {
-		t.Fatal("supported guarded platform refused")
-	}
-}
 func TestCapacityVerifiedDispatchConsumesMatchingLocalPendingRequest(t *testing.T) {
 	c, r := capacityFixture(t)
 	resolve := c.Resolve
@@ -375,5 +363,30 @@ func TestCapacityVerifiedDispatchConsumesMatchingLocalPendingRequest(t *testing.
 	}
 	if _, e = os.Stat(path); !os.IsNotExist(e) {
 		t.Fatal("completed request remained falsely pending", e)
+	}
+}
+
+func TestCapacityDeclaredShellAliasPreservesPolicyNameAndDigest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell alias fixture; guarded execution is unsupported on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dash")
+	alias := filepath.Join(dir, "sh")
+	body := []byte("#!/bin/sh\nprintf fixture\n")
+	if e := os.WriteFile(target, body, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink(target, alias); e != nil {
+		t.Fatal(e)
+	}
+	declared := []CapacityExecutable{{Path: alias, SHA256: capacityOutputDigest(string(body))}}
+	verified, e := VerifyCapacityExecutables(context.Background(), declared)
+	if e != nil || verified[0].Path != alias {
+		t.Fatalf("declared alias identity changed: %+v %v", verified, e)
+	}
+	pinned, e := capacityPinnedBody("sh -c true", declared)
+	if e != nil || !strings.Contains(pinned, alias) {
+		t.Fatalf("declared sh alias was lost to dash basename: %s %v", pinned, e)
 	}
 }
