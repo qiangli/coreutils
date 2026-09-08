@@ -83,11 +83,15 @@ func runWithClock(rc *tool.RunContext, args []string, now func() time.Time, setC
 	}
 
 	loc := dateLocation(rc.Env)
-	names, err := selectDateLocale(rc.Env)
-	if err != nil {
-		fmt.Fprintf(rc.Err, "date: %v\n", err)
-		return 1
-	}
+	// The locale error is DEFERRED, not fatal here. Resolution used to be
+	// eager, so an unavailable LC_TIME failed every invocation — including
+	// `date +%Y%m%d`, a format with no locale-dependent conversion specifier
+	// in it, which consults no locale data at all. GNU and BSD both print it
+	// under any LANG. Worse, the failure is swallowed by a surrounding
+	// command: "tag=v$(date -u +%Y%m%d)" yields "tag=v" and exits 0, so
+	// `set -e` never fires and a date-stamped release tag silently truncates.
+	// Report it at the point of USE, and only when the format needs it.
+	names, localeErr := selectDateLocale(rc.Env)
 	if *utc || *universal || *uct {
 		loc = time.UTC
 	}
@@ -119,6 +123,13 @@ func runWithClock(rc *tool.RunContext, args []string, now func() time.Time, setC
 		if err != nil {
 			return tool.UsageError(rc, cmd, "invalid XSI set-date operand %q: %v", operands[0], err)
 		}
+		// GATE BEFORE THE MUTATION. This path's output format is fixed and
+		// locale-dependent (%a and %b), so an unavailable LC_TIME will fail
+		// it — and setting the system clock first would leave the machine
+		// changed by a command that then reported failure.
+		if code := reportLocale(rc, "%a %b %e %H:%M:%S %Z %Y", localeErr); code >= 0 {
+			return code
+		}
 		if err := setClock(target); err != nil {
 			fmt.Fprintf(rc.Err, "date: cannot set date: %v\n", err)
 			return 1
@@ -127,6 +138,9 @@ func runWithClock(rc *tool.RunContext, args []string, now func() time.Time, setC
 	}
 	format, code := selectFormat(rc, operands, *iso8601, fs.Changed("iso-8601"), *rfc3339, *rfcEmail || *rfc822 || *rfc2822)
 	if code >= 0 {
+		return code
+	}
+	if code := reportLocale(rc, format, localeErr); code >= 0 {
 		return code
 	}
 	if *dateFile != "" {
@@ -402,6 +416,51 @@ var germanDateLocale = dateLocale{
 	months:        [12]string{"Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"},
 	monthsShort:   [12]string{"Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"},
 	german:        true,
+}
+
+// reportLocale surfaces a deferred LC_TIME failure, but only when FORMAT
+// actually consumes locale data. Returns an exit code, or -1 to proceed.
+func reportLocale(rc *tool.RunContext, format string, err error) int {
+	if err == nil || !formatNeedsLocale(format) {
+		return -1
+	}
+	fmt.Fprintf(rc.Err, "date: %v\n", err)
+	return 1
+}
+
+// localeDependentSpecifiers are the strftime conversions whose OUTPUT comes
+// from the locale's time data: weekday and month names, the locale's own
+// date/time representations, and the AM/PM designators. Everything else — the
+// numeric fields, %F/%T/%D/%R, %s, %z, %% — is locale-independent and must
+// print under any LANG.
+//
+// %I and %l are 12-hour NUMERIC and stay out deliberately; only %p/%P and the
+// %r that embeds them need the designators.
+const localeDependentSpecifiers = "aAbBhcpPrxX"
+
+// formatNeedsLocale reports whether FORMAT contains a conversion that reads
+// locale data. The E and O modifiers select alternative locale
+// representations, so a specifier carrying either needs the locale whatever
+// the conversion is.
+func formatNeedsLocale(format string) bool {
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i+1 >= len(format) {
+			continue
+		}
+		c := format[i+1]
+		if c == '%' { // an escaped percent consumes the pair
+			i++
+			continue
+		}
+		if c == 'E' || c == 'O' {
+			return true
+		}
+		if strings.ContainsRune(localeDependentSpecifiers, rune(c)) {
+			return true
+		}
+		i++
+	}
+	return false
 }
 
 // selectDateLocale applies POSIX locale precedence for the LC_TIME category:
