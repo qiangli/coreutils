@@ -6,6 +6,7 @@ seq: 96
 status: assigned
 priority: p2
 created: 2026-09-07T19:27:40.311501Z
+weave: 2
 assignee: sprint139-manager
 sprint: 139
 ---
