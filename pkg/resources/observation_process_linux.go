@@ -96,3 +96,16 @@ func observationClockTicks() float64 {
 	}
 	return 0
 }
+
+func lookupNativeProcessIdentity(pid int) (ProcessIdentity, error) {
+	boot, err := readSmallObservationFile("/proc/sys/kernel/random/boot_id", 128)
+	if err != nil {
+		return ProcessIdentity{}, err
+	}
+	stat, err := readSmallObservationFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"), 16384)
+	if err != nil {
+		return ProcessIdentity{}, err
+	}
+	sample, err := parseObservationProcStat(pid, stat, strings.TrimSpace(string(boot)), 0, uint64(os.Getpagesize()))
+	return sample.Identity, err
+}

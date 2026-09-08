@@ -339,7 +339,7 @@ func markSectionFailures(c *hostObservationCache, now time.Time, section string,
 	}
 }
 func projectHostObservation(c *hostObservationCache, opts HostObserveOptions, now time.Time, refreshing bool) *HostObservation {
-	out := &HostObservation{SchemaVersion: HostObservationSchema, ID: fmt.Sprintf("host-%d", c.Revision), At: c.At, ExpiresAt: c.At.Add(HostObservationTTL), System: c.System, Sections: map[string]ObservationStatus{}, ProcessCoverage: c.ProcessCoverage, DirectoryCoverage: ObservationCoverage{Complete: true, Limit: maxObservationScanEntries}, Refreshing: refreshing}
+	out := &HostObservation{SchemaVersion: HostObservationSchema, ID: fmt.Sprintf("host-%d-%d", c.At.UnixNano(), c.Revision), At: c.At, ExpiresAt: c.At.Add(HostObservationTTL), System: c.System, Sections: map[string]ObservationStatus{}, ProcessCoverage: c.ProcessCoverage, DirectoryCoverage: ObservationCoverage{Complete: true, Limit: maxObservationScanEntries}, Refreshing: refreshing}
 	for key, value := range c.Sections {
 		value.Stale = value.Stale || now.Before(value.At) || !now.Before(value.ExpiresAt)
 		out.Sections[key] = value

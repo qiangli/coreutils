@@ -67,3 +67,17 @@ func collectProcessSamples(ctx context.Context) ([]processSample, ObservationCov
 	coverage.Included = len(out)
 	return out, coverage, nil
 }
+
+func lookupNativeProcessIdentity(pid int) (ProcessIdentity, error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return ProcessIdentity{}, err
+	}
+	defer windows.CloseHandle(handle)
+	var born, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(handle, &born, &exit, &kernel, &user); err != nil {
+		return ProcessIdentity{}, err
+	}
+	birth := uint64(born.HighDateTime)<<32 | uint64(born.LowDateTime)
+	return ProcessIdentity{PID: pid, StartID: fmt.Sprintf("windows:%d", birth)}, nil
+}

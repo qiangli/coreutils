@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -385,5 +386,40 @@ func TestHostObservationParentPIDReuseCannotCaptureOlderChild(t *testing.T) {
 	got, work := AttributeProcesses(rows, []WorkloadRef{{ID: "new-parent", Root: rows[0].Identity}})
 	if got[1].Attribution != "unverified" || got[1].WorkloadID != "" || work[0].ProcessCount != 1 {
 		t.Fatalf("reused parent captured old child: %+v %+v", got, work)
+	}
+}
+
+func TestHostObservationProcessIdentityLookup(t *testing.T) {
+	isolateObservation(t)
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("native identity unsupported")
+	}
+	identity, err := LookupProcessIdentity(context.Background(), os.Getpid())
+	if err != nil || identity.PID != os.Getpid() || identity.StartID == "" {
+		t.Fatalf("self identity: %+v %v", identity, err)
+	}
+	samples, _, err := collectProcessSamples(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, sample := range samples {
+		if sample.Identity.PID == os.Getpid() {
+			found = true
+			if sample.Identity != identity {
+				t.Fatalf("launch/read identity formats differ: %+v %+v", identity, sample.Identity)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("self absent from bounded native snapshot")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := LookupProcessIdentity(ctx, os.Getpid()); err == nil {
+		t.Fatal("cancelled lookup succeeded")
+	}
+	if _, err := LookupProcessIdentity(context.Background(), -1); err == nil {
+		t.Fatal("invalid PID accepted")
 	}
 }

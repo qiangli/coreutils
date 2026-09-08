@@ -139,3 +139,12 @@ func darwinProcessSample(pid int32) (processSample, error) {
 	cpu := (float64(info.Task.User) + float64(info.Task.System)) * observationLibproc.nanosPerTick / 1e9
 	return processSample{Identity: ProcessIdentity{PID: int(pid), StartID: fmt.Sprintf("darwin:%d:%d", info.BSD.StartSeconds, info.BSD.StartMicros)}, PPID: int(info.BSD.Fields[4]), Name: string(name[:end]), CPUSeconds: &cpu, RSS: &info.Task.RSS, Source: "libproc:taskallinfo"}, nil
 }
+
+func lookupNativeProcessIdentity(pid int) (ProcessIdentity, error) {
+	loadObservationLibproc()
+	if observationLibproc.err != nil {
+		return ProcessIdentity{}, observationLibproc.err
+	}
+	sample, err := darwinProcessSample(int32(pid))
+	return sample.Identity, err
+}

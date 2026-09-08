@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 )
@@ -58,4 +59,23 @@ func processObservations(samples []processSample, at, previous time.Time, now ti
 }
 func processBudget(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, time.Second)
+}
+
+// LookupProcessIdentity reads one process's native birth marker for launch-time
+// recording. It never enumerates the host, reads argv, or grants process control.
+func LookupProcessIdentity(ctx context.Context, pid int) (ProcessIdentity, error) {
+	if pid <= 0 || pid > 1<<31-1 {
+		return ProcessIdentity{}, fmt.Errorf("resources: PID must be a positive 32-bit value")
+	}
+	if err := ctx.Err(); err != nil {
+		return ProcessIdentity{}, err
+	}
+	identity, err := lookupNativeProcessIdentity(pid)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return ProcessIdentity{}, cancelled
+	}
+	if err == nil && (identity.PID != pid || identity.StartID == "") {
+		return ProcessIdentity{}, fmt.Errorf("resources: process birth identity unavailable")
+	}
+	return identity, err
 }
