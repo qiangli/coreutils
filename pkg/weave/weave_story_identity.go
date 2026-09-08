@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/role"
 )
 
 // SprintClaimIdentity resolves the exact durable address a start/take command
@@ -253,8 +254,8 @@ func LiveSprintManagers() ([]string, error) {
 		if holder == "" {
 			continue
 		}
-		if now.Sub(s.Lease.At) > SprintLeaseTTL {
-			continue // stale: the holder is not managing anything
+		if s.seat().Live(now) != role.LivenessLive {
+			continue // not live: the holder is not managing anything
 		}
 		if seen[holder] {
 			continue
