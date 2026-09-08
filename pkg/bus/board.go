@@ -409,10 +409,15 @@ func Unseen(reader string, limit int) (directed, other []Post, older int, err er
 		if !onConcern && !p.ForReader(reader) {
 			continue
 		}
+		// Membership is an uncapped tier like a declared concern: a group post
+		// says who should ACT on it, and the directed-tier rule — never
+		// truncate an obligation — cannot stop at the first address kind.
+		// Broadcasts deliberately stay in the capped rest below.
+		inAudience := p.Audience != nil && !p.Audience.Empty() && InAudience(*p.Audience, reader)
 		switch {
 		case p.Directed(reader):
 			directed = append(directed, p)
-		case onConcern:
+		case onConcern || inAudience:
 			concerned = append(concerned, p)
 		default:
 			rest = append(rest, p)

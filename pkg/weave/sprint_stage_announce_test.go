@@ -3,6 +3,8 @@ package weave
 import (
 	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/bus"
 )
 
 // captureAnnounce replaces the board send with a recorder, so these assertions
@@ -150,3 +152,49 @@ type boardDownErr struct{}
 func (boardDownErr) Error() string { return "board is down" }
 
 var errBoardDown = boardDownErr{}
+
+// THE ANNOUNCEMENT IS ADDRESSED, NOT BROADCAST — the sprint #139 payoff.
+//
+// Stage changes are for the OTHER seated managers: they act on a peer being
+// started, handed off, or stopped. A broadcast made every agent on the host
+// scan them under the cap while the peers still had to declare the concern to
+// see them in full. Addressing the post to the live conductors gives members
+// the uncapped tier by membership itself — and a board with nobody seated
+// still records the transition, because history is not delivery.
+func TestStageAnnouncementIsAddressedToTheConductors(t *testing.T) {
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	bus.FleetSelect = func(a bus.Audience) ([]string, error) {
+		if a.Role != "conductor" {
+			t.Errorf("selector = %+v, want the conductor role", a)
+			return nil, nil
+		}
+		return []string{"peer-a", "peer-b"}, nil
+	}
+	t.Cleanup(func() { bus.FleetSelect = nil })
+
+	if err := postStageToBoard("pm", "sprint #42 A sprint — moved backlog → doing"); err != nil {
+		t.Fatalf("postStageToBoard: %v", err)
+	}
+	posts, err := bus.Posts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Audience == nil || posts[0].Audience.Role != "conductor" {
+		t.Fatalf("stage post = %+v; it must carry Audience{role conductor} so seated managers, and only they, are its uncapped readers", posts)
+	}
+
+	// Nobody seated: FleetSelect resolves to an EMPTY roster, which is not the
+	// unresolvable case — the sprint still happened and the board still owes
+	// its history. The append must succeed.
+	bus.FleetSelect = func(bus.Audience) ([]string, error) { return nil, nil }
+	if err := postStageToBoard("pm", "sprint #42 A sprint — stopped"); err != nil {
+		t.Fatalf("zero managers must not fail the announcement: %v", err)
+	}
+	posts, err = bus.Posts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 || posts[1].Audience == nil || posts[1].Audience.Role != "conductor" {
+		t.Fatalf("zero-manager stage post = %+v; an empty roster is honest history, not a send failure", posts)
+	}
+}

@@ -333,3 +333,39 @@ func TestBoard_AllModeCountsDistinctViewers(t *testing.T) {
 		}
 	}
 }
+
+// AUDIENCE MEMBERSHIP IS AN UNCAPPED TIER — the sprint #139 payoff.
+//
+// A group post is addressed to a reader because they are DOING something
+// (managing a sprint), not because they happened to declare a concern. A
+// member who must first subscribe to see their own mail in full has an
+// obligation trimmed by an arbitrary -n, which is the directed-tier rule
+// applied to a group: never truncate what somebody is supposed to act on.
+func TestBoard_AudienceMemberSeesGroupPostUncapped(t *testing.T) {
+	boardInTempHome(t)
+	FleetSelect = func(Audience) ([]string, error) {
+		return []string{"claude-opus5"}, nil
+	}
+	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+
+	// The group post is the OLDEST thing on the board: if it were capped like
+	// an ordinary broadcast, the newest-five rule would trim it first.
+	if err := PostMessage(Post{From: "steward", Audience: &Audience{Role: "conductor"}, Body: "sprint moved"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 9 {
+		if err := PostMessage(Post{From: "a", Body: "fyi"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, other, older, err := Unseen("claude-opus5", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 4 {
+		t.Fatalf("older = %d, want 4 hidden broadcasts — only the broadcasts may be capped", older)
+	}
+	if len(other) != 6 || other[0].Seq != 1 {
+		t.Fatalf("other = %d posts starting at seq %d; the member must see the group post (seq 1) uncapped alongside the capped 5", len(other), other[0].Seq)
+	}
+}
