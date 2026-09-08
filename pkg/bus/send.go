@@ -96,6 +96,9 @@ func Send(req SendRequest) (SendResult, error) {
 	body := req.Body
 
 	if req.Audience != nil && !req.Audience.Empty() {
+		if err := req.Audience.Validate(); err != nil {
+			return SendResult{}, err
+		}
 		if err := ValidateCoordinationBody(body); err != nil {
 			return SendResult{}, &BodyError{Err: err}
 		}
@@ -111,12 +114,12 @@ func Send(req SendRequest) (SendResult, error) {
 		// selector naming nothing resolvable (`--role reviewer`) posted to the
 		// board anyway and reported success, which is the receipt
 		// indistinguishable from a real delivery that this comment forbids.
-		var names []string
-		if FleetSelect != nil {
-			var ferr error
-			if names, ferr = FleetSelect(aud); ferr != nil {
-				return SendResult{}, ferr
-			}
+		if FleetSelect == nil {
+			return SendResult{}, fmt.Errorf("audience: selector resolver is unavailable for %s", aud.describe())
+		}
+		names, err := FleetSelect(aud)
+		if err != nil {
+			return SendResult{}, err
 		}
 		seq, err := PostMessageSeq(Post{
 			From: req.From, Audience: &aud, Mode: mode, Topic: req.Topic, Body: body,

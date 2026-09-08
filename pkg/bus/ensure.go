@@ -82,7 +82,8 @@ var FleetNames func() []string
 // Audience is a selector over the address book. A zero value selects nothing;
 // the caller decides what an empty selection means.
 //
-// Fields are ANDed, so `--band 4 --tool ycode` is "L4 agents on ycode" rather
+// Binding fields are ANDed; Role is mutually exclusive with all binding fields.
+// Thus `--band 4 --tool ycode` is "L4 agents on ycode" rather
 // than the union. A union would make a wider blast radius the easier thing to
 // type, and on a board the wider blast radius is the one that turns messages
 // into noise nobody reads.
@@ -113,6 +114,34 @@ type Audience struct {
 func (a Audience) Empty() bool {
 	return a.Band == 0 && a.Tool == "" && a.Provider == "" && a.Family == "" &&
 		a.Version == "" && a.Role == ""
+}
+
+// Validate rejects selectors whose criteria cannot be combined. Hosts must
+// validate direct FleetSelect calls as well as the Send admission path.
+func (a Audience) Validate() error {
+	if a.Role == "" {
+		return nil
+	}
+	var filters []string
+	if a.Band != 0 {
+		filters = append(filters, "--band")
+	}
+	if a.Tool != "" {
+		filters = append(filters, "--tool")
+	}
+	if a.Provider != "" {
+		filters = append(filters, "--provider")
+	}
+	if a.Family != "" {
+		filters = append(filters, "--family")
+	}
+	if a.Version != "" {
+		filters = append(filters, "--version")
+	}
+	if len(filters) > 0 {
+		return fmt.Errorf("audience: --role cannot be combined with binding filters: %s", strings.Join(filters, ", "))
+	}
+	return nil
 }
 
 // FleetSelect resolves an Audience to agent names, injected by the host for the

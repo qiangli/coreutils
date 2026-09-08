@@ -274,17 +274,17 @@ func newMBSendCmd() *cobra.Command {
   bashy mb send codex-gpt5.6-sol "gate is red on main"
   bashy mb send --to codex-gpt5.6-sol "gate is red on main"
   bashy mb send --band 4 "need an L4 to review the converge gate"
+  bashy mb send --role conductor "shared gate is ready"
   bashy mb send --tool ycode "ycode rebuilt — re-probe your bindings"
   bashy mb send --provider anthropic "anthropic keys rotated"
   bashy mb send --family opus "opus family: cost_micro was corrected"
   bashy mb send --family gemini-flash --version 3.6 "3.6 flash is now bound"
 
-'bashy agents list' is the address book: a bare name is its NAME column, and the
-selectors read the same catalog, so who is "L4" here and there can never drift.
-
-Selectors are ANDed, not unioned. A union would make the wider blast radius the
-easier thing to type, and on a shared board the wide one is what turns messages
-into noise nobody reads. For genuinely everyone: 'bashy mb post'.
+'bashy agents list' is the binding address book: a bare name is its NAME column.
+Binding selectors (--band/--tool/--provider/--family/--version) read that catalog
+and are ANDed. --role conductor reads the live sprint leases and cannot be
+combined with binding selectors. For everyone: 'bashy mb post'.
+A valid selector with no matches records history and reports 0 matching recipients.
 
 One quick-coordination body is limited to 1024 UTF-8 bytes and is never
 truncated or auto-split. Prefer a short request/priority/owner plus a stable
@@ -318,7 +318,11 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				if err != nil {
 					return verbError("mb send", err)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", res.Label)
+				if len(res.Deliveries) == 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "recorded for %s; 0 matching recipients\n", res.Label)
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", res.Label)
+				}
 				reportDelivery(cmd, res.Deliveries)
 				return nil
 			}
@@ -329,7 +333,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				}
 			} else {
 				if len(args) < 2 {
-					return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--band/--tool/--provider/--family/--version)")
+					return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--role/--band/--tool/--provider/--family/--version)")
 				}
 				target = strings.TrimSpace(args[0])
 				body = strings.Join(args[1:], " ")
