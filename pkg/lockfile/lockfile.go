@@ -162,7 +162,11 @@ func (l *Lock) record(h Holder) {
 	if _, err := l.file.WriteAt(b, 0); err != nil {
 		return
 	}
-	_ = l.file.Sync()
+	// WriteAt makes the record visible to other processes. Do not fsync this
+	// diagnostic metadata: ownership is the kernel lock, which cannot survive
+	// a process or machine restart. A disk barrier adds no ownership guarantee
+	// and holds up every contender (especially on Windows), consuming callers'
+	// bounded acquisition budgets before their actual transaction can run.
 }
 
 // Release unlocks and closes. It is safe to call twice.

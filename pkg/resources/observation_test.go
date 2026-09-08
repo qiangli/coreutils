@@ -206,6 +206,7 @@ func TestResourcesObservationChild(t *testing.T) {
 	dir := os.Getenv("RESOURCE_OBSERVATION_DIR")
 	if mode == "alert" {
 		for i := 0; i < 10; i++ {
+			started := time.Now()
 			_, err := UpdateAlertState(context.Background(), dir, func(s *AlertLedger) error {
 				var n int
 				if b := s.Entries["n"]; len(b) > 0 {
@@ -217,7 +218,8 @@ func TestResourcesObservationChild(t *testing.T) {
 				return nil
 			})
 			if err != nil {
-				t.Fatal(err)
+				holder, held := lockfile.Owner(filepath.Join(dir, ".alerts.lock"))
+				t.Fatalf("alert transaction %d/10 after %s: %v (lock held=%v holder=%+v)", i+1, time.Since(started), err, held, holder)
 			}
 		}
 		return
