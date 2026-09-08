@@ -3,10 +3,11 @@ id: d9edcb58913c
 kind: task
 title: The sprint plan is a copyable path, not the link the story asked for
 seq: 97
-status: todo
-priority: p2
+status: done
+priority: p1
 created: 2026-09-07T19:51:31.571672Z
 sprint: 136
+closed: 2026-09-07T21:06:09.745723Z
 ---
 
 THE THIRD CARRIED ITEM FROM SPRINT #135, and the one that was nearly lost: it was recorded as evidence on the plan-link goal and given no story of its own, so unlike 86a6cc12 and 312252ae it had nothing tracking it.
@@ -27,3 +28,46 @@ DECIDE BETWEEN THEM ON EVIDENCE, and record which and why. If (c), say so where 
 DO NOT ship an href that resolves on loopback and 404s behind the tunnel. That is the specific failure this deliberately avoided, and the existing test asserting zero anchors must be UPDATED rather than deleted if the answer changes.
 
 GATE. Whichever branch is chosen: a verifydom case that drives the resolved target on BOTH a bare base and a proxied /matrix/h/<host>/app/<name>/ base and asserts it resolves in both, or — for (c) — the corrected goal text plus this story closed with the finding recorded.
+
+## DECISION 2026-09-07 (corbel, sprint 136) — (c), and the recorded reason was half wrong
+
+EVALUATED (a), (b) and (c) rather than defaulting to the cheapest. The finding
+that matters is a CORRECTION to the reasoning this story was told not to
+re-derive.
+
+THE PROXY OBJECTION DOES NOT HOLD. #135 recorded "no href resolves both on
+loopback and behind the outpost proxy". That is false, and the machinery that
+falsifies it is already in this repo: pkg/webconsole/embed.go injects a
+`<base href>` into every served page for exactly this purpose — "new
+URL(x, document.baseURI) then needs no per-mount configuration ... which is
+what keeps it correct under a route prefix". A RELATIVE href is therefore
+prefix-correct by construction, on loopback and under
+/matrix/h/<host>/app/<name>/ alike. Every other in-console link already relies
+on it.
+
+So the deviation recorded on #135 gives a reason that is not the real one.
+
+WHAT THE REAL BLOCKER IS, and it is only half of what was written: the FILE
+ROOT. weaveStory.SpecRef is repo-relative and StoryRoots is a list, so on a
+sprint spanning two repos there is no single root to resolve the ref against —
+and serving the bytes at all means adding a data-plane route to a page the
+atlas marks CapReadOnly. That second point is a governance decision about what
+the board page is allowed to become, not a UI detail, and it is not one to
+take as a drive-by at the end of a time box while two other lanes share this
+repo.
+
+DISPOSITION: (c) for this sprint. The goal language is corrected rather than
+the artifact, because a repo-relative reference on a repo-spanning record is
+not linkable location-independently WITHOUT deciding to serve file bytes —
+which is a separate, real decision. The correction is recorded on #135's
+thread, where a reader of that [x] will see it.
+
+BUT (b) IS NOW VIABLE, where before it read as speculative: with the proxy
+objection dissolved, a read-only plan endpoint resolved host-side needs only
+the single-root question answered and the CapReadOnly decision taken. Filed as
+its own story with this evaluation attached, so the next person starts from
+the corrected reasoning rather than the original one.
+
+The existing test asserting zero anchors is left UNCHANGED and correct: today
+the card renders a reference, and it must not grow an href until that decision
+is made.

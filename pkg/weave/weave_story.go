@@ -580,6 +580,11 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 	// root.Commands() to wrap each subverb's Args validator, so a
 	// subcommand added afterwards would not be covered.
 	installArgsErrorReporting(cmd)
+
+	// ...and the errors a RunE returns itself: a guard that runs before
+	// the store is opened is not a cobra structural error, so neither
+	// reporter above sees it. See runerr.go.
+	installRunErrorReporting(cmd)
 	return cmd
 }
 
