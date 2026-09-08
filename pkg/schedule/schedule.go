@@ -273,7 +273,15 @@ func (j *Job) fireWithAdmission(w io.Writer, deliver MailDelivery, admit JobAdmi
 		}
 	}
 	runErr := c.Run()
-	runErr = combineAdmissionError(runErr, finish(runErr))
+	finishReason := runErr
+	if c.Process == nil {
+		finishReason = errBudgetJobNotStarted
+	} else if !budgetOwnedJobGone(c) {
+		finishReason = errBudgetJobLifetime
+	} else {
+		finishReason = nil
+	} // The group ended; preserve command error separately from lifetime proof.
+	runErr = combineAdmissionError(runErr, finish(finishReason))
 	if j.MailOutput && output.Len() > 0 {
 		if deliver == nil {
 			return errors.Join(runErr, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported))

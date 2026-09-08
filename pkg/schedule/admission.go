@@ -19,6 +19,9 @@ type WorkBudget struct {
 	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
 }
 
+var errBudgetJobNotStarted = errors.New("budget job never started")
+var errBudgetJobLifetime = errors.New("budget child lifetime unverified")
+
 type JobAdmission func(context.Context, *Job) (finish func(error) error, err error)
 
 // BudgetAdmission can be embedded with an isolated Gate. Nil uses the normal
@@ -82,6 +85,11 @@ func BudgetAdmission(g *llmbudget.Gate) JobAdmission {
 		return func(runErr error) error {
 			close(stop)
 			defer o.Close()
+			if errors.Is(runErr, errBudgetJobNotStarted) {
+				c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				return release(c, r.ID, r.Owner)
+			}
 			if runErr != nil {
 				return nil
 			} // uncertain failed work remains reserved for lifecycle reconciliation

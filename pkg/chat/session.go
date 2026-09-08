@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -49,12 +50,13 @@ import (
 // able to say "stop, you're off the agenda" without killing the turn and losing
 // everything it had already said.
 type Session struct {
-	budgetMu     sync.Mutex
-	budgetWorks  []*budgetWork
-	budgetClosed bool
-	Agent        string // the canonical binding, as recorded
-	Nick         string // the name the caller used
-	CtlSock      string // where a steer lands
+	budgetMu      sync.Mutex
+	budgetWorks   []*budgetWork
+	budgetClosed  bool
+	budgetCommand *exec.Cmd
+	Agent         string // the canonical binding, as recorded
+	Nick          string // the name the caller used
+	CtlSock       string // where a steer lands
 	// inboxAgent is used only by transports such as ACP that have an
 	// authenticated protocol session but no PTY control socket.
 	inboxAgent string
@@ -441,7 +443,10 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		reportStarted(err)
 		s.mu.Lock()
 		s.exit, s.killed, s.err = exit, killed, err
-		s.err = errors.Join(s.err, s.finishBudgetWorks(s.buf.String(), err))
+		if cmd.Process == nil {
+			_ = budgetWork.abort()
+		}
+		s.err = errors.Join(s.err, s.finishBudgetWorks(s.buf.String(), budgetCompletionError(cmd)))
 		s.mu.Unlock()
 	}()
 

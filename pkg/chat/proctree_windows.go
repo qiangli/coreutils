@@ -31,3 +31,5 @@ func killProcessTree(cmd *exec.Cmd) error {
 	}
 	return cmd.Process.Kill()
 }
+
+func budgetOwnedGroupGone(cmd *exec.Cmd) bool { return cmd == nil || cmd.Process == nil }

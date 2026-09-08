@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -143,4 +144,23 @@ func (s *Session) finishBudgetWorks(output string, runErr error) error {
 		}
 	}
 	return result
+}
+
+// Concrete subprocess runners populate this proof. Injected Runner implementations
+// retain their existing synchronous contract: nil Run error means bounded work ended.
+type budgetProcessProof struct{ Observed, Started, Terminated bool }
+type budgetProcessKey struct{}
+
+func observeBudgetProcess(ctx context.Context, cmd *exec.Cmd) {
+	if p, ok := ctx.Value(budgetProcessKey{}).(*budgetProcessProof); ok {
+		p.Observed = true
+		p.Started = cmd != nil && cmd.Process != nil
+		p.Terminated = budgetOwnedGroupGone(cmd)
+	}
+}
+func budgetCompletionError(cmd *exec.Cmd) error {
+	if !budgetOwnedGroupGone(cmd) {
+		return errors.New("inherited child lifetime unverified; reservation retained")
+	}
+	return nil
 }

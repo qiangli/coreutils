@@ -395,6 +395,7 @@ func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 }
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	observeBudgetProcess(ctx, nil)
 	// Preflight, so a missing CLI is reported as a missing CLI. Left to os/exec
 	// it surfaces as `exec: "claude": executable file not found in $PATH` — which
 	// names a $PATH the operator never set and cannot see, since the launcher is
@@ -411,6 +412,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		stripQuarantine(p)
 	}
 	cmd := agentCommand(ctx, agent, args, cwd)
+	defer func() { observeBudgetProcess(ctx, cmd) }()
 
 	// Attach to a PTY once the command — and above all its environment — is
 	// fully built, so the PTY path cannot diverge from the pipe path in what the
@@ -1133,10 +1135,26 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		return res, budgetErr
 	}
 	callCtx, endObservation := startGenAIObservation(ctx, lnch)
+	proof := &budgetProcessProof{}
+	callCtx = context.WithValue(callCtx, budgetProcessKey{}, proof)
 	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
 	endGenAIObservation(endObservation, lnch, prompt, out, "", err)
-	if budgetErr := budgetWork.finish(out, err); budgetErr != nil {
-		err = errors.Join(err, budgetErr)
+	var finishErr error
+	if proof.Observed && !proof.Started {
+		finishErr = budgetWork.abort()
+	} else {
+		budgetErr := err
+		if proof.Observed {
+			if proof.Terminated {
+				budgetErr = nil
+			} else {
+				budgetErr = errors.New("inherited child lifetime unverified")
+			}
+		}
+		finishErr = budgetWork.finish(out, budgetErr)
+	}
+	if finishErr != nil {
+		err = errors.Join(err, finishErr)
 	}
 	// This is the shared return seam for every unattended agent turn.  Do not
 	// return an over-budget transcript: its complete bytes have first been

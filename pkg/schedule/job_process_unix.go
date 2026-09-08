@@ -14,3 +14,13 @@ func applyJobProcAttrs(cmd *exec.Cmd) {
 	// its process group.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
+
+func budgetOwnedJobGone(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return true
+	}
+	if cmd.ProcessState == nil || cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setsid {
+		return false
+	}
+	return syscall.Kill(-cmd.Process.Pid, 0) == syscall.ESRCH
+}

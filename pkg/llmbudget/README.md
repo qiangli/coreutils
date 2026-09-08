@@ -147,3 +147,13 @@ have unknown token demand; a memory allocation is explicit or unknown. Capacity
 is held until successful command completion; failures retain the claim for
 verified reconciliation. Scheduler/model subprocess completion does not yield
 provider-authoritative usage.
+
+Concrete chat/PTY/ACP and scheduler subprocess paths verify the inherited owned
+process group has disappeared after waiting, before releasing capacity. Direct
+parent exit alone is insufficient. Missing group proof and launched Windows work
+retain claims for verified reconciliation; no job-object/daemon-escape guarantee
+is invented. A confirmed never-started command releases its unused claim.
+Injected `Runner` implementations retain the explicit synchronous contract that
+a successful Run returns only after their owned work ends. Estimated completion
+settlement remains conservative even when cancellation/error has ended a verified
+group; the original command error still reaches its caller.

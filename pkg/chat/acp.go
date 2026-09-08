@@ -163,6 +163,8 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
 	}
 
+	setProcessGroup(cmd)
+	s.budgetCommand = cmd
 	budgetWork, budgetErr := reserveBudgetWork(ctx, l, opt.Prompt, s.Agent, true, opt.AllowPremium)
 	if budgetErr != nil {
 		return nil, true, budgetErr
@@ -170,7 +172,11 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	s.budgetWorks = append(s.budgetWorks, budgetWork)
 	client, err := acp.NewClient(ctx, &acpHandler{d: drv}, cmd)
 	if err != nil {
-		_ = budgetWork.finish("", err)
+		if cmd.Process == nil {
+			_ = budgetWork.abort()
+		} else {
+			_ = budgetWork.finish("", err)
+		}
 		return nil, true, fmt.Errorf("chat: %s speaks ACP but would not start: %w", l.Binding(), err)
 	}
 	drv.client = client
@@ -349,7 +355,7 @@ func (s *Session) closeACP() {
 		spoke := s.buf.String()
 		s.mu.Unlock()
 		s.mu.Lock()
-		s.err = errors.Join(s.err, s.finishBudgetWorks(spoke, s.err))
+		s.err = errors.Join(s.err, s.finishBudgetWorks(spoke, budgetCompletionError(s.budgetCommand)))
 		s.mu.Unlock()
 		if s.acpCard != "" {
 			room.Leave(s.acpCard)
