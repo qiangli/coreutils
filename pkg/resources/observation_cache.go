@@ -358,7 +358,7 @@ func projectHostObservation(c *hostObservationCache, opts HostObserveOptions, no
 			processes[i].RSS.Status.Reason = status.Reason
 		}
 	}
-	out.Processes, out.Workloads = AttributeProcesses(processes, opts.Workloads)
+	out.Processes, out.Workloads = attributeProcessesInPlace(processes, opts.Workloads)
 	if !out.ProcessCoverage.Complete {
 		for i := range out.Workloads {
 			out.Workloads[i].Coverage.Complete = false

@@ -9,8 +9,21 @@ import (
 // AttributeProcesses joins a complete host observation to workload roots. Each
 // process belongs to at most one nearest verified root. PID alone is never proof.
 func AttributeProcesses(processes []ProcessObservation, refs []WorkloadRef) ([]ProcessObservation, []WorkloadObservation) {
-	out := append([]ProcessObservation(nil), processes...)
-	byPID := map[int]int{}
+	return attributeProcessesInPlace(append([]ProcessObservation(nil), processes...), refs)
+}
+
+// The host projection owns this fresh slice. Public callers keep copy semantics;
+// projection avoids allocating another full host process observation array.
+func attributeProcessesInPlace(out []ProcessObservation, refs []WorkloadRef) ([]ProcessObservation, []WorkloadObservation) {
+	if len(refs) == 0 {
+		for i := range out {
+			out[i].WorkloadID = ""
+			out[i].Attribution = "unattributed"
+			out[i].Reason = "no verified workload ancestor"
+		}
+		return out, []WorkloadObservation{}
+	}
+	byPID := make(map[int]int, len(out))
 	roots := map[int][]int{}
 	for i, p := range out {
 		byPID[p.Identity.PID] = i

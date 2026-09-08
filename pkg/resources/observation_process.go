@@ -23,7 +23,7 @@ type processSample struct {
 }
 
 func processRates(current, previous []processSample, elapsed float64) {
-	old := map[ProcessIdentity]processSample{}
+	old := make(map[ProcessIdentity]processSample, len(previous))
 	for _, p := range previous {
 		old[p.Identity] = p
 	}
@@ -43,12 +43,12 @@ func processObservations(samples []processSample, at, previous time.Time, now ti
 	for _, p := range samples {
 		row := ProcessObservation{Identity: p.Identity, PPID: p.PPID, Name: p.Name, Attribution: "unattributed", CPU: unknownValue[float64](p.Source, "no comparable CPU sample", at), RSS: unknownValue[uint64](p.Source, p.Reason, at)}
 		if p.CPUPercent != nil {
-			row.CPU = observedValue(*p.CPUPercent, p.Source, at, HostObservationTTL)
+			row.CPU = ObservationValue[float64]{Value: p.CPUPercent, Status: observationStatus("actual", p.Source, "", at, HostObservationTTL)}
 			row.CPU.Status.WindowStart = previous
 			row.CPU.Status.WindowEnd = at
 		}
 		if p.RSS != nil {
-			row.RSS = observedValue(*p.RSS, p.Source, at, HostObservationTTL)
+			row.RSS = ObservationValue[uint64]{Value: p.RSS, Status: observationStatus("actual", p.Source, "", at, HostObservationTTL)}
 		}
 		row.CPU.Status.Stale = now.Before(at) || !now.Before(at.Add(HostObservationTTL))
 		row.RSS.Status.Stale = row.CPU.Status.Stale

@@ -28,14 +28,24 @@ func readObservationJSON(path string, limit int64, value any) error {
 		return err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
-	if int64(len(b)) > limit {
-		return fmt.Errorf("resources: state exceeds %d bytes", limit)
+	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > limit {
+		return fmt.Errorf("resources: state is not a regular file within %d bytes", limit)
 	}
-	return json.Unmarshal(b, value)
+	// Atomic state files are immutable through this descriptor. Allocate once
+	// from its bounded size; ReadAll repeatedly grew/copies large host caches.
+	b := make([]byte, int(info.Size())+1)
+	n, err := io.ReadFull(f, b)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return err
+	}
+	if int64(n) > info.Size() {
+		return errors.New("resources: state changed while reading")
+	}
+	return json.Unmarshal(b[:n], value)
 }
 func writeObservationJSON(path string, limit int, value any) error {
 	b, err := json.Marshal(value)
