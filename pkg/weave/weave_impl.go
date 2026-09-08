@@ -271,7 +271,8 @@ type weaveItem struct {
 	// from there to the whole subagent process group). Set when
 	// state flips to working; cleared on terminal state. Used by
 	// `weave abandon` for precise SIGTERM instead of pkill-by-name.
-	WrapperPid int `json:"wrapper_pid,omitempty"`
+	WrapperPid     int    `json:"wrapper_pid,omitempty"`
+	WrapperStartID string `json:"wrapper_start_id,omitempty"` // OS birth identity, recorded at launch; absent on legacy runs
 	// Stale is computed at read time by `weave list` (never
 	// persisted): state is "working" but the recorded wrapper PID
 	// is no longer alive — the wrapper crashed or was killed
