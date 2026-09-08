@@ -118,10 +118,19 @@ func open(path string) (*os.File, error) {
 	if path == "" {
 		return nil, fmt.Errorf("lockfile: empty path")
 	}
+	// Existing lock directories are the common polling path. Opening first
+	// avoids a redundant directory Stat on every acquisition and retry.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err == nil {
+		return f, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("lockfile: open %s: %w", path, err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("lockfile: ensure directory: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("lockfile: open %s: %w", path, err)
 	}
