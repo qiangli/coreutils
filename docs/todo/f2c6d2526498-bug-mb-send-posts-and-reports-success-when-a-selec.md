@@ -3,11 +3,12 @@ id: f2c6d2526498
 kind: task
 title: 'BUG: mb send posts and reports success when a selector cannot resolve'
 seq: 103
-status: assigned
+status: done
 priority: p1
 created: 2026-09-08T03:58:01.976715Z
 assignee: sprint139-manager
 sprint: 139
+closed: 2026-09-08T09:40:22.254942Z
 ---
 
 FOUND while adding the --role selector (story 312252aeb358): pkg/bus/send.go resolved the audience AFTER durably appending the post, and DISCARDED the resolver error:

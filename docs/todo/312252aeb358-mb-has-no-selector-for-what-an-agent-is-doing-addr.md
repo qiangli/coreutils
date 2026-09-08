@@ -3,12 +3,13 @@ id: 312252aeb358
 kind: task
 title: 'mb has no selector for what an agent is DOING: address the live sprint managers'
 seq: 96
-status: assigned
+status: done
 priority: p2
 created: 2026-09-07T19:27:40.311501Z
 weave: 2
 assignee: sprint139-manager
 sprint: 139
+closed: 2026-09-08T09:40:22.230667Z
 ---
 
 SPLIT OUT OF 365ed78773c4 on 2026-09-07, with the rest of that story delivered. This is its point 1, held back for a reason that is not effort.
