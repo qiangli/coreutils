@@ -158,6 +158,9 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("a title is required")
 	}
+	if err := ValidateCadence(recurring); err != nil {
+		return nil, err
+	}
 	next := 1
 	if m, err := MaxSeq(st); err == nil {
 		next = m + 1
@@ -302,7 +305,15 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 		it.Assignee = assignee
 	}
 
-	if status == StatusDone && it.Recurring != "" {
+	// A recurring item reopens on completion INSTEAD of closing — but only
+	// when its cadence is its own. An item bound to a sprint takes its cadence
+	// from that sprint's cycle (`bashy sprint advance`), and reopening here
+	// would erase the very completion the cycle record has to attest: this
+	// branch never stamps Closed/ClosedBy, so the tenth iteration is
+	// indistinguishable from the first. Reaching a success state through the
+	// absence of evidence is the one thing the fleet-evidence invariant
+	// forbids, so a sprint story closes honestly and `advance` reopens it.
+	if status == StatusDone && it.Recurring != "" && it.Sprint == 0 {
 		it.Status = StatusTodo
 		base := time.Now().UTC()
 		if it.Due != nil {
@@ -369,6 +380,29 @@ func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 		return out[i].Seq < out[j].Seq
 	})
 	return out, nil
+}
+
+// CadenceSprint is the cadence of an item whose repetition is driven by a
+// SPRINT CYCLE rather than by the clock: `bashy sprint advance` resets it, so
+// there is deliberately no due date to advance.
+const CadenceSprint = "default"
+
+// ValidateCadence rejects a cadence nothing can interpret.
+//
+// It exists because an unparseable cadence used to be indistinguishable from
+// an on-demand one: Add never checked the string, and SetStatus discarded
+// advanceCadence's error, so `--recurring wekly` silently became "repeats, but
+// never becomes due". A typo that quietly half-works is worse than one that
+// fails, because nothing ever reports it.
+func ValidateCadence(cadence string) error {
+	c := strings.ToLower(strings.TrimSpace(cadence))
+	if c == "" || c == CadenceSprint {
+		return nil
+	}
+	if _, err := advanceCadence(time.Now().UTC(), c); err != nil {
+		return fmt.Errorf("%w (want %q for a sprint-driven item, or daily|weekly|monthly, a duration like 24h, or a 5-field cron expression)", err, CadenceSprint)
+	}
+	return nil
 }
 
 func advanceCadence(from time.Time, cadence string) (time.Time, error) {
