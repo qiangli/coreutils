@@ -111,3 +111,66 @@ func TestSprintDeliveryRefusesACardThatPromisesNothing(t *testing.T) {
 		t.Fatal("a tracked work record with no delivery capability was accepted as reachable")
 	}
 }
+
+// TestSprintDeliveryGateIsConsistent pins the DECISION for todo 27ae4f3792e2,
+// not the placement — which is what that story asks for.
+//
+// BEFORE: sprintInboxDeliveryLive REFUSED exactly one verb, `sprint focus`,
+// which sets an advisory pointer and changes nothing else. The same owner could
+// start, take, checkpoint and END the sprint — end being irreversible — and was
+// stopped only by the cheapest, most reversible, purely bookkeeping operation.
+// It cost sprint #135 its focus pointer: the refusal reads as "this seat is not
+// properly established", so the conductor went looking for a problem that did
+// not exist and drove the sprint without focus.
+//
+// AFTER: it WARNS, and does so on seating, focusing and ending alike. The
+// reason is written at sprintSeatDeliveryAdvisory and is the same boundary
+// sprintSeatToolMismatch already draws in this package: the host refuses what it
+// can PROVE wrong (validateSprintOwner: an owner naming nobody) and reports what
+// it cannot JUDGE (a human driving a sprint from a terminal is legitimate and
+// has no managed session behind it).
+//
+// This test fails if anyone restores an asymmetry without recording a reason:
+// all three verbs must treat an unwakeable owner the same way.
+func TestSprintDeliveryGateIsConsistent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	const owner = "unwakeable-manager"
+
+	// No room card at all: nothing can push to this owner.
+	if sprintInboxDeliveryLive(owner) {
+		t.Fatal("fixture is wrong: this owner must be unreachable")
+	}
+
+	advisory := sprintSeatDeliveryAdvisory(owner)
+	if strings.TrimSpace(advisory) == "" {
+		t.Fatal("an unwakeable owner must still be REPORTED; a silent gap is what the story forbids")
+	}
+	if !strings.Contains(advisory, owner) {
+		t.Errorf("the advisory must name the seat it is about, got %q", advisory)
+	}
+
+	// The advisory reaches the seating path (start/take print sprintReadyLine)
+	// and the ending path, not only focus.
+	ready := sprintReadyLine(136, owner)
+	if !strings.Contains(ready, advisory) {
+		t.Error("seating an unwakeable owner must carry the advisory: an owner nothing can push to " +
+			"matters MORE when the seat is taken than when a focus pointer is moved")
+	}
+
+	// And a reachable owner must produce no advisory anywhere — the warning is
+	// information, so it must not become noise on a healthy seat.
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID("wakeable-manager"), Nick: "wakeable-manager", Mode: "inbox",
+		Tool: "claude", Binding: "claude:test", PID: os.Getpid(),
+		Caps: []string{room.CapInboxStream},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer room.Leave(room.AgentClaimID("wakeable-manager"))
+	if got := sprintSeatDeliveryAdvisory("wakeable-manager"); got != "" {
+		t.Errorf("a reachable seat must produce no advisory, got %q", got)
+	}
+}

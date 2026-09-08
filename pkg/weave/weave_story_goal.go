@@ -115,6 +115,43 @@ func sprintSeatToolMismatch(owner string) string {
 		a.Tool, a.Model, tool, owner, tool)
 }
 
+// sprintSeatDeliveryAdvisory reports that mail addressed to this seat cannot
+// currently WAKE it — and REPORTS rather than refuses, for the same reason
+// sprintSeatToolMismatch above does.
+//
+// THE DECISION, pinned by TestSprintDeliveryGateIsConsistent (todo 27ae4f3792e2).
+// This check used to REFUSE exactly one verb: `sprint focus`, which sets an
+// advisory pointer at the story the manager intends next. The same owner could
+// start, take, checkpoint and END the sprint — `end` is irreversible and closes
+// the card — and was blocked only from the cheapest, most reversible, purely
+// bookkeeping operation. That asymmetry cost sprint #135 its focus pointer: the
+// refusal reads as "this seat is not properly established", so the conductor
+// went looking for a problem that did not exist and drove the sprint without it.
+//
+// Three placements were possible (the story enumerates them). The file already
+// answers the question. `validateSprintOwner` REFUSES an unregistered owner at
+// every point an owner is written, because that is a fact the host can prove and
+// which is always wrong. `sprintSeatToolMismatch` WARNS, because the host can
+// prove the mismatch but CANNOT judge whether the name is legitimately the
+// caller's own. Live delivery is the second kind: a human operator driving a
+// sprint from a terminal is a legitimate mode that no managed session backs, and
+// `sprint reach` already reports it exactly this way. So it warns, everywhere —
+// seating, focusing and ending alike — and refuses nowhere.
+//
+// This does NOT leave the underlying question unanswered, which is what the
+// story forbids: the advisory now appears on the verbs where an unwakeable owner
+// actually matters (seating one, and ending a sprint under one), where before it
+// appeared on none of them.
+func sprintSeatDeliveryAdvisory(owner string) string {
+	if strings.TrimSpace(owner) == "" || sprintInboxDeliveryLive(owner) {
+		return ""
+	}
+	return fmt.Sprintf("\nnote: %s has no verified managed inbox delivery — mail addressed to this seat "+
+		"cannot wake it. Launch it through Bashy if it is meant to be driven by mail; a terminal "+
+		"`bashy inbox --watch --as %s` keeps the seat live but cannot be woken. Harmless if you are "+
+		"steering this sprint yourself.", owner, owner)
+}
+
 func sprintReadyLine(id int64, owner string) string {
 	// Name the MANAGER'S job first. This line used to offer only "read your
 	// mail", which reads as an individual-contributor next step and is how a
@@ -129,7 +166,7 @@ func sprintReadyLine(id int64, owner string) string {
 		"decompose, file stories, launch and monitor the fleet, gate every merge. Then "+
 		"`bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
 		"the seat live; `--watch` to stay attached; `bashy skills show inbox` for how mail works)"+
-		sprintSeatToolMismatch(owner), id, id, owner)
+		sprintSeatToolMismatch(owner)+sprintSeatDeliveryAdvisory(owner), id, id, owner)
 }
 
 func normalizeStoryRoot(root string) (string, error) {
@@ -612,9 +649,6 @@ func newSprintFocusCmd() *cobra.Command {
 		}
 		return runWeaveStoryMutate(cmd, id, "sprint focus", &flags, func(s *weaveStory) (string, error) {
 			owner := weaveStoryConductorName(s, "")
-			if !sprintInboxDeliveryLive(owner) {
-				return "", fmt.Errorf("sprint owner %s has no verified managed inbox delivery; launch it through Bashy (a terminal `inbox --watch` alone cannot wake the agent)", owner)
-			}
 			next, err := nextSprintStory(s)
 			if err != nil {
 				return "", err
@@ -629,7 +663,8 @@ func newSprintFocusCmd() *cobra.Command {
 				body += "; priority override: " + s.Execution.Override
 			}
 			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "decision", body)
-			return fmt.Sprintf("sprint #%d focus %s", id, it.ID), nil
+			return fmt.Sprintf("sprint #%d focus %s%s", id, it.ID,
+				sprintSeatDeliveryAdvisory(owner)), nil
 		})
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "story repo root (default current)")

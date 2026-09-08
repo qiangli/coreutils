@@ -131,6 +131,11 @@ Common-case usage:
 	// non-zero with ZERO output. See argerr.go.
 	installArgsErrorReporting(cmd)
 
+	// ...and the errors a RunE returns itself: a guard that runs before
+	// the store is opened is not a cobra structural error, so neither
+	// reporter above sees it. See runerr.go.
+	installRunErrorReporting(cmd)
+
 	return cmd
 }
 
