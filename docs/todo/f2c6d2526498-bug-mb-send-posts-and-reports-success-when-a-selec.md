@@ -3,9 +3,10 @@ id: f2c6d2526498
 kind: task
 title: 'BUG: mb send posts and reports success when a selector cannot resolve'
 seq: 103
-status: todo
+status: assigned
 priority: p1
 created: 2026-09-08T03:58:01.976715Z
+assignee: sprint139-manager
 sprint: 139
 ---
 

@@ -3,9 +3,10 @@ id: 312252aeb358
 kind: task
 title: 'mb has no selector for what an agent is DOING: address the live sprint managers'
 seq: 96
-status: todo
+status: assigned
 priority: p2
 created: 2026-09-07T19:27:40.311501Z
+assignee: sprint139-manager
 sprint: 139
 ---
 
