@@ -15,6 +15,7 @@ func CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
 	return defaultGate.CollectReport(ctx, opt)
 }
 func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, error) {
+	resolveModel, listModels := reportModelResolver(g)
 	p, err := g.policy()
 	if err != nil {
 		return nil, err
@@ -39,7 +40,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 			}
 		} else {
 			cat := fleet.New()
-			models, errs := cat.Models()
+			models, errs := listModels()
 			for _, e := range errs {
 				report.Warnings = append(report.Warnings, e.Error())
 			}
@@ -73,7 +74,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if m, ok := g.model(b.Model); ok {
+		if m, ok := resolveModel(b.Model); ok {
 			b.Model = m.Name
 			if b.Provider == "" {
 				b.Provider = m.Provider
@@ -118,7 +119,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		}
 	}
 	for _, a := range opt.Active {
-		if m, ok := g.model(a.Model); ok {
+		if m, ok := resolveModel(a.Model); ok {
 			a.Model = m.Name
 		}
 		for _, b := range modelBindings[a.Model] {
@@ -137,7 +138,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 		}
 		if opt.Model != "" {
 			wanted := opt.Model
-			if m, ok := g.model(wanted); ok {
+			if m, ok := resolveModel(wanted); ok {
 				wanted = m.Name
 			}
 			if !contains(row.Models, wanted) {
@@ -242,7 +243,7 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 			row.Metrics = append(row.Metrics, constraintMetrics(c, now)...)
 		}
 		for _, model := range row.Models {
-			if m, ok := g.model(model); ok {
+			if m, ok := resolveModel(model); ok {
 				row.Metrics = append(row.Metrics, legacyMetrics(m, now)...)
 			}
 		}
@@ -353,4 +354,43 @@ func legacyMetrics(m Model, now time.Time) []Metric {
 		add("limits.tokens_per_minute", "tokens/minute", float64(m.Limits.RateTokens)*float64(time.Minute)/float64(m.Limits.RatePer))
 	}
 	return out
+}
+
+// A report sees one coherent catalog projection. Resolve canonical names and
+// aliases from that projection instead of reparsing every YAML file per row.
+// The cache is request-local: the next report sees edits/removals and new env
+// metadata without a TTL or process-global stale/negative cache.
+func reportModelResolver(g *Gate) (func(string) (Model, bool), func() ([]fleet.Model, []error)) {
+	var models []fleet.Model
+	var errs []error
+	loaded := false
+	catalog := map[string]Model{}
+	list := func() ([]fleet.Model, []error) {
+		if !loaded {
+			loaded = true
+			models, errs = fleet.New().Models()
+			for _, fm := range models {
+				m := FromFleetModel(fm)
+				for _, name := range fm.Names() {
+					if _, exists := catalog[name]; !exists {
+						catalog[name] = m
+					}
+				}
+			}
+		}
+		return models, errs
+	}
+	resolve := func(name string) (Model, bool) {
+		if name == "" {
+			return Model{}, false
+		}
+		if m, ok := g.cfg.Models[name]; ok {
+			m.Name = nonEmpty(m.Name, name)
+			return m, true
+		}
+		list()
+		m, ok := catalog[name]
+		return m, ok
+	}
+	return resolve, list
 }

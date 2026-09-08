@@ -413,6 +413,11 @@ func (g *Gate) save() {
 }
 
 func (g *Gate) model(name string) (Model, bool) {
+	// Account-only source rows have no model. A missing model is not a
+	// request to parse every embedded/local fleet model.
+	if name == "" {
+		return Model{}, false
+	}
 	if m, ok := g.cfg.Models[name]; ok {
 		m.Name = nonEmpty(m.Name, name)
 		return m, true
