@@ -1127,10 +1127,17 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// The launcher is the only place that knows which principal is about to
 	// act, so it is the only place that can tell the spawned process who it
 	// is. execRunner reads this back out to stamp the child's environment.
+	budgetWork, budgetErr := reserveBudgetWork(ctx, lnch, prompt, taskCard.ID, true, opt.AllowPremium)
+	if budgetErr != nil {
+		res.ExitCode = 75
+		return res, budgetErr
+	}
 	callCtx, endObservation := startGenAIObservation(ctx, lnch)
 	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
 	endGenAIObservation(endObservation, lnch, prompt, out, "", err)
-	recordLaunchUsage(ctx, lnch, prompt, out)
+	if budgetErr := budgetWork.finish(out, err); budgetErr != nil {
+		err = errors.Join(err, budgetErr)
+	}
 	// This is the shared return seam for every unattended agent turn.  Do not
 	// return an over-budget transcript: its complete bytes have first been
 	// spilled by reduceInvokeOutput, and the bounded view tells the next agent
@@ -1222,7 +1229,13 @@ func governLaunch(ctx context.Context, originalName string, l Launch, prompt str
 			return l, llmbudget.Decision{Action: llmbudget.Block, Model: l.ModelName, Reason: "budget route cycle"}, nil
 		}
 		seen[l.ModelName] = true
-		d := llmbudget.CheckWithOverride(ctx, l.ModelName, estimateTokens(prompt), opt.AllowPremium)
+		request := opaqueBudgetRequest(l, prompt, true)
+		request.AllowPremium = opt.AllowPremium
+		preview, e := llmbudget.Preview(ctx, request)
+		if e != nil {
+			return l, preview.Decision, e
+		}
+		d := preview.Decision
 		switch d.Action {
 		case "", llmbudget.Allow:
 			return l, d, nil

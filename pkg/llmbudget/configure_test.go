@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigurePolicyValidatesThenAtomicallyApplies(t *testing.T) {
@@ -104,5 +105,31 @@ func TestTerminatedUnknownTokensRemainUnknownUnderNewPolicy(t *testing.T) {
 	next := demand("next", newOwner)
 	if a, e := g.Reserve(context.Background(), next); e != nil || a.Decision.Action != Queue {
 		t.Fatal("unknown completion converted to zero", a, e)
+	}
+}
+
+func TestEstimatedOpaqueUsageRecoversOnlyAfterWindowReset(t *testing.T) {
+	p := fixturePolicy()
+	p.Constraints = nil
+	g := fixtureGate(t, p)
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	g.cfg.Now = func() time.Time { return now }
+	o := fixtureOwner(t, g)
+	r := demand("estimated", o)
+	r.UnknownTokens = true
+	if _, e := g.Reserve(context.Background(), r); e != nil {
+		t.Fatal(e)
+	}
+	if e := g.Settle(context.Background(), r.ID, o.ID(), Actual{InputTokens: 1, OutputTokens: 1, TokensEstimated: true, SpendMicroUSD: i64(1)}); e != nil {
+		t.Fatal(e)
+	}
+	p.Constraints = []Constraint{{Provider: "vendor", DailyTokens: i64(100), DailySpendMicroUSD: i64(100)}}
+	next := demand("next", o)
+	if a, e := g.Reserve(context.Background(), next); e != nil || a.Decision.Action != Queue {
+		t.Fatal("estimated usage refunded", a, e)
+	}
+	now = now.AddDate(0, 0, 1)
+	if a, e := g.Reserve(context.Background(), next); e != nil || a.Reservation == nil {
+		t.Fatal("closed unknown window stuck", a, e)
 	}
 }

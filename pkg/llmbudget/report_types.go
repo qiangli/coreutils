@@ -100,6 +100,7 @@ type Reservation struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 type Actual struct {
+	TokensEstimated   bool      `json:"tokens_estimated,omitempty"`
 	InputTokens       int64     `json:"input_tokens"`
 	OutputTokens      int64     `json:"output_tokens"`
 	CachedInputTokens int64     `json:"cached_input_tokens"`

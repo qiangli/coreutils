@@ -128,3 +128,22 @@ text are rejected before replacement. `Request.UnknownTokens` and
 Matching hard constraints refuse unknown demand, including outstanding claims;
 verified termination with unknown token usage retains that uncertainty for the
 current policy window.
+
+Chat Invoke, PTY/ACP sessions and steers reserve before dispatch. They observe
+opaque harness lifetimes, not individual provider requests. Successful harness
+completion settles local text/average-price observations with
+`Actual.TokensEstimated=true`; account reports label split tokens estimated and
+retain unknown token/spend coverage for hard policy. Errors/cancellation retain
+claims until an existing lifecycle authority verifies termination; a caller's
+cancel signal is not proof. Ordinary successful command completion bounds the
+supervised work, with deliberately detached descendants outside the portable
+process ownership guarantee. No real provider API is called by these tests.
+
+Scheduler jobs opt into the same authority with `schedule add --expensive` and
+optional `--budget-model`/`--budget-memory-bytes`. Unmarked jobs, including ordinary
+POSIX at/batch jobs, keep their existing behavior. `Job.WorkBudget` and
+`FireJobWithAdmission` expose the same seam to embeddings. Expensive model jobs
+have unknown token demand; a memory allocation is explicit or unknown. Capacity
+is held until successful command completion; failures retain the claim for
+verified reconciliation. Scheduler/model subprocess completion does not yield
+provider-authoritative usage.

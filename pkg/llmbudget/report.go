@@ -161,7 +161,11 @@ func (g *Gate) CollectReport(ctx context.Context, opt ReportOptions) (*Report, e
 				name string
 				n    int64
 			}{{"usage.input_tokens", pool.InputTokens}, {"usage.output_tokens", pool.OutputTokens}, {"usage.cached_input_tokens", pool.CachedInputTokens}} {
-				row.Metrics = append(row.Metrics, measured(v.name, float64(v.n), "tokens", "actual", "local-meter", pool.ObservedAt))
+				class := "actual"
+				if pool.EstimatedTokens {
+					class = "estimated"
+				}
+				row.Metrics = append(row.Metrics, measured(v.name, float64(v.n), "tokens", class, "local-meter", pool.ObservedAt))
 			}
 		}
 		for _, model := range row.Models {

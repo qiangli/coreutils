@@ -466,7 +466,13 @@ func (g *Gate) Settle(ctx context.Context, id, owner string, a Actual) error {
 		pool.OutputTokens = safeAdd(pool.OutputTokens, a.OutputTokens)
 		pool.CachedInputTokens = safeAdd(pool.CachedInputTokens, a.CachedInputTokens)
 		pool.ObservedAt = g.now()
-		if a.SpendMicroUSD == nil && (r.Request.Tokens > 0 || r.Request.UnknownTokens) {
+		if a.TokensEstimated {
+			pool.EstimatedTokens = true
+			pool.UnknownTokens = true
+			at := g.now()
+			pool.UnknownTokensAt = &at
+		}
+		if (a.SpendMicroUSD == nil || a.TokensEstimated) && (r.Request.Tokens > 0 || r.Request.UnknownTokens) {
 			pool.UnknownSpend = true
 			pool.UnknownSpendAt = g.now()
 		}

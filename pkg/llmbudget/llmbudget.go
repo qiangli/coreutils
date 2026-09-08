@@ -144,6 +144,9 @@ var defaultGate = DefaultFromEnv()
 // exercised is exactly the kind of capability that quietly does not work.
 // Inject a Gate with a fixed clock and pre-loaded counters instead of sleeping
 // or spending real money to reach a limit.
+// DefaultGate returns the current authority for a caller to retain throughout a work lifetime.
+func DefaultGate() *Gate { return defaultGate }
+
 func SetDefault(g *Gate) (restore func()) {
 	prev := defaultGate
 	if g != nil {

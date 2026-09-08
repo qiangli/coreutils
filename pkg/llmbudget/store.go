@@ -23,6 +23,7 @@ const maxCompletions = 8192
 // PoolCounters extend the original meter; legacy totals remain untouched.
 // Split input/cache counters cover only records made through the new API.
 type PoolCounters struct {
+	EstimatedTokens   bool       `json:"estimated_tokens,omitempty"`
 	UnknownTokens     bool       `json:"unknown_tokens,omitempty"`
 	UnknownTokensAt   *time.Time `json:"unknown_tokens_at,omitempty"`
 	UnknownSpendAt    time.Time  `json:"unknown_spend_at,omitempty"`
