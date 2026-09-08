@@ -140,3 +140,20 @@ func TestSendAudienceZeroMatchesRecordsHonestReceipt(t *testing.T) {
 		t.Fatalf("zero-match history has %d posts, want 1", got)
 	}
 }
+
+func TestSendAudienceRejectsWhitespaceRole(t *testing.T) {
+	isolate(t)
+	previous := FleetSelect
+	t.Cleanup(func() { FleetSelect = previous })
+	FleetSelect = func(Audience) ([]string, error) {
+		t.Error("whitespace role reached resolver")
+		return []string{"unintended-recipient"}, nil
+	}
+	_, err := Send(SendRequest{From: "tester", Audience: &Audience{Role: " \t\n "}, Body: "must not broaden blank roles"})
+	if err == nil || !strings.Contains(err.Error(), "role") {
+		t.Fatalf("whitespace role error = %v", err)
+	}
+	if got := boardLen(t); got != 0 {
+		t.Fatalf("invalid role appended %d posts", got)
+	}
+}

@@ -122,6 +122,9 @@ func (a Audience) Validate() error {
 	if a.Role == "" {
 		return nil
 	}
+	if strings.TrimSpace(a.Role) == "" {
+		return fmt.Errorf("audience: --role requires a nonempty role name")
+	}
 	var filters []string
 	if a.Band != 0 {
 		filters = append(filters, "--band")
