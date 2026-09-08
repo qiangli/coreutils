@@ -130,6 +130,7 @@ func (p Post) Audiences() string {
 	for _, kv := range [][2]string{
 		{"tool", p.Audience.Tool}, {"provider", p.Audience.Provider},
 		{"family", p.Audience.Family}, {"version", p.Audience.Version},
+		{"role", p.Audience.Role},
 	} {
 		if kv[1] != "" {
 			parts = append(parts, kv[0]+" "+kv[1])
@@ -144,13 +145,36 @@ func (p Post) Audiences() string {
 // An ModeAny post already CLAIMED by somebody else concerns nobody else — that
 // is the point of offering work to a pool rather than announcing it.
 func (p Post) ForReader(reader string) bool {
+	return p.forReader(reader, newAudienceSnapshot())
+}
+
+// FilterPostsForReader selects the posts that concern reader, preserving their
+// order and leaving posts unchanged. Like Post.ForReader, it includes directed
+// posts and broadcasts and excludes another reader's claimed work offers.
+//
+// Each call resolves each distinct audience at most once, including unavailable
+// or empty rosters. Call it once per read operation: membership is stable across
+// posts with the same selector and refreshes on the next call. It does not
+// advance cursors, claim offers, or record views.
+func FilterPostsForReader(posts []Post, reader string) []Post {
+	audiences := newAudienceSnapshot()
+	var out []Post
+	for _, p := range posts {
+		if p.forReader(reader, audiences) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (p Post) forReader(reader string, audiences audienceSnapshot) bool {
 	if p.Directed(reader) || p.Broadcast() {
 		return true
 	}
 	if p.Audience == nil || p.Audience.Empty() {
 		return false
 	}
-	if !InAudience(*p.Audience, reader) {
+	if !audiences.inAudience(*p.Audience, reader) {
 		return false
 	}
 	if p.Mode == ModeAny {
@@ -223,34 +247,57 @@ func (p Post) OnConcern(concerns []string) bool {
 	return false
 }
 
-// audienceCache memoizes selector resolution for the life of one command, so a
-// board full of selector posts costs one catalog load per DISTINCT selector
-// rather than one per post.
-var audienceCache = map[Audience]map[string]bool{}
+// audienceSnapshot memoizes each distinct selector for one board read or
+// archive scan. It belongs to that operation, never to the process: embedded
+// readers must observe lease handoffs and expiry on their next read. A snapshot
+// is used by one goroutine; concurrent reads each own a separate map.
+// Resolution errors and empty rosters are also memoized for this operation.
+type audienceSnapshot map[Audience]audienceMembers
 
-// InAudience reports whether reader is in the set a selector names.
+type audienceMembers struct {
+	names map[string]bool
+	size  int
+}
+
+func newAudienceSnapshot() audienceSnapshot {
+	return make(audienceSnapshot)
+}
+
+func (s audienceSnapshot) resolve(aud Audience) audienceMembers {
+	if members, ok := s[aud]; ok {
+		return members
+	}
+	var members audienceMembers
+	if FleetSelect != nil {
+		if names, err := FleetSelect(aud); err == nil {
+			members.names = make(map[string]bool, len(names))
+			members.size = len(names)
+			for _, n := range names {
+				members.names[strings.ToLower(strings.TrimSpace(n))] = true
+			}
+		}
+	}
+	s[aud] = members
+	return members
+}
+
+func (s audienceSnapshot) inAudience(aud Audience, reader string) bool {
+	return s.resolve(aud).names[strings.ToLower(strings.TrimSpace(reader))]
+}
+
+func (s audienceSnapshot) audienceSize(aud Audience) int {
+	return s.resolve(aud).size
+}
+
+// InAudience reports whether reader is in the set a selector currently names.
+// Each direct call resolves afresh; board reads reuse one operation's snapshot.
 //
 // An unresolvable selector matches NOBODY rather than everybody. Erring toward
 // silence costs one reader a message they can still find with --all; erring the
 // other way turns every group post into a broadcast, which is precisely the
 // clutter this design exists to prevent.
 func InAudience(aud Audience, reader string) bool {
-	if FleetSelect == nil {
-		return false
-	}
-	members, ok := audienceCache[aud]
-	if !ok {
-		names, err := FleetSelect(aud)
-		if err != nil {
-			return false
-		}
-		members = make(map[string]bool, len(names))
-		for _, n := range names {
-			members[strings.ToLower(strings.TrimSpace(n))] = true
-		}
-		audienceCache[aud] = members
-	}
-	return members[strings.ToLower(strings.TrimSpace(reader))]
+	return newAudienceSnapshot().inAudience(aud, reader)
 }
 
 // BoardDir is the board's store. It is deliberately NOT under the room
@@ -395,6 +442,10 @@ func Posts() ([]Post, error) {
 // An UNDECLARED concern is never silently promoted: the tag alone lifts no
 // cap, or tagging would become the megaphone the convention forbids.
 func Unseen(reader string, limit int) (directed, other []Post, older int, err error) {
+	return unseen(reader, limit, newAudienceSnapshot())
+}
+
+func unseen(reader string, limit int, audiences audienceSnapshot) (directed, other []Post, older int, err error) {
 	all, e := Posts()
 	if e != nil {
 		return nil, nil, 0, e
@@ -407,13 +458,18 @@ func Unseen(reader string, limit int) (directed, other []Post, older int, err er
 			continue
 		}
 		onConcern := p.OnConcern(concerns)
-		if !onConcern && !p.ForReader(reader) {
+		if !onConcern && !p.forReader(reader, audiences) {
 			continue
 		}
+		// Membership is an uncapped tier like a declared concern: a group post
+		// says who should ACT on it, and the directed-tier rule — never
+		// truncate an obligation — cannot stop at the first address kind.
+		// Broadcasts deliberately stay in the capped rest below.
+		inAudience := p.Audience != nil && !p.Audience.Empty() && audiences.inAudience(*p.Audience, reader)
 		switch {
 		case p.Directed(reader):
 			directed = append(directed, p)
-		case onConcern:
+		case onConcern || inAudience:
 			concerned = append(concerned, p)
 		default:
 			rest = append(rest, p)
@@ -799,14 +855,7 @@ func Viewers(seq int64) []string {
 // N of M" line. Zero when it cannot be resolved — and the caller renders the
 // count alone rather than inventing a denominator.
 func AudienceSize(aud Audience) int {
-	if FleetSelect == nil {
-		return 0
-	}
-	names, err := FleetSelect(aud)
-	if err != nil {
-		return 0
-	}
-	return len(names)
+	return newAudienceSnapshot().audienceSize(aud)
 }
 
 // --- provable delivery states -----------------------------------------------

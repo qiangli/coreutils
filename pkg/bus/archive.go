@@ -180,7 +180,7 @@ func boardReaderStates() []boardReaderState {
 // canArchivePost applies retention conditions 2 and 3 to one post. Condition
 // 1 (age) is checked by the caller, which walks posts oldest-first and stops
 // at the first one that is not old enough.
-func canArchivePost(p Post, readers []boardReaderState, now time.Time, window time.Duration) bool {
+func canArchivePost(p Post, readers []boardReaderState, now time.Time, window time.Duration, audiences audienceSnapshot) bool {
 	// Condition 2: every reader who has polled within the window, and for
 	// whom this post is even relevant, has a cursor past it. A stale reader
 	// (away longer than the window) does not get a vote here — see the
@@ -189,7 +189,7 @@ func canArchivePost(p Post, readers []boardReaderState, now time.Time, window ti
 		if now.Sub(r.lastPoll) > window {
 			continue
 		}
-		if p.ForReader(r.name) && r.cursor < p.Seq {
+		if p.forReader(r.name, audiences) && r.cursor < p.Seq {
 			return false
 		}
 	}
@@ -253,6 +253,7 @@ func RotateBoard(now time.Time) (archived int, err error) {
 	window := RetentionWindow()
 	cutoff := now.Add(-window)
 	readers := boardReaderStates()
+	audiences := newAudienceSnapshot()
 
 	var toArchive []Post
 	for _, p := range all {
@@ -260,7 +261,7 @@ func RotateBoard(now time.Time) (archived int, err error) {
 		if perr != nil || !at.Before(cutoff) {
 			break
 		}
-		if !canArchivePost(p, readers, now, window) {
+		if !canArchivePost(p, readers, now, window, audiences) {
 			break
 		}
 		toArchive = append(toArchive, p)

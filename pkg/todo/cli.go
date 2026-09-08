@@ -239,7 +239,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&priority, "priority", "", "priority tier (p0|p1|p2|p3)")
 	cmd.Flags().StringVar(&note, "note", "", "task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
-	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
+	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
 		"who is working the item (notified over bashy notify; see bashy inbox)")
@@ -494,6 +494,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				it.Due = due
 			}
 			if cmd.Flags().Changed("recurring") {
+				if err := ValidateCadence(recurring); err != nil {
+					return err
+				}
 				it.Recurring = recurring
 			}
 			ownerChanged := cmd.Flags().Changed("owner")
@@ -530,7 +533,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority (p0|p1|p2|p3)")
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
-	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
+	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,
 		"who is working the item (notified over bashy notify; see bashy inbox)")

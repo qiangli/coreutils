@@ -1,9 +1,12 @@
 package bus
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -19,6 +22,7 @@ func boardInTempHome(t *testing.T) {
 	// observation stores; point all of them at empty temp dirs so no test
 	// resolves (or fails to resolve) against the operator's real host state.
 	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	t.Setenv("BASHY_SPRINT_DIR", t.TempDir())
 	t.Setenv("BASHY_MEET_DIR", t.TempDir())
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
 	t.Setenv("BASHY_AGENTS_DIR", "")
@@ -208,7 +212,7 @@ func TestBoard_SelectorIsOnePostAndResolvesAtReadTime(t *testing.T) {
 		}
 		return nil, nil
 	}
-	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+	t.Cleanup(func() { FleetSelect = nil })
 
 	if err := PostMessage(Post{From: "steward", Audience: &Audience{Band: 4}, Body: "L4 only"}); err != nil {
 		t.Fatal(err)
@@ -272,7 +276,7 @@ func TestBoard_AnyModeIsClaimedByTheFirstReader(t *testing.T) {
 	FleetSelect = func(a Audience) ([]string, error) {
 		return []string{"a1", "a2", "a3"}, nil
 	}
-	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+	t.Cleanup(func() { FleetSelect = nil })
 
 	if err := PostMessage(Post{
 		From: "steward", Audience: &Audience{Band: 3}, Mode: ModeAny, Body: "take P0-1",
@@ -308,7 +312,7 @@ func TestBoard_AnyModeIsClaimedByTheFirstReader(t *testing.T) {
 func TestBoard_AllModeCountsDistinctViewers(t *testing.T) {
 	boardInTempHome(t)
 	FleetSelect = func(a Audience) ([]string, error) { return []string{"a1", "a2", "a3"}, nil }
-	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+	t.Cleanup(func() { FleetSelect = nil })
 
 	if err := PostMessage(Post{
 		From: "steward", Audience: &Audience{Band: 4}, Mode: ModeAll, Body: "quota exhausted",
@@ -331,5 +335,271 @@ func TestBoard_AllModeCountsDistinctViewers(t *testing.T) {
 		if _, other, _, _ := Unseen(who, 0); len(other) != 1 {
 			t.Fatalf("%s must still see an announcement", who)
 		}
+	}
+}
+
+// AUDIENCE MEMBERSHIP IS AN UNCAPPED TIER — the sprint #139 payoff.
+//
+// A group post is addressed to a reader because they are DOING something
+// (managing a sprint), not because they happened to declare a concern. A
+// member who must first subscribe to see their own mail in full has an
+// obligation trimmed by an arbitrary -n, which is the directed-tier rule
+// applied to a group: never truncate what somebody is supposed to act on.
+func TestBoard_AudienceMemberSeesGroupPostUncapped(t *testing.T) {
+	boardInTempHome(t)
+	FleetSelect = func(Audience) ([]string, error) {
+		return []string{"claude-opus5"}, nil
+	}
+	t.Cleanup(func() { FleetSelect = nil })
+
+	// The group post is the OLDEST thing on the board: if it were capped like
+	// an ordinary broadcast, the newest-five rule would trim it first.
+	if err := PostMessage(Post{From: "steward", Audience: &Audience{Role: "conductor"}, Body: "sprint moved"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 9 {
+		if err := PostMessage(Post{From: "a", Body: "fyi"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, other, older, err := Unseen("claude-opus5", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 4 {
+		t.Fatalf("older = %d, want 4 hidden broadcasts — only the broadcasts may be capped", older)
+	}
+	if len(other) != 6 || other[0].Seq != 1 {
+		t.Fatalf("other = %d posts starting at seq %d; the member must see the group post (seq 1) uncapped alongside the capped 5", len(other), other[0].Seq)
+	}
+}
+
+// Lease membership changes even when the board itself has not changed. Each
+// read must re-resolve it, including empty and failed previous resolutions.
+func TestBoard_AudienceRefreshesBetweenReads(t *testing.T) {
+	for _, entry := range []string{"unseen", "membership", "post"} {
+		t.Run(entry, func(t *testing.T) {
+			boardInTempHome(t)
+			var names []string
+			var resolveErr error
+			oldSelect := FleetSelect
+			FleetSelect = func(Audience) ([]string, error) { return names, resolveErr }
+			t.Cleanup(func() { FleetSelect = oldSelect })
+			p := Post{From: "tester", Audience: &Audience{Role: "conductor"}, Body: "lease notice"}
+			if err := PostMessage(p); err != nil {
+				t.Fatal(err)
+			}
+			check := func(reader string, want bool) {
+				t.Helper()
+				var got bool
+				switch entry {
+				case "membership":
+					got = InAudience(*p.Audience, reader)
+				case "post":
+					got = p.ForReader(reader)
+				default:
+					directed, other, older, err := Unseen(reader, 1)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(directed) != 0 || older != 0 {
+						t.Fatalf("directed=%d older=%d", len(directed), older)
+					}
+					got = len(other) == 1
+				}
+				if got != want {
+					t.Errorf("reader %q with roster %v and error %v: got %v, want %v", reader, names, resolveErr, got, want)
+				}
+			}
+			check("old", false) // initially no live leases
+			names = []string{" Old "}
+			check("OLD", true) // a manager seats in the same process
+			names = []string{"new"}
+			check("old", false) // handoff removes the previous owner
+			check("new", true)
+			names = nil
+			check("new", false) // expired leases leave the live roster
+			resolveErr = errors.New("roster unavailable")
+			check("new", false)
+			names, resolveErr = []string{"new"}, nil
+			check("new", true) // a later read retries failed or empty resolution
+		})
+	}
+}
+
+func TestBoard_AudienceResolvedOncePerRead(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "members", true: "unavailable"}[failed], func(t *testing.T) {
+			boardInTempHome(t)
+			calls := map[Audience]int{}
+			oldSelect := FleetSelect
+			FleetSelect = func(a Audience) ([]string, error) {
+				calls[a]++
+				if failed {
+					return nil, errors.New("roster unavailable")
+				}
+				return []string{"reader"}, nil
+			}
+			t.Cleanup(func() { FleetSelect = oldSelect })
+			selectors := []Audience{{Role: "conductor"}, {Band: 4}}
+			for _, aud := range selectors {
+				for range 7 {
+					if err := PostMessage(Post{From: "tester", Audience: &aud, Body: "notice"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			clear(calls)
+			for read := 1; read <= 2; read++ {
+				_, other, older, err := Unseen("reader", 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 14
+				if failed {
+					want = 0
+				}
+				if len(other) != want || older != 0 {
+					t.Fatalf("posts=%d older=%d, want %d/0", len(other), older, want)
+				}
+				for _, aud := range selectors {
+					if calls[aud] != read {
+						t.Errorf("read %d: selector %+v resolved %d times, want %d", read, aud, calls[aud], read)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBoard_AudienceConcurrentReads(t *testing.T) {
+	boardInTempHome(t)
+	var calls atomic.Int32
+	oldSelect := FleetSelect
+	FleetSelect = func(Audience) ([]string, error) { calls.Add(1); return []string{"reader"}, nil }
+	t.Cleanup(func() { FleetSelect = oldSelect })
+	for range 7 {
+		if err := PostMessage(Post{From: "tester", Audience: &Audience{Role: "conductor"}, Body: "notice"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls.Store(0)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			_, other, _, err := Unseen("reader", 1)
+			if err != nil || len(other) != 7 {
+				t.Errorf("posts=%d error=%v", len(other), err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := calls.Load(); got != 8 {
+		t.Fatalf("resolver calls=%d, want one per concurrent read (8)", got)
+	}
+}
+
+func TestMessageBoard_AudienceSnapshotSharedWithReceipts(t *testing.T) {
+	for _, mode := range []string{"read", "peek", "history"} {
+		t.Run(mode, func(t *testing.T) {
+			boardInTempHome(t)
+			calls := 0
+			names := []string{"first"}
+			oldSelect := FleetSelect
+			FleetSelect = func(Audience) ([]string, error) { calls++; return names, nil }
+			t.Cleanup(func() { FleetSelect = oldSelect })
+			for range 7 {
+				if err := PostMessage(Post{From: "tester", Audience: &Audience{Role: "conductor"}, Body: "notice"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls = 0
+			for i, reader := range []string{"first", "second"} {
+				args := []string{"--as", reader}
+				if mode != "read" {
+					args = append(args, "--"+mode)
+				}
+				out, _, err := runMessageBoard(t, context.Background(), args...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Count(out, "notice") != 7 {
+					t.Fatalf("lost addressed posts:\n%s", out)
+				}
+				denominator := " of 1)"
+				if i == 1 {
+					denominator = " of 2)"
+				}
+				if strings.Count(out, denominator) != 7 {
+					t.Fatalf("stale receipt denominator:\n%s", out)
+				}
+				if calls != i+1 {
+					t.Fatalf("read %d: resolver called %d times, want %d including all receipts", i+1, calls, i+1)
+				}
+				names = []string{"second", "peer"}
+			}
+		})
+	}
+}
+
+func TestFilterPostsForReaderPreservesAddressingAndRefreshes(t *testing.T) {
+	boardInTempHome(t)
+	oldSelect := FleetSelect
+	t.Cleanup(func() { FleetSelect = oldSelect })
+	calls := map[Audience]int{}
+	names := []string{"reader"}
+	FleetSelect = func(a Audience) ([]string, error) {
+		calls[a]++
+		if a.Role == "conductor" {
+			return names, nil
+		}
+		return []string{"outsider"}, nil
+	}
+	aud := &Audience{Role: "conductor"}
+	posts := []Post{
+		{Seq: 1, To: "reader", Body: "direct"},
+		{Seq: 2, Body: "broadcast"},
+		{Seq: 3, To: "outsider", Body: "another reader"},
+		{Seq: 4, Audience: aud, Body: "notice"},
+		{Seq: 5, Audience: aud, Body: "second notice"},
+		{Seq: 6, Audience: aud, Mode: ModeAny, Body: "claimed offer"},
+		{Seq: 7, Audience: &Audience{Band: 4}, Body: "another audience"},
+	}
+	if _, granted := ClaimPost(6, "peer"); !granted {
+		t.Fatal("could not seed claimed offer")
+	}
+	got := FilterPostsForReader(posts, "reader")
+	want := []int64{1, 2, 4, 5}
+	if len(got) != len(want) {
+		t.Fatalf("selected posts = %+v", got)
+	}
+	for i, seq := range want {
+		if got[i].Seq != seq {
+			t.Fatalf("selected post %d = %d, want %d", i, got[i].Seq, seq)
+		}
+	}
+	names = []string{"successor"}
+	got = FilterPostsForReader(posts, "reader")
+	if len(got) != 2 || got[0].Seq != 1 || got[1].Seq != 2 {
+		t.Fatalf("after handoff: %+v", got)
+	}
+	for _, selector := range []Audience{*aud, {Band: 4}} {
+		if calls[selector] != 2 {
+			t.Errorf("selector %+v resolved %d times, want once per call", selector, calls[selector])
+		}
+	}
+	for i, p := range posts {
+		if p.Seq != int64(i+1) {
+			t.Fatalf("input posts mutated: %+v", posts)
+		}
+		if viewers := Viewers(p.Seq); len(viewers) != 0 {
+			t.Fatalf("filter recorded views for %d: %v", p.Seq, viewers)
+		}
+	}
+	if SeenSeq("reader") != 0 {
+		t.Fatal("filter consumed the reader cursor")
+	}
+	if holder := ClaimHolder(6); holder != "peer" {
+		t.Fatalf("filter changed claim holder: %q", holder)
 	}
 }

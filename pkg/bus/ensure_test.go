@@ -9,6 +9,9 @@ import (
 func busInTempHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// Explicit coordination-store overrides take precedence over HOME, including
+	// those used by isolated repository gates. Reset them for every test.
+	boardInTempHome(t)
 	if room.Dir() == "" {
 		t.Skip("room store unavailable")
 	}

@@ -200,11 +200,28 @@ func AgentClaimID(name string) string {
 	return claim
 }
 
-// Dir is the room root (~/.bashy/room), overridable with $BASHY_ROOM_DIR so a test
-// gets an isolated room.
+// Dir resolves the room root:
+//
+//	$BASHY_ROOM_DIR     the specific override, most precise
+//	$BASHY_HOME/room    the whole bashy home relocated (tests, sandboxed runs)
+//	~/.bashy/room       the default, unchanged
+//
+// The MIDDLE rung is not cosmetic. $BASHY_HOME is the documented way to
+// relocate a whole bashy home, and sprint, foreman and webconsole all honour
+// it for exactly that reason. Room did not, so a run sandboxed with
+// $BASHY_HOME got an isolated sprint store whose stage announcements, mb posts
+// and bus events still landed on the SHARED host board. Two smoke tests
+// announced a throwaway sprint onto the operator's real board that way, and
+// mb is append-only, so neither could be taken back.
+//
+// A sandbox that silently leaks is worse than no sandbox: the caller believes
+// they are isolated, so nothing prompts them to check.
 func Dir() string {
 	if d := strings.TrimSpace(os.Getenv("BASHY_ROOM_DIR")); d != "" {
 		return d
+	}
+	if h := strings.TrimSpace(os.Getenv("BASHY_HOME")); h != "" {
+		return filepath.Join(h, "room")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

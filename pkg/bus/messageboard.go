@@ -178,13 +178,14 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		if err != nil {
 			return err
 		}
+		audiences := newAudienceSnapshot()
 		var posts []Post
 		var older int
 		if history {
 			posts, err = Posts()
 		} else {
 			var directed, other []Post
-			directed, other, older, err = Unseen(who, limit)
+			directed, other, older, err = unseen(who, limit, audiences)
 			// Directed first: those carry an obligation, and a reader that
 			// stops after the first screen must have seen them.
 			posts = append(directed, other...)
@@ -204,7 +205,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		labels := make(map[int64]string, len(posts))
 		if !history && !peek {
 			for _, p := range posts {
-				labels[p.Seq] = resolveLabel(p, who, concerns)
+				labels[p.Seq] = resolveLabel(p, who, concerns, audiences)
 			}
 		}
 		w := cmd.OutOrStdout()
@@ -222,7 +223,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 			for _, p := range posts {
 				to, ok := labels[p.Seq]
 				if !ok {
-					to = describeFor(p, who, concerns)
+					to = describeFor(p, who, concerns, audiences)
 				}
 				if seenBy {
 					if v := Viewers(p.Seq); len(v) > 0 {
@@ -263,7 +264,7 @@ func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) erro
 // read could destroy history it would need a permission model, and a permission
 // model is how a messaging feature stops being one.
 func newMBSendCmd() *cobra.Command {
-	var topic, as, to, tool, provider, family, version string
+	var topic, as, to, tool, provider, family, version, role string
 	var band int
 	var any bool
 	cmd := &cobra.Command{
@@ -274,17 +275,17 @@ func newMBSendCmd() *cobra.Command {
   bashy mb send codex-gpt5.6-sol "gate is red on main"
   bashy mb send --to codex-gpt5.6-sol "gate is red on main"
   bashy mb send --band 4 "need an L4 to review the converge gate"
+  bashy mb send --role conductor "shared gate is ready"
   bashy mb send --tool ycode "ycode rebuilt — re-probe your bindings"
   bashy mb send --provider anthropic "anthropic keys rotated"
   bashy mb send --family opus "opus family: cost_micro was corrected"
   bashy mb send --family gemini-flash --version 3.6 "3.6 flash is now bound"
 
-'bashy agents list' is the address book: a bare name is its NAME column, and the
-selectors read the same catalog, so who is "L4" here and there can never drift.
-
-Selectors are ANDed, not unioned. A union would make the wider blast radius the
-easier thing to type, and on a shared board the wide one is what turns messages
-into noise nobody reads. For genuinely everyone: 'bashy mb post'.
+'bashy agents list' is the binding address book: a bare name is its NAME column.
+Binding selectors (--band/--tool/--provider/--family/--version) read that catalog
+and are ANDed. --role conductor reads the live sprint leases and cannot be
+combined with binding selectors. For everyone: 'bashy mb post'.
+A valid selector with no matches records history and reports 0 matching recipients.
 
 One quick-coordination body is limited to 1024 UTF-8 bytes and is never
 truncated or auto-split. Prefer a short request/priority/owner plus a stable
@@ -297,6 +298,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				Band: band, Tool: strings.TrimSpace(tool),
 				Provider: strings.TrimSpace(provider),
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
+				Role: strings.TrimSpace(role),
 			}
 			from, err := ResolveAuthoredActor(as)
 			if err != nil {
@@ -317,7 +319,11 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				if err != nil {
 					return verbError("mb send", err)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", res.Label)
+				if len(res.Deliveries) == 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "recorded for %s; 0 matching recipients\n", res.Label)
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", res.Label)
+				}
 				reportDelivery(cmd, res.Deliveries)
 				return nil
 			}
@@ -328,7 +334,7 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 				}
 			} else {
 				if len(args) < 2 {
-					return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--band/--tool/--provider/--family/--version)")
+					return fmt.Errorf("mb send: name an agent, pass --to <target>, or pass a selector (--role/--band/--tool/--provider/--family/--version)")
 				}
 				target = strings.TrimSpace(args[0])
 				body = strings.Join(args[1:], " ")
@@ -357,6 +363,8 @@ manually send numbered <=1024-byte parts using one token: '[ref:abc 1/3]',
 	f.StringVar(&provider, "provider", "", "post to every agent whose model has this provider")
 	f.StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
 	f.StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
+	f.StringVar(&role, "role", "",
+		"post to every agent currently HOLDING that role — `--role conductor` reaches the live sprint managers, and only them (a stale or unowned lease names nobody)")
 	f.BoolVar(&any, "any", false,
 		"offer to ANY ONE of the group: the first to read it claims it and the rest never see it (default: all of them see it, and views are counted)")
 	return cmd
@@ -458,7 +466,7 @@ func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 // resolveLabel performs a post's read side effects — claiming an offer, or
 // recording a view — and returns how to label it. Called BEFORE any output, so
 // a broken pipe cannot lose the state change.
-func resolveLabel(p Post, who string, concerns []string) string {
+func resolveLabel(p Post, who string, concerns []string, audiences audienceSnapshot) string {
 	switch {
 	case p.Directed(who):
 		return "you"
@@ -477,13 +485,13 @@ func resolveLabel(p Post, who string, concerns []string) string {
 		// A concern read leaves the same record, and against the concern's
 		// declarers it answers "did everyone concerned read it".
 		_ = RecordView(p.Seq, who)
-		return describeFor(p, who, concerns)
+		return describeFor(p, who, concerns, audiences)
 	}
 	return p.Audiences()
 }
 
 // describeFor labels a post WITHOUT side effects, for --history and --peek.
-func describeFor(p Post, who string, concerns []string) string {
+func describeFor(p Post, who string, concerns []string, audiences audienceSnapshot) string {
 	if p.Directed(who) {
 		return "you"
 	}
@@ -498,7 +506,7 @@ func describeFor(p Post, who string, concerns []string) string {
 		return "any of " + p.Audiences() + " — unclaimed"
 	default:
 		seen := len(Viewers(p.Seq))
-		if n := AudienceSize(*p.Audience); n > 0 {
+		if n := audiences.audienceSize(*p.Audience); n > 0 {
 			base = fmt.Sprintf("%s (seen by %d of %d)", p.Audiences(), seen, n)
 		} else {
 			base = fmt.Sprintf("%s (seen by %d)", p.Audiences(), seen)

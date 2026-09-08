@@ -71,3 +71,80 @@ func TestRecurringBehavior(t *testing.T) {
 		t.Fatalf("due not advanced correctly")
 	}
 }
+
+// A SPRINT-BOUND recurring story takes its cadence from the sprint's cycle,
+// not from the clock. Reopening it here would erase the very completion the
+// cycle record has to attest — this branch never stamps Closed — so the tenth
+// iteration would be indistinguishable from the first.
+func TestSprintBoundRecurringStoryClosesHonestlyInsteadOfReopening(t *testing.T) {
+	t.Setenv("BASHY_TODO_DIR", t.TempDir())
+	pinTodoAgents(t, "alice")
+	st, _ := UserStore("steward")
+
+	it, err := Add(st, "tag and push", "", "p1", nil, CadenceSprint, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.Sprint = 129
+	if _, err := st.Save(it); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := SetStatus(st, it.ID, StatusDone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDone {
+		t.Errorf("status = %q, want %q — a sprint story is reopened by `sprint advance`, not by done", got.Status, StatusDone)
+	}
+	if got.Closed == nil {
+		t.Error("Closed was not stamped: the completion left no evidence, which is what made cycle 10 look like cycle 1")
+	}
+}
+
+// An UNBOUND recurring todo is a personal chore on its own clock, and keeps
+// the original behaviour: it reopens and its due date advances.
+func TestUnboundRecurringTodoStillReopensOnDone(t *testing.T) {
+	t.Setenv("BASHY_TODO_DIR", t.TempDir())
+	pinTodoAgents(t, "alice")
+	st, _ := UserStore("steward")
+
+	due := time.Now().UTC()
+	it, err := Add(st, "water the plants", "", "p2", &due, "weekly", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := SetStatus(st, it.ID, StatusDone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusTodo {
+		t.Errorf("status = %q, want %q", got.Status, StatusTodo)
+	}
+	if got.Due == nil || !got.Due.After(due) {
+		t.Errorf("due did not advance: %v", got.Due)
+	}
+}
+
+// A cadence nothing can interpret used to be indistinguishable from an
+// on-demand one: Add never checked it and SetStatus discarded the parse error,
+// so a typo silently became "repeats, but never becomes due".
+func TestInvalidCadenceIsRejectedAtWriteTime(t *testing.T) {
+	t.Setenv("BASHY_TODO_DIR", t.TempDir())
+	pinTodoAgents(t, "alice")
+	st, _ := UserStore("steward")
+
+	for _, ok := range []string{"", CadenceSprint, "daily", "weekly", "monthly", "24h", "*/15 * * * *"} {
+		if err := ValidateCadence(ok); err != nil {
+			t.Errorf("ValidateCadence(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"wekly", "every monday", "24hours"} {
+		if err := ValidateCadence(bad); err == nil {
+			t.Errorf("ValidateCadence(%q) = nil, want an error", bad)
+		}
+	}
+	if _, err := Add(st, "typo", "", "p1", nil, "wekly", ""); err == nil {
+		t.Error("Add accepted an uninterpretable cadence")
+	}
+}

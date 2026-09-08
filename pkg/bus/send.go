@@ -96,6 +96,9 @@ func Send(req SendRequest) (SendResult, error) {
 	body := req.Body
 
 	if req.Audience != nil && !req.Audience.Empty() {
+		if err := req.Audience.Validate(); err != nil {
+			return SendResult{}, err
+		}
 		if err := ValidateCoordinationBody(body); err != nil {
 			return SendResult{}, &BodyError{Err: err}
 		}
@@ -104,6 +107,20 @@ func Send(req SendRequest) (SendResult, error) {
 		if mode == "" {
 			mode = ModeAll
 		}
+		// RESOLVE BEFORE THE APPEND, exactly as the req.To path below does and
+		// as this function's own contract requires: "an unresolvable target
+		// writes NOTHING and fails". The selector used to be resolved AFTER
+		// the post was durably appended, with its error DISCARDED — so a
+		// selector naming nothing resolvable (`--role reviewer`) posted to the
+		// board anyway and reported success, which is the receipt
+		// indistinguishable from a real delivery that this comment forbids.
+		if FleetSelect == nil {
+			return SendResult{}, fmt.Errorf("audience: selector resolver is unavailable for %s", aud.describe())
+		}
+		names, err := FleetSelect(aud)
+		if err != nil {
+			return SendResult{}, err
+		}
 		seq, err := PostMessageSeq(Post{
 			From: req.From, Audience: &aud, Mode: mode, Topic: req.Topic, Body: body,
 		})
@@ -111,14 +128,10 @@ func Send(req SendRequest) (SendResult, error) {
 			return SendResult{}, err
 		}
 		res := SendResult{Seq: seq, Kind: SendAudience, Label: aud.describe()}
-		if FleetSelect != nil {
-			if names, ferr := FleetSelect(aud); ferr == nil {
-				for _, n := range names {
-					d := SteerLive(n, steerNotice(req.From, body))
-					d.State = deliveryState(n, seq, d.Steered, true)
-					res.Deliveries = append(res.Deliveries, d)
-				}
-			}
+		for _, n := range names {
+			d := SteerLive(n, steerNotice(req.From, body))
+			d.State = deliveryState(n, seq, d.Steered, true)
+			res.Deliveries = append(res.Deliveries, d)
 		}
 		return res, nil
 	}

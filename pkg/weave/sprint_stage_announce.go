@@ -50,8 +50,10 @@ const (
 )
 
 // announceTopic scopes the post so a reader who declared this concern sees it
-// uncapped. Everyone else sees it under the ordinary -n cap, which is the right
-// default: these are useful to peers and noise to everyone else.
+// uncapped, and the audience carries the same exemption by MEMBERSHIP: a
+// seated manager is addressed without having declared anything. Everyone else
+// sees it under the ordinary -n cap, which is the right default: these are
+// useful to peers and noise to everyone else.
 const announceTopic = "sprint"
 
 // announceEnabled is the operator's off switch. Announcing is on by default —
@@ -105,8 +107,18 @@ func stageMessage(s *weaveStory, body string) string {
 	return msg
 }
 
+// announceRole is who a stage change is FOR: the other seated managers. It
+// resolves at read time through the same host seam `mb send --role` uses, so
+// a lease moving between agents re-addresses future reads with no rewrite.
+const announceRole = "conductor"
+
 func postStageToBoard(from, body string) error {
-	_, err := bus.Send(bus.SendRequest{From: from, Topic: announceTopic, Body: body})
+	_, err := bus.Send(bus.SendRequest{
+		From:     from,
+		Topic:    announceTopic,
+		Body:     body,
+		Audience: &bus.Audience{Role: announceRole},
+	})
 	return err
 }
 
