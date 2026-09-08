@@ -166,9 +166,19 @@ func UpdateAlertState(ctx context.Context, dir string, update func(*AlertLedger)
 	}
 	revision := state.Revision
 	updatedAt := state.UpdatedAt
-	before, err := json.Marshal(state.Entries)
-	if err != nil {
-		return nil, err
+	// Entries are already bounded, validated JSON. Compare their bytes directly
+	// rather than serializing and reformatting the entire ledger twice on every
+	// client poll. Copy the bytes too: callbacks may mutate RawMessage in place.
+	before := make(map[string]json.RawMessage, len(state.Entries))
+	total := 0
+	for _, value := range state.Entries {
+		total += len(value)
+	}
+	snapshot := make([]byte, total)
+	for key, value := range state.Entries {
+		n := copy(snapshot, value)
+		before[key] = snapshot[:n:n]
+		snapshot = snapshot[n:]
 	}
 	if err := update(state); err != nil {
 		return nil, err
@@ -179,11 +189,17 @@ func UpdateAlertState(ctx context.Context, dir string, update func(*AlertLedger)
 	if err := validateAlertState(state); err != nil {
 		return nil, err
 	}
-	after, err := json.Marshal(state.Entries)
-	if err != nil {
-		return nil, err
+	unchanged := state.Entries != nil && len(before) == len(state.Entries)
+	if unchanged {
+		for key, value := range before {
+			next, ok := state.Entries[key]
+			if !ok || !bytes.Equal(value, next) {
+				unchanged = false
+				break
+			}
+		}
 	}
-	if bytes.Equal(before, after) {
+	if unchanged {
 		state.Revision = revision
 		state.UpdatedAt = updatedAt
 		return state, nil
