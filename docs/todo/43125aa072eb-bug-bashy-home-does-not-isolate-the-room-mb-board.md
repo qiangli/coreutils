@@ -3,10 +3,11 @@ id: 43125aa072eb
 kind: task
 title: 'BUG: BASHY_HOME does not isolate the room/mb board, so sandboxed runs post to the real host board'
 seq: 102
-status: todo
+status: done
 priority: p1
 created: 2026-09-08T03:44:07.02766Z
 sprint: 140
+closed: 2026-09-09T01:59:19.268238Z
 ---
 
 FOUND while dogfooding sprint advance: two smoke runs under an isolated BASHY_HOME each announced "sprint #1 release train — created in backlog" onto the OPERATOR'S REAL message board (mb entries 570 and 571). The sprint store was correctly sandboxed; the announce was not.
