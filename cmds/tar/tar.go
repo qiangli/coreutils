@@ -1,6 +1,7 @@
 // Package tarcmd implements tar(1) — the GNU tar common surface:
 // -c create, -x extract, -t list, -f FILE ('-' = stdin/stdout),
-// -z gzip, -v verbose, -C DIR, --strip-components=N (extract).
+// -z gzip, -v verbose, -C DIR, --exclude=PATTERN (create), and
+// --strip-components=N (extract).
 //
 // Portions adapted from https://github.com/u-root/u-root
 // pkg/tarutil/tar.go and cmds/core/tar/tar.go (BSD-3-Clause).
@@ -32,7 +33,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "tar",
 	Synopsis: "Create, list, or extract tar archives (optionally gzip-compressed).",
-	Usage: "tar -c [-zv] -f ARCHIVE [-C DIR] FILE...\n" +
+	Usage: "tar -c [-zv] -f ARCHIVE [-C DIR] [--exclude=PATTERN] FILE...\n" +
 		"   or: tar -t [-zv] -f ARCHIVE [MEMBER...]\n" +
 		"   or: tar -x [-zv] -f ARCHIVE [-C DIR] [--strip-components=N] [MEMBER...]",
 }
@@ -43,6 +44,10 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	args = expandOldStyle(args)
+	if code := validateTarLongOptions(rc, args); code >= 0 {
+		return code
+	}
+	orderedOperands := orderedCreateOperands(args)
 
 	fs := tool.NewFlags(cmd.Name)
 	create := fs.BoolP("create", "c", false, "create a new archive")
@@ -52,6 +57,7 @@ func run(rc *tool.RunContext, args []string) int {
 	gz := fs.BoolP("gzip", "z", false, "filter the archive through gzip")
 	verbose := fs.BoolP("verbose", "v", false, "verbosely list files processed")
 	chdir := fs.StringP("directory", "C", "", "change to DIR before performing any operations")
+	fs.StringArray("exclude", nil, "exclude files matching PATTERN when creating an archive")
 	strip := fs.Uint("strip-components", 0, "strip N leading components from file names on extraction")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -77,6 +83,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if fs.Changed("strip-components") && !*extract {
 		return tool.UsageError(rc, cmd, "--strip-components is only supported with -x")
 	}
+	if fs.Changed("exclude") && !*create {
+		return tool.UsageError(rc, cmd, "--exclude is only supported with -c")
+	}
 
 	// Base directory for member resolution (-C), resolved against the
 	// invocation working directory.
@@ -96,7 +105,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if len(operands) == 0 {
 			return tool.UsageError(rc, cmd, "Cowardly refusing to create an empty archive")
 		}
-		return doCreate(rc, *file, base, operands, *gz, *verbose)
+		return doCreate(rc, *file, base, orderedOperands, *gz, *verbose)
 	}
 	return doRead(rc, *file, base, operands, *gz, *verbose, *extract, int(*strip))
 }
@@ -132,7 +141,101 @@ func expandOldStyle(args []string) []string {
 
 // ---------------------------------------------------------------- create
 
-func doCreate(rc *tool.RunContext, archive, base string, operands []string, gz, verbose bool) int {
+type createOperand struct {
+	name     string
+	excludes []string
+}
+
+// tarLongOptions is the canonical long-option grammar used by both the
+// ordered scanner and validation. Tar's option order is meaningful for
+// --exclude, so accepting pflag's general unique-prefix extension here would
+// let an abbreviation bypass the scanner.
+var tarLongOptions = map[string]bool{
+	"create": true, "extract": true, "list": true, "file": true,
+	"gzip": true, "verbose": true, "directory": true, "exclude": true,
+	"strip-components": true, "help": true, "version": true,
+}
+
+var tarLongOptionsWithValue = map[string]bool{
+	"file": true, "directory": true, "exclude": true, "strip-components": true,
+}
+
+func validateTarLongOptions(rc *tool.RunContext, args []string) int {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return -1
+		}
+		if !strings.HasPrefix(arg, "--") || len(arg) == 2 {
+			continue
+		}
+		name, _, hasValue := strings.Cut(arg[2:], "=")
+		if !tarLongOptions[name] {
+			return tool.NotSupported(rc, cmd, arg)
+		}
+		if tarLongOptionsWithValue[name] && !hasValue {
+			i++
+		}
+	}
+	return -1
+}
+
+// orderedCreateOperands preserves the position-sensitive nature of GNU tar
+// exclusions. Each file operand is paired with the exclusions that have been
+// seen at that point; a later --exclude therefore cannot affect an earlier
+// operand. The normal flag parser still owns validation and diagnostics.
+func orderedCreateOperands(args []string) []createOperand {
+	var operands []createOperand
+	var excludes []string
+	operand := func(name string) {
+		operands = append(operands, createOperand{name: name, excludes: append([]string(nil), excludes...)})
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			for _, name := range args[i+1:] {
+				operand(name)
+			}
+			break
+		}
+		if strings.HasPrefix(arg, "--") && len(arg) > 2 {
+			name, value, equal := strings.Cut(arg[2:], "=")
+			if tarLongOptions[name] {
+				switch name {
+				case "exclude":
+					if !equal && i+1 < len(args) {
+						i++
+						value = args[i]
+					}
+					excludes = append(excludes, value)
+				case "file", "directory", "strip-components":
+					if !equal && i+1 < len(args) {
+						i++
+					}
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			short := arg[1:]
+			for pos := 0; pos < len(short); pos++ {
+				switch short[pos] {
+				case 'f', 'C':
+					if pos+1 == len(short) && i+1 < len(args) {
+						i++
+					}
+					pos = len(short)
+				}
+			}
+			continue
+		}
+		operand(arg)
+	}
+	return operands
+}
+
+func doCreate(rc *tool.RunContext, archive, base string, operands []createOperand, gz, verbose bool) int {
 	var w io.Writer
 	var closers []io.Closer
 	vout := rc.Out
@@ -158,7 +261,7 @@ func doCreate(rc *tool.RunContext, archive, base string, operands []string, gz, 
 	failed := false
 	warned := map[string]bool{}
 	for _, op := range operands {
-		if err := addToArchive(rc, tw, base, op, verbose, vout, warned); err != nil {
+		if err := addToArchive(rc, tw, base, op.name, verbose, vout, warned, op.excludes); err != nil {
 			fmt.Fprintf(rc.Err, "tar: %v\n", err)
 			failed = true
 		}
@@ -204,7 +307,7 @@ func memberName(rc *tool.RunContext, op string, warned map[string]bool) string {
 	return n
 }
 
-func addToArchive(rc *tool.RunContext, tw *tar.Writer, base, op string, verbose bool, vout io.Writer, warned map[string]bool) error {
+func addToArchive(rc *tool.RunContext, tw *tar.Writer, base, op string, verbose bool, vout io.Writer, warned map[string]bool, excludes []string) error {
 	root := op
 	if !filepath.IsAbs(op) {
 		root = filepath.Join(base, op)
@@ -217,7 +320,18 @@ func addToArchive(rc *tool.RunContext, tw *tar.Writer, base, op string, verbose 
 		}
 		name := memberBase
 		if rel, rerr := filepath.Rel(root, p); rerr == nil && rel != "." {
-			name = path.Join(memberBase, filepath.ToSlash(rel))
+			rel = filepath.ToSlash(rel)
+			if memberBase == "." {
+				name = "./" + rel
+			} else {
+				name = path.Join(memberBase, rel)
+			}
+		}
+		if excluded(name, excludes) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		var linkname string
@@ -270,6 +384,166 @@ func addToArchive(rc *tool.RunContext, tw *tar.Writer, base, op string, verbose 
 		}
 		return nil
 	})
+}
+
+// excluded applies GNU tar --exclude patterns to archive member names, rather
+// than host paths. Default patterns are unanchored: each component-boundary
+// suffix is considered, so "foo" matches both "top/foo" and "top/sub/foo".
+// Wildcards may span slashes. A directory is also tested without its tar
+// trailing slash so a match can prune the whole subtree.
+func excluded(name string, patterns []string) bool {
+	plain := strings.TrimSuffix(name, "/")
+	for _, pattern := range patterns {
+		if tarGlobSuffixMatch(pattern, name) || (plain != name && tarGlobSuffixMatch(pattern, plain)) {
+			return true
+		}
+	}
+	return false
+}
+
+func tarGlobSuffixMatch(pattern, name string) bool {
+	if tarGlobMatch(pattern, name) {
+		return true
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' && tarGlobMatch(pattern, name[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// tarGlobMatch is the small wildcard dialect needed by GNU --exclude: '*'
+// matches any sequence (including '/'), '?' one byte, and bracket expressions
+// accept GNU shell-style ! (as well as ^) negation.
+func tarGlobMatch(pattern, name string) bool {
+	for {
+		if pattern == "" {
+			return name == ""
+		}
+		switch pattern[0] {
+		case '*':
+			for len(pattern) > 0 && pattern[0] == '*' {
+				pattern = pattern[1:]
+			}
+			if pattern == "" {
+				return true
+			}
+			for i := 0; ; i++ {
+				if tarGlobMatch(pattern, name[i:]) {
+					return true
+				}
+				if i == len(name) {
+					return false
+				}
+			}
+		case '?':
+			if name == "" {
+				return false
+			}
+			pattern, name = pattern[1:], name[1:]
+		case '[':
+			matched, consumed, ok := tarBracketMatch(pattern, name)
+			if !ok || !matched {
+				return false
+			}
+			pattern, name = pattern[consumed:], name[1:]
+		case '\\':
+			if len(pattern) == 1 || name == "" || pattern[1] != name[0] {
+				return false
+			}
+			pattern, name = pattern[2:], name[1:]
+		default:
+			if name == "" || pattern[0] != name[0] {
+				return false
+			}
+			pattern, name = pattern[1:], name[1:]
+		}
+	}
+}
+
+func tarBracketMatch(pattern, name string) (matched bool, consumed int, ok bool) {
+	if len(pattern) < 2 || pattern[0] != '[' || name == "" {
+		return false, 0, false
+	}
+	i := 1
+	negated := false
+	if i < len(pattern) && (pattern[i] == '!' || pattern[i] == '^') {
+		negated = true
+		i++
+	}
+	haveMember := false
+	for i < len(pattern) {
+		if pattern[i] == ']' && haveMember {
+			if negated {
+				matched = !matched
+			}
+			return matched, i + 1, true
+		}
+		lo := pattern[i]
+		if pattern[i] == '[' && i+1 < len(pattern) && pattern[i+1] == ':' {
+			end := strings.Index(pattern[i+2:], ":]")
+			if end >= 0 {
+				end += i + 2
+				class := pattern[i+2 : end]
+				if !tarNamedClass(class) {
+					return false, 0, false
+				}
+				haveMember = true
+				if tarNamedClassContains(class, name[0]) {
+					matched = true
+				}
+				i = end + 2
+				continue
+			}
+		}
+		if lo == '\\' && i+1 < len(pattern) {
+			i++
+			lo = pattern[i]
+		}
+		i++
+		haveMember = true
+		hi := lo
+		if i+1 < len(pattern) && pattern[i] == '-' && pattern[i+1] != ']' {
+			i++
+			hi = pattern[i]
+			if hi == '\\' && i+1 < len(pattern) {
+				i++
+				hi = pattern[i]
+			}
+			i++
+		}
+		if lo <= name[0] && name[0] <= hi {
+			matched = true
+		}
+	}
+	return false, 0, false
+}
+
+func tarNamedClass(class string) bool {
+	switch class {
+	case "alnum", "alpha", "ascii", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "word", "xdigit":
+		return true
+	default:
+		return false
+	}
+}
+
+func tarNamedClassContains(class string, c byte) bool {
+	return (class == "ascii" && c <= 0x7f) ||
+		(class == "digit" && c >= '0' && c <= '9') ||
+		(class == "xdigit" && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) ||
+		(class == "alpha" && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) ||
+		(class == "alnum" && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) ||
+		(class == "lower" && c >= 'a' && c <= 'z') ||
+		(class == "upper" && c >= 'A' && c <= 'Z') ||
+		(class == "blank" && (c == ' ' || c == '\t')) ||
+		(class == "space" && (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f')) ||
+		(class == "cntrl" && (c < 0x20 || c == 0x7f)) ||
+		(class == "print" && c >= 0x20 && c <= 0x7e) ||
+		(class == "graph" && c >= 0x21 && c <= 0x7e) ||
+		(class == "punct" && ((c >= 0x21 && c <= 0x2f) || (c >= 0x3a && c <= 0x40) || (c >= 0x5b && c <= 0x60) || (c >= 0x7b && c <= 0x7e))) ||
+		(class == "word" && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'))
 }
 
 // ----------------------------------------------------------- list/extract

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -173,6 +174,294 @@ func TestListFromStdinAndCreateToStdout(t *testing.T) {
 	lst, _, code := runTool(t, dir, strings.NewReader(out), "-tf", "-")
 	if code != 0 || !strings.Contains(lst, "src/a.txt\n") {
 		t.Fatalf("list from stdin: code=%d out=%q", code, lst)
+	}
+}
+
+func archiveNames(t *testing.T, data []byte) []string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(data))
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatalf("invalid tar stream: %v", err)
+		}
+		names = append(names, hdr.Name)
+	}
+}
+
+func archiveNameSet(t *testing.T, data []byte) map[string]bool {
+	t.Helper()
+	names := make(map[string]bool)
+	for _, name := range archiveNames(t, data) {
+		names[name] = true
+	}
+	return names
+}
+
+func TestCreateExcludePatternsPruneDirectoriesAndKeepStdoutArchiveValid(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"tree/keep.txt":             "keep",
+		"tree/nested/remove.tmp":    "tmp",
+		"tree/pruned/also-keep.txt": "must be pruned",
+	} {
+		full := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Exercise the reported -cf form and old-style cf. In both cases f must
+	// consume - as the archive name before the long options are processed.
+	for _, prefix := range [][]string{{"-cf", "-"}, {"cf", "-"}} {
+		args := append(prefix, "--exclude=tree/pruned", "--exclude", "*.tmp", "tree")
+		out, errb, code := runTool(t, dir, nil, args...)
+		if code != 0 {
+			t.Fatalf("create with excludes %v: code=%d err=%q", prefix, code, errb)
+		}
+		names := archiveNames(t, []byte(out))
+		got := strings.Join(names, "\n")
+		if !strings.Contains(got, "tree/\n") || !strings.Contains(got, "tree/keep.txt") {
+			t.Errorf("wanted retained members for %v, got %q", prefix, got)
+		}
+		for _, unwanted := range []string{"tree/nested/remove.tmp", "tree/pruned/", "tree/pruned/also-keep.txt"} {
+			if strings.Contains(got, unwanted) {
+				t.Errorf("excluded member %q present for %v in %q", unwanted, prefix, got)
+			}
+		}
+	}
+}
+
+func writeFiles(t *testing.T, dir string, files ...string) {
+	t.Helper()
+	for _, name := range files {
+		full := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCreateExcludeGNUDefaultMatching(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir,
+		"top/foo", "top/sub/foo", "top/foobar", "top/sub/keep",
+		"top/prune/deep/hidden", "top/file1.txt", "top/filea.txt", "top/fileb.txt", "top/filec.txt",
+	)
+
+	tests := []struct {
+		name     string
+		patterns []string
+		present  []string
+		absent   []string
+	}{
+		{
+			name:     "unanchored basename",
+			patterns: []string{"foo"},
+			present:  []string{"top/foobar"},
+			absent:   []string{"top/foo", "top/sub/foo"},
+		},
+		{
+			name:     "unanchored path suffix",
+			patterns: []string{"sub/foo"},
+			present:  []string{"top/foo"},
+			absent:   []string{"top/sub/foo"},
+		},
+		{
+			name:     "directory pruning",
+			patterns: []string{"prune"},
+			present:  []string{"top/sub/keep"},
+			absent:   []string{"top/prune/", "top/prune/deep/hidden"},
+		},
+		{
+			name:     "GNU bracket negation",
+			patterns: []string{"file[!b].txt"},
+			present:  []string{"top/fileb.txt"},
+			absent:   []string{"top/filea.txt", "top/filec.txt"},
+		},
+		{
+			name:     "POSIX named bracket class",
+			patterns: []string{"file[[:digit:]].txt"},
+			present:  []string{"top/foo", "top/filea.txt", "top/fileb.txt", "top/filec.txt"},
+			absent:   []string{"top/file1.txt"},
+		},
+		{
+			name:     "wildcard crosses slash",
+			patterns: []string{"sub*keep"},
+			present:  []string{"top/foo"},
+			absent:   []string{"top/sub/keep"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := []string{"-cf", "-"}
+			for i, pattern := range tt.patterns {
+				if i%2 == 0 {
+					args = append(args, "--exclude="+pattern)
+				} else {
+					args = append(args, "--exclude", pattern)
+				}
+			}
+			args = append(args, "top")
+			out, errb, code := runTool(t, dir, nil, args...)
+			if code != 0 {
+				t.Fatalf("create: code=%d err=%q", code, errb)
+			}
+			names := archiveNameSet(t, []byte(out))
+			for _, want := range tt.present {
+				if !names[want] {
+					t.Errorf("missing retained member %q in %v", want, names)
+				}
+			}
+			for _, unwanted := range tt.absent {
+				if names[unwanted] {
+					t.Errorf("excluded member %q present in %v", unwanted, names)
+				}
+			}
+		})
+	}
+}
+
+func TestTarRejectsLongOptionAbbreviationsBeforeOrderedScan(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "tree/foo")
+	for _, arg := range []string{"--excl=foo", "--excl", "--ex=foo"} {
+		_, errb, code := runTool(t, dir, nil, "-cf", "-", arg, "tree")
+		if code != 2 || !strings.Contains(errb, "not supported") || !strings.Contains(errb, "pure-Go") {
+			t.Errorf("tar %s: code=%d err=%q", arg, code, errb)
+		}
+	}
+}
+
+func TestCreateExcludeMatchesDotOperandMemberNames(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "foo", "keep")
+	out, errb, code := runTool(t, dir, nil, "-cf", "-", "--exclude=./foo", ".")
+	if code != 0 {
+		t.Fatalf("create: code=%d err=%q", code, errb)
+	}
+	names := archiveNameSet(t, []byte(out))
+	if !names["./"] || names["./foo"] || !names["./keep"] {
+		t.Fatalf("archive members = %v, want directory header and unexcluded ./keep only", names)
+	}
+}
+
+func TestCreateExcludeRepeatedFormsAndArchiveDestinations(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "top/foo", "top/drop.tmp", "top/keep")
+
+	for _, archive := range []string{"-", "named.tar"} {
+		t.Run(archive, func(t *testing.T) {
+			out, errb, code := runTool(t, dir, nil, "-cf", archive,
+				"--exclude=foo", "--exclude", "*.tmp", "top")
+			if code != 0 {
+				t.Fatalf("create: code=%d err=%q", code, errb)
+			}
+			data := []byte(out)
+			if archive != "-" {
+				var err error
+				data, err = os.ReadFile(filepath.Join(dir, archive))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			names := archiveNameSet(t, data)
+			if !names["top/keep"] || names["top/foo"] || names["top/drop.tmp"] {
+				t.Fatalf("archive members = %v", names)
+			}
+		})
+	}
+}
+
+func TestCreateExcludeIsPositionalForDashedAndOldStyle(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "a/foo", "a/keep", "b/a/foo", "b/keep")
+
+	for _, prefix := range [][]string{{"-cf", "-"}, {"cf", "-"}} {
+		args := append(append([]string(nil), prefix...), "a", "--exclude=a/foo", "b")
+		out, errb, code := runTool(t, dir, nil, args...)
+		if code != 0 {
+			t.Fatalf("create %v: code=%d err=%q", prefix, code, errb)
+		}
+		names := archiveNameSet(t, []byte(out))
+		if !names["a/foo"] {
+			t.Errorf("later exclusion retroactively filtered a for %v: %v", prefix, names)
+		}
+		if names["b/a/foo"] {
+			t.Errorf("cumulative exclusion did not filter b for %v: %v", prefix, names)
+		}
+		if !names["b/keep"] {
+			t.Errorf("missing retained b member for %v: %v", prefix, names)
+		}
+	}
+}
+
+func TestCreateAllExcludedProducesValidArchive(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "only/file")
+	for _, archive := range []string{"-", "empty.tar"} {
+		out, errb, code := runTool(t, dir, nil, "-cf", archive, "--exclude=only", "only")
+		if code != 0 {
+			t.Fatalf("create %q: code=%d err=%q", archive, code, errb)
+		}
+		data := []byte(out)
+		if archive != "-" {
+			var err error
+			data, err = os.ReadFile(filepath.Join(dir, archive))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if names := archiveNames(t, data); len(names) != 0 {
+			t.Fatalf("all-excluded archive %q contains %q", archive, names)
+		}
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("forced write failure") }
+
+func TestCreateReportsFailingWriter(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "file")
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: dir,
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: failingWriter{},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, []string{"-cf", "-", "file"}); code != 1 {
+		t.Fatalf("code=%d err=%q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "forced write failure") {
+		t.Fatalf("missing writer error: %q", errb.String())
+	}
+}
+
+func TestExcludeOnlySupportedForCreateAndUnsupportedVariantsFailLoudly(t *testing.T) {
+	dir := t.TempDir()
+	makeTree(t, dir)
+	if _, errb, code := runTool(t, dir, nil, "-tf", "a.tar", "--exclude=*.tmp"); code != 2 || !strings.Contains(errb, "only supported with -c") {
+		t.Errorf("exclude with list: code=%d err=%q", code, errb)
+	}
+	if _, errb, code := runTool(t, dir, nil, "-cf", "a.tar", "--exclude-from=patterns", "src"); code != 2 || !strings.Contains(errb, "exclude-from") || !strings.Contains(errb, "pure-Go") {
+		t.Errorf("unsupported exclusion variant: code=%d err=%q", code, errb)
 	}
 }
 
