@@ -964,10 +964,21 @@ func init() {
 
 	// platform
 	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("context", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("doctor", Entry{Stage: StageCross, Group: GroupDiagnostics, Caps: []string{CapReadOnly}})
+	// inspect: the one diagnostics verb whose SUBJECT IS BASHY ITSELF. `doctor`
+	// answers about the host, `why` about the process tree, `otel` about a
+	// trace, `audit` about one store; inspect is the resource map (where every
+	// store bashy owns lives, scope-resolved for THIS cwd), the gate decisions
+	// (each middleware gate with the SIGNAL that decided it), and the index that
+	// names which verb answers every other question about bashy. Read-only,
+	// offline, model-free by contract — a new read-only self-view is a new
+	// ASPECT of this verb, never a new verb. `doctor`, `context` and `audit`
+	// fold behind it (subject = bashy AND effects = {read}); the old names stay
+	// as hidden aliases, like `upgrade` → `self`.
+	addVerb("inspect", Entry{Stage: StageCross, Group: GroupDiagnostics, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("context", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "inspect", Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("doctor", Entry{Stage: StageCross, Group: GroupDiagnostics, AliasOf: "inspect", Caps: []string{CapReadOnly}})
 	addVerb("otel", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly, CapNeedsNetwork}})
-	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "inspect", Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("check", Entry{Stage: StageTest, Group: GroupDiagnostics, Caps: []string{CapJSON, CapReadOnly}})
 	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
 	// nobody tested, but because the gate (the command that decides pass/fail)
@@ -1078,6 +1089,8 @@ func init() {
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
 		"doctor", "otel", "audit", "check", "sprint",
+		// inspect READS every store it maps and never writes one — its contract.
+		"inspect",
 		// apps READS every store its panels render, and the Files panel reads the
 		// filesystem under its scope — the whole point of the tile.
 		"apps",

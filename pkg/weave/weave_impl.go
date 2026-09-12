@@ -509,6 +509,17 @@ func weaveBaseBranch(root string) string {
 // living under ycode's. weaveLegacyStateRoots are pre-re-home locations,
 // consulted only as one-time migration sources (newest-rename first).
 func weaveStateRoot(home string) string { return filepath.Join(home, ".bashy", "weave") }
+
+// StateRoot is the weave state directory for the current user (~/.bashy/weave),
+// exported so a resource map can name it without recomputing it. Empty when no
+// home directory can be determined.
+func StateRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return weaveStateRoot(home)
+}
 func weaveLegacyStateRoots(home string) []string {
 	return []string{
 		filepath.Join(home, ".agents", "weave"),          // interim host-agnostic root

@@ -60,13 +60,27 @@ func shortHash(s string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// bashyDir returns ~/.bashy/<parts...>, created.
-func bashyDir(parts ...string) (string, error) {
+// bashyPath returns ~/.bashy/<parts...> WITHOUT creating it; bashyDir is the
+// creating form. Split so a read-only reader (the resource map) can name the
+// location without a side effect.
+func bashyPath(parts ...string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(append([]string{home, ".bashy"}, parts...)...)
+	return filepath.Join(append([]string{home, ".bashy"}, parts...)...), nil
+}
+
+// SessionsRoot is where chat sessions and their capture logs live
+// (~/.bashy/sessions). It creates nothing.
+func SessionsRoot() (string, error) { return bashyPath("sessions") }
+
+// bashyDir returns ~/.bashy/<parts...>, created.
+func bashyDir(parts ...string) (string, error) {
+	dir, err := bashyPath(parts...)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

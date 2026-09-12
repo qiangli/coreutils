@@ -95,6 +95,10 @@ func (s Stats) Contribution() float64 {
 	return float64(s.Passed-s.Failed) / float64(s.Runs)
 }
 
+// AttestDir is where `skills run` receipts live (<storeDir>/attest) — the one
+// place that path is spelled.
+func AttestDir(storeDir string) string { return filepath.Join(storeDir, "attest") }
+
 // ReadLedger loads every attest log under <storeDir>/attest.
 //
 // A missing store is not an error: a host that has never run a contracted skill
@@ -106,7 +110,7 @@ func ReadLedger(storeDir string) (*Ledger, error) {
 	if strings.TrimSpace(storeDir) == "" {
 		return l, nil
 	}
-	dir := filepath.Join(storeDir, "attest")
+	dir := AttestDir(storeDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

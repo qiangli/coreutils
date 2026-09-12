@@ -88,7 +88,7 @@ func DetectSources(home, cwd string) []SourceInfo {
 
 	// repo graph contribution log: <repoRoot>/.agents/bashy/graph/contrib.jsonl
 	if repoRoot != "" {
-		contrib := filepath.Join(repoRoot, ".agents", "bashy", "graph", "contrib.jsonl")
+		contrib := RepoContribPath(repoRoot)
 		if info := jsonlSource("repo-graph", contrib); info != nil {
 			out = append(out, *info)
 		} else {

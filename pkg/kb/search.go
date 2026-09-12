@@ -476,6 +476,12 @@ func FederatedSearch(cwd string, terms []string, k int) []FedHit {
 	return out
 }
 
+// RepoContribPath is the repo-scope contribution ring (.agents/bashy/graph/
+// contrib.jsonl under repoRoot) — the one place that path is spelled.
+func RepoContribPath(repoRoot string) string {
+	return filepath.Join(repoRoot, ".agents", "bashy", "graph", "contrib.jsonl")
+}
+
 // repoRootOf walks up to the nearest .git (same rule as the contrib store,
 // so all agents anywhere in a repo see the same ring). "" when not in a repo.
 func repoRootOf(start string) string {
@@ -510,7 +516,7 @@ func contribHits(repoRoot string, terms []string, k int) []FedHit {
 		ForgetEpisode string `json:"forget_episode"`
 		Episode       string `json:"episode"`
 	}
-	path := filepath.Join(repoRoot, ".agents", "bashy", "graph", "contrib.jsonl")
+	path := RepoContribPath(repoRoot)
 	f, err := os.Open(path)
 	if err != nil {
 		return nil

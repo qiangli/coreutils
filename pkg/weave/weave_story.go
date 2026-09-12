@@ -1564,6 +1564,10 @@ func sprintStoreDir() (string, error) {
 	return filepath.Join(home, ".bashy", "sprint"), nil
 }
 
+// SprintStoreDir is sprintStoreDir exported, so a resource map can name the
+// sprint board's store without recomputing it.
+func SprintStoreDir() (string, error) { return sprintStoreDir() }
+
 // currentBox is the running cycle, or nil when the sprint is not on the clock.
 func (s *weaveStory) currentBox() *weaveStoryBox {
 	if len(s.Boxes) == 0 {

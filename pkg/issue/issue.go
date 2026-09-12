@@ -251,6 +251,10 @@ type Store struct {
 
 func New(repoRoot string) *Store { return &Store{Root: repoRoot} }
 
+// Dir is the directory the store reads and writes, exported so a resource map
+// can name the list that applies to a scope without recomputing it.
+func (s *Store) Dir() string { return s.dir() }
+
 func (s *Store) dir() string {
 	sub := s.Sub
 	if sub == "" {

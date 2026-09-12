@@ -82,6 +82,10 @@ func (c Config) Resolve() (Client, error) {
 
 // tokenFilePath is the bashy-owned on-disk secrets-token location:
 // $XDG_CONFIG_HOME/bashy/secrets-token, else ~/.config/bashy/secrets-token.
+// TokenFilePath is the bashy-owned secrets-token location, exported so a
+// resource map can report its existence — never its contents.
+func TokenFilePath() string { return tokenFilePath() }
+
 func tokenFilePath() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return filepath.Join(dir, "bashy", "secrets-token")

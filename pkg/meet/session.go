@@ -709,6 +709,10 @@ func loadSynthesis(id string) *Synthesis {
 
 // baseDir is the root of the local session store. Overridable via
 // BASHY_MEET_DIR (used by tests and by operators who want a custom location).
+// BaseDir is the meet store root (BASHY_MEET_DIR, else ~/.bashy/meet) — the
+// one place this path is computed, exported so a resource map can name it.
+func BaseDir() (string, error) { return baseDir() }
+
 func baseDir() (string, error) {
 	if d := strings.TrimSpace(os.Getenv("BASHY_MEET_DIR")); d != "" {
 		return d, nil
