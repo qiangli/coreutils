@@ -3,10 +3,11 @@ id: 7c67f648d3d8
 kind: task
 title: 'S159.2 coreutils: one ladder per store - skills.DefaultStoreDir, execlog.DefaultRoot; graph reads what bashy wrote'
 seq: 108
-status: todo
+status: done
 priority: p1
 created: 2026-09-12T19:37:31.066006Z
 sprint: 159
+closed: 2026-09-12T19:40:55.690049Z
 ---
 
 coreutils half of S159.2 (umbrella story 080662f5cfe4; design docs/bashy-inspect-design.md section 8, PRIVATE).
