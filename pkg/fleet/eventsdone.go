@@ -27,9 +27,9 @@ import (
 type EventsDone struct {
 	// Field is the JSON key carrying the event kind — "type" for most, "event"
 	// for agy. Empty defaults to "type", which is the majority spelling.
-	Field string `yaml:"field,omitempty" json:"field,omitempty"`
+	Field string `yaml:"field,omitempty" json:"field,omitempty" doc:"JSON key carrying the event kind"`
 	// Values are the kinds that mean the turn ENDED. Any match is a boundary.
-	Values []string `yaml:"values,omitempty" json:"values,omitempty"`
+	Values []string `yaml:"values,omitempty" json:"values,omitempty" doc:"event kinds that end a turn"`
 }
 
 // Declared reports a usable matcher. An EventsDone with no values matches

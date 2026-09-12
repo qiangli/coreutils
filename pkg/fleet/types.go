@@ -109,34 +109,34 @@ const (
 // that was settled spell them `kit:` and `type:`; both are accepted on
 // parse and neither is emitted. See parse.go.
 type Tool struct {
-	Name    string   `yaml:"name" json:"name"`
-	Kind    string   `yaml:"kind" json:"kind"` // cli | func | web | system
-	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
+	Name    string   `yaml:"name" json:"name" doc:"canonical registry name"`
+	Kind    string   `yaml:"kind" json:"kind" doc:"tool kind: cli, func, web, or system"` // cli | func | web | system
+	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	Display string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
 	// Hidden keeps a tool in the registry (still detected, still resolvable by
 	// explicit name) but omits it from `bashy tool` list/help unless --all.
-	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty"`
-	CLI    ToolCLI `yaml:"cli,omitempty" json:"cli"`
-	Quirks string  `yaml:"quirks,omitempty" json:"quirks,omitempty"`
+	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty" doc:"omit the tool from default listings"`
+	CLI    ToolCLI `yaml:"cli,omitempty" json:"cli" doc:"command-line harness settings"`
+	Quirks string  `yaml:"quirks,omitempty" json:"quirks,omitempty" doc:"known tool-specific behavior"`
 
 	// Harness scores the capabilities a tool governs regardless of the
 	// model behind it (operability, shell, tool-use, isolation). The
 	// capability matrix reads these as priors.
-	Harness map[string]float64 `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Harness map[string]float64 `yaml:"harness,omitempty" json:"harness,omitempty" doc:"harness capability priors"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
 
 type ToolCLI struct {
-	Binary   string        `yaml:"binary,omitempty" json:"binary,omitempty"`
-	Versions []ToolVersion `yaml:"versions,omitempty" json:"versions,omitempty"`
-	Launch   ToolLaunch    `yaml:"launch,omitempty" json:"launch"`
+	Binary   string        `yaml:"binary,omitempty" json:"binary,omitempty" doc:"executable to run"`
+	Versions []ToolVersion `yaml:"versions,omitempty" json:"versions,omitempty" doc:"known downloadable versions"`
+	Launch   ToolLaunch    `yaml:"launch,omitempty" json:"launch" doc:"headless and interactive launch contract"`
 }
 
 type ToolVersion struct {
-	Version  string `yaml:"version,omitempty" json:"version,omitempty"`
-	Download string `yaml:"download,omitempty" json:"download,omitempty"`
-	Install  string `yaml:"install,omitempty" json:"install,omitempty"`
+	Version  string `yaml:"version,omitempty" json:"version,omitempty" doc:"version identifier"`
+	Download string `yaml:"download,omitempty" json:"download,omitempty" doc:"download location"`
+	Install  string `yaml:"install,omitempty" json:"install,omitempty" doc:"installation command"`
 }
 
 // ToolLaunch is how the orchestrator invokes a tool headlessly.
@@ -145,38 +145,38 @@ type ToolLaunch struct {
 	// {model} by the bound model's upstream id. When no model is bound,
 	// {model} and the flag token immediately preceding it are dropped, so
 	// a template with a model flag degrades exactly to one without.
-	Exec string `yaml:"exec,omitempty" json:"exec,omitempty"`
+	Exec string `yaml:"exec,omitempty" json:"exec,omitempty" doc:"headless argv template"`
 	// Credential declares how this harness authenticates a bound model.
 	// "model-provider" grants only the credential named by Model.APIKeyRef, or
 	// by Model.Provider when no explicit key reference exists. Values remain in
 	// the launcher environment; this field carries names and policy only.
-	Credential string `yaml:"credential,omitempty" json:"credential,omitempty"`
+	Credential string `yaml:"credential,omitempty" json:"credential,omitempty" doc:"credential policy for bound models"`
 	// WorkspaceArg is an optional argv fragment that binds the launched tool to
 	// the orchestrator's allocated workspace. {workspace} is replaced by that
 	// absolute path. It is rendered immediately after the binary, before the
 	// exec template's model and prompt arguments. Tools that do not declare it
 	// retain their existing argv exactly.
-	WorkspaceArg string `yaml:"workspace_arg,omitempty" json:"workspace_arg,omitempty"`
+	WorkspaceArg string `yaml:"workspace_arg,omitempty" json:"workspace_arg,omitempty" doc:"argv fragment binding a workspace"`
 	// WorkspacePreflightExec is an optional read-only launch template used to
 	// ask the tool which PWD/project directory it selected. The launcher supplies
 	// a reporting prompt and refuses to start the source-writing invocation
 	// unless the reported path equals the allocated workspace.
-	WorkspacePreflightExec string `yaml:"workspace_preflight_exec,omitempty" json:"workspace_preflight_exec,omitempty"`
+	WorkspacePreflightExec string `yaml:"workspace_preflight_exec,omitempty" json:"workspace_preflight_exec,omitempty" doc:"read-only workspace verification template"`
 	// VersionProbeExec is an optional provider-declared, read-only command used
 	// by fleet capability probing instead of assuming every CLI accepts --version.
-	VersionProbeExec string `yaml:"version_probe_exec,omitempty" json:"version_probe_exec,omitempty"`
+	VersionProbeExec string `yaml:"version_probe_exec,omitempty" json:"version_probe_exec,omitempty" doc:"version-probe argv template"`
 	// PromptPosition records where the prompt goes for consumers that
 	// cannot read the template (cloudbox conductor). Advisory here: the
 	// {prompt} placeholder is authoritative.
-	PromptPosition string `yaml:"prompt_position,omitempty" json:"prompt_position,omitempty"`
+	PromptPosition string `yaml:"prompt_position,omitempty" json:"prompt_position,omitempty" doc:"declared prompt position"`
 	// TrustPreseed names a config file the host must pre-seed so the CLI
 	// does not no-op on a first-run trust prompt.
-	TrustPreseed string       `yaml:"trust_preseed,omitempty" json:"trust_preseed,omitempty"`
-	Watchdog     ToolWatchdog `yaml:"watchdog,omitempty" json:"watchdog"`
+	TrustPreseed string       `yaml:"trust_preseed,omitempty" json:"trust_preseed,omitempty" doc:"config path preseeded for workspace trust"`
+	Watchdog     ToolWatchdog `yaml:"watchdog,omitempty" json:"watchdog" doc:"runtime resource limits"`
 
 	// SupportsSay marks a tool that CAN be steered mid-run — a capability fact
 	// about the tool, MEASURED (pkg/agentpty/steer_live_test.go), not asserted.
-	SupportsSay bool `yaml:"supports_say,omitempty" json:"supports_say,omitempty"`
+	SupportsSay bool `yaml:"supports_say,omitempty" json:"supports_say,omitempty" doc:"whether live steering is supported"`
 
 	// ACPExec is the argv template that launches this tool as an ACP AGENT
 	// speaking JSON-RPC on stdio. Empty means the tool does not speak ACP and
@@ -187,7 +187,7 @@ type ToolLaunch struct {
 	// model is fixed by the binding before the launch: ACP carries no
 	// model-selection call, and a bound model refuses the ACP rung outright
 	// (see agentlaunch.ACPArgv). A {model} token here renders LITERALLY.
-	ACPExec string `yaml:"acp_exec,omitempty" json:"acp_exec,omitempty"`
+	ACPExec string `yaml:"acp_exec,omitempty" json:"acp_exec,omitempty" doc:"ACP agent argv template"`
 
 	// EventsArg is how this tool is told to stream STRUCTURED EVENTS, if it can.
 	//
@@ -206,7 +206,7 @@ type ToolLaunch struct {
 	// Template with one token: {path}. e.g. `--events {path}`.
 	// The events are NDJSON, one object per line, with at minimum:
 	//     {"type":"turn.start"} {"type":"tool.call"} {"type":"turn.end", ...}
-	EventsArg string `yaml:"events_arg,omitempty" json:"events_arg,omitempty"`
+	EventsArg string `yaml:"events_arg,omitempty" json:"events_arg,omitempty" doc:"structured-event side-channel argument"`
 
 	// EventsStdout is the same capability for tools that stream on STDOUT
 	// rather than into a file bashy names.
@@ -240,7 +240,7 @@ type ToolLaunch struct {
 	// stop_reason and an error status as STRUCTURED FACTS rather than lines
 	// scraped back out of a terminal and guessed at. That is worth having, and
 	// it is a different thing from turn detection.
-	EventsStdout string `yaml:"events_stdout,omitempty" json:"events_stdout,omitempty"`
+	EventsStdout string `yaml:"events_stdout,omitempty" json:"events_stdout,omitempty" doc:"structured-event stdout arguments"`
 
 	// EventsDone declares how THIS tool spells "the turn ended".
 	//
@@ -256,7 +256,7 @@ type ToolLaunch struct {
 	// Declared per tool rather than inferred, for the reason this package
 	// declares everything else: a guess that happens to work is a guess that
 	// breaks on the next release with nobody watching.
-	EventsDone EventsDone `yaml:"events_done,omitempty" json:"events_done,omitempty"`
+	EventsDone EventsDone `yaml:"events_done,omitempty" json:"events_done,omitempty" doc:"terminal-event matcher"`
 
 	// EventsOutcome locates the VERDICT inside that terminal event.
 	//
@@ -264,7 +264,7 @@ type ToolLaunch struct {
 	// is recorded in the umbrella's own notes, so a caller reading the status
 	// learns nothing and reports success. The stream carries what the exit does
 	// not. See eventsoutcome.go for why only SUCCESS is declarable.
-	EventsOutcome EventsOutcome `yaml:"events_outcome,omitempty" json:"events_outcome,omitempty"`
+	EventsOutcome EventsOutcome `yaml:"events_outcome,omitempty" json:"events_outcome,omitempty" doc:"terminal-event success rule"`
 
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.
@@ -278,7 +278,7 @@ type ToolLaunch struct {
 	// can interrupt, at the cost of a pty that merges the tool's chrome into the
 	// transcript. A launcher picks by what it needs; the registry refuses to pretend
 	// one launch does both.
-	SteerExec string `yaml:"steer_exec,omitempty" json:"steer_exec,omitempty"`
+	SteerExec string `yaml:"steer_exec,omitempty" json:"steer_exec,omitempty" doc:"interactive steerable argv template"`
 
 	// ForkExec is the argv template that FORKS the tool's current session — a new,
 	// independent session that inherits the live transcript — instead of starting
@@ -289,30 +289,30 @@ type ToolLaunch struct {
 	// (`--resume <id> --fork-session -p`), codex does NOT — its headless `resume`
 	// APPENDS to the parent thread, which would corrupt the steward's own session,
 	// so codex has no ForkExec and `delegate self` falls back to a fresh instance.
-	ForkExec string `yaml:"fork_exec,omitempty" json:"fork_exec,omitempty"`
+	ForkExec string `yaml:"fork_exec,omitempty" json:"fork_exec,omitempty" doc:"context-inheriting fork argv template"`
 	// SessionEnv names the env var(s) that carry this tool's current session id
 	// when it drives a subprocess (e.g. CLAUDE_CODE_SESSION_ID). First non-empty
 	// wins. Without a readable session id, a ForkExec that needs {session} cannot
 	// fire, and delegate self falls back to a fresh instance.
-	SessionEnv []string `yaml:"session_env,omitempty" json:"session_env,omitempty"`
+	SessionEnv []string `yaml:"session_env,omitempty" json:"session_env,omitempty" doc:"environment variables carrying the session id"`
 
 	// SupportsGracefulQuit marks a tool that exits cleanly on a quit signal.
-	SupportsGracefulQuit bool `yaml:"supports_graceful_quit,omitempty" json:"supports_graceful_quit,omitempty"`
+	SupportsGracefulQuit bool `yaml:"supports_graceful_quit,omitempty" json:"supports_graceful_quit,omitempty" doc:"whether a quit signal exits cleanly"`
 	// TrustClear is the steering input that clears a trust prompt.
-	TrustClear string `yaml:"trust_clear,omitempty" json:"trust_clear,omitempty"`
+	TrustClear string `yaml:"trust_clear,omitempty" json:"trust_clear,omitempty" doc:"input that clears a trust prompt"`
 	// AuthHint explains an interactive sign-in the tool needs before it
 	// can run headless at all.
-	AuthHint string `yaml:"auth_hint,omitempty" json:"auth_hint,omitempty"`
+	AuthHint string `yaml:"auth_hint,omitempty" json:"auth_hint,omitempty" doc:"interactive authentication guidance"`
 	// Notes is the free-text launch contract commentary.
-	Notes string `yaml:"notes,omitempty" json:"notes,omitempty"`
+	Notes string `yaml:"notes,omitempty" json:"notes,omitempty" doc:"launch contract notes"`
 	// EnvMarkers are environment variables whose presence identifies this
 	// tool as the one currently running.
-	EnvMarkers []string `yaml:"env_markers,omitempty" json:"env_markers,omitempty"`
+	EnvMarkers []string `yaml:"env_markers,omitempty" json:"env_markers,omitempty" doc:"environment variables identifying the tool"`
 }
 
 type ToolWatchdog struct {
-	MaxRuntime string `yaml:"max_runtime,omitempty" json:"max_runtime,omitempty"`
-	MemLimit   string `yaml:"mem_limit,omitempty" json:"mem_limit,omitempty"`
+	MaxRuntime string `yaml:"max_runtime,omitempty" json:"max_runtime,omitempty" doc:"maximum run duration"`
+	MemLimit   string `yaml:"mem_limit,omitempty" json:"mem_limit,omitempty" doc:"maximum memory use"`
 }
 
 // IsCLI reports whether this tool is an agentic CLI — the only tool kind
@@ -537,11 +537,11 @@ func (t Tool) ForkArgvPrefixWithWorkspace(workspace, modelID, session string) ([
 
 // Model is an inference backend.
 type Model struct {
-	Name    string   `yaml:"name" json:"name"` // the alias clients pass
-	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
+	Name    string   `yaml:"name" json:"name" doc:"canonical model name"` // the alias clients pass
+	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	Display string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
 	// Kind is HOW YOU AUTHENTICATE: subscription | api | local.
-	Kind string `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Kind string `yaml:"kind,omitempty" json:"kind,omitempty" doc:"authentication mode"`
 
 	// Billing is HOW YOU PAY: metered | flat | free. Optional — when empty it is
 	// derived from Kind by BillingMode(), reproducing the old collapsed behaviour, so
@@ -549,17 +549,17 @@ type Model struct {
 	//
 	// It exists because z.ai's GLM Coding Plan is flat-rate billing over an API key,
 	// and no single value of Kind can say that. See the constants above.
-	Billing string `yaml:"billing,omitempty" json:"billing,omitempty"`
+	Billing string `yaml:"billing,omitempty" json:"billing,omitempty" doc:"billing mode"`
 
-	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	Source string `yaml:"source,omitempty" json:"source,omitempty" doc:"model source: cloud or local"`
 
-	Provider  string `yaml:"provider,omitempty" json:"provider,omitempty"`
-	BaseURL   string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
-	APIKeyRef string `yaml:"api_key_ref,omitempty" json:"api_key_ref,omitempty"`
+	Provider  string `yaml:"provider,omitempty" json:"provider,omitempty" doc:"inference provider"`
+	BaseURL   string `yaml:"base_url,omitempty" json:"base_url,omitempty" doc:"provider API base URL"`
+	APIKeyRef string `yaml:"api_key_ref,omitempty" json:"api_key_ref,omitempty" doc:"credential-store key name"`
 	// UpstreamID is the provider-side model id — the value handed to a
 	// tool's --model flag. Its YAML key is `model:`, matching the asset
 	// registry's column.
-	UpstreamID string `yaml:"model,omitempty" json:"model,omitempty"`
+	UpstreamID string `yaml:"model,omitempty" json:"model,omitempty" doc:"default provider-side model id"`
 
 	// ToolIDs override UpstreamID for a specific tool, because THE ID A MODEL
 	// ANSWERS TO IS A PROPERTY OF THE TOOL, NOT OF THE MODEL.
@@ -577,7 +577,7 @@ type Model struct {
 	// caught it within a minute of the tool being registered.
 	//
 	// Keyed by TOOL name. Absent → UpstreamID.
-	ToolIDs map[string]string `yaml:"ids,omitempty" json:"ids,omitempty"`
+	ToolIDs map[string]string `yaml:"ids,omitempty" json:"ids,omitempty" doc:"tool-specific provider-side model ids"`
 
 	// Family and Version make the canonical name version-explicit. The
 	// catalog derives the floating family alias from them: `opus` names
@@ -588,14 +588,14 @@ type Model struct {
 	// Family is declared, never parsed out of the name: `kimi-k2.7-code`
 	// and `kimi-k2.6` are separate product lines, and no amount of clever
 	// suffix-stripping gets that right.
-	Family  string `yaml:"family,omitempty" json:"family,omitempty"`
-	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+	Family  string `yaml:"family,omitempty" json:"family,omitempty" doc:"version-independent product family"`
+	Version string `yaml:"version,omitempty" json:"version,omitempty" doc:"version within the product family"`
 
 	// Band is the model's capability peg, 1 (basic) to MaxBand (frontier); 0 is
 	// unpegged. It is normalized ACROSS providers — a provider's own tier
 	// ladder is never mapped positionally, so four vendor tiers may all
 	// land in one band. Agents inherit it; they never carry their own.
-	Band int `yaml:"band,omitempty" json:"band,omitempty"`
+	Band int `yaml:"band,omitempty" json:"band,omitempty" doc:"normalized capability band"`
 
 	// BandSource says whether the band was MEASURED or merely DECLARED, and it
 	// exists because the fleet has already been burned once by not knowing.
@@ -610,26 +610,26 @@ type Model struct {
 	// and until a model has failed something it has not been placed.
 	//
 	// Empty means declared. Nothing should present an unmeasured band as fact.
-	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty"`
+	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty" doc:"evidence supporting the capability band"`
 
 	// Tier is the provider's own word for its tier, carried from an org
 	// overlay. It is not Band and is not routable.
-	Tier          string   `yaml:"tier,omitempty" json:"tier,omitempty"`
-	Capabilities  []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
-	Domain        []string `yaml:"domain,omitempty" json:"domain,omitempty"`
-	ContextLength int64    `yaml:"context_length,omitempty" json:"context_length,omitempty"`
-	Price         float64  `yaml:"price,omitempty" json:"price,omitempty"`
+	Tier          string   `yaml:"tier,omitempty" json:"tier,omitempty" doc:"provider-native tier name"`
+	Capabilities  []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty" doc:"declared model capabilities"`
+	Domain        []string `yaml:"domain,omitempty" json:"domain,omitempty" doc:"preferred task domains"`
+	ContextLength int64    `yaml:"context_length,omitempty" json:"context_length,omitempty" doc:"maximum context length"`
+	Price         float64  `yaml:"price,omitempty" json:"price,omitempty" doc:"relative provider price"`
 
 	// Quality is the model's overall capability prior in [0,1]; Spec holds
 	// per-capability adjustments where a model is notably stronger or
 	// weaker than its tier. CostMicro is the relative per-turn cost the
 	// routing objective divides by. All three are read by the capability
 	// matrix.
-	Quality   float64            `yaml:"quality,omitempty" json:"quality,omitempty"`
-	CostMicro int64              `yaml:"cost_micro,omitempty" json:"cost_micro,omitempty"`
-	Spec      map[string]float64 `yaml:"spec,omitempty" json:"spec,omitempty"`
+	Quality   float64            `yaml:"quality,omitempty" json:"quality,omitempty" doc:"overall capability prior"`
+	CostMicro int64              `yaml:"cost_micro,omitempty" json:"cost_micro,omitempty" doc:"relative per-turn cost"`
+	Spec      map[string]float64 `yaml:"spec,omitempty" json:"spec,omitempty" doc:"per-capability adjustments"`
 
-	XHosts []ModelHost `yaml:"x_hosts,omitempty" json:"x_hosts,omitempty"`
+	XHosts []ModelHost `yaml:"x_hosts,omitempty" json:"x_hosts,omitempty" doc:"paired hosts serving the model"`
 
 	// Derived holds names the catalog computed at load — today, the family
 	// alias. It is a function of the whole catalog, not of this entry, so
@@ -642,8 +642,8 @@ type Model struct {
 
 // ModelHost names a paired host serving a projected local model.
 type ModelHost struct {
-	Host  string `yaml:"host" json:"host"`
-	Owner string `yaml:"owner,omitempty" json:"owner,omitempty"`
+	Host  string `yaml:"host" json:"host" doc:"paired host name"`
+	Owner string `yaml:"owner,omitempty" json:"owner,omitempty" doc:"host owner"`
 }
 
 // Target is the id passed to a tool's model flag: the provider-side id
@@ -681,39 +681,39 @@ type AgentFile struct {
 
 // Agent is a tool bound to a model, under a nickname.
 type Agent struct {
-	Name        string   `yaml:"name" json:"name"` // the primary nickname
-	Aliases     []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Display     string   `yaml:"display,omitempty" json:"display,omitempty"`
-	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Name        string   `yaml:"name" json:"name" doc:"canonical agent name"` // the primary nickname
+	Aliases     []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
+	Display     string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty" doc:"purpose of the agent"`
 
 	// Nick is the agent's human name — the one you say out loud. Leave it
 	// empty and the catalog assigns one deterministically from the binding,
 	// so every agent has a memorable handle without anyone naming it.
-	Nick string `yaml:"nick,omitempty" json:"nick,omitempty"`
+	Nick string `yaml:"nick,omitempty" json:"nick,omitempty" doc:"human name used in conversation"`
 
-	Tool  string `yaml:"tool" json:"tool"`   // → Tool.Name
-	Model string `yaml:"model" json:"model"` // → Model.Name
+	Tool  string `yaml:"tool" json:"tool" doc:"bound tool name"`    // → Tool.Name
+	Model string `yaml:"model" json:"model" doc:"bound model name"` // → Model.Name
 
 	// A CASCADE agent (band_source: cascade) is not a plain tool:model binding.
 	// It runs a cheap Base agent and, when the base gets stuck, escalates through
 	// Escalation (a ladder of agent names, tried in order — e.g. an L3 then an L4)
 	// for a content-full steer. It SERVES at Band via that ladder while running
 	// cheap most of the time. When Base is set, Model is ignored.
-	Base       string   `yaml:"base,omitempty" json:"base,omitempty"`
-	Escalation []string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
+	Base       string   `yaml:"base,omitempty" json:"base,omitempty" doc:"base agent for a cascade"`
+	Escalation []string `yaml:"escalation,omitempty" json:"escalation,omitempty" doc:"cascade escalation ladder"`
 
 	// Band + BandSource are the SERVED band of a cascade agent (BandSource
 	// "cascade") — the level the ladder REACHES, not the base model's peg. This
 	// is the one legitimate agent-level band: it is the cascade's contract, not a
 	// stored model peg that would rot. For a plain tool:model agent these are
 	// empty and the band is inherited from the model, as always.
-	Band       int    `yaml:"band,omitempty" json:"band,omitempty"`
-	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty"`
+	Band       int    `yaml:"band,omitempty" json:"band,omitempty" doc:"served capability band for a cascade"`
+	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty" doc:"source of the served band"`
 
-	Role        *AgentRole        `yaml:"role,omitempty" json:"role,omitempty"`
-	Ledger      *AgentLedger      `yaml:"ledger,omitempty" json:"ledger,omitempty"`
-	Instruction *AgentInstruction `yaml:"instruction,omitempty" json:"instruction,omitempty"`
-	Functions   []string          `yaml:"functions,omitempty" json:"functions,omitempty"`
+	Role        *AgentRole        `yaml:"role,omitempty" json:"role,omitempty" doc:"permissions and scope"`
+	Ledger      *AgentLedger      `yaml:"ledger,omitempty" json:"ledger,omitempty" doc:"operational reliability record"`
+	Instruction *AgentInstruction `yaml:"instruction,omitempty" json:"instruction,omitempty" doc:"standing instruction"`
+	Functions   []string          `yaml:"functions,omitempty" json:"functions,omitempty" doc:"available function kits"`
 
 	// ClonedFrom and ClonedAt record that this agent was BRANCHED off another,
 	// and when.
@@ -729,15 +729,15 @@ type Agent struct {
 	// The provenance is kept because the alternative is a fleet of same-binding
 	// agents with no way to tell which was the original, which was branched off
 	// what, or when their histories parted.
-	ClonedFrom string `yaml:"cloned_from,omitempty" json:"cloned_from,omitempty"`
-	ClonedAt   string `yaml:"cloned_at,omitempty" json:"cloned_at,omitempty"`
+	ClonedFrom string `yaml:"cloned_from,omitempty" json:"cloned_from,omitempty" doc:"parent agent name"`
+	ClonedAt   string `yaml:"cloned_at,omitempty" json:"cloned_at,omitempty" doc:"clone creation time"`
 
 	// Ephemeral marks a clone minted for ONE task, to be removed when that task
 	// closes. It is hidden from `agents list` unless --all, because a fleet
 	// roster listing every in-flight task's worker is a roster nobody reads.
 	// Task, when set, names the work it was minted for.
-	Ephemeral bool   `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty"`
-	Task      string `yaml:"task,omitempty" json:"task,omitempty"`
+	Ephemeral bool   `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty" doc:"whether the agent exists for one task"`
+	Task      string `yaml:"task,omitempty" json:"task,omitempty" doc:"task assigned to an ephemeral agent"`
 
 	// AutoNick and Derived are computed by the catalog at load: the
 	// assigned human name (when Nick is empty) and the floating family
@@ -756,18 +756,18 @@ func (a *Agent) IsCascade() bool {
 }
 
 type AgentRole struct {
-	Skills       []string `yaml:"skills,omitempty" json:"skills,omitempty"`
-	AllowedTools []string `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	Scope        string   `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Skills       []string `yaml:"skills,omitempty" json:"skills,omitempty" doc:"skills assigned to the role"`
+	AllowedTools []string `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty" doc:"tools permitted for the role"`
+	Scope        string   `yaml:"scope,omitempty" json:"scope,omitempty" doc:"role responsibility boundary"`
 }
 
 type AgentLedger struct {
-	Reliability string `yaml:"reliability,omitempty" json:"reliability,omitempty"`
-	Notes       string `yaml:"notes,omitempty" json:"notes,omitempty"`
+	Reliability string `yaml:"reliability,omitempty" json:"reliability,omitempty" doc:"operability prior"`
+	Notes       string `yaml:"notes,omitempty" json:"notes,omitempty" doc:"reliability notes"`
 }
 
 type AgentInstruction struct {
-	Content string `yaml:"content,omitempty" json:"content,omitempty"`
+	Content string `yaml:"content,omitempty" json:"content,omitempty" doc:"instruction text"`
 }
 
 // MatrixKey is the agent's identity: tool:model. Every nickname for the

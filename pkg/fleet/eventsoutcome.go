@@ -42,10 +42,10 @@ type EventsOutcome struct {
 	// Path is a dotted path into the terminal event object — "is_error" for
 	// claude, "result.status" for agy. Nesting differs per tool, so the path is
 	// declared rather than assumed.
-	Path string `yaml:"path,omitempty" json:"path,omitempty"`
+	Path string `yaml:"path,omitempty" json:"path,omitempty" doc:"dotted path to the outcome value"`
 	// OK are the values at Path that MEAN success, rendered as strings so one
 	// declaration covers a bool (`false`) and an enum (`SUCCESS`) alike.
-	OK []string `yaml:"ok,omitempty" json:"ok,omitempty"`
+	OK []string `yaml:"ok,omitempty" json:"ok,omitempty" doc:"values that mean success"`
 }
 
 // Verdict is what a terminal event says about the turn.

@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,7 +19,8 @@ import (
 type agentFlags struct {
 	tool, model, display, description, nick string
 	aliases, addAlias, rmAlias              []string
-	force                                   bool
+	force, ephemeral                        bool
+	paths                                   pathFlags
 }
 
 func (f *agentFlags) bind(c *cobra.Command, forSet bool) {
@@ -28,6 +30,8 @@ func (f *agentFlags) bind(c *cobra.Command, forSet bool) {
 	c.Flags().StringVar(&f.description, "description", "", "what this agent is for")
 	c.Flags().StringVar(&f.nick, "nick", "", "the agent's human name; empty means one is assigned from the binding")
 	c.Flags().BoolVar(&f.force, "force", false, "take a name that already belongs to another entry")
+	c.Flags().BoolVar(&f.ephemeral, "ephemeral", false, "mark this as a one-task agent")
+	f.paths.bind(c)
 	if forSet {
 		c.Flags().StringArrayVar(&f.addAlias, "add-alias", nil, "add a nickname (repeatable)")
 		c.Flags().StringArrayVar(&f.rmAlias, "rm-alias", nil, "drop a nickname (repeatable)")
@@ -56,15 +60,18 @@ func newAgentsAdd(opts []Option) *cobra.Command {
 			cat := New(opts...)
 			arg := args[0]
 
-			if f.tool == "" && f.model == "" && looksLikePath(arg) {
+			if f.tool == "" && f.model == "" && len(f.paths.set) == 0 && len(f.paths.unset) == 0 && !cmd.Flags().Changed("ephemeral") && looksLikePath(arg) {
 				return importAgent(cmd, cat, arg, f.force)
 			}
-			if f.tool == "" || f.model == "" {
+			if len(f.paths.set) == 0 && (f.tool == "" || f.model == "") {
 				return fmt.Errorf("fleet: minting %q needs both --tool and --model (an agent always names both)", arg)
 			}
 			a := Agent{
 				Name: arg, Aliases: f.aliases, Tool: f.tool, Model: f.model,
-				Display: f.display, Description: f.description, Nick: f.nick,
+				Display: f.display, Description: f.description, Nick: f.nick, Ephemeral: f.ephemeral,
+			}
+			if err := applyPathFlags(cmd, KindAgent, &a, f.paths); err != nil {
+				return err
 			}
 			claims := append(append([]string{}, a.Aliases...), a.Nick)
 			if err := cat.claimName(KindAgent, a.Name, claims, f.force); err != nil {
@@ -193,7 +200,13 @@ func newAgentsSet(opts []Option) *cobra.Command {
 			if cmd.Flags().Changed("nick") {
 				a.Nick = f.nick
 			}
+			if cmd.Flags().Changed("ephemeral") {
+				a.Ephemeral = f.ephemeral
+			}
 			a.Aliases = mergeAliases(a.Aliases, f.addAlias, f.rmAlias)
+			if err := applyPathFlags(cmd, KindAgent, &a, f.paths); err != nil {
+				return err
+			}
 
 			// The claim covers the explicit nickname too — an operator naming
 			// an agent `codex` would otherwise shadow the tool of that name.
@@ -220,29 +233,39 @@ func newAgentsSet(opts []Option) *cobra.Command {
 
 func newToolsAdd(opts []Option) *cobra.Command {
 	var force bool
+	var hidden bool
 	var name string
+	var paths pathFlags
 	c := &cobra.Command{
-		Use:           "add <file>|-",
-		Short:         "Import a tool definition into the local store",
+		Use:           "add (<name> --set path=value | <file>|-)",
+		Short:         "Add or import a tool definition into the local store",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat := New(opts...)
-			data, err := readSource(args[0], cmd.InOrStdin())
-			if err != nil {
-				return err
-			}
-			fallback := name
-			if fallback == "" {
-				fallback = baseName(args[0])
-			}
-			t, err := ParseTool(fallback, data, nil)
-			if err != nil {
-				return err
-			}
-			if name != "" {
-				t.Name = name
+			var t Tool
+			if looksLikePath(args[0]) && len(paths.set) == 0 && len(paths.unset) == 0 && !cmd.Flags().Changed("hidden") {
+				data, err := readSource(args[0], cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				fallback := name
+				if fallback == "" {
+					fallback = baseName(args[0])
+				}
+				t, err = ParseTool(fallback, data, nil)
+				if err != nil {
+					return err
+				}
+				if name != "" {
+					t.Name = name
+				}
+			} else {
+				t = Tool{Name: args[0], Hidden: hidden}
+				if err := applyPathFlags(cmd, KindTool, &t, paths); err != nil {
+					return err
+				}
 			}
 			if err := cat.claimName(KindTool, t.Name, t.Aliases, force); err != nil {
 				return err
@@ -256,6 +279,8 @@ func newToolsAdd(opts []Option) *cobra.Command {
 	}
 	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
 	c.Flags().StringVar(&name, "name", "", "store under this name instead of the document's own")
+	c.Flags().BoolVar(&hidden, "hidden", false, "omit this tool from default listings")
+	paths.bind(c)
 	return c
 }
 
@@ -263,6 +288,8 @@ func newToolsSet(opts []Option) *cobra.Command {
 	var binary, execTmpl, display string
 	var addAlias, rmAlias []string
 	var force bool
+	var hidden bool
+	var paths pathFlags
 	c := &cobra.Command{
 		Use:           "set <name>",
 		Short:         "Modify a tool definition",
@@ -287,6 +314,12 @@ func newToolsSet(opts []Option) *cobra.Command {
 				t.Display = display
 			}
 			t.Aliases = mergeAliases(t.Aliases, addAlias, rmAlias)
+			if cmd.Flags().Changed("hidden") {
+				t.Hidden = hidden
+			}
+			if err := applyPathFlags(cmd, KindTool, &t, paths); err != nil {
+				return err
+			}
 
 			if err := cat.claimName(KindTool, t.Name, t.Aliases, force); err != nil {
 				return err
@@ -310,12 +343,17 @@ func newToolsSet(opts []Option) *cobra.Command {
 	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")
 	c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, "drop an alias (repeatable)")
 	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	c.Flags().BoolVar(&hidden, "hidden", false, "omit this tool from default listings")
+	paths.bind(c)
 	return c
 }
 
 func newModelsAdd(opts []Option) *cobra.Command {
 	var m Model
 	var force bool
+	var bandSource string
+	var ids []string
+	var paths pathFlags
 	c := &cobra.Command{
 		Use:   "add (<name> --provider P --kind K | <file>|-)",
 		Short: "Add an inference backend to the local store",
@@ -336,7 +374,7 @@ func newModelsAdd(opts []Option) *cobra.Command {
 			cat := New(opts...)
 			arg := args[0]
 
-			if looksLikePath(arg) && m.Provider == "" && m.Kind == "" {
+			if looksLikePath(arg) && m.Provider == "" && m.Kind == "" && len(paths.set) == 0 && len(paths.unset) == 0 && bandSource == "" && len(ids) == 0 {
 				data, err := readSource(arg, cmd.InOrStdin())
 				if err != nil {
 					return err
@@ -348,6 +386,15 @@ func newModelsAdd(opts []Option) *cobra.Command {
 				m = parsed
 			} else {
 				m.Name = arg
+			}
+			if bandSource != "" {
+				m.BandSource = bandSource
+			}
+			if err := applyIDs(&m, ids); err != nil {
+				return err
+			}
+			if err := applyPathFlags(cmd, KindModel, &m, paths); err != nil {
+				return err
 			}
 			if err := cat.claimName(KindModel, m.Name, m.Aliases, force); err != nil {
 				return err
@@ -372,10 +419,13 @@ func newModelsAdd(opts []Option) *cobra.Command {
 	c.Flags().StringVar(&m.Family, "family", "", "product line; the bare family name floats to its newest version")
 	c.Flags().StringVar(&m.Version, "version", "", "version within the family, e.g. 4.9")
 	c.Flags().IntVar(&m.Band, "band", 0, "capability peg 1-4, normalized across providers")
+	c.Flags().StringVar(&bandSource, "band-source", "", "evidence for the capability band")
+	c.Flags().StringArrayVar(&ids, "id", nil, "tool-specific model id as <tool>=<upstream> (repeatable)")
 	c.Flags().StringArrayVar(&m.Aliases, "alias", nil, "an additional name (repeatable)")
 	c.Flags().Float64Var(&m.Quality, "quality", 0, "capability prior in [0,1]; the router's quality term")
 	c.Flags().Int64Var(&m.CostMicro, "cost-micro", 0, "relative per-turn cost; the router's cost term")
 	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	paths.bind(c)
 	return c
 }
 
@@ -385,6 +435,10 @@ func newModelsSet(opts []Option) *cobra.Command {
 	var costMicro int64
 	var addAlias, rmAlias []string
 	var force bool
+	var band int
+	var bandSource string
+	var ids []string
+	var paths pathFlags
 	c := &cobra.Command{
 		Use:           "set <name>",
 		Short:         "Modify an inference backend",
@@ -413,6 +467,18 @@ func newModelsSet(opts []Option) *cobra.Command {
 				}
 			}
 			m.Aliases = mergeAliases(m.Aliases, addAlias, rmAlias)
+			if cmd.Flags().Changed("band") {
+				m.Band = band
+			}
+			if cmd.Flags().Changed("band-source") {
+				m.BandSource = bandSource
+			}
+			if err := applyIDs(&m, ids); err != nil {
+				return err
+			}
+			if err := applyPathFlags(cmd, KindModel, &m, paths); err != nil {
+				return err
+			}
 
 			if err := cat.claimName(KindModel, m.Name, m.Aliases, force); err != nil {
 				return err
@@ -435,10 +501,55 @@ func newModelsSet(opts []Option) *cobra.Command {
 	c.Flags().StringVar(&display, "display", "", "human-facing label")
 	c.Flags().Float64Var(&quality, "quality", 0, "capability prior in [0,1]; the router's quality term")
 	c.Flags().Int64Var(&costMicro, "cost-micro", 0, "relative per-turn cost; the router's cost term")
+	c.Flags().IntVar(&band, "band", 0, "capability peg 1-4, normalized across providers")
+	c.Flags().StringVar(&bandSource, "band-source", "", "evidence for the capability band")
+	c.Flags().StringArrayVar(&ids, "id", nil, "tool-specific model id as <tool>=<upstream> (repeatable)")
 	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")
 	c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, "drop an alias (repeatable)")
 	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	paths.bind(c)
 	return c
+}
+
+type pathFlags struct {
+	set   []string
+	unset []string
+}
+
+func (f *pathFlags) bind(c *cobra.Command) {
+	c.Flags().StringArrayVar(&f.set, "set", nil, "set a dotted path as <path>=<value> (repeatable)")
+	c.Flags().StringArrayVar(&f.unset, "unset", nil, "clear a dotted path (repeatable)")
+}
+
+func applyPathFlags(cmd *cobra.Command, noun string, record any, flags pathFlags) error {
+	if err := editPaths(noun, record, flags.set, flags.unset); err != nil {
+		return reportPathError(cmd, noun, err)
+	}
+	return nil
+}
+
+func reportPathError(cmd *cobra.Command, noun string, err error) error {
+	var unknown *unknownPathError
+	if errors.As(err, &unknown) {
+		if writeErr := writeSchema(cmd.ErrOrStderr(), noun, false); writeErr != nil {
+			return writeErr
+		}
+	}
+	return err
+}
+
+func applyIDs(m *Model, ids []string) error {
+	for _, assignment := range ids {
+		tool, upstream, ok := strings.Cut(assignment, "=")
+		if !ok || tool == "" || upstream == "" {
+			return fmt.Errorf("fleet: --id needs <tool>=<upstream>, got %q", assignment)
+		}
+		if m.ToolIDs == nil {
+			m.ToolIDs = make(map[string]string)
+		}
+		m.ToolIDs[tool] = upstream
+	}
+	return nil
 }
 
 // --- rm / edit / verify --------------------------------------------------
