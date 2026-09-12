@@ -313,6 +313,14 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 // The console keeps serving on loopback throughout; only the LAN listener
 // comes and goes.
 func runPairGatedListener(ctx context.Context, out io.Writer, srv *http.Server, addr, storePath string) (func(), error) {
+	return runPairGatedListenerWithAddr(ctx, out, srv, addr, storePath, currentPairListenerAddr)
+}
+
+// runPairGatedListenerWithAddr is the testable core of
+// runPairGatedListener. resolve is consulted whenever LAN access is needed so
+// a long-running console follows a DHCP, Wi-Fi, or VPN address change instead
+// of retrying an address the host no longer owns forever.
+func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.Server, addr, storePath string, resolve func(string) string) (func(), error) {
 	if storePath == "" {
 		p, err := pairPath()
 		if err != nil {
@@ -324,6 +332,7 @@ func runPairGatedListener(ctx context.Context, out io.Writer, srv *http.Server, 
 
 	var mu sync.Mutex
 	var ln net.Listener
+	activeAddr := ""
 
 	closeLAN := func(reason string) {
 		mu.Lock()
@@ -333,21 +342,31 @@ func runPairGatedListener(ctx context.Context, out io.Writer, srv *http.Server, 
 		}
 		_ = ln.Close()
 		ln = nil
-		fmt.Fprintf(out, "bashy apps: LAN listener on %s closed (%s)\n", addr, reason)
+		fmt.Fprintf(out, "bashy apps: LAN listener on %s closed (%s)\n", activeAddr, reason)
+		activeAddr = ""
 	}
-	openLAN := func(reason string) {
+	openLAN := func(target, reason string) {
 		mu.Lock()
 		defer mu.Unlock()
-		if ln != nil {
+		if ln != nil && activeAddr == target {
 			return
 		}
-		l, err := net.Listen("tcp", addr)
+		l, err := net.Listen("tcp", target)
 		if err != nil {
-			fmt.Fprintf(out, "bashy apps: could not open the LAN listener on %s: %v\n", addr, err)
+			fmt.Fprintf(out, "bashy apps: could not open the LAN listener on %s: %v\n", target, err)
 			return
+		}
+		previous := activeAddr
+		if ln != nil {
+			_ = ln.Close()
 		}
 		ln = l
-		fmt.Fprintf(out, "bashy apps: LAN listener on %s open (%s)\n", addr, reason)
+		activeAddr = target
+		if previous == "" {
+			fmt.Fprintf(out, "bashy apps: LAN listener on %s open (%s)\n", target, reason)
+		} else {
+			fmt.Fprintf(out, "bashy apps: LAN listener moved from %s to %s (%s)\n", previous, target, reason)
+		}
 		go func() { _ = srv.Serve(l) }()
 	}
 
@@ -377,13 +396,56 @@ func runPairGatedListener(ctx context.Context, out io.Writer, srv *http.Server, 
 			pending := st.openTickets(now)
 			switch {
 			case devices > 0:
-				openLAN(fmt.Sprintf("%d paired device(s)", devices))
+				openLAN(resolve(addr), fmt.Sprintf("%d paired device(s)", devices))
 			case pending > 0:
-				openLAN("a pairing code is waiting to be scanned")
+				openLAN(resolve(addr), "a pairing code is waiting to be scanned")
 			default:
 				closeLAN("no paired devices")
 			}
 		}
 	}()
 	return func() { close(done) }, nil
+}
+
+// currentPairListenerAddr preserves an address while this host still owns it.
+// If a literal IPv4 disappeared (the ordinary DHCP, Wi-Fi, or VPN transition),
+// it preserves the port and follows the host's current primary LAN address.
+// Hostnames, wildcard binds, IPv6, and an unavailable address probe remain
+// exactly as configured instead of being guessed at here.
+func currentPairListenerAddr(configured string) string {
+	host, port, err := net.SplitHostPort(configured)
+	if err != nil {
+		return configured
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() == nil || ip.IsUnspecified() {
+		return configured
+	}
+	if localInterfaceHasIP(ip) {
+		return configured
+	}
+	if current := primaryLANAddr(); current != "" {
+		return net.JoinHostPort(current, port)
+	}
+	return configured
+}
+
+func localInterfaceHasIP(want net.IP) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch a := addr.(type) {
+		case *net.IPNet:
+			ip = a.IP
+		case *net.IPAddr:
+			ip = a.IP
+		}
+		if ip != nil && ip.Equal(want) {
+			return true
+		}
+	}
+	return false
 }

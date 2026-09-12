@@ -3,6 +3,7 @@ package webconsole
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -598,6 +600,65 @@ func TestPairGatedListenerFollowsTheDeviceSet(t *testing.T) {
 	}
 	if !eventually(8*time.Second, func() bool { return !dialable(addr) }) {
 		t.Fatalf("the LAN port stayed open after the last pairing ended:\n%s", out.String())
+	}
+}
+
+// A console daemon outlives DHCP leases and VPN sessions. When its configured
+// IP disappears, the gated phone listener must move to the newly selected LAN
+// address instead of retrying the stale one forever.
+func TestPairGatedListenerFollowsANetworkChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pairing.json")
+	store := newPairStore(path)
+	if _, _, err := store.issueTicket(nil, time.Hour, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	reserve := func() string {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		return addr
+	}
+	first, second := reserve(), reserve()
+	for second == first {
+		second = reserve()
+	}
+	var current atomic.Value
+	current.Store(first)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})}
+	stop, err := runPairGatedListenerWithAddr(ctx, io.Discard, srv, first, path, func(string) string {
+		return current.Load().(string)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	if !eventually(6*time.Second, func() bool { return dialable(first) }) {
+		t.Fatal("the initial LAN listener did not open")
+	}
+	current.Store(second)
+	if !eventually(6*time.Second, func() bool { return dialable(second) && !dialable(first) }) {
+		t.Fatal("the LAN listener did not follow the network change")
+	}
+}
+
+func TestCurrentPairListenerAddrReplacesAStaleIP(t *testing.T) {
+	current := primaryLANAddr()
+	if current == "" {
+		t.Skip("host has no LAN address")
+	}
+	if got, want := currentPairListenerAddr("192.0.2.1:22749"), net.JoinHostPort(current, "22749"); got != want {
+		t.Fatalf("stale pairing address resolved to %q, want %q", got, want)
 	}
 }
 
