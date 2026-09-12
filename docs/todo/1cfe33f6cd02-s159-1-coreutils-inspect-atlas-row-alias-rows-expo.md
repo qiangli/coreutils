@@ -3,10 +3,11 @@ id: 1cfe33f6cd02
 kind: task
 title: 'S159.1 coreutils: inspect atlas row + alias rows + exported path accessors'
 seq: 107
-status: todo
+status: done
 priority: p0
 created: 2026-09-12T19:13:34.264956Z
 sprint: 159
+closed: 2026-09-12T19:26:26.088055Z
 ---
 
 coreutils half of S159.1 (umbrella story f1d46cf5c54f; design docs/bashy-inspect-design.md in the umbrella, PRIVATE).
