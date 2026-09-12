@@ -3,8 +3,6 @@ package craft
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -59,12 +57,9 @@ func (c *config) index() *Index {
 // thing to write down and no patience for a second command.
 func (c *config) coordinate() string { return skills.HostCoordinate(c.skillOpts...) }
 
-func defaultStoreDir() string {
-	if h, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(h, ".config", "bashy", "skills")
-	}
-	return ""
-}
+// defaultStoreDir is the catalog's own store — craft accumulates INTO the
+// skills store, so there is exactly one ladder, and it is the catalog's.
+func defaultStoreDir() string { return skills.DefaultStoreDir() }
 
 // NewCraftCmd builds the `craft` command tree — the living skill graph over
 // the catalog pkg/skills manages.

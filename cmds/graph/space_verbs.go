@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/craft"
 	"github.com/qiangli/coreutils/pkg/execlog"
 	"github.com/qiangli/coreutils/pkg/kb"
+	"github.com/qiangli/coreutils/pkg/skills"
 	"github.com/qiangli/coreutils/pkg/spacegraph"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
@@ -638,35 +638,20 @@ func recordingOn() bool {
 	return weavecli.IsAgentDriven()
 }
 
-func execStoreRoot() string {
-	v := strings.TrimSpace(os.Getenv("BASHY_EXECHIST"))
-	switch strings.ToLower(v) {
-	case "", "1", "true", "on", "yes", "0", "false", "off", "no":
-	default:
-		return v
-	}
-	if home := strings.TrimSpace(os.Getenv("BASHY_HOME")); home != "" {
-		return filepath.Join(home, "exec")
-	}
-	if h, err := os.UserHomeDir(); err == nil && h != "" {
-		return filepath.Join(h, ".bashy", "exec")
-	}
-	return filepath.Join(os.TempDir(), "bashy-exec")
-}
+// execStoreRoot is the exec history store, resolved by the package that
+// owns it — the same ladder the writer uses.
+func execStoreRoot() string { return execlog.DefaultRoot() }
 
 // spaceStoreDir is the craft store, which is where the fact half of what a
 // host knows already lives. The edges belong beside the facts because they are
 // the same KIND of claim — identity-bearing, host-local, and with no export
 // path by construction.
-func spaceStoreDir() string {
-	if home := strings.TrimSpace(os.Getenv("BASHY_HOME")); home != "" {
-		return filepath.Join(home, "skills")
-	}
-	if h, err := os.UserHomeDir(); err == nil && h != "" {
-		return filepath.Join(h, ".bashy", "skills")
-	}
-	return filepath.Join(os.TempDir(), "bashy-skills")
-}
+//
+// Resolved by the catalog package, because that is where the WRITER
+// (bashy's exec-history middleware) puts it. This function used to carry its
+// own ladder ending in ~/.bashy/skills — a directory nothing ever wrote — so
+// `graph space` and `graph reached` read an empty store on every host.
+func spaceStoreDir() string { return skills.DefaultStoreDir() }
 
 func emitJSON(rc *tool.RunContext, v any) int {
 	enc := json.NewEncoder(rc.Out)

@@ -40,12 +40,35 @@ func WithHostVersion(name, version string) Option {
 // ~/.config/bashy/skills): the local skill store + the probe cache.
 func WithConfigDir(dir string) Option { return func(c *config) { c.cfgDir = dir } }
 
-func defaultConfigDir() string {
-	if h, err := os.UserHomeDir(); err == nil {
+// DefaultStoreDir is the local skills store — and, because the craft facts,
+// the attest ledger and the space graph all live beside the catalog, the ONE
+// place that path is resolved:
+//
+//	$BASHY_SKILLS_DIR       the specific override, most precise
+//	$BASHY_HOME/skills      the whole bashy home relocated (tests, sandboxed runs)
+//	~/.config/bashy/skills  the default
+//
+// Every reader and writer of that store calls this. Until 2026-09-12 the
+// space graph was WRITTEN here and READ from ~/.bashy/skills, so `graph space`
+// reported an empty store on every host that had one — a plausible answer that
+// was not true. Two ladders for one store is how that happens; hence one.
+//
+// An empty return means no home could be determined. Callers must treat it as
+// "no store" rather than as a path.
+func DefaultStoreDir() string {
+	if dir := strings.TrimSpace(os.Getenv("BASHY_SKILLS_DIR")); dir != "" {
+		return dir
+	}
+	if home := strings.TrimSpace(os.Getenv("BASHY_HOME")); home != "" {
+		return filepath.Join(home, "skills")
+	}
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
 		return filepath.Join(h, ".config", "bashy", "skills")
 	}
 	return ""
 }
+
+func defaultConfigDir() string { return DefaultStoreDir() }
 
 // NewSkillsCmd builds the `skills` command tree: probe / list / show.
 // Bare `skills` behaves like `skills list` (back-compat with the
