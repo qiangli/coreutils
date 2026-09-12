@@ -110,6 +110,12 @@ type Concept struct {
 	// TestEmit_NeverLeaksLocation.
 	Location string `json:"location,omitempty"`
 	Host     string `json:"host,omitempty"` // bindings are host-scoped; say so
+	// Action is what RUNNING the concept amounts to — a per-call projection
+	// over the same registry record, present for every concept that is an
+	// action (a verb, a skill, an agent binding) and nil for the ones that are
+	// not (a tool is the executor of an action). Nested on purpose: see
+	// action.go for why the word never appears as a top-level key.
+	Action *ActionFacet `json:"action,omitempty" yaml:"action,omitempty"`
 }
 
 // Store is the projected lexicon. It is rebuilt on every call — there is no
@@ -177,6 +183,7 @@ func Build(cat *fleet.Catalog, synopses map[string]string, host string, ov Overl
 			ScopeNote:  DefaultScopeNote,
 			Use:        "bashy " + name,
 			Source:     "atlas",
+			Action:     commandFacet(name, e, commandExecutor(e, ExecutorVerb)),
 		}
 		if e.Stage != "" {
 			c.Definition = strings.TrimSpace(c.Definition + " (" + e.Stage + " stage)")
@@ -231,10 +238,12 @@ func Build(cat *fleet.Catalog, synopses map[string]string, host string, ov Overl
 				Use:        "bashy handoff --to " + a.Name,
 				Source:     "fleet-registry",
 				Host:       host,
+				Action:     bindingFacet(a),
 			}, ov)
 		}
 
-		// The tool layer: the word a human actually says.
+		// The tool layer: the word a human actually says. No action facet: the
+		// tool is what RUNS an action, and the action is its binding.
 		tools, _ := cat.Tools(true)
 		for _, t := range tools {
 			bindings := byTool[t.Name]

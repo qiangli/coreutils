@@ -284,6 +284,15 @@ func writeConcept(out io.Writer, c *Concept) {
 	if c.Use != "" {
 		fmt.Fprintf(out, "  use:  %s\n", c.Use)
 	}
+	if a := c.Action; a != nil {
+		// What running it amounts to, on one line: the contract that binds it,
+		// how much freedom the run takes, what it may do, and what runs it.
+		line := fmt.Sprintf("%s contract=%s latitude=%s authority=%s", a.Kind, a.Contract, a.Latitude, a.Authority)
+		if len(a.EffectsDeclared) > 0 {
+			line += " effects=" + strings.Join(a.EffectsDeclared, ",")
+		}
+		fmt.Fprintf(out, "  runs: %s via %s (%s)\n", line, a.Executor, a.Envelope)
+	}
 	if c.ScopeNote != "" {
 		fmt.Fprintf(out, "  note: %s\n", c.ScopeNote)
 	}

@@ -24,7 +24,12 @@ type DhntInfo struct {
 	Contract   []string // contract predicate ids (dhnt-canonical)
 	EffectCap  []string // declared effect-cap atoms
 	Steps      int
-	Err        string // non-empty when skill.dhnt is invalid (parse/identity)
+	// HasJudgeStep reports a step whose latitude is judge (P4) anywhere in the
+	// body, branches included. It is what turns a skill from a deterministic
+	// runbook into an agentic one, so a consumer projecting "how much freedom
+	// does running this take" needs the bit without re-parsing the face.
+	HasJudgeStep bool
+	Err          string // non-empty when skill.dhnt is invalid (parse/identity)
 }
 
 // Valid reports whether the canonical face parsed and hashed cleanly.
@@ -45,7 +50,7 @@ func parseDhntInfo(canon []byte) *DhntInfo {
 	if err != nil {
 		return &DhntInfo{Err: err.Error()}
 	}
-	info := &DhntInfo{Identity: id, Steps: len(sk.Steps)}
+	info := &DhntInfo{Identity: id, Steps: len(sk.Steps), HasJudgeStep: anyJudgeStep(sk.Steps)}
 	// A missing capability key is a legitimate state (no contract), not a
 	// parse failure — it must never invalidate an otherwise-good face.
 	if key, err := CapabilityKey(sk); err == nil {
@@ -58,4 +63,21 @@ func parseDhntInfo(canon []byte) *DhntInfo {
 		info.EffectCap = append(info.EffectCap, e.String())
 	}
 	return info
+}
+
+// anyJudgeStep walks a step list, branches included, for a judge-latitude
+// leaf. Only leaves carry latitude — a Branch node's own Latitude is unused.
+func anyJudgeStep(steps []dhntskills.Step) bool {
+	for _, st := range steps {
+		if st.Branch != nil {
+			if anyJudgeStep(st.Branch.Then) || anyJudgeStep(st.Branch.Else) {
+				return true
+			}
+			continue
+		}
+		if st.Latitude == dhntskills.LatJudge {
+			return true
+		}
+	}
+	return false
 }

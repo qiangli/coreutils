@@ -48,6 +48,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/pkg/redact"
 )
 
@@ -448,14 +449,20 @@ func (s *Store) AddStandardTools(names []string, ov Overlay) {
 		if n == "" {
 			continue
 		}
-		s.add(Concept{
+		c := Concept{
 			ID: "tool:" + n, Kind: KindStandardTool, PrefLabel: n,
 			Definition: "a standard tool in bashy's pure-Go userland, run in-process",
 			ScopeNote: "Standard everywhere bashy runs — not local jargon. It resolves " +
 				"in-process rather than from PATH, so `which` may not find it.",
 			Use:    "bashy commands " + n,
 			Source: "atlas",
-		}, ov)
+		}
+		// The facet comes off the atlas record; a name the atlas does not know
+		// has no effects to project, so it gets none rather than an empty one.
+		if e, ok := atlas.Lookup(n); ok {
+			c.Action = commandFacet(n, e, commandExecutor(e, ExecutorCoreutils))
+		}
+		s.add(c, ov)
 	}
 	s.reindex()
 }
