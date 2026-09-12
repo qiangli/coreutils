@@ -443,7 +443,7 @@ func Operable(tool string) (bool, string) {
 // launch contracts in pkg/chat and pkg/weave. They now live in the registry
 // (coreutils/pkg/fleet): a tool declares its harness scores, a model its
 // quality/cost/specializations, and an agent declares the tool:model pair.
-// One declaration, three consumers — so a model added with `bashy models add`
+// One declaration, three consumers — so a model added with `bashy model add`
 // is routable without editing Go.
 //
 // Values stay deliberately coarse and marked Source=prior; host outcomes

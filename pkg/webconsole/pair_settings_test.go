@@ -247,8 +247,8 @@ func TestPairMintFailsClosedWhenNotArmed(t *testing.T) {
 		t.Fatalf("enabled = %v, want false", resp["enabled"])
 	}
 	restart, _ := resp["restart"].(string)
-	if !strings.Contains(restart, "bashy apps serve") || !strings.Contains(restart, "--pair") {
-		t.Fatalf("restart = %q, want the exact `bashy apps serve … --pair` command", restart)
+	if !strings.Contains(restart, "bashy app serve") || !strings.Contains(restart, "--pair") {
+		t.Fatalf("restart = %q, want the exact `bashy app serve … --pair` command", restart)
 	}
 	// The guessed LAN address is filled in (stubbed), not left as a placeholder.
 	if !strings.Contains(restart, "192.168.1.20") {

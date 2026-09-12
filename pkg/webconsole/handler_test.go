@@ -261,7 +261,7 @@ func TestDisableAcceptsThePublicMountName(t *testing.T) {
 			// the test is "this is no longer the ROOM", not "this is a 404" —
 			// the same distinction TestEveryAvailablePanelIsMountedAtItsAdvertisedPath
 			// draws from the other side.
-			if body := do(h, "GET", "/meet/api/rooms", "127.0.0.1:5555", nil).Body.String(); !strings.Contains(body, "bashy apps") {
+			if body := do(h, "GET", "/meet/api/rooms", "127.0.0.1:5555", nil).Body.String(); !strings.Contains(body, "bashy app") {
 				t.Errorf("--disable %s left the room answering its own API: %.120q", name, body)
 			}
 			for _, p := range findPanels(t, h) {

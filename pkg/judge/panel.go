@@ -84,7 +84,7 @@ func SelectPanel(n int, pinned []string) ([]string, string, error) {
 	}
 	installed := availableAgents()
 	if len(installed) == 0 {
-		return nil, "", fmt.Errorf("no agentic CLI is installed and signed in — `bashy tools` to see what this host can drive")
+		return nil, "", fmt.Errorf("no agentic CLI is installed and signed in — `bashy tool` to see what this host can drive")
 	}
 	if n > len(installed) {
 		note := fmt.Sprintf("panel of %d, not %d: this host can field only %d distinct agent(s) — a panel of clones is one opinion billed %d times",

@@ -75,7 +75,7 @@ expands the roster to every agent in the registry.`,
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools (default claude,codex,opencode,agy)")
-	cmd.Flags().BoolVar(&agents, "agents", false, "Roster every agent in the registry (`bashy agents list`) instead of the default tool roster")
+	cmd.Flags().BoolVar(&agents, "agents", false, "Roster every agent in the registry (`bashy agent list`) instead of the default tool roster")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Run and cache an output-gated smoke turn (may use provider capacity)")
 	cmd.Flags().BoolVar(&auth, "auth", false, "Also probe AUTH-readiness (headless launch on a trivial prompt; catches a tool that is installed but not signed in, before it stalls a real run)")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())

@@ -68,7 +68,7 @@ func ensureRoomSecretary(ctx context.Context, st *State) error {
 	}
 	name = canonAgent(strings.TrimSpace(name))
 	if _, ok := fleet.New().Agent(name); !ok {
-		return fmt.Errorf("meet: secretary %q is not a named agent in `bashy agents list`", name)
+		return fmt.Errorf("meet: secretary %q is not a named agent in `bashy agent list`", name)
 	}
 	for _, other := range excluded {
 		if strings.EqualFold(canonAgent(other), name) {

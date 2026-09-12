@@ -55,7 +55,7 @@ type sprintStoryState struct {
 //
 // It used to carry a private copy of that check, and two predicates answering
 // one question about one seat is the defect sprint 105 was opened to fix: the
-// board and `bashy agents` disagreed about the same conductor at the same
+// board and `bashy agent` disagreed about the same conductor at the same
 // instant. A second copy here would have rebuilt exactly that.
 //
 // ONE BEHAVIOUR CHANGED IN THE MERGE, on purpose rather than by inheritance.
@@ -109,7 +109,7 @@ func sprintSeatToolMismatch(owner string) string {
 	}
 	return fmt.Sprintf("\n  NOTE: this seat's name is bound to %s:%s, and you are running under %s.\n"+
 		"  If %q is genuinely your own name, carry on. If you adopted it from the sprint\n"+
-		"  record, take the seat under YOUR name instead — `bashy agents add <name> --tool %s\n"+
+		"  record, take the seat under YOUR name instead — `bashy agent add <name> --tool %s\n"+
 		"  --model <model>` — or the fleet reports the wrong tool for this seat and the work\n"+
 		"  is attributed to an agent that did none of it.",
 		a.Tool, a.Model, tool, owner, tool)
@@ -158,14 +158,14 @@ func sprintReadyLine(id int64, owner string) string {
 	// conductor ends up working a whole sprint alone beside an idle fleet.
 	return fmt.Sprintf("you are the MANAGER of this sprint — its conductor, which is what `conductor:%d` addresses: "+
 		"prioritize its stories, then delegate them "+
-		"to agents from `bashy agents list` (run independent stories in parallel; work one yourself only "+
-		"if it finishes immediately; the roster is yours to extend — `bashy agents add`/`clone`; widen to the "+
+		"to agents from `bashy agent list` (run independent stories in parallel; work one yourself only "+
+		"if it finishes immediately; the roster is yours to extend — `bashy agent add`/`clone`; widen to the "+
 		"number of READY INDEPENDENT stories, not the size of the roster — agents cost tokens and contend for "+
 		"rate limits, see `bashy weave fleet`)\n"+
-		"next: `bashy skills show conductor` — the PROCEDURE for this seat, written for an agent: "+
+		"next: `bashy skill show conductor` — the PROCEDURE for this seat, written for an agent: "+
 		"decompose, file stories, launch and monitor the fleet, gate every merge. Then "+
 		"`bashy sprint show %d` for the backlog · `bashy inbox --as %s` (reads your mail and keeps "+
-		"the seat live; `--watch` to stay attached; `bashy skills show inbox` for how mail works)"+
+		"the seat live; `--watch` to stay attached; `bashy skill show inbox` for how mail works)"+
 		sprintSeatToolMismatch(owner)+sprintSeatDeliveryAdvisory(owner), id, id, owner)
 }
 

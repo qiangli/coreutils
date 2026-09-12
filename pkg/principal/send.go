@@ -122,7 +122,7 @@ type snapshot struct {
 	people []fleet.Person
 }
 
-// snapTTL bounds staleness: an entry added by `bashy agents add` becomes
+// snapTTL bounds staleness: an entry added by `bashy agent add` becomes
 // visible to a long-running shell within this window, while a burst of sends
 // pays for one catalog load.
 const snapTTL = 5 * time.Second

@@ -14,7 +14,7 @@ import (
 
 // CloneAgentContext branches an agent's conversation context onto a clone.
 //
-// It is the implementation behind `bashy agents clone`, injected into the
+// It is the implementation behind `bashy agent clone`, injected into the
 // registry as a fleet.ContextCloner because knowing where an agent's store
 // lives means this package, and this package reads the registry.
 //

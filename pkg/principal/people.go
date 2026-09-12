@@ -19,7 +19,7 @@ import (
 // authoritative identity and slots into the same entry.
 func NewPeopleCmd(opts ...fleet.Option) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "people",
+		Use:           "person",
 		Short:         "Human principals — who the names in prose refer to",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
@@ -90,7 +90,7 @@ func newPeopleAdd(opts []fleet.Option) *cobra.Command {
 			"Account names are recorded per host, never globally. Assuming the local\n" +
 			"$USER exists on a remote machine is the most common way a cross-host\n" +
 			"reach fails, so an unbound host makes `whois` say it is guessing.",
-		Example:       "  bashy people add alice --display \"Alice\" --email alice@example.com --os-user host-a=alice --os-user host-b=al",
+		Example:       "  bashy person add alice --display \"Alice\" --email alice@example.com --os-user host-a=alice --os-user host-b=al",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

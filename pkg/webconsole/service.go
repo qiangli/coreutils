@@ -16,12 +16,12 @@ import (
 	"github.com/qiangli/coreutils/pkg/svcd"
 )
 
-// `bashy apps serve` as a supervised daemon, so outpost can keep the console up.
+// `bashy app serve` as a supervised daemon, so outpost can keep the console up.
 //
-// The lifecycle lives one level down — `bashy apps service {start,status,stop}`
+// The lifecycle lives one level down — `bashy app service {start,status,stop}`
 // — for the same reason meet's does: outpost drives services with
 // `bashy <Command...> {start|status|stop}`, and the bare verbs are already
-// taken by human-facing commands. `bashy apps` opens the console; nothing a
+// taken by human-facing commands. `bashy app` opens the console; nothing a
 // supervisor should ever call.
 //
 // WHY OUTPOST SUPERVISES A BASHY TOOL AT ALL. outpost is the host's daemon and
@@ -66,11 +66,11 @@ func newServiceCmd() *cobra.Command {
 		Use:   "service",
 		Short: "run the console as a supervised background daemon",
 		Long: "service is the daemon lifecycle for the console.\n\n" +
-			"  bashy apps service start    launch the console in the background\n" +
-			"  bashy apps service status   is it running?\n" +
-			"  bashy apps service stop     ask it to stop, then insist\n\n" +
+			"  bashy app service start    launch the console in the background\n" +
+			"  bashy app service status   is it running?\n" +
+			"  bashy app service stop     ask it to stop, then insist\n\n" +
 			"This is the shape outpost supervises: it runs start, polls status every\n" +
-			"30s, and restarts anything that reads stopped. Humans want `bashy apps`,\n" +
+			"30s, and restarts anything that reads stopped. Humans want `bashy app`,\n" +
 			"which serves in the foreground and opens the launcher.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -143,15 +143,15 @@ func printServiceStatus(w io.Writer, st svcd.Status, asJSON bool, action string)
 	}
 	switch {
 	case st.Running:
-		line := fmt.Sprintf("bashy apps: running on %s", st.Addr)
+		line := fmt.Sprintf("bashy app: running on %s", st.Addr)
 		if st.PID > 0 {
 			line += fmt.Sprintf(" (pid %d)", st.PID)
 		}
 		fmt.Fprintln(w, line)
 	case errors.Is(errForState(st), svcd.ErrUnidentified):
-		fmt.Fprintf(w, "bashy apps: %s\n", st.Detail)
+		fmt.Fprintf(w, "bashy app: %s\n", st.Detail)
 	default:
-		fmt.Fprintf(w, "bashy apps: stopped\n")
+		fmt.Fprintf(w, "bashy app: stopped\n")
 	}
 	if st.Detail != "" && st.Running {
 		fmt.Fprintf(w, "  %s\n", st.Detail)

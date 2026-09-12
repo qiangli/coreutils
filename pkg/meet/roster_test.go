@@ -372,7 +372,7 @@ func TestStart_RefusesBareInstalledToolWithoutAgentRegistration(t *testing.T) {
 	t.Cleanup(func() { operableFn = old })
 
 	_, err := (&sessionFlags{topic: "t", participants: []string{"some-installed-tool"}}).newState()
-	if err == nil || !strings.Contains(err.Error(), "bashy agents list") || strings.Contains(err.Error(), "--all") {
+	if err == nil || !strings.Contains(err.Error(), "bashy agent list") || strings.Contains(err.Error(), "--all") {
 		t.Fatalf("installed but unregistered tool must be rejected with registration guidance: %v", err)
 	}
 }

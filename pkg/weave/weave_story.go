@@ -103,7 +103,7 @@ type weaveStoryLease struct {
 	// beat is up to ten minutes old when the process dies — and a heartbeat
 	// records only that somebody was alive THEN. Killed at beat+1s, the seat
 	// goes on reading healthy for the rest of the TTL with nothing running,
-	// which is exactly the ghost `bashy agents` reported. A holder that named
+	// which is exactly the ghost `bashy agent` reported. A holder that named
 	// no process could not be caught out; one that names its own can.
 	//
 	// Zero is the ordinary case and means "no process claims to be holding
@@ -116,7 +116,7 @@ type weaveStoryLease struct {
 
 // SprintLeaseTTL is how long a conductor's heartbeat stays believable.
 //
-// EXPORTED because it is not private policy: `bashy agents` grades the very
+// EXPORTED because it is not private policy: `bashy agent` grades the very
 // same lease when it projects the board into the live-work roster, and a
 // roster ageing leases on a different clock than the board reports a conductor
 // the board has already released. It carried a hand-copied literal until an
@@ -452,7 +452,7 @@ this is an order rather than a checklist:
 
 Steps 2-5 are where the sprint moves. A tick spending its whole budget on 1 and
 6 is administering the sprint rather than delivering it. Full procedure:
-bashy skills show conductor.
+bashy skill show conductor.
 
 sprint tick <id> gathers the INPUTS to steps 1-7 in one command — unread and
 directed mail, the board delta since you last acted, who is assignable, runs
@@ -872,14 +872,14 @@ whenever it is not obvious, and revisit as the backlog and the fleet change.
 
 Taking a sprint makes you responsible for DELIVERY, and the fastest delivery
 uses the whole fleet. So the default is: prioritize the stories, then DELEGATE
-them to agents from ` + "`bashy agents list`" + `, matching each story to a capable
+them to agents from ` + "`bashy agent list`" + `, matching each story to a capable
 agent and running independent stories in parallel. Working through a sprint
 alone is the EXCEPTION, justified only for a story short enough to finish
 immediately and needing no other agent.
 
-THE ROSTER IS YOURS TO CHANGE, NOT A FIXED MENU. ` + "`bashy agents list`" + ` is a
+THE ROSTER IS YOURS TO CHANGE, NOT A FIXED MENU. ` + "`bashy agent list`" + ` is a
 living roster the manager MAINTAINS: register a new binding with
-` + "`bashy agents add`" + `, branch one for a single task with ` + "`bashy agents clone`" + `
+` + "`bashy agent add`" + `, branch one for a single task with ` + "`bashy agent clone`" + `
 (` + "`--ephemeral --task`" + ` so it is reaped when the work closes), and adjust an
 entry when the work needs something the fleet does not yet have. Matching the
 fleet to the backlog is part of managing the sprint, not a request to escalate —
@@ -900,7 +900,7 @@ MATCH THE AGENT TO THE STORY, AND PREFER THE ONE THAT DOES NOT METER. Two
 routing rules, both ordinary service economics rather than anything specific to
 this fleet:
 
-  - Capability to difficulty. A band is a peg (` + "`bashy agents list --min-band`" + `);
+  - Capability to difficulty. A band is a peg (` + "`bashy agent list --min-band`" + `);
     spending an L4 on a mechanical story buys nothing and consumes the seat the
     hard story will need. Send the easy work to the cheaper, smaller agent.
   - Billing before auth. Prefer FLAT-BILLED agents over metered ones, and read
@@ -923,10 +923,10 @@ you still gate, converge and report.`,
 				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
 					return fmt.Errorf("--owner is required, and there are two cases.\n" +
 						"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
-						"    `bashy agents list` to find it, or register one:\n" +
-						"    `bashy agents add <name> --tool <tool> --model <model>`\n" +
+						"    `bashy agent list` to find it, or register one:\n" +
+						"    `bashy agent add <name> --tool <tool> --model <model>`\n" +
 						"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
-						"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agents list`\n" +
+						"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agent list`\n" +
 						"    and ask the user rather than guessing on their behalf.")
 				}
 				who := strings.TrimSpace(as)

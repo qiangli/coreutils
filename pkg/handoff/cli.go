@@ -361,7 +361,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				fmt.Fprintf(out, "── the human says (on pickup) ──\n%s\n\n", strings.TrimSpace(message))
 			}
 			if rec.Role != "" {
-				fmt.Fprintf(out, "── role ──\nAssume the '%s' role: run `bashy skills show %s` and follow it. You are handed the SEAT — decide how to drive (including whether to delegate it back).\n\n", rec.Role, rec.Role)
+				fmt.Fprintf(out, "── role ──\nAssume the '%s' role: run `bashy skill show %s` and follow it. You are handed the SEAT — decide how to drive (including whether to delegate it back).\n\n", rec.Role, rec.Role)
 			}
 			fmt.Fprintf(out, "── continuity ──\n%s\n\n", strings.TrimSpace(rec.Continuity))
 			if rec.NextAction != "" {
@@ -631,7 +631,7 @@ func resolveAgent(name string) (string, error) {
 		}
 	}
 	sort.Strings(legal)
-	return "", fmt.Errorf("%q is not an agent on this host.\n\nValid: %s (or a binding: try `bashy agents list`).\n"+
+	return "", fmt.Errorf("%q is not an agent on this host.\n\nValid: %s (or a binding: try `bashy agent list`).\n"+
 		"On this machine those words name a CLI plus the model bound to it -- not a vendor's product.",
 		name, strings.Join(legal, ", "))
 }

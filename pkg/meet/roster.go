@@ -160,7 +160,7 @@ func (sf *sessionFlags) seatByBand() error {
 	seats, skips := SeatByBand(cat, sf.minBand, nil)
 	if len(seats) == 0 {
 		return fmt.Errorf("meet: no operable agent is pegged at band L%d or above — "+
-			"`bashy agents list --min-band %d` shows who was considered", sf.minBand, sf.minBand)
+			"`bashy agent list --min-band %d` shows who was considered", sf.minBand, sf.minBand)
 	}
 
 	sf.rosterNotes = append(sf.rosterNotes,
@@ -363,7 +363,7 @@ func routableSeat(name string) error {
 		return nil
 	}
 	return fmt.Errorf("meet: %q is not a registered agent — choose one from "+
-		"`bashy agents list` or register an ephemeral agent first", name)
+		"`bashy agent list` or register an ephemeral agent first", name)
 }
 
 // Invite seats an agent in a running room. Organizer-only.

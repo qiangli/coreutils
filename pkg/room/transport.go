@@ -20,7 +20,7 @@ import (
 // # Why it keys on the CAPABILITY and not on the card
 //
 // This is the trap, and it is a live one. The refusal a sprint prints today
-// offers `bashy agents track start <id> --agent NAME` as a remedy — which mints
+// offers `bashy agent track start <id> --agent NAME` as a remedy — which mints
 // a room card advertising NOTHING. A predicate that asks "does a live card
 // exist" therefore passes the exact case it was written to catch, and the
 // remedy the tool recommends is the way to defeat it. Only a card that CLAIMS a

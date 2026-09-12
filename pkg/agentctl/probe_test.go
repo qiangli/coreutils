@@ -129,7 +129,7 @@ func TestClassifyNamesARejectedCredential(t *testing.T) {
 	raw := "litellm.AuthenticationError: AuthenticationError: MoonshotException - The provided API key is invalid"
 	st, note := Classify(raw, false)
 	if st != ProbeNeedsAuth {
-		t.Fatalf("Classify = %q (%s), want %q so the operator is sent to `bashy secrets`", st, note, ProbeNeedsAuth)
+		t.Fatalf("Classify = %q (%s), want %q so the operator is sent to `bashy secret`", st, note, ProbeNeedsAuth)
 	}
 	if st.OK() {
 		t.Error("an agent that cannot authenticate is not usable")

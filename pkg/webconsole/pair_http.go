@@ -36,7 +36,7 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.pairing == nil || s.sessions == nil {
 		s.pairFailure(w, host, "pairing is not enabled on this console",
-			"This console is not accepting pairings. Start it with `bashy apps serve --bind <lan-ip> --pair`.",
+			"This console is not accepting pairings. Start it with `bashy app serve --bind <lan-ip> --pair`.",
 			http.StatusNotFound)
 		return
 	}
@@ -52,7 +52,7 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 	secret := strings.TrimSpace(q.Get("t"))
 	if secret == "" {
 		s.pairFailure(w, host, "pairing request carried no ticket",
-			"That link is missing its pairing ticket. Scan the code again from `bashy apps pair`.",
+			"That link is missing its pairing ticket. Scan the code again from `bashy app pair`.",
 			http.StatusBadRequest)
 		return
 	}
@@ -61,14 +61,14 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 	d, err := s.pairing.redeem(secret, name, truncate(r.UserAgent(), 200))
 	if err != nil {
 		status := http.StatusForbidden
-		human := "That pairing code was not accepted. Generate a fresh one with `bashy apps pair`."
+		human := "That pairing code was not accepted. Generate a fresh one with `bashy app pair`."
 		switch {
 		case errors.Is(err, errTicketUsed):
-			human = "That code has already been used. A pairing code works exactly once — generate a fresh one with `bashy apps pair`."
+			human = "That code has already been used. A pairing code works exactly once — generate a fresh one with `bashy app pair`."
 		case errors.Is(err, errTicketStale):
-			human = "That code has expired. Generate a fresh one with `bashy apps pair`."
+			human = "That code has expired. Generate a fresh one with `bashy app pair`."
 		case errors.Is(err, errNoTicket):
-			human = "That code is not recognised by this host. Generate a fresh one with `bashy apps pair`."
+			human = "That code is not recognised by this host. Generate a fresh one with `bashy app pair`."
 		}
 		s.pairFailure(w, host, "pair redemption refused: "+err.Error(), human, status)
 		return
@@ -195,7 +195,7 @@ func auditPairEvent(action string, fields map[string]string) {
 		Actor:  audit.ActorFromEnv(),
 		Action: action,
 		Argv:   argv,
-		Binary: "bashy apps",
+		Binary: "bashy app",
 		Host:   host,
 		// Every pairing event is an authorization decision about this host's
 		// shell and files.

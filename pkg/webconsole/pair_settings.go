@@ -18,9 +18,9 @@ import (
 	"github.com/qiangli/coreutils/pkg/coopauth"
 )
 
-// The Settings-page twin of `bashy apps pair`.
+// The Settings-page twin of `bashy app pair`.
 //
-// WHY IT EXISTS. `bashy apps pair` already mints a QR from the terminal. But the
+// WHY IT EXISTS. `bashy app pair` already mints a QR from the terminal. But the
 // operator who is looking at the console in a browser has no terminal in front
 // of them, and telling them to open one to reach the phone that is in their
 // hand is a worse flow than a toggle. This moves the MINT behind a click while
@@ -85,7 +85,7 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 
 	// Fail closed when this console cannot broaden its own listener. The toggle
 	// must never PRETEND it opened LAN access: pairing is armed by
-	// `bashy apps serve --bind <lan-ip> --pair`, and if that was not asked for,
+	// `bashy app serve --bind <lan-ip> --pair`, and if that was not asked for,
 	// the honest answer is the command that would arm it.
 	if s.pairing == nil {
 		lan := lanAddrFn()
@@ -99,7 +99,7 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 			"detail": "The console must be started on the LAN with pairing on before a phone " +
 				"can reach it. No firewall or router change is made for you, and this stays on " +
 				"your local network — it is never exposed to the internet.",
-			"restart":          "bashy apps serve --bind " + hint + " --pair",
+			"restart":          "bashy app serve --bind " + hint + " --pair",
 			"lan_hint_guessed": lan == "",
 		})
 		return
@@ -136,7 +136,7 @@ func (s *server) handlePairMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// window 0: the two-minute scan window a bare `bashy apps pair` confers —
+	// window 0: the two-minute scan window a bare `bashy app pair` confers —
 	// it only has to survive the walk from the screen to the phone, and it is
 	// not the clock anyone was fighting.
 	t, secret, err := s.pairing.issueTicket(req.Scope, deviceTTLFrom(req.TTLHours), 0)

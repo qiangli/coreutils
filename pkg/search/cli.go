@@ -31,7 +31,7 @@ func NewSearchCmd() *cobra.Command {
 			"  1. tavily  (TAVILY_API_KEY)\n" +
 			"  2. brave   (BRAVE_API_KEY)\n" +
 			"  3. serper  (SERPER_API_KEY)\n" +
-			"Keys come from the environment (project them with `eval \"$(bashy secrets env)\"`).\n" +
+			"Keys come from the environment (project them with `eval \"$(bashy secret env)\"`).\n" +
 			"Results are cited (url + retrieved-at) so a caller can verify they resolve.",
 		Args:          cobra.MinimumNArgs(1),
 		SilenceUsage:  true,

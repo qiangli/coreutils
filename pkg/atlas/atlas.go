@@ -525,6 +525,30 @@ func aliasTool(name, target string) {
 	tools[name] = e
 }
 
+// aliasVerb registers name as a second spelling of an existing verb: the
+// entry is a copy of the target's classification (stage, group, tier, caps,
+// effects) with AliasOf set and no web surface of its own — the console
+// discovers a surface once, under the canonical name. Call it after the
+// effect pass so the copy is of the final classification.
+func aliasVerb(name, target string) {
+	if _, dup := verbs[name]; dup {
+		panic(fmt.Sprintf("atlas: alias %q is already a verb", name))
+	}
+	t, ok := verbs[target]
+	if !ok {
+		panic(fmt.Sprintf("atlas: alias %q targets unknown verb %q", name, target))
+	}
+	if t.AliasOf != "" {
+		panic(fmt.Sprintf("atlas: alias %q targets %q, itself an alias of %q", name, target, t.AliasOf))
+	}
+	e := t
+	e.Caps = append([]string(nil), t.Caps...)
+	e.Effects = append([]string(nil), t.Effects...)
+	e.AliasOf = target
+	e.Web = nil
+	verbs[name] = e
+}
+
 // capTools appends a capability to existing tool entries; unknown names panic
 // so the tables self-check at init.
 func capTools(capability string, names ...string) {
@@ -812,7 +836,6 @@ func init() {
 	// test campaign, a half-done deploy.
 	addVerb("handoff", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("resume", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("agent", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
 	// bus — the agent notification bus (publish/watch). Replaces the never-
 	// reachable `notify`: the subscriber could not be `bashy watch`, because that
 	// name belongs to the classic watch(1), so both halves live under one parent.
@@ -833,11 +856,16 @@ func init() {
 		Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses},
 	})
 
-	// the fleet registry: what this host runs with
-	addVerb("tools", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("models", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("agents", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("people", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// the fleet registry: what this host runs with. NOUNS ARE SINGULAR — see
+	// the naming rule at the end of init (aliasVerb): `bashy agent list` is the
+	// registry, `bashy agent add` mints one, and `agents` is only the hidden
+	// plural spelling that keeps old callers working. `agent` also carries the
+	// identity helper (`agent whoami`) that used to be a verb of its own — one
+	// noun, one front door.
+	addVerb("tool", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("model", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("agent", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("person", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("whois", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("schedule", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("act", staged(StageTest, managed(GroupOrch, TierSandbox)))
@@ -873,7 +901,7 @@ func init() {
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
 	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
+	addVerb("skill", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 	// recall was a top-level verb until 2026-08-05 and is now `kb recall` — the
 	// cross-ring read surface mounted under the noun that owns memory. It has no
@@ -929,10 +957,12 @@ func init() {
 	// The name is the macOS register (Apps / Terminal / Files), chosen by the user
 	// over `web-console`. Note outpost serves an unrelated GET /apps (its
 	// cooperative-app advertisement); they share a word, not a namespace.
-	addVerb("apps", Entry{Stage: StageCross, Group: GroupPlatform,
+	// The verb is `app` (nouns are singular; `apps` is the hidden plural
+	// alias); the human-facing label stays "Apps".
+	addVerb("app", Entry{Stage: StageCross, Group: GroupPlatform,
 		Caps: []string{CapDaemon, CapJSON, CapSpawnsProcesses},
 		Web: &WebSurface{Label: "Apps", Mode: WebSelf, Port: 22749,
-			Start: []string{"apps"}, DefaultOn: true}})
+			Start: []string{"app"}, DefaultOn: true}})
 	addVerb("curl", staged(StageCross, provisioner(GroupNet, CapNeedsNetwork)))
 
 	// toolchains (self-provisioning, agent-mode shims)
@@ -1012,7 +1042,7 @@ func init() {
 	addVerb("upgrade", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "self",
 		Caps: []string{CapCached, CapNeedsNetwork}})
 	addVerb("run", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("secrets", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapNeedsNetwork, CapNeedsPairing}})
+	addVerb("secret", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapNeedsNetwork, CapNeedsPairing}})
 	// ask declares NO caps beyond --json, and that is the point of it being its own
 	// verb rather than `secrets input`. Caps say what a verb REQUIRES: `secrets`
 	// genuinely requires a network and a paired cloudbox, because every one of its
@@ -1084,16 +1114,16 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "leaderboard", "meet", "mb", "messages", "ping", "inbox", "bus", "agent", "tools", "models", "agents", "people", "whois",
-		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
+		"capability", "leaderboard", "meet", "mb", "messages", "ping", "inbox", "bus", "agent", "tool", "model", "person", "whois",
+		"kb", "skill", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
 		"doctor", "otel", "audit", "check", "sprint",
 		// inspect READS every store it maps and never writes one — its contract.
 		"inspect",
-		// apps READS every store its panels render, and the Files panel reads the
+		// app READS every store its panels render, and the Files panel reads the
 		// filesystem under its scope — the whole point of the tile.
-		"apps",
+		"app",
 		// steward READS the host's authority record (status/board/log/history/reconcile)
 		// and WRITES it (below). A privacy surface: the journal is a durable account of
 		// what agents did on this machine, and its transcripts can carry real
@@ -1133,11 +1163,11 @@ func init() {
 		"ask",
 		// verbs
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
-		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
+		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
-		// apps WRITES through its terminal (a real shell) and its session key.
-		"apps",
+		// app WRITES through its terminal (a real shell) and its session key.
+		"app",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
 		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
 		// anything but a torn final append, and quarantines the exact bytes it discards
@@ -1151,12 +1181,12 @@ func init() {
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search", "ping",
-		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
+		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tool", "model", "agent", "act", "sota",
 		"herald",
 		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
-		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
-		"otel", "tessaro", "login", "apps",
+		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
+		"otel", "tessaro", "login", "app",
 	)
 
 	// exec — spawns a process bashy no longer governs (the coreutils userland,
@@ -1168,11 +1198,11 @@ func init() {
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
-		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
+		"act-runner", "skill", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
-		// apps spawns a bashy per browser terminal tab
-		"apps",
+		// app spawns a bashy per browser terminal tab
+		"app",
 		// herald runs the GATE — an operator-supplied command that decides
 		// whether a peer's returned work is good.
 		"herald",
@@ -1181,7 +1211,7 @@ func init() {
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
 	// because they emit the whole environment, secrets included — the reason the
 	// context-redaction allowlist must also cover them.
-	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "ask", "tessaro", "login")
+	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secret", "ask", "tessaro", "login")
 
 	// priv — changes privilege, ownership, or a security label.
 	// newgrp changes the caller's GROUP CREDENTIAL before spawning the shell -
@@ -1201,8 +1231,8 @@ func init() {
 		"at", "batch", "crontab", "nohup",
 		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
-		// an `apps` server outlives the shell that started it.
-		"apps",
+		// an `app` server outlives the shell that started it.
+		"app",
 	)
 
 	// spend — incurs metered cost: paid inference the agent drives, pooled
@@ -1252,6 +1282,35 @@ func init() {
 	// and execs the staged shell for its runtime probes.
 	eff(EffRead, "posix-gate")
 	eff(EffExec, "posix-gate")
+
+	// --- number aliases ------------------------------------------------------
+	//
+	// NOUNS ARE SINGULAR. A front-door verb that names a kind of thing is spelled
+	// in the singular (`agent`, `model`, `skill`, `secret`); enumeration is the
+	// `list` subcommand, never an -s suffix. English number is not a shell
+	// concept: an agent cannot derive from the noun whether bashy wanted `todo`
+	// or `todos`, `agent` or `agents` — it had to memorise each one, and the
+	// surface had both `agent` and `agents` meaning UNRELATED things. So the
+	// plural is accepted as a HIDDEN alias of the singular (kept for existing
+	// callers, listed only under `commands --all`), never canonical, never
+	// taught. `issue` is the same shape: the work-tracking model made it one
+	// record with `todo` at two scopes, so it aliases rather than 127s.
+	//
+	// Runs AFTER the effect classification so an alias copies its target's
+	// final effects — an alias that declared its own would be a claim the
+	// target could falsify. Exceptions to the rule are enumerated, not implied:
+	// POSIX/bash/GNU names are frozen by the standard (`jobs`, `dirs`, `times`,
+	// `strings`, `users`, `groups`, `command`…), and `commands` stays plural
+	// because `command` IS one of them and it is a subcommand-less lister of
+	// the `jobs` shape. naming_test.go ratchets all of this.
+	aliasVerb("agents", "agent")
+	aliasVerb("models", "model")
+	aliasVerb("tools", "tool")
+	aliasVerb("people", "person")
+	aliasVerb("skills", "skill")
+	aliasVerb("secrets", "secret")
+	aliasVerb("apps", "app")
+	aliasVerb("issue", "todo")
 
 	// Deterministic ordering for every consumer.
 	for n, e := range tools {

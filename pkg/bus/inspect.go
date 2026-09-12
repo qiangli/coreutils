@@ -55,7 +55,7 @@ const (
 
 // How a name came to be listed. A name may carry several.
 const (
-	// InboxHolderCatalog: the fleet catalog names it (`bashy agents list`).
+	// InboxHolderCatalog: the fleet catalog names it (`bashy agent list`).
 	InboxHolderCatalog = "catalog"
 	// InboxHolderSubscribed: it holds a durable bus subscription.
 	InboxHolderSubscribed = "subscription"

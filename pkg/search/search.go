@@ -4,7 +4,7 @@
 // return a uniform, CITED result the rest of the fleet (and `bashy sota`) consumes.
 //
 // The key for a backend comes from the environment, which is how the secrets
-// vault projects it (`eval "$(bashy secrets env)"`). No key on disk here.
+// vault projects it (`eval "$(bashy secret env)"`). No key on disk here.
 //
 // Web search is `net`, but it is NOT a lifecycle verb, so it never touches the
 // local-first floor (which governs the loop verbs only).
@@ -48,12 +48,12 @@ type Options struct {
 
 // ErrNoBackend is returned when no web-search backend is configured.
 var ErrNoBackend = errors.New("search: no web backend configured — set one of " +
-	"TAVILY_API_KEY / BRAVE_API_KEY / SERPER_API_KEY (via `bashy secrets`), " +
+	"TAVILY_API_KEY / BRAVE_API_KEY / SERPER_API_KEY (via `bashy secret`), " +
 	"or BASHY_SEARCH_BACKEND to name one")
 
 // backend is one rung of the provider ladder. The key is resolved from the
 // environment first (the conventional API-key vars), then from the secrets vault
-// under `secret` — so a key stored with `bashy secrets set brave …` is found with
+// under `secret` — so a key stored with `bashy secret set brave …` is found with
 // no manual `BRAVE_API_KEY=…` mapping.
 type backend struct {
 	name    string

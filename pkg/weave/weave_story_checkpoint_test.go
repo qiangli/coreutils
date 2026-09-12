@@ -39,7 +39,7 @@ func TestBeatrixSprintCheckpointRegression(t *testing.T) {
 		t.Fatalf("expected checkpoint on unclaimed to fail with unclaimed, got code=%d out=%s", code, out)
 	}
 
-	// 2. Beatrix takes the lease. She must be a LIVE entry in `bashy agents`:
+	// 2. Beatrix takes the lease. She must be a LIVE entry in `bashy agent`:
 	// taking a sprint seats a coordination address, and one with no process
 	// behind it accepts room and inbox traffic nobody will ever read.
 	t.Setenv("WEAVE_CONDUCTOR", "Beatrix")

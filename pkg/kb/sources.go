@@ -184,7 +184,7 @@ func newSourcesCmd(dir *string) *cobra.Command {
 		Short: "Detect private agent-memory stores on this host (transfer sources; read-only)",
 		Long: `Probe the known private-memory store layouts on this host — the SOURCES an
 agent distills from when transferring knowledge into the kb (see the
-knowledge-transfer skill: bashy skills show knowledge-transfer).
+knowledge-transfer skill: bashy skill show knowledge-transfer).
 
 Read-only and best-effort: kb reads these stores, it NEVER writes them;
 absence is normal, not an error. Per store: path, format, entry count,

@@ -120,7 +120,7 @@ and the issue body as the prompt:
 
 The worker is stamped with the principal it acts as, so what it writes
 resolves: BASHY_PRINCIPAL=dhnt:agent/007. WEAVE_AGENT stays the per-issue
-SEAT (007-a) — the slot, not the agent. See "bashy agents" / "bashy whois".
+SEAT (007-a) — the slot, not the agent. See "bashy agent" / "bashy whois".
 
 ONE AGENT WORKS ONE RUN AT A TIME. An agent is a single identity — one
 conversation store, one kb attribution, one bus cursor — so handing it two
@@ -131,7 +131,7 @@ refused, and the run simply stays queued for it to pick up next.
 To actually run several at once, use --clone: it mints a per-issue
 ephemeral agent (007-w3) with its own name and its own context, so the
 runs are parallel because they are separate. Those workers are hidden from
-"bashy agents list" (see --all) and are reclaimed when their run finishes.
+"bashy agent list" (see --all) and are reclaimed when their run finishes.
 
 Anything else is passed through untouched. A bare tool name (-- claude)
 still launches raw. A multi-token raw executable argv is honored exactly as

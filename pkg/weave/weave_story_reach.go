@@ -31,7 +31,7 @@ package weave
 //
 // # The owner was an unvalidated free string
 //
-// Nothing checked it against `bashy agents`, so a sprint could record an owner
+// Nothing checked it against `bashy agent`, so a sprint could record an owner
 // that `mb send` / `chat --agent` / `inbox --as` cannot address — and the
 // coordination line printed by take/resume would name it anyway. An address
 // nobody answers is worse than a missing one: it consumes the time of whoever
@@ -84,7 +84,7 @@ func sprintRoomRetained(s *weaveStory) bool {
 }
 
 // sprintOwnerRegistered reports whether a name resolves to a durable fleet
-// agent — one of the canonical identities shown by `bashy agents list`.
+// agent — one of the canonical identities shown by `bashy agent list`.
 func sprintOwnerRegistered(name string) bool {
 	n := strings.TrimSpace(name)
 	if n == "" {
@@ -224,12 +224,12 @@ func formatUnreadReminder(n int, oldest time.Duration, owner string) string {
 func validateSprintOwner(name string) error {
 	n := strings.TrimSpace(name)
 	if n == "" {
-		return fmt.Errorf("a sprint manager (the sprint owner) is required: pass --owner NAME from `bashy agents list`")
+		return fmt.Errorf("a sprint manager (the sprint owner) is required: pass --owner NAME from `bashy agent list`")
 	}
 	if isPlaceholderConductorName(n) {
 		return fmt.Errorf("%q is a placeholder, not an agent — it addresses nobody and collides "+
 			"across every sprint on this host.\n"+
-			"  pass --owner NAME from `bashy agents list`", n)
+			"  pass --owner NAME from `bashy agent list`", n)
 	}
 	_, kind, err := fleetCatalog().ResolvePrincipal(n)
 	if err == nil && kind == fleet.KindAgent {
@@ -238,13 +238,13 @@ func validateSprintOwner(name string) error {
 	if err == nil {
 		return fmt.Errorf("sprint manager %q is a registered person, not an agent.\n"+
 			"  humans manage sprints by steering a registered agent through Apps, Meet, MB, or Inbox\n"+
-			"  pass --owner NAME from `bashy agents list`", n)
+			"  pass --owner NAME from `bashy agent list`", n)
 	}
 	if errors.Is(err, fleet.ErrPrincipalAmbiguous) {
 		return fmt.Errorf("sprint manager %q is ambiguous — more than one registered principal answers to it; qualify it", n)
 	}
 	return fmt.Errorf("sprint manager %q owns nothing here, so mb/chat/inbox cannot reach it.\n"+
-		"  choose an agent from `bashy agents list`\n"+
+		"  choose an agent from `bashy agent list`\n"+
 		"  then re-run with --owner %s", n, n)
 }
 
@@ -302,7 +302,7 @@ func sprintCheckReachability(s *weaveStory) sprintReachability {
 		r.Live = sprintInboxDeliveryLive(r.Owner)
 		if !r.Registered {
 			r.Problems = append(r.Problems, fmt.Sprintf(
-				"owner %q is not in `bashy agents` — mb/chat/inbox cannot reach it", r.Owner))
+				"owner %q is not in `bashy agent` — mb/chat/inbox cannot reach it", r.Owner))
 		}
 		// UNANSWERED MAIL IS THE REAL FAILURE. Everything above is about
 		// whether somebody COULD answer; this is whether anybody DID. A sender

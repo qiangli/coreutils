@@ -454,7 +454,7 @@ func TestResolutionDoesNotRefuseAnUnregisteredBinding(t *testing.T) {
 // The message still has to be actionable wherever a caller DOES need it.
 func TestRegistrationRefusalNamesTheFixCommand(t *testing.T) {
 	err := RegistrationRefusal("codex:opus5")
-	for _, want := range []string{"not a registered Bashy agent", "bashy agents add codex:opus5 --tool codex --model opus5"} {
+	for _, want := range []string{"not a registered Bashy agent", "bashy agent add codex:opus5 --tool codex --model opus5"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal missing %q:\n%v", want, err)
 		}

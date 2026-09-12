@@ -19,7 +19,7 @@ func TestPickAgentConflict(t *testing.T) {
 // TestPickAgentSpecific — a specific name passes through (canonicalized when the
 // catalog knows it, verbatim when it is a bare tool).
 // A BARE TOOL IS NOT AN AGENT. This asserted the opposite until sprint #111:
-// `--agent claude` passed through and minted a launch identity no `bashy agents`
+// `--agent claude` passed through and minted a launch identity no `bashy agent`
 // record owned — an address bus and inbox could never route to.
 //
 // The contract change is deliberate and scoped to THIS call site. `chat --agent`
@@ -33,7 +33,7 @@ func TestPickAgentRefusesABareToolAsAnIdentity(t *testing.T) {
 		t.Fatal("a bare tool was accepted as an agent identity")
 	}
 	// The refusal has to be actionable, not merely correct.
-	for _, want := range []string{"not a registered Bashy agent", "bashy agents add claude"} {
+	for _, want := range []string{"not a registered Bashy agent", "bashy agent add claude"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal is missing %q:\n%v", want, err)
 		}

@@ -91,7 +91,7 @@ func TestWeaveCaptureRedactsLogAndReturnedText(t *testing.T) {
 	// The command substitution is an inter-process shell mechanism, not a
 	// capture sink. It must receive the unmodified render so eval can populate
 	// the variable; only the later PTY output is redacted.
-	script := `unset WEAVE_CAPTURE_SECRET; eval "$(bashy secrets env)"; test -n "$WEAVE_CAPTURE_SECRET"; printf "%s final bytes" "$WEAVE_CAPTURE_SECRET"`
+	script := `unset WEAVE_CAPTURE_SECRET; eval "$(bashy secret env)"; test -n "$WEAVE_CAPTURE_SECRET"; printf "%s final bytes" "$WEAVE_CAPTURE_SECRET"`
 	startOut, code := runWeave(t, "start", "--run", "1", "--pty", "always", "--", "bashy", "-c", script)
 	if code != 0 {
 		t.Fatalf("PTY start failed: code=%d output_bytes=%d", code, len(startOut))

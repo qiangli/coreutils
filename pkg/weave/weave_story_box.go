@@ -209,10 +209,10 @@ func newSprintStartCmd() *cobra.Command {
 				if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
 					return fmt.Errorf("--owner is required, and there are two cases.\n" +
 						"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
-						"    `bashy agents list` to find it, or register one:\n" +
-						"    `bashy agents add <name> --tool <tool> --model <model>`\n" +
+						"    `bashy agent list` to find it, or register one:\n" +
+						"    `bashy agent add <name> --tool <tool> --model <model>`\n" +
 						"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
-						"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agents list`\n" +
+						"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agent list`\n" +
 						"    and ask the user rather than guessing on their behalf.")
 				}
 				who := strings.TrimSpace(as)
@@ -252,10 +252,10 @@ func newSprintStartCmd() *cobra.Command {
 					if !cmd.Flags().Changed("owner") || strings.TrimSpace(as) == "" {
 						return "", fmt.Errorf("--owner is required, and there are two cases.\n" +
 							"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
-							"    `bashy agents list` to find it, or register one:\n" +
-							"    `bashy agents add <name> --tool <tool> --model <model>`\n" +
+							"    `bashy agent list` to find it, or register one:\n" +
+							"    `bashy agent add <name> --tool <tool> --model <model>`\n" +
 							"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
-							"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agents list`\n" +
+							"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agent list`\n" +
 							"    and ask the user rather than guessing on their behalf.")
 					}
 					// Restarting a RUNNING box would silently discard the original
@@ -766,7 +766,7 @@ func resolveManager(cat *fleet.Catalog, name string) *managerAgent {
 	m := &managerAgent{Name: name}
 	a, ok := cat.Agent(name)
 	if !ok {
-		m.Reason = "not in the fleet — `bashy agents list` does not name it"
+		m.Reason = "not in the fleet — `bashy agent list` does not name it"
 		return m
 	}
 	m.Resolved = true

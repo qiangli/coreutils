@@ -390,7 +390,7 @@ func newOpenCmd() *cobra.Command {
 				sf.initiator = humanName() // `start` always names its initiator
 			}
 			if !sf.board && strings.TrimSpace(sf.chair) == "" {
-				return fmt.Errorf("meet: an open meeting requires an owner (facilitator) — pass --owner NAME from `bashy agents list`")
+				return fmt.Errorf("meet: an open meeting requires an owner (facilitator) — pass --owner NAME from `bashy agent list`")
 			}
 			st, err := sf.newState()
 			if err != nil {

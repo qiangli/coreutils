@@ -21,7 +21,7 @@ import (
 // Pairing swaps the operator's OS account password for a single-use,
 // time-boxed, device-scoped credential.
 //
-// WHY IT EXISTS. `bashy apps serve --bind <lan-ip>` already works, and binding
+// WHY IT EXISTS. `bashy app serve --bind <lan-ip>` already works, and binding
 // off-loopback already demands a login (gate.go switches the ungated-loopback
 // row off). But the only LAN credential is HOST OS AUTH — the operator's own
 // account password, typed into a phone browser and POSTed over plaintext HTTP.
@@ -37,8 +37,8 @@ import (
 // self-signed certificate fingerprint for the phone to pin — a QR is an
 // out-of-band channel, which is what makes a pinned cert possible without a CA.
 //
-// WHY A FILE AND NOT AN API. `bashy apps pair` is a different process from
-// `bashy apps serve`, and the server has no ungated loopback route to offer it
+// WHY A FILE AND NOT AN API. `bashy app pair` is a different process from
+// `bashy app serve`, and the server has no ungated loopback route to offer it
 // (that row is off precisely because the console is LAN-bound). A 0600 file
 // under the console's own state directory is the smallest thing that both
 // processes can agree on, and it is the same mechanism `session.key` already

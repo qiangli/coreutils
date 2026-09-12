@@ -114,7 +114,7 @@ type Tool struct {
 	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
 	// Hidden keeps a tool in the registry (still detected, still resolvable by
-	// explicit name) but omits it from `bashy tools` list/help unless --all.
+	// explicit name) but omits it from `bashy tool` list/help unless --all.
 	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty"`
 	CLI    ToolCLI `yaml:"cli,omitempty" json:"cli"`
 	Quirks string  `yaml:"quirks,omitempty" json:"quirks,omitempty"`

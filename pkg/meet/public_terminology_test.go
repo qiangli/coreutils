@@ -41,7 +41,7 @@ func TestPublicRoleErrorsUseFacilitatorAndCanonicalAgentList(t *testing.T) {
 
 	pinFleet(t)
 	err := routableSeat("not-registered-anywhere")
-	if err == nil || !strings.Contains(err.Error(), "bashy agents list") || strings.Contains(err.Error(), "--all") {
+	if err == nil || !strings.Contains(err.Error(), "bashy agent list") || strings.Contains(err.Error(), "--all") {
 		t.Fatalf("roster guidance = %v", err)
 	}
 }

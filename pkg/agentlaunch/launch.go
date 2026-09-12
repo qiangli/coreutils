@@ -198,7 +198,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		}
 	}
 	if namedAgent && !known {
-		return lnch, fmt.Errorf("agent launch: agent %q names tool %q, which is not in the catalog (see `bashy tools list`)", name, toolName)
+		return lnch, fmt.Errorf("agent launch: agent %q names tool %q, which is not in the catalog (see `bashy tool list`)", name, toolName)
 	}
 	if known {
 		lnch.Tool = tool.Binary()
@@ -208,7 +208,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		// ACP carries no model-selection call, and the ACP-native tools take no
 		// model flag: `opencode acp --model moonshot/kimi-k3` prints its help
 		// instead of speaking the protocol (measured 2026-07-27 with a real
-		// binding out of `bashy agents list`, not an invented one). So driving
+		// binding out of `bashy agent list`, not an invented one). So driving
 		// opencode-kimi-k3 over ACP would exec byte-for-byte the same
 		// `opencode acp` process as opencode-deepseek-v4-pro, and all four
 		// opencode agents — L2 through L3 — would collapse into whatever model
@@ -281,7 +281,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	}
 
 	if lnch.Model != "" {
-		return lnch, fmt.Errorf("agent launch: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
+		return lnch, fmt.Errorf("agent launch: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tool add`",
 			toolName, modelName)
 	}
 
@@ -291,7 +291,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	// that is about to speak JSON-RPC at it.
 	if opt.ACP {
 		return lnch, fmt.Errorf("agent launch: %q cannot be driven over ACP — tool %q is not in the catalog, "+
-			"so there is no ACP launch to resolve (see `bashy tools list`)", name, toolName)
+			"so there is no ACP launch to resolve (see `bashy tool list`)", name, toolName)
 	}
 
 	// A STEER cannot be resolved from a fallback.
@@ -310,7 +310,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	if opt.Steer {
 		if !known {
 			return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q is not in the catalog, "+
-				"so there is no interactive launch to resolve (see `bashy tools list`)", name, toolName)
+				"so there is no interactive launch to resolve (see `bashy tool list`)", name, toolName)
 		}
 		return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q declares no interactive launch (steer_exec)", name, toolName)
 	}
@@ -755,7 +755,7 @@ func normalizeUnsafeFlags(tool string, args []string) []string {
 var ErrNoAgent = errors.New("agent launch: not an agent")
 
 // RegistrationRefusal is the shared fail-closed answer for a launch identity no
-// `bashy agents` record owns.
+// `bashy agent` record owns.
 //
 // IT IS NOT USED HERE, deliberately. Resolution lets an unregistered binding
 // LAUNCH: weave's TestUnNicknamedBindingIsNotAPrincipal pins that `aider:opus`
@@ -777,6 +777,6 @@ func RegistrationRefusal(name string) error {
 	if !bound || tool == "" || model == "" {
 		tool, model = name, "<model>"
 	}
-	return fmt.Errorf("agent launch: %q is not a registered Bashy agent; register it before launching:\n  bashy agents add %s --tool %s --model %s",
+	return fmt.Errorf("agent launch: %q is not a registered Bashy agent; register it before launching:\n  bashy agent add %s --tool %s --model %s",
 		name, name, tool, model)
 }

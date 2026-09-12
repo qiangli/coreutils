@@ -266,7 +266,7 @@ func (sprintSource) Load(_ context.Context, b *Board, o Options) error {
 		if x.Lease != nil {
 			s.Conductor, s.LeaseHolder = x.Lease.Holder, x.Lease.Holder
 			// weave.SprintLeaseTTL, not a hand-copied literal: the sprint verbs,
-			// `bashy agents` and this board all grade the SAME lease, and a board
+			// `bashy agent` and this board all grade the SAME lease, and a board
 			// ageing it on its own clock reports a conductor the verbs still
 			// consider live. That constant is exported for exactly this reason.
 			s.LeaseStale = o.Now.Sub(x.Lease.At) > weave.SprintLeaseTTL

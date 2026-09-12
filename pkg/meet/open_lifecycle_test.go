@@ -93,7 +93,7 @@ func TestOpenRequiresARegisteredFacilitator(t *testing.T) {
 	_, err := runMeet(t, "open", "--topic", "owned meeting", "--participant", "codex",
 		"--secretary", "", "--dry-run")
 	if err == nil || !strings.Contains(err.Error(), "owner (facilitator)") ||
-		!strings.Contains(err.Error(), "bashy agents list") {
+		!strings.Contains(err.Error(), "bashy agent list") {
 		t.Fatalf("ownerless meeting refusal = %v", err)
 	}
 

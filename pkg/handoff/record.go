@@ -104,7 +104,7 @@ type Record struct {
 	// the work — a skill name like "steward" or "conductor". A plain handoff
 	// passes a TASK ("here is what I was doing"); a role handoff passes the SEAT
 	// ("you are now the steward"): the successor loads the skill
-	// (`bashy skills show <role>`), acts as that role, and DECIDES how to drive —
+	// (`bashy skill show <role>`), acts as that role, and DECIDES how to drive —
 	// including whether to delegate the work back. Empty = task handoff. This is
 	// the distinction that made "handoff your work" ambiguous: work vs. seat.
 	//

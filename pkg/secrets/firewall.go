@@ -40,7 +40,7 @@ func allowAgentSecrets() bool {
 //
 // An absent or unreadable template/cache yields an empty set. The names are the
 // authoritative "these variables carry vault secrets" signal, because they are
-// exactly what `bashy secrets env` writes with `export NAME=...`.
+// exactly what `bashy secret env` writes with `export NAME=...`.
 func VaultEnvNames() map[string]struct{} {
 	names := map[string]struct{}{}
 	// (a) The declared binding template: LOCAL_NAME=@ref | literal. Only the @ref

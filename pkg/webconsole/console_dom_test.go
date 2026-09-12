@@ -463,7 +463,7 @@ func TestDOMLongPressMenuSuppressedOnTiles(t *testing.T) {
 
 // The operator chooses what a paired phone may reach, in Settings.
 //
-// Before this, a pass was always meet/mb/sprint and `bashy apps pair --allow`
+// Before this, a pass was always meet/mb/sprint and `bashy app pair --allow`
 // was the only way to widen it — so a phone that hit "terminal is not in the
 // scope" got a refusal with no way to act on it. Two properties matter and both
 // are pinned: the shell and the filesystem are OFF by default (a grant must be

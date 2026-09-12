@@ -125,6 +125,6 @@ func (c *Catalog) principalNameMatches(name string) int {
 // "is not a registered agent" was a human who was never registered at all and
 // was being pointed at a list they would never appear in.
 func UnknownPrincipalHint(name string) string {
-	return "choose an agent from `bashy agents list` or a person from `bashy people list`" +
-		" (`bashy people add " + strings.TrimSpace(name) + "` registers a human)"
+	return "choose an agent from `bashy agent list` or a person from `bashy person list`" +
+		" (`bashy person add " + strings.TrimSpace(name) + "` registers a human)"
 }

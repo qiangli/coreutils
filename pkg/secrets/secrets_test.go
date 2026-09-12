@@ -354,7 +354,7 @@ func TestSecretsHelpPointsToAskWithoutAddingAlias(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("secrets help: %v", err)
 	}
-	if !strings.Contains(rootHelp.String(), "bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai") {
+	if !strings.Contains(rootHelp.String(), "bashy ask --name OPENAI_API_KEY --stdout | bashy secret set openai") {
 		t.Fatal("secrets help does not show how to compose bashy ask with secrets set")
 	}
 
@@ -365,7 +365,7 @@ func TestSecretsHelpPointsToAskWithoutAddingAlias(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("secrets set help: %v", err)
 	}
-	if !strings.Contains(setHelp.String(), "bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai") {
+	if !strings.Contains(setHelp.String(), "bashy ask --name OPENAI_API_KEY --stdout | bashy secret set openai") {
 		t.Fatal("secrets set help does not show how to compose bashy ask with secrets set")
 	}
 	for _, sub := range cmd.Commands() {

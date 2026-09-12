@@ -281,7 +281,7 @@ func newMBSendCmd() *cobra.Command {
   bashy mb send --family opus "opus family: cost_micro was corrected"
   bashy mb send --family gemini-flash --version 3.6 "3.6 flash is now bound"
 
-'bashy agents list' is the binding address book: a bare name is its NAME column.
+'bashy agent list' is the binding address book: a bare name is its NAME column.
 Binding selectors (--band/--tool/--provider/--family/--version) read that catalog
 and are ANDed. --role conductor reads the live sprint leases and cannot be
 combined with binding selectors. For everyone: 'bashy mb post'.

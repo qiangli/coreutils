@@ -52,7 +52,7 @@ func TestLiveSprintManagersExcludesStaleAndUnowned(t *testing.T) {
 }
 
 // A lease exactly at the TTL boundary is graded the same way the board and
-// `bashy agents` grade it — that is why SprintLeaseTTL is exported.
+// `bashy agent` grade it — that is why SprintLeaseTTL is exported.
 func TestLiveSprintManagersUsesTheSharedLeaseTTL(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BASHY_SPRINT_DIR", dir)

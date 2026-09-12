@@ -47,8 +47,8 @@ func newAgentsAdd(opts []Option) *cobra.Command {
 			"A nickname is an alias for a binding, not an identity of its own:\n" +
 			"`007` and `smarty` may both name claude:fable5, and both resolve to the\n" +
 			"same capability-matrix row.",
-		Example: "  bashy agents add 007 --tool codex --model deepseek-v4 --alias smarty\n" +
-			"  bashy agents add ./conductor.yaml",
+		Example: "  bashy agent add 007 --tool codex --model deepseek-v4 --alias smarty\n" +
+			"  bashy agent add ./conductor.yaml",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -124,7 +124,7 @@ func reportAgentSaved(cmd *cobra.Command, cat *Catalog, a Agent) error {
 
 // crossKindWarnings reports names that already mean something else.
 //
-// Names are unique WITHIN a kind, not across kinds, so `bashy agents add
+// Names are unique WITHIN a kind, not across kinds, so `bashy agent add
 // claude` is legal. But it makes `whois claude` ambiguous, and the places that
 // resolve a name — `bashy chat --agent`, `weave start -- <name>` — try the
 // agent first, so the new nickname silently shadows the tool. Say so.
@@ -166,7 +166,7 @@ func newAgentsSet(opts []Option) *cobra.Command {
 			"An agent from the embedded baseline, a shared dir, or an org overlay is\n" +
 			"copied into the host-local store on first modification: the edit shadows\n" +
 			"the original rather than mutating a catalog this host does not own.",
-		Example:       "  bashy agents set 007 --model opus --add-alias bond",
+		Example:       "  bashy agent set 007 --model opus --add-alias bond",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -326,9 +326,9 @@ func newModelsAdd(opts []Option) *cobra.Command {
 			"follows the releases and the name in a record never changes meaning.\n\n" +
 			"--band is the model's capability peg, 1 (basic) to 4 (frontier), measured\n" +
 			"across providers rather than taken from the vendor's own tier ladder.",
-		Example: "  bashy models add opus5 --family opus --version 5 --band 3 \\\n" +
+		Example: "  bashy model add opus5 --family opus --version 5 --band 3 \\\n" +
 			"      --provider anthropic --kind subscription --upstream claude-opus-5\n" +
-			"  bashy models add ./deepseek.yaml",
+			"  bashy model add ./deepseek.yaml",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -507,9 +507,9 @@ func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *
 			"reports what came back: ok, bad-model, stale-contract, or needs-auth. It\n" +
 			"costs a real model call per agent, and it is the only thing that catches a\n" +
 			"binding the registry believes in and the tool does not.",
-		Example: "  bashy agents verify\n" +
-			"  bashy agents verify --live\n" +
-			"  bashy agents verify --live claude-opus5",
+		Example: "  bashy agent verify\n" +
+			"  bashy agent verify --live\n" +
+			"  bashy agent verify --live claude-opus5",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

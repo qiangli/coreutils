@@ -38,7 +38,7 @@ var theLoop = []string{
 	"check",  // TEST   — static preflight.
 	"dag",    // CROSS  — build/test/deploy targets; the make replacement.
 	"kb",     // CROSS  — what this host has learned.
-	"skills", // CROSS — what this host knows how to do.
+	"skill",  // CROSS  — what this host knows how to do.
 }
 
 func TestTheSDLCLoopIsAirGapped(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// ParseEnv parses the `export NAME='value'` lines produced by `bashy secrets env`
+// ParseEnv parses the `export NAME='value'` lines produced by `bashy secret env`
 // back into a NAME->value map. It is the inverse of the renderer: comments (#) and
 // blank lines are skipped, and single-quoted values are unescaped with the same
 // convention shellSingleQuote emits ('\” -> '), so any value round-trips exactly.

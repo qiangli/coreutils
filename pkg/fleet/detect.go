@@ -45,7 +45,7 @@ func detectIn(index []marker) (string, bool) {
 //
 // The marker table used to be a Go literal in pkg/skills. It now lives beside
 // every other fact about a tool, so teaching bashy to recognize a new harness
-// is `bashy tools add`, not a code change.
+// is `bashy tool add`, not a code change.
 //
 // Detection yields a TOOL, never an agent. A running claude is not `007` — a
 // nickname is minted by whoever launched it, and inventing one here would put
@@ -73,7 +73,7 @@ var (
 // name-valued conventions.
 //
 // Exported because the marker set is DATA (it comes from the tool registry, so
-// `bashy tools add` can extend it) and callers need to enumerate it rather than
+// `bashy tool add` can extend it) and callers need to enumerate it rather than
 // hardcode it:
 //
 //   - a test that wants a genuinely agent-free environment must clear all of them,

@@ -32,7 +32,7 @@ type Option func(*config)
 func WithStoreDir(dir string) Option { return func(c *config) { c.storeDir = dir } }
 
 // WithSkillOptions passes the host's skill-catalog options through, so craft
-// indexes exactly the skills `bashy skills list` shows.
+// indexes exactly the skills `bashy skill list` shows.
 func WithSkillOptions(opts ...skills.Option) Option {
 	return func(c *config) { c.skillOpts = append(c.skillOpts, opts...) }
 }
@@ -64,7 +64,7 @@ func defaultStoreDir() string { return skills.DefaultStoreDir() }
 // NewCraftCmd builds the `craft` command tree — the living skill graph over
 // the catalog pkg/skills manages.
 //
-// The split is deliberate. `bashy skills` is the CATALOG: an Agent
+// The split is deliberate. `bashy skill` is the CATALOG: an Agent
 // Skills-compatible store you list, show, add, verify, run, and export.
 // `bashy craft` is what the catalog ACCUMULATES INTO: evidence gathered across
 // runs, coordinates, and implementations. One is the shelf; the other is what
@@ -82,7 +82,7 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 		Use:   "craft",
 		Short: "the living skill graph: what this host has learned from running skills",
 		Long: "craft is the accumulated body of practical skill on this host.\n\n" +
-			"Where `bashy skills` manages the catalog — the skills you have — craft is\n" +
+			"Where `bashy skill` manages the catalog — the skills you have — craft is\n" +
 			"what running them has taught: which contract held, at which space-time\n" +
 			"coordinate, under which executor, and how often.\n\n" +
 			"Evidence is keyed two ways. By NAME, which identifies one skill. And by\n" +
@@ -551,7 +551,7 @@ func runFold(cmd *cobra.Command, cfg *config, note, coord, capability, evidence,
 	}
 	if strings.TrimSpace(coord) == "" {
 		return fmt.Errorf("craft: no coordinate given and this host's could not be read — a fold that holds " +
-			"nowhere in particular holds nowhere (`bashy skills probe` prints this host's)")
+			"nowhere in particular holds nowhere (`bashy skill probe` prints this host's)")
 	}
 	store := OpenFolds(cfg.storeDir, HostScrubber(cfg.storeDir))
 	if retire {

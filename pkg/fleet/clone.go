@@ -49,7 +49,7 @@ const (
 func (c *Catalog) CloneAgent(parentName, newName string, ephemeral bool, task string) (Agent, error) {
 	parent, ok := c.Agent(parentName)
 	if !ok {
-		return Agent{}, fmt.Errorf("fleet: no agent %q to clone — `bashy agents list`", parentName)
+		return Agent{}, fmt.Errorf("fleet: no agent %q to clone — `bashy agent list`", parentName)
 	}
 	if err := validName(newName); err != nil {
 		return Agent{}, err
@@ -137,10 +137,10 @@ func newAgentsClone(opts []Option) *cobra.Command {
 			"could actually be branched depends on the tool, and the command always\n" +
 			"says which it got — a clone reported as inheriting context it did not\n" +
 			"inherit is the failure this whole model exists to prevent.",
-		Example: "  bashy agents clone elif                  # -> elif2, inherits elif's context\n" +
-			"  bashy agents clone elif reviewer         # a named second opinion\n" +
-			"  bashy agents clone elif --ephemeral --task 412\n" +
-			"  bashy agents clone elif backup --fresh   # same binding, no history",
+		Example: "  bashy agent clone elif                  # -> elif2, inherits elif's context\n" +
+			"  bashy agent clone elif reviewer         # a named second opinion\n" +
+			"  bashy agent clone elif --ephemeral --task 412\n" +
+			"  bashy agent clone elif backup --fresh   # same binding, no history",
 		Args:          cobra.RangeArgs(1, 2),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -150,7 +150,7 @@ func newAgentsClone(opts []Option) *cobra.Command {
 
 			parent, ok := cat.Agent(parentName)
 			if !ok {
-				return fmt.Errorf("fleet: no agent %q to clone — `bashy agents list`", parentName)
+				return fmt.Errorf("fleet: no agent %q to clone — `bashy agent list`", parentName)
 			}
 
 			name := ""
@@ -193,7 +193,7 @@ func newAgentsClone(opts []Option) *cobra.Command {
 
 			if ephemeral {
 				fmt.Fprintf(cmd.ErrOrStderr(),
-					"ephemeral: hidden from `agents list` (use --all), remove with `bashy agents rm %s`\n", clone.Name)
+					"ephemeral: hidden from `agents list` (use --all), remove with `bashy agent rm %s`\n", clone.Name)
 			}
 			for _, w := range cat.crossKindWarnings(KindAgent, clone.Name, nil) {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning:", w)

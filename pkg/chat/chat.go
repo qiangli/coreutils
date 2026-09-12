@@ -600,7 +600,7 @@ func agentChildEnv(ctx context.Context) []string {
 		// Keyed on the identity, the store is what an agent's memory should be:
 		// one per agent, durable across runs, and — because room.Join permits
 		// only one live session per identity — never contended. An agent that
-		// should start from nothing is a different agent: `bashy agents clone`.
+		// should start from nothing is a different agent: `bashy agent clone`.
 		// Non-ycode tools and any operator-set YCODE_DATA_DIR/YCODE_HOME are left
 		// untouched. Shares the SAME helper weave uses so the two launch surfaces
 		// cannot drift.
@@ -1364,7 +1364,7 @@ func unsafeLaunchAllowed() (bool, string) {
 //
 // This is the ONE choke point for it: every launch — registry-templated or
 // seeded-fallback — renders its argv through resolveLaunch, so a dangerous flag
-// cannot reach an agent by any other route, including a `bashy tools add`
+// cannot reach an agent by any other route, including a `bashy tool add`
 // template written later.
 //
 // It refuses rather than silently stripping the flag: stripping would leave a

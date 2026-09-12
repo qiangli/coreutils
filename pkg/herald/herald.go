@@ -16,7 +16,7 @@
 //	kind:        api
 //	provider:    a2a                        # the discriminator
 //	base_url:    https://agent.example.com
-//	api_key_ref: ACME_TOKEN                 # resolved through `bashy secrets`
+//	api_key_ref: ACME_TOKEN                 # resolved through `bashy secret`
 //	band:        0                          # unpegged until host-measured
 //
 // so the agent `herald:acme-reviewer` lands in the capability matrix, in

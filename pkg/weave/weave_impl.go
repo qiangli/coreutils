@@ -3274,7 +3274,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		!term.IsTerminal(int(os.Stdin.Fd())) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitInvalidArg, fmt.Errorf(
-				"pinned worker %q is a bare tool, not a headless agent — with no controlling terminal it launches an interactive TUI that hangs. Pin a fleet AGENT instead (a nickname, or tool:model like %q); `bashy agents list` shows the choices",
+				"pinned worker %q is a bare tool, not a headless agent — with no controlling terminal it launches an interactive TUI that hangs. Pin a fleet AGENT instead (a nickname, or tool:model like %q); `bashy agent list` shows the choices",
 				toolArgs[0], toolArgs[0]+":<model>")))
 	}
 	// displayTool is what the queue records; for an agent launch it is the

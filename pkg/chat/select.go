@@ -13,7 +13,7 @@ import (
 // Selector chooses which agent a session launches: a SPECIFIC one named by the
 // caller, or ANY operable one matching a capability band and/or a tool.
 //
-// It is the same choice `bashy agents list` and `meet --min-band` already make —
+// It is the same choice `bashy agent list` and `meet --min-band` already make —
 // name one, or let a band pick one — so "who is routable" means the same thing
 // everywhere.
 type Selector struct {
@@ -74,7 +74,7 @@ func PickAgent(sel Selector) (string, error) {
 			hint = " (skipped, not routable: " + strings.Join(skipped, ", ") + ")"
 		}
 		return "", fmt.Errorf("chat: no operable agent matches %s%s — "+
-			"`bashy agents list` shows the fleet", describeSelector(sel), hint)
+			"`bashy agent list` shows the fleet", describeSelector(sel), hint)
 	}
 	return picks[0].Name, nil
 }

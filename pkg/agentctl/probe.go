@@ -178,7 +178,7 @@ var authGateSignatures = []string{
 	"do you trust", "trust the contents", "trust this",
 	"you must log in", "session expired", "no api key", "api key not",
 	// A rejected CREDENTIAL, not a missing session. The distinction matters to
-	// whoever reads the verdict: "needs-auth" sends them to `bashy secrets`, and
+	// whoever reads the verdict: "needs-auth" sends them to `bashy secret`, and
 	// a bare "failed" sends them hunting through a registry that is perfectly
 	// fine. This is what the two kimi agents were reporting as "failed".
 	"authenticationerror", "invalid api key", "incorrect api key",

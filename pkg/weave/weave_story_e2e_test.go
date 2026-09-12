@@ -31,7 +31,7 @@ func execCommandForTest(name string, args ...string) (string, error) {
 }
 
 // seedAgent registers a named agent in the test HOME's fleet store, so a name
-// the sprint records is one `bashy agents` can actually resolve.
+// the sprint records is one `bashy agent` can actually resolve.
 //
 // Tests need this now because an unregistered owner is refused — which is the
 // point. Before, any string was accepted and the four lifecycle tests below
@@ -110,7 +110,7 @@ func TestSprintRefusesAnOwnerThatResolvesToNobody(t *testing.T) {
 	// The refusal must point to the canonical agent roster rather than
 	// suggesting an ad-hoc live seat or a human principal that cannot take an
 	// autonomous turn.
-	for _, want := range []string{"sprint manager", "owns nothing here", "bashy agents list", "--owner"} {
+	for _, want := range []string{"sprint manager", "owns nothing here", "bashy agent list", "--owner"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("refusal missing %q:\n%s", want, out)
 		}
@@ -405,7 +405,7 @@ func TestSprintOwnerMustBeAnAddressableAgent(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a sprint was seated to a name that is in no roster:\n%s", out)
 	}
-	if !strings.Contains(out, "owns nothing here") || !strings.Contains(out, "bashy agents list") {
+	if !strings.Contains(out, "owns nothing here") || !strings.Contains(out, "bashy agent list") {
 		t.Errorf("refusal must say the name owns nothing and identify the agent registry:\n%s", out)
 	}
 

@@ -10,7 +10,7 @@ package bus
 // room nobody polls, on better bones.
 //
 // Opt-in addressing is the shape of an opt-in smoke alarm. The address book
-// (`bashy agents list`) enumerates the fleet, so the fleet is exactly the set
+// (`bashy agent list`) enumerates the fleet, so the fleet is exactly the set
 // that needs inboxes, and creating them is a reconciliation rather than a
 // decision.
 //
@@ -150,7 +150,7 @@ func (a Audience) Validate() error {
 // FleetSelect resolves an Audience to agent names, injected by the host for the
 // same reason FleetNames is: pkg/bus is the transport and the roster is policy.
 //
-// `bashy agents list` IS the address book, so a selector has to be answered by
+// `bashy agent list` IS the address book, so a selector has to be answered by
 // the catalog that owns it rather than by a copy kept here — a second opinion
 // about who is L4 is a second opinion that can drift.
 var FleetSelect func(Audience) ([]string, error)

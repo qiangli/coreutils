@@ -253,7 +253,7 @@ func protocolOptions() []a2aclient.FactoryOption {
 // that only needs to know whether one exists.
 //
 // The value comes from the process environment, which is how the bashy vault
-// delivers secrets (`eval "$(bashy secrets env)"`). herald therefore never
+// delivers secrets (`eval "$(bashy secret env)"`). herald therefore never
 // reads, caches, or logs the secret store itself.
 func Credential(p Peer) (string, bool) {
 	if p.APIKeyRef == "" {

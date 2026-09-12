@@ -42,7 +42,7 @@ func TestTransferCmd(t *testing.T) {
 	if !strings.Contains(out, "pass topic terms") {
 		t.Errorf("topicless transfer missing hint:\n%s", out)
 	}
-	if !strings.Contains(out, "bashy skills show knowledge-transfer") {
+	if !strings.Contains(out, "bashy skill show knowledge-transfer") {
 		t.Errorf("transfer missing skill pointer:\n%s", out)
 	}
 

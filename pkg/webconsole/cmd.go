@@ -25,10 +25,10 @@ import (
 	"github.com/qiangli/coreutils/pkg/websession"
 )
 
-// NewAppsCmd is the `bashy apps` tree.
+// NewAppsCmd is the `bashy app` tree.
 func NewAppsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "apps",
+		Use:   "app",
 		Short: "open bashy's apps in a browser: Terminal, Files, Meet, and every declared surface",
 		Long: "apps serves bashy's surfaces in a browser at one address.\n\n" +
 			"It is ONE launcher with the apps deep-linked beneath it, not one server per\n" +
@@ -41,7 +41,7 @@ func NewAppsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newServeCmd(), newListCmd(), newServiceCmd(),
 		newPairCmd(), newDevicesCmd(), newRevokeCmd())
-	// Bare `bashy apps` serves — the common case should not need a subcommand.
+	// Bare `bashy app` serves — the common case should not need a subcommand.
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		serve, _, err := c.Find([]string{"serve"})
 		if err != nil {
@@ -124,7 +124,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&appAuth, "app-auth", nil,
 		"operator-authorized auth tier for a third-party mount: <mount>=public|system|custom, repeatable")
 	cmd.Flags().BoolVar(&pair, "pair", false,
-		"accept QR device pairings (`bashy apps pair`), and keep the LAN listener open "+
+		"accept QR device pairings (`bashy app pair`), and keep the LAN listener open "+
 			"only while a paired device exists")
 	return cmd
 }
@@ -273,13 +273,13 @@ func runServe(ctx context.Context, out io.Writer, opts Options, bind string, por
 	}
 
 	url := "http://" + addr + "/"
-	fmt.Fprintf(out, "bashy apps: %s\n", url)
+	fmt.Fprintf(out, "bashy app: %s\n", url)
 	for _, st := range (&probeCache{}).Probe(ctx, Discover()) {
 		fmt.Fprintf(out, "  %-9s %s%s\n", st.Status, url[:len(url)-1], st.Path)
 	}
 	if offLoopback && opts.Pairing {
 		fmt.Fprintf(out, "\n  pairing mode: the LAN listener on %s opens only while a paired\n", addr)
-		fmt.Fprintf(out, "  device exists. Pair one with:  bashy apps pair\n")
+		fmt.Fprintf(out, "  device exists. Pair one with:  bashy app pair\n")
 		fmt.Fprintf(out, "  Loopback stays up either way:  http://127.0.0.1:%d/\n", port)
 	}
 
@@ -342,7 +342,7 @@ func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.
 		}
 		_ = ln.Close()
 		ln = nil
-		fmt.Fprintf(out, "bashy apps: LAN listener on %s closed (%s)\n", activeAddr, reason)
+		fmt.Fprintf(out, "bashy app: LAN listener on %s closed (%s)\n", activeAddr, reason)
 		activeAddr = ""
 	}
 	openLAN := func(target, reason string) {
@@ -353,7 +353,7 @@ func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.
 		}
 		l, err := net.Listen("tcp", target)
 		if err != nil {
-			fmt.Fprintf(out, "bashy apps: could not open the LAN listener on %s: %v\n", target, err)
+			fmt.Fprintf(out, "bashy app: could not open the LAN listener on %s: %v\n", target, err)
 			return
 		}
 		previous := activeAddr
@@ -363,9 +363,9 @@ func runPairGatedListenerWithAddr(ctx context.Context, out io.Writer, srv *http.
 		ln = l
 		activeAddr = target
 		if previous == "" {
-			fmt.Fprintf(out, "bashy apps: LAN listener on %s open (%s)\n", target, reason)
+			fmt.Fprintf(out, "bashy app: LAN listener on %s open (%s)\n", target, reason)
 		} else {
-			fmt.Fprintf(out, "bashy apps: LAN listener moved from %s to %s (%s)\n", previous, target, reason)
+			fmt.Fprintf(out, "bashy app: LAN listener moved from %s to %s (%s)\n", previous, target, reason)
 		}
 		go func() { _ = srv.Serve(l) }()
 	}

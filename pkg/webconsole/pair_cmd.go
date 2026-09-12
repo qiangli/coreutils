@@ -19,12 +19,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `bashy apps pair` — reach the console from a phone without typing an OS
+// `bashy app pair` — reach the console from a phone without typing an OS
 // password into it.
 //
 // The flow is three lines of terminal and one scan:
 //
-//	$ bashy apps pair
+//	$ bashy app pair
 //	  http://workshop.local:22749/pair/redeem?v=1&t=…     <- also the raw LAN IP
 //	  [terminal QR]
 //	  waiting 120s for a device…
@@ -180,7 +180,7 @@ func runPair(ctx context.Context, out io.Writer, opt pairOptions) error {
 		return waitForScan(ctx, out, store, t, false)
 	}
 
-	fmt.Fprintf(out, "bashy apps pair — scan with the phone's camera\n\n")
+	fmt.Fprintf(out, "bashy app pair — scan with the phone's camera\n\n")
 	if !opt.NoQR {
 		block, qerr := terminalQR(primary)
 		if qerr != nil {
@@ -236,7 +236,7 @@ func waitForScan(ctx context.Context, out io.Writer, store *pairStore, t ticket,
 			fmt.Fprintf(out, "\n  paired: %s (%s)\n", d.Name, d.ID)
 			fmt.Fprintf(out, "  scope:  %s\n", strings.Join(d.Scope, ", "))
 			fmt.Fprintf(out, "  until:  %s\n", d.Expires.Local().Format(time.RFC1123))
-			fmt.Fprintf(out, "  revoke: bashy apps revoke %s\n", d.ID)
+			fmt.Fprintf(out, "  revoke: bashy app revoke %s\n", d.ID)
 			return nil
 		}
 		if !time.Now().Before(t.Expires) {
@@ -363,7 +363,7 @@ func newDevicesCmd() *cobra.Command {
 				return enc.Encode(out)
 			}
 			if len(list) == 0 {
-				fmt.Fprintln(c.OutOrStdout(), "no paired devices (pair one with: bashy apps pair)")
+				fmt.Fprintln(c.OutOrStdout(), "no paired devices (pair one with: bashy app pair)")
 				return nil
 			}
 			w := tabwriter.NewWriter(c.OutOrStdout(), 0, 0, 2, ' ', 0)
@@ -417,21 +417,21 @@ func newRevokeCmd() *cobra.Command {
 					return err
 				}
 				auditPairEvent("pair.revoked_all", map[string]string{"devices": fmt.Sprint(n)})
-				fmt.Fprintf(c.OutOrStdout(), "bashy apps: revoked the operator grant and %d device(s)\n", n)
+				fmt.Fprintf(c.OutOrStdout(), "bashy app: revoked the operator grant and %d device(s)\n", n)
 				return nil
 			}
 			if len(args) != 1 {
-				return fmt.Errorf("apps revoke: name one device id, or pass --all (see `bashy apps devices`)")
+				return fmt.Errorf("apps revoke: name one device id, or pass --all (see `bashy app devices`)")
 			}
 			found, err := store.revoke(args[0])
 			if err != nil {
 				return err
 			}
 			if !found {
-				return fmt.Errorf("apps revoke: no live device %q (see `bashy apps devices --all`)", args[0])
+				return fmt.Errorf("apps revoke: no live device %q (see `bashy app devices --all`)", args[0])
 			}
 			auditPairEvent("pair.revoked", map[string]string{"device": args[0]})
-			fmt.Fprintf(c.OutOrStdout(), "bashy apps: revoked %s\n", args[0])
+			fmt.Fprintf(c.OutOrStdout(), "bashy app: revoked %s\n", args[0])
 			return nil
 		},
 	}

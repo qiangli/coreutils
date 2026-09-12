@@ -20,9 +20,9 @@ import (
 // convention: 2 usage, 1 otherwise, 0 for nil.
 func ExitCode(err error) int { return assetring.ExitCode(err) }
 
-// NewToolsCmd builds the `tools` verb tree.
+// NewToolsCmd builds the `tool` verb tree (`tools` is its hidden plural alias).
 func NewToolsCmd(opts ...Option) *cobra.Command {
-	return newRoot("tools", "Agentic CLI harnesses registered by the fleet",
+	return newRoot("tool", "Agentic CLI harnesses registered by the fleet",
 		newToolsList(opts),
 		newToolsShow(opts),
 		newToolsAdd(opts),
@@ -36,9 +36,9 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 	)
 }
 
-// NewModelsCmd builds the `models` verb tree.
+// NewModelsCmd builds the `model` verb tree (`models` is its hidden plural alias).
 func NewModelsCmd(opts ...Option) *cobra.Command {
-	return newRoot("models", "Inference backends the fleet can bind to",
+	return newRoot("model", "Inference backends the fleet can bind to",
 		newModelsList(opts),
 		newModelsShow(opts),
 		newModelsAdd(opts),
@@ -52,9 +52,9 @@ func NewModelsCmd(opts ...Option) *cobra.Command {
 	)
 }
 
-// NewAgentsCmd builds the `agents` verb tree.
+// NewAgentsCmd builds the `agent` verb tree (`agents` is its hidden plural alias).
 func NewAgentsCmd(opts ...Option) *cobra.Command {
-	return newRoot("agents", "Named tool:model bindings — the enlistable unit",
+	return newRoot("agent", "Named tool:model bindings — the enlistable unit",
 		newAgentsList(opts),
 		newAgentsShow(opts),
 		newAgentsAdd(opts),
@@ -70,8 +70,8 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 }
 
 // newRoot wires a noun's verb tree. The bare noun is its `list` verb, so
-// `bashy tools` and `bashy tools list` agree — the same shorthand
-// `bashy skills` already offers.
+// `bashy tool` and `bashy tool list` agree — the same shorthand
+// `bashy skill` already offers.
 func newRoot(name, short string, list *cobra.Command, rest ...*cobra.Command) *cobra.Command {
 	c := &cobra.Command{
 		Use:           name,
@@ -406,8 +406,8 @@ func newAgentsList(opts []Option) *cobra.Command {
 			"for pegged rows (unpegged rows omit it), the model's kind/provider, and reason\n" +
 			"when resolves is false.\n\n" +
 			ringFieldHelp,
-		Example: "  bashy agents list --min-band 3\n" +
-			"  bashy agents list --json",
+		Example: "  bashy agent list --min-band 3\n" +
+			"  bashy agent list --json",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -71,7 +71,7 @@ func ExportTo(sk Skill, src Source, dstRoot string, force bool) (string, error) 
 			return "", err
 		}
 	}
-	rec := exportRecord{Name: sk.Name, ExportedAt: time.Now().UTC(), By: "bashy skills export"}
+	rec := exportRecord{Name: sk.Name, ExportedAt: time.Now().UTC(), By: "bashy skill export"}
 	if sk.Dhnt.Valid() {
 		rec.Identity = sk.Dhnt.Identity
 	}

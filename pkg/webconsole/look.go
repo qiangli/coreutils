@@ -203,7 +203,7 @@ func (s *server) openAppsMode() string {
 }
 
 // handleLookGet serves the structured projection of the settings: the same
-// JSON an embedder or a CLI (`bashy apps look`) would read, not markup.
+// JSON an embedder or a CLI (`bashy app look`) would read, not markup.
 func (s *server) handleLookGet(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, lookView(s.openAppsMode()))
 }

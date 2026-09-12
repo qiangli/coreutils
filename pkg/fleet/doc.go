@@ -37,7 +37,7 @@
 // are one capability and two identities. That is a legal, ordinary thing
 // to write here — claimName only guards names — and it is the answer to
 // "can I run two of these at once". You do not run one agent twice; you
-// give the second one a name. `bashy agents clone` is that write, plus
+// give the second one a name. `bashy agent clone` is that write, plus
 // the parent's context as of now (see CloneAgent), plus provenance.
 //
 // An agent minted for a single task carries Ephemeral, which keeps it out

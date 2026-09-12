@@ -1,13 +1,13 @@
-// Package secrets is the `bashy secrets ...` front door to cloudbox's
+// Package secrets is the `bashy secret ...` front door to cloudbox's
 // AES-encrypted API-key vault. It replaces a plaintext shell rc file of API
 // keys/tokens (the historical `~/.novigensrc` pattern) with a single
 //
-//	eval "$(bashy secrets env)"
+//	eval "$(bashy secret env)"
 //
 // line: the secrets live encrypted in cloudbox (one place to rotate /
 // revoke / audit), and the rc file holds no secret material at all.
 //
-// It is part of the AgentOS hub (consumed by bashy as `bashy secrets`),
+// It is part of the AgentOS hub (consumed by bashy as `bashy secret`),
 // stdlib + cobra only — no new dependency. The on-the-wire contract is
 // cloudbox's Bearer /api/v1/secrets surface (secrets:read for env/ls/get,
 // secrets:write for set/import/rm).
@@ -27,20 +27,20 @@ import (
 )
 
 // NewSecretsCmd returns the `secrets` cobra command tree — the
-// host-agnostic entry point a front end mounts (e.g. `bashy secrets`).
+// host-agnostic entry point a front end mounts (e.g. `bashy secret`).
 func NewSecretsCmd() *cobra.Command { return newSecretsCmd() }
 
 func newSecretsCmd() *cobra.Command {
 	var cfg Config
 	cmd := &cobra.Command{
-		Use:   "secrets",
+		Use:   "secret",
 		Short: "Cloudbox-managed API keys/tokens for your shell (replaces a plaintext rc file)",
 		Long: `secrets fetches your API keys/tokens from cloudbox's encrypted vault
 instead of keeping them in a plaintext shell rc file. Put your keys in
-cloudbox once (bashy secrets import ~/.novigensrc), then replace the rc
+cloudbox once (bashy secret import ~/.novigensrc), then replace the rc
 file body with a single line:
 
-  eval "$(bashy secrets env)"
+  eval "$(bashy secret env)"
 
 Every new shell pulls the current values over an authenticated, audited,
 revocable token; the rc file itself holds no secret material. For resilience
@@ -53,7 +53,7 @@ disk (at the cost of the offline fallback).
 To enter a secret interactively without exposing it to an agent or shell
 history, compose the separate ask command with set:
 
-  bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai`,
+  bashy ask --name OPENAI_API_KEY --stdout | bashy secret set openai`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -80,7 +80,7 @@ func newEnvCmd(cfg *Config) *cobra.Command {
 		Short: "Resolve a local binding template into 'export NAME=VALUE' lines for eval",
 		Long: `Resolve a LOCAL binding template into shell export statements, for:
 
-  eval "$(bashy secrets env)"
+  eval "$(bashy secret env)"
 
 Each line is LOCAL_NAME=RHS. An RHS beginning with '@' is a cloudbox secret
 REFERENCE (@name, or @{name}) resolved from the vault; any other RHS is a
@@ -143,12 +143,12 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 	bindings, terr := readTemplate(tmplPath)
 	if terr != nil {
 		// No template yet (or unreadable) — guide the user, don't break.
-		fmt.Fprintf(errOut, "bashy secrets: %v\n", terr)
-		fmt.Fprintf(out, "# bashy secrets: no binding template (%v)\n# create %s with lines like ENV_NAME=@<cloudbox secret name>\n", terr, tmplPath)
+		fmt.Fprintf(errOut, "bashy secret: %v\n", terr)
+		fmt.Fprintf(out, "# bashy secret: no binding template (%v)\n# create %s with lines like ENV_NAME=@<cloudbox secret name>\n", terr, tmplPath)
 		return nil
 	}
 	if len(bindings) == 0 {
-		fmt.Fprintf(out, "# bashy secrets: template %s has no ENV_NAME=ref bindings\n", tmplPath)
+		fmt.Fprintf(out, "# bashy secret: template %s has no ENV_NAME=ref bindings\n", tmplPath)
 		return nil
 	}
 
@@ -159,7 +159,7 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 		if err == nil {
 			rendered, missing := renderEnv(bindings, items)
 			for _, m := range missing {
-				fmt.Fprintf(errOut, "bashy secrets: %q -> %q not found in vault; skipped\n", m.local, m.ref)
+				fmt.Fprintf(errOut, "bashy secret: %q -> %q not found in vault; skipped\n", m.local, m.ref)
 			}
 			if cachePath != "" && !noCache {
 				_ = writeCache(cachePath, rendered)
@@ -172,14 +172,14 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 	// Degraded: try any cache regardless of age (default template only).
 	if cachePath != "" && !noCache {
 		if data, e := os.ReadFile(cachePath); e == nil {
-			fmt.Fprintf(errOut, "bashy secrets: cloudbox unreachable (%v); using cached values\n", err)
-			fmt.Fprintf(out, "# bashy secrets: served from cache (cloudbox unreachable: %v)\n", err)
+			fmt.Fprintf(errOut, "bashy secret: cloudbox unreachable (%v); using cached values\n", err)
+			fmt.Fprintf(out, "# bashy secret: served from cache (cloudbox unreachable: %v)\n", err)
 			_, _ = out.Write(data)
 			return nil
 		}
 	}
-	fmt.Fprintf(errOut, "bashy secrets: %v\n", err)
-	fmt.Fprintf(out, "# bashy secrets unavailable: %v\n", err)
+	fmt.Fprintf(errOut, "bashy secret: %v\n", err)
+	fmt.Fprintf(out, "# bashy secret unavailable: %v\n", err)
 	return nil
 }
 
@@ -308,7 +308,7 @@ func newLsCmd(cfg *Config) *cobra.Command {
 func newGetCmd(cfg *Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "get NAME",
-		Short: "Print one secret value (for KEY=$(bashy secrets get NAME))",
+		Short: "Print one secret value (for KEY=$(bashy secret get NAME))",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			client, err := cfg.Resolve()
@@ -336,7 +336,7 @@ stdin so the value stays out of shell history.
 
 To enter a secret interactively on a channel an agent cannot read:
 
-  bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai`,
+  bashy ask --name OPENAI_API_KEY --stdout | bashy secret set openai`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(c *cobra.Command, args []string) error {
 			client, err := cfg.Resolve()
@@ -388,7 +388,7 @@ func emptyValueError(c *cobra.Command, name string) error {
 		"refusing to store an empty value for %s: nothing arrived on stdin.\n"+
 			"If you are inside an agent session, stdin belongs to the agent, not to you —\n"+
 			"use `bashy ask` to be prompted directly, then store the result:\n"+
-			"    bashy ask --name %s --stdout | bashy secrets set %s", name, name, name)
+			"    bashy ask --name %s --stdout | bashy secret set %s", name, name, name)
 }
 
 // readSecretValue gets the value for `secrets set NAME` when none was given on the

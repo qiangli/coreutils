@@ -90,7 +90,7 @@ func TestAddAssigneeMustBeARegisteredAgent(t *testing.T) {
 	cmd.SetErr(&errOut)
 	cmd.SetArgs([]string{"herd the cats", "--owner", "nobody-registered-anywhere-zz"})
 	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "assignee") || !strings.Contains(err.Error(), "bashy agents list") {
+	if err == nil || !strings.Contains(err.Error(), "assignee") || !strings.Contains(err.Error(), "bashy agent list") {
 		t.Fatalf("unregistered assignee error = %v", err)
 	}
 	st, _, storeErr := sf()

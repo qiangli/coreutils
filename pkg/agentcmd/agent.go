@@ -23,11 +23,15 @@ type WhoAmIResult struct {
 func NewAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "agent identity and local agent helpers"}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newWhoamiCmd())
+	cmd.AddCommand(NewWhoamiCmd())
 	return cmd
 }
 
-func newWhoamiCmd() *cobra.Command {
+// NewWhoamiCmd is the `whoami` subcommand: the launcher-stamped agent identity.
+// It is exported so the embedding shell can mount it under the canonical
+// `agent` noun beside the fleet registry (`bashy agent whoami`) instead of a
+// second top-level verb one letter away from it.
+func NewWhoamiCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "whoami",

@@ -104,8 +104,8 @@ func setRoleReview(dir, tool, role string, rating int, verdict string, notes []s
 //
 // It used to be a Go map here, a second copy of the same launch flags that
 // pkg/chat carried and the capability matrix scored against. The three drifted
-// independently. Now a tool declares its contract once — `bashy tools show
-// codex` is what weave launches — and `bashy tools set` changes it without a
+// independently. Now a tool declares its contract once — `bashy tool show
+// codex` is what weave launches — and `bashy tool set` changes it without a
 // rebuild.
 //
 // The accrued track record (Roles, ContractOK, run counts) is NOT registry

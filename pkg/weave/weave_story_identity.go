@@ -19,10 +19,10 @@ func SprintClaimIdentity(id int64, explicit string, _ bool) (string, error) {
 	if explicit == "" {
 		return "", fmt.Errorf("--owner is required, and there are two cases.\n" +
 			"  YOU are the manager (you were told to take this sprint): use your OWN name.\n" +
-			"    `bashy agents list` to find it, or register one:\n" +
-			"    `bashy agents add <name> --tool <tool> --model <model>`\n" +
+			"    `bashy agent list` to find it, or register one:\n" +
+			"    `bashy agent add <name> --tool <tool> --model <model>`\n" +
 			"    then re-run with --owner <name>. That is not a guess; it is your identity.\n" +
-			"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agents list`\n" +
+			"  You are appointing SOMEONE ELSE: choose a NAME from `bashy agent list`\n" +
 			"    and ask the user rather than guessing on their behalf.")
 	}
 	dir, err := sprintStoreDir()
@@ -74,7 +74,7 @@ func HoldSprintManagerLease(id int64, owner string, pid int) error {
 //
 // WITHOUT THIS, DETACHING WAS INVISIBLE. The attached watch is documented as
 // the seat being held for as long as the process runs, but ending it wrote
-// nothing: the last beat stayed on the lease, so `bashy agents` kept reporting
+// nothing: the last beat stayed on the lease, so `bashy agent` kept reporting
 // a healthy conductor for the remainder of the TTL with the process provably
 // gone. Symmetry is the fix — a beat that claims the seat on attach must be
 // answered by a stand-down on detach.
@@ -228,7 +228,7 @@ func SprintOwnerLastRead(name string) (at time.Time, ok bool) {
 //
 // Addressing either produces mail nobody answers, which is worse than a
 // broadcast because the sender believes it reached someone. Staleness is
-// judged by the same SprintLeaseTTL the board and `bashy agents` grade leases
+// judged by the same SprintLeaseTTL the board and `bashy agent` grade leases
 // with — exported for exactly this reason, so a second opinion about who is
 // live cannot drift from the first.
 //

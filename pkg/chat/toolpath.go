@@ -13,7 +13,7 @@ import (
 //
 // `bashy chat` is reached three ways with three different environments: an
 // operator's login shell (PATH has everything), a supervised daemon —
-// `bashy apps serve`, `bashy meet serve`, `foreman serve` — started by a
+// `bashy app serve`, `bashy meet serve`, `foreman serve` — started by a
 // service manager, and a spawned agent's own shell-out. Only the first is a
 // login shell. A daemon launched by launchd/systemd inherits a service PATH
 // that does not include the per-user binary home, so an agent CLI installed

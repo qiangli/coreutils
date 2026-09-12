@@ -1,6 +1,6 @@
 // Command fixtureapp is a minimal third-party app that speaks the
 // dhnt-app-meta-v1 contract. It is the worked example an app author copies, and
-// the end-to-end fixture for `bashy apps --app`.
+// the end-to-end fixture for `bashy app --app`.
 //
 // The two halves are the whole contract: answer `meta --json` on STDOUT, and
 // honour X-Forwarded-Prefix by emitting a <base href> with a trailing slash.

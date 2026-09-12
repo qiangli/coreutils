@@ -96,7 +96,7 @@ Channels are tried in order and the first that reaches a human wins:
   3. an out-of-band rendezvous: bashy prints a command, you run it in your own
      terminal and type the value there.
 
-For durable secrets use 'bashy secrets', which is the managed vault. This
+For durable secrets use 'bashy secret', which is the managed vault. This
 command is for one-off values and stores nothing long-lived.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,

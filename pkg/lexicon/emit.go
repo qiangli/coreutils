@@ -119,7 +119,7 @@ func (s *Store) split() (verbs, bindings []Concept) {
 	priority := map[string]bool{
 		"bashy handoff": true, "bashy resume": true, "bashy weave": true,
 		"bashy gate": true, "bashy sprint": true, "bashy meet": true,
-		"bashy invoke": true, "bashy kb": true, "bashy skills": true,
+		"bashy invoke": true, "bashy kb": true, "bashy skill": true,
 		"bashy dag": true, "bashy foreman": true, "bashy sdlc": true,
 	}
 	var top, rest []Concept

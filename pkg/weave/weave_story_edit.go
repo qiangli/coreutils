@@ -50,7 +50,7 @@ would let a sprint pass a bar it never set, with nothing recording that the bar
 moved. Changing acceptance on a sprint already in done requires --reason.
 
 Passing --owner re-points the sprint's coordination address, so the new name
-must be a unique NAME shown by "bashy agents list". It does NOT take the
+must be a unique NAME shown by "bashy agent list". It does NOT take the
 conductor lease; use sprint take.`,
 		Args: cobra.ExactArgs(1),
 		Example: "  bashy sprint edit 99 --title \"Bashy Yoke II — coordination truthfulness\"\n" +
@@ -155,7 +155,7 @@ conductor lease; use sprint take.`,
 	cmd.Flags().StringVar(&acceptance, "acceptance", "", "new acceptance / done criteria")
 	cmd.Flags().StringVar(&epic, "epic", "", "new epic grouping label")
 	role.AttachOwner(cmd.Flags(), &owner, role.ProjectManager,
-		"new sprint manager; must be a NAME shown by bashy agents list")
+		"new sprint manager; must be a NAME shown by bashy agent list")
 	cmd.Flags().StringVar(&reason, "reason", "", "why this edit is correct — required to amend a done sprint's acceptance")
 	flags.attach(cmd)
 	return cmd

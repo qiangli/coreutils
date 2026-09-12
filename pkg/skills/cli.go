@@ -83,7 +83,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	}
 
 	root := &cobra.Command{
-		Use:           "skills",
+		Use:           "skill",
 		Short:         "workspace skills, gated by this host's space-time coordinate",
 		Long:          "skills lists, inspects, and probes the tier-2 workspace skills available\non this host. `list` shows only skills applicable here (env-gated via each\nskill's metadata.requires); `probe` prints the host coordinate the gate\nevaluates against.",
 		SilenceErrors: true,

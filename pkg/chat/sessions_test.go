@@ -33,7 +33,7 @@ func TestAgentIDIsTheIdentityNotTheProcess(t *testing.T) {
 // TestAgentIDForUnnamedLaunchIsItsBinding — an unnamed `tool:model` launch has
 // no identity of its own, so it becomes its binding. Still one per host: it
 // still resolves to one store and one API key. Naming it is how you get a
-// second, which is what `agents clone` writes.
+// second, which is what `agent clone` writes.
 func TestAgentIDForUnnamedLaunchIsItsBinding(t *testing.T) {
 	bare := Launch{ToolName: "ycode", ModelName: "glm-5.2"}
 	got := agentID(bare)
@@ -143,7 +143,7 @@ func TestCardEventsFileFallsBackForLegacyCard(t *testing.T) {
 // operator learns to reach for --force. Both exits must be in the message.
 func TestErrAgentLiveNamesBothWaysForward(t *testing.T) {
 	msg := errAgentLive("elif", 4242, "/src/coreutils").Error()
-	for _, want := range []string{"elif", "4242", "/src/coreutils", "--attach", "agents clone"} {
+	for _, want := range []string{"elif", "4242", "/src/coreutils", "--attach", "agent clone"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal message is missing %q:\n%s", want, msg)
 		}
@@ -172,7 +172,7 @@ func TestRefuseIfSessionLiveOnlyGatesStoreLockingTools(t *testing.T) {
 	if err == nil {
 		t.Fatal("a ycode turn against a live session must be refused in our own words")
 	}
-	if !strings.Contains(err.Error(), "agents clone") {
+	if !strings.Contains(err.Error(), "agent clone") {
 		t.Errorf("refusal should name the way forward, got: %v", err)
 	}
 

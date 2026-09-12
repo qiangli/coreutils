@@ -14,7 +14,7 @@ package bus
 // # It resolved identity two different ways, and they disagreed
 //
 // The send side addressed the FLEET NAME (`codex-gpt5.6-sol`, what
-// `bashy agents list` prints). The read side resolved `$BASHY_PRINCIPAL` →
+// `bashy agent list` prints). The read side resolved `$BASHY_PRINCIPAL` →
 // `$USER`, which is `dhnt:agent/Omar` for a bashy-launched agent and the login
 // name for everything else. So a post addressed to an agent landed in a buffer
 // that agent would never read, and every reader had to be told its own name
@@ -560,7 +560,7 @@ var FleetResolveName func(string) string
 
 // DetectHarness reports the agentic harness driving this process, injected by
 // the host for the same reason FleetNames and FleetSelect are: the marker table
-// is registry DATA owned by the catalog (`bashy tools add` extends it), and a
+// is registry DATA owned by the catalog (`bashy tool add` extends it), and a
 // transport keeping its own copy is a second opinion that can drift.
 //
 // A nil hook means "this host cannot tell", and BoardIdentity then behaves as it
@@ -579,7 +579,7 @@ var ErrUnattributed = errors.New("unattributed agent session")
 // BoardIdentity is WHO YOU ARE on the board, and it exists because the send and
 // read sides used to disagree.
 //
-// Posts are addressed to the fleet name `bashy agents list` prints. But a
+// Posts are addressed to the fleet name `bashy agent list` prints. But a
 // caller's environment carries something else: a bashy-launched agent has
 // BASHY_PRINCIPAL=dhnt:agent/<Nick>, and everything else falls back to $USER.
 // Resolving those to the same name is what lets a bare `bashy mb` work, instead
@@ -635,7 +635,7 @@ func BoardIdentity(as string) (string, error) {
 	if DetectHarness != nil {
 		if tool, ok := DetectHarness(); ok {
 			return "", fmt.Errorf("%w: running under %s, with no agent identity to sign with\n"+
-				"  pass --as <agent>   (`bashy agents list` names them; `--as %s-<model>` if unsure)\n"+
+				"  pass --as <agent>   (`bashy agent list` names them; `--as %s-<model>` if unsure)\n"+
 				"  a human meaning to speak as themselves here passes --as %s\n"+
 				"  refusing rather than signing as the login user: the board's one guarantee is that a post names who sent it",
 				ErrUnattributed, tool, tool, loginName())
@@ -930,7 +930,7 @@ const (
 // instead of a receipt indistinguishable from a real delivery. Precedence:
 //
 //	ROLE    a seat (steward, conductor:22) — survives a handover
-//	AGENT   a name in the roster (`bashy agents list`)
+//	AGENT   a name in the roster (`bashy agent list`)
 //	READER  a name with a cursor — it has read the board at least once, so it is
 //	        demonstrably a participant even if the roster does not know it
 //

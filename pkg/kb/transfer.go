@@ -29,7 +29,7 @@ tags), existing pages related to the topic — and the transfer checklist.
 
 Deterministic (no LLM) and read-only: the judgment is yours, transfer
 structures it. The full procedure is the knowledge-transfer skill:
-bashy skills show knowledge-transfer.`,
+bashy skill show knowledge-transfer.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			store := Open(*dir)
@@ -73,14 +73,14 @@ bashy skills show knowledge-transfer.`,
 
 			fmt.Fprint(out, `per selected claim (durable + team-relevant + non-derivable, redacted):
   FACT/GOTCHA  bashy kb add --type gotcha --title "..." --description "<what + WHEN>" --tags xfer:<source> --evidence "..."
-  PROCEDURE    bashy skills learn <dir>            # executable + checkable contract -> a skill, not a page
+  PROCEDURE    bashy skill learn <dir>            # executable + checkable contract -> a skill, not a page
   EXISTS-OK    bashy kb update <slug> ...          # page was right - extend it
   EXISTS-WRONG bashy kb supersede <slug> ...       # page was wrong - correction stays linked
   SKIP         (record the reason in your transfer report)
 tag every transferred page xfer:<source> (claude-memory|memex|weave-memory|repo-graph|recall);
 transferred pages land as CANDIDATE - a SECOND agent validates through use:
   bashy kb validate <slug> --evidence "used in <task>, held"
-full procedure: bashy skills show knowledge-transfer
+full procedure: bashy skill show knowledge-transfer
 `)
 			return nil
 		},

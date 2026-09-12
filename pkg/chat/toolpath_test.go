@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The defect this file exists for: `bashy apps serve` / `meet serve` run under a
+// The defect this file exists for: `bashy app serve` / `meet serve` run under a
 // service manager whose PATH is not the operator's login PATH, so an agent CLI
 // installed at the host-install contract's own location was invisible and every
 // launch died with `exec: "claude": executable file not found in $PATH`.

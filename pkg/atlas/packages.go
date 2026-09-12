@@ -129,7 +129,7 @@ var packages = map[string]Package{
 	// --- command implementations -------------------------------------------
 	// These answer §2.2a through their command's Stage. Nothing more is owed
 	// here: addVerb/stageTools already refused to let them ship unplaced.
-	"agentcmd":   cmdPkg("agent"),
+	"agentcmd":   libPkg("agent", "the identity helper mounted as `agent whoami` — the launcher-stamped agent principal, resolved the way the board resolves it"),
 	"admission":  libPkg("bus", "store-neutral deterministic byte budgeting, priority projection, overflow digests, and prepared acknowledgements behind Bus/chat turn preambles; it owns no messages and therefore has no command surface"),
 	"ask":        cmdPkg("ask"),
 	"board":      libPkg("sprint", "read-only machine-global projection behind the Sprint web panel and steward/conductor dashboards; it no longer owns a top-level verb"),
@@ -151,13 +151,13 @@ var packages = map[string]Package{
 		"ever reached for it unprompted typing exactly that, and being told the verb did not exist"),
 	"lexicon":    cmdPkg("lexicon"),
 	"meet":       cmdPkg("meet"),
-	"webconsole": cmdPkg("apps"),
-	"webterm": libPkg("apps", "the browser terminal: one pty per websocket, running bashy itself. "+
+	"webconsole": cmdPkg("app"),
+	"webterm": libPkg("app", "the browser terminal: one pty per websocket, running bashy itself. "+
 		"Separate from webconsole so the platform-conditional pty code is one small package — "+
 		"and so outpost's /shell can later collapse onto it instead of keeping a second implementation"),
-	"websession": libPkg("apps", "stateless HMAC session cookie + per-IP login throttle for a locally "+
+	"websession": libPkg("app", "stateless HMAC session cookie + per-IP login throttle for a locally "+
 		"served web surface; copied from outpost's adminui, which is internal/ and so unimportable"),
-	"svcd": libPkg("apps", "the start/status/stop daemon lifecycle a supervised bashy service exposes: "+
+	"svcd": libPkg("app", "the start/status/stop daemon lifecycle a supervised bashy service exposes: "+
 		"pidfile, a port probe that identifies the listener via /healthz before signalling it, and a "+
 		"stop that escalates so the port is actually freed. Adopted by the web console first; pkg/meet, "+
 		"pkg/sdlc and pkg/schedule still carry private copies and should migrate onto it"),
@@ -170,8 +170,8 @@ var packages = map[string]Package{
 	"schedule":      cmdPkg("schedule"),
 	"sdlc":          cmdPkg("sdlc"),
 	"search":        cmdPkg("search"),
-	"secrets":       cmdPkg("secrets"),
-	"skills":        cmdPkg("skills"),
+	"secrets":       cmdPkg("secret"),
+	"skills":        cmdPkg("skill"),
 	"craft":         cmdPkg("craft"),
 	"role": libPkg("sprint", "how to REACH whoever holds a role — the bus topic and room behind the "+
 		"contact `bashy sprint` shows and `bashy steward` leads with. role is vocabulary only "+
@@ -243,24 +243,24 @@ var packages = map[string]Package{
 	"ctty": libPkg("ask", "the channel ladder (controlling terminal → GUI askpass → nothing) under "+
 		"`bashy ask`. Not a capability an operator invokes — it is HOW ask reaches a human, and it "+
 		"is meaningless without a question to carry."),
-	"fleet": libPkg("tools", "the declarative registry behind tools/models/agents/people/whois. Four "+
+	"fleet": libPkg("tool", "the declarative registry behind tool/model/agent/person/whois. Four "+
 		"verbs project one registry; the registry is not a fifth verb."),
-	"hostauth": libPkg("apps", "verifies web-console login credentials against the host OS. "+
+	"hostauth": libPkg("app", "verifies web-console login credentials against the host OS. "+
 		"No verb of its own: authentication is a guard on the apps surface, not an independently "+
 		"invokable capability."),
-	"policy": libPkg("audit", "policy/audit is the tamper-evident record behind `bashy audit`; "+
+	"policy": libPkg("inspect", "policy/audit is the tamper-evident record behind `bashy inspect audit`; "+
 		"policy/coord is the same-project collision guard behind `bashy claim`. Two capabilities, "+
 		"two existing front doors, no `policy` verb — a verb here would be a settings surface, and "+
 		"policy is enforced, not configured."),
 	"principal": libPkg("whois", "name → the thing it names, plus how to reach it. Every verb that "+
 		"addresses an agent resolves through it; `whois` is the one that shows its work."),
-	"spacetime": libPkg("context", "where-and-when this process is running, reported by "+
-		"`bashy context`. A measurement, not an action."),
+	"spacetime": libPkg("inspect", "where-and-when this process is running, reported by "+
+		"`bashy inspect context`. A measurement, not an action."),
 	"coopauth": libPkg("login", "the ONE shared cloudbox/outpost cooperative-auth implementation. "+
 		"It has no surface of its own by design: auth that you can invoke directly is auth you can "+
 		"invoke around."),
-	"llmbudget": libPkg("invoke", "the local-first meter and gate under every metered-inference "+
-		"verb (invoke/judge/meet/coach/pair). Deliberately not a verb: a budget an agent can call "+
+	"llmbudget": libPkg("chat", "the local-first meter and gate under every metered-inference "+
+		"verb (chat/judge/meet/coach/pair). Deliberately not a verb: a budget an agent can call "+
 		"is a budget an agent can raise. It is read through the verbs that declare EffSpend."),
 	"otelquery": libPkg("otel", "the query half of `bashy otel`, split from pkg/telemetry so "+
 		"reading traces does not link the exporter."),

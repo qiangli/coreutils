@@ -38,7 +38,7 @@ func seedSprintLease(t *testing.T, holder string) func() weaveStoryLease {
 }
 
 // A process that will still be running when its own beat is read back has to
-// SAY SO. Without the pid on the lease, `bashy agents` could not tell a live
+// SAY SO. Without the pid on the lease, `bashy agent` could not tell a live
 // attached watch from one killed a second after its last beat, and reported
 // the dead one healthy for the rest of the TTL.
 func TestHoldSprintManagerLeaseRecordsTheHoldingProcess(t *testing.T) {

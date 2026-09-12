@@ -82,7 +82,7 @@ func (s *server) panelTier(path string) (string, bool) {
 // wanted) or `custom` (the app runs its own login, so the console must not
 // intercept the redirect). Everything else still walks the original ladder.
 //
-// Row 3 is why `bashy apps` on 127.0.0.1 never asks for a password: it is
+// Row 3 is why `bashy app` on 127.0.0.1 never asks for a password: it is
 // the same rule pkg/meet already applies, and the machine owner authenticating
 // to their own machine to see their own files buys nothing. Row 4 is what makes
 // a LAN bind safe to offer at all.
@@ -159,7 +159,7 @@ func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID s
 		// A device cookie exists but this console serves no pairing state.
 		// Nothing can vouch for it, so nothing does.
 		s.clearSession(w, r)
-		http.Error(w, "this device pairing is no longer recognised; scan a fresh code from `bashy apps pair`", http.StatusForbidden)
+		http.Error(w, "this device pairing is no longer recognised; scan a fresh code from `bashy app pair`", http.StatusForbidden)
 		return false
 	}
 	st, err := s.pairing.load()
@@ -170,7 +170,7 @@ func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID s
 	d, live := st.findDevice(deviceID, time.Now())
 	if !live {
 		s.clearSession(w, r)
-		http.Error(w, "this device pairing has ended (revoked or expired); scan a fresh code from `bashy apps pair`", http.StatusForbidden)
+		http.Error(w, "this device pairing has ended (revoked or expired); scan a fresh code from `bashy app pair`", http.StatusForbidden)
 		return false
 	}
 	if !s.scopeAllows(d.Scope, r.URL.Path) {
@@ -184,7 +184,7 @@ func (s *server) deviceAdmits(w http.ResponseWriter, r *http.Request, deviceID s
 			"device": deviceID, "panel": name, "path": r.URL.Path,
 		})
 		http.Error(w, fmt.Sprintf(
-			"this device is paired for %s and %q is not in that scope; re-pair with: bashy apps pair --allow %s",
+			"this device is paired for %s and %q is not in that scope; re-pair with: bashy app pair --allow %s",
 			strings.Join(d.Scope, ", "), name, name), http.StatusForbidden)
 		return false
 	}

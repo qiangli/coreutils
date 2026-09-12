@@ -87,7 +87,7 @@ type Options struct {
 	// code the phone scans rather than a stale default.
 	Port int
 
-	// Pairing enables QR device pairing: `bashy apps pair` mints a one-time
+	// Pairing enables QR device pairing: `bashy app pair` mints a one-time
 	// ticket, the phone redeems it at /pair/redeem, and the resulting session
 	// is device-scoped. Off unless the operator asked for it — it only makes
 	// sense on a LAN-bound console, and turning it on silently would open a

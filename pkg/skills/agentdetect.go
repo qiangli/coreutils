@@ -8,7 +8,7 @@ import "github.com/qiangli/coreutils/pkg/fleet"
 //
 // The marker table moved into the fleet registry (coreutils/pkg/fleet), where
 // it sits beside everything else known about a tool: its binary, its launch
-// contract, its harness scores. Recognizing a new harness is now `bashy tools
+// contract, its harness scores. Recognizing a new harness is now `bashy tool
 // add`, not an edit here.
 
 // DetectAgent reports the agentic tool driving this process, if any.

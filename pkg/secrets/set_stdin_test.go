@@ -9,7 +9,7 @@ import (
 )
 
 // A PIPE must keep working exactly as before — that is the scripted path
-// (`printf %s "$k" | bashy secrets set NAME`) and the reason the command reads stdin
+// (`printf %s "$k" | bashy secret set NAME`) and the reason the command reads stdin
 // at all: it keeps the key out of shell history.
 //
 // The bug was never the read. It was that at a TERMINAL the command asked for

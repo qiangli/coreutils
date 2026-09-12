@@ -300,7 +300,7 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 			return nil, err
 		}
 		if assignee == "" {
-			return nil, fmt.Errorf("todo: assigned status requires an owner (assignee) — pass --owner NAME from `bashy agents list`")
+			return nil, fmt.Errorf("todo: assigned status requires an owner (assignee) — pass --owner NAME from `bashy agent list`")
 		}
 		it.Assignee = assignee
 	}

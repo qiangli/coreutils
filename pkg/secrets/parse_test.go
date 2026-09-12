@@ -25,7 +25,7 @@ func TestParseEnvRoundTrips(t *testing.T) {
 }
 
 func TestParseEnvSkipsCommentsAndInvalid(t *testing.T) {
-	in := []byte("# bashy secrets: served from cache\n" +
+	in := []byte("# bashy secret: served from cache\n" +
 		"export GITHUB_TOKEN='ghp_ok'\n" +
 		"\n" +
 		"export 1BAD='nope'\n" + // invalid env name -> skipped

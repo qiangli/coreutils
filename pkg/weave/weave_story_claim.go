@@ -113,7 +113,7 @@ func newSprintClaimCmd() *cobra.Command {
 the sprint's manager, so two agents cannot start the same p0 and discover it in
 a merge conflict.
 
-The claimant must be a live entry in "bashy agents" for the same reason a sprint
+The claimant must be a live entry in "bashy agent" for the same reason a sprint
 owner must: the manager will reply to this name, and a name nobody is behind
 turns a collaboration into a wait.
 

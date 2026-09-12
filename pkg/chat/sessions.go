@@ -39,7 +39,7 @@ import (
 // the pid is what lets room.Join enforce the singleton. Dropping the cwd is the
 // same decision seen from the other side — one identity means one memory, so an
 // agent recognises you in a second repo instead of starting over. An agent that
-// SHOULD start over is a different agent: `bashy agents clone`.
+// SHOULD start over is a different agent: `bashy agent clone`.
 
 // agentID is the agent's identity on this host, and the id a human types:
 // `bashy chat steer elif "..."`.
@@ -183,6 +183,6 @@ func errAgentLive(id string, pid int, cwd string) error {
 	return fmt.Errorf(
 		"chat: agent %s is already live (pid %d%s) — an agent is one identity, so it is not started twice\n"+
 			"  bashy chat --agent %s --attach   watch and steer the live session\n"+
-			"  bashy agents clone %s            a second agent on the same binding, with its own context",
+			"  bashy agent clone %s            a second agent on the same binding, with its own context",
 		id, pid, where, id, id)
 }
