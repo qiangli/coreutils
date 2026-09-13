@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -136,15 +137,51 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	show.Flags().BoolVar(&showJSON, "json", false, "print the skill's record as JSON")
 
 	var force, addJSON bool
+	var create createFlags
 	add := &cobra.Command{
-		Use:   "add <dir>|<file.yaml>|-",
+		Use:   "add <dir>|<file.yaml>|- | <name> --description TEXT",
 		Short: "install a skill folder or record into the host-local store (verified admission)",
-		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt),\nor a `kind: skill` record (the projection `show --yaml` prints; a file, or -\nfor stdin) rebuilt into the same folder, into the host-local store after a\nverified-admission gate: frontmatter must parse with name+description,\nmetadata.requires must parse, and a skill.dhnt canonical face must be valid\n(transpilable, content-addressed). Inapplicable-here is reported, not\nrefused — a skill may be installed for a tool you have not provisioned yet.",
+		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt),\nor a `kind: skill` record (the projection `show --yaml` prints; a file, or -\nfor stdin) rebuilt into the same folder, into the host-local store after a\nverified-admission gate: frontmatter must parse with name+description,\nmetadata.requires must parse, and a skill.dhnt canonical face must be valid\n(transpilable, content-addressed). Inapplicable-here is reported, not\nrefused — a skill may be installed for a tool you have not provisioned yet.\n\nGiven a name and --description instead of a path, add writes a minimal\nSKILL.md — name, description, metadata.requires if given, and the --body\nverbatim — and installs it through the same gate. No template beyond that.",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return runAdd(cmd, cfg, args[0], force, addJSON) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if create.given(cmd) {
+				return runCreate(cmd, cfg, args[0], create, force, addJSON)
+			}
+			return runAdd(cmd, cfg, args[0], force, addJSON)
+		},
 	}
 	add.Flags().BoolVar(&force, "force", false, "replace an already-installed skill of the same name")
 	add.Flags().BoolVar(&addJSON, "json", false, "machine-readable admission report")
+	create.bind(add)
+
+	rm := &cobra.Command{
+		Use:   "rm <name>",
+		Short: "remove a skill from the local store",
+		Long:  "rm removes a skill from the local store.\n\nOnly the local ring is writable. Removing a skill that also exists in a\nlower ring unshadows the original rather than deleting it; a skill that\nexists ONLY in a lower ring is refused — embedded entries are immutable,\nshadow it with `skill add` instead.",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runRm(cmd, cfg, args[0]) },
+	}
+
+	var sf setFlags
+	set := &cobra.Command{
+		Use:   "set <name>",
+		Short: "modify a skill's frontmatter, bindings, files, or body",
+		Long:  "set edits an installed skill in place.\n\nA skill from the embedded baseline, a shared dir, or the org ring is copied\ninto the host-local store on first modification: the edit shadows the\noriginal rather than mutating a catalog this host does not own. Frontmatter\nkeys the edit does not name are preserved as written, and so is the body\nunless --body replaces it. The result re-runs the admission gate before it\nis saved; a skill that fails it is left as it was.",
+		Example: "  bashy skill set port-check --description \"probe a port\" --requires \"os=linux,darwin\"\n" +
+			"  bashy skill set port-check --binding check-tests=\"go test ./...\" --rm-binding step-reada\n" +
+			"  bashy skill set port-check --file scripts/run.sh=./run.sh --body ./SKILL-body.md",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error { return runSet(cmd, cfg, args[0], sf) },
+	}
+	sf.bind(set)
+
+	edit := &cobra.Command{
+		Use:   "edit <name>",
+		Short: "open a skill's SKILL.md in $EDITOR",
+		Long:  "edit opens a skill's SKILL.md in $VISUAL or $EDITOR. A skill from a lower\nring is copied into the local store first, so the editor never opens a file\nthat cannot be saved.",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runEdit(cmd, cfg, args[0]) },
+	}
 
 	var verifyJSON bool
 	verify := &cobra.Command{
@@ -221,8 +258,354 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
 	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
 	// what running it accumulates into.
-	root.AddCommand(list, probe, show, add, verify, run, learn, promote, export, newSyncCmd())
+	root.AddCommand(list, probe, show, add, rm, set, edit, verify, run, learn, promote, export, newSyncCmd())
 	return root
+}
+
+// --- add <name> / rm / set / edit ---------------------------------------
+
+// createFlags are the fields `add <name>` writes into a minimal SKILL.md.
+type createFlags struct {
+	description, requires, body string
+}
+
+func (f *createFlags) bind(c *cobra.Command) {
+	c.Flags().StringVar(&f.description, "description", "", "what the skill is for (creates <name> from flags instead of a path)")
+	c.Flags().StringVar(&f.requires, "requires", "", "metadata.requires gate expression, e.g. \"os=linux,darwin\"")
+	c.Flags().StringVar(&f.body, "body", "", "file holding the SKILL.md body (- for stdin); none by default")
+}
+
+// given tells `add <name> --description …` from `add <path>`: any create
+// flag makes the operand a name, whatever it looks like on disk.
+func (f *createFlags) given(cmd *cobra.Command) bool {
+	return cmd.Flags().Changed("description") || cmd.Flags().Changed("requires") || cmd.Flags().Changed("body")
+}
+
+// runCreate is `add <name> --description …`: a minimal SKILL.md rendered into
+// a temp folder and admitted through the same gate as any other add.
+func runCreate(cmd *cobra.Command, cfg *config, name string, f createFlags, force, asJSON bool) error {
+	if cfg.cfgDir == "" {
+		return fmt.Errorf("skills: no host-local store directory configured")
+	}
+	if err := validSkillName(name); err != nil {
+		return err
+	}
+	if strings.TrimSpace(f.description) == "" {
+		return fmt.Errorf("skills: creating %q needs --description (a skill without one fails admission)", name)
+	}
+	var meta map[string]string
+	if f.requires != "" {
+		if _, err := ParseRequires(f.requires); err != nil {
+			return err
+		}
+		meta = map[string]string{"requires": f.requires}
+	}
+	var body string
+	if f.body != "" {
+		data, err := readSource(f.body, cmd.InOrStdin())
+		if err != nil {
+			return err
+		}
+		body = string(data)
+	}
+	md, err := newSkillMD(name, f.description, meta, body)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "skill-add-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	dir := filepath.Join(tmp, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, skillMarker), md, 0o644); err != nil {
+		return err
+	}
+	return addFolder(cmd, cfg, dir, force, asJSON)
+}
+
+func runRm(cmd *cobra.Command, cfg *config, name string) error {
+	if cfg.cfgDir == "" {
+		return fmt.Errorf("skills: no host-local store directory configured")
+	}
+	if err := validSkillName(name); err != nil {
+		return err
+	}
+	sk, _, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	if sk.Ring != RingLocal {
+		if sk.Ring == RingEmbedded {
+			return fmt.Errorf("skills: %q is not in the local store — embedded entries are immutable; shadow it with `skill add`", name)
+		}
+		return fmt.Errorf("skills: %q is not in the local store (it comes from the %s ring, which is read-only); shadow it with `skill add`", name, sk.Ring)
+	}
+	if err := os.RemoveAll(filepath.Join(cfg.cfgDir, name)); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "removed skill %s\n", name)
+	if under, _, ok := cfg.catalog().Get(name); ok {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: %s now resolves to the %s ring's entry (unshadowed, not deleted)\n", name, under.Ring)
+	}
+	return nil
+}
+
+// materialize copies a skill served from a lower ring into the local store
+// (copy-on-write: the original is never touched) and returns its local
+// folder and the ring it came from. A skill already local is returned as is.
+func materialize(cfg *config, name string) (string, Ring, error) {
+	if cfg.cfgDir == "" {
+		return "", 0, fmt.Errorf("skills: no host-local store directory configured")
+	}
+	if err := validSkillName(name); err != nil {
+		return "", 0, err
+	}
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return "", 0, fmt.Errorf("skills: %q not found", name)
+	}
+	dir := filepath.Join(cfg.cfgDir, name)
+	if sk.Ring == RingLocal {
+		return dir, sk.Ring, nil
+	}
+	files, err := src.Files(name)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return "", 0, err
+	}
+	for _, rel := range files {
+		data, ok := src.File(name, rel)
+		if !ok {
+			continue
+		}
+		target := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return "", 0, err
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			_ = os.RemoveAll(dir) // never leave a half-copied skill shadowing a whole one
+			return "", 0, err
+		}
+	}
+	return dir, sk.Ring, nil
+}
+
+// setFlags are the edits `set` applies. Every one is optional; the
+// frontmatter keys and files an edit does not name are left as they were.
+type setFlags struct {
+	description, requires, body string
+	bindings, rmBindings        []string
+	files, rmFiles              []string
+}
+
+func (f *setFlags) bind(c *cobra.Command) {
+	c.Flags().StringVar(&f.description, "description", "", "replace the description")
+	c.Flags().StringVar(&f.requires, "requires", "", "replace metadata.requires (empty string drops it)")
+	c.Flags().StringArrayVar(&f.bindings, "binding", nil, "bind a check/step to a command as check-X=<cmd> or step-X=<cmd> (repeatable)")
+	c.Flags().StringArrayVar(&f.rmBindings, "rm-binding", nil, "drop a binding key, e.g. check-tests (repeatable)")
+	c.Flags().StringArrayVar(&f.files, "file", nil, "add or replace a file in the folder as <path>=<source> (- reads stdin; repeatable)")
+	c.Flags().StringArrayVar(&f.rmFiles, "rm-file", nil, "remove a file from the folder (repeatable)")
+	c.Flags().StringVar(&f.body, "body", "", "replace the SKILL.md body from a file (- for stdin)")
+}
+
+// bindingKey checks a --binding / --rm-binding key: the spellings the
+// executor resolves (run.go CheckBindingKey) — bare `check`, `check-X`,
+// `step-X`.
+func bindingKey(key string) error {
+	if key == "check" {
+		return nil
+	}
+	for _, p := range []string{"check-", "step-"} {
+		if rest, ok := strings.CutPrefix(key, p); ok && rest != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("skills: binding key %q must be check, check-<name>, or step-<name>", key)
+}
+
+func runSet(cmd *cobra.Command, cfg *config, name string, f setFlags) error {
+	// Materialise FIRST: the edit lands on a local copy, never on the ring
+	// the skill came from.
+	local, from, err := materialize(cfg, name)
+	if err != nil {
+		return err
+	}
+	if from != RingLocal {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", name, from)
+	}
+
+	// Stage the edit beside the store, gate it, and only then swap it in,
+	// so a rejected edit leaves the installed skill exactly as it was.
+	tmp, err := os.MkdirTemp("", "skill-set-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	staged := filepath.Join(tmp, name)
+	if err := copyDir(local, staged); err != nil {
+		return err
+	}
+
+	// stdin can be read once; two flags asking for it is a usage error.
+	stdinUses := 0
+	stdin := func() ([]byte, error) {
+		stdinUses++
+		if stdinUses > 1 {
+			return nil, fmt.Errorf("skills: only one of --body/--file may read stdin (-)")
+		}
+		return io.ReadAll(cmd.InOrStdin())
+	}
+	readFrom := func(src string) ([]byte, error) {
+		if src == "-" {
+			return stdin()
+		}
+		return os.ReadFile(src)
+	}
+
+	mdPath := filepath.Join(staged, skillMarker)
+	md, err := os.ReadFile(mdPath)
+	if err != nil {
+		return err
+	}
+	edit := FrontmatterEdit{SetMeta: map[string]string{}}
+	if cmd.Flags().Changed("description") {
+		edit.Description = &f.description
+	}
+	if cmd.Flags().Changed("requires") {
+		if f.requires == "" {
+			edit.UnsetMeta = append(edit.UnsetMeta, "requires")
+		} else {
+			if _, err := ParseRequires(f.requires); err != nil {
+				return err
+			}
+			edit.SetMeta["requires"] = f.requires
+		}
+	}
+	for _, b := range f.bindings {
+		key, command, ok := strings.Cut(b, "=")
+		if !ok || command == "" {
+			return fmt.Errorf("skills: --binding needs <key>=<command>, got %q", b)
+		}
+		if err := bindingKey(key); err != nil {
+			return err
+		}
+		edit.SetMeta[key] = command
+	}
+	for _, key := range f.rmBindings {
+		if err := bindingKey(key); err != nil {
+			return err
+		}
+		edit.UnsetMeta = append(edit.UnsetMeta, key)
+	}
+	if md, err = WriteFrontmatter(md, edit); err != nil {
+		return err
+	}
+	if f.body != "" {
+		body, err := readFrom(f.body)
+		if err != nil {
+			return err
+		}
+		if md, err = replaceBody(md, string(body)); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(mdPath, md, 0o644); err != nil {
+		return err
+	}
+	for _, spec := range f.files {
+		rel, src, ok := strings.Cut(spec, "=")
+		if !ok || rel == "" || src == "" {
+			return fmt.Errorf("skills: --file needs <path>=<source>, got %q", spec)
+		}
+		if err := folderPath(rel); err != nil {
+			return err
+		}
+		data, err := readFrom(src)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(staged, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			return err
+		}
+	}
+	for _, rel := range f.rmFiles {
+		if err := folderPath(rel); err != nil {
+			return err
+		}
+		target := filepath.Join(staged, filepath.FromSlash(rel))
+		if _, err := os.Stat(target); err != nil {
+			return fmt.Errorf("skills: %s has no file %s", name, rel)
+		}
+		if err := os.Remove(target); err != nil {
+			return err
+		}
+	}
+
+	sk, err := loadSkillDir(staged)
+	if err != nil {
+		return err
+	}
+	ps, _ := cfg.probes(false)
+	a := admit(sk, ps)
+	if !a.Valid {
+		renderAdmission(cmd.OutOrStdout(), a)
+		return fmt.Errorf("skills: %q failed the admission gate — not saved", name)
+	}
+	if _, err := installSkill(staged, cfg.cfgDir, name, true); err != nil {
+		return err
+	}
+	if !a.Applicable {
+		fmt.Fprintf(cmd.ErrOrStderr(), "skills: %s saved but not applicable here (%s)\n", name, a.Failing)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), name)
+	return nil
+}
+
+// folderPath admits a --file / --rm-file path: relative, inside the folder,
+// and not the SKILL.md that set itself owns.
+func folderPath(rel string) error {
+	switch {
+	case rel == skillMarker:
+		return fmt.Errorf("skills: %s is edited through --description/--requires/--binding/--body, not --file", skillMarker)
+	case strings.HasPrefix(rel, "/") || !filepath.IsLocal(filepath.FromSlash(rel)):
+		return fmt.Errorf("skills: path %q escapes the skill folder", rel)
+	}
+	return nil
+}
+
+// runEdit opens the materialised SKILL.md in $VISUAL/$EDITOR — the one
+// place this package runs another program, and only because an editor is
+// what the operator asked for.
+func runEdit(cmd *cobra.Command, cfg *config, name string) error {
+	dir, from, err := materialize(cfg, name)
+	if err != nil {
+		return err
+	}
+	if from != RingLocal {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", name, from)
+	}
+	path := filepath.Join(dir, skillMarker)
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		fmt.Fprintln(cmd.OutOrStdout(), path)
+		return fmt.Errorf("skills: neither $VISUAL nor $EDITOR is set; the skill is at the path above")
+	}
+	ed := exec.Command(editor, path)
+	ed.Stdin, ed.Stdout, ed.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
+	return ed.Run()
 }
 
 func runExport(cmd *cobra.Command, cfg *config, name, to string, user, repo, force bool) error {
