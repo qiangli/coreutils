@@ -30,20 +30,25 @@ func TestResolveSprintLinks(t *testing.T) {
 		SpecRef:    "[[kb:deploy-runbook]]",
 		Acceptance: "done when [[todo:" + it.ID[:8] + "]] closes; see [[sprint:2]] and [[kb:nope]]",
 		StoryRoots: []string{root},
+		Goal:       []sprintGoalItem{{ID: "g1", Text: "ship it", Stories: []sprintStoryRef{{Repo: root, ID: it.ID}, {Repo: root, ID: "000000000000"}}}},
+		Runs:       []sprintRun{{Repo: root, ID: 7}},
 	}
 	got := map[string]string{}
 	for _, l := range resolveSprintLinks(s) {
-		got[l.Ref] = l.Status + "/" + l.Field
+		got[l.Field+" "+l.Ref] = l.Status
 	}
 	want := map[string]string{
-		"kb:deploy-runbook": "resolved/spec",
-		"todo:" + it.ID:     "resolved/acceptance",
-		"sprint:2":          "external/acceptance",
-		"kb:nope":           "dangling/acceptance",
+		"spec kb:deploy-runbook":                "resolved",
+		"acceptance todo:" + it.ID:              "resolved",
+		"acceptance sprint:2":                   "external",
+		"acceptance kb:nope":                    "dangling",
+		"goal:g1 todo:" + it.ID:                 "schema",   // membership, not a citation
+		"goal:g1 todo:000000000000":             "dangling", // a story no tracked root holds
+		"run run:" + filepath.Base(root) + "-7": "schema",
 	}
-	for ref, w := range want {
-		if got[ref] != w {
-			t.Errorf("%s: %q, want %q (all: %v)", ref, got[ref], w, got)
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s: %q, want %q (all: %v)", k, got[k], w, got)
 		}
 	}
 }

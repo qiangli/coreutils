@@ -50,8 +50,12 @@ func sprintLinkFields(s *weaveStory) [][2]string {
 	return fields
 }
 
-// resolveSprintLinks resolves every citation in the card's prose against the
-// kb pages + todo records of the sprint's story roots.
+// resolveSprintLinks returns everything the card is connected to, in one
+// list: the SCHEMA links first (goal → story, linked weave runs; status
+// "schema", field "goal" / "run"), then every citation in the card's prose
+// resolved against the kb pages + todo records of the sprint's story roots.
+// The two are different facts — membership versus mention — and the field
+// says which is which.
 func resolveSprintLinks(s *weaveStory) []sprintLinkRef {
 	var nodes []kb.LinkNode
 	for _, root := range sprintStoryRoots(s) {
@@ -66,6 +70,32 @@ func resolveSprintLinks(s *weaveStory) []sprintLinkRef {
 	}
 	var out []sprintLinkRef
 	seen := map[string]bool{}
+	// Schema: goal items name stories by id; the story's title comes from the
+	// same node graph (a story that no tracked root holds is "dangling", which
+	// is exactly what `sprint show`'s coverage line calls it).
+	for _, g := range s.Goal {
+		for _, ref := range g.Stories {
+			key := "goal|todo:" + ref.ID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			l := kb.Link{Kind: kb.LinkTodo, Target: ref.ID, Raw: "[[todo:" + ref.ID + "]]"}
+			if n, ok := kb.ResolveLink(l, nodes); ok {
+				out = append(out, sprintLinkRef{Ref: n.Ref(), Title: n.Title, Status: "schema", Field: "goal:" + g.ID})
+			} else {
+				out = append(out, sprintLinkRef{Ref: l.Ref(), Status: "dangling", Field: "goal:" + g.ID})
+			}
+		}
+	}
+	for _, r := range s.Runs {
+		key := fmt.Sprintf("run|%s:%d", r.Repo, r.ID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, sprintLinkRef{Ref: fmt.Sprintf("run:%s-%d", filepath.Base(r.Repo), r.ID), Title: r.Repo, Status: "schema", Field: "run"})
+	}
 	for _, f := range sprintLinkFields(s) {
 		for _, l := range kb.ParseLinks(f[1]) {
 			key := f[0] + "|" + l.Ref()
@@ -89,9 +119,9 @@ func resolveSprintLinks(s *weaveStory) []sprintLinkRef {
 }
 
 func renderSprintLinks(w io.Writer, links []sprintLinkRef) {
-	fmt.Fprintf(w, "  ── links (%d) ──\n", len(links))
+	fmt.Fprintf(w, "  ── links (%d; schema = membership, resolved = a citation in the prose) ──\n", len(links))
 	if len(links) == 0 {
-		fmt.Fprintln(w, "  (none — cite a kb page as [[kb:slug]] or a story as [[todo:id]] in the spec, acceptance, continuity, goal or thread)")
+		fmt.Fprintln(w, "  (none — link a story with `sprint goal add --story`, or cite [[kb:slug]] / [[todo:id]] in the spec, acceptance, continuity, goal or thread)")
 		return
 	}
 	for _, l := range links {
@@ -99,6 +129,10 @@ func renderSprintLinks(w io.Writer, links []sprintLinkRef) {
 		if title == "" {
 			title = "-"
 		}
-		fmt.Fprintf(w, "  -> %-28s %-30s %-9s (%s)\n", l.Ref, title, l.Status, l.Field)
+		// Truncate for the column, never the JSON: a story title is a sentence.
+		if r := []rune(title); len(r) > 44 {
+			title = string(r[:43]) + "…"
+		}
+		fmt.Fprintf(w, "  -> %-22s %-44s %-9s (%s)\n", l.Ref, title, l.Status, l.Field)
 	}
 }
