@@ -3,10 +3,15 @@ id: 242625fd5369
 kind: task
 title: C2 skill show --yaml|--json, add <file.yaml>|-, export --yaml, sync consumes a record
 seq: 111
-status: todo
+status: done
 priority: p0
 created: 2026-09-12T23:03:30.086102Z
+weave: 10
+assignee: qiangli
 sprint: 161
+closed: 2026-09-13T00:33:10.451138Z
+resolution: fixed
+closed_by: claude-j
 ---
 
 Skill record verbs over C1:

@@ -3,9 +3,11 @@ id: c3e7759fdd72
 kind: task
 title: 'C5 minimum embedded baseline: keep harness launch contracts, drop embedded models+agents (after U4)'
 seq: 114
-status: todo
+status: assigned
 priority: p1
 created: 2026-09-12T23:03:30.161218Z
+weave: 11
+assignee: qiangli
 sprint: 161
 ---
 

@@ -3,10 +3,11 @@ id: d92b65ac71ba
 kind: task
 title: 'C3 skill CRUD completion: add <name> --description, rm, set, edit (copy-on-write, embedded immutable)'
 seq: 112
-status: todo
+status: done
 priority: p0
 created: 2026-09-12T23:03:30.111336Z
 sprint: 161
+closed: 2026-09-13T00:33:10.477865Z
 ---
 
 Skill CRUD completion (today: no rm, no set, no edit; add takes only a dir).
