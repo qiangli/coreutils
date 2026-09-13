@@ -54,6 +54,15 @@ With no target, dag runs the file's default goal — the frontmatter
 targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		// Targets are OPERANDS of the root command, and RunE validates them
+		// against the DAG file. The contract must be declared: once a
+		// subcommand is mounted on this root (bashy adds `capacity` through
+		// AddCapacityCommands), cobra's legacy validator treats every
+		// positional word as a subcommand lookup and rejects it with
+		// `unknown command "build" for "dag"` — which SilenceErrors then
+		// hides, so the verb died silently for every target in every repo
+		// while this package's own tests (no subcommand mounted) stayed green.
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Changed("json") lets an explicit --json=false override BASHY_AGENTIC.
 			mode := weavecli.ResolveOutputModeEx(cmd.Flags().Changed("json"), jsonF, plainF, quietF)
