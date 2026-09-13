@@ -30,7 +30,7 @@ func NewAppsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "app",
 		Short: "open bashy's apps in a browser: Terminal, Files, Meet, and every declared surface",
-		Long: "apps serves bashy's surfaces in a browser at one address.\n\n" +
+		Long: "app serves bashy's Apps — its surfaces in a browser at one address.\n\n" +
 			"It is ONE launcher with the apps deep-linked beneath it, not one server per\n" +
 			"verb: one nav, one auth, one design system. `bashy commands --view web` lists\n" +
 			"the same surfaces in the terminal.",
