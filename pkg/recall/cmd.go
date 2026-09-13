@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/qiangli/coreutils/pkg/craft"
 	"github.com/qiangli/coreutils/pkg/kb"
 	"github.com/qiangli/coreutils/pkg/redact"
+	"github.com/qiangli/coreutils/pkg/scope"
+	"github.com/qiangli/coreutils/pkg/skills"
 )
 
 // ExitBrokenRing is returned when a ring EXISTED but could not be read.
@@ -111,22 +114,146 @@ Three things about its behaviour are contract, not implementation:
 	return cmd
 }
 
-// openRings resolves the readable rings. A MISSING store is not an error — it is
-// a host that has not learned anything there yet — so each reader is handed a nil
-// store rather than failing the whole call.
-func openRings(root string) []Reader {
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
+// NewContextCmd builds the budgeted `kb context` stage verb. Extra readers are
+// injected by the mounting application (for example cmds/graph's CodeRing), so
+// recall never imports codegraph, gfy, or tree-sitter.
+func NewContextCmd(extra ...Reader) *cobra.Command {
+	var (
+		forText  string
+		files    []string
+		episode  string
+		rings    []string
+		forms    []string
+		budget   int
+		minCover float64
+		k        int
+		asJSON   bool
+	)
+	cmd := &cobra.Command{
+		Use:           "context",
+		Short:         "assemble one budgeted context across knowledge rings",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(forText) == "" {
+				return fmt.Errorf("kb context: --for is required")
+			}
+			readers := append(openContextRings(), extra...)
+			if err := validateContextSelection(rings, forms, readers); err != nil {
+				return err
+			}
+			q := Query{
+				Text: strings.TrimSpace(forText), Files: cleanList(files), Episode: strings.TrimSpace(episode),
+				Rings: cleanList(rings), Forms: cleanList(forms), Budget: budget, MinCoverage: minCover, K: k,
+				OS: hostOS(), Repo: repoName(),
+			}
+			res := Context(q, readers...)
+			if asJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(res); err != nil {
+					return err
+				}
+			} else {
+				renderContext(cmd.OutOrStdout(), res)
+			}
+			for _, ring := range res.Rings {
+				if !ring.OK {
+					return fmt.Errorf("kb context: ring %s: %s", ring.Name, ring.Error)
+				}
+			}
 			return nil
-		}
-		root = filepath.Join(home, ".bashy")
+		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&forText, "for", "", "task text to assemble context for (required)")
+	f.StringSliceVar(&files, "files", nil, "task files exposed as cues to injected readers")
+	f.StringVar(&episode, "episode", "", "include checkpoint-tagged agent notes from this episode")
+	f.StringSliceVar(&rings, "rings", []string{RingRepo, RingHost}, "rings to read: agent,repo,host,capability")
+	f.StringSliceVar(&forms, "forms", []string{kb.FormNote, kb.FormPage}, "forms to read: note,page,relation,code")
+	f.IntVar(&budget, "budget", PreambleBudget, "hard ceiling on assembled output, in estimated tokens")
+	f.Float64Var(&minCover, "min-coverage", 0, "abstain unless a hit covers this fraction of the query")
+	f.IntVar(&k, "k", 3, "max hits per ring")
+	f.BoolVar(&asJSON, "json", false, "emit the frozen kb-context-v1 envelope")
+	return cmd
+}
+
+func openContextRings() []Reader {
+	repoRoot, ok := scope.FindGitRoot()
+	if !ok {
+		repoRoot, _ = os.Getwd()
+	}
+	repoDir := filepath.Join(repoRoot, kb.RepoSub)
+	hostDir := kb.DefaultDir()
+	agentDir := kb.AgentRingDir()
+	if agentScope, err := scope.Resolve(scope.Options{
+		AgentDir:   func() (string, error) { return kb.AgentRingDir(), nil },
+		ForceAgent: true,
+	}); err == nil && agentScope.Kind == scope.KindAgent {
+		agentDir = agentScope.Dir()
+	}
+	skillsDir := skills.DefaultStoreDir()
+	return []Reader{
+		AgentRing{Store: kb.OpenAgentRing(agentDir, kb.ToolID()), Path: agentDir, Required: true},
+		RepoRing{Store: kb.Open(repoDir), Path: repoDir},
+		HostRing{Store: kb.Open(hostDir), Path: hostDir},
+		CapabilityRing{Folds: craft.OpenFolds(skillsDir, redact.New()), Path: skillsDir},
+	}
+}
+
+func validateContextSelection(rings, forms []string, readers []Reader) error {
+	selected := cleanList(rings)
+	availableRings := map[string]bool{}
+	for _, rd := range readers {
+		availableRings[rd.Ring()] = true
+	}
+	for _, ring := range selected {
+		if !availableRings[ring] {
+			return fmt.Errorf("kb context: unknown ring %q (agent|repo|host|capability)", ring)
+		}
+	}
+	for _, form := range cleanList(forms) {
+		available := false
+		for _, rd := range readers {
+			if slices.Contains(selected, rd.Ring()) && slices.Contains(rd.Forms(), form) {
+				available = true
+				break
+			}
+		}
+		if !available {
+			return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
+		}
+	}
+	return nil
+}
+
+func cleanList(in []string) []string {
+	var out []string
+	for _, value := range in {
+		for _, item := range strings.Split(value, ",") {
+			if item = strings.TrimSpace(item); item != "" && !slices.Contains(out, item) {
+				out = append(out, item)
+			}
+		}
+	}
+	return out
+}
+
+// openRings resolves recall's readable rings. A MISSING store is not an error
+// on this historical surface; context has the stricter requested-ring contract.
+func openRings(root string) []Reader {
 	var rs []Reader
-	if kbDir := filepath.Join(root, "kb"); isDir(kbDir) {
+	kbDir := kb.DefaultDir()
+	craftDir := skills.DefaultStoreDir()
+	if root != "" {
+		kbDir = filepath.Join(root, "kb")
+		craftDir = filepath.Join(root, "skills")
+	}
+	if isDir(kbDir) {
 		rs = append(rs, HostRing{Store: kb.Open(kbDir)})
 	}
-	if craftDir := filepath.Join(root, "craft"); isDir(craftDir) {
+	if isDir(craftDir) {
 		rs = append(rs, CapabilityRing{Folds: craft.OpenFolds(craftDir, redact.New())})
 	}
 	return rs
