@@ -25,6 +25,7 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 	return newRoot("tool", "Agentic CLI harnesses registered by the fleet",
 		newToolsList(opts),
 		newToolsShow(opts),
+		newSchema(KindTool),
 		newToolsAdd(opts),
 		newToolsSet(opts),
 		newRm(KindTool, opts, (*Catalog).RemoveTool),
@@ -41,6 +42,7 @@ func NewModelsCmd(opts ...Option) *cobra.Command {
 	return newRoot("model", "Inference backends the fleet can bind to",
 		newModelsList(opts),
 		newModelsShow(opts),
+		newSchema(KindModel),
 		newModelsAdd(opts),
 		newModelsSet(opts),
 		newRm(KindModel, opts, (*Catalog).RemoveModel),
@@ -57,6 +59,7 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 	return newRoot("agent", "Named tool:model bindings — the enlistable unit",
 		newAgentsList(opts),
 		newAgentsShow(opts),
+		newSchema(KindAgent),
 		newAgentsAdd(opts),
 		newAgentsClone(opts),
 		newAgentsSet(opts),
@@ -167,6 +170,7 @@ func newToolsList(opts []Option) *cobra.Command {
 
 func newToolsShow(opts []Option) *cobra.Command {
 	var asJSON, asYAML bool
+	var field string
 	c := &cobra.Command{
 		Use:           "show <name>",
 		Short:         "Print a tool's definition",
@@ -181,11 +185,18 @@ func newToolsShow(opts []Option) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("fleet: no tool %q", args[0])
 			}
+			if field != "" {
+				if err := emitField(cmd.OutOrStdout(), t, KindTool, field, asJSON); err != nil {
+					return reportPathError(cmd, KindTool, err)
+				}
+				return nil
+			}
 			return emit(cmd.OutOrStdout(), t, asJSON)
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
 	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob (the default)")
+	c.Flags().StringVar(&field, "field", "", "print one dotted path")
 	return c
 }
 
@@ -336,6 +347,7 @@ func newModelsList(opts []Option) *cobra.Command {
 
 func newModelsShow(opts []Option) *cobra.Command {
 	var asJSON, asYAML bool
+	var field string
 	c := &cobra.Command{
 		Use:           "show <name>",
 		Short:         "Print a model's definition",
@@ -350,11 +362,18 @@ func newModelsShow(opts []Option) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("fleet: no model %q", args[0])
 			}
+			if field != "" {
+				if err := emitField(cmd.OutOrStdout(), m, KindModel, field, asJSON); err != nil {
+					return reportPathError(cmd, KindModel, err)
+				}
+				return nil
+			}
 			return emit(cmd.OutOrStdout(), m, asJSON)
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
 	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob (the default)")
+	c.Flags().StringVar(&field, "field", "", "print one dotted path")
 	return c
 }
 
@@ -500,6 +519,7 @@ func dashIfEmpty(s string) string {
 
 func newAgentsShow(opts []Option) *cobra.Command {
 	var asJSON, asYAML bool
+	var field string
 	c := &cobra.Command{
 		Use:           "show <name>",
 		Short:         "Print an agent's binding",
@@ -515,6 +535,12 @@ func newAgentsShow(opts []Option) *cobra.Command {
 			a, ok := cat.Agent(args[0])
 			if !ok {
 				return fmt.Errorf("fleet: no agent %q", args[0])
+			}
+			if field != "" {
+				if err := emitField(cmd.OutOrStdout(), a, KindAgent, field, asJSON); err != nil {
+					return reportPathError(cmd, KindAgent, err)
+				}
+				return nil
 			}
 			if asJSON {
 				return emit(cmd.OutOrStdout(), a, true)
@@ -545,6 +571,7 @@ func newAgentsShow(opts []Option) *cobra.Command {
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of a summary")
 	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob")
+	c.Flags().StringVar(&field, "field", "", "print one dotted path")
 	return c
 }
 
