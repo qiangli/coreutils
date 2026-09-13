@@ -158,6 +158,8 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newListCmd(&dir, resolved))
 	cmd.AddCommand(newIndexCmd(&dir, resolved))
 	cmd.AddCommand(newLogCmd(&dir, resolved))
+	cmd.AddCommand(newBacklinksCmd(&dir, resolved))
+	cmd.AddCommand(newDoctorCmd(&dir, resolved))
 	return cmd
 }
 
@@ -861,6 +863,157 @@ func newLogCmd(dir, ring *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVarP(&n, "n", "n", 20, "number of entries")
+	return cmd
+}
+
+// --- backlinks -----------------------------------------------------------
+
+// graphNodes collects the link-graph nodes visible from the resolved store:
+// every kb page, plus the repo's todo/issue records when the store is a repo
+// ring (so todo→kb citations resolve). todoKnown reports whether the todo
+// namespace was enumerable — the caller uses it so an un-enumerable todo link
+// is treated as external, not dangling.
+func graphNodes(store *Store) (nodes []LinkNode, todoKnown bool, err error) {
+	pages, err := store.List()
+	if err != nil {
+		return nil, false, err
+	}
+	nodes = KBNodes(pages)
+	if td := siblingTodoDir(store.Dir()); td != "" {
+		todoKnown = true
+		tn, err := TodoNodesFromDir(td)
+		if err != nil {
+			return nil, false, err
+		}
+		nodes = append(nodes, tn...)
+	}
+	return nodes, todoKnown, nil
+}
+
+type backlinkJSON struct {
+	Ref   string `json:"ref"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+}
+
+func newBacklinksCmd(dir, ring *string) *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "backlinks <slug>",
+		Short: "Show every record (kb page or todo) whose body links to this page",
+		Long: `Resolve the link graph at READ TIME: list every kb page and todo/issue whose
+body cites <slug> (via [[slug]], [[kb:slug]], or a pages/<slug>.md link). Reads
+only — nothing is recorded, no body is rewritten.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			store := openRing(*dir, *ring)
+			nodes, _, err := graphNodes(store)
+			if err != nil {
+				return err
+			}
+			target := LinkNode{Kind: LinkKB, ID: args[0]}
+			back := Backlinks(target, nodes)
+			out := c.OutOrStdout()
+			if jsonOut {
+				rows := make([]backlinkJSON, 0, len(back))
+				for _, n := range back {
+					rows = append(rows, backlinkJSON{Ref: n.Ref(), Kind: string(n.Kind), Title: n.Title})
+				}
+				payload := struct {
+					Slug      string         `json:"slug"`
+					Backlinks []backlinkJSON `json:"backlinks"`
+				}{Slug: args[0], Backlinks: rows}
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(payload)
+			}
+			if len(back) == 0 {
+				fmt.Fprintf(out, "no records link to kb:%s\n", args[0])
+				return nil
+			}
+			fmt.Fprintf(out, "%d record(s) link to kb:%s\n", len(back), args[0])
+			for _, n := range back {
+				fmt.Fprintf(out, "  %s\t%s\n", n.Ref(), n.Title)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON output")
+	return cmd
+}
+
+// --- doctor ----------------------------------------------------------------
+
+func newDoctorCmd(dir, ring *string) *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Flag link-graph and hygiene problems (never fixes — repair with update/supersede)",
+		Long: `Report, and only report: dangling links, orphan pages (no inbound, no
+outbound, not validated), near-duplicate pairs, and records missing a form or
+description. doctor FLAGS, it is never 'kb fix' — nothing here rewrites a body,
+so a reported page is left byte-identical on disk. Scope it with --ring.`,
+		Args: cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			store := openRing(*dir, *ring)
+			pages, err := store.List()
+			if err != nil {
+				return err
+			}
+			var todoNodes []LinkNode
+			todoKnown := false
+			if td := siblingTodoDir(store.Dir()); td != "" {
+				todoKnown = true
+				if todoNodes, err = TodoNodesFromDir(td); err != nil {
+					return err
+				}
+			}
+			rep := Doctor(pages, store, todoNodes, todoKnown)
+			rep.Ring = *ring
+			out := c.OutOrStdout()
+			if jsonOut {
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(rep)
+			}
+			if rep.Clean() {
+				fmt.Fprintln(out, "kb doctor: no issues found")
+				return nil
+			}
+			if len(rep.Dangling) > 0 {
+				fmt.Fprintf(out, "dangling links (%d):\n", len(rep.Dangling))
+				for _, d := range rep.Dangling {
+					fmt.Fprintf(out, "  %s -> %s  %s\n", d.From, d.Target, d.Raw)
+				}
+			}
+			if len(rep.Orphans) > 0 {
+				fmt.Fprintf(out, "orphan pages (%d):\n", len(rep.Orphans))
+				for _, s := range rep.Orphans {
+					fmt.Fprintf(out, "  %s\n", s)
+				}
+			}
+			if len(rep.NearDuplicates) > 0 {
+				fmt.Fprintf(out, "near-duplicate pairs (%d):\n", len(rep.NearDuplicates))
+				for _, p := range rep.NearDuplicates {
+					fmt.Fprintf(out, "  %s <-> %s\n", p.A, p.B)
+				}
+			}
+			if len(rep.MissingForm) > 0 {
+				fmt.Fprintf(out, "missing form (%d):\n", len(rep.MissingForm))
+				for _, s := range rep.MissingForm {
+					fmt.Fprintf(out, "  %s\n", s)
+				}
+			}
+			if len(rep.MissingDescription) > 0 {
+				fmt.Fprintf(out, "missing description (%d):\n", len(rep.MissingDescription))
+				for _, s := range rep.MissingDescription {
+					fmt.Fprintf(out, "  %s\n", s)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON output")
 	return cmd
 }
 

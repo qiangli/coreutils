@@ -6,6 +6,7 @@ package todo
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/role"
 
 	"github.com/qiangli/coreutils/pkg/issue"
+	"github.com/qiangli/coreutils/pkg/kb"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -340,7 +342,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 }
 
 func newShowCmd(sf storeFunc) *cobra.Command {
-	var jsonOut bool
+	var jsonOut, links bool
 	cmd := &cobra.Command{
 		Use:   "show <id|prefix>",
 		Short: "show one task",
@@ -355,6 +357,15 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 				return err
 			}
 			if jsonOut {
+				if links {
+					out, in := resolveLinks(st, it)
+					return emitJSON(cmd, struct {
+						*issue.Issue
+						Overdue  bool      `json:"overdue"`
+						Outbound []linkRef `json:"outbound"`
+						Inbound  []linkRef `json:"inbound"`
+					}{Issue: it, Overdue: IsOverdue(it), Outbound: out, Inbound: in})
+				}
 				return emitJSON(cmd, itemJSON{Issue: it, Overdue: IsOverdue(it)})
 			}
 			w := cmd.OutOrStdout()
@@ -393,11 +404,64 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 			if body := strings.TrimSpace(it.Body); body != "" {
 				fmt.Fprintf(w, "\n%s\n", body)
 			}
+			if links {
+				out, in := resolveLinks(st, it)
+				printLinks(w, out, in)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	cmd.Flags().BoolVar(&links, "links", false, "resolve the body's links at read time: outbound citations + inbound backlinks (kb pages and todos)")
 	return cmd
+}
+
+// linkRef is one resolved (or dangling) link on the todo show --links surface.
+type linkRef struct {
+	Ref    string `json:"ref"`              // kb:<slug> | todo:<id> | sprint:<n>
+	Title  string `json:"title,omitempty"`  // the target's title, when resolved
+	Status string `json:"status,omitempty"` // "resolved" | "dangling" | "external"
+}
+
+// resolveLinks computes an item's outbound links and inbound backlinks through
+// the SAME resolver kb uses (pkg/kb is the one home of the parser; todo calls it
+// read-only). The graph is this repo's kb pages plus its todo/issue records.
+func resolveLinks(st *issue.Store, it *issue.Issue) (outbound, inbound []linkRef) {
+	var nodes []kb.LinkNode
+	if pages, err := kb.Open(filepath.Join(st.Root, kb.RepoSub)).List(); err == nil {
+		nodes = append(nodes, kb.KBNodes(pages)...)
+	}
+	if items, err := st.List(); err == nil {
+		for _, x := range items {
+			nodes = append(nodes, kb.TodoNode(x.ID, x.Title, x.Body))
+		}
+	}
+	self := kb.TodoNode(it.ID, it.Title, it.Body)
+
+	for _, l := range kb.ParseLinks(self.Body) {
+		if n, ok := kb.ResolveLink(l, nodes); ok && n.Ref() != self.Ref() {
+			outbound = append(outbound, linkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved"})
+		} else if l.Kind == kb.LinkSprint {
+			outbound = append(outbound, linkRef{Ref: l.Ref(), Status: "external"})
+		} else {
+			outbound = append(outbound, linkRef{Ref: l.Ref(), Status: "dangling"})
+		}
+	}
+	for _, n := range kb.Backlinks(self, nodes) {
+		inbound = append(inbound, linkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved"})
+	}
+	return outbound, inbound
+}
+
+func printLinks(w io.Writer, outbound, inbound []linkRef) {
+	fmt.Fprintf(w, "\n  outbound (%d)\n", len(outbound))
+	for _, l := range outbound {
+		fmt.Fprintf(w, "    -> %s  %s  %s\n", l.Ref, dash(l.Title), l.Status)
+	}
+	fmt.Fprintf(w, "  inbound (%d)\n", len(inbound))
+	for _, l := range inbound {
+		fmt.Fprintf(w, "    <- %s  %s\n", l.Ref, dash(l.Title))
+	}
 }
 
 func newStatusCmd(sf storeFunc) *cobra.Command {
