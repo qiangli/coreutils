@@ -8,12 +8,15 @@ import (
 	"testing/fstest"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 // store builds a catalog whose local ring is a scratch dir, over the real
-// embedded baseline — the shape an operator actually runs with.
+// embedded tools and the test ring's models and agents — the shape an
+// operator runs with once an overlay ring is mounted.
 func store(t *testing.T) (*Catalog, string) {
 	t.Helper()
+	fleettest.Ring(t)
 	root := t.TempDir()
 	return New(WithRoot(root)), root
 }

@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 	"github.com/qiangli/coreutils/pkg/secrets"
 )
 
 func TestNamedYcodeChildEnvPreservesResolvedCredentialNames(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))

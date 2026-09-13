@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func TestInvokeLiveStreamEnablesDeclaredToolEvents(t *testing.T) {
@@ -51,10 +52,12 @@ func permitUnsafeLaunch(t *testing.T) {
 	t.Setenv(UnsafeLaunchEnv, "1")
 }
 
-// pinCatalog points the launcher at the compiled-in baseline only, so a
-// developer's own ~/.config/bashy store cannot change what these tests see.
+// pinCatalog points the launcher at the compiled-in tools plus the test
+// ring's models and agents, over an empty local store, so a developer's own
+// ~/.config/bashy store cannot change what these tests see.
 func pinCatalog(t *testing.T) {
 	t.Helper()
+	fleettest.Ring(t)
 	root := t.TempDir()
 	prev := newCatalog
 	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
@@ -129,6 +132,7 @@ func TestModelIsTheProviderSideID(t *testing.T) {
 // A nickname resolves to its binding, and so do its aliases.
 func TestNicknameAndAliasSelectTheSameModel(t *testing.T) {
 	permitUnsafeLaunch(t)
+	fleettest.Ring(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 	if err := cat.SaveAgent(fleet.Agent{
@@ -307,6 +311,7 @@ func TestUnNicknamedBindingKeepsItsRawName(t *testing.T) {
 	// test asserts NAME/MODEL resolution, not the gate, so permit unsafe launches —
 	// the same convention the other rendering tests follow.
 	permitUnsafeLaunch(t)
+	fleettest.Ring(t)
 	root := t.TempDir()
 	prev := newCatalog
 	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root), fleet.WithoutLocalStore()) }
@@ -418,6 +423,7 @@ func hasEnv(env []string, kv string) bool { return contains(env, kv) }
 // the executable path. A binding written with a path would never match the
 // capability matrix, whose rows are keyed by tool name.
 func TestBindingUsesRegistryNamesNotThePath(t *testing.T) {
+	fleettest.Ring(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 	if err := cat.SaveTool(fleet.Tool{

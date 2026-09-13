@@ -10,6 +10,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/chat"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func ambiguousRosterFleet(t *testing.T) *fleet.Catalog {
@@ -202,11 +203,11 @@ func TestSeatByBandSkipsDirectProviderHarnessWithoutItsKey(t *testing.T) {
 // "the nickname is Sable".
 func pinFleet(t *testing.T) func(string) string {
 	t.Helper()
-	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
+	fleettest.Ring(t)
 	return func(agent string) string {
 		a, ok := fleet.New().Agent(agent)
 		if !ok {
-			t.Fatalf("baseline has no agent %q", agent)
+			t.Fatalf("test ring has no agent %q", agent)
 		}
 		if a.NickName() == "" {
 			t.Fatalf("%s drew no nickname", agent)

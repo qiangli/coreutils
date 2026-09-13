@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func TestDecodeWeaveDoctorFindings(t *testing.T) {
@@ -101,6 +103,7 @@ func TestDecodeTodoListRejectsUnversionedPayload(t *testing.T) {
 // weave cooldown data is an expected scope reduction, not a broken board
 // source and must not become the dashboard's "1 source warning" banner.
 func TestFleetSourceOutsideRepoUsesPATHFallbackWithoutWarning(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
 
@@ -121,6 +124,7 @@ func TestFleetSourceOutsideRepoUsesPATHFallbackWithoutWarning(t *testing.T) {
 // A genuine availability collector failure remains a warning after the PATH
 // fallback is populated. Only the expected absence of a repo is quiet.
 func TestFleetSourceStillReportsRealAvailabilityFailure(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv("HOME", t.TempDir())
 	b := &Board{}
 	want := errors.New("broken availability payload")

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func testCatalog(root string) CatalogFunc {
@@ -15,6 +16,7 @@ func testCatalog(root string) CatalogFunc {
 }
 
 func TestResolveWithCatalogRendersNicknameFromFleetTemplate(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv(UnsafeLaunchEnv, "1")
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
@@ -35,6 +37,7 @@ func TestResolveWithCatalogRendersNicknameFromFleetTemplate(t *testing.T) {
 }
 
 func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv(UnsafeLaunchEnv, "1")
 	l, err := ResolveWithCatalog("opencode:deepseek-v4-pro", Options{}, testCatalog(t.TempDir()))
 	if err != nil {
@@ -46,6 +49,7 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 }
 
 func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv(UnsafeLaunchEnv, "1")
 	for _, tc := range []struct {
 		name, model string
@@ -154,6 +158,7 @@ func TestCodexExplicitSandboxRemovesLocalBypassOverride(t *testing.T) {
 }
 
 func TestManagedSprintOwnerProfilesResolveWithExplicitUnsafeAuthorization(t *testing.T) {
+	fleettest.Ring(t)
 	root := t.TempDir()
 	for _, tc := range []struct {
 		agent string
@@ -183,6 +188,7 @@ func TestManagedSprintOwnerProfilesResolveWithExplicitUnsafeAuthorization(t *tes
 }
 
 func TestResolveCarriesSelectedCredentialNames(t *testing.T) {
+	fleettest.Ring(t)
 	t.Setenv(UnsafeLaunchEnv, "1")
 	l, err := ResolveWithCatalog("ycode:glm-5.2", Options{}, testCatalog(t.TempDir()))
 	if err != nil {

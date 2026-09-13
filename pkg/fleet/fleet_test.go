@@ -6,12 +6,15 @@ import (
 	"testing/fstest"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
-// baseline builds a catalog over the compiled-in ring only, so a
-// developer's real ~/.config/bashy store cannot influence a test.
+// baseline builds a catalog over the compiled-in tools plus the test ring's
+// models and agents, with no local store, so a developer's real
+// ~/.config/bashy store cannot influence a test.
 func baseline(t *testing.T) *Catalog {
 	t.Helper()
+	fleettest.Ring(t)
 	return New(WithoutLocalStore(), WithRoot(t.TempDir()))
 }
 
@@ -356,6 +359,7 @@ func TestLocalRingShadowsBaseline(t *testing.T) {
 
 // Many nicknames, one binding.
 func TestAliasesResolveToOneAgent(t *testing.T) {
+	fleettest.Ring(t) // `fable` is the family alias of the ring's fable5
 	overlay := assetring.FileFS(fstest.MapFS{
 		"bond.yaml": {Data: []byte("agents:\n  - name: \"007\"\n    aliases: [smarty, bond]\n    tool: claude\n    model: fable\n")},
 	}, assetring.RingLocal, ".yaml")
