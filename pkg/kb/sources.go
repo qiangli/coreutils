@@ -2,6 +2,7 @@ package kb
 
 import (
 	"bufio"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -154,6 +155,139 @@ func jsonlSource(name, path string) *SourceInfo {
 		info.Newest = fi.ModTime().UTC().Format(time.RFC3339)
 	}
 	return info
+}
+
+// --- memex source records --------------------------------------------------
+
+// memexSource is the xfer tag suffix and Source.Tool stamp for records moved
+// out of a ycode memex store.
+const memexSource = "memex"
+
+// memexMemory is the subset of a ycode memex memory record kb needs to move a
+// memory into the agent ring. kb reimplements the frontmatter-md parse rather
+// than importing ycode's memex package: pkg/kb is an import leaf (scope/bus/git
+// only), and the on-disk frontmatter shape — not the Go type — is the stable
+// contract. Fields mirror memory.Memory{Name,Description,Type,Scope,Content,
+// Tags,ContentHash,SupersededBy,ValidUntil}.
+type memexMemory struct {
+	Name         string
+	Description  string
+	Type         string
+	Scope        string
+	Content      string
+	Tags         []string
+	ContentHash  string     // md5(normalize(content)); computed when absent on disk
+	SupersededBy string     // NAME of the memory that replaced this one
+	ValidUntil   *time.Time // temporal validity; a past value means expired
+}
+
+// readMemexDir parses every frontmatter-md memory file in dir into memexMemory
+// records, in deterministic (name-sorted) order. MEMORY.md is an index, not an
+// entry — skipped, the same rule mdDirSource follows. A missing dir returns no
+// records and no error (absence is normal); a corrupt file is skipped.
+func readMemexDir(dir string) ([]*memexMemory, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "MEMORY.md" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	var out []*memexMemory
+	for _, name := range names {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if m := parseMemexMemory(string(b)); m != nil {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// parseMemexMemory parses one memex memory file: a `key: value` YAML-ish
+// frontmatter block over a free markdown body, exactly the shape memex's own
+// store writes. Unknown keys are ignored (kb reads the world's files, it does
+// not lint them). The content hash is computed from the body when the file did
+// not carry one, matching memex's md5(normalize(content)).
+func parseMemexMemory(data string) *memexMemory {
+	m := &memexMemory{}
+	if !strings.HasPrefix(data, "---\n") {
+		m.Content = data
+		return finishMemexMemory(m)
+	}
+	endIdx := strings.Index(data[4:], "\n---\n")
+	if endIdx == -1 {
+		m.Content = data
+		return finishMemexMemory(m)
+	}
+	frontmatter := data[4 : 4+endIdx]
+	m.Content = strings.TrimSpace(data[4+endIdx+5:])
+	for line := range strings.SplitSeq(frontmatter, "\n") {
+		key, value, ok := strings.Cut(line, ": ")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.TrimSpace(key) {
+		case "name":
+			m.Name = value
+		case "description":
+			m.Description = value
+		case "type":
+			m.Type = value
+		case "scope":
+			m.Scope = value
+		case "tags":
+			if value != "" {
+				m.Tags = splitMemexTags(value)
+			}
+		case "content_hash":
+			m.ContentHash = value
+		case "superseded_by":
+			m.SupersededBy = value
+		case "valid_until":
+			if t, err := time.Parse(time.RFC3339, value); err == nil {
+				m.ValidUntil = &t
+			}
+		}
+	}
+	return finishMemexMemory(m)
+}
+
+func finishMemexMemory(m *memexMemory) *memexMemory {
+	if m.ContentHash == "" {
+		m.ContentHash = memexContentHash(m.Content)
+	}
+	return m
+}
+
+// splitMemexTags splits memex's comma-joined tag string, dropping blanks.
+func splitMemexTags(s string) []string {
+	var out []string
+	for t := range strings.SplitSeq(s, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// memexContentHash reproduces memex's dedup hash: md5 over case-folded,
+// whitespace-collapsed content. Deterministic across runs, so a second
+// transfer of the same store re-derives the same hashes and moves nothing.
+func memexContentHash(content string) string {
+	normalized := strings.Join(strings.Fields(strings.ToLower(content)), " ")
+	return fmt.Sprintf("%x", md5.Sum([]byte(normalized)))
 }
 
 // TransferredCounts scans live pages for xfer:<source> tags — the
