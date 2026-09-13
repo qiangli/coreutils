@@ -3,12 +3,13 @@ id: 7a780ae10675
 kind: task
 title: 'C1 pkg/kb form: field (note|page|relation; legacy=page) + agent ring under agent-data via pkg/scope; --ring/--form flags; owner-only read'
 seq: 117
-status: assigned
+status: done
 priority: p0
 created: 2026-09-13T01:31:31.604715Z
 weave: 12
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:05:31.344286Z
 ---
 
 Goal: pkg/kb gains the two record-level facets: form and ring.
