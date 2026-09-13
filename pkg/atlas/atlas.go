@@ -862,9 +862,15 @@ func init() {
 	// plural spelling that keeps old callers working. `agent` also carries the
 	// identity helper (`agent whoami`) that used to be a verb of its own — one
 	// noun, one front door.
-	addVerb("tool", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("model", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("agent", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	//
+	// All four registry nouns — tool, model, agent, and skill (under knowledge,
+	// below) — carry `rm`, and `rm` deletes a local-store entry with no undo:
+	// destructive, on every one of them, and declared the same way on every one
+	// of them (operator decision D4). Rows that disagreed here would tell a policy
+	// engine that `skill rm` is safer than `tool rm`, which is not true.
+	addVerb("tool", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapDestructive}})
+	addVerb("model", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapDestructive}})
+	addVerb("agent", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapDestructive}})
 	addVerb("person", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("whois", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("schedule", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
@@ -901,7 +907,9 @@ func init() {
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
 	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("skill", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
+	// skill: destructive for the same reason as tool/model/agent above — `rm`
+	// on the local ring, no undo.
+	addVerb("skill", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapDestructive}})
 	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 	// recall was a top-level verb until 2026-08-05 and is now `kb recall` — the
 	// cross-ring read surface mounted under the noun that owns memory. It has no
@@ -1176,7 +1184,11 @@ func init() {
 	)
 
 	// destroy — can IRREVERSIBLY lose data.
-	eff(EffDestroy, "dd", "mail", "mailx", "rm", "shred", "truncate", "unlink")
+	eff(EffDestroy, "dd", "mail", "mailx", "rm", "shred", "truncate", "unlink",
+		// The registry nouns' `rm` deletes a local-store entry outright; the
+		// four rows declare it alike (see the tool/model/agent entries).
+		"tool", "model", "agent", "skill",
+	)
 
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,

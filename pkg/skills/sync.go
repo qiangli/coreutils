@@ -6,6 +6,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
@@ -62,12 +63,22 @@ func newSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			unpacked, err := expandRecords(res.Dir)
+			if err != nil {
+				return err
+			}
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
-				return enc.Encode(res)
+				return enc.Encode(struct {
+					fleet.SyncResult
+					Unpacked int `json:"unpacked,omitempty"`
+				}{res, unpacked})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "skills: %d pulled into %s\n", res.Fetched, res.Dir)
+			if unpacked > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "skills: %d unpacked from records into full folders\n", unpacked)
+			}
 			return nil
 		},
 	}
@@ -75,4 +86,50 @@ func newSyncCmd() *cobra.Command {
 	c.Flags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY)")
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return c
+}
+
+// expandRecords rewrites every pulled skill whose SKILL.md is in fact a
+// `kind: skill` record into the full folder that record carries, and reports
+// how many it unpacked.
+//
+// fleet.Sync writes whatever the registry served as <name>/SKILL.md. That is
+// right for the plain-SKILL.md registry of today and wrong the moment an entry
+// is published as a record: the ring would serve a YAML document as a skill
+// body, and reference.md / skill.dhnt would be nowhere. A Content blob that
+// ParseRecord accepts (strict fields, kind: skill, files carrying SKILL.md) is
+// unpacked in place under the registry's entry name; anything else is left
+// exactly as written, so the current cloudbox keeps working unchanged. A plain
+// SKILL.md cannot be mistaken for a record — its frontmatter has no kind and
+// carries keys the strict decoder refuses.
+func expandRecords(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		folder := filepath.Join(dir, e.Name())
+		body, err := os.ReadFile(filepath.Join(folder, skillMarker))
+		if err != nil {
+			continue
+		}
+		rec, err := ParseRecord(body)
+		if err != nil {
+			continue
+		}
+		if err := os.RemoveAll(folder); err != nil {
+			return n, err
+		}
+		if err := WriteFolder(rec, folder); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
