@@ -82,6 +82,9 @@ func Context(q Query, readers ...Reader) ContextResult {
 			continue
 		}
 		for _, h := range ringHits {
+			if h.Form == "" && len(rd.Forms()) == 1 {
+				h.Form = rd.Forms()[0]
+			}
 			if len(q.Forms) > 0 && !slices.Contains(q.Forms, h.Form) {
 				continue
 			}

@@ -209,6 +209,45 @@ func TestContextChoosesLargestResolutionThatFits(t *testing.T) {
 	}
 }
 
+func TestContextKCapsAllReadersInOneRing(t *testing.T) {
+	isolateRecallStores(t)
+	res := Context(Query{Text: "widget", K: 2, Forms: []string{kb.FormNote, kb.FormPage}},
+		staticReader{ring: RingRepo, hits: []Hit{
+			{Ring: RingRepo, Form: kb.FormPage, ID: "kb:page-a", Cue: "widget page a", Score: 4},
+			{Ring: RingRepo, Form: kb.FormPage, ID: "kb:page-b", Cue: "widget page b", Score: 3},
+		}},
+		formStaticReader{ring: RingRepo, forms: []string{kb.FormNote}, hits: []Hit{
+			{Ring: RingRepo, Form: kb.FormNote, ID: "kb:note-a", Cue: "widget note a", Score: 2},
+			{Ring: RingRepo, Form: kb.FormNote, ID: "kb:note-b", Cue: "widget note b", Score: 1},
+		}})
+	if len(res.Blocks) != 2 {
+		t.Fatalf("two readers in one ring returned %d blocks with k=2", len(res.Blocks))
+	}
+}
+
+func TestAgentRingCheckpointRequiresMatchingEpisode(t *testing.T) {
+	isolateRecallStores(t)
+	dir := filepath.Join(os.Getenv("YCODE_DATA_DIR"), "kb")
+	store := kb.Open(dir)
+	for _, p := range []*kb.Page{
+		{Slug: "ordinary", Form: kb.FormNote, Type: kb.TypeLesson, Title: "widget ordinary", Status: kb.StatusCandidate, Source: &kb.Source{Tool: "owner"}},
+		{Slug: "checkpoint", Form: kb.FormNote, Type: kb.TypeLesson, Title: "widget checkpoint", Tags: []string{"checkpoint"}, Status: kb.StatusCandidate, Source: &kb.Source{Tool: "owner", Episode: "ep-7"}},
+	} {
+		if err := store.Write(p, "add"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ring := AgentRing{Store: kb.OpenAgentRing(dir, "owner"), Path: dir}
+	without, err := ring.Recall(Query{Text: "widget", Forms: []string{kb.FormNote}})
+	if err != nil || len(without) != 1 || without[0].ID != "kb:ordinary" {
+		t.Fatalf("unnamed episode hits=%+v err=%v", without, err)
+	}
+	with, err := ring.Recall(Query{Text: "widget", Episode: "ep-7", Forms: []string{kb.FormNote}})
+	if err != nil || len(with) != 2 {
+		t.Fatalf("named episode hits=%+v err=%v", with, err)
+	}
+}
+
 func TestContextCommandInjectsReaderAndPassesFiles(t *testing.T) {
 	isolateRecallStores(t)
 	rd := &capturingReader{ring: RingRepo, forms: []string{kb.FormCode}, hits: []Hit{{Ring: RingRepo, Form: kb.FormCode, ID: "code:symbol", Cue: "symbol", Score: 1}}}
@@ -266,6 +305,18 @@ type capturingReader struct {
 	forms []string
 	hits  []Hit
 	query Query
+}
+
+type formStaticReader struct {
+	ring  string
+	forms []string
+	hits  []Hit
+}
+
+func (r formStaticReader) Ring() string    { return r.ring }
+func (r formStaticReader) Forms() []string { return r.forms }
+func (r formStaticReader) Recall(Query) ([]Hit, error) {
+	return append([]Hit(nil), r.hits...), nil
 }
 
 func (r *capturingReader) Ring() string    { return r.ring }
