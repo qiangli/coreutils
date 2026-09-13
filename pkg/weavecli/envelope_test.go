@@ -174,3 +174,18 @@ func TestEmitError_PlainShape(t *testing.T) {
 		t.Errorf("plain text format wrong: %q", got)
 	}
 }
+
+func TestInputRequiredExitCode(t *testing.T) {
+	var buf bytes.Buffer
+	code := EmitError(&buf, OutputJSON, "agentic", ExitInputRequired, errors.New("caller input required"))
+	if code != 6 {
+		t.Fatalf("code = %d, want 6", code)
+	}
+	var got Envelope
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Error == nil || got.Error.Code != "input_required" {
+		t.Fatalf("error = %#v, want input_required", got.Error)
+	}
+}

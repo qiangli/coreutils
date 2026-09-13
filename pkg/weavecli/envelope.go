@@ -31,6 +31,7 @@ const (
 	ExitPrecondFail   = 3
 	ExitStateConflict = 4
 	ExitDepUnhealthy  = 5
+	ExitInputRequired = 6
 )
 
 // Envelope is the structured response shape returned in --json mode.
@@ -237,6 +238,8 @@ func codeToString(code int) string {
 		return "state_conflict"
 	case ExitDepUnhealthy:
 		return "dependency_unhealthy"
+	case ExitInputRequired:
+		return "input_required"
 	case ExitOK:
 		return "ok"
 	default:

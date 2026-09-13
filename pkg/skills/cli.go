@@ -926,6 +926,9 @@ func runAdd(cmd *cobra.Command, cfg *config, arg string, force, asJSON bool) err
 		if err != nil {
 			return err
 		}
+		if err := ValidateRecordShareable(rec, hostScrubber()); err != nil {
+			return err
+		}
 		if err := validSkillName(rec.Name); err != nil {
 			return err
 		}

@@ -44,30 +44,30 @@ const RecordKind = "skill"
 // Record is the catalog/wire projection of one skill folder. Field order is
 // the emitted key order and is fixed.
 type Record struct {
-	Name        string `yaml:"name"`
-	Kind        string `yaml:"kind"` // always RecordKind
-	Description string `yaml:"description"`
+	Name        string `yaml:"name" json:"name"`
+	Kind        string `yaml:"kind" json:"kind"` // always RecordKind
+	Description string `yaml:"description" json:"description"`
 	// Requires is the frontmatter `metadata.requires` expression verbatim —
 	// the spelling the author wrote, not the parsed form.
-	Requires string `yaml:"requires,omitempty"`
+	Requires string `yaml:"requires,omitempty" json:"requires,omitempty"`
 	// Identity and Capability are derived from skill.dhnt (see DhntInfo);
 	// both are "" when the folder has no valid canonical face.
-	Identity   string         `yaml:"identity"`
-	Capability string         `yaml:"capability"`
-	Contract   RecordContract `yaml:"contract"`
+	Identity   string         `yaml:"identity" json:"identity"`
+	Capability string         `yaml:"capability" json:"capability"`
+	Contract   RecordContract `yaml:"contract" json:"contract"`
 	// Bindings are the check-*/step-* frontmatter metadata keys that bind
 	// contract predicates and step primitives to concrete commands.
-	Bindings map[string]string `yaml:"bindings,omitempty"`
+	Bindings map[string]string `yaml:"bindings,omitempty" json:"bindings,omitempty"`
 	// Files maps slash-separated relative paths to file contents verbatim,
 	// SKILL.md included.
-	Files map[string]string `yaml:"files"`
+	Files map[string]string `yaml:"files" json:"files"`
 }
 
 // RecordContract is the record's view of DhntInfo: what the skill guarantees.
 type RecordContract struct {
-	Effects []string `yaml:"effects"` // declared effect-cap atoms
-	Ensure  []string `yaml:"ensure"`  // contract predicate ids
-	Steps   int      `yaml:"steps"`
+	Effects []string `yaml:"effects" json:"effects"` // declared effect-cap atoms
+	Ensure  []string `yaml:"ensure" json:"ensure"`   // contract predicate ids
+	Steps   int      `yaml:"steps" json:"steps"`
 }
 
 // ErrCarriesIdentity reports a file that names host identity, which a
@@ -154,6 +154,26 @@ func RecordFrom(sk *Skill, src Source, scrub *redact.Scrubber) (Record, error) {
 		}
 	}
 	return rec, nil
+}
+
+// ValidateRecordShareable applies the same fail-closed identity gate used by
+// RecordFrom to a record received over the wire. Importers must call this
+// before rebuilding the folder: stdin must not be a softer admission path.
+func ValidateRecordShareable(rec Record, scrub *redact.Scrubber) error {
+	if scrub == nil {
+		return nil
+	}
+	paths := make([]string, 0, len(rec.Files))
+	for path := range rec.Files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		if _, found := scrub.Scrub(rec.Files[path]); len(found) > 0 {
+			return &ErrCarriesIdentity{Path: rec.Name + "/" + path, Kinds: findingKinds(found)}
+		}
+	}
+	return nil
 }
 
 // findingKinds lists the distinct kinds in a scrub result, sorted.

@@ -133,6 +133,7 @@ var packages = map[string]Package{
 	"admission":  libPkg("bus", "store-neutral deterministic byte budgeting, priority projection, overflow digests, and prepared acknowledgements behind Bus/chat turn preambles; it owns no messages and therefore has no command surface"),
 	"ask":        cmdPkg("ask"),
 	"board":      libPkg("sprint", "read-only machine-global projection behind the Sprint web panel and steward/conductor dashboards; it no longer owns a top-level verb"),
+	"bscript":    libPkg("agentic", "bounded command/script-to-skill yield lowering behind the agentic front door; it intentionally has no independently executable surface"),
 	"browser":    cmdPkg("browser"),
 	"bus":        cmdPkg("bus"),
 	"capability": cmdPkg("capability"),

@@ -209,6 +209,34 @@ func TestCLIAddRecordFile(t *testing.T) {
 	}
 }
 
+func TestCLIAddRecordRefusesHostIdentityBeforeWriting(t *testing.T) {
+	f := recordFixture(t)
+	host := "private-workstation.example"
+	prev := hostScrubber
+	hostScrubber = func(...redact.Option) *redact.Scrubber {
+		return redact.New(redact.WithHost(host))
+	}
+	t.Cleanup(func() { hostScrubber = prev })
+
+	rec := Record{
+		Name: "leaky",
+		Kind: RecordKind,
+		Files: map[string]string{
+			"SKILL.md": "---\nname: leaky\ndescription: leaky record\nmetadata:\n  step-run: ssh " + host + "\n---\n",
+		},
+	}
+	b, err := MarshalRecord(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.runIn(string(b), "add", "-"); err == nil || !strings.Contains(err.Error(), "carries host identity") {
+		t.Fatalf("add error = %v, want identity refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(DefaultStoreDir(), "leaky")); !os.IsNotExist(err) {
+		t.Fatalf("leaky record wrote to store: %v", err)
+	}
+}
+
 func TestCLIExportYAML(t *testing.T) {
 	f := recordFixture(t)
 	dst := t.TempDir()

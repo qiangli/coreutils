@@ -18,12 +18,13 @@ import (
 // saves: a result with a note instead of an error to diagnose and retry.
 //
 // Wire it AFTER permission validation and BEFORE the coreutils/fork handlers, so
-// the adapted argv is what actually executes. Self-silences unless hints are
-// enabled (agent mode / BASHY_HINTS), same gate as pkg/nudge.
+// the adapted argv is what actually executes. Rewriting requires explicit
+// agentic mode and an enabled disclosure channel; ambient agent detection alone
+// never changes argv.
 func Handler() func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			if !nudge.Enabled() {
+			if !weavecli.IsAgent() || !nudge.Enabled() {
 				return next(ctx, args)
 			}
 			fixed, note, ok := Adapt(args)

@@ -773,6 +773,8 @@ func init() {
 
 	// orchestration
 	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("agentic", Entry{Stage: StageCross, Group: GroupPlatform, Tier: TierUserland,
+		Caps: []string{CapJSON, CapSpawnsProcesses}, Effects: []string{EffExec}})
 	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON},
 		Web: &WebSurface{Label: "Sprint", Mount: "sprint", Mode: WebInProcess, DefaultOn: true}})
 	// `dag --serve` HAS a browser view, but proxying it through the launcher does
