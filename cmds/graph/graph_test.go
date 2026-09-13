@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	gfygraph "github.com/qiangli/gfy/pkg/graph"
+
+	"github.com/qiangli/coreutils/pkg/codegraph"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -17,6 +21,7 @@ import (
 // Gamma -> Alpha -> Beta, so the graph has real nodes and edges.
 func fixtureRepo(t *testing.T) string {
 	t.Helper()
+	isolateStores(t)
 	dir := t.TempDir()
 	files := map[string]string{
 		"a.go": "package fixture\n\nfunc Alpha() int { return Beta() }\n\nfunc Beta() int { return 42 }\n",
@@ -28,6 +33,13 @@ func fixtureRepo(t *testing.T) string {
 		}
 	}
 	return dir
+}
+
+func isolateStores(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"BASHY_KB_DIR", "BASHY_HOME", "BASHY_SKILLS_DIR", "YCODE_DATA_DIR"} {
+		t.Setenv(name, t.TempDir())
+	}
 }
 
 func run(t *testing.T, dir string, fn func(*tool.RunContext, []string) int, args ...string) (out, errOut string, code int) {
@@ -91,6 +103,42 @@ func TestGraphNeighborsFindsCallee(t *testing.T) {
 	}
 }
 
+func TestGraphNeighborsCallsAreOutgoingOnly(t *testing.T) {
+	dir := fixtureRepo(t)
+	out, errOut, code := run(t, dir, runNeighbors, "Alpha", "--relation", "calls", "--json")
+	if code != 0 {
+		t.Fatalf("graph neighbors exit %d, stderr=%s", code, errOut)
+	}
+	var p neighborsPayload
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	labels := map[string]bool{}
+	for _, n := range p.Neighbors {
+		labels[strings.TrimSuffix(n.Label, "()")] = true
+	}
+	if !labels["Beta"] {
+		t.Fatalf("expected Alpha calls to include callee Beta, got %#v", p.Neighbors)
+	}
+	if labels["Gamma"] {
+		t.Fatalf("caller Gamma must not appear in outgoing calls neighbors: %#v", p.Neighbors)
+	}
+
+	out, errOut, code = run(t, dir, runNeighbors, "Beta", "--relation", "calls", "--json")
+	if code != 0 {
+		t.Fatalf("graph neighbors exit %d, stderr=%s", code, errOut)
+	}
+	p = neighborsPayload{}
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	for _, n := range p.Neighbors {
+		if strings.TrimSuffix(n.Label, "()") == "Alpha" {
+			t.Fatalf("caller Alpha must not appear as Beta's outgoing call neighbor: %#v", p.Neighbors)
+		}
+	}
+}
+
 func TestGraphNeighborsMissingSymbol(t *testing.T) {
 	dir := fixtureRepo(t)
 	_, errOut, code := run(t, dir, runNeighbors, "NoSuchSymbolXYZ", "--plain")
@@ -116,8 +164,30 @@ func TestGraphImpactBlastRadius(t *testing.T) {
 	for _, n := range p.Nodes {
 		labels[strings.TrimSuffix(strings.TrimPrefix(n.Label, "."), "()")] = true
 	}
-	if !labels["Beta"] {
-		t.Errorf("expected Beta in Alpha's blast radius, got %#v", p.Nodes)
+	if !labels["Gamma"] {
+		t.Errorf("expected caller Gamma in Alpha's reverse-dependency impact, got %#v", p.Nodes)
+	}
+	if labels["Beta"] {
+		t.Errorf("callee Beta should not be in Alpha's directed reverse-dependency impact, got %#v", p.Nodes)
+	}
+}
+
+func TestGraphImpactUndirectedCouplingIsExplicit(t *testing.T) {
+	dir := fixtureRepo(t)
+	out, errOut, code := run(t, dir, runImpact, "Alpha", "--depth", "1", "--undirected", "--json")
+	if code != 0 {
+		t.Fatalf("graph impact exit %d, stderr=%s", code, errOut)
+	}
+	var p impactPayload
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	labels := map[string]bool{}
+	for _, n := range p.Nodes {
+		labels[strings.TrimSuffix(strings.TrimPrefix(n.Label, "."), "()")] = true
+	}
+	if !labels["Beta"] || !labels["Gamma"] {
+		t.Fatalf("--undirected should preserve coupling view, got %#v", p.Nodes)
 	}
 }
 
@@ -195,6 +265,7 @@ func TestGraphHotspotsRunsAndFilters(t *testing.T) {
 }
 
 func TestUbiquitousLabelsFiltered(t *testing.T) {
+	isolateStores(t)
 	// Unit-check the heuristic directly: normalized ubiquitous labels are dropped,
 	// domain labels survive.
 	cases := map[string]bool{
@@ -222,6 +293,70 @@ func TestGraphSHAStableAcrossBuilds(t *testing.T) {
 	}
 }
 
+func TestDirectedGraphBuildIsStableAndContainsFileToSymbol(t *testing.T) {
+	dir := fixtureRepo(t)
+	a, err := codegraph.BuildWithProgress(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := codegraph.BuildWithProgress(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.Graph.IsDirected() || !b.Graph.IsDirected() {
+		t.Fatalf("graphs must be directed: %v %v", a.Graph.IsDirected(), b.Graph.IsDirected())
+	}
+	nodesA, nodesB := a.Graph.Nodes(), b.Graph.Nodes()
+	if strings.Join(nodesA, "\x00") != strings.Join(nodesB, "\x00") {
+		t.Fatalf("node ids changed across identical builds:\n%v\n%v", nodesA, nodesB)
+	}
+	first := edgeOrientationByExtractedEndpoints(a.Graph)
+	second := edgeOrientationByExtractedEndpoints(b.Graph)
+	flips := 0
+	for key, orientA := range first {
+		if orientB, ok := second[key]; ok && orientA != orientB {
+			flips++
+		}
+	}
+	if flips != 0 {
+		t.Fatalf("source/target orientation flips across identical builds: %d", flips)
+	}
+	contains := 0
+	for _, e := range a.Graph.Edges() {
+		if edgeStr(e.Attrs, "relation") != "contains" {
+			continue
+		}
+		contains++
+		srcLabel := nodeLabel(a.Graph, e.Source)
+		tgtLabel := nodeLabel(a.Graph, e.Target)
+		if !strings.HasSuffix(srcLabel, ".go") || strings.HasSuffix(tgtLabel, ".go") {
+			t.Fatalf("contains edge must be file->symbol, got %s -> %s", srcLabel, tgtLabel)
+		}
+	}
+	if contains == 0 {
+		t.Fatal("fixture produced no contains edges")
+	}
+}
+
+func edgeOrientationByExtractedEndpoints(g *gfygraph.Graph) map[string]string {
+	edges := g.Edges()
+	sort.Slice(edges, func(i, j int) bool {
+		if edgeStr(edges[i].Attrs, "_src") != edgeStr(edges[j].Attrs, "_src") {
+			return edgeStr(edges[i].Attrs, "_src") < edgeStr(edges[j].Attrs, "_src")
+		}
+		if edgeStr(edges[i].Attrs, "_tgt") != edgeStr(edges[j].Attrs, "_tgt") {
+			return edgeStr(edges[i].Attrs, "_tgt") < edgeStr(edges[j].Attrs, "_tgt")
+		}
+		return edgeStr(edges[i].Attrs, "relation") < edgeStr(edges[j].Attrs, "relation")
+	})
+	out := make(map[string]string, len(edges))
+	for _, e := range edges {
+		key := edgeStr(e.Attrs, "relation") + "\x00" + edgeStr(e.Attrs, "_src") + "\x00" + edgeStr(e.Attrs, "_tgt")
+		out[key] = e.Source + "\x00" + e.Target
+	}
+	return out
+}
+
 func TestCacheFreshnessDetectsEdits(t *testing.T) {
 	dir := fixtureRepo(t)
 	// Build populates the cache.
@@ -239,5 +374,44 @@ func TestCacheFreshnessDetectsEdits(t *testing.T) {
 	}
 	if cacheFresh(dir, cache) {
 		t.Error("cache should be stale after a source edit")
+	}
+}
+
+func TestOldUndirectedCacheIsRebuilt(t *testing.T) {
+	dir := fixtureRepo(t)
+	cache := filepath.Join(dir, cacheRel)
+	old := gfygraph.New(false)
+	old.AddNode("old_file", map[string]any{"label": "old.go", "file_type": "code"})
+	old.AddNode("old_symbol", map[string]any{"label": "Old()", "file_type": "code"})
+	old.AddEdge("old_symbol", "old_file", map[string]any{
+		"relation": "contains", "_src": "old_file", "_tgt": "old_symbol",
+	})
+	if err := old.SaveJSON(cache); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Hour)
+	if err := os.Chtimes(cache, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if cacheFresh(dir, cache) {
+		t.Fatal("old undirected cache must not be considered fresh")
+	}
+	out, errOut, code := run(t, dir, runStats, "--json")
+	if code != 0 {
+		t.Fatalf("graph stats exit %d, stderr=%s", code, errOut)
+	}
+	var p statsPayload
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	loaded, err := codegraph.Load(cache)
+	if err != nil {
+		t.Fatalf("rebuilt cache should load: %v", err)
+	}
+	if !loaded.Graph.IsDirected() {
+		t.Fatal("rebuilt cache must be directed")
+	}
+	if searchOld := nodeLabel(loaded.Graph, "old_symbol"); searchOld == "Old()" {
+		t.Fatal("stale undirected cache was loaded instead of rebuilt")
 	}
 }

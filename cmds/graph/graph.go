@@ -73,8 +73,8 @@ func init() {
 		"graph stats [path] [--rebuild] [--json]", runStats)
 	addSub("neighbors", "direct neighbors (1-hop coupling) of a symbol",
 		"graph neighbors <symbol> [path] [--relation R] [--json]", runNeighbors)
-	addSub("impact", "blast radius: symbols coupled to a target (direct by default)",
-		"graph impact <file|symbol> [path] [--depth N=1] [--limit N=40] [--json]", runImpact)
+	addSub("impact", "reverse dependency blast radius (who depends on a target)",
+		"graph impact <file|symbol> [path] [--depth N=1] [--limit N=40] [--undirected] [--json]", runImpact)
 	addSub("path", "shortest path between two symbols in the code graph",
 		"graph path <a> <b> [path] [--max-hops N] [--json]", runPath)
 	addSub("hotspots", "most-connected entities (refactor/blast-radius centers)",
@@ -209,6 +209,9 @@ func loadOrBuild(rc *tool.RunContext, root string, forceRebuild, quiet bool) (*c
 func cacheFresh(root, cachePath string) bool {
 	ci, err := os.Stat(cachePath)
 	if err != nil {
+		return false
+	}
+	if err := codegraph.CacheFresh(cachePath); err != nil {
 		return false
 	}
 	return !newestSourceMTime(root).After(ci.ModTime())
@@ -568,10 +571,11 @@ const defaultImpactLimit = 40
 
 func runImpact(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
-	// Default depth 1 = direct coupling (the first-order blast radius). Depth 2+
-	// explodes on the undirected graph (14 → 124 nodes here) and is opt-in.
+	// Default depth 1 = direct reverse dependency. Depth 2+ can explode and is
+	// opt-in. --undirected preserves the old coupling query explicitly.
 	depth := 1
 	limit := defaultImpactLimit
+	undirected := false
 	var symbol, target string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -580,6 +584,8 @@ func runImpact(rc *tool.RunContext, args []string) int {
 			asJSON = true
 		case a == "--json=false" || a == "--plain":
 			asJSON = false
+		case a == "--undirected":
+			undirected = true
 		case a == "--depth":
 			if i+1 < len(args) {
 				i++
@@ -621,7 +627,10 @@ func runImpact(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "graph impact: not found: %s\n", symbol)
 		return 1
 	}
-	visited, edges := gc.Graph.BFS([]string{id}, depth)
+	visited, edges := reverseBFS(gc.Graph, []string{id}, depth)
+	if undirected {
+		visited, edges = gc.Graph.ToUndirected().BFS([]string{id}, depth)
+	}
 	total := len(visited)
 	truncated := 0
 	if limit > 0 && len(visited) > limit {
@@ -650,6 +659,58 @@ func runImpact(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Out, "… +%d more (raise with --limit N or narrow with --depth 1)\n", truncated)
 	}
 	return 0
+}
+
+func reverseBFS(g *gfygraph.Graph, startNodes []string, depth int) (visited []string, edges []gfygraph.EdgeData) {
+	incoming := make(map[string][]gfygraph.EdgeData)
+	for _, e := range g.Edges() {
+		incoming[e.Target] = append(incoming[e.Target], e)
+	}
+	for id := range incoming {
+		sort.Slice(incoming[id], func(i, j int) bool {
+			if incoming[id][i].Source != incoming[id][j].Source {
+				return incoming[id][i].Source < incoming[id][j].Source
+			}
+			return incoming[id][i].Target < incoming[id][j].Target
+		})
+	}
+	seen := make(map[string]bool)
+	edgeSeen := make(map[string]bool)
+	queue := make([]string, 0, len(startNodes))
+	depthMap := make(map[string]int)
+	for _, s := range startNodes {
+		if g.HasNode(s) {
+			queue = append(queue, s)
+			seen[s] = true
+			depthMap[s] = 0
+		}
+	}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		d := depthMap[current]
+		if d >= depth {
+			continue
+		}
+		for _, e := range incoming[current] {
+			edgeKey := e.Source + "\x00" + e.Target
+			if !edgeSeen[edgeKey] {
+				edgeSeen[edgeKey] = true
+				edges = append(edges, e)
+			}
+			if !seen[e.Source] {
+				seen[e.Source] = true
+				depthMap[e.Source] = d + 1
+				queue = append(queue, e.Source)
+			}
+		}
+	}
+	visited = make([]string, 0, len(seen))
+	for id := range seen {
+		visited = append(visited, id)
+	}
+	sort.Strings(visited)
+	return visited, edges
 }
 
 // subgraphView builds the node list from visited (kept) ids and only the edges
