@@ -679,6 +679,7 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column 
 
 func newWeaveStoryShowCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	var links bool
 	cmd := &cobra.Command{
 		Use:   "show <sprint>",
 		Short: "Show a sprint card: spec, acceptance, continuity, lease, thread, tasks",
@@ -688,14 +689,15 @@ func newWeaveStoryShowCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			return runWeaveStoryShow(cmd, id, &flags)
+			return runWeaveStoryShow(cmd, id, &flags, links)
 		},
 	}
 	flags.attach(cmd)
+	cmd.Flags().BoolVar(&links, "links", false, "resolve the card's [[kb:slug]] / [[todo:id]] citations at read time against the tracked repos' kb pages and todos")
 	return cmd
 }
 
-func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error {
+func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, links bool) error {
 	mode := flags.mode()
 	dir, err := weaveStoryDir(cmd, mode, "sprint show")
 	if err != nil {
@@ -719,10 +721,14 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 		if nerr != nil {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint show", weavecli.ExitGenericFail, nerr))
 		}
-		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{
+		payload := map[string]any{
 			"sprint": s, "goal_progress": progress, "next_story": next,
 			"resources": sprintResources(cmd, id),
-		}))
+		}
+		if links {
+			payload["links"] = resolveSprintLinks(s)
+		}
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint show", payload))
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
@@ -743,6 +749,9 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 	// can reach, are exactly the facts that must not wait for a close attempt.
 	renderSprintCoverage(out, s)
 	renderSprintReachability(out, s)
+	if links {
+		renderSprintLinks(out, resolveSprintLinks(s))
+	}
 	if h, stale, free := weaveStoryLeaseState(s); !free {
 		st := "fresh"
 		if stale {

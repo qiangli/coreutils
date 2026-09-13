@@ -94,7 +94,9 @@ func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) D
 		if !outbound && !inbound && p.Status != StatusValidated {
 			r.Orphans = append(r.Orphans, p.Slug)
 		}
-		if strings.TrimSpace(p.Description) == "" {
+		// A note is the memo shape: description optional by design (page.go
+		// FormNote), so its absence is not a hygiene problem.
+		if strings.TrimSpace(p.Description) == "" && p.EffForm() != FormNote {
 			r.MissingDescription = append(r.MissingDescription, p.Slug)
 		}
 		if store != nil && !declaresForm(store, p.Slug) {

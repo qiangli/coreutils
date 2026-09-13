@@ -506,7 +506,9 @@ func (f *pageFlags) register(cmd *cobra.Command, requireTitle bool) {
 	cmd.Flags().StringVarP(&f.bodyFile, "file", "f", "", "read the body from FILE ('-' = stdin)")
 	if requireTitle {
 		_ = cmd.MarkFlagRequired("title")
-		_ = cmd.MarkFlagRequired("description")
+		// --description is required for a PAGE and optional for a NOTE (the
+		// memo shape, page.go FormNote) — cobra cannot express "required
+		// unless --form note", so buildPage enforces it per form.
 	}
 }
 
@@ -521,6 +523,9 @@ func (f *pageFlags) buildPage(c *cobra.Command) (*Page, error) {
 	if !StorableForm(form) {
 		// relation lives in the graph, code is a view — neither is a page.
 		return nil, fmt.Errorf("kb: form %q cannot be written as a page (note|page); relation lives in the graph, code is a view", form)
+	}
+	if form == FormPage && strings.TrimSpace(f.desc) == "" {
+		return nil, fmt.Errorf("kb: a page needs --description (what + WHEN it applies); a memo without one is --form note")
 	}
 	body := f.body
 	if f.bodyFile != "" {
