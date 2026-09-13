@@ -24,7 +24,6 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/pkg/fleet"
-	"github.com/qiangli/coreutils/pkg/skills"
 )
 
 // ActionFacet is what running a concept amounts to. Field order is the design's.
@@ -111,11 +110,31 @@ func commandExecutor(e atlas.Entry, table string) string {
 	return table
 }
 
+// SkillRow is the executor-free view of a catalog skill that AddSkills
+// projects. It is a plain struct on purpose: pkg/lexicon must not import
+// pkg/skills, because that package carries the skill EXECUTOR and with it the
+// shell interpreter, and lexicon is linked into places where the interpreter
+// cannot build (pkg/steward's fail-closed lock is the aix crossvet canary that
+// caught this). The caller that owns the catalog fills the row from its
+// skills.Skill — name, description, the SKILL.md metadata, and the parsed
+// canonical face when it has a valid one.
+type SkillRow struct {
+	Name        string
+	Description string
+	Meta        map[string]string // SKILL.md metadata keys (check-* bindings live here)
+	// FaceValid is true when skill.dhnt parsed and hashed cleanly; the three
+	// fields below are meaningful only then.
+	FaceValid    bool
+	Identity     string   // "h…" content address of the canonical line
+	EffectCap    []string // declared effect-cap atoms (dhnt-6)
+	HasJudgeStep bool     // any step (branches included) carries judge latitude
+}
+
 // skillFacet projects a catalog skill. The contract is the strongest thing the
 // skill actually carries: a valid canonical face, else the check-* bindings its
 // prose declares, else nothing. Latitude follows the steps — one judge step
 // makes the whole run agentic, since the executor may not run it verbatim.
-func skillFacet(sk skills.Skill) *ActionFacet {
+func skillFacet(sk SkillRow) *ActionFacet {
 	f := &ActionFacet{
 		Kind:      ActionSkill,
 		Contract:  ContractNone,
@@ -126,11 +145,11 @@ func skillFacet(sk skills.Skill) *ActionFacet {
 		Scope:     ScopeGeneric,
 	}
 	switch {
-	case sk.Dhnt.Valid():
-		f.Identity = sk.Dhnt.Identity
+	case sk.FaceValid:
+		f.Identity = sk.Identity
 		f.Contract = ContractDhnt
-		f.EffectsDeclared = append([]string(nil), sk.Dhnt.EffectCap...)
-		if sk.Dhnt.HasJudgeStep {
+		f.EffectsDeclared = append([]string(nil), sk.EffectCap...)
+		if sk.HasJudgeStep {
 			f.Latitude = LatitudeJudge
 			f.Authority = AuthorityAgentic
 		}
@@ -171,8 +190,9 @@ func bindingFacet(a fleet.Agent) *ActionFacet {
 //
 // Separate from Build for the same reason AddSystem is: the skill ring is
 // mounted by the embedding shell (its embedded FS is bashy's, not this
-// package's), so the caller that has a catalog passes its rows in.
-func (s *Store) AddSkills(rows []skills.Skill, ov Overlay) {
+// package's), so the caller that has a catalog passes its rows in — as
+// SkillRow, never skills.Skill (see SkillRow for why).
+func (s *Store) AddSkills(rows []SkillRow, ov Overlay) {
 	for _, sk := range rows {
 		name := strings.TrimSpace(sk.Name)
 		if name == "" {

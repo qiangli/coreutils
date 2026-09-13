@@ -30,7 +30,7 @@ func isolateStores(t *testing.T) {
 // skillRows builds a catalog over an in-memory embedded ring covering every
 // contract a skill can carry: a valid face (exact and judge), prose check-*
 // bindings, and nothing at all.
-func skillRows(t *testing.T) []skills.Skill {
+func skillRows(t *testing.T) []SkillRow {
 	t.Helper()
 	embedded := fstest.MapFS{
 		"go-health/SKILL.md":    {Data: []byte("---\nname: go-health\ndescription: build then test\n---\nbody\n")},
@@ -47,11 +47,24 @@ func skillRows(t *testing.T) []skills.Skill {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := make([]skills.Skill, 0, len(rows))
+	out := make([]SkillRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, r.Skill)
+		out = append(out, skillRowOf(r.Skill))
 	}
 	return out
+}
+
+// skillRowOf is the conversion an embedding shell writes at its call site:
+// lexicon takes the executor-free view, never the skills.Skill itself.
+func skillRowOf(sk skills.Skill) SkillRow {
+	row := SkillRow{Name: sk.Name, Description: sk.Description, Meta: sk.Meta}
+	if sk.Dhnt.Valid() {
+		row.FaceValid = true
+		row.Identity = sk.Dhnt.Identity
+		row.EffectCap = sk.Dhnt.EffectCap
+		row.HasJudgeStep = sk.Dhnt.HasJudgeStep
+	}
+	return row
 }
 
 func facetOf(t *testing.T, s *Store, term string) *ActionFacet {
