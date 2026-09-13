@@ -14,6 +14,7 @@ import (
 	gfygraph "github.com/qiangli/gfy/pkg/graph"
 
 	"github.com/qiangli/coreutils/pkg/codegraph"
+	"github.com/qiangli/coreutils/pkg/recall"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -413,5 +414,48 @@ func TestOldUndirectedCacheIsRebuilt(t *testing.T) {
 	}
 	if searchOld := nodeLabel(loaded.Graph, "old_symbol"); searchOld == "Old()" {
 		t.Fatal("stale undirected cache was loaded instead of rebuilt")
+	}
+}
+
+func TestCodeRingContextBudgetAndRefs(t *testing.T) {
+	dir := fixtureRepo(t)
+	cmd := recall.NewContextCmd(NewCodeRing(dir))
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{
+		"--for", "Alpha calls Beta",
+		"--rings", "repo",
+		"--forms", "code",
+		"--files", "a.go",
+		"--budget", "700",
+		"--json",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got recall.ContextResult
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid context JSON: %v\n%s", err, out.String())
+	}
+	if got.Budget.Used > 700 {
+		t.Fatalf("context used %d tokens, want <= 700", got.Budget.Used)
+	}
+	if len(got.Blocks) == 0 {
+		t.Fatalf("code context returned no blocks: %+v", got)
+	}
+	sawFileBoost := false
+	for _, block := range got.Blocks {
+		if block.Form != "code" {
+			t.Fatalf("block form = %q, want code: %+v", block.Form, block)
+		}
+		if !strings.HasPrefix(block.Ref, "code:") {
+			t.Fatalf("block ref = %q, want code:*", block.Ref)
+		}
+		if block.Ref == "code:file:a.go" {
+			sawFileBoost = true
+		}
+	}
+	if !sawFileBoost {
+		t.Fatalf("--files did not surface the boosted repomap file: %+v", got.Blocks)
 	}
 }
