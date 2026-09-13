@@ -3,12 +3,15 @@ id: c3e7759fdd72
 kind: task
 title: 'C5 minimum embedded baseline: keep harness launch contracts, drop embedded models+agents (after U4)'
 seq: 114
-status: assigned
+status: done
 priority: p1
 created: 2026-09-12T23:03:30.161218Z
 weave: 11
 assignee: qiangli
 sprint: 161
+closed: 2026-09-13T00:52:42.271539Z
+resolution: fixed
+closed_by: claude-k
 ---
 
 Minimum embedded baseline — fish to rod. Shrink coreutils/pkg/fleet/baseline/ (embed.go:16) to what the mechanism cannot work without: the TOOL LAUNCH CONTRACTS (tools/*.yaml — measured wire contracts with the harness CLIs; keep) and ZERO models, ZERO agents.

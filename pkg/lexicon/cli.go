@@ -307,6 +307,14 @@ func writeConcept(out io.Writer, c *Concept) {
 // by any project rather than hard-wiring bashy.
 var KnownCommands []string
 
+// SkillSource is the seam to the skill catalog, injected by the embedding
+// shell — the same shape as SeatSource, and for the same reason: the ring is
+// mounted by the shell (its embedded FS is bashy's, not this package's), and
+// pkg/lexicon must not import pkg/skills (see SkillRow). nil means the host
+// cannot answer for skills, so `define <skill>` says "unknown here" rather
+// than guessing. WIRING IT IS THE LOAD-BEARING STEP.
+var SkillSource func() []SkillRow
+
 func build(opts []fleet.Option) *Store {
 	host, _ := os.Hostname()
 	return Build(fleet.New(opts...), Synopses, host, Overlay{})
@@ -348,6 +356,11 @@ func buildFull(opts []fleet.Option) *Store {
 	// missing: `define <this machine>` answered "unknown here", and `define
 	// steward` returned the verb rather than the seat somebody was holding.
 	s.AddReachable(Overlay{})
+
+	// The skill catalog — a capability, run by name, with its action facet.
+	if SkillSource != nil {
+		s.AddSkills(SkillSource(), Overlay{})
+	}
 	return s
 }
 

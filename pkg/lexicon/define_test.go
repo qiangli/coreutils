@@ -1,6 +1,7 @@
 package lexicon
 
 import (
+	"bytes"
 	"os"
 	"slices"
 	"strings"
@@ -315,5 +316,35 @@ func TestDefineCmd_CredentialIsNotRenderedInEitherMode(t *testing.T) {
 		if !strings.Contains(out.String(), "credential") {
 			t.Errorf("define %v did not classify the term:\n%s", args, out.String())
 		}
+	}
+}
+
+// A wired SkillSource makes `define <skill>` answer with the skill's facet;
+// unwired, the host says "unknown here" rather than guessing.
+func TestDefine_SkillSourceSeam(t *testing.T) {
+	defer func(prev func() []SkillRow) { SkillSource = prev }(SkillSource)
+	SkillSource = func() []SkillRow {
+		return []SkillRow{{Name: "go-health", Description: "build then test", FaceValid: true, Identity: "h" + strings.Repeat("0", 64), EffectCap: []string{"read"}}}
+	}
+	cmd := NewDefineCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"go-health"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "runs: skill contract=dhnt latitude=exact authority=deterministic effects=read via dhnt (attest-jsonl)") {
+		t.Fatalf("define go-health did not print the skill facet:\n%s", out.String())
+	}
+	SkillSource = nil
+	out.Reset()
+	cmd = NewDefineCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"go-health"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "unknown here") {
+		t.Fatalf("unwired SkillSource still answered:\n%s", out.String())
 	}
 }
