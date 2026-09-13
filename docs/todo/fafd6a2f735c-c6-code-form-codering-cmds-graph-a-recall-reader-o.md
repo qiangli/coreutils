@@ -3,12 +3,13 @@ id: fafd6a2f735c
 kind: task
 title: 'C6 code form: CodeRing (cmds/graph, a recall.Reader) over codegraph + repomap within budget; codegraph DIRECTED edges (E7 — ids already deterministic, 256/438 edges flipped)'
 seq: 122
-status: assigned
+status: done
 priority: p2
 created: 2026-09-13T01:31:31.748194Z
 weave: 13
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T04:15:52.430999Z
 ---
 
 Goal: the code form — code intelligence for coding-agent context engineering — as a read-only VIEW over the existing engines, served through the same front door. Never stored as kb records, never validated, never exported. Design of record: dhnt docs/kb-rings-forms-stages.md §4 (code), §7; plan D1/D3.
