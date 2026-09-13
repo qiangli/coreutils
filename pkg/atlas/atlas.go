@@ -318,7 +318,7 @@ func OriginLabel(origin string) string {
 	case OriginExternal:
 		return "bin-managed external"
 	case OriginBashy:
-		return "yoke (added by bashy)"
+		return "yoke — added by bashy"
 	}
 	return origin
 }
