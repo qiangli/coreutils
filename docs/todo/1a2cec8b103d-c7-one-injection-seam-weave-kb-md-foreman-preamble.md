@@ -3,9 +3,11 @@ id: 1a2cec8b103d
 kind: task
 title: 'C7 one injection seam: weave KB.md, foreman preamble, recall.PreambleForHost all call kb context (rings repo,host) behind the BASHY_KNOWLEDGE control arm'
 seq: 123
-status: todo
+status: assigned
 priority: p2
 created: 2026-09-13T01:31:31.776332Z
+weave: 18
+assignee: qiangli
 sprint: 163
 ---
 

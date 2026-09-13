@@ -3,9 +3,11 @@ id: 7bd979b80383
 kind: task
 title: 'C8 kb transfer --from memex <dir>: move the owner''s own memex store into its agent ring as form: note candidates (foreign stores stay pointers-not-copies)'
 seq: 124
-status: todo
+status: assigned
 priority: p2
 created: 2026-09-13T01:31:31.804595Z
+weave: 19
+assignee: qiangli
 sprint: 163
 ---
 
