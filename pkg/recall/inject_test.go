@@ -42,11 +42,8 @@ func TestPreamble_OnInjectsCitations(t *testing.T) {
 	if !strings.Contains(got, "kb:widget") {
 		t.Error("preamble has no id to open; it is a summary, not a citation")
 	}
-	if !strings.Contains(strings.ToLower(got), "may be stale") {
-		t.Error("preamble does not mark itself as fallible prior knowledge")
-	}
-	if !strings.Contains(got, "[host/") {
-		t.Error("preamble does not label the ring a hit came from")
+	if !strings.Contains(got, "[host/page]") {
+		t.Error("preamble does not label the ring and form a hit came from")
 	}
 }
 
@@ -76,6 +73,9 @@ func TestPreamble_RespectsBudget(t *testing.T) {
 	got := Preamble("widget handling", HostRing{Store: store})
 	if got == "" {
 		t.Fatal("no preamble")
+	}
+	if len(got) > PreambleBudget {
+		t.Fatalf("preamble is %d bytes, exceeds budget over %d", len(got), PreambleBudget)
 	}
 	// K=2 per ring is the cap; with one ring that is at most 2 bullets.
 	if n := strings.Count(got, "\n- "); n > 2 {

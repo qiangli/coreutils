@@ -12,6 +12,7 @@ type Observation struct {
 	Commits          int       `json:"commits,omitempty"`
 	VerifyExit       int       `json:"verify_exit,omitempty"`
 	GateExit         int       `json:"gate_exit,omitempty"`
+	GateEventID      string    `json:"gate_event_id,omitempty"`
 	KilledBy         string    `json:"killed_by,omitempty"`
 	Summary          string    `json:"summary,omitempty"`
 	FailedApproaches []string  `json:"failed_approaches,omitempty"`

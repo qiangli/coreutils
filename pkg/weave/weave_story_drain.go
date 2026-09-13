@@ -66,15 +66,19 @@ package weave
 // the gate verdict, and the continuity note.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/gate"
+	"github.com/qiangli/coreutils/pkg/kb"
+	"github.com/qiangli/coreutils/pkg/weave/memory"
 )
 
 // drainReport is what one drain attempt observed, per linked repo and overall.
@@ -207,9 +211,14 @@ func pauseWorkersIn(dir string, only map[int64]bool) (int, error) {
 // The command is the caller's, because only they know what "compiles and
 // tests" means for their tree. When none is given nothing is run and Ran stays
 // false — which the caller must treat as UNVERIFIED, never as a pass.
-func runDrainGate(ctx context.Context, dir, command string) gate.Outcome {
+type drainGateOutcome struct {
+	gate.Outcome
+	GateEventID string
+}
+
+func runDrainGate(ctx context.Context, dir, command string) drainGateOutcome {
 	if strings.TrimSpace(command) == "" {
-		return gate.Outcome{Ran: false}
+		return drainGateOutcome{Outcome: gate.Outcome{Ran: false}}
 	}
 	if dir == "" {
 		dir, _ = os.Getwd()
@@ -219,7 +228,71 @@ func runDrainGate(ctx context.Context, dir, command string) gate.Outcome {
 		out.Passed = false
 		out.Output = strings.TrimSpace(out.Output + "\nsprint gate: " + err.Error())
 	}
-	return out
+	result := drainGateOutcome{Outcome: out}
+	eventID, err := observeDrainGate(out)
+	if err != nil {
+		result.Output = strings.TrimSpace(result.Output + "\nkb observe: " + err.Error())
+		return result
+	}
+	result.GateEventID = eventID
+	if err := rememberDrainGate(context.Background(), dir, out, eventID); err != nil {
+		result.Output = strings.TrimSpace(result.Output + "\nweave memory: " + err.Error())
+	}
+	return result
+}
+
+// observeDrainGate goes through kb's command API so the C4 event writer remains
+// the sole implementation of journal shape and event IDs.
+func observeDrainGate(out gate.Outcome) (string, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	args := []string{
+		"--dir", kb.DefaultDir(), "observe",
+		"--episode", "weave-drain",
+		"--kind", "gate",
+		"--ref", "gate:" + now,
+		"--summary", out.Summary(),
+		"--at", now,
+		"--command", out.Command,
+		"--exit-code", strconv.Itoa(out.ExitCode),
+		"--where", out.Where,
+	}
+	if out.Ran {
+		args = append(args, "--ran")
+	}
+	if out.Passed {
+		args = append(args, "--passed")
+	}
+	cmd := kb.NewKBCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return "", fmt.Errorf("%w: %s", err, detail)
+		}
+		return "", err
+	}
+	id := strings.TrimSpace(stdout.String())
+	if id == "" {
+		return "", fmt.Errorf("kb observe returned no event id")
+	}
+	return id, nil
+}
+
+func rememberDrainGate(ctx context.Context, repoRoot string, out gate.Outcome, eventID string) error {
+	queueDir, err := weaveQueueDir(repoRoot)
+	if err != nil {
+		return err
+	}
+	st, _, err := memory.Open(queueDir, memory.Prefs{})
+	if err != nil {
+		return err
+	}
+	return st.Remember(ctx, memory.Observation{
+		Outcome: "gate", GateExit: out.ExitCode, GateEventID: eventID,
+		Summary: out.Summary(), CreatedAt: time.Now().UTC(),
+	})
 }
 
 // drainSummary renders what happened, in the order a reader needs it: the

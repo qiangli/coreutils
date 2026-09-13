@@ -23,6 +23,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/kb"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/procguard"
 	"github.com/qiangli/coreutils/pkg/recall"
@@ -1020,8 +1021,15 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	//
 	// Best-effort by construction: a memory lookup must never stop an agent from
 	// starting, so an unreadable ring yields "" and the launch is unchanged.
-	if pre := recall.PreambleForHost(prompt); pre != "" {
-		prompt = pre + prompt
+	if recall.Enabled() {
+		res := recall.Context(recall.Query{
+			Text: prompt, Rings: []string{recall.RingRepo, recall.RingHost},
+			Forms: []string{kb.FormNote, kb.FormPage}, Budget: recall.PreambleBudget,
+			OS: runtime.GOOS,
+		}, recall.ContextReaders()...)
+		if pre := recall.RenderContext(res); pre != "" {
+			prompt = pre + "\n" + prompt
+		}
 	}
 	args := append(lnch.Args, prompt)
 	// A caller asking to observe a turn live needs the tool's declared event

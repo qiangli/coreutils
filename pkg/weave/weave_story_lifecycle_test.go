@@ -69,6 +69,7 @@ func TestSprintLifecycleSurface(t *testing.T) {
 }
 
 func TestRunDrainGateHonorsContextDeadline(t *testing.T) {
+	isolateWeaveKBStores(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()
