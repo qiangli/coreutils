@@ -3,10 +3,15 @@ id: f86c87357945
 kind: task
 title: 'C1 pkg/skills: kind: skill Record — lossless folder↔YAML projection, deterministic emit, redact at pack'
 seq: 110
-status: todo
+status: done
 priority: p0
 created: 2026-09-12T23:03:30.059846Z
+weave: 7
+assignee: qiangli
 sprint: 161
+closed: 2026-09-13T00:15:43.763252Z
+resolution: fixed
+closed_by: claude-g
 ---
 
 pkg/skills: the kind: skill record type — a lossless projection of a skill folder (SKILL.md stays the on-disk canonical; the record is for catalog/wire).

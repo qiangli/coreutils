@@ -3,10 +3,15 @@ id: 00c3fd08d23b
 kind: task
 title: 'C4 fleet generic CRUD: tool|model|agent add/set --set path=value, --unset, schema, show --field'
 seq: 113
-status: todo
+status: done
 priority: p1
 created: 2026-09-12T23:03:30.136601Z
+weave: 8
+assignee: qiangli
 sprint: 161
+closed: 2026-09-13T00:15:43.789126Z
+resolution: fixed
+closed_by: claude-h
 ---
 
 Fleet generic field CRUD — the rod. In pkg/fleet/cli_write.go:

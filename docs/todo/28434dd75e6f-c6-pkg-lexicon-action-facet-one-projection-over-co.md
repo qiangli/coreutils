@@ -3,10 +3,15 @@ id: 28434dd75e6f
 kind: task
 title: 'C6 pkg/lexicon action facet: one projection over command/script/agent/skill + atlas.ProjectEffects'
 seq: 115
-status: todo
+status: done
 priority: p1
 created: 2026-09-12T23:03:30.186539Z
+weave: 9
+assignee: qiangli
 sprint: 161
+closed: 2026-09-13T00:15:43.814392Z
+resolution: fixed
+closed_by: claude-i
 ---
 
 The action facet — the unification as code, projection only.
