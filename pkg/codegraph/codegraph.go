@@ -6,6 +6,7 @@ package codegraph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +29,8 @@ import (
 
 // DefaultCachePath is the relative path under project root where the graph is cached.
 const DefaultCachePath = ".agents/ycode/graph.json"
+
+const cacheVersion = "codegraph-directed-v1"
 
 // GraphContext holds the built graph and derived analysis results.
 type GraphContext struct {
@@ -142,10 +145,11 @@ func BuildWithProgress(cwd string, progress ProgressFunc) (*GraphContext, error)
 
 		// Phase 3: Build graph.
 		emit(progress, "  ⧗ [3/5] Building graph...")
-		g := build.BuildFromResult(extraction, false)
+		g := build.BuildFromResult(extraction, true)
 		if g == nil {
 			return fmt.Errorf("graph construction failed")
 		}
+		markCacheVersion(g)
 		emit(progress, fmt.Sprintf("  ✓ [3/5] Graph built (%d nodes, %d edges)",
 			g.NodeCount(), g.EdgeCount()))
 
@@ -188,6 +192,7 @@ func (gc *GraphContext) Save(path string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create cache directory: %w", err)
 	}
+	markCacheVersion(gc.Graph)
 	return gc.Graph.SaveJSON(path)
 }
 
@@ -196,6 +201,9 @@ func (gc *GraphContext) Save(path string) error {
 func Load(path string) (*GraphContext, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
+	}
+	if err := CacheFresh(path); err != nil {
+		return nil, err
 	}
 
 	g, err := graph.LoadJSON(path)
@@ -218,6 +226,44 @@ func Load(path string) (*GraphContext, error) {
 			CommunityCount: len(communities),
 		},
 	}, nil
+}
+
+// CacheFresh reports whether a graph cache matches the current directed cache
+// format. It does not inspect source mtimes; callers layer their own source
+// staleness check on top.
+func CacheFresh(path string) error {
+	return cacheVersionOK(path)
+}
+
+func markCacheVersion(g *graph.Graph) {
+	if g == nil {
+		return
+	}
+	if g.Metadata == nil {
+		g.Metadata = make(map[string]any)
+	}
+	g.Metadata["bashy_codegraph_cache_version"] = cacheVersion
+}
+
+func cacheVersionOK(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read cached graph: %w", err)
+	}
+	var envelope struct {
+		Directed bool           `json:"directed"`
+		Graph    map[string]any `json:"graph"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("inspect cached graph: %w", err)
+	}
+	if !envelope.Directed {
+		return fmt.Errorf("cached graph is undirected")
+	}
+	if envelope.Graph == nil || envelope.Graph["bashy_codegraph_cache_version"] != cacheVersion {
+		return fmt.Errorf("cached graph version mismatch")
+	}
+	return nil
 }
 
 // CachePath returns the full cache path for a project root.
