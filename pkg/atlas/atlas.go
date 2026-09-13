@@ -178,6 +178,8 @@ type Entry struct {
 	AliasOf  string   // e.g. docker → podman, upgrade → self
 	Origin   string   // provenance (closed vocab, exclusive); every entry has one
 	Posix    bool     // one of the 116 POSIX-required names (cross-cuts Origin)
+	OS       []string // platforms the command is supported on (closed vocab; platform.go)
+	Partial  []string // supported platforms where it runs with a documented gap
 
 	// Web declares a browser UI, and is how `bashy web-console` discovers what
 	// to put on the start page without a hardcoded table. Nil = no web surface.
@@ -393,6 +395,7 @@ func RegistryEntry(tier int) Entry {
 		Subclass: SubclassManagedExternal,
 		Origin:   OriginExternal,
 		Posix:    false,
+		OS:       []string{OSDarwin, OSLinux, OSWindows},
 		Caps: []string{
 			CapCached, CapNeedsNetwork, CapSelfProvisioning, CapSpawnsProcesses,
 		},
@@ -617,6 +620,8 @@ func aliasVerb(name, target string) {
 	e := t
 	e.Caps = append([]string(nil), t.Caps...)
 	e.Effects = append([]string(nil), t.Effects...)
+	e.OS = append([]string(nil), t.OS...)
+	e.Partial = append([]string(nil), t.Partial...)
 	e.AliasOf = target
 	e.Web = nil
 	verbs[name] = e
@@ -1389,6 +1394,8 @@ func init() {
 	// Provenance is stamped once the subclass passes are final and BEFORE the
 	// alias pass, so `agents` inherits `agent`'s origin. See origin.go.
 	classifyOrigins()
+	// Platform support (OS / Partial), same placement and for the same reason.
+	classifyPlatforms()
 
 	// --- number aliases ------------------------------------------------------
 	//
