@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/kb"
 )
@@ -19,6 +20,41 @@ func (RepoRing) Ring() string    { return RingRepo }
 func (RepoRing) Forms() []string { return []string{kb.FormNote, kb.FormPage} }
 func (r RepoRing) Recall(q Query) ([]Hit, error) {
 	return recallPages(RingRepo, r.Store, r.Path, q)
+}
+
+type RelationRing struct {
+	RingName string
+	Path     string
+}
+
+func (r RelationRing) Ring() string { return r.RingName }
+func (RelationRing) Forms() []string {
+	return []string{kb.FormRelation}
+}
+func (r RelationRing) Recall(q Query) ([]Hit, error) {
+	if r.Path != "" {
+		if err := requireRingDir(r.Path); err != nil {
+			return nil, err
+		}
+	}
+	live, err := (kb.RelationRing{Dir: r.Path}).Live()
+	if err != nil {
+		return nil, err
+	}
+	relations := kb.SearchRelations(live, kb.Terms(q.Text), q.k())
+	out := make([]Hit, 0, len(relations))
+	for _, rel := range relations {
+		out = append(out, Hit{
+			Ring: r.RingName, Kind: "relation", ID: "graph:" + rel.ID, Form: kb.FormRelation,
+			Cue: kb.RelationText(rel), Confidence: rel.Confidence,
+			ObservedAt: rel.At.Format(time.RFC3339),
+			Score:      1,
+			Why:        []string{"relation"},
+			Source:     []SourceRef{{URI: "file://" + kb.RelationPath(r.Path)}},
+			Episode:    rel.Episode,
+		})
+	}
+	return out, nil
 }
 
 // AgentRing reads the owner-scoped <agent-data>/kb store. The supplied Store

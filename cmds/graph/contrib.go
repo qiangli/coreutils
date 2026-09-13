@@ -22,12 +22,15 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/kb"
+	"github.com/qiangli/coreutils/pkg/scope"
 )
 
-// contribRel is the repo-local, bashy-owned store path (co-located with the
-// code-graph cache; .agents is gitignored — sharing beyond one machine is a later
-// export/mesh concern per the design).
-const contribRel = ".agents/bashy/graph/contrib.jsonl"
+// contribRel is the relation-form log under a kb ring. In the repo ring this is
+// docs/kb/graph.jsonl, so authored relation claims are committed with the rest
+// of the repository knowledge instead of disappearing under gitignored .agents.
+const contribRel = "graph.jsonl"
 
 // Contribution is one appended record. A single flexible shape covers every op so
 // the log stays a plain JSONL stream; unused fields are omitempty.
@@ -41,12 +44,14 @@ type Contribution struct {
 	Episode    string    `json:"episode,omitempty"`
 
 	// note / observe: the entity this is about. link: the source entity.
-	Target string `json:"target,omitempty"`
-	Text   string `json:"text,omitempty"` // note text or observation summary
+	Target   string `json:"target,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
+	Text     string `json:"text,omitempty"` // note text or observation summary
 
 	// link
 	Relation string `json:"relation,omitempty"`
 	Dst      string `json:"dst,omitempty"`
+	DstID    string `json:"dst_id,omitempty"`
 
 	// observe
 	Kind    string            `json:"kind,omitempty"`    // build|test|run|execution|deploy|…
@@ -59,11 +64,11 @@ type Contribution struct {
 	ForgetEpisode string `json:"forget_episode,omitempty"`
 }
 
-// store is the append-only contribution log for one repo root.
+// store is the append-only contribution log for one kb ring.
 type store struct{ path string }
 
-func openStore(repoRoot string) *store {
-	return &store{path: filepath.Join(repoRoot, contribRel)}
+func openStore(ringDir string) *store {
+	return &store{path: filepath.Join(ringDir, contribRel)}
 }
 
 // append writes one record as a JSON line. O_APPEND makes concurrent writes from
@@ -167,7 +172,26 @@ func contribID(parts ...string) string {
 		h.Write([]byte(p))
 		h.Write([]byte{0})
 	}
-	return hex.EncodeToString(h.Sum(nil))[:12]
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func entityID(name string) string {
+	kind := entityKind(name)
+	h := sha1.New()
+	h.Write([]byte(kind))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func entityKind(name string) string {
+	if i := strings.IndexByte(name, ':'); i > 0 {
+		prefix := strings.TrimSpace(name[:i])
+		if prefix != "" && !strings.ContainsAny(prefix, `/\`) {
+			return prefix
+		}
+	}
+	return "entity"
 }
 
 // findRepoRoot walks up from start to the nearest directory containing .git so all
@@ -184,6 +208,24 @@ func findRepoRoot(start string) string {
 		}
 		dir = parent
 	}
+}
+
+func contribStoreDir(rc interface {
+	Getenv(string) string
+}) (string, error) {
+	sc, err := scope.Resolve(scope.Options{
+		RepoSub: kb.RepoSub,
+		HostDir: func() (string, error) {
+			if v := strings.TrimSpace(rc.Getenv("BASHY_KB_DIR")); v != "" {
+				return v, nil
+			}
+			return kb.DefaultDir(), nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return sc.Dir(), nil
 }
 
 // contribBy identifies the contributing agent/tool. Best-effort, never fails.

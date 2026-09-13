@@ -471,6 +471,7 @@ func FederatedSearch(cwd string, terms []string, k int) []FedHit {
 		return nil
 	}
 	var out []FedHit
+	out = append(out, repoRelationHits(root, terms, k)...)
 	out = append(out, contribHits(root, terms, k)...)
 	out = append(out, weaveMemoryHits(root, terms, k)...)
 	return out
@@ -479,7 +480,20 @@ func FederatedSearch(cwd string, terms []string, k int) []FedHit {
 // RepoContribPath is the repo-scope contribution ring (.agents/bashy/graph/
 // contrib.jsonl under repoRoot) — the one place that path is spelled.
 func RepoContribPath(repoRoot string) string {
-	return filepath.Join(repoRoot, ".agents", "bashy", "graph", "contrib.jsonl")
+	return filepath.Join(repoRoot, RepoSub, RelationFile)
+}
+
+func repoRelationHits(repoRoot string, terms []string, k int) []FedHit {
+	ring := RelationRing{Dir: filepath.Join(repoRoot, RepoSub)}
+	live, err := ring.Live()
+	if err != nil {
+		return nil
+	}
+	var out []FedHit
+	for _, r := range SearchRelations(live, terms, k) {
+		out = append(out, FedHit{Origin: "repo-relation", Text: RelationText(r)})
+	}
+	return out
 }
 
 // repoRootOf walks up to the nearest .git (same rule as the contrib store,
@@ -502,84 +516,18 @@ func repoRootOf(start string) string {
 // last-writer-wins per id — the bashy-graph-contrib-v1 envelope) and
 // substring-matches terms against live notes/observations.
 func contribHits(repoRoot string, terms []string, k int) []FedHit {
-	type rec struct {
-		ID            string `json:"id"`
-		Op            string `json:"op"`
-		Target        string `json:"target"`
-		Text          string `json:"text"`
-		Relation      string `json:"relation"`
-		Dst           string `json:"dst"`
-		Kind          string `json:"kind"`
-		Outcome       string `json:"outcome"`
-		ForgetID      string `json:"forget_id"`
-		ForgetTarget  string `json:"forget_target"`
-		ForgetEpisode string `json:"forget_episode"`
-		Episode       string `json:"episode"`
-	}
-	path := RepoContribPath(repoRoot)
-	f, err := os.Open(path)
+	all, err := ReadLegacyRelations(repoRoot)
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
-	var all []rec
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var r rec
-		if json.Unmarshal([]byte(line), &r) != nil {
-			continue
-		}
-		all = append(all, r)
-	}
-	if sc.Err() != nil {
-		return nil
-	}
-	var forgets []rec
-	latest := map[string]rec{}
-	var order []string
-	for _, r := range all {
-		if r.Op == "forget" {
-			forgets = append(forgets, r)
-			continue
-		}
-		if _, seen := latest[r.ID]; !seen {
-			order = append(order, r.ID)
-		}
-		latest[r.ID] = r
-	}
-	dead := func(r rec) bool {
-		for _, f := range forgets {
-			if (f.ForgetID != "" && f.ForgetID == r.ID) ||
-				(f.ForgetTarget != "" && f.ForgetTarget == r.Target) ||
-				(f.ForgetEpisode != "" && f.ForgetEpisode == r.Episode) {
-				return true
-			}
-		}
-		return false
-	}
+	live := ReplayRelations(all)
 	var out []FedHit
-	for _, id := range order {
+	for _, r := range live {
 		if len(out) >= k {
 			break
 		}
-		r := latest[id]
-		if dead(r) {
-			continue
-		}
-		var text string
-		switch r.Op {
-		case "note":
-			text = "note " + r.Target + ": " + r.Text
-		case "link":
-			text = "link " + r.Target + " " + r.Relation + " " + r.Dst
-		case "observe":
-			text = "observe " + r.Kind + "/" + r.Outcome + " " + r.Target + ": " + r.Text
-		default:
+		text := RelationText(r)
+		if text == "" {
 			continue
 		}
 		if matchesAny(text, terms) {

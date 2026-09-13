@@ -8,6 +8,8 @@ package graphcmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -56,7 +58,28 @@ type ackEnvelope struct {
 }
 
 func storeRoot(rc *tool.RunContext) string {
-	return findRepoRoot(resolveRoot(rc, ""))
+	start := resolveRoot(rc, "")
+	wd, err := os.Getwd()
+	if err == nil {
+		if abs, absErr := filepath.Abs(start); absErr == nil {
+			if chErr := os.Chdir(abs); chErr == nil {
+				defer os.Chdir(wd)
+				if dir, scopeErr := contribStoreDir(rc); scopeErr == nil {
+					return dir
+				}
+			}
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(start, ".git")); statErr == nil {
+		return filepath.Join(start, "docs", "kb")
+	}
+	if root := findRepoRoot(start); root != start {
+		return filepath.Join(root, "docs", "kb")
+	}
+	if dir, err := contribStoreDir(rc); err == nil {
+		return dir
+	}
+	return filepath.Join(start, "docs", "kb")
 }
 
 func writeContribJSON(rc *tool.RunContext, root string, cs []Contribution) {
@@ -120,7 +143,7 @@ func runNote(rc *tool.RunContext, args []string) int {
 	c := Contribution{
 		ID: contribID("note", target, text), Op: "note", By: contribBy(rc),
 		At: time.Now().UTC(), Source: source, Confidence: confidence,
-		Episode: contribEpisode(rc), Target: target, Text: text,
+		Episode: contribEpisode(rc), Target: target, TargetID: entityID(target), Text: text,
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {
@@ -155,7 +178,7 @@ func runLink(rc *tool.RunContext, args []string) int {
 	c := Contribution{
 		ID: contribID("link", src, relation, dst), Op: "link", By: contribBy(rc),
 		At: time.Now().UTC(), Episode: contribEpisode(rc),
-		Target: src, Relation: relation, Dst: dst,
+		Target: src, TargetID: entityID(src), Relation: relation, Dst: dst, DstID: entityID(dst),
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {
@@ -225,7 +248,7 @@ func runObserve(rc *tool.RunContext, args []string) int {
 	c := Contribution{
 		ID: contribID("observe", kind, target, outcome, summary, now.Format(time.RFC3339Nano)),
 		Op: "observe", By: contribBy(rc), At: now, Episode: contribEpisode(rc),
-		Target: target, Text: summary, Kind: kind, Outcome: outcome, Data: data,
+		Target: target, TargetID: entityID(target), Text: summary, Kind: kind, Outcome: outcome, Data: data,
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {

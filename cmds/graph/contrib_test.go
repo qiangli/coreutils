@@ -23,13 +23,26 @@ func contribRepo(t *testing.T) string {
 	return dir
 }
 
+func contribEnv(t *testing.T) []string {
+	t.Helper()
+	root := t.TempDir()
+	return []string{
+		"BASHY_AGENT_ID=tester",
+		"BASHY_EPISODE=ep1",
+		"BASHY_KB_DIR=" + filepath.Join(root, "kb"),
+		"BASHY_HOME=" + filepath.Join(root, "home"),
+		"BASHY_SKILLS_DIR=" + filepath.Join(root, "skills"),
+		"YCODE_DATA_DIR=" + filepath.Join(root, "ycode"),
+	}
+}
+
 func runc(t *testing.T, dir string, fn func(*tool.RunContext, []string) int, args ...string) (out, errOut string, code int) {
 	t.Helper()
 	var o, e bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Env:   []string{"BASHY_AGENT_ID=tester", "BASHY_EPISODE=ep1"},
+		Env:   contribEnv(t),
 		FS:    tool.NewLocalFS(),
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &o, Err: &e},
 	}
@@ -43,8 +56,11 @@ func TestNoteAppendAndRecall(t *testing.T) {
 		t.Fatalf("note failed: %d %s", code, e)
 	}
 	// The store file exists at the repo-local path.
-	if _, err := os.Stat(filepath.Join(dir, contribRel)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "docs", "kb", contribRel)); err != nil {
 		t.Fatalf("store not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".agents", "bashy", "graph", "contrib.jsonl")); err == nil {
+		t.Fatal("graph note wrote the legacy .agents contribution log")
 	}
 	out, _, code := runc(t, dir, runRecall, "handshake", "--json")
 	if code != 0 {
@@ -59,6 +75,9 @@ func TestNoteAppendAndRecall(t *testing.T) {
 	}
 	if env.Contributions[0].By != "tester" || env.Contributions[0].Episode != "ep1" {
 		t.Errorf("provenance not captured: %+v", env.Contributions[0])
+	}
+	if env.Contributions[0].TargetID == "" || len(env.Contributions[0].TargetID) != 16 {
+		t.Fatalf("entity id not stamped: %+v", env.Contributions[0])
 	}
 }
 
@@ -86,6 +105,27 @@ func TestLinkAndNotesFor(t *testing.T) {
 	// notes-for a target includes links pointing TO it (Dst match).
 	if env.Count != 1 || env.Contributions[0].Relation != "dials" {
 		t.Fatalf("link not found via notes-for dst: %+v", env)
+	}
+	if env.Contributions[0].TargetID == "" || env.Contributions[0].DstID == "" {
+		t.Fatalf("link entity ids not stamped: %+v", env.Contributions[0])
+	}
+}
+
+func TestEntityIDsStableAcrossRuns(t *testing.T) {
+	dir := contribRepo(t)
+	runc(t, dir, runLink, "kb:alpha", "about", "todo:123", "--plain")
+	out1, _, _ := runc(t, dir, runNotesFor, "todo:123", "--json")
+	runc(t, dir, runLink, "kb:alpha", "about", "todo:123", "--plain")
+	out2, _, _ := runc(t, dir, runNotesFor, "todo:123", "--json")
+	var env1, env2 contribEnvelope
+	_ = json.Unmarshal([]byte(out1), &env1)
+	_ = json.Unmarshal([]byte(out2), &env2)
+	if env1.Count != 1 || env2.Count != 1 {
+		t.Fatalf("link should remain idempotent across runs: %d %d", env1.Count, env2.Count)
+	}
+	a, b := env1.Contributions[0], env2.Contributions[0]
+	if a.ID != b.ID || a.TargetID != b.TargetID || a.DstID != b.DstID {
+		t.Fatalf("ids changed across runs:\n%+v\n%+v", a, b)
 	}
 }
 
@@ -155,17 +195,17 @@ func TestSharedAcrossSubdirs(t *testing.T) {
 		t.Fatalf("subdir contribution not shared to repo root store: %d", env.Count)
 	}
 	// And the store lives at the root, not the subdir.
-	if _, err := os.Stat(filepath.Join(dir, contribRel)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "docs", "kb", contribRel)); err != nil {
 		t.Fatalf("store should be at repo root: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(sub, contribRel)); err == nil {
+	if _, err := os.Stat(filepath.Join(sub, "docs", "kb", contribRel)); err == nil {
 		t.Fatal("store should NOT be created in the subdir")
 	}
 }
 
 func TestConcurrentAppendsAllLand(t *testing.T) {
 	dir := contribRepo(t)
-	st := openStore(dir)
+	st := openStore(filepath.Join(dir, "docs", "kb"))
 	done := make(chan int, 10)
 	for i := 0; i < 10; i++ {
 		go func(n int) {

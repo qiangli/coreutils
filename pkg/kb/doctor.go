@@ -27,6 +27,13 @@ type DupPair struct {
 	B string `json:"b"`
 }
 
+type OpenRelation struct {
+	ID       string `json:"id"`
+	Target   string `json:"target,omitempty"`
+	Relation string `json:"relation"`
+	Dst      string `json:"dst,omitempty"`
+}
+
 // DoctorReport is the result of a doctor pass. Empty slices (not nil) so the
 // JSON shape is stable whether or not a category fired.
 type DoctorReport struct {
@@ -36,12 +43,14 @@ type DoctorReport struct {
 	NearDuplicates     []DupPair      `json:"near_duplicates"`
 	MissingForm        []string       `json:"missing_form"`
 	MissingDescription []string       `json:"missing_description"`
+	OpenRelations      []OpenRelation `json:"open_relations"`
 }
 
 // Clean reports whether the pass found nothing.
 func (r DoctorReport) Clean() bool {
 	return len(r.Dangling) == 0 && len(r.Orphans) == 0 && len(r.NearDuplicates) == 0 &&
-		len(r.MissingForm) == 0 && len(r.MissingDescription) == 0
+		len(r.MissingForm) == 0 && len(r.MissingDescription) == 0 &&
+		len(r.OpenRelations) == 0
 }
 
 // Doctor runs every hygiene check over the kb pages, using todoNodes (when the
@@ -59,6 +68,7 @@ func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) D
 		NearDuplicates:     []DupPair{},
 		MissingForm:        []string{},
 		MissingDescription: []string{},
+		OpenRelations:      []OpenRelation{},
 	}
 	kbNodes := KBNodes(pages)
 	allNodes := append(append([]LinkNode{}, kbNodes...), todoNodes...)
@@ -96,6 +106,23 @@ func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) D
 	r.NearDuplicates = nearDuplicatePairs(pages)
 
 	return r
+}
+
+func DoctorRelations(relations []Relation) []OpenRelation {
+	var out []OpenRelation
+	for _, rel := range relations {
+		if rel.Op != "link" || strings.TrimSpace(rel.Relation) == "" || CoreRelation(rel.Relation) {
+			continue
+		}
+		out = append(out, OpenRelation{ID: rel.ID, Target: rel.Target, Relation: rel.Relation, Dst: rel.Dst})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Relation != out[j].Relation {
+			return out[i].Relation < out[j].Relation
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 // danglingLink reports whether link l resolves to nothing within a namespace we

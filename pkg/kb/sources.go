@@ -86,7 +86,7 @@ func DetectSources(home, cwd string) []SourceInfo {
 		out = append(out, SourceInfo{Name: "weave-memory", Path: weaveGlob, Format: "jsonl"})
 	}
 
-	// repo graph contribution log: <repoRoot>/.agents/bashy/graph/contrib.jsonl
+	// repo relation log: <repoRoot>/docs/kb/graph.jsonl
 	if repoRoot != "" {
 		contrib := RepoContribPath(repoRoot)
 		if info := jsonlSource("repo-graph", contrib); info != nil {

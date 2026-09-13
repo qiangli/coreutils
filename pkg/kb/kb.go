@@ -229,6 +229,14 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 				q.Use, q.UseWeight = store.UseHistory(), useWeight
 			}
 			hits := Search(pages, q)
+			var rel []Relation
+			if form == FormRelation {
+				live, err := (RelationRing{Dir: store.Dir()}).Live()
+				if err != nil {
+					return err
+				}
+				rel = SearchRelations(live, terms, k)
+			}
 			var fed []FedHit
 			if federate {
 				if cwd, err := os.Getwd(); err == nil {
@@ -240,7 +248,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			// An empty answer explains itself: which terms no page uses, and
 			// what vocabulary this corpus does speak. The caller reformulates
 			// from that instead of guessing what the silence meant.
-			empty := len(hits) == 0 && len(fed) == 0
+			empty := len(hits) == 0 && len(rel) == 0 && len(fed) == 0
 			var rep *Report
 			if empty || why {
 				r := Diagnose(pages, q)
@@ -248,7 +256,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			}
 
 			if jsonOut {
-				return writeSearchJSON(out, hits, fed, rep, jsonResolution(brief, full), terms)
+				return writeSearchJSON(out, hits, rel, fed, rep, jsonResolution(brief, full), terms)
 			}
 			if empty {
 				fmt.Fprint(out, rep.Text())
@@ -274,6 +282,9 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			for _, f := range fed {
 				fmt.Fprintf(out, "%s  %s\n", f.Origin, f.Text)
 			}
+			for _, r := range rel {
+				fmt.Fprintf(out, "relation  %s  (%s)\n", RelationText(r), r.ID)
+			}
 			return nil
 		},
 	}
@@ -290,7 +301,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().Float64Var(&useWeight, "use-weight", 0, "weight the ACT-R base-level term (recency x frequency of opens); 0 = rank purely on the query")
 	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
 	cmd.Flags().BoolVar(&why, "why", false, "also explain the search: which query terms the corpus carries, and where (always shown when nothing matches)")
-	cmd.Flags().StringVar(&form, "form", "", "filter to one record form: note|page (legacy pages read as page)")
+	cmd.Flags().StringVar(&form, "form", "", "filter to one record form: note|page|relation|code (legacy pages read as page)")
 	return cmd
 }
 
@@ -327,6 +338,17 @@ type searchHitJSON struct {
 	// first, then coverage. Always present — a ranking a third party cannot
 	// interrogate is one it cannot debug, and it cannot read our source.
 	Why []string `json:"why,omitempty"`
+}
+
+type relationHitJSON struct {
+	ID       string `json:"id"`
+	Op       string `json:"op"`
+	Target   string `json:"target,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
+	Relation string `json:"relation,omitempty"`
+	Dst      string `json:"dst,omitempty"`
+	DstID    string `json:"dst_id,omitempty"`
+	Text     string `json:"text"`
 }
 
 // jsonResolution maps the output flags onto the resolution ladder for the
@@ -370,9 +392,10 @@ type searchReportJSON struct {
 	Vocab    []string         `json:"vocab,omitempty"`
 }
 
-func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report, res Resolution, terms []string) error {
+func writeSearchJSON(w io.Writer, hits []Hit, rel []Relation, fed []FedHit, rep *Report, res Resolution, terms []string) error {
 	payload := struct {
 		Pages     []searchHitJSON   `json:"pages"`
+		Relations []relationHitJSON `json:"relations,omitempty"`
 		Federated []FedHit          `json:"federated,omitempty"`
 		Report    *searchReportJSON `json:"report,omitempty"`
 	}{Pages: []searchHitJSON{}, Federated: fed}
@@ -409,6 +432,12 @@ func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report, res Res
 			}
 		}
 		payload.Pages = append(payload.Pages, hit)
+	}
+	for _, r := range rel {
+		payload.Relations = append(payload.Relations, relationHitJSON{
+			ID: r.ID, Op: r.Op, Target: r.Target, TargetID: r.TargetID,
+			Relation: r.Relation, Dst: r.Dst, DstID: r.DstID, Text: RelationText(r),
+		})
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -781,7 +810,7 @@ func newListCmd(dir, ring *string) *cobra.Command {
 				// which is what the text path below renders. It previously
 				// emitted every page's full body, so `list --json` on a real
 				// store was the single largest payload kb could produce.
-				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil, nil, ResLine, nil)
+				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil, nil, nil, ResLine, nil)
 			}
 			for _, p := range pages {
 				fmt.Fprint(c.OutOrStdout(), LineRenderer().Page(p))
@@ -943,6 +972,11 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				}
 			}
 			rep := Doctor(pages, store, todoNodes, todoKnown)
+			relations, err := (RelationRing{Dir: store.Dir()}).Live()
+			if err != nil {
+				return err
+			}
+			rep.OpenRelations = DoctorRelations(relations)
 			rep.Ring = *ring
 			out := c.OutOrStdout()
 			if jsonOut {
@@ -982,6 +1016,12 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				fmt.Fprintf(out, "missing description (%d):\n", len(rep.MissingDescription))
 				for _, s := range rep.MissingDescription {
 					fmt.Fprintf(out, "  %s\n", s)
+				}
+			}
+			if len(rep.OpenRelations) > 0 {
+				fmt.Fprintf(out, "open-vocabulary relations (%d):\n", len(rep.OpenRelations))
+				for _, r := range rep.OpenRelations {
+					fmt.Fprintf(out, "  %s -%s-> %s  [%s]\n", r.Target, r.Relation, r.Dst, r.ID)
 				}
 			}
 			return nil

@@ -81,6 +81,36 @@ func TestContextBudgetAndRingPrecedence(t *testing.T) {
 	}
 }
 
+func TestContextRelationFormReadsRelationRing(t *testing.T) {
+	root := isolateRecallStores(t)
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoKB := filepath.Join(repo, kb.RepoSub)
+	if err := os.MkdirAll(repoKB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kb.RelationPath(repoKB), []byte(`{"id":"r1","op":"link","target":"kb:alpha","relation":"about","dst":"todo:123"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	res := Context(Query{Text: "alpha", Rings: []string{RingRepo}, Forms: []string{kb.FormRelation}, Budget: 100}, openContextRings()...)
+	if len(res.Blocks) != 1 {
+		t.Fatalf("relation context blocks = %d: %+v", len(res.Blocks), res)
+	}
+	if res.Blocks[0].Form != kb.FormRelation || res.Blocks[0].Ref != "graph:r1" {
+		t.Fatalf("wrong relation block: %+v", res.Blocks[0])
+	}
+}
+
 func TestContextAbstainsWithEmptyBlocks(t *testing.T) {
 	isolateRecallStores(t)
 	res := Context(Query{Text: "unknown", MinCoverage: 0.9, Forms: []string{kb.FormPage}},

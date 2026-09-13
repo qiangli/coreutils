@@ -13,6 +13,10 @@ import (
 func writeFixtureStores(t *testing.T) (string, string) {
 	t.Helper()
 	home := t.TempDir()
+	t.Setenv("BASHY_KB_DIR", filepath.Join(home, "kb"))
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	t.Setenv("BASHY_SKILLS_DIR", filepath.Join(home, "skills"))
+	t.Setenv("YCODE_DATA_DIR", filepath.Join(home, "ycode"))
 	write := func(path, content string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -34,7 +38,7 @@ func writeFixtureStores(t *testing.T) (string, string) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	write(filepath.Join(repo, ".agents", "bashy", "graph", "contrib.jsonl"),
+	write(filepath.Join(repo, RepoSub, RelationFile),
 		`{"op":"note","target":"x","text":"t1"}`+"\n"+
 			`{"op":"note","target":"y","text":"t2"}`+"\n"+
 			`{"op":"note","target":"z","text":"t3"}`+"\n")
@@ -71,6 +75,10 @@ func TestDetectSources(t *testing.T) {
 func TestDetectSourcesAbsent(t *testing.T) {
 	// Empty home, cwd not in a repo: every known store reported absent, no error.
 	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("BASHY_KB_DIR", filepath.Join(home, "kb"))
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	t.Setenv("BASHY_SKILLS_DIR", filepath.Join(home, "skills"))
+	t.Setenv("YCODE_DATA_DIR", filepath.Join(home, "ycode"))
 	for _, s := range DetectSources(home, cwd) {
 		if s.Present {
 			t.Errorf("unexpected present store in empty fixture: %+v", s)
@@ -79,6 +87,11 @@ func TestDetectSourcesAbsent(t *testing.T) {
 }
 
 func TestTransferredCounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_KB_DIR", filepath.Join(home, "kb"))
+	t.Setenv("BASHY_HOME", filepath.Join(home, ".bashy"))
+	t.Setenv("BASHY_SKILLS_DIR", filepath.Join(home, "skills"))
+	t.Setenv("YCODE_DATA_DIR", filepath.Join(home, "ycode"))
 	pages := []*Page{
 		{Slug: "a", Status: StatusCandidate, Tags: []string{"xfer:claude-memory", "outpost"}},
 		{Slug: "b", Status: StatusValidated, Tags: []string{"XFER:Claude-Memory"}}, // case-folded
