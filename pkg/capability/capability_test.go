@@ -2,10 +2,16 @@ package capability
 
 import (
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
+// withTempStore fences the matrix onto a scratch dir and pins the registry
+// the seed reads to the test ring, so the seeded rows are the ring's agents
+// and not whatever the developer's own store holds.
 func withTempStore(t *testing.T) {
 	t.Helper()
+	fleettest.Ring(t)
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
 }
 

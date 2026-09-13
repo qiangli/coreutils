@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/capability"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
-// pinCapabilityStore points the capability matrix at a scratch store, the
-// same way capability's own tests do.
+// pinCapabilityStore points the capability matrix at a scratch store and its
+// seed at the test ring, the same way capability's own tests do.
 func pinCapabilityStore(t *testing.T) {
 	t.Helper()
+	fleettest.Ring(t)
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
 }
 

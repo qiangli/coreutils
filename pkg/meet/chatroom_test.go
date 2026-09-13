@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 // The chat-room relaxation: a room may keep no minutes, and its roster may change
@@ -19,7 +21,7 @@ func newRoom(t *testing.T) *State {
 	t.Helper()
 	t.Setenv("BASHY_MEET_DIR", t.TempDir())
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
-	t.Setenv("BASHY_FLEET_DIR", t.TempDir()) // the compiled-in baseline, not the developer's store
+	fleettest.Ring(t) // the compiled-in tools + test ring, not the developer's store
 	// The fixture names its organizer "qiangli", and humanName() reads $USER. Any
 	// path that compares the two — the organizer check, and every transport that
 	// defaults an actor to the host's human — would otherwise pass or fail

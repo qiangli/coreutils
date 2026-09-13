@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 // obsEnv is the hermetic test env with the three observation stores rooted
@@ -97,6 +98,7 @@ func TestBusSubscriptionAloneIsObservation(t *testing.T) {
 // A catalog name is unchanged: same single match, declared fleet identity,
 // spawn-first contact ladder for a target with no trace on this host.
 func TestCatalogNameUnchangedByObservationSource(t *testing.T) {
+	fleettest.Ring(t)
 	env := obsEnv(t)
 	r, cat := testResolver(t, env)
 	if err := cat.SaveAgent(fleet.Agent{Name: "007", Tool: "claude", Model: "fable"}); err != nil {
@@ -124,6 +126,7 @@ func TestCatalogNameUnchangedByObservationSource(t *testing.T) {
 // (cost 20) even for an agent already running here. A fresh trace must rank
 // the async channels above cli.
 func TestRankingPrefersAsyncForALiveTarget(t *testing.T) {
+	fleettest.Ring(t)
 	env := obsEnv(t)
 	r, cat := testResolver(t, env)
 	if err := cat.SaveAgent(fleet.Agent{Name: "smarty", Tool: "claude", Model: "fable"}); err != nil {

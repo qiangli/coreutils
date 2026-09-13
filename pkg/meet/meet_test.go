@@ -10,6 +10,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/chat"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 // fakeRunner returns a canned reply without spawning a real agent, so the whole
@@ -26,6 +27,7 @@ func newTestSession(t *testing.T) *State {
 	t.Helper()
 	t.Setenv("BASHY_MEET_DIR", t.TempDir())
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir()) // isolate the operability auto-record at close
+	fleettest.Ring(t)                             // the agents that auto-record resolve against
 	old := nowFn
 	nowFn = fixedNow
 	t.Cleanup(func() { nowFn = old })

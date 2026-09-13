@@ -8,11 +8,14 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
-// pinAgentFleet gives weave a scratch registry holding one nicknamed agent.
+// pinAgentFleet gives weave a scratch registry over the test ring, holding
+// one nicknamed agent of its own.
 func pinAgentFleet(t *testing.T) *fleet.Catalog {
 	t.Helper()
+	fleettest.Ring(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 	if err := cat.SaveAgent(fleet.Agent{

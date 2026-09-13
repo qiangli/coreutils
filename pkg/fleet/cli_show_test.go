@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 // runCmd drives one of the noun trees against a scratch local ring and returns
@@ -72,6 +74,7 @@ func TestShowYAMLIsTheDefaultForToolsAndModels(t *testing.T) {
 // the shape the store holds and the control plane serves, so re-importing the
 // emitted bytes has to work.
 func TestAgentsShowYAMLEmitsTheEnvelope(t *testing.T) {
+	fleettest.Ring(t)
 	root := t.TempDir()
 	cat := New(WithRoot(root))
 	if err := cat.SaveAgent(Agent{Name: "007", Tool: "claude", Model: "fable"}); err != nil {

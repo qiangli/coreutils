@@ -113,6 +113,7 @@ func TestAgentChildEnvScrubsVaultSecret(t *testing.T) {
 // with a nil or empty slice must retain the catalog-derived single-key behavior
 // without reopening unrelated operator credentials.
 func TestAgentChildEnvLegacyLaunchFallsBackToCatalogCredential(t *testing.T) {
+	pinCatalog(t)
 	t.Setenv("BASHY_ALLOW_AGENT_SECRETS", "0")
 	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
 	t.Setenv("DEEPSEEK_API_KEY", "selected-model-credential")

@@ -14,6 +14,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 	"github.com/qiangli/coreutils/pkg/skills"
 )
 
@@ -180,6 +181,7 @@ func TestAction_SkillFacets(t *testing.T) {
 // tool. The TOOL concept the human names is the executor and gets no facet.
 func TestAction_BindingFacet_ToolHasNone(t *testing.T) {
 	isolateStores(t)
+	fleettest.Ring(t) // the agent under test comes from the test ring
 	cat := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithoutLocalStore(), fleet.WithoutCloudOverlay())
 	s := Build(cat, nil, "test-host", Overlay{})
 

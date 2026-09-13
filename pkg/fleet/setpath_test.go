@@ -6,10 +6,13 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func isolatedFleetRoot(t *testing.T) string {
 	t.Helper()
+	fleettest.Ring(t)
 	for _, key := range []string{
 		"BASHY_HOME", "BASHY_FLEET_DIR", "BASHY_SKILLS_DIR", "BASHY_TOOLS_DIR",
 		"BASHY_MODELS_DIR", "BASHY_AGENTS_DIR",
@@ -89,20 +92,22 @@ func TestUnsetClearsAnExistingValue(t *testing.T) {
 
 func TestSetCopiesEveryNounIntoLocalRing(t *testing.T) {
 	root := isolatedFleetRoot(t)
+	// Tools ship embedded; models and agents come from the test ring, which is
+	// mounted as a shared dir — the note must name the ring the copy came from.
 	for _, tc := range []struct {
-		name string
-		cmd  *cobra.Command
+		name, ring string
+		cmd        *cobra.Command
 	}{
-		{"tool", NewToolsCmd(WithRoot(root))},
-		{"model", NewModelsCmd(WithRoot(root))},
-		{"agent", NewAgentsCmd(WithRoot(root))},
+		{"tool", "embedded", NewToolsCmd(WithRoot(root))},
+		{"model", "shared", NewModelsCmd(WithRoot(root))},
+		{"agent", "shared", NewAgentsCmd(WithRoot(root))},
 	} {
 		entry := map[string]string{"tool": "codex", "model": "fable5", "agent": "codex-gpt5.6-sol"}[tc.name]
 		out, err := runCmd(t, tc.cmd, "set", entry, "--set", "display=local override")
 		if err != nil {
 			t.Fatalf("%s set: %v", tc.name, err)
 		}
-		if !strings.Contains(out, "note: copied "+entry+" from the embedded ring into the local store") {
+		if !strings.Contains(out, "note: copied "+entry+" from the "+tc.ring+" ring into the local store") {
 			t.Errorf("%s copy note missing from %q", tc.name, out)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
@@ -80,6 +81,7 @@ func TestSplitQueryDoesNotMistakeABindingForAKind(t *testing.T) {
 // --- resolution -----------------------------------------------------------
 
 func TestResolveAgentByNicknameAndAlias(t *testing.T) {
+	fleettest.Ring(t) // `fable` is the family alias of the ring's fable5
 	r, cat := testResolver(t, testEnv(t))
 	if err := cat.SaveAgent(fleet.Agent{
 		Name: "007", Aliases: []string{"smarty", "bond"}, Tool: "claude", Model: "fable",
@@ -574,6 +576,7 @@ func TestCheckMentionsWarnsOnUnknownAndAmbiguous(t *testing.T) {
 // Expanding a mention is what makes "@007 commented" legible to the next
 // agent that reads the page.
 func TestExpandResolvesMentionsInline(t *testing.T) {
+	fleettest.Ring(t)
 	r, cat := testResolver(t, testEnv(t))
 	if err := cat.SaveAgent(fleet.Agent{Name: "007", Tool: "claude", Model: "fable"}); err != nil {
 		t.Fatal(err)

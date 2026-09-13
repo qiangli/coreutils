@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 // pinStore points the meeting store at a scratch dir and returns the meeting's
@@ -45,6 +47,7 @@ func testState() *State {
 // Attaching replays the WHOLE history, in full, before anything new — you join
 // a conversation already in progress and need to know what was said.
 func TestObserveReplaysFullHistory(t *testing.T) {
+	fleettest.Ring(t)
 	st := testState()
 	pinStore(t, st)
 	long := strings.Repeat("a line of reasoning\n", 50)

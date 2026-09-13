@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func TestCanonicalProvider(t *testing.T) {
@@ -34,6 +36,7 @@ func TestCanonicalProvider(t *testing.T) {
 }
 
 func TestCollectFleetResourcesSchema(t *testing.T) {
+	fleettest.Ring(t) // the groups are rolled up from the ring's agents
 	ctx := context.Background()
 	fr, err := CollectFleetResources(ctx)
 	if err != nil {

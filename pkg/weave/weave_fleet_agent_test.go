@@ -6,11 +6,14 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
-// pinFleetWith installs a scratch registry and returns its catalog for setup.
+// pinFleetWith installs a scratch registry over the test ring and returns its
+// catalog for setup.
 func pinFleetWith(t *testing.T) *fleet.Catalog {
 	t.Helper()
+	fleettest.Ring(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 	prev := fleetCatalog

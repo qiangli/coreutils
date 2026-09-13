@@ -10,6 +10,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/chat"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 func permanentTestStore(t *testing.T) string {
@@ -103,9 +104,10 @@ func TestAddressDoesNotAutoStartDisabledPermanentSteward(t *testing.T) {
 
 func TestFirstRoomContributionActivatesOneFleetSecretary(t *testing.T) {
 	permanentTestStore(t)
+	fleettest.Ring(t)
 	agents, _ := fleet.New().Agents()
 	if len(agents) == 0 {
-		t.Fatal("embedded fleet has no agent for secretary test")
+		t.Fatal("test ring has no agent for secretary test")
 	}
 	want := agents[0].Name
 	old := StartRoomSecretary

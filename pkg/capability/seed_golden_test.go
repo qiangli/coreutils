@@ -11,6 +11,7 @@ import (
 	"testing/fstest"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/fleet/fleettest"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata/seed_priors.golden from the current baseline")
@@ -25,9 +26,11 @@ func bare(root string) *fleet.Catalog {
 // This pins every cell they produced, so the move is provably value-preserving
 // and any future edit to a baseline YAML shows up as an intentional diff.
 func TestSeedPriorsMatchGolden(t *testing.T) {
+	fleettest.Ring(t)
 	prev := newCatalog
 	newCatalog = func() *fleet.Catalog {
-		// Real baseline, empty local store: the golden values ARE the baseline.
+		// Embedded tools + the test ring, empty local store: the golden values
+		// ARE the baseline.
 		return fleet.New(fleet.WithRoot(t.TempDir()))
 	}
 	t.Cleanup(func() { newCatalog = prev })
