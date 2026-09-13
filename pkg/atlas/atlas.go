@@ -161,7 +161,7 @@ const (
 	OriginGNU      = "gnu"      // GNU coreutils command reimplemented in Go
 	OriginUnix     = "unix"     // other classic Unix tool reimplemented in Go (awk, sed, jq, tar, …)
 	OriginExternal = "external" // bin-managed: binmgr CLI, toolchain provisioner, pinned POSIX provider — exec'd, never linked
-	OriginBashy    = "bashy"    // added by bashy: the agentic / yoke surface
+	OriginBashy    = "bashy"    // the YOKE commands: bashy's agentic third substrate (Classic · Bash++ · Yoke) — built for agentic tools; many need no model (deterministic rungs: tz, clip, tokens)
 )
 
 // Entry is one command's atlas record. The classical class (builtin /
@@ -300,6 +300,13 @@ func Origins() []string {
 }
 
 // OriginLabel is the human/agent-readable name of an origin, for listings.
+// The bashy-added group is called the YOKE commands — one proper noun beside
+// bash · GNU · Unix · external, so the group can be referred to as easily as
+// "the GNU coreutils" or "the POSIX-required set". `commands` minus yoke is
+// the classic surface. Agentic means BUILT FOR AGENTIC TOOLS, not "needs a
+// model": the ladder has deterministic rungs (tz, clip, duration, tokens)
+// that are yoke all the same. The wire value stays
+// "bashy" (provenance = who), the label says yoke.
 func OriginLabel(origin string) string {
 	switch origin {
 	case OriginBash:
@@ -311,7 +318,7 @@ func OriginLabel(origin string) string {
 	case OriginExternal:
 		return "bin-managed external"
 	case OriginBashy:
-		return "added by bashy"
+		return "yoke (added by bashy)"
 	}
 	return origin
 }
