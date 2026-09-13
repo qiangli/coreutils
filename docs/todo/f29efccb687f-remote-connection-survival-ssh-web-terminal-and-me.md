@@ -6,7 +6,7 @@ seq: 84
 status: todo
 priority: p2
 created: 2026-09-06T20:36:13.846842Z
-sprint: 130
+sprint: 166
 ---
 
 GOAL

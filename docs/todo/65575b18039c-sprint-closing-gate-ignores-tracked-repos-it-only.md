@@ -6,7 +6,7 @@ seq: 71
 status: todo
 priority: p1
 created: 2026-09-06T11:30:33.745495Z
-sprint: 130
+sprint: 166
 ---
 
 CONFIRMED IN CODE. pkg/weave/weave_story_closing.go checkClosingConditions

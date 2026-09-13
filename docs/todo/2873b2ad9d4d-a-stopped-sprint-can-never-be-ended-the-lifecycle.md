@@ -6,7 +6,7 @@ seq: 72
 status: todo
 priority: p1
 created: 2026-09-06T11:30:33.769965Z
-sprint: 130
+sprint: 166
 ---
 
 pkg/weave/weave_story_box.go:505 refuses end when a box exists but none is

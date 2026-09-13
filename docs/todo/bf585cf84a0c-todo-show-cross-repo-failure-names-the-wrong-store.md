@@ -6,7 +6,7 @@ seq: 80
 status: todo
 priority: p3
 created: 2026-09-06T11:30:33.949917Z
-sprint: 130
+sprint: 166
 ---
 
 From the umbrella, bashy todo show babd0878 fails with:

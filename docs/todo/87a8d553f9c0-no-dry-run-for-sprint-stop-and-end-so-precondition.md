@@ -6,7 +6,7 @@ seq: 78
 status: todo
 priority: p1
 created: 2026-09-06T11:30:33.905216Z
-sprint: 130
+sprint: 166
 ---
 
 There is no way to ask sprint stop or sprint end whether a close would be

@@ -6,7 +6,7 @@ seq: 77
 status: todo
 priority: p2
 created: 2026-09-06T11:30:33.882883Z
-sprint: 130
+sprint: 166
 ---
 
 sprint checkpoint refuses without the conductor lease: "sprint N lease is

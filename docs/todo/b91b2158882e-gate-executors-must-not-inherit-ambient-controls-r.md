@@ -6,7 +6,7 @@ seq: 85
 status: todo
 priority: p1
 created: 2026-09-07T08:28:00.242307Z
-sprint: 131
+sprint: 166
 ---
 
 A gate's exit code is a VERDICT. A gate that inherits an ambient control decides differently depending on the shell that launched it, which makes the verdict a fact about the environment rather than about the tree. This is the highest-severity item in the section 14 design contract, because it can corrupt EVIDENCE rather than merely waste effort.
