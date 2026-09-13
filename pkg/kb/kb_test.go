@@ -680,3 +680,168 @@ func TestRetirementNeedsAnObservationWindow(t *testing.T) {
 		t.Fatalf("a page older than the read log must not be retired: %+v", hits)
 	}
 }
+
+// runRing executes the kb CLI with the given args verbatim (no implicit --dir),
+// so ring selection (--ring) is exercised end to end. Returns stdout, stderr.
+func runRing(t *testing.T, stdin string, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := NewKBCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetIn(strings.NewReader(stdin))
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
+// TestFormDefaultsAndValidation covers the form facet: the writer always emits
+// form:, add defaults to page, --form note is honored, and the non-storable
+// forms (relation lives in the graph, code is a view) are refused on a write.
+func TestFormDefaultsAndValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	// Default add is a page, and it is written to disk (the writer always emits form:).
+	mustRun(t, dir, "add", "--title", "a plain page", "--description", "WHEN nothing special")
+	p, err := Open(dir).Load("a-plain-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Form != FormPage {
+		t.Fatalf("default add form = %q, want %q", p.Form, FormPage)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "pages", "a-plain-page.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "form: page") {
+		t.Fatalf("on-disk page did not emit form:\n%s", raw)
+	}
+
+	// --form note is honored.
+	mustRun(t, dir, "add", "--form", "note", "--title", "a memo", "--description", "WHEN jotting")
+	n, err := Open(dir).Load("a-memo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Form != FormNote {
+		t.Fatalf("note add form = %q, want %q", n.Form, FormNote)
+	}
+
+	// relation and code are not page-storable forms.
+	for _, bad := range []string{FormRelation, FormCode, "bogus"} {
+		if _, err := run(t, dir, "", "add", "--force", "--form", bad, "--title", "x "+bad, "--description", "d"); err == nil {
+			t.Fatalf("form %q should be refused on a write", bad)
+		}
+	}
+	if ValidForm("bogus") || !ValidForm(FormRelation) || !ValidForm(FormCode) {
+		t.Fatal("ValidForm vocabulary wrong: note|page|relation|code recognized, others not")
+	}
+	if StorableForm(FormRelation) || StorableForm(FormCode) || !StorableForm(FormNote) || !StorableForm(FormPage) {
+		t.Fatal("StorableForm should accept only note|page")
+	}
+}
+
+// TestLegacyPageReadsAsForm pins the migration contract: a record written
+// before the form facet — no form: in its frontmatter — reads as a page, and
+// --form page includes it while --form note does not.
+func TestLegacyPageReadsAsForm(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "pages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A legacy page: valid frontmatter, but no form: field at all.
+	legacy := "---\ntype: lesson\ntitle: legacy lesson\ndescription: WHEN reading an old page\nstatus: validated\n---\n\nthe body.\n"
+	if err := os.WriteFile(filepath.Join(dir, "pages", "legacy-lesson.md"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := Open(dir).Load("legacy-lesson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Form != FormPage || p.EffForm() != FormPage {
+		t.Fatalf("legacy record read as form %q, want page", p.Form)
+	}
+
+	// --form page includes it; --form note excludes it.
+	pageOut := mustRun(t, dir, "search", "--form", "page", "--k", "10", "legacy")
+	if !strings.Contains(pageOut, "legacy-lesson") {
+		t.Fatalf("--form page should include the legacy record:\n%s", pageOut)
+	}
+	noteOut := mustRun(t, dir, "list", "--form", "note")
+	if strings.Contains(noteOut, "legacy-lesson") {
+		t.Fatalf("--form note must not include a page record:\n%s", noteOut)
+	}
+}
+
+// TestAgentRingResolvesUnderAgentDataAndIsOwnerOnly covers the agent ring: it
+// resolves under <YCODE_DATA_DIR>/kb, a write lands there and nowhere else, and
+// it is invisible to another principal (ToolID mismatch).
+func TestAgentRingResolvesUnderAgentDataAndIsOwnerOnly(t *testing.T) {
+	agentData := t.TempDir()
+	host := t.TempDir()
+	// Point every store the brief names at scratch, never the operator's.
+	t.Setenv("YCODE_DATA_DIR", agentData)
+	t.Setenv("BASHY_KB_DIR", host)
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv("BASHY_SKILLS_DIR", t.TempDir())
+	// Run outside any git repo so the default ring would be host, not repo.
+	t.Chdir(t.TempDir())
+
+	agentKB := filepath.Join(agentData, "kb")
+
+	// Principal alice writes to the agent ring.
+	t.Setenv("WEAVE_AGENT", "alice")
+	if _, _, err := runRing(t, "", "--ring", "agent", "add", "--title", "alice secret", "--description", "WHEN only alice should see it"); err != nil {
+		t.Fatalf("alice agent-ring add: %v", err)
+	}
+	// It landed under <agent-data>/kb and NOWHERE else (exactly one ring).
+	if _, err := os.Stat(filepath.Join(agentKB, "pages", "alice-secret.md")); err != nil {
+		t.Fatalf("agent-ring page not under <agent-data>/kb: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(host, "pages", "alice-secret.md")); !os.IsNotExist(err) {
+		t.Fatalf("agent-ring write leaked into the host ring (err=%v)", err)
+	}
+
+	// alice sees her own page on the agent ring.
+	out, _, err := runRing(t, "", "--ring", "agent", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "alice-secret") {
+		t.Fatalf("alice cannot see her own agent-ring page:\n%s", out)
+	}
+
+	// bob — a different principal sharing the same physical dir — sees nothing.
+	t.Setenv("WEAVE_AGENT", "bob")
+	out, _, err = runRing(t, "", "--ring", "agent", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "alice-secret") {
+		t.Fatalf("bob can see alice's agent-ring page — the ring is not owner-only:\n%s", out)
+	}
+	// bob's show of alice's page is a not-found, not an error that reveals it.
+	if _, _, err := runRing(t, "", "--ring", "agent", "show", "alice-secret"); err == nil {
+		t.Fatal("bob should not be able to show alice's agent-ring page")
+	}
+	// Store level too: bob's owner-scoped List is empty though the file exists.
+	if pages, _ := OpenAgentRing(agentKB, "bob").List(); len(pages) != 0 {
+		t.Fatalf("owner-scoped List for bob should be empty, got %d", len(pages))
+	}
+	if pages, _ := OpenAgentRing(agentKB, "alice").List(); len(pages) != 1 {
+		t.Fatalf("owner-scoped List for alice should have 1 page, got %d", len(pages))
+	}
+}
+
+// TestAgentRingRequiresAgentData verifies --ring agent fails loudly (never a
+// silent fallthrough to another ring) when no per-agent store is set.
+func TestAgentRingRequiresAgentData(t *testing.T) {
+	t.Setenv("YCODE_DATA_DIR", "")
+	t.Setenv("BASHY_KB_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	if _, _, err := runRing(t, "", "--ring", "agent", "list"); err == nil {
+		t.Fatal("--ring agent with no YCODE_DATA_DIR must error, not fall back to another ring")
+	}
+}

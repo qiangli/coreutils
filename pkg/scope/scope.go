@@ -32,8 +32,9 @@ import (
 type Kind string
 
 const (
-	KindRepo Kind = "repo" // a git repo's committed store
-	KindUser Kind = "user" // the per-host store
+	KindRepo  Kind = "repo"  // a git repo's committed store
+	KindUser  Kind = "user"  // the per-host store
+	KindAgent Kind = "agent" // an owner-only store under the per-identity agent-data dir
 )
 
 // Scope is a resolved location plus the pieces a tool needs to build its store.
@@ -47,10 +48,14 @@ type Scope struct {
 // Dir is the on-disk directory the store lives in.
 func (s *Scope) Dir() string { return filepath.Join(s.Root, s.Sub) }
 
-// Label is the short "which store am I on" line ("repo <root>" | "user <owner>").
+// Label is the short "which store am I on" line ("repo <root>" | "agent
+// <root>" | "user <owner>").
 func (s *Scope) Label() string {
 	if s.Kind == KindRepo {
 		return "repo " + s.Root
+	}
+	if s.Kind == KindAgent {
+		return "agent " + s.Root
 	}
 	if s.Owner != "" {
 		return "user " + s.Owner
@@ -62,17 +67,36 @@ func (s *Scope) Label() string {
 // HostDir is called ONLY when the per-host store is chosen, so a tool that is
 // always used inside a repo never pays the home lookup (and never fails on it).
 type Options struct {
-	RepoSub   string                 // committed subdir under the repo root, e.g. "docs/kb"
-	Owner     string                 // per-host owner segment ("" = no owner subdir)
-	HostDir   func() (string, error) // lazy per-host base directory (e.g. ~/.bashy/kb)
-	ForceRepo bool                   // --repo
-	ForceUser bool                   // --user
-	BaseDir   string                 // --base-dir: an explicit repo root
+	RepoSub    string                 // committed subdir under the repo root, e.g. "docs/kb"
+	Owner      string                 // per-host owner segment ("" = no owner subdir)
+	HostDir    func() (string, error) // lazy per-host base directory (e.g. ~/.bashy/kb)
+	AgentDir   func() (string, error) // lazy agent-ring directory (the full <agent-data>/kb); called only for ForceAgent
+	ForceRepo  bool                   // --repo
+	ForceUser  bool                   // --user
+	ForceAgent bool                   // --ring agent: the owner-only per-identity store (never a default)
+	BaseDir    string                 // --base-dir: an explicit repo root
 }
 
 // Resolve applies the precedence documented on the package: base-dir > (unless
-// --user) auto-detected git repo > --repo error > per-host store.
+// --user) auto-detected git repo > --repo error > per-host store. The agent
+// ring is never a default — it is returned only when ForceAgent is set (an
+// explicit --ring agent), so a bare Resolve keeps the repo/host behavior
+// unchanged.
 func Resolve(o Options) (*Scope, error) {
+	if o.ForceAgent {
+		if o.AgentDir == nil {
+			return nil, fmt.Errorf("agent ring: no agent-data directory available")
+		}
+		dir, err := o.AgentDir()
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(dir) == "" {
+			return nil, fmt.Errorf("agent ring: no per-agent store (this process was not launched with a per-identity agent-data dir)")
+		}
+		// AgentDir returns the full ring directory; no owner subdir applies.
+		return &Scope{Kind: KindAgent, Root: dir, Sub: ""}, nil
+	}
 	if b := strings.TrimSpace(o.BaseDir); b != "" {
 		return &Scope{Kind: KindRepo, Root: b, Sub: o.RepoSub}, nil
 	}

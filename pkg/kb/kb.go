@@ -38,20 +38,25 @@ import (
 // explicit --dir wins; then $BASHY_KB_DIR forces the host store (tests, relocated
 // homes) unless --repo/--base-dir asked otherwise; otherwise auto-detect (this
 // repo's docs/kb/ inside a git repo, else the host store).
-func resolveKBDir(dir *string, forceRepo, forceUser bool, baseDir string) (string, error) {
+func resolveKBDir(dir *string, forceRepo, forceUser, forceAgent bool, baseDir string) (string, error) {
 	if strings.TrimSpace(*dir) != "" {
 		return "dir", nil
 	}
-	if env := strings.TrimSpace(os.Getenv("BASHY_KB_DIR")); env != "" && baseDir == "" && !forceRepo {
+	// The AGENT ring is explicit (--ring agent) and owner-only: BASHY_KB_DIR
+	// (which forces the host store for tests/relocated homes) must not divert
+	// it, so the env shortcut is skipped when --ring agent is asked for.
+	if env := strings.TrimSpace(os.Getenv("BASHY_KB_DIR")); env != "" && baseDir == "" && !forceRepo && !forceAgent {
 		*dir = env
 		return "user", nil
 	}
 	sc, err := scope.Resolve(scope.Options{
-		RepoSub:   RepoSub,
-		HostDir:   func() (string, error) { return DefaultDir(), nil },
-		ForceRepo: forceRepo,
-		ForceUser: forceUser,
-		BaseDir:   baseDir,
+		RepoSub:    RepoSub,
+		HostDir:    func() (string, error) { return DefaultDir(), nil },
+		AgentDir:   func() (string, error) { return AgentRingDir(), nil },
+		ForceRepo:  forceRepo,
+		ForceUser:  forceUser,
+		ForceAgent: forceAgent,
+		BaseDir:    baseDir,
 	})
 	if err != nil {
 		return "", err
@@ -62,9 +67,23 @@ func resolveKBDir(dir *string, forceRepo, forceUser bool, baseDir string) (strin
 
 // NewKBCmd returns the `kb` cobra command tree — the host-agnostic entry
 // point a front end mounts (e.g. `bashy kb`).
+// openRing opens the store for the resolved ring. On the agent ring it scopes
+// reads to the calling principal (ToolID) so another principal sees nothing;
+// every other ring is unscoped.
+func openRing(dir, ring string) *Store {
+	if ring == string(scope.KindAgent) {
+		return OpenAgentRing(dir, ToolID())
+	}
+	return Open(dir)
+}
+
 func NewKBCmd() *cobra.Command {
-	var dir, baseDir string
+	var dir, baseDir, ring string
 	var forceRepo, forceUser bool
+	// resolved holds the ring the store was resolved to (repo|user|agent|dir),
+	// shared with every subcommand so the agent ring's owner-only read scope is
+	// applied uniformly.
+	resolved := new(string)
 	cmd := &cobra.Command{
 		Use:   "kb",
 		Short: "Knowledge base for agents — auto: repo docs/kb/ if in a git repo, else your host store",
@@ -96,38 +115,55 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 		// so every subcommand's Open(*dir) lands on the right store. A header on
 		// stderr names WHICH store, so which kb you are on is never in doubt.
 		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
-			label, err := resolveKBDir(&dir, forceRepo, forceUser, baseDir)
+			// --ring is the ring selector; it maps onto the existing force
+			// flags. A ring is exactly one store — a write lands in one place.
+			forceAgent := false
+			switch strings.TrimSpace(ring) {
+			case "":
+				// no override — --repo/--user/auto-detect decide
+			case "repo":
+				forceRepo = true
+			case "host":
+				forceUser = true
+			case "agent":
+				forceAgent = true
+			default:
+				return fmt.Errorf("kb: unknown ring %q (repo|host|agent)", ring)
+			}
+			label, err := resolveKBDir(&dir, forceRepo, forceUser, forceAgent, baseDir)
 			if err != nil {
 				return err
 			}
+			*resolved = label
 			fmt.Fprintf(c.ErrOrStderr(), "kb [%s] %s\n", label, dir)
 			return nil
 		},
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&dir, "dir", "", "point at a kb store directory directly (bypasses scope detection)")
+	cmd.PersistentFlags().StringVar(&ring, "ring", "", "select the store ring: repo | host | agent (default: repo in a git repo, else host; agent is the owner-only per-identity store)")
 	cmd.PersistentFlags().BoolVar(&forceRepo, "repo", false, "force THIS repo's committed store (docs/kb/); error if not in a git repo")
 	cmd.PersistentFlags().BoolVar(&forceUser, "user", false, "force the host store (~/.bashy/kb), even inside a repo")
 	cmd.PersistentFlags().StringVar(&baseDir, "base-dir", "", "read ANOTHER project root's store (<root>/docs/kb/) — travel repos without cd")
 
-	cmd.AddCommand(newSearchCmd(&dir))
-	cmd.AddCommand(newShowCmd(&dir))
-	cmd.AddCommand(newAddCmd(&dir))
-	cmd.AddCommand(newUpdateCmd(&dir))
-	cmd.AddCommand(newSupersedeCmd(&dir))
-	cmd.AddCommand(newValidateCmd(&dir))
-	cmd.AddCommand(newRetroCmd(&dir))
+	cmd.AddCommand(newSearchCmd(&dir, resolved))
+	cmd.AddCommand(newShowCmd(&dir, resolved))
+	cmd.AddCommand(newAddCmd(&dir, resolved))
+	cmd.AddCommand(newUpdateCmd(&dir, resolved))
+	cmd.AddCommand(newSupersedeCmd(&dir, resolved))
+	cmd.AddCommand(newValidateCmd(&dir, resolved))
+	cmd.AddCommand(newRetroCmd(&dir, resolved))
 	cmd.AddCommand(newSourcesCmd(&dir))
 	cmd.AddCommand(newTransferCmd(&dir))
-	cmd.AddCommand(newListCmd(&dir))
-	cmd.AddCommand(newIndexCmd(&dir))
-	cmd.AddCommand(newLogCmd(&dir))
+	cmd.AddCommand(newListCmd(&dir, resolved))
+	cmd.AddCommand(newIndexCmd(&dir, resolved))
+	cmd.AddCommand(newLogCmd(&dir, resolved))
 	return cmd
 }
 
 // --- search --------------------------------------------------------------
 
-func newSearchCmd(dir *string) *cobra.Command {
+func newSearchCmd(dir, ring *string) *cobra.Command {
 	var (
 		repo, goos     string
 		tags           []string
@@ -138,6 +174,7 @@ func newSearchCmd(dir *string) *cobra.Command {
 		minCov         float64
 		useWeight      float64
 		retireAfter    time.Duration
+		form           string
 	)
 	cmd := &cobra.Command{
 		Use:   "search <term>...",
@@ -155,11 +192,15 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 --tags to filter).`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			store := Open(*dir)
+			if form != "" && !ValidForm(form) {
+				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
+			}
+			store := openRing(*dir, *ring)
 			pages, err := store.List()
 			if err != nil {
 				return err
 			}
+			pages = filterForm(pages, form)
 			if repo == "" {
 				if cwd, err := os.Getwd(); err == nil {
 					if root := repoRootOf(cwd); root != "" {
@@ -245,7 +286,23 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().Float64Var(&useWeight, "use-weight", 0, "weight the ACT-R base-level term (recency x frequency of opens); 0 = rank purely on the query")
 	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
 	cmd.Flags().BoolVar(&why, "why", false, "also explain the search: which query terms the corpus carries, and where (always shown when nothing matches)")
+	cmd.Flags().StringVar(&form, "form", "", "filter to one record form: note|page (legacy pages read as page)")
 	return cmd
+}
+
+// filterForm keeps only pages of the given form (by effective form, so legacy
+// records count as pages). An empty form keeps everything.
+func filterForm(pages []*Page, form string) []*Page {
+	if form == "" {
+		return pages
+	}
+	out := pages[:0:0]
+	for _, p := range pages {
+		if p.EffForm() == form {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // searchHitJSON is one hit on the MACHINE path. Which fields are populated is
@@ -356,13 +413,26 @@ func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report, res Res
 
 // --- show ----------------------------------------------------------------
 
-func newShowCmd(dir *string) *cobra.Command {
-	return &cobra.Command{
+func newShowCmd(dir, ring *string) *cobra.Command {
+	var form string
+	cmd := &cobra.Command{
 		Use:   "show <slug>",
 		Short: "Print one page (frontmatter + body)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			store := Open(*dir)
+			if form != "" && !ValidForm(form) {
+				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
+			}
+			store := openRing(*dir, *ring)
+			// Load applies the agent ring's owner scope: another principal's
+			// page reports as absent, so it is invisible here too.
+			p, err := store.Load(args[0])
+			if err != nil {
+				return err
+			}
+			if form != "" && p.EffForm() != form {
+				return fmt.Errorf("kb: %s is form %s, not %s", args[0], p.EffForm(), form)
+			}
 			b, err := os.ReadFile(store.PagePath(args[0]))
 			if err != nil {
 				return err
@@ -374,6 +444,8 @@ func newShowCmd(dir *string) *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&form, "form", "", "require the page to be this form: note|page")
+	return cmd
 }
 
 // --- add -----------------------------------------------------------------
@@ -384,9 +456,11 @@ type pageFlags struct {
 	tags, repos          []string
 	goos, evidence, slug string
 	body, bodyFile       string
+	form                 string
 }
 
 func (f *pageFlags) register(cmd *cobra.Command, requireTitle bool) {
+	cmd.Flags().StringVar(&f.form, "form", FormPage, "record form: note|page (note = description optional, body free)")
 	cmd.Flags().StringVar(&f.typ, "type", TypeLesson, "page type: lesson|gotcha|runbook|decision|fact")
 	cmd.Flags().StringVar(&f.title, "title", "", "page title")
 	cmd.Flags().StringVar(&f.desc, "description", "", "what + WHEN this applies (the routing surface)")
@@ -406,6 +480,14 @@ func (f *pageFlags) register(cmd *cobra.Command, requireTitle bool) {
 func (f *pageFlags) buildPage(c *cobra.Command) (*Page, error) {
 	if !ValidType(f.typ) {
 		return nil, fmt.Errorf("kb: invalid type %q (lesson|gotcha|runbook|decision|fact)", f.typ)
+	}
+	form := f.form
+	if form == "" {
+		form = FormPage
+	}
+	if !StorableForm(form) {
+		// relation lives in the graph, code is a view — neither is a page.
+		return nil, fmt.Errorf("kb: form %q cannot be written as a page (note|page); relation lives in the graph, code is a view", form)
 	}
 	body := f.body
 	if f.bodyFile != "" {
@@ -427,6 +509,7 @@ func (f *pageFlags) buildPage(c *cobra.Command) (*Page, error) {
 	}
 	p := &Page{
 		Slug:        slug,
+		Form:        form,
 		Type:        f.typ,
 		Title:       f.title,
 		Description: strings.TrimSpace(f.desc),
@@ -442,7 +525,7 @@ func (f *pageFlags) buildPage(c *cobra.Command) (*Page, error) {
 	return p, nil
 }
 
-func newAddCmd(dir *string) *cobra.Command {
+func newAddCmd(dir, ring *string) *cobra.Command {
 	var flags pageFlags
 	var force bool
 	cmd := &cobra.Command{
@@ -454,7 +537,7 @@ supersede that page instead (--force overrides). Distill strategy, not
 transcript; failures are as valuable as successes.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			p, err := flags.buildPage(c)
 			if err != nil {
 				return err
@@ -483,7 +566,7 @@ transcript; failures are as valuable as successes.`,
 
 // --- update --------------------------------------------------------------
 
-func newUpdateCmd(dir *string) *cobra.Command {
+func newUpdateCmd(dir, ring *string) *cobra.Command {
 	var (
 		title, desc, status, evidence string
 		tags                          []string
@@ -494,7 +577,7 @@ func newUpdateCmd(dir *string) *cobra.Command {
 		Short: "Refresh an existing page (the entry was right — extend or correct in place)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			p, err := store.Load(args[0])
 			if err != nil {
 				return err
@@ -571,7 +654,7 @@ func newUpdateCmd(dir *string) *cobra.Command {
 
 // --- supersede -----------------------------------------------------------
 
-func newSupersedeCmd(dir *string) *cobra.Command {
+func newSupersedeCmd(dir, ring *string) *cobra.Command {
 	var flags pageFlags
 	cmd := &cobra.Command{
 		Use:   "supersede <slug>",
@@ -581,7 +664,7 @@ supersedes/superseded_by links both ways. Never delete knowledge — an
 invalidated lesson plus its correction is itself knowledge.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			old, err := store.Load(args[0])
 			if err != nil {
 				return err
@@ -618,14 +701,14 @@ invalidated lesson plus its correction is itself knowledge.`,
 
 // --- validate ------------------------------------------------------------
 
-func newValidateCmd(dir *string) *cobra.Command {
+func newValidateCmd(dir, ring *string) *cobra.Command {
 	var evidence string
 	cmd := &cobra.Command{
 		Use:   "validate <slug>",
 		Short: "Promote a candidate to validated (requires evidence)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			p, err := store.Load(args[0])
 			if err != nil {
 				return err
@@ -646,7 +729,7 @@ func newValidateCmd(dir *string) *cobra.Command {
 
 // --- retro ---------------------------------------------------------------
 
-func newRetroCmd(dir *string) *cobra.Command {
+func newRetroCmd(dir, ring *string) *cobra.Command {
 	var k int
 	cmd := &cobra.Command{
 		Use:   "retro [<term>...]",
@@ -656,7 +739,7 @@ and the one decision to make about the knowledge — never blind-append.
 Deterministic (no LLM): the judgment is yours, retro structures it.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			pages, err := store.List()
 			if err != nil {
 				return err
@@ -699,18 +782,23 @@ write distilled strategy, not transcript; capture failures as guardrails.
 
 // --- list / index / log --------------------------------------------------
 
-func newListCmd(dir *string) *cobra.Command {
+func newListCmd(dir, ring *string) *cobra.Command {
 	var jsonOut bool
+	var form string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List every page, one line each",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			store := Open(*dir)
+			if form != "" && !ValidForm(form) {
+				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
+			}
+			store := openRing(*dir, *ring)
 			pages, err := store.List()
 			if err != nil {
 				return err
 			}
+			pages = filterForm(pages, form)
 			if jsonOut {
 				// list has no query, so there is nothing to explain (no why).
 				// ResLine matches this verb's own contract — "one line each",
@@ -726,6 +814,7 @@ func newListCmd(dir *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON output")
+	cmd.Flags().StringVar(&form, "form", "", "filter to one record form: note|page (legacy pages read as page)")
 	return cmd
 }
 
@@ -737,13 +826,13 @@ func toHits(pages []*Page) []Hit {
 	return out
 }
 
-func newIndexCmd(dir *string) *cobra.Command {
+func newIndexCmd(dir, ring *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "index",
 		Short: "Regenerate index.md (the always-load entry point)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			if err := store.RebuildIndex(); err != nil {
 				return err
 			}
@@ -753,14 +842,14 @@ func newIndexCmd(dir *string) *cobra.Command {
 	}
 }
 
-func newLogCmd(dir *string) *cobra.Command {
+func newLogCmd(dir, ring *string) *cobra.Command {
 	var n int
 	cmd := &cobra.Command{
 		Use:   "log",
 		Short: "Show recent journal entries (who wrote what, when)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			store := Open(*dir)
+			store := openRing(*dir, *ring)
 			lines, err := store.JournalTail(n)
 			if err != nil {
 				return err

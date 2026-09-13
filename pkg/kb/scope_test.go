@@ -29,7 +29,7 @@ func TestResolveKBDirRepoScope(t *testing.T) {
 	t.Setenv("BASHY_KB_DIR", "") // ensure env does not force the host store
 	root := kbGitRepo(t)
 	var dir string
-	label, err := resolveKBDir(&dir, false, false, "")
+	label, err := resolveKBDir(&dir, false, false, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestResolveKBDirRepoScope(t *testing.T) {
 func TestResolveKBDirExplicitDirWins(t *testing.T) {
 	kbGitRepo(t)
 	dir := "/explicit/store"
-	label, err := resolveKBDir(&dir, false, false, "")
+	label, err := resolveKBDir(&dir, false, false, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestResolveKBDirEnvForcesHostInsideRepo(t *testing.T) {
 	t.Setenv("BASHY_KB_DIR", host)
 	kbGitRepo(t)
 	var dir string
-	label, err := resolveKBDir(&dir, false, false, "")
+	label, err := resolveKBDir(&dir, false, false, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestResolveKBDirRepoFlagBeatsEnv(t *testing.T) {
 	t.Setenv("BASHY_KB_DIR", t.TempDir())
 	root := kbGitRepo(t)
 	var dir string
-	label, err := resolveKBDir(&dir, true, false, "")
+	label, err := resolveKBDir(&dir, true, false, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,12 +100,40 @@ func TestRepoStoreDoesNotNestGit(t *testing.T) {
 	}
 }
 
+// The agent ring resolves under <YCODE_DATA_DIR>/kb and, being explicit, wins
+// over both the BASHY_KB_DIR host shortcut and an auto-detected repo.
+func TestResolveKBDirAgentRing(t *testing.T) {
+	agentData := t.TempDir()
+	t.Setenv("YCODE_DATA_DIR", agentData)
+	t.Setenv("BASHY_KB_DIR", t.TempDir()) // host env set...
+	kbGitRepo(t)                          // ...and inside a repo — --ring agent still wins
+	var dir string
+	label, err := resolveKBDir(&dir, false, false, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "agent" || dir != filepath.Join(agentData, "kb") {
+		t.Fatalf("agent ring = %q %q, want agent %s", label, dir, filepath.Join(agentData, "kb"))
+	}
+}
+
+// Without a per-agent store (no YCODE_DATA_DIR), --ring agent errors rather than
+// silently falling back to another ring.
+func TestResolveKBDirAgentRingNeedsAgentData(t *testing.T) {
+	t.Setenv("YCODE_DATA_DIR", "")
+	t.Chdir(t.TempDir())
+	var dir string
+	if _, err := resolveKBDir(&dir, false, false, true, ""); err == nil {
+		t.Fatal("--ring agent with no agent-data dir must error")
+	}
+}
+
 func TestResolveKBDirBaseDirTravel(t *testing.T) {
 	t.Setenv("BASHY_KB_DIR", t.TempDir())
 	kbGitRepo(t)
 	other := t.TempDir()
 	var dir string
-	label, err := resolveKBDir(&dir, false, false, other)
+	label, err := resolveKBDir(&dir, false, false, false, other)
 	if err != nil {
 		t.Fatal(err)
 	}
