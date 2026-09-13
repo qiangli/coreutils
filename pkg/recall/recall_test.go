@@ -30,6 +30,7 @@ import (
 // reasonable ("just add --include-facts for debugging"), and a test that only
 // checks output would pass right up until someone piped it somewhere.
 func TestRecall_NeverTouchesTheFactStore(t *testing.T) {
+	isolateRecallStores(t)
 	banned := []string{"OpenFacts", "FactStore", "Fact"}
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
@@ -75,6 +76,7 @@ func TestRecall_NeverTouchesTheFactStore(t *testing.T) {
 // cross-ring score comparison, which was measured and rejected (RRF with a
 // no-signal arm dropped MRR 0.594 -> 0.417 at identical hit@3).
 func TestRecall_PerRingCapsAreNotGlobal(t *testing.T) {
+	isolateRecallStores(t)
 	dir := t.TempDir()
 	store := kbWith(t, dir,
 		page("stuck-process-one", "stopping a stuck process", "how to stop a stuck process safely"),
@@ -113,6 +115,7 @@ func TestRecall_PerRingCapsAreNotGlobal(t *testing.T) {
 // answer, and it must be REPORTED rather than swallowed. A caller has to be able
 // to tell "nothing known" from "something broke".
 func TestRecall_RingsAreIndependent(t *testing.T) {
+	isolateRecallStores(t)
 	dir := t.TempDir()
 	store := kbWith(t, dir, page("known", "a known lesson", "something we know about widgets"))
 
@@ -130,6 +133,7 @@ func TestRecall_RingsAreIndependent(t *testing.T) {
 // known is information; conflating it with a failure is how an agent proceeds on
 // a false negative.
 func TestRecall_EmptyIsAnAnswerNotAnError(t *testing.T) {
+	isolateRecallStores(t)
 	store := kbWith(t, t.TempDir(), page("unrelated", "kubernetes ingress", "how ingress works"))
 	res := Recall(Query{Text: "zzzz nonexistent topic qqqq"}, HostRing{Store: store})
 	if len(res.Hits) != 0 {
@@ -145,6 +149,7 @@ func TestRecall_EmptyIsAnAnswerNotAnError(t *testing.T) {
 
 // TestRecall_AbstainsWhenAsked — abstention is a first-class answer, not an error.
 func TestRecall_AbstainsWhenAsked(t *testing.T) {
+	isolateRecallStores(t)
 	store := kbWith(t, t.TempDir(), page("unrelated", "kubernetes ingress", "how ingress works"))
 	res := Recall(Query{Text: "zzzz nonexistent qqqq", MinCoverage: 0.9}, HostRing{Store: store})
 	if !res.Abstained {
@@ -158,6 +163,7 @@ func TestRecall_AbstainsWhenAsked(t *testing.T) {
 // TestRecall_BudgetTruncatesAtAHitBoundary — a half-rendered record is worse than
 // one fewer record, because it can be quoted as if complete.
 func TestRecall_BudgetTruncatesAtAHitBoundary(t *testing.T) {
+	isolateRecallStores(t)
 	dir := t.TempDir()
 	store := kbWith(t, dir,
 		page("widget-one", "widget handling one", "the first thing to know about widget handling"),
@@ -186,6 +192,7 @@ func TestRecall_BudgetTruncatesAtAHitBoundary(t *testing.T) {
 // no re-openable source is a reconstruction, and provenance is what stops a
 // third party from treating a candidate note as policy.
 func TestRecall_EveryHitCarriesRingAndSource(t *testing.T) {
+	isolateRecallStores(t)
 	dir := t.TempDir()
 	store := kbWith(t, dir, page("widget", "widget lesson", "a lesson about widgets"))
 	folds := foldsWith(t, dir, craft.Fold{Coordinate: "c1", Note: "widgets need a restart"})
@@ -209,6 +216,7 @@ func TestRecall_EveryHitCarriesRingAndSource(t *testing.T) {
 // TestRecall_DeterministicOrder — a caller building on an unstable order has no
 // reproducible behaviour.
 func TestRecall_DeterministicOrder(t *testing.T) {
+	isolateRecallStores(t)
 	dir := t.TempDir()
 	store := kbWith(t, dir,
 		page("a-widget", "widget alpha", "widget alpha notes"),
@@ -232,7 +240,8 @@ func TestRecall_DeterministicOrder(t *testing.T) {
 
 type brokenRing struct{}
 
-func (brokenRing) Ring() string { return "broken" }
+func (brokenRing) Ring() string    { return "broken" }
+func (brokenRing) Forms() []string { return []string{kb.FormPage} }
 func (brokenRing) Recall(Query) ([]Hit, error) {
 	return nil, os.ErrPermission
 }

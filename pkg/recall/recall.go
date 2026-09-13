@@ -32,6 +32,7 @@
 package recall
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -49,16 +50,15 @@ const Version = 1
 // (embedded → shared → cloud → local) intent: a record closer to this host and
 // this operator is emitted before an org-wide default.
 const (
+	RingAgent      = "agent"      // owner-only <agent-data>/kb pages
+	RingRepo       = "repo"       // the current repository's committed docs/kb pages
 	RingHost       = "host"       // ~/.bashy/kb pages
 	RingCapability = "capability" // craft folds — what generally holds at a coordinate
 )
 
-// Rings returns the rings this build can read, in precedence order.
-//
-// P0 is host + capability, per the spec's phasing. The repo rings (contrib.jsonl,
-// weave memory) land in P1 behind the same envelope, which is why callers should
-// switch on the `ring` field rather than assume a fixed set.
-func Rings() []string { return []string{RingHost, RingCapability} }
+// Rings returns the rings this build can read, in presentation precedence.
+// Readers rank only inside their own ring; this order never fuses their scores.
+func Rings() []string { return []string{RingAgent, RingRepo, RingHost, RingCapability} }
 
 // Query is a recall request. The zero value is usable except for Text.
 type Query struct {
@@ -79,6 +79,15 @@ type Query struct {
 	Since time.Duration
 	// Repo and OS filter scoped records. Empty = unfiltered.
 	Repo, OS string
+	// Forms restricts records by shape. Empty leaves form selection to the
+	// caller (recall's historical behaviour); context defaults it to note,page.
+	Forms []string
+	// Files are task-local code cues exposed to injected readers such as
+	// CodeRing. Page readers do not reinterpret them.
+	Files []string
+	// Episode admits checkpoint-tagged agent notes from exactly this episode.
+	// Without it, checkpoint reconstructions are never presented as records.
+	Episode string
 
 	// Now is injectable so tests are not clock-dependent. Zero = time.Now().
 	Now time.Time
@@ -124,6 +133,7 @@ type Hit struct {
 	Ring string `json:"ring"`
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
+	Form string `json:"form,omitempty"`
 
 	Cue  string `json:"cue"`
 	Gist string `json:"gist,omitempty"`
@@ -141,6 +151,13 @@ type Hit struct {
 
 	// Compose is the command that renders a capability, when the hit is one.
 	Compose string `json:"compose,omitempty"`
+
+	// Full is the record body used by the context resolution ladder. It is
+	// internal to rendering so recall's established JSON stays token-lean.
+	Full string `json:"-"`
+	// Episode and Checkpoint enforce the agent-ring reconstruction boundary.
+	Episode    string `json:"-"`
+	Checkpoint bool   `json:"-"`
 }
 
 // Budget reports what the render cost against the ceiling.
@@ -178,57 +195,49 @@ type RingError struct {
 // suppress another's answer, which is why each returns its own error.
 type Reader interface {
 	Ring() string
+	// Forms names the record shapes this reader can provide. The context
+	// command uses it to refuse unavailable forms before doing any reads.
+	Forms() []string
 	Recall(q Query) ([]Hit, error)
 }
 
 // HostRing reads ~/.bashy/kb pages.
-type HostRing struct{ Store *kb.Store }
+type HostRing struct {
+	Store *kb.Store
+	// Path, when set, is checked before reading. Context sets it so a missing
+	// requested substrate is an honest broken-ring result naming what opened;
+	// direct Recall callers may leave it empty for the historical lazy store.
+	Path string
+}
 
-func (HostRing) Ring() string { return RingHost }
+func (HostRing) Ring() string    { return RingHost }
+func (HostRing) Forms() []string { return []string{kb.FormNote, kb.FormPage} }
 
 func (r HostRing) Recall(q Query) ([]Hit, error) {
-	if r.Store == nil {
-		return nil, nil
-	}
-	pages, err := r.Store.List()
-	if err != nil {
-		return nil, err
-	}
-	kq := kb.Query{
-		Terms:       kb.Terms(q.Text),
-		Repo:        q.Repo,
-		OS:          q.OS,
-		K:           q.k(),
-		MinCoverage: q.MinCoverage,
-	}
-	var out []Hit
-	for _, h := range kb.Search(pages, kq) {
-		p := h.Page
-		if q.Since > 0 && !withinSince(p.Updated, p.Created, q.now(), q.Since) {
-			continue
-		}
-		out = append(out, Hit{
-			Ring: RingHost, Kind: p.Type, ID: "kb:" + p.Slug,
-			Cue: p.Title, Gist: p.Description,
-			Source: []SourceRef{{URI: "file://" + r.Store.PagePath(p.Slug)}},
-			Status: p.Status, Confidence: "ASSERTED",
-			ObservedAt: p.Updated, ValidFrom: p.Created,
-			Score: h.Score,
-			Why:   []string{"kb", "matched " + itoa(h.Matched) + " terms"},
-		})
-	}
-	return out, nil
+	return recallPages(RingHost, r.Store, r.Path, q)
 }
 
 // CapabilityRing reads craft FOLDS — generalisable knowledge keyed on a
 // coordinate. It deliberately has no access to the fact store; see the package
 // doc. Folds are ranked by reusing kb's BM25 over a synthetic page per fold, so
 // there is ONE ranker in the system rather than a second hand-tuned one.
-type CapabilityRing struct{ Folds *craft.FoldStore }
+type CapabilityRing struct {
+	Folds *craft.FoldStore
+	Path  string
+}
 
-func (CapabilityRing) Ring() string { return RingCapability }
+func (CapabilityRing) Ring() string    { return RingCapability }
+func (CapabilityRing) Forms() []string { return []string{kb.FormPage} }
 
 func (r CapabilityRing) Recall(q Query) ([]Hit, error) {
+	if r.Path != "" {
+		if err := requireRingDir(r.Path); err != nil {
+			return nil, err
+		}
+	}
+	if len(q.Forms) > 0 && !slices.Contains(q.Forms, kb.FormPage) {
+		return nil, nil
+	}
 	if r.Folds == nil {
 		return nil, nil
 	}
@@ -268,7 +277,9 @@ func (r CapabilityRing) Recall(q Query) ([]Hit, error) {
 		}
 		hit := Hit{
 			Ring: RingCapability, Kind: "fold", ID: id,
-			Cue: f.Note, Gist: f.Evidence,
+			Form: kb.FormPage,
+			Cue:  f.Note, Gist: f.Evidence,
+			Full:   f.Evidence,
 			Source: []SourceRef{{URI: "file://" + r.Folds.Path(), Region: f.Coordinate}},
 			Status: kb.StatusValidated, Confidence: "EXTRACTED",
 			ObservedAt: rfc3339(f.ObservedAt), ValidFrom: rfc3339(f.ValidFrom),

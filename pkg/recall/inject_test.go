@@ -14,6 +14,7 @@ import (
 // whole feature is justified by becomes unmeasurable. This test is what makes
 // flipping the default a deliberate act rather than a drive-by.
 func TestPreamble_OffByDefault(t *testing.T) {
+	isolateRecallStores(t)
 	t.Setenv(EnvKnowledge, "")
 	store := kbWith(t, t.TempDir(), page("widget", "widget lesson", "a lesson about widgets"))
 	if got := Preamble("widget", HostRing{Store: store}); got != "" {
@@ -28,6 +29,7 @@ func TestPreamble_OffByDefault(t *testing.T) {
 }
 
 func TestPreamble_OnInjectsCitations(t *testing.T) {
+	isolateRecallStores(t)
 	t.Setenv(EnvKnowledge, "on")
 	store := kbWith(t, t.TempDir(), page("widget", "widget lesson", "a lesson about widgets"))
 	got := Preamble("widget", HostRing{Store: store})
@@ -51,6 +53,7 @@ func TestPreamble_OnInjectsCitations(t *testing.T) {
 // TestPreamble_EmptyWhenNothingKnown — an agent must not be handed a header with
 // no content under it; that reads as "nothing is known" being an error state.
 func TestPreamble_EmptyWhenNothingKnown(t *testing.T) {
+	isolateRecallStores(t)
 	t.Setenv(EnvKnowledge, "on")
 	store := kbWith(t, t.TempDir(), page("ingress", "kubernetes ingress", "how ingress works"))
 	if got := Preamble("zzzz qqqq nonexistent", HostRing{Store: store}); got != "" {
@@ -61,6 +64,7 @@ func TestPreamble_EmptyWhenNothingKnown(t *testing.T) {
 // TestPreamble_RespectsBudget — an agent whose context is half preamble has less
 // room for the task it was given.
 func TestPreamble_RespectsBudget(t *testing.T) {
+	isolateRecallStores(t)
 	t.Setenv(EnvKnowledge, "on")
 	var pages []*kb.Page
 	for _, n := range []string{"one", "two", "three", "four", "five", "six"} {
