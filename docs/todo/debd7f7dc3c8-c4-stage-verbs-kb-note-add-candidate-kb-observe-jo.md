@@ -3,12 +3,13 @@ id: debd7f7dc3c8
 kind: task
 title: 'C4 stage verbs: kb note add --candidate, kb observe (journal-only), kb validate --from-gate (only runtime path to validated); redaction gate before shareable-ring writes'
 seq: 120
-status: assigned
+status: done
 priority: p1
 created: 2026-09-13T01:31:31.691999Z
 weave: 16
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:23:33.685869Z
 ---
 
 Goal: the stage verbs a harness wires at Observe / Verify / Persist, so "instructed is not structural" stops being true for the conductor and for hooks. Design of record: dhnt docs/kb-rings-forms-stages.md §5, §6; plan D2.

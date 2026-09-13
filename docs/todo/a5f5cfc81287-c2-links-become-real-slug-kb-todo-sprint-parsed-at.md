@@ -3,12 +3,13 @@ id: a5f5cfc81287
 kind: task
 title: 'C2 links become real: [[slug]]/[[kb:]]/[[todo:]]/[[sprint:]] parsed at read time in kb AND todo bodies; kb backlinks; kb doctor (flag, never fix); todo show --links'
 seq: 118
-status: assigned
+status: done
 priority: p0
 created: 2026-09-13T01:31:31.63346Z
 weave: 14
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:23:33.136198Z
 ---
 
 Goal: links become real — the documented "link graph is vacuous" defect closes without a new field or store.

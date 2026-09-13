@@ -3,12 +3,13 @@ id: e08516989b1e
 kind: task
 title: 'C3 kb context: the one budgeted assembler over rings x forms (per-ring K, resolution by budget, typed blocks, abstain=exit 0); repair recall capability ring path'
 seq: 119
-status: assigned
+status: done
 priority: p0
 created: 2026-09-13T01:31:31.663773Z
 weave: 15
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:23:33.366781Z
 ---
 
 Goal: kb context — the ONE budgeted assembler (the unified-graph plan's S3 seam), replacing three ad-hoc injectors that each had their own key and no budget. Design of record: dhnt docs/kb-rings-forms-stages.md §5, §7, §8; plan D1/D4/D6.
