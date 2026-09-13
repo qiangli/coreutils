@@ -465,7 +465,7 @@ var idioms = []Idiom{
 	{ID: "cluster-deploy", Commands: []string{"kubectl", "helm"},
 		Pattern: "kubectl get ...; helm install ...",
 		Note:    "inspect the cluster, install/upgrade via charts", Tier: TierCluster},
-	{ID: "pair-first", Commands: []string{"login", "sphere"},
+	{ID: "pair-first", Commands: []string{"login", "peer"},
 		Pattern: "login, then sphere/kubectl",
 		Note:    "tiers 4-5 need a Tessaro-paired machine", Tier: TierAccount},
 	{ID: "whois-notify", Commands: []string{"whois", "notify"},
@@ -1024,7 +1024,12 @@ func init() {
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
 	addVerb("ollama", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
-	addVerb("sphere", Entry{Stage: StageDeploy, Group: GroupEngines, Tier: TierSphere,
+	// `peer` is the CANONICAL name of the sphere tier's front door (operator,
+	// 2026-09-13, Sprint 167) — the word a user reaches for — and `sphere` is
+	// its hidden alias, kept because the tier is called that in
+	// docs/execution-tiers.md. Same rule as the container engine: canonical =
+	// the taught name (oci), alias = the other spellings.
+	addVerb("peer", Entry{Stage: StageDeploy, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
 
 	// forge
@@ -1279,7 +1284,7 @@ func init() {
 		"ntp", "sntp", "browser", "fetch", "search", "ping",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tool", "model", "agent", "act", "sota",
 		"herald",
-		"act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
+		"act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
 		"otel", "tessaro", "login", "app",
@@ -1294,7 +1299,7 @@ func init() {
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
-		"act-runner", "skill", "oci", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
+		"act-runner", "skill", "oci", "podman", "docker", "sandbox", "ollama", "dks", "peer",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
 		// app spawns a bashy per browser terminal tab
@@ -1319,7 +1324,7 @@ func init() {
 	// compute on peers; mirror/rclone push to a remote endpoint.
 	// herald delegates a TASK to an agent on someone else's infrastructure —
 	// the machine boundary is the whole point of the verb.
-	eff(EffRemote, "dag", "mirror", "sphere", "rclone", "kubectl", "helm", "herald")
+	eff(EffRemote, "dag", "mirror", "peer", "rclone", "kubectl", "helm", "herald")
 
 	// persist — leaves something that OUTLIVES the session: a cron entry, a
 	// daemon, an installed/upgraded binary.
@@ -1335,7 +1340,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "sphere", "ollama", "sota", "herald")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "peer", "ollama", "sota", "herald")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
@@ -1414,12 +1419,9 @@ func init() {
 	aliasVerb("apps", "app")
 	aliasVerb("issue", "todo")
 
-	// `peer` is the taught spelling of the sphere tier's front door (Sprint
-	// 167): "peer" is the word a user reaches for; "sphere" is the tier's
-	// name in docs/execution-tiers.md. The alias is the VISIBLE one — the
-	// embedder lists `peer` and hides `sphere` — which is the reverse of the
-	// number aliases above and the first alias with that shape.
-	aliasVerb("peer", "sphere")
+	// `sphere` is the hidden alias of `peer` (see the peer entry above); the
+	// embedder lists peer and hides sphere.
+	aliasVerb("sphere", "peer")
 
 	// Deterministic ordering for every consumer.
 	for n, e := range tools {
