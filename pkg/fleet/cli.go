@@ -338,6 +338,9 @@ func newModelsList(opts []Option) *cobra.Command {
 					r.Kind, r.Provider, r.Target, strings.Join(r.Aliases, ","), r.Ring)
 			}
 			tw.Flush()
+			if len(models) == 0 {
+				emptyRingHint(cmd.ErrOrStderr(), KindModel)
+			}
 			return reportParseErrs(cmd.ErrOrStderr(), errs)
 		},
 	}
@@ -497,6 +500,9 @@ func newAgentsList(opts []Option) *cobra.Command {
 					dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
 			}
 			tw.Flush()
+			if len(agents) == 0 {
+				emptyRingHint(cmd.ErrOrStderr(), KindAgent)
+			}
 			if err := reportCollisions(cmd.ErrOrStderr(), cat.CheckAliases()); err != nil {
 				return err
 			}
@@ -609,6 +615,15 @@ func yesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// emptyRingHint tells an operator whose merged ring holds no entries of a
+// noun where they come from, now that bashy ships none: the ring is a rod,
+// not a fish. It is a hint on stderr, never an error — an empty roster is a
+// legitimate state, and the table header above it is the listing.
+func emptyRingHint(w io.Writer, kind string) {
+	fmt.Fprintf(w, "hint: no %ss in any ring — `bashy %s add NAME`, `bashy %s sync`, or mount a shared ring via $%s\n",
+		kind, kind, kind, nounPathEnv[kind+"s"])
 }
 
 // reportParseErrs surfaces broken entries on stderr and fails the verb.

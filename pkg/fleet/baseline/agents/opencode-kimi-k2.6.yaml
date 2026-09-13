@@ -1,8 +1,0 @@
-agents:
-  - name: opencode-kimi-k2.6
-    tool: opencode
-    model: kimi-k2.6
-    display: "opencode · kimi-k2.6"
-    ledger:
-      reliability: unmeasured
-      notes: L2 rung; live-probed
