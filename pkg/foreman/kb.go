@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/kb"
+	"github.com/qiangli/coreutils/pkg/recall"
 )
 
 func (s *Session) kbPreamble() string {
@@ -23,22 +24,15 @@ func (s *Session) kbPreamble() string {
 }
 
 func composeKBNote(goal string) string {
-	pages, err := kb.Open("").List()
-	if err != nil || len(pages) == 0 {
+	if strings.TrimSpace(goal) == "" {
 		return ""
 	}
-	hits := kb.Search(pages, kb.Query{Terms: kb.Terms(goal), OS: runtime.GOOS})
-	if len(hits) == 0 {
-		// Deliberately NOT kb.Diagnose here, unlike weave's KB.md. That drop
-		// is a file the worker opens when it wants it; this is prepended to
-		// the prompt and paid on every session whether or not it is used.
-		// Explaining a miss is worth a file and not worth unconditional
-		// context — "retrieve tiny" is the budget rule, and a no-match note
-		// that costs nothing is the cheapest honest answer.
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("Host kb (shared lessons from all agents on this host — `bashy kb retro` after the task):\n")
-	b.WriteString(kb.Renderer{Resolution: kb.ResLine, Bullet: "- ", Sep: " "}.Hits(hits))
-	return b.String()
+	res := recall.Context(recall.Query{
+		Text: goal, Rings: []string{recall.RingRepo, recall.RingHost},
+		Forms: []string{kb.FormNote, kb.FormPage}, Budget: recall.PreambleBudget,
+		OS: runtime.GOOS,
+	}, recall.ContextReaders()...)
+	// Deliberately no diagnosis on a miss: this text is prepended to the prompt
+	// and paid unconditionally, unlike weave's on-disk KB.md.
+	return recall.RenderContext(res)
 }

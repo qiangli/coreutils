@@ -16,45 +16,45 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/kb"
+	"github.com/qiangli/coreutils/pkg/recall"
 )
 
 // weaveKBFileName is the workspace drop (gitignored via .git/info/exclude,
 // like WEAVE_MEMORY.md — it must never merge).
 const weaveKBFileName = "KB.md"
 
-// weaveKBBodyCap keeps the injected page bodies token-lean; the worker can
-// `bashy kb show <slug>` for the rest (progressive disclosure).
-const weaveKBBodyCap = 400
+// weaveKBBudget preserves the previous 400-rune body allowance as the hard
+// assembler budget. The worker can open cited pages for more.
+const weaveKBBudget = 400
 
-// weaveInjectKBFile writes KB.md into the workspace: the top host-kb
-// matches for this issue plus the retro write-back instruction.
+// weaveInjectKBFile writes KB.md into the workspace: budgeted repo/host
+// context for this issue plus the retro write-back instruction.
 func weaveInjectKBFile(dir, workspace string, it *weaveItem) error {
 	if it == nil || workspace == "" {
 		return nil
 	}
-	store := kb.Open("")
-	pages, err := store.List()
-	if err != nil {
-		return err
+	repoRoot, ok := weaveRepoRootForQueue(dir)
+	if !ok {
+		repoRoot, _ = os.Getwd()
 	}
-	q := kb.Query{
-		Terms: kb.Terms(it.Title),
-		Repo:  weaveRepoNameFromQueueDir(dir),
-		OS:    runtime.GOOS,
+	query := recall.Query{
+		Text: it.Title, Rings: []string{recall.RingRepo, recall.RingHost},
+		Forms: []string{kb.FormNote, kb.FormPage}, Budget: weaveKBBudget,
+		Repo: weaveRepoNameFromQueueDir(dir), OS: runtime.GOOS,
 	}
-	var hits []kb.Hit
-	if len(pages) > 0 {
-		hits = kb.Search(pages, q)
-	}
+	assembled := recall.Context(query, recall.ContextPageReaders(repoRoot)...)
+	contextText := recall.RenderContext(assembled)
 	var b strings.Builder
-	b.WriteString("# KB — host knowledge base (shared by all agents on this host, across repos)\n\n")
-	if len(hits) == 0 {
+	b.WriteString("# KB — relevant repo and host knowledge (may be stale; verify before relying on it)\n\n")
+	if contextText == "" {
 		// "Nothing matched" is not the same as "nothing is here", and the
 		// worker cannot tell the difference from a bare sentence. The search
 		// ran on the issue TITLE alone, so a miss is as likely to be the
 		// query's wording as the corpus's silence — the report says which,
 		// and hands over the vocabulary to re-ask with.
+		pages := contextPagesForDiagnose(repoRoot)
 		if len(pages) > 0 {
+			q := kb.Query{Terms: kb.Terms(it.Title), Repo: query.Repo, OS: query.OS}
 			b.WriteString("This search used the issue title only, and nothing matched:\n\n```\n")
 			b.WriteString(kb.Diagnose(pages, q).Text())
 			b.WriteString("```\n\nRe-ask in the kb's own words before assuming it is empty: `bashy kb search <query>`.\n")
@@ -64,9 +64,7 @@ func weaveInjectKBFile(dir, workspace string, it *weaveItem) error {
 		}
 	} else {
 		b.WriteString("Check these before you start — they may save you a failed approach:\n\n")
-		b.WriteString(kb.Renderer{
-			Resolution: kb.ResFull, Bullet: "- ", Sep: " ", BodyCap: weaveKBBodyCap,
-		}.Hits(hits))
+		b.WriteString(contextText)
 		b.WriteString("\nMore: `bashy kb search <query>` (or `bashy kb show <slug>`).\n")
 	}
 	b.WriteString("\nAFTER this issue is done, close the loop: `bashy kb retro <a few words on what you did>`\n")
@@ -75,6 +73,17 @@ func weaveInjectKBFile(dir, workspace string, it *weaveItem) error {
 		return err
 	}
 	return weaveExcludeWorkspaceFile(workspace, weaveKBFileName)
+}
+
+func contextPagesForDiagnose(repoRoot string) []*kb.Page {
+	var pages []*kb.Page
+	for _, dir := range []string{filepath.Join(repoRoot, kb.RepoSub), kb.DefaultDir()} {
+		ps, err := kb.Open(dir).List()
+		if err == nil {
+			pages = append(pages, ps...)
+		}
+	}
+	return pages
 }
 
 // weaveRepoNameFromQueueDir recovers the repo basename from the queue dir

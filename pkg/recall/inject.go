@@ -1,9 +1,13 @@
 package recall
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/qiangli/coreutils/pkg/kb"
 )
 
 // EnvKnowledge switches knowledge injection for a launched agent.
@@ -40,57 +44,78 @@ func enabledIn(v string) bool {
 // agent whose context is half preamble has less room for the actual task.
 const PreambleBudget = 700
 
-// Preamble renders what is known about `goal` as a prompt prefix, or "" when
-// nothing is known or injection is off.
-//
-// Shape follows pkg/foreman's kbPreamble, which is the pattern already proven in
-// this tree — a labelled block naming its source and the verb to dig further, so
-// the agent can tell recalled knowledge from the operator's instruction and can
-// go read the original. Two rules it inherits:
-//
-//   - NEVER present a hit as an instruction. It is labelled as prior knowledge
-//     that may be stale, because a recalled note asserted as policy is exactly
-//     how a `candidate` becomes a false constraint.
-//   - Cite, do not summarise. Every line carries an id the agent can open. A
-//     summarising preamble is a confabulation surface.
+// Preamble is the compatibility entry point for callers that supply their own
+// readers. It delegates ranking, budgeting, and rendering to the same Context
+// assembler used by `kb context`.
 func Preamble(goal string, readers ...Reader) string {
 	if !Enabled() || strings.TrimSpace(goal) == "" {
 		return ""
 	}
-	return preamble(goal, readers...)
+	return RenderContext(Context(Query{
+		Text: goal, K: 2, Budget: PreambleBudget,
+	}, readers...))
 }
 
-// preamble is Preamble without the env check, so tests and callers that have
-// already decided can use it directly.
-func preamble(goal string, readers ...Reader) string {
-	res := Recall(Query{Text: goal, K: 2, Budget: PreambleBudget}, readers...)
-	if len(res.Hits) == 0 {
+// ContextReaders opens the same default readers as `kb context`. Callers select
+// rings and forms in Query; they never open, rank, or render stores themselves.
+func ContextReaders() []Reader { return openContextRings() }
+
+// ContextPageReaders opens the repo and host page rings for an injector. An
+// explicit repo root is needed by weave because it assembles a new workspace
+// while the conductor may be running elsewhere.
+func ContextPageReaders(repoRoot string) []Reader {
+	repoDir := filepath.Join(repoRoot, kb.RepoSub)
+	hostDir := kb.DefaultDir()
+	return []Reader{
+		RepoRing{Store: kb.Open(repoDir), Path: repoDir},
+		HostRing{Store: kb.Open(hostDir), Path: hostDir},
+	}
+}
+
+// RenderContext renders the blocks selected by Context. Keeping this beside the
+// injection seam lets chat, foreman, and weave consume the command's exact text
+// shape without maintaining private renderers.
+func RenderContext(res ContextResult) string {
+	if res.Abstained || len(res.Blocks) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("Prior knowledge recalled from this host (may be stale — verify before relying on it;\n")
-	b.WriteString("`bashy recall <topic>` for more, `bashy kb show <slug>` for a full page):\n")
-	for _, h := range res.Hits {
-		fmt.Fprintf(&b, "- [%s/%s] %s", h.Ring, h.Status, h.Cue)
-		if h.Gist != "" {
-			fmt.Fprintf(&b, " — %s", h.Gist)
+	var b bytes.Buffer
+	renderContext(&b, res)
+	if res.Budget.Limit <= 0 || b.Len() <= res.Budget.Limit {
+		return b.String()
+	}
+	// Injected text has a byte ceiling in addition to Context's estimated-token
+	// ceiling. Shorten prose before citations so truncation never turns a
+	// recalled claim into unattributed text.
+	var bounded strings.Builder
+	for _, block := range res.Blocks {
+		prefix := fmt.Sprintf("- [%s/%s] ", block.Ring, block.Form)
+		suffix := fmt.Sprintf("  (%s)\n", block.Ref)
+		room := res.Budget.Limit - bounded.Len() - len(prefix) - len(suffix)
+		if room <= 0 {
+			continue
 		}
-		fmt.Fprintf(&b, "  (%s)\n", h.ID)
+		body := strings.ReplaceAll(block.Text, "\n", " ")
+		if len(body) > room {
+			body = bytePrefix(body, room)
+		}
+		bounded.WriteString(prefix)
+		bounded.WriteString(body)
+		bounded.WriteString(suffix)
 	}
-	b.WriteString("\n")
-	return b.String()
+	return bounded.String()
 }
 
-// PreambleForHost is the convenience the launcher uses: open this host's rings and
-// render. Returns "" on any problem — injection is best-effort by construction,
-// because a memory lookup must never be able to stop an agent from starting.
-func PreambleForHost(goal string) string {
-	if !Enabled() || strings.TrimSpace(goal) == "" {
-		return ""
+func bytePrefix(s string, limit int) string {
+	if len(s) <= limit {
+		return s
 	}
-	rs := openRings("")
-	if len(rs) == 0 {
-		return ""
+	end := 0
+	for i := range s {
+		if i > limit {
+			break
+		}
+		end = i
 	}
-	return preamble(goal, rs...)
+	return strings.TrimSpace(s[:end])
 }
