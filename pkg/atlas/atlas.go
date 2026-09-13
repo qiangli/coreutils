@@ -145,6 +145,25 @@ const (
 	SubclassManagedExternal = "managed-external"
 )
 
+// Origin says WHERE a command came from — the provenance axis. It is
+// exclusive: one origin per command. The classical class (builtin / coreutils
+// / verb) says how a name RESOLVES; the origin says who defined it. The two
+// disagree in useful ways: `printf` resolves as a bash builtin but is a GNU
+// coreutils command; `awk` is in-process Go but nobody at GNU wrote it.
+//
+// POSIX is deliberately NOT an origin: the 116 POSIX-required names cut
+// across bash (`cd`), GNU (`cat`), classic Unix (`awk`) and the pinned
+// external providers (`m4`), so a flat enum would have to pick between
+// "GNU" and "POSIX" for `cat` and every reader would ask which won. It is
+// the `Posix` tag instead (PosixRequired()).
+const (
+	OriginBash     = "bash"     // bash 5.3 builtin, contributed by the embedding shell
+	OriginGNU      = "gnu"      // GNU coreutils command reimplemented in Go
+	OriginUnix     = "unix"     // other classic Unix tool reimplemented in Go (awk, sed, jq, tar, …)
+	OriginExternal = "external" // bin-managed: binmgr CLI, toolchain provisioner, pinned POSIX provider — exec'd, never linked
+	OriginBashy    = "bashy"    // added by bashy: the agentic / yoke surface
+)
+
 // Entry is one command's atlas record. The classical class (builtin /
 // coreutils / verb) is not stored: it follows from which table (or the
 // embedding shell's builtin set) the name resolves in.
@@ -157,6 +176,8 @@ type Entry struct {
 	Caps     []string
 	Effects  []string // security effects (closed vocab); every entry has ≥1
 	AliasOf  string   // e.g. docker → podman, upgrade → self
+	Origin   string   // provenance (closed vocab, exclusive); every entry has one
+	Posix    bool     // one of the 116 POSIX-required names (cross-cuts Origin)
 
 	// Web declares a browser UI, and is how `bashy web-console` discovers what
 	// to put on the start page without a hardcoded table. Nil = no web surface.
@@ -271,6 +292,49 @@ func Effects() []string {
 	}
 }
 
+// Origins returns the closed origin vocabulary in presentation order:
+// the shell first, then the userland by how far it is from the standard,
+// then what bashy exec's, then what bashy invented.
+func Origins() []string {
+	return []string{OriginBash, OriginGNU, OriginUnix, OriginExternal, OriginBashy}
+}
+
+// OriginLabel is the human/agent-readable name of an origin, for listings.
+func OriginLabel(origin string) string {
+	switch origin {
+	case OriginBash:
+		return "bash builtin"
+	case OriginGNU:
+		return "GNU coreutils"
+	case OriginUnix:
+		return "classic Unix"
+	case OriginExternal:
+		return "bin-managed external"
+	case OriginBashy:
+		return "added by bashy"
+	}
+	return origin
+}
+
+// GNUCoreutilsUpstream returns the GNU coreutils 9.x command inventory
+// (108 names), sorted. It is the membership test behind OriginGNU and the
+// upstream side of `bashy commands --gnu`. Three of them (chroot, coreutils,
+// runcon) have no bashy implementation and so appear in no table.
+func GNUCoreutilsUpstream() []string {
+	return append([]string(nil), gnuCoreutilsUpstream...)
+}
+
+// PosixRequired returns the 116 POSIX-required utility names — the set
+// `posix-gate` certifies (docs/posix-required-commands.tsv), sorted. Names
+// owned by the shell (`cd`, `alias`, …) are in this list but in no atlas
+// table; the embedder tags its builtins from it.
+func PosixRequired() []string {
+	return append([]string(nil), posixRequired...)
+}
+
+// IsPosixRequired reports whether name is one of the 116.
+func IsPosixRequired(name string) bool { return posixRequiredSet[name] }
+
 // Lookup returns the atlas entry for a command name: in-process tools first,
 // then front-door verbs (mirroring dispatch precedence). Shell builtins and
 // declarative-registry CLIs are the embedder's to merge (see RegistryEntry).
@@ -320,6 +384,8 @@ func RegistryEntry(tier int) Entry {
 		Stage:    stage,
 		Shape:    ShapeResult,
 		Subclass: SubclassManagedExternal,
+		Origin:   OriginExternal,
+		Posix:    false,
 		Caps: []string{
 			CapCached, CapNeedsNetwork, CapSelfProvisioning, CapSpawnsProcesses,
 		},
@@ -1297,6 +1363,12 @@ func init() {
 	eff(EffRead, "posix-gate")
 	eff(EffExec, "posix-gate")
 
+	// --- origin + posix -------------------------------------------------------
+	//
+	// Provenance is stamped once the subclass passes are final and BEFORE the
+	// alias pass, so `agents` inherits `agent`'s origin. See origin.go.
+	classifyOrigins()
+
 	// --- number aliases ------------------------------------------------------
 	//
 	// NOUNS ARE SINGULAR. A front-door verb that names a kind of thing is spelled
@@ -1325,6 +1397,13 @@ func init() {
 	aliasVerb("secrets", "secret")
 	aliasVerb("apps", "app")
 	aliasVerb("issue", "todo")
+
+	// `peer` is the taught spelling of the sphere tier's front door (Sprint
+	// 167): "peer" is the word a user reaches for; "sphere" is the tier's
+	// name in docs/execution-tiers.md. The alias is the VISIBLE one — the
+	// embedder lists `peer` and hides `sphere` — which is the reverse of the
+	// number aliases above and the first alias with that shape.
+	aliasVerb("peer", "sphere")
 
 	// Deterministic ordering for every consumer.
 	for n, e := range tools {
