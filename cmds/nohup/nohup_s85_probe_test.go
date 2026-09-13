@@ -203,9 +203,12 @@ func TestS85ProbeWriteAndKillHangup(t *testing.T) {
 		runDone <- run(rc, []string{script})
 	}()
 
-	// Read child PID
+	// Read child PID. The budget is generous on purpose: under the repo-wide
+	// gate (every package's tests spawning processes at once) a /bin/sh
+	// child can take well over two seconds to start on macOS, and this test
+	// was the one deterministic red line of an otherwise green base.
 	var pid int
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(pidFile)
 		if n, scanErr := fmt.Sscanf(string(data), "%d", &pid); err == nil && scanErr == nil && n == 1 {
@@ -227,7 +230,7 @@ func TestS85ProbeWriteAndKillHangup(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("command exited with code %d after SIGHUP, want 0", code)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for command after SIGHUP")
 	}
 
