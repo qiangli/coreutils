@@ -3,9 +3,11 @@ id: 7a780ae10675
 kind: task
 title: 'C1 pkg/kb form: field (note|page|relation; legacy=page) + agent ring under agent-data via pkg/scope; --ring/--form flags; owner-only read'
 seq: 117
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-13T01:31:31.604715Z
+weave: 12
+assignee: qiangli
 sprint: 163
 ---
 

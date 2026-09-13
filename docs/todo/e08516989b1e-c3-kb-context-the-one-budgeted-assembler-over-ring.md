@@ -3,9 +3,11 @@ id: e08516989b1e
 kind: task
 title: 'C3 kb context: the one budgeted assembler over rings x forms (per-ring K, resolution by budget, typed blocks, abstain=exit 0); repair recall capability ring path'
 seq: 119
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-13T01:31:31.663773Z
+weave: 15
+assignee: qiangli
 sprint: 163
 ---
 

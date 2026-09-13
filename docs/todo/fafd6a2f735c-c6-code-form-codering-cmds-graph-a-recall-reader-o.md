@@ -3,9 +3,11 @@ id: fafd6a2f735c
 kind: task
 title: 'C6 code form: CodeRing (cmds/graph, a recall.Reader) over codegraph + repomap within budget; codegraph DIRECTED edges (E7 — ids already deterministic, 256/438 edges flipped)'
 seq: 122
-status: todo
+status: assigned
 priority: p2
 created: 2026-09-13T01:31:31.748194Z
+weave: 13
+assignee: qiangli
 sprint: 163
 ---
 

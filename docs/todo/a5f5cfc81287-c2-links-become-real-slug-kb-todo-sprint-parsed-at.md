@@ -3,9 +3,11 @@ id: a5f5cfc81287
 kind: task
 title: 'C2 links become real: [[slug]]/[[kb:]]/[[todo:]]/[[sprint:]] parsed at read time in kb AND todo bodies; kb backlinks; kb doctor (flag, never fix); todo show --links'
 seq: 118
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-13T01:31:31.63346Z
+weave: 14
+assignee: qiangli
 sprint: 163
 ---
 

@@ -3,9 +3,11 @@ id: debd7f7dc3c8
 kind: task
 title: 'C4 stage verbs: kb note add --candidate, kb observe (journal-only), kb validate --from-gate (only runtime path to validated); redaction gate before shareable-ring writes'
 seq: 120
-status: todo
+status: assigned
 priority: p1
 created: 2026-09-13T01:31:31.691999Z
+weave: 16
+assignee: qiangli
 sprint: 163
 ---
 
