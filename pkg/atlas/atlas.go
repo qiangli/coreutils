@@ -997,9 +997,18 @@ func init() {
 	addVerb("define", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 
 	// engines
-	addVerb("podman", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox,
+	// The tier-3 container engine has FOUR spellings and ONE canonical name
+	// (operator, 2026-09-13, Sprint 167): `oci` is the STANDARD name — the O3
+	// pillar (ollama · oci · otel), the spec the engine implements — and the
+	// canonical entry; `sandbox` is the POPULAR name (the tier-3 venue word,
+	// visible alias); `podman` and `docker` are VENDOR spellings (hidden
+	// aliases, kept for callers). Dispatch still lands on the podman engine
+	// (engineAlias in bashy); the atlas records who is a spelling of whom.
+	addVerb("oci", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox,
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
-	addVerb("docker", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "podman",
+	addVerb("podman", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "oci",
+		Caps: []string{CapDaemon, CapSpawnsProcesses}})
+	addVerb("docker", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "oci",
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
 	// `sandbox` is the TIER NAME (tier 3), so the tier vocabulary and the verb
 	// surface agree: someone who reads "tier 3 = sandbox" and types it gets the
@@ -1011,7 +1020,7 @@ func init() {
 	// caps, deliberately distinct from raw podman passthrough. This verb is the
 	// raw local engine — it refuses nothing. Anyone extending it toward the
 	// filtered semantics should make that a real capability, not a rename.
-	addVerb("sandbox", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "podman",
+	addVerb("sandbox", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "oci",
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
 	addVerb("ollama", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
@@ -1270,7 +1279,7 @@ func init() {
 		"ntp", "sntp", "browser", "fetch", "search", "ping",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tool", "model", "agent", "act", "sota",
 		"herald",
-		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
+		"act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
 		"otel", "tessaro", "login", "app",
@@ -1285,7 +1294,7 @@ func init() {
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
-		"act-runner", "skill", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
+		"act-runner", "skill", "oci", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
 		// app spawns a bashy per browser terminal tab
@@ -1316,7 +1325,7 @@ func init() {
 	// daemon, an installed/upgraded binary.
 	eff(EffPersist,
 		"at", "batch", "crontab", "nohup",
-		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
+		"schedule", "act-runner", "mirror", "oci", "podman", "docker", "sandbox", "ollama", "dks", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
 		// an `app` server outlives the shell that started it.
 		"app",
