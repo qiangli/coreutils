@@ -149,6 +149,8 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newSearchCmd(&dir, resolved))
 	cmd.AddCommand(newShowCmd(&dir, resolved))
 	cmd.AddCommand(newAddCmd(&dir, resolved))
+	cmd.AddCommand(newNoteCmd(&dir, resolved))
+	cmd.AddCommand(newObserveCmd(&dir, resolved))
 	cmd.AddCommand(newUpdateCmd(&dir, resolved))
 	cmd.AddCommand(newSupersedeCmd(&dir, resolved))
 	cmd.AddCommand(newValidateCmd(&dir, resolved))
@@ -696,34 +698,6 @@ invalidated lesson plus its correction is itself knowledge.`,
 		},
 	}
 	flags.register(cmd, true)
-	return cmd
-}
-
-// --- validate ------------------------------------------------------------
-
-func newValidateCmd(dir, ring *string) *cobra.Command {
-	var evidence string
-	cmd := &cobra.Command{
-		Use:   "validate <slug>",
-		Short: "Promote a candidate to validated (requires evidence)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			store := openRing(*dir, *ring)
-			p, err := store.Load(args[0])
-			if err != nil {
-				return err
-			}
-			p.Status = StatusValidated
-			p.Evidence = evidence
-			if err := store.Write(p, "validate"); err != nil {
-				return err
-			}
-			fmt.Fprintf(c.OutOrStdout(), "validated %s\n", p.Slug)
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&evidence, "evidence", "", "how it was verified (command, commit, issue)")
-	_ = cmd.MarkFlagRequired("evidence")
 	return cmd
 }
 
