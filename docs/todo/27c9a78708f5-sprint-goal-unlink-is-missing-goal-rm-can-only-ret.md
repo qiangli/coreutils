@@ -6,7 +6,7 @@ seq: 79
 status: todo
 priority: p3
 created: 2026-09-06T11:30:33.92722Z
-sprint: 166
+sprint: 130
 ---
 
 sprint goal link adds a story to a goal item; nothing removes one. sprint goal

@@ -6,7 +6,7 @@ seq: 75
 status: todo
 priority: p1
 created: 2026-09-06T11:30:33.838279Z
-sprint: 166
+sprint: 130
 ---
 
 "What is still open on this sprint" is the question a closing manager asks

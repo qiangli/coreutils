@@ -6,7 +6,7 @@ seq: 74
 status: todo
 priority: p2
 created: 2026-09-06T11:30:33.81655Z
-sprint: 166
+sprint: 130
 ---
 
 sprintGoalDangling (pkg/weave/weave_story_goal.go) flags a linked story only

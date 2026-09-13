@@ -6,7 +6,7 @@ seq: 76
 status: todo
 priority: p2
 created: 2026-09-06T11:30:33.860876Z
-sprint: 166
+sprint: 130
 ---
 
 Nothing in the CLI shows which stories a goal item covers.

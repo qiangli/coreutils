@@ -6,7 +6,7 @@ seq: 82
 status: todo
 priority: p2
 created: 2026-09-06T12:14:41.021909Z
-sprint: 166
+sprint: 130
 ---
 
 sprint goal add and sprint goal rm exit 1 with EMPTY stdout AND stderr on every
