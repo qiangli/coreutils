@@ -137,6 +137,11 @@ func archAliases(goarch string) []string {
 	}
 }
 
+// DefaultAssetMatch is the matcher a GitHubSpec without AssetMatch uses:
+// the asset name contains both goos and goarch. Exported so a test can ask
+// what a spec would pick on another platform without resolving anything.
+func DefaultAssetMatch(name, goos, goarch string) bool { return defaultAssetMatch(name, goos, goarch) }
+
 func defaultAssetMatch(name, goos, goarch string) bool {
 	n := strings.ToLower(name)
 	if !strings.Contains(n, goos) {

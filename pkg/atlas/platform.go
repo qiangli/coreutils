@@ -78,12 +78,8 @@ func classifyPlatforms() {
 	osOnly([]string{OSDarwin, OSLinux},
 		"chgrp", "chmod", "chown", "mkfifo", "mknod", "nice", "renice",
 		"crontab", "talk", "logger", "logname")
-	// The pinned POSIX providers are built from C upstream source on the host
-	// (cmds/posixproviders: "… is not supported on windows"), as is their
-	// provisioner.
-	osOnly([]string{OSDarwin, OSLinux},
-		"ar", "ctags", "ex", "localedef", "lp", "m4", "man", "nm", "strip", "vi",
-		"posix-providers")
+	// Bin-managed externals are declared, never defaulted (externalPlatforms).
+	declareExternalPlatforms()
 	// bashy's engines_windows.go: "bashy ollama: not supported in the Windows
 	// engine build".
 	osOnly([]string{OSDarwin, OSLinux}, "ollama")
@@ -112,6 +108,89 @@ func classifyPlatforms() {
 	partialOn(OSDarwin,
 		"renice", // prio_unix_libc.go: process-group and user adjustments
 	)
+}
+
+// ExternalPlatform is the declared platform support of a bin-managed external
+// (a managed-external / provisioner verb or tool, or a declarative-registry
+// CLI). Externals are NEVER defaulted: bashy does not build them, so the only
+// evidence that a Windows build exists is the upstream's release asset — and
+// WindowsAsset cites one such name in the exact form the package's own
+// AssetMatch accepts (platform_external_test.go feeds it back to the matcher).
+// A URL-template download cites the template's goos slot instead.
+type ExternalPlatform struct {
+	OS           []string
+	WindowsAsset string // a release asset / URL the package resolves on windows; "" = not on windows
+}
+
+// externalPlatforms is the declaration table. Adding a managed external
+// without a row here panics at init (see classifyPlatforms).
+var externalPlatforms = map[string]ExternalPlatform{
+	// pinned POSIX providers — built from C upstream source on the host;
+	// cmds/posixproviders: "man 2.12.0 is not supported on windows"
+	"ar": {OS: []string{OSDarwin, OSLinux}}, "ctags": {OS: []string{OSDarwin, OSLinux}},
+	"ex": {OS: []string{OSDarwin, OSLinux}}, "localedef": {OS: []string{OSDarwin, OSLinux}},
+	"lp": {OS: []string{OSDarwin, OSLinux}}, "m4": {OS: []string{OSDarwin, OSLinux}},
+	"man": {OS: []string{OSDarwin, OSLinux}}, "nm": {OS: []string{OSDarwin, OSLinux}},
+	"strip": {OS: []string{OSDarwin, OSLinux}}, "vi": {OS: []string{OSDarwin, OSLinux}},
+	"posix-providers": {OS: []string{OSDarwin, OSLinux}},
+	// cmds/why: witr-<os>-<arch>(.zip on windows)
+	"why": {OS: allOS, WindowsAsset: "witr-windows-amd64.zip"},
+	// managed externals (external/<pkg>, GitHub releases or URL templates)
+	"act":        {OS: allOS, WindowsAsset: "act_Windows_x86_64.zip"},
+	"act-runner": {OS: allOS, WindowsAsset: "https://dl.gitea.com/act_runner/{version}/act_runner-{version}-windows-amd64.exe"},
+	"gh":         {OS: allOS, WindowsAsset: "gh_2.0.0_windows_amd64.zip"},
+	"git":        {OS: allOS, WindowsAsset: "pure-Go bashy git (coreutils/git); no download"},
+	"helm":       {OS: allOS, WindowsAsset: "https://get.helm.sh/helm-{version}-windows-amd64.tar.gz"},
+	"kopia":      {OS: allOS, WindowsAsset: "kopia-0.0.0-windows-x64.zip"},
+	"kubectl":    {OS: allOS, WindowsAsset: "https://dl.k8s.io/release/{version}/bin/windows/amd64/kubectl.exe"},
+	"loom":       {OS: allOS, WindowsAsset: "gitea-1.0.0-windows-4.0-amd64.exe"},
+	"mirror":     {OS: allOS, WindowsAsset: "pure-Go orchestration over rclone (pkg/mirror); no download"},
+	"rclone":     {OS: allOS, WindowsAsset: "rclone-v1.0.0-windows-amd64.zip"},
+	"seaweedfs":  {OS: allOS, WindowsAsset: "windows_amd64.tar.gz"},
+	"zot":        {OS: allOS, WindowsAsset: "zot-windows-amd64"},
+	// toolchain provisioners (external/<lang>): each resolves a windows build;
+	// git-scm IS the windows path (git-for-windows MinGit; unix uses system git)
+	"cargo": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"}, "rustc": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"},
+	"rustup": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"}, "rust": {OS: allOS, WindowsAsset: "rustup-init.exe (external/rust)"},
+	"clang": {OS: allOS, WindowsAsset: "zig-windows-x86_64 (external/zigcc)"}, "cmake": {OS: allOS, WindowsAsset: "cmake-*-windows-x86_64.zip (external/cmake)"},
+	"curl":    {OS: allOS, WindowsAsset: "curl-*_win64-mingw.zip (external/curlbin)"},
+	"git-scm": {OS: allOS, WindowsAsset: "MinGit-*-64-bit.zip (external/gitscm)"},
+	"go":      {OS: allOS, WindowsAsset: "go*.windows-amd64.zip (external/gotoolchain)"},
+	"mise":    {OS: allOS, WindowsAsset: "mise-v0.0.0-windows-x64.zip"},
+	"node":    {OS: allOS, WindowsAsset: "node-*-win-x64.zip (external/node)"}, "npm": {OS: allOS, WindowsAsset: "ships with node"},
+	"npx": {OS: allOS, WindowsAsset: "ships with node"}, "pnpm": {OS: allOS, WindowsAsset: "via node/corepack"}, "yarn": {OS: allOS, WindowsAsset: "via node/corepack"},
+	"python": {OS: allOS, WindowsAsset: "python-build-standalone *-pc-windows-msvc (external/python)"}, "pip": {OS: allOS, WindowsAsset: "ships with python"},
+	"uv": {OS: allOS, WindowsAsset: "uv-x86_64-pc-windows-msvc.zip (external/python)"},
+	// declarative registry CLIs (external/registry)
+	"doctl":  {OS: allOS, WindowsAsset: "doctl-*-windows-amd64.zip"},
+	"gcloud": {OS: allOS, WindowsAsset: "vendor installer (PreferHost); google-cloud-cli-windows-x86_64.zip"},
+	"rg":     {OS: allOS, WindowsAsset: "ripgrep-*-x86_64-pc-windows-msvc.zip"},
+}
+
+// ExternalPlatforms returns the declared platform support of a bin-managed
+// external by name — for the embedder's registry-derived entries, which are
+// not in the tables.
+func ExternalPlatforms(name string) (ExternalPlatform, bool) {
+	e, ok := externalPlatforms[name]
+	return e, ok
+}
+
+// declareExternalPlatforms applies the table and refuses an undeclared
+// external: "we downloaded it" is not evidence it runs on windows.
+func declareExternalPlatforms() {
+	for _, table := range []map[string]Entry{tools, verbs} {
+		for n, e := range table {
+			if e.Subclass != SubclassManagedExternal && e.Subclass != SubclassProvisioner {
+				continue
+			}
+			d, ok := externalPlatforms[n]
+			if !ok {
+				panic(fmt.Sprintf("atlas: managed external %q has no platform declaration (externalPlatforms in platform.go): cite its windows release asset, or declare it unix-only", n))
+			}
+			e.OS = append([]string(nil), d.OS...)
+			table[n] = e
+		}
+	}
 }
 
 func osOnly(oses []string, names ...string) {
