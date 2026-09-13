@@ -27,6 +27,12 @@ import (
 //	<dir>/.git           best-effort history/blame via the pure-Go git package
 type Store struct {
 	dir string
+	// owner, when set, scopes reads to a single principal: Load and List
+	// return only pages this principal wrote (Source.Tool match). It is set
+	// for the AGENT ring, whose store is owner-only — another principal
+	// sharing the physical directory sees nothing, not an error. Empty (the
+	// repo and host rings) means every page is visible.
+	owner string
 }
 
 // RepoSub is the committed per-repo kb: docs/kb/, inside the repo and CHECKED
@@ -51,6 +57,23 @@ func DefaultDir() string {
 	return filepath.Join(home, ".bashy", "kb")
 }
 
+// AgentDataDirEnv names the per-identity data directory bashy relocates for a
+// ycode-family agent (agentlaunch.YcodeDataDir sets it at launch). The AGENT
+// ring lives under it. kb reads the env rather than importing agentlaunch, so
+// pkg/kb stays an import leaf (scope/bus/git only) — this reuses the directory
+// the launcher already derived, it never recomputes it.
+const AgentDataDirEnv = "YCODE_DATA_DIR"
+
+// AgentRingDir resolves the agent ring root: <agent-data>/kb, or "" when this
+// process was not launched with a per-agent store (AgentDataDirEnv unset).
+func AgentRingDir() string {
+	d := strings.TrimSpace(os.Getenv(AgentDataDirEnv))
+	if d == "" {
+		return ""
+	}
+	return filepath.Join(d, "kb")
+}
+
 // Open returns a Store rooted at dir ("" = DefaultDir). The directory is
 // created lazily on first write; Open never fails on a missing store.
 func Open(dir string) *Store {
@@ -58,6 +81,21 @@ func Open(dir string) *Store {
 		dir = DefaultDir()
 	}
 	return &Store{dir: dir}
+}
+
+// OpenAgentRing opens the agent ring at dir for principal owner. Reads are
+// scoped to owner's own pages (Source.Tool match), so another principal
+// sharing the directory sees nothing. Writes are unchanged — buildPage stamps
+// Source.Tool, which is the same owner.
+func OpenAgentRing(dir, owner string) *Store {
+	s := Open(dir)
+	s.owner = strings.TrimSpace(owner)
+	return s
+}
+
+// ownedBy reports whether page p was written by principal owner.
+func ownedBy(p *Page, owner string) bool {
+	return p != nil && p.Source != nil && p.Source.Tool == owner
 }
 
 // Dir returns the store root.
@@ -68,13 +106,23 @@ func (s *Store) PagePath(slug string) string { return filepath.Join(s.pagesDir()
 func (s *Store) indexPath() string           { return filepath.Join(s.dir, "index.md") }
 func (s *Store) journalPath() string         { return filepath.Join(s.dir, "journal.jsonl") }
 
-// Load reads one page by slug.
+// Load reads one page by slug. On an owner-scoped store (the agent ring) a page
+// written by another principal is invisible: Load reports os.ErrNotExist, the
+// same as an absent page, so another principal sees nothing rather than an
+// error that would reveal the page exists.
 func (s *Store) Load(slug string) (*Page, error) {
 	b, err := os.ReadFile(s.PagePath(slug))
 	if err != nil {
 		return nil, err
 	}
-	return ParsePage(slug, b)
+	p, err := ParsePage(slug, b)
+	if err != nil {
+		return nil, err
+	}
+	if s.owner != "" && !ownedBy(p, s.owner) {
+		return nil, os.ErrNotExist
+	}
+	return p, nil
 }
 
 // List reads every page, sorted by slug. A corrupt page is skipped rather
@@ -96,6 +144,8 @@ func (s *Store) List() ([]*Page, error) {
 		slug := strings.TrimSuffix(name, ".md")
 		p, err := s.Load(slug)
 		if err != nil {
+			// On an owner-scoped store this also skips another principal's
+			// pages (Load reports them as absent).
 			continue
 		}
 		out = append(out, p)
@@ -120,6 +170,11 @@ func (s *Store) Write(p *Page, op string) error {
 	}
 	if p.Status == "" {
 		p.Status = StatusCandidate
+	}
+	// The writer always emits form:. A record built without one (or an older
+	// page loaded before the facet existed) is a page.
+	if p.Form == "" {
+		p.Form = FormPage
 	}
 	if err := os.MkdirAll(s.pagesDir(), 0o755); err != nil {
 		return err

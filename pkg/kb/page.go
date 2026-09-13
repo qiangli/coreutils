@@ -15,7 +15,8 @@ import (
 type Page struct {
 	Slug string `yaml:"-"` // filename stem under pages/
 
-	Type         string   `yaml:"type"` // lesson|gotcha|runbook|decision|fact (OKF: the one required field)
+	Form         string   `yaml:"form,omitempty"` // note|page (the SHAPE; a legacy record with none reads as page)
+	Type         string   `yaml:"type"`           // lesson|gotcha|runbook|decision|fact (OKF: the one required field)
 	Title        string   `yaml:"title"`
 	Description  string   `yaml:"description"` // "what + WHEN this applies" — the routing surface
 	Tags         []string `yaml:"tags,omitempty"`
@@ -60,10 +61,47 @@ const (
 	StatusSuperseded = "superseded"
 )
 
+// Record forms — the SHAPE of a record, orthogonal to Type (the WHY). Two are
+// stored as a Page on disk: FormNote (description optional, body free — the
+// memo/documentation shape) and FormPage (today's concept page). FormRelation
+// is a claim stored in graph.jsonl, not a Page; FormCode is a view over the
+// code graph, never a stored record. Both are in the reader vocabulary so a
+// caller can name them, but neither is ever written here.
+const (
+	FormNote     = "note"
+	FormPage     = "page"
+	FormRelation = "relation"
+	FormCode     = "code"
+)
+
 var pageTypes = []string{TypeLesson, TypeGotcha, TypeRunbook, TypeDecision, TypeFact}
+
+// forms is the full reader vocabulary a --form flag may name.
+var forms = []string{FormNote, FormPage, FormRelation, FormCode}
+
+// storableForms are the forms a Page record on disk may actually carry — a
+// write to any other form is refused (relation lives in the graph, code is a
+// view).
+var storableForms = []string{FormNote, FormPage}
 
 // ValidType reports whether t is one of the OKF page types kb writes.
 func ValidType(t string) bool { return slices.Contains(pageTypes, t) }
+
+// ValidForm reports whether f is a recognized record form (the reader
+// vocabulary: note|page|relation|code).
+func ValidForm(f string) bool { return slices.Contains(forms, f) }
+
+// StorableForm reports whether f is a form a Page may be WRITTEN as (note|page).
+func StorableForm(f string) bool { return slices.Contains(storableForms, f) }
+
+// EffForm is the page's form with the legacy default applied: a record with no
+// form: reads as a page.
+func (p *Page) EffForm() string {
+	if p.Form == "" {
+		return FormPage
+	}
+	return p.Form
+}
 
 // ParsePage reads a page file: a YAML frontmatter block followed by the
 // markdown body. Same permissive framing as skills.ParseFrontmatter —
@@ -84,6 +122,11 @@ func ParsePage(slug string, b []byte) (*Page, error) {
 		return nil, fmt.Errorf("kb: %s: frontmatter: %w", slug, err)
 	}
 	p.Slug = slug
+	// Legacy records predate the form facet; they read as pages. The writer
+	// always emits form:, so this default only ever fills an older record.
+	if p.Form == "" {
+		p.Form = FormPage
+	}
 	// Drop the newline that closed the fence and one blank separator line.
 	body = strings.TrimPrefix(body, "\r")
 	body = strings.TrimPrefix(body, "\n")

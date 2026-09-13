@@ -88,6 +88,56 @@ func TestUserScopeNoOwner(t *testing.T) {
 	}
 }
 
+func agentDir(p string) func() (string, error) {
+	return func() (string, error) { return p, nil }
+}
+
+// The agent ring is returned only for ForceAgent, and it wins even inside a
+// repo — an explicit --ring agent points at the per-identity store, never the
+// repo's committed one.
+func TestForceAgentResolvesAgentRing(t *testing.T) {
+	gitRepo(t)
+	sc, err := Resolve(Options{
+		RepoSub:    "docs/kb",
+		ForceAgent: true,
+		AgentDir:   agentDir("/agent-data/kb"),
+		HostDir:    hostDir("/host"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.Kind != KindAgent || sc.Dir() != filepath.Join("/agent-data/kb") {
+		t.Fatalf("agent ring not honored: %+v dir=%s", sc, sc.Dir())
+	}
+	if got := sc.Label(); got[:6] != "agent " {
+		t.Fatalf("agent label = %q, want it to start with %q", got, "agent ")
+	}
+}
+
+// ForceAgent with no usable agent-data dir is an error, never a silent
+// fallthrough to another ring.
+func TestForceAgentWithoutAgentDataErrors(t *testing.T) {
+	if _, err := Resolve(Options{RepoSub: "docs/kb", ForceAgent: true}); err == nil {
+		t.Fatal("agent ring with no AgentDir must error")
+	}
+	if _, err := Resolve(Options{RepoSub: "docs/kb", ForceAgent: true, AgentDir: agentDir("")}); err == nil {
+		t.Fatal("agent ring with an empty agent-data dir must error")
+	}
+}
+
+// A bare Resolve (no ForceAgent) never returns the agent ring even when an
+// AgentDir is supplied — the agent ring is never a default.
+func TestAgentRingIsNeverADefault(t *testing.T) {
+	t.Chdir(t.TempDir()) // not a git repo → would resolve to host
+	sc, err := Resolve(Options{RepoSub: "docs/kb", AgentDir: agentDir("/agent-data/kb"), HostDir: hostDir("/host")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.Kind != KindUser {
+		t.Fatalf("without ForceAgent the agent ring must not be chosen, got %s", sc.Kind)
+	}
+}
+
 func TestSanitizeSegmentContainsTraversal(t *testing.T) {
 	for _, in := range []string{"../../etc", "a/b", `a\b`, "..", "  ../x  "} {
 		got := SanitizeSegment(in)
