@@ -163,7 +163,9 @@ func TestContextCommandMissingRingNamesOpenedPath(t *testing.T) {
 
 func TestContextCommandRefusesUnavailableForms(t *testing.T) {
 	isolateRecallStores(t)
-	for _, form := range []string{kb.FormRelation, kb.FormCode, "bogus"} {
+	// relation became available when C5 landed RelationRing; code stays
+	// refused until the CodeRing reader is injected at bashy's mount (C6).
+	for _, form := range []string{kb.FormCode, "bogus"} {
 		cmd := NewContextCmd()
 		cmd.SetArgs([]string{"--for", "widget", "--rings", "repo", "--forms", form})
 		err := cmd.Execute()
