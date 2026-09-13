@@ -3,12 +3,13 @@ id: 7bd979b80383
 kind: task
 title: 'C8 kb transfer --from memex <dir>: move the owner''s own memex store into its agent ring as form: note candidates (foreign stores stay pointers-not-copies)'
 seq: 124
-status: assigned
+status: done
 priority: p2
 created: 2026-09-13T01:31:31.804595Z
 weave: 19
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:51:18.381913Z
 ---
 
 Goal: kb transfer --from memex <dir> moves an agent's OWN ycode memex store into its agent ring as form: note candidates, so memex can be retired from the ycode harness (D1/D4).

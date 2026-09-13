@@ -3,12 +3,13 @@ id: 1a2cec8b103d
 kind: task
 title: 'C7 one injection seam: weave KB.md, foreman preamble, recall.PreambleForHost all call kb context (rings repo,host) behind the BASHY_KNOWLEDGE control arm'
 seq: 123
-status: assigned
+status: done
 priority: p2
 created: 2026-09-13T01:31:31.776332Z
 weave: 18
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:51:18.353141Z
 ---
 
 Goal: one injection seam. The three shipped injectors each have their own key and no budget; they all become calls to the assembler. Design of record: dhnt docs/kb-rings-forms-stages.md §5, §6, §9; plan D1/D2.

@@ -3,12 +3,13 @@ id: 5510f0a5740e
 kind: task
 title: 'C5 relation form: graph note|link|observe|forget write <ring>/kb/graph.jsonl (committed for repo ring), deterministic sha1(kind\0name)[:16] ids, core relation vocabulary; RelationRing reader'
 seq: 121
-status: assigned
+status: done
 priority: p1
 created: 2026-09-13T01:31:31.720373Z
 weave: 17
 assignee: qiangli
 sprint: 163
+closed: 2026-09-13T03:51:18.324522Z
 ---
 
 Goal: the relation form — entity/relationship claims that skills compose over — moves under the kb front door without a new noun.
