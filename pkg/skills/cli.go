@@ -3,6 +3,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,7 +11,15 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
+	"github.com/qiangli/coreutils/pkg/redact"
 )
+
+// hostScrubber builds the identity scrubber a record is packed through on
+// this machine. A variable so tests can pack hermetically (redact.New) while
+// production always scrubs against the live host (redact.FromHost).
+var hostScrubber = redact.FromHost
 
 // config is assembled from Options by NewSkillsCmd.
 type config struct {
@@ -113,20 +122,24 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	probe.Flags().BoolVar(&refresh, "refresh", false, "re-measure lazy probes (drop the cache)")
 	probe.Flags().BoolVar(&probeJSON, "json", false, "machine-readable output")
 
-	var ref bool
+	var ref, showYAML, showJSON bool
 	show := &cobra.Command{
 		Use:   "show <name>",
-		Short: "print a skill's SKILL.md (--reference: its reference.md)",
+		Short: "print a skill's SKILL.md (--reference: its reference.md; --yaml/--json: its record)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return runShow(cmd, cfg, args[0], ref) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runShow(cmd, cfg, args[0], ref, showYAML, showJSON)
+		},
 	}
 	show.Flags().BoolVarP(&ref, "reference", "r", false, "print the deep-companion reference.md")
+	show.Flags().BoolVar(&showYAML, "yaml", false, "print the skill's record (the lossless projection of its whole folder) as YAML")
+	show.Flags().BoolVar(&showJSON, "json", false, "print the skill's record as JSON")
 
 	var force, addJSON bool
 	add := &cobra.Command{
-		Use:   "add <dir>",
-		Short: "install a skill folder into the host-local store (verified admission)",
-		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt)\ninto the host-local store after a verified-admission gate: frontmatter must\nparse with name+description, metadata.requires must parse, and a skill.dhnt\ncanonical face must be valid (transpilable, content-addressed). Inapplicable-\nhere is reported, not refused — a skill may be installed for a tool you have\nnot provisioned yet.",
+		Use:   "add <dir>|<file.yaml>|-",
+		Short: "install a skill folder or record into the host-local store (verified admission)",
+		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt),\nor a `kind: skill` record (the projection `show --yaml` prints; a file, or -\nfor stdin) rebuilt into the same folder, into the host-local store after a\nverified-admission gate: frontmatter must parse with name+description,\nmetadata.requires must parse, and a skill.dhnt canonical face must be valid\n(transpilable, content-addressed). Inapplicable-here is reported, not\nrefused — a skill may be installed for a tool you have not provisioned yet.",
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(cmd *cobra.Command, args []string) error { return runAdd(cmd, cfg, args[0], force, addJSON) },
 	}
@@ -186,13 +199,16 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	promote.Flags().StringVar(&promoteOut, "out", "", "bundle output directory (default ./promote-<name>)")
 
 	var expTo string
-	var expUser, expRepo, expForce bool
+	var expUser, expRepo, expForce, expYAML bool
 	export := &cobra.Command{
 		Use:   "export <name>",
 		Short: "install a catalog skill into agent skill directories (user scope, a dir, or --repo)",
-		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.",
+		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.\nWith --yaml (--to only) the skill is written as ONE record document,\n<dir>/<name>.yaml, instead of a folder — the shape `add` imports back.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if expYAML {
+				return runExportRecord(cmd, cfg, args[0], expTo, expUser, expRepo, expForce)
+			}
 			return runExport(cmd, cfg, args[0], expTo, expUser, expRepo, expForce)
 		},
 	}
@@ -200,6 +216,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	export.Flags().BoolVar(&expUser, "user", false, "install at user scope (detected agent roots)")
 	export.Flags().BoolVar(&expRepo, "repo", false, "install at repo scope (explicit consent)")
 	export.Flags().BoolVar(&expForce, "force", false, "replace folders not exported by us")
+	export.Flags().BoolVar(&expYAML, "yaml", false, "write the record (<dir>/<name>.yaml) instead of the folder; --to only")
 
 	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
 	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
@@ -243,6 +260,39 @@ func runExport(cmd *cobra.Command, cfg *config, name, to string, user, repo, for
 		fmt.Fprintf(cmd.OutOrStdout(), "exported: %s\n", dst)
 	}
 	return firstErr
+}
+
+// runExportRecord is `export --yaml`: the skill as one record document at
+// <to>/<name>.yaml. Agent roots (--user/--repo) read FOLDERS, so a record
+// there would be a file no tool opens; only --to takes it.
+func runExportRecord(cmd *cobra.Command, cfg *config, name, to string, user, repo, force bool) error {
+	if to == "" || user || repo {
+		return fmt.Errorf("skills: --yaml writes a record document, which agent roots do not read — pair it with --to DIR only")
+	}
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	rec, err := RecordFrom(&sk, src, hostScrubber())
+	if err != nil {
+		return err
+	}
+	b, err := MarshalRecord(rec)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(to, name+".yaml")
+	if _, err := os.Stat(dst); err == nil && !force {
+		return fmt.Errorf("skills: %s exists — use --force to replace", dst)
+	}
+	if err := os.MkdirAll(to, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(dst, b, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "exported: %s\n", dst)
+	return nil
 }
 
 func (c *config) probes(refresh bool) (*ProbeSet, *FileCache) {
@@ -369,11 +419,17 @@ func runProbe(cmd *cobra.Command, cfg *config, refresh, asJSON bool) error {
 	return nil
 }
 
-func runShow(cmd *cobra.Command, cfg *config, name string, ref bool) error {
+func runShow(cmd *cobra.Command, cfg *config, name string, ref, asYAML, asJSON bool) error {
 	cat := cfg.catalog()
 	sk, src, ok := cat.Get(name)
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
+	}
+	if asYAML || asJSON {
+		if ref {
+			return fmt.Errorf("skills: --reference does not combine with --yaml/--json (the record carries every file)")
+		}
+		return showRecord(cmd.OutOrStdout(), sk, src, asJSON)
 	}
 	rel := "SKILL.md"
 	if ref {
@@ -405,13 +461,106 @@ func runShow(cmd *cobra.Command, cfg *config, name string, ref bool) error {
 	return nil
 }
 
-func runAdd(cmd *cobra.Command, cfg *config, dir string, force, asJSON bool) error {
-	if strings.Contains(dir, "://") {
+// showRecord emits the record projection (`show --yaml` / `--json`). The
+// Record struct is YAML-tagged by design (record.go: the YAML emit is the
+// canonical, hashable form); the JSON face is that same document re-keyed
+// through a generic decode so both spellings carry identical key names — and
+// since JSON is YAML, either one feeds `add -` back.
+func showRecord(w io.Writer, sk Skill, src Source, asJSON bool) error {
+	rec, err := RecordFrom(&sk, src, hostScrubber())
+	if err != nil {
+		return err
+	}
+	b, err := MarshalRecord(rec)
+	if err != nil {
+		return err
+	}
+	if !asJSON {
+		_, err = w.Write(b)
+		return err
+	}
+	var generic map[string]any
+	if err := yaml.Unmarshal(b, &generic); err != nil {
+		return err
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(generic)
+}
+
+// readSource loads a record from a path, or from r when the path is "-".
+func readSource(path string, r io.Reader) ([]byte, error) {
+	if path == "-" {
+		return io.ReadAll(r)
+	}
+	return os.ReadFile(path)
+}
+
+// isRecordSource tells `add <file.yaml>|-` from `add <dir>`: stdin or a
+// regular file is a record, a directory is a folder. Anything else falls
+// through to the folder loader, whose "no SKILL.md" error names the path.
+func isRecordSource(arg string) bool {
+	if arg == "-" {
+		return true
+	}
+	fi, err := os.Stat(arg)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// validSkillName rejects a name that would not be one folder in the store.
+// The frontmatter name is authored text, and a record's name becomes a path.
+func validSkillName(name string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("skills: empty name")
+	case strings.ContainsAny(name, `/\`):
+		return fmt.Errorf("skills: name %q must not contain a path separator", name)
+	case strings.HasPrefix(name, "."):
+		return fmt.Errorf("skills: name %q must not start with a dot", name)
+	case strings.Contains(name, ".."):
+		return fmt.Errorf("skills: name %q must not contain %q", name, "..")
+	}
+	return nil
+}
+
+func runAdd(cmd *cobra.Command, cfg *config, arg string, force, asJSON bool) error {
+	if strings.Contains(arg, "://") {
 		return fmt.Errorf("skills: url sources are not supported yet — pass a local skill directory")
 	}
 	if cfg.cfgDir == "" {
 		return fmt.Errorf("skills: no host-local store directory configured")
 	}
+	dir := arg
+	if isRecordSource(arg) {
+		// A record is rebuilt into a folder first, so it walks through the
+		// SAME gate as `add <dir>` — a document must not have a softer
+		// admission than the folder it stands for.
+		data, err := readSource(arg, cmd.InOrStdin())
+		if err != nil {
+			return err
+		}
+		rec, err := ParseRecord(data)
+		if err != nil {
+			return err
+		}
+		if err := validSkillName(rec.Name); err != nil {
+			return err
+		}
+		tmp, err := os.MkdirTemp("", "skill-add-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tmp)
+		dir = filepath.Join(tmp, rec.Name)
+		if err := WriteFolder(rec, dir); err != nil {
+			return err
+		}
+	}
+	return addFolder(cmd, cfg, dir, force, asJSON)
+}
+
+// addFolder is the admission gate + install for a skill folder on disk.
+func addFolder(cmd *cobra.Command, cfg *config, dir string, force, asJSON bool) error {
 	sk, err := loadSkillDir(dir)
 	if err != nil {
 		return err
