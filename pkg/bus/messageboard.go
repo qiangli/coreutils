@@ -43,11 +43,20 @@ package bus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	pathpkg "path"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/ref"
+	"github.com/qiangli/coreutils/pkg/scope"
 )
 
 // NewMessageBoardCmd returns the top-level `mb` verb.
@@ -121,9 +130,279 @@ through one cursor-safe view.`,
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
 	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new relevant post")
-	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
+	cmd.AddCommand(newMBSendCmd(), newMBPostCmd(), newMBShowCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd
+}
+
+func newMBShowCmd() *cobra.Command {
+	var jsonOut, links bool
+	cmd := &cobra.Command{
+		Use:   "show <seq>",
+		Short: "show one message-board post",
+		Long: `Show one message-board post by sequence.
+
+A post is citable as [[mb:N]], but --history is the whole board. This command is
+the single-record read surface for that citation, with --json and --links using
+the same read-time meanings as todo and sprint show.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			seq, err := parsePositiveSeq("mb", args[0])
+			if err != nil {
+				return err
+			}
+			p, ok, err := findPost(seq)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("mb: post %d not found", seq)
+			}
+			linkRefs := postLinks(p)
+			w := cmd.OutOrStdout()
+			if jsonOut {
+				out := struct {
+					Post
+					Links []boardLinkRef `json:"links,omitempty"`
+				}{Post: p}
+				if links {
+					out.Links = linkRefs
+				}
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+			fmt.Fprintf(w, "[%d] %s from `%s` -> %s\n", p.Seq, p.Topic, p.From, p.Audiences())
+			if p.At != "" {
+				fmt.Fprintf(w, "at     %s\n", p.At)
+			}
+			if body := strings.TrimSpace(p.Body); body != "" {
+				fmt.Fprintf(w, "\n%s\n", body)
+			}
+			if links {
+				printBoardLinks(w, linkRefs)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	cmd.Flags().BoolVar(&links, "links", false, "resolve the post body's links at read time against this repo's kb and todo stores")
+	return cmd
+}
+
+type boardLinkRef struct {
+	Ref    string `json:"ref"`
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+func postLinks(p Post) []boardLinkRef {
+	nodes := boardRepoLinkNodes()
+	seen := map[string]bool{}
+	var out []boardLinkRef
+	for _, l := range parseBoardLinks(p.Body) {
+		refText := l.ref()
+		if seen[refText] {
+			continue
+		}
+		seen[refText] = true
+		if n, ok := resolveBoardLink(l, nodes); ok {
+			out = append(out, boardLinkRef{Ref: n.ref(), Title: n.title, Status: "resolved"})
+			continue
+		}
+		out = append(out, boardLinkRef{Ref: refText, Status: l.status()})
+	}
+	return out
+}
+
+type boardLink struct {
+	kind ref.Kind
+	id   string
+}
+
+func (l boardLink) ref() string { return ref.Format(l.kind, l.id) }
+
+func (l boardLink) status() string {
+	switch {
+	case l.kind == ref.Unknown:
+		return "unknown"
+	case l.kind != ref.KB && l.kind != ref.Todo:
+		return "external"
+	default:
+		return "dangling"
+	}
+}
+
+type boardLinkNode struct {
+	kind  ref.Kind
+	id    string
+	title string
+}
+
+func (n boardLinkNode) ref() string { return ref.Format(n.kind, n.id) }
+
+var (
+	boardWikiRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+	boardMDRe   = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
+)
+
+func parseBoardLinks(body string) []boardLink {
+	seen := map[string]bool{}
+	var out []boardLink
+	add := func(l boardLink, ok bool) {
+		if !ok {
+			return
+		}
+		key := l.ref()
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, l)
+	}
+	for _, m := range boardWikiRe.FindAllStringSubmatch(body, -1) {
+		add(classifyBoardWiki(m[1]))
+	}
+	for _, m := range boardMDRe.FindAllStringSubmatch(body, -1) {
+		add(classifyBoardRel(m[1]))
+	}
+	return out
+}
+
+func classifyBoardWiki(inner string) (boardLink, bool) {
+	inner = strings.TrimSpace(inner)
+	if inner == "" {
+		return boardLink{}, false
+	}
+	if !strings.Contains(inner, ":") {
+		return boardLink{kind: ref.KB, id: inner}, true
+	}
+	r, err := ref.Parse(inner)
+	if err == nil {
+		return boardLink{kind: r.Kind, id: r.ID}, true
+	}
+	if errors.Is(err, ref.ErrEmptyID) {
+		return boardLink{}, false
+	}
+	return boardLink{kind: ref.Unknown, id: inner}, true
+}
+
+func classifyBoardRel(raw string) (boardLink, bool) {
+	u := strings.TrimSpace(raw)
+	if u == "" || strings.Contains(u, "://") || strings.HasPrefix(u, "#") || strings.HasPrefix(u, "mailto:") {
+		return boardLink{}, false
+	}
+	if !strings.HasSuffix(u, ".md") {
+		return boardLink{}, false
+	}
+	clean := pathpkg.Clean(u)
+	stem := strings.TrimSuffix(pathpkg.Base(clean), ".md")
+	dir := pathpkg.Dir(clean)
+	switch {
+	case strings.Contains(dir, "todo"):
+		id := stem
+		if i := strings.IndexByte(stem, '-'); i > 0 {
+			id = stem[:i]
+		}
+		return boardLink{kind: ref.Todo, id: id}, id != ""
+	case strings.Contains(dir, "pages") || strings.Contains(dir, "kb"):
+		return boardLink{kind: ref.KB, id: stem}, stem != ""
+	}
+	return boardLink{}, false
+}
+
+func boardRepoLinkNodes() []boardLinkNode {
+	root, ok := scope.FindGitRoot()
+	if !ok {
+		return nil
+	}
+	var nodes []boardLinkNode
+	nodes = append(nodes, readBoardKBNodes(filepath.Join(root, "docs", "kb", "pages"))...)
+	nodes = append(nodes, readBoardTodoNodes(filepath.Join(root, "docs", "todo"))...)
+	return nodes
+}
+
+func resolveBoardLink(l boardLink, nodes []boardLinkNode) (boardLinkNode, bool) {
+	for _, n := range nodes {
+		switch l.kind {
+		case ref.KB:
+			if n.kind == ref.KB && n.id == l.id {
+				return n, true
+			}
+		case ref.Todo:
+			if n.kind == ref.Todo && (n.id == l.id || strings.HasPrefix(n.id, l.id)) {
+				return n, true
+			}
+		}
+	}
+	return boardLinkNode{}, false
+}
+
+func readBoardKBNodes(dir string) []boardLinkNode {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []boardLinkNode
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".md")
+		out = append(out, boardLinkNode{kind: ref.KB, id: id, title: boardMarkdownTitle(filepath.Join(dir, e.Name()))})
+	}
+	return out
+}
+
+func readBoardTodoNodes(dir string) []boardLinkNode {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []boardLinkNode
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		stem := strings.TrimSuffix(e.Name(), ".md")
+		id := stem
+		if i := strings.IndexByte(stem, '-'); i > 0 {
+			id = stem[:i]
+		}
+		out = append(out, boardLinkNode{kind: ref.Todo, id: id, title: boardMarkdownTitle(filepath.Join(dir, e.Name()))})
+	}
+	return out
+}
+
+func boardMarkdownTitle(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "title:") {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "title:")), `"'`)
+		}
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
+	}
+	return ""
+}
+
+func printBoardLinks(w io.Writer, links []boardLinkRef) {
+	fmt.Fprintf(w, "\nlinks (%d)\n", len(links))
+	for _, l := range links {
+		fmt.Fprintf(w, "  -> %s  %s  %s\n", l.Ref, emptyDash(l.Title), l.Status)
+	}
+}
+
+func emptyDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 // waitForBoard blocks until this reader has something relevant to read or the

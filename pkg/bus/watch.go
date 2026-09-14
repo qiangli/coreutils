@@ -97,6 +97,7 @@ so two agents draining the same topic each get their own copy.`,
 	f.BoolVar(&drain, "drain", false, "print what you have not seen since your last drain, then exit")
 	f.StringVar(&as, "as", "", "reader identity for the drain cursor (default: your principal)")
 	f.Int64Var(&since, "since", 0, "start after this sequence number (overrides the saved cursor)")
+	f.Int64Var(&since, "from", 0, "alias for --since; start after this sequence number")
 	f.DurationVar(&interval, "interval", defaultPoll, "how often follow mode re-reads the timeline")
 	f.DurationVar(&wait, "wait", 0, "with --drain, wait up to this duration for a new relevant notification")
 	f.BoolVar(&jsonOut, "json", false, "emit one "+SchemaVersion+" JSON object per line (NDJSON)")
