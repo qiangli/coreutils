@@ -123,14 +123,22 @@ func SnapshotInbox(reader string) (InboxSnapshot, error) {
 			return snap, err
 		}
 	}
-	if _, err := ResolveFor(reader); err != nil {
+	// ONE timeline parse per snapshot, shared by the resolve and the direct
+	// scan below. Each used to parse it independently.
+	events, err := watchTimeline(0)
+	if err != nil {
 		return snap, err
+	}
+	if sub, err := LoadSubscription(reader); err == nil && sub.Subscriber != "" {
+		if _, err := resolveForEvents(sub, events); err != nil {
+			return snap, err
+		}
 	}
 	allPending, err := ReadPending(reader)
 	if err != nil {
 		return snap, err
 	}
-	direct, through, err := UnreadNotifications(reader)
+	direct, through, err := unreadNotificationsFrom(reader, events)
 	if err != nil {
 		return snap, err
 	}
@@ -199,11 +207,17 @@ func sameNotification(a, b Pending) bool {
 // used by Bashy's unified inbox; the bus remains the owner of both timeline and
 // cursor and no second delivery store is introduced.
 func UnreadNotifications(reader string) ([]room.Event, int64, error) {
-	from, err := readCursor(reader)
+	events, err := watchTimeline(0)
 	if err != nil {
 		return nil, 0, err
 	}
-	events, err := watchTimeline(0)
+	return unreadNotificationsFrom(reader, events)
+}
+
+// unreadNotificationsFrom is UnreadNotifications over an already-parsed
+// timeline (see resolveForEvents for why the parse is shared).
+func unreadNotificationsFrom(reader string, events []room.Event) ([]room.Event, int64, error) {
+	from, err := readCursor(reader)
 	if err != nil {
 		return nil, 0, err
 	}

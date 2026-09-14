@@ -295,7 +295,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			}
 			recordPreambleAdmission(context.Background(), p)
 			return p.Commit()
-		})
+		}, bus.NewInboxPollGate(name))
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.

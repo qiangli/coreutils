@@ -10,6 +10,15 @@ import (
 // managedInboxPoll is deliberately modest: input remains durable in its source,
 // and a one-second wake-up is fast compared with an agent turn without turning
 // every managed session into a filesystem hot loop.
+//
+// The interval alone did not keep it from becoming one. A tick's body is a full
+// unified-inbox snapshot — two parses of the host timeline plus the host's
+// board and meet scan — which on a mature host takes longer than the tick, so
+// the ticker fired back-to-back and an IDLE managed session burned a whole
+// core (coreutils story #127: `foreman serve` at 66–126% while its agent sat at
+// 2%). The snapshot therefore runs behind a bus.PollGate: cheap store metadata
+// every tick, the full read only when something moved or on the periodic
+// rescan. Same mechanism as the Sprint 138 fix to `bashy inbox --watch`.
 const managedInboxPoll = time.Second
 
 // runInboxRelay turns durable unified-inbox input into an actual agent turn.
@@ -17,12 +26,15 @@ const managedInboxPoll = time.Second
 // while a transport is busy. A refusal leaves every cursor untouched and the
 // next poll retries the same input.
 func runInboxRelay(ctx context.Context, done <-chan struct{}, ready func() bool,
-	prepare func() bus.PreparedPreamble, deliver func(bus.PreparedPreamble) error) {
-	runInboxRelayEvery(ctx, done, ready, prepare, deliver, managedInboxPoll)
+	prepare func() bus.PreparedPreamble, deliver func(bus.PreparedPreamble) error, gate *bus.PollGate) {
+	runInboxRelayEvery(ctx, done, ready, prepare, deliver, gate, managedInboxPoll)
 }
 
+// runInboxRelayEvery is runInboxRelay with an injectable interval. A nil gate
+// snapshots on every tick — the tests' shape, and the pre-#127 behaviour.
 func runInboxRelayEvery(ctx context.Context, done <-chan struct{}, ready func() bool,
-	prepare func() bus.PreparedPreamble, deliver func(bus.PreparedPreamble) error, interval time.Duration) {
+	prepare func() bus.PreparedPreamble, deliver func(bus.PreparedPreamble) error,
+	gate *bus.PollGate, interval time.Duration) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -33,14 +45,37 @@ func runInboxRelayEvery(ctx context.Context, done <-chan struct{}, ready func() 
 			return
 		case <-tick.C:
 		}
+		// Readiness first: it is a field load, and a busy transport must not
+		// even sample the stores — the answer would be thrown away.
 		if ready != nil && !ready() {
 			continue
 		}
+		var sum uint64
+		var ok bool
+		if gate != nil {
+			var read bool
+			if read, sum, ok = gate.Due(time.Now()); !read {
+				continue
+			}
+		}
 		pending := prepare()
 		if pending.Err() != nil || pending.Text == "" {
+			if gate != nil {
+				gate.Commit(sum, ok, time.Now())
+			}
 			continue
 		}
-		_ = deliver(pending) // failure is durable: no Commit means retry
+		if err := deliver(pending); err != nil {
+			// Failure is durable: no Commit means retry — and the gate must not
+			// hide that retry behind an unchanged fingerprint.
+			if gate != nil {
+				gate.Retry()
+			}
+			continue
+		}
+		if gate != nil {
+			gate.Commit(sum, ok, time.Now())
+		}
 	}
 }
 
@@ -51,7 +86,7 @@ func (s *Session) startInboxRelay(ctx context.Context) {
 	}
 	go runInboxRelay(ctx, s.done, ready,
 		func() bus.PreparedPreamble { return bus.PrepareForAgent(s.inboxAgent, "") },
-		s.deliverPreparedInbox)
+		s.deliverPreparedInbox, bus.NewInboxPollGate(s.inboxAgent))
 }
 
 // deliverPreparedInbox is Say with the already-prepared input preserved. This

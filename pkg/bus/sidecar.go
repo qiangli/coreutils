@@ -100,11 +100,20 @@ func (s *Sidecar) Run(ctx context.Context) error {
 	coordinate.StartMovementMonitor()
 	defer coordinate.Close()
 
+	// Once is a full parse of the host timeline for every subscription. Behind
+	// the same gate as the chat relay: metadata every tick, the parse only when
+	// the timeline or the subscription set moved, or on the periodic rescan —
+	// otherwise a steward's sidecar is the second core-burner on an idle host
+	// (coreutils story #127).
+	gate := NewPollGate(TimelineFingerprint, 0)
 	t := time.NewTicker(s.Poll)
 	defer t.Stop()
 	for {
-		if _, err := s.Once(); err != nil {
-			return err
+		if read, sum, ok := gate.Due(s.now()); read {
+			if _, err := s.Once(); err != nil {
+				return err
+			}
+			gate.Commit(sum, ok, s.now())
 		}
 		select {
 		case <-ctx.Done():

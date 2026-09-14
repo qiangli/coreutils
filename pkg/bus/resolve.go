@@ -251,7 +251,16 @@ func ResolveFor(subscriber string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return resolveForEvents(sub, events)
+}
 
+// resolveForEvents is ResolveFor over an already-parsed timeline. SnapshotInbox
+// reads the timeline ONCE and hands it to both halves of the drain: a parse of
+// the host timeline is the expensive step (hundreds of ms on a mature host),
+// and doing it twice per snapshot was half of the idle-session CPU in coreutils
+// story #127.
+func resolveForEvents(sub Subscription, events []room.Event) (int, error) {
+	subscriber := sub.Subscriber
 	var high int64
 	queued := 0
 	for _, e := range events {
