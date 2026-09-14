@@ -62,16 +62,22 @@ type runHit struct {
 	item *weaveItem
 }
 
-// resolveRun answers run:<repo-basename>-<n>. It searches the current checkout's
-// queue first, then every queue on the machine, deduped by directory, and
-// resolves only when exactly one queue with the named basename carries run n.
+// resolveRun answers run:<repo-basename>-<n>. The current checkout's queue is
+// AUTHORITATIVE when it carries run n under that basename — the same rule
+// `weave status <n>` follows, so the two agree — and only when it does not is
+// the search widened to every queue on the machine, where exactly one hit
+// resolves and two is an error that names both paths and refuses to pick
+// (plan D7). Ordering the queues without stopping on the first would make
+// "current checkout first" decorative: the gate's two same-named checkouts
+// reported ambiguity from INSIDE one of them.
 func resolveRun(id string) (ref.Node, error) {
 	base, n, err := parseRunID(id)
 	if err != nil {
 		return ref.Node{}, err
 	}
 	var hits []runHit
-	for _, dir := range runQueueDirs() {
+	dirs, current := runQueueDirs()
+	for _, dir := range dirs {
 		q, err := loadWeaveQueue(dir)
 		if err != nil {
 			return ref.Node{}, fmt.Errorf("weave: read queue %s: %w", dir, err)
@@ -85,6 +91,9 @@ func resolveRun(id string) (ref.Node, error) {
 		}
 		if it := findWeaveItem(q, n); it != nil {
 			hits = append(hits, runHit{repo: root, item: it})
+			if dir == current {
+				break // the checkout we are standing in owns the answer
+			}
 		}
 	}
 	switch len(hits) {
@@ -109,10 +118,10 @@ func resolveRun(id string) (ref.Node, error) {
 
 // runQueueDirs lists the queue directories to consult, current checkout first,
 // then every queue on the machine — deduped, since the machine-wide scan already
-// enumerates the current queue when it exists on disk.
-func runQueueDirs() []string {
+// enumerates the current queue when it exists on disk. current is the
+// checkout's own queue dir ("" outside any repo) so the caller can stop there.
+func runQueueDirs() (dirs []string, current string) {
 	seen := map[string]bool{}
-	var dirs []string
 	add := func(d string) {
 		if d != "" && !seen[d] {
 			seen[d] = true
@@ -122,6 +131,7 @@ func runQueueDirs() []string {
 	if cwd, err := os.Getwd(); err == nil {
 		if root, err := weaveRepoRoot(cwd); err == nil {
 			if qd, err := weaveQueueDir(root); err == nil {
+				current = qd
 				add(qd)
 			}
 		}
@@ -129,7 +139,7 @@ func runQueueDirs() []string {
 	for _, d := range weaveAllQueueDirs() {
 		add(d)
 	}
-	return dirs
+	return dirs, current
 }
 
 // parseRunID splits <repo-basename>-<n> on the LAST dash — a repo basename may

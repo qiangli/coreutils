@@ -3,6 +3,7 @@ package weave
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +147,49 @@ func TestResolveRunAmbiguousAcrossQueues(t *testing.T) {
 		if !strings.Contains(err.Error(), p) {
 			t.Errorf("ambiguity error does not name repo path %s: %v", p, err)
 		}
+	}
+}
+
+// TestResolveRunCurrentCheckoutWins: standing INSIDE one of two same-named
+// checkouts, run:<base>-<n> is the run in THIS checkout — the same answer
+// `weave status <n>` gives — and the other queue is never consulted. Only from
+// a neutral cwd do the two collide (TestResolveRunAmbiguousAcrossQueues).
+func TestResolveRunCurrentCheckoutWins(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH; weaveRepoRoot needs it")
+	}
+	home, _ := hermeticHome(t)
+	rootA := filepath.Join(t.TempDir(), "shared")
+	rootB := filepath.Join(t.TempDir(), "shared")
+	if err := os.MkdirAll(rootA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", rootA, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	// The queue dir for rootA must be the one weaveQueueDir derives for it, so
+	// the resolver's "current checkout" lookup lands on it.
+	canonA, err := filepath.EvalSymlinks(rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagA, _ := weaveQueueNames(weaveCanonicalRepoRoot(canonA))
+	scratchQueue(t, home, tagA, canonA, &weaveItem{ID: 3, Title: "mine", State: "todo"})
+	scratchQueue(t, home, "shared-other", rootB, &weaveItem{ID: 3, Title: "theirs", State: "working"})
+
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(rootA); err != nil {
+		t.Fatal(err)
+	}
+
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	n, err := g.Resolve("run:shared-3")
+	if err != nil {
+		t.Fatalf("inside the checkout, run:shared-3 must resolve to this checkout's run, got: %v", err)
+	}
+	if n.Title != "mine" || n.Where != canonA {
+		t.Fatalf("resolved the wrong checkout: %+v", n)
 	}
 }
