@@ -732,6 +732,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
+	fmt.Fprintf(out, "  ref:        sprint:%d\n", s.ID)
 	renderSprintResources(out, sprintResources(cmd, id))
 	if s.Epic != "" {
 		fmt.Fprintf(out, "  epic:       %s\n", s.Epic)

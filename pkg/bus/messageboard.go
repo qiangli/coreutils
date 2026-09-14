@@ -232,7 +232,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 						to += " [" + strings.Join(v, ", ") + "]"
 					}
 				}
-				fmt.Fprintf(w, "- [%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
+				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
 			}
 			fmt.Fprint(w, nextSteps(posts, labels, who))
 			if older > 0 {

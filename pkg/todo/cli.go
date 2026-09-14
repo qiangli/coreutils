@@ -20,6 +20,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/issue"
 	"github.com/qiangli/coreutils/pkg/kb"
+	"github.com/qiangli/coreutils/pkg/ref"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -30,7 +31,20 @@ type storeFunc func() (*issue.Store, string, error)
 // itemJSON wraps an issue for JSON output, computing the overdue flag.
 type itemJSON struct {
 	*issue.Issue
-	Overdue bool `json:"overdue"`
+	Ref     string `json:"ref"` // todo:<full id> — the canonical address (pkg/ref)
+	Overdue bool   `json:"overdue"`
+}
+
+// refOf is the item's canonical ref, full id.
+func refOf(it *issue.Issue) string { return ref.Format(ref.Todo, it.ID) }
+
+// shortRef is the ref at the listing's id width: `todo:<8-hex>`, which resolves
+// git-style by prefix. The full id is in --json and in `todo show`.
+func shortRef(id string) string {
+	if id == "" || len(id) < 8 {
+		return shortID(id) // "(no-id)" or the short id itself, unprefixed
+	}
+	return ref.Format(ref.Todo, shortID(id))
 }
 
 // listItem is one row of the `todo list` result envelope — a projection of an
@@ -309,7 +323,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 					break
 				}
 			}
-			headerStr := "#\tID\tSTATUS\tPRIO\tAGE\tDUE"
+			headerStr := "#\tREF\tSTATUS\tPRIO\tAGE\tDUE"
 			if hasAssignee {
 				headerStr += "\tASSIGNEE"
 			}
@@ -324,7 +338,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 					}
 				}
 				row := fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s",
-					it.Seq, shortID(it.ID), it.Status, dash(it.Priority), age(it.Created), dueStr)
+					it.Seq, shortRef(it.ID), it.Status, dash(it.Priority), age(it.Created), dueStr)
 				if hasAssignee {
 					row += fmt.Sprintf("\t%s", dash(it.Assignee))
 				}
@@ -361,15 +375,16 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 					out, in := resolveLinks(st, it)
 					return emitJSON(cmd, struct {
 						*issue.Issue
+						Ref      string    `json:"ref"`
 						Overdue  bool      `json:"overdue"`
 						Outbound []linkRef `json:"outbound"`
 						Inbound  []linkRef `json:"inbound"`
-					}{Issue: it, Overdue: IsOverdue(it), Outbound: out, Inbound: in})
+					}{Issue: it, Ref: refOf(it), Overdue: IsOverdue(it), Outbound: out, Inbound: in})
 				}
-				return emitJSON(cmd, itemJSON{Issue: it, Overdue: IsOverdue(it)})
+				return emitJSON(cmd, itemJSON{Issue: it, Ref: refOf(it), Overdue: IsOverdue(it)})
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "#%d  %s  %s\n\n", it.Seq, it.ID, it.Title)
+			fmt.Fprintf(w, "#%d  %s  %s\n\n", it.Seq, refOf(it), it.Title)
 			fmt.Fprintf(w, "  status    %s\n", it.Status)
 			if it.Priority != "" {
 				fmt.Fprintf(w, "  priority  %s\n", it.Priority)

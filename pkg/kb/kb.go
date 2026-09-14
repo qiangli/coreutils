@@ -818,8 +818,10 @@ func newListCmd(dir, ring *string) *cobra.Command {
 				// store was the single largest payload kb could produce.
 				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil, nil, nil, ResLine, nil)
 			}
+			rd := LineRenderer()
+			rd.Ref = true // kb:<slug> — copy a row straight into prose
 			for _, p := range pages {
-				fmt.Fprint(c.OutOrStdout(), LineRenderer().Page(p))
+				fmt.Fprint(c.OutOrStdout(), rd.Page(p))
 			}
 			return nil
 		},

@@ -2218,9 +2218,13 @@ func weaveRenderItemRows(w io.Writer, q *weaveQueue, items []*weaveItem) {
 		if it.Salvageable {
 			work = fmt.Sprintf("%d commits", it.UnmergedCommits)
 		}
-		fmt.Fprintf(w, "%-4d %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n",
+		// REF is the run's canonical address, run:<repo-basename>-<n> — the
+		// spelling a citation uses ([[run:coreutils-21]]) and `bashy define`
+		// resolves; the current checkout's queue is authoritative for it.
+		runRef := fmt.Sprintf("run:%s-%d", filepath.Base(filepath.Clean(q.Root)), it.ID)
+		fmt.Fprintf(w, "%-4d %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %-24s %s\n",
 			it.ID, it.Priority, itemStage(it), pts, state, toolCol,
-			work, weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Workspace))
+			work, weaveStartedCol(it), weaveDurationCol(it), title, runRef, weaveTildePath(it.Workspace))
 	}
 }
 
@@ -2412,7 +2416,7 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s\n", weaveTildePath(v.Root))
-		fmt.Fprintf(w, "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "WORKSPACE")
+		fmt.Fprintf(w, "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %-24s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "REF", "WORKSPACE")
 		// The graph columns (epic, blocked) are facts about the WHOLE queue, so the
 		// renderer needs one — this view carries the same items under another name.
 		weaveRenderItemRows(w, &weaveQueue{Root: v.Root, Items: v.Items}, v.Items)
@@ -2593,7 +2597,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	if unattended > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "ATTENTION: %d unattended item(s) — see `weave doctor`\n", unattended)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "WORKSPACE")
+	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %-24s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "REF", "WORKSPACE")
 	weaveRenderItemRows(cmd.OutOrStdout(), q, items)
 	if anyStale {
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")

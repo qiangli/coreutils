@@ -44,6 +44,18 @@ type Renderer struct {
 	Bullet     string // "" (CLI), "  " (indented sub-list), "- " (prompt bullet)
 	Sep        string // between slug and the rest: "  " (CLI) or " " (bullets)
 	BodyCap    int    // 0 = DefaultBodyCap; only consulted at ResFull
+	// Ref prints the address as the canonical ref (`kb:<slug>`) instead of the
+	// bare slug. `kb list` sets it so a row can be copied into prose as-is; the
+	// injection and envelope renderers leave it off and stay byte-identical.
+	Ref bool
+}
+
+// addr is the page's address as this renderer prints it.
+func (rd Renderer) addr(p *Page) string {
+	if rd.Ref {
+		return "kb:" + p.Slug
+	}
+	return p.Slug
 }
 
 // CueRenderer is the lean rendering: addresses only.
@@ -61,10 +73,10 @@ func (rd Renderer) Page(p *Page) string {
 	var b strings.Builder
 	switch rd.Resolution {
 	case ResCue:
-		fmt.Fprintf(&b, "%s%s%s%s\n", rd.Bullet, p.Slug, sep, p.Title)
+		fmt.Fprintf(&b, "%s%s%s%s\n", rd.Bullet, rd.addr(p), sep, p.Title)
 	default:
 		fmt.Fprintf(&b, "%s%s%s[%s/%s] %s — %s\n",
-			rd.Bullet, p.Slug, sep, p.Status, p.Type, p.Title, p.Description)
+			rd.Bullet, rd.addr(p), sep, p.Status, p.Type, p.Title, p.Description)
 		if rd.Resolution == ResFull {
 			if body := strings.TrimSpace(p.Body); body != "" {
 				cap := rd.BodyCap
