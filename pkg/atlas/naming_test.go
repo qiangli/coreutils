@@ -23,9 +23,12 @@ import (
 // nonPluralEndingInS are verbs whose final s is not a plural.
 var nonPluralEndingInS = []string{"bus", "dks", "seaweedfs", "whois"}
 
-// pluralListers are subcommand-less listers of the bash `jobs`/`dirs` shape,
-// where the plural means "print the set". `commands` cannot be singularised:
-// `command` is a POSIX special builtin.
+// pluralListers are listers of the bash `jobs`/`dirs` shape, where the
+// plural means "print the set". `commands` cannot be singularised: `command`
+// is a POSIX special builtin. Since Sprint 179 it also carries the CRUD words
+// of the registered-command ring (a CRUD word counts only when a NAME
+// follows it), and `command` is its hidden, no-shim front-door alias in bashy
+// — the exception rests on the POSIX collision alone.
 var pluralListers = []string{"commands"}
 
 // irregularPlurals cannot be seen by the suffix check.
