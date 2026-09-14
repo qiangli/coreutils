@@ -42,6 +42,12 @@ func runWeave(t *testing.T, args ...string) (string, int) {
 // cloudbox shared-session verbs now live under `sprint session`.
 func runSprint(t *testing.T, args ...string) (string, int) {
 	t.Helper()
+	// Most lifecycle fixtures exercise behavior after orientation. Keep their
+	// setup explicit in one place; dedicated Sprint 175 tests cover legacy cards
+	// with either field missing.
+	if len(args) > 0 && args[0] == "add" {
+		args = append(args, "--primary-goal", "deliver the fixture outcome", "--spec", "docs/test-plan.md")
+	}
 	cmd := NewSprintCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)

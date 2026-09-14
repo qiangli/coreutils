@@ -581,6 +581,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			ownerChanged := cmd.Flags().Changed("owner")
 			reassigned := ownerChanged && assignee != ""
 			if ownerChanged {
+				if it.Sprint != 0 && (it.Status == StatusDone || it.Closed != nil) {
+					return fmt.Errorf("done sprint story %s cannot retroactively assign or reopen; acceptance provenance must be recorded by `bashy sprint accept %d %s`", it.ID, it.Sprint, it.ID)
+				}
 				canonical, err := canonicalAssignee(assignee)
 				if err != nil {
 					return err

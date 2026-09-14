@@ -224,6 +224,9 @@ func newSprintStartCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				if err := sprintOrientationError(before); err != nil {
+					return err
+				}
 				if before.currentBox().Running() {
 					return fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
 						id, before.currentBox().Status(now), id, id)
@@ -327,9 +330,9 @@ func newSprintStartCmd() *cobra.Command {
 					// entry point — it is how a sprint BEGINS — and it was the one
 					// that said nothing, so an agent seated by it had to already
 					// know how mail reaches it.
-					return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s\n%s",
+					return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s\n%s\n%s",
 						id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote+sessionNote,
-						sprintReadyLine(id, who)), nil
+						sprintReadyLine(id, who), sprintOrientationLine(s)), nil
 				})
 				if err != nil && launched {
 					_ = retireSprintOwnerSession(cmd.Context(), id, who, cwd)
@@ -616,6 +619,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 						// closes over an open story nobody planned, or over a dirty
 						// tree, is a green result reached because nothing looked.
 						if err := sprintUnansweredGate(s, "end"); err != nil {
+							return "", err
+						}
+						if err := sprintStoryAcceptanceAudit(s); err != nil {
 							return "", err
 						}
 						if err := sprintCoverageGate(s, false, ""); err != nil {

@@ -294,6 +294,9 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	if err != nil {
 		return nil, err
 	}
+	if status == StatusDone && it.Sprint != 0 {
+		return nil, fmt.Errorf("sprint story %s cannot close through generic todo; submit delivery evidence, then the manager runs `bashy sprint accept %d %s -m \"<verified evidence>\"`", it.ID, it.Sprint, it.ID)
+	}
 	if status == StatusAssigned {
 		assignee, err := canonicalAssignee(it.Assignee)
 		if err != nil {

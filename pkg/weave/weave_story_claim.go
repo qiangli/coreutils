@@ -12,6 +12,7 @@ package weave
 //	claim    I am taking this story        (exclusive; announces to the manager)
 //	yield    I am giving it back unfinished (the honest inverse of claim)
 //	submit   it is ready for review/merge   (hands the decision to the manager)
+//	accept   the manager verified it        (the only sprint-story close path)
 //
 // `claim`/`yield` is the pair. `submit` is not its opposite — it is the
 // transition OUT of the pair, into the manager's hands. Conflating submit with
@@ -293,7 +294,7 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		who = weaveConductorName("")
 	}
 	return runWeaveStoryMutate(cmd, id, "sprint submit", flags, func(s *weaveStory) (string, error) {
-		root, it, err := resolveSprintStoryFor(s, repo, ref)
+		_, it, err := resolveSprintStoryFor(s, repo, ref)
 		if err != nil {
 			return "", err
 		}
@@ -301,11 +302,7 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 			return "", fmt.Errorf("story %s is held by %s, not %s — claim it first, or let them submit it", it.ID, held, who)
 		}
 		if strings.TrimSpace(it.Assignee) == "" {
-			it.Assignee = who
-			it.Status = todopkg.StatusAssigned
-			if _, err := todopkg.RepoStore(root).Save(it); err != nil {
-				return "", fmt.Errorf("record the implicit claim: %w", err)
-			}
+			return "", fmt.Errorf("story %s is unclaimed — run `bashy sprint claim %d %s --owner %s` before submission", it.ID, id, it.ID, who)
 		}
 		note := fmt.Sprintf("%s submitted story %s for review/merge: %s",
 			who, shortSprintStoryID(it.ID), strings.TrimSpace(evidence))
@@ -322,4 +319,94 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		return fmt.Sprintf("sprint #%d: %s submitted %s — %s reviews, verifies, and closes it%s",
 			id, who, shortSprintStoryID(it.ID), owner, delivery), nil
 	})
+}
+
+func newSprintAcceptCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var repo, evidence string
+	cmd := &cobra.Command{
+		Use:   "accept <sprint> <story>",
+		Short: "Close a claimed and submitted story after manager verification",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			if strings.TrimSpace(evidence) == "" {
+				return fmt.Errorf("-m <verified evidence> required")
+			}
+			return runSprintStoryAccept(cmd, id, args[1], repo, evidence, &flags)
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
+	cmd.Flags().StringVarP(&evidence, "message", "m", "", "manager's verification evidence (required)")
+	flags.attach(cmd)
+	return cmd
+}
+
+func sprintSubmissionEvidence(s *weaveStory, storyID string) bool {
+	needle := " submitted story " + shortSprintStoryID(storyID) + " for review/merge:"
+	for _, c := range s.Thread {
+		if strings.Contains(c.Body, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func sprintAcceptanceEvidence(s *weaveStory, storyID string) bool {
+	needle := " accepted story " + shortSprintStoryID(storyID) + ":"
+	for _, c := range s.Thread {
+		if strings.Contains(c.Body, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence string, flags *weaveOutputFlags) error {
+	return runWeaveStoryMutate(cmd, id, "sprint accept", flags, func(s *weaveStory) (string, error) {
+		actor := weaveStoryConductorName(s, "")
+		if s.Lease == nil || !strings.EqualFold(strings.TrimSpace(s.Lease.Holder), actor) {
+			return "", fmt.Errorf("only sprint #%d's current manager may accept stories", id)
+		}
+		root, it, err := resolveSprintStoryFor(s, repo, ref)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(it.Assignee) == "" {
+			return "", fmt.Errorf("story %s was never claimed", it.ID)
+		}
+		if !sprintSubmissionEvidence(s, it.ID) {
+			return "", fmt.Errorf("story %s has no submitted delivery evidence — run `bashy sprint submit %d %s -m \"<evidence>\"` first", it.ID, id, it.ID)
+		}
+		it.Status = todopkg.StatusDone
+		now := time.Now().UTC()
+		it.Closed = &now
+		it.ClosedBy = actor
+		if _, err := todopkg.RepoStore(root).Save(it); err != nil {
+			return "", err
+		}
+		weaveStoryAppend(s, actor, "decision", fmt.Sprintf("%s accepted story %s: %s", actor, shortSprintStoryID(it.ID), strings.TrimSpace(evidence)))
+		return fmt.Sprintf("sprint #%d: accepted story %s after manager verification", id, shortSprintStoryID(it.ID)), nil
+	})
+}
+
+func sprintStoryAcceptanceAudit(s *weaveStory) error {
+	for _, root := range sprintDeclaredStoryRoots(s) {
+		items, err := todopkg.List(todopkg.RepoStore(root), "")
+		if err != nil {
+			continue
+		}
+		for _, it := range items {
+			if it.Sprint != s.ID || (it.Status != todopkg.StatusDone && it.Status != issue.StatusClosed) {
+				continue
+			}
+			if strings.TrimSpace(it.Assignee) == "" || !sprintAcceptanceEvidence(s, it.ID) {
+				return fmt.Errorf("sprint #%d cannot end — closed story %s lacks assignee or manager acceptance evidence; repair through `bashy sprint accept %d %s -m \"<verified evidence>\"`", s.ID, it.ID, s.ID, it.ID)
+			}
+		}
+	}
+	return nil
 }

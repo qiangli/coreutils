@@ -4,6 +4,7 @@
 package todo
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,15 +91,12 @@ func TestSprintBoundRecurringStoryClosesHonestlyInsteadOfReopening(t *testing.T)
 		t.Fatal(err)
 	}
 
-	got, err := SetStatus(st, it.ID, StatusDone)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := SetStatus(st, it.ID, StatusDone); err == nil || !strings.Contains(err.Error(), "sprint accept 129") {
+		t.Fatalf("generic completion error = %v", err)
 	}
-	if got.Status != StatusDone {
-		t.Errorf("status = %q, want %q — a sprint story is reopened by `sprint advance`, not by done", got.Status, StatusDone)
-	}
-	if got.Closed == nil {
-		t.Error("Closed was not stamped: the completion left no evidence, which is what made cycle 10 look like cycle 1")
+	got, _ := ResolveRef(st, it.ID)
+	if got.Status != StatusTodo || got.Closed != nil {
+		t.Errorf("refused generic completion mutated story: status=%q closed=%v", got.Status, got.Closed)
 	}
 }
 

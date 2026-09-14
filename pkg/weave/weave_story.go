@@ -26,20 +26,21 @@ import (
 // a SIGKILL/token-exhaustion death — work: the successor reconstructs
 // state from the sprint, never from the dead conductor's memory.
 type weaveStory struct {
-	ID         int64            `json:"id"`
-	Title      string           `json:"title"`
-	Epic       string           `json:"epic,omitempty"`        // grouping label
-	SpecRef    string           `json:"spec_ref,omitempty"`    // handoff/spec doc reference
-	Acceptance string           `json:"acceptance,omitempty"`  // done criteria
-	Column     string           `json:"column"`                // backlog|doing|done
-	Continuity string           `json:"continuity,omitempty"`  // the resume brief
-	Owner      string           `json:"owner,omitempty"`       // durable coordination identity across pauses
-	Goal       []sprintGoalItem `json:"goal,omitempty"`        // durable outcomes; completion is derived
-	StoryRoots []string         `json:"story_roots,omitempty"` // repo todo stores contributing stories
-	Execution  sprintExecution  `json:"execution,omitempty"`   // policy + current focus, never a copied order
-	Lease      *weaveStoryLease `json:"lease,omitempty"`       // current conductor + heartbeat
-	Thread     []weaveComment   `json:"thread,omitempty"`      // sprint-level history
-	Runs       []sprintRun      `json:"runs,omitempty"`        // linked weave runs, CROSS-REPO
+	ID          int64            `json:"id"`
+	Title       string           `json:"title"`
+	Epic        string           `json:"epic,omitempty"`         // grouping label
+	PrimaryGoal string           `json:"primary_goal,omitempty"` // one-sentence outcome the manager protects
+	SpecRef     string           `json:"spec_ref,omitempty"`     // handoff/spec doc reference
+	Acceptance  string           `json:"acceptance,omitempty"`   // done criteria
+	Column      string           `json:"column"`                 // backlog|doing|done
+	Continuity  string           `json:"continuity,omitempty"`   // the resume brief
+	Owner       string           `json:"owner,omitempty"`        // durable coordination identity across pauses
+	Goal        []sprintGoalItem `json:"goal,omitempty"`         // durable outcomes; completion is derived
+	StoryRoots  []string         `json:"story_roots,omitempty"`  // repo todo stores contributing stories
+	Execution   sprintExecution  `json:"execution,omitempty"`    // policy + current focus, never a copied order
+	Lease       *weaveStoryLease `json:"lease,omitempty"`        // current conductor + heartbeat
+	Thread      []weaveComment   `json:"thread,omitempty"`       // sprint-level history
+	Runs        []sprintRun      `json:"runs,omitempty"`         // linked weave runs, CROSS-REPO
 	// Boxes are the sprint's TIME CYCLES, oldest first — orthogonal to Column
 	// (position) and Lease (conductor liveness). A sprint is stopped and
 	// restarted freely over its life, so this is a LIST: one entry per
@@ -545,6 +546,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintClaimCmd(),
 		newSprintYieldCmd(),
 		newSprintSubmitCmd(),
+		newSprintAcceptCmd(),
 		newWeaveStoryEditCmd(),
 		newWeaveStoryRmCmd(),
 		newSprintStatusCmd(),
@@ -620,7 +622,7 @@ func newSprintSessionCmd() *cobra.Command {
 
 func newWeaveStoryAddCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var epic, spec, acceptance, column string
+	var epic, primaryGoal, spec, acceptance, column string
 	cmd := &cobra.Command{
 		Use:   `add "<title>"`,
 		Short: "Create a sprint card on the board",
@@ -633,10 +635,11 @@ func newWeaveStoryAddCmd() *cobra.Command {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint add", weavecli.ExitInvalidArg,
 					fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))))
 			}
-			return runWeaveStoryAdd(cmd, strings.Join(args, " "), epic, spec, acceptance, column, &flags)
+			return runWeaveStoryAdd(cmd, strings.Join(args, " "), epic, primaryGoal, spec, acceptance, column, &flags)
 		},
 	}
 	cmd.Flags().StringVar(&epic, "epic", "", "epic grouping label")
+	cmd.Flags().StringVar(&primaryGoal, "primary-goal", "", "one-sentence primary outcome the sprint manager protects")
 	cmd.Flags().StringVar(&spec, "spec", "", "spec/handoff doc reference (e.g. docs/p3-handoff.md)")
 	cmd.Flags().StringVar(&acceptance, "acceptance", "", "acceptance / done criteria")
 	cmd.Flags().StringVar(&column, "column", "backlog", strings.Join(weaveStoryColumns, "|"))
@@ -644,7 +647,7 @@ func newWeaveStoryAddCmd() *cobra.Command {
 	return cmd
 }
 
-func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column string, flags *weaveOutputFlags) error {
+func runWeaveStoryAdd(cmd *cobra.Command, title, epic, primaryGoal, spec, acceptance, column string, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	dir, err := weaveStoryDir(cmd, mode, "sprint add")
 	if err != nil {
@@ -658,7 +661,7 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column 
 		newID = q.NextStoryID
 		q.NextStoryID++
 		s := &weaveStory{
-			ID: newID, Title: title, Epic: epic, SpecRef: spec,
+			ID: newID, Title: title, Epic: epic, PrimaryGoal: strings.TrimSpace(primaryGoal), SpecRef: spec,
 			Acceptance: acceptance, Column: column,
 			Execution: sprintExecution{PriorityFirst: true},
 			Created:   time.Now().UTC(), UpdatedAt: time.Now().UTC(),
@@ -723,7 +726,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 		}
 		payload := map[string]any{
 			"sprint": s, "goal_progress": progress, "next_story": next,
-			"resources": sprintResources(cmd, id),
+			"resources": sprintResources(cmd, id), "outcome_cost": sprintOutcomeCost(s, time.Now().UTC()),
 		}
 		if links {
 			payload["links"] = resolveSprintLinks(s)
@@ -737,12 +740,16 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 	if s.Epic != "" {
 		fmt.Fprintf(out, "  epic:       %s\n", s.Epic)
 	}
+	if s.PrimaryGoal != "" {
+		fmt.Fprintf(out, "  primary:    %s\n", s.PrimaryGoal)
+	}
 	if s.SpecRef != "" {
 		fmt.Fprintf(out, "  spec:       %s\n", s.SpecRef)
 	}
 	if s.Acceptance != "" {
 		fmt.Fprintf(out, "  acceptance: %s\n", s.Acceptance)
 	}
+	renderSprintOutcomeCost(out, sprintOutcomeCost(s, time.Now().UTC()))
 	renderSprintExecution(out, s)
 	// The plan's blind spot and the sprint's reachability belong HERE, next to
 	// the checklist they qualify. `sprint show` is what a conductor reads on
@@ -948,6 +955,9 @@ you still gate, converge and report.`,
 				if err != nil {
 					return err
 				}
+				if err := sprintOrientationError(before); err != nil {
+					return err
+				}
 				prev, stale, free := weaveStoryLeaseState(before)
 				if !free && !stale && prev != who && !force {
 					return fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
@@ -1002,7 +1012,7 @@ you still gate, converge and report.`,
 					default:
 						weaveStoryAppend(s, who, kindStage, fmt.Sprintf("force-took conductor lease from %s", prev))
 					}
-					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\ncontinuity: %s", id, who, sprintReadyLine(id, who), brief), nil
+					return fmt.Sprintf("sprint #%d: %s is now conductor — use this exact name for mb/Meet/chat/ping; %s\n%s\ncontinuity: %s", id, who, sprintReadyLine(id, who), sprintOrientationLine(s), brief), nil
 				})
 			})
 		},

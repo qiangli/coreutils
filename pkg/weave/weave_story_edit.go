@@ -37,10 +37,10 @@ import (
 
 func newWeaveStoryEditCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var title, spec, acceptance, epic, owner, reason string
+	var title, primaryGoal, spec, acceptance, epic, owner, reason string
 	cmd := &cobra.Command{
 		Use:   "edit <sprint>",
-		Short: "Correct a sprint's title, spec, acceptance, epic or owner — every change on the record",
+		Short: "Correct a sprint's title, primary goal, spec, acceptance, epic or owner — every change on the record",
 		Long: `edit changes a sprint card's text after creation.
 
 Every field change is appended to the sprint thread as "field: old → new". That
@@ -61,8 +61,8 @@ conductor lease; use sprint take.`,
 			if err != nil {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			if title == "" && spec == "" && acceptance == "" && epic == "" && owner == "" {
-				return fmt.Errorf("nothing to change: pass at least one of --title --spec --acceptance --epic --owner")
+			if title == "" && primaryGoal == "" && spec == "" && acceptance == "" && epic == "" && owner == "" {
+				return fmt.Errorf("nothing to change: pass at least one of --title --primary-goal --spec --acceptance --epic --owner")
 			}
 			expectedOwner := ""
 			mutate := func() error {
@@ -77,6 +77,10 @@ conductor lease; use sprint take.`,
 					if title != "" && title != s.Title {
 						record("title", s.Title, title)
 						s.Title = title
+					}
+					if primaryGoal != "" && primaryGoal != s.PrimaryGoal {
+						record("primary goal", s.PrimaryGoal, primaryGoal)
+						s.PrimaryGoal = strings.TrimSpace(primaryGoal)
 					}
 					if spec != "" && spec != s.SpecRef {
 						record("spec", s.SpecRef, spec)
@@ -151,6 +155,7 @@ conductor lease; use sprint take.`,
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
+	cmd.Flags().StringVar(&primaryGoal, "primary-goal", "", "new one-sentence primary outcome")
 	cmd.Flags().StringVar(&spec, "spec", "", "new spec/handoff doc reference")
 	cmd.Flags().StringVar(&acceptance, "acceptance", "", "new acceptance / done criteria")
 	cmd.Flags().StringVar(&epic, "epic", "", "new epic grouping label")

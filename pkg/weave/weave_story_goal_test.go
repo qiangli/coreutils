@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	todopkg "github.com/qiangli/coreutils/pkg/todo"
 )
@@ -58,13 +59,22 @@ func TestSprintGoalCompletionFollowsStoryClosureAndReopen(t *testing.T) {
 		t.Fatal("open story checked the goal")
 	}
 	st := todopkg.RepoStore(root)
-	if _, err := todopkg.SetStatus(st, id, todopkg.StatusDone); err != nil {
+	it, err := todopkg.ResolveRef(st, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.Status = todopkg.StatusDone
+	now := time.Now().UTC()
+	it.Closed = &now
+	if _, err := st.Save(it); err != nil {
 		t.Fatal(err)
 	}
 	if !sprintGoalDone(g) {
 		t.Fatal("closed story did not check the goal")
 	}
-	if _, err := todopkg.SetStatus(st, id, todopkg.StatusTodo); err != nil {
+	it.Status = todopkg.StatusTodo
+	it.Closed = nil
+	if _, err := st.Save(it); err != nil {
 		t.Fatal(err)
 	}
 	if sprintGoalDone(g) {
