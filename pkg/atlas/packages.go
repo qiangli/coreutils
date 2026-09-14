@@ -146,6 +146,11 @@ var packages = map[string]Package{
 	"herald":     cmdPkg("herald"),
 	"judge":      cmdPkg("judge"),
 	"kb":         cmdPkg("kb"),
+	"ref": libPkg("define", "the ONE grammar for naming anything bashy can address — `<kind>:<id>`, "+
+		"`urn:dhnt:<kind>:<id>`, the closed 15-kind vocabulary, the node every store's resolver returns. "+
+		"Stdlib-only leaf by test, because pkg/kb already reaches fleet/bus/principal and the shared type "+
+		"had to sit below all of them. Its verb is `define <ref>` (pkg/lexicon reads the registry the "+
+		"shell fills); kb's prose parser consumes the vocabulary. Sprint 168, docs/uniform-ref-addressing.md."),
 	"recall": libPkg("kb", "the cross-ring read surface — 'what is known about X' across kb pages AND craft "+
 		"capabilities, one envelope, per-ring caps, never composing. It owned the top-level verb `bashy recall` "+
 		"until 2026-08-05; it is now `bashy kb recall`, because four days of telemetry caught the only agent that "+
