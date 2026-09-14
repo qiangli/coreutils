@@ -220,6 +220,13 @@ left nil is not an empty store). --list-kinds prints the vocabulary.`,
 		// Still NO subcommands, and that is unrelated to arity: the argument is
 		// an arbitrary token either way.
 		Args: cobra.MaximumNArgs(1),
+		// A ref that names nothing is an ANSWER (exit 1 with the reason), not a
+		// usage mistake: printing the flag table under it buries the one line
+		// the caller needs, and the embedding shell already prints the error
+		// once. Usage still shows for a real arity error via the explicit
+		// message below.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 && !listKinds {
 				return fmt.Errorf("define needs exactly one term — the word to look up " +
