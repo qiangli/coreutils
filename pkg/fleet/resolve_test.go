@@ -18,6 +18,12 @@ func refCatalog(t *testing.T) *ref.Registry {
 	root := t.TempDir()
 	t.Setenv("BASHY_HOME", root)
 	t.Setenv("BASHY_SKILLS_DIR", "")
+	// WithRoot pins the local store but not the read-only shared rings; an
+	// ambient $BASHY_*_PATH (a weave harness exports the umbrella fleet)
+	// would merge foreign entries into the catalog under test.
+	for _, env := range []string{"BASHY_TOOLS_PATH", "BASHY_MODELS_PATH", "BASHY_AGENTS_PATH", "BASHY_PEOPLE_PATH", "BASHY_HOSTS_PATH"} {
+		t.Setenv(env, "")
+	}
 
 	write := func(rel, body string) {
 		t.Helper()

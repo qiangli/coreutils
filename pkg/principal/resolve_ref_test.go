@@ -18,6 +18,12 @@ func refTestResolver(t *testing.T) (*Resolver, string) {
 	t.Helper()
 	root := t.TempDir()
 	t.Setenv("BASHY_HOME", root)
+	// WithRoot pins the local store but not the read-only shared rings; an
+	// ambient $BASHY_*_PATH (a weave harness exports the umbrella fleet)
+	// would merge foreign entries into the catalog under test.
+	for _, env := range []string{"BASHY_TOOLS_PATH", "BASHY_MODELS_PATH", "BASHY_AGENTS_PATH", "BASHY_PEOPLE_PATH", "BASHY_HOSTS_PATH"} {
+		t.Setenv(env, "")
+	}
 	if err := os.MkdirAll(filepath.Join(root, "people"), 0o755); err != nil {
 		t.Fatal(err)
 	}
