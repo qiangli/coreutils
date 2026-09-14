@@ -3,10 +3,12 @@ id: ab7e1b2880d1
 kind: task
 title: managed-session inbox relay full-scans the bus timeline every second and burns a core (foreman serve observed)
 seq: 127
-status: assigned
+status: done
 created: 2026-09-13T15:59:28.216066Z
 assignee: rabbet
 sprint: 156
+closed: 2026-09-14T07:00:56.038379Z
+closed_by: rabbet
 ---
 
 ORIGINAL REPORT (2026-09-13 15:27–16:00Z, dev box, dhnt checkout): `bashy foreman serve sprint-165-manager` (a foreman-spawned Claude manager session) ran at 66–126% of a core for 30+ min while its child `claude` sat at 2%. The resource-observer posted host CPU pressure 100% / 92% warnings to the sprint #165 seat because of it. The foreman's PTY transcript (~/.bashy/foreman/<id>/log) grew ~590 B/s while the child only drew its TUI spinner (5,600+ cursor show/hide toggles in 31 min). Original hypothesis: per-write cost in the PTY relay (full-buffer re-parse or busy poll on the pty read side).
