@@ -99,11 +99,13 @@ func newRoot(name, short string, list *cobra.Command, rest ...*cobra.Command) *c
 }
 
 const ringFieldHelp = `RING is the source of this selected definition, not where an executable or
-model runs: embedded = compiled baseline; shared = read-only directory from
-BASHY_TOOLS_PATH, BASHY_MODELS_PATH, or BASHY_AGENTS_PATH; cloud = organization
-catalog cached by sync; local = writable host override under BASHY_FLEET_DIR or
-the noun-specific BASHY_*_DIR. Precedence is embedded -> shared -> cloud ->
-local; the last definition of a name wins.`
+model runs: embedded = compiled baseline (the tool launch contracts plus the
+seeded model/agent roster; BASHY_FLEET_SEEDS=off drops the roster, never the
+contracts); shared = read-only directory from BASHY_TOOLS_PATH,
+BASHY_MODELS_PATH, or BASHY_AGENTS_PATH; cloud = organization catalog cached by
+sync; local = writable host override under BASHY_FLEET_DIR or the noun-specific
+BASHY_*_DIR. Precedence is embedded -> shared -> cloud -> local; the last
+definition of a name wins.`
 
 // --- tools --------------------------------------------------------------
 
@@ -618,9 +620,11 @@ func yesNo(b bool) string {
 }
 
 // emptyRingHint tells an operator whose merged ring holds no entries of a
-// noun where they come from, now that bashy ships none: the ring is a rod,
-// not a fish. It is a hint on stderr, never an error — an empty roster is a
-// legitimate state, and the table header above it is the listing.
+// noun where they come from. bashy ships seeds, so the merged ring is empty
+// only when the embedded ring was excluded (a catalog built on a bare
+// baseline FS) — the hint names the rod: add, sync, or a shared ring. It is a
+// hint on stderr, never an error — an empty roster is a legitimate state, and
+// the table header above it is the listing.
 func emptyRingHint(w io.Writer, kind string) {
 	fmt.Fprintf(w, "hint: no %ss in any ring — `bashy %s add NAME`, `bashy %s sync`, or mount a shared ring via $%s\n",
 		kind, kind, kind, nounPathEnv[kind+"s"])

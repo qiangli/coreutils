@@ -19,3 +19,16 @@ Order: (a) umbrella story U4 exports the current 27 models / 39 agents to the op
 Rewrite tests that assumed baseline agents/models (band_test.go "every baseline agent resolves", fleet_test.go, agentlaunch/launch_test.go, pkg/capability, pkg/meet roster tests) to load a testdata/ ring — testdata is not shipped content.
 Decision points to record in the spec: whether hermes/kimi-code/openclaw/cline/gemini/goose contracts (declared-not-measured / detection-only) stay embedded; whether the installed-host smoke (make install then bashy agent list) is expected empty until the overlay is mounted.
 Gate: go test ./pkg/fleet/... ./pkg/agentlaunch/... ./pkg/chat/... ./pkg/meet/... ./pkg/capability/...; bashy chat --agent <overlay agent> works with the overlay mounted; dev host keeps its full fleet after make install (count before/after).
+
+---
+
+**Revised 2026-09-13 (sprint 176, story f29e3c7a5fd7).** The embedded ring ships
+SEEDS again: the tool launch contracts PLUS a default model/agent roster with its
+band pegs. Rod-not-fish stays — it binds the mechanism (no vendor knowledge in Go),
+not the data: a seed is an initial default every higher ring overwrites, and
+`BASHY_FLEET_SEEDS=off` drops the roster (never the contracts) for a host that
+wants only its own catalog. Why: with the roster only in the operator's shell rc,
+every process that did not inherit those exports (headless workers, daemons,
+non-login ssh, fresh hosts, bashy's own `bash -ic` shim) saw three local models,
+and every band-routed picker failed closed. The umbrella `fleet/` overlay is now
+the operator's re-peg layer, not the roster's home.

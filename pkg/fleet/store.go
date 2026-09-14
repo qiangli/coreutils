@@ -63,6 +63,22 @@ func NounDir(root, noun string) string {
 	return filepath.Join(root, noun)
 }
 
+// SeedsEnv is the switch that drops the seeded model + agent roster from the
+// embedded ring. The tool launch contracts are never dropped: they are the
+// mechanism, the roster is data. An org that wants its hosts to see only the
+// catalog it publishes (`sync`) or mounts ($BASHY_*_PATH) sets it to `off`;
+// the test ring sets it so a fixture roster is the whole roster.
+const SeedsEnv = "BASHY_FLEET_SEEDS"
+
+// seedsOff reports whether the seeded roster is switched off for this process.
+func seedsOff() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(SeedsEnv))) {
+	case "off", "none", "0", "false", "no":
+		return true
+	}
+	return false
+}
+
 // sharedDirs returns the read-only shared catalog dirs for a noun.
 func sharedDirs(noun string) []string {
 	env, ok := nounPathEnv[noun]

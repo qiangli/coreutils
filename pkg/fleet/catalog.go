@@ -152,7 +152,10 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 	if base == nil {
 		base = baselineFS
 	}
-	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil {
+	// The seeded roster (models + agents) can be switched off; the tool
+	// launch contracts cannot — see SeedsEnv.
+	seeded := noun == dirTools || !seedsOff()
+	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil && seeded {
 		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
 	}
 	for _, dir := range sharedDirs(noun) {

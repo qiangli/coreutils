@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/spf13/cobra"
 )
 
-// bashy ships no models and no agents. On a host with nothing mounted, the
-// listing is an empty table under its header plus a one-line rod hint on
-// stderr — and exit 0, because an empty roster is a state, not a fault.
+// bashy ships seeds, so "empty" here means a catalog built on a bare baseline
+// FS with nothing mounted above it. In that state the listing is an empty
+// table under its header plus a one-line rod hint on stderr — and exit 0,
+// because an empty roster is a state, not a fault.
 func TestEmptyRingListsHeaderAndHintsWithoutFailing(t *testing.T) {
 	for _, key := range []string{"BASHY_FLEET_DIR", "BASHY_MODELS_PATH", "BASHY_AGENTS_PATH", "BASHY_MODELS_DIR", "BASHY_AGENTS_DIR"} {
 		t.Setenv(key, "")
@@ -21,8 +23,8 @@ func TestEmptyRingListsHeaderAndHintsWithoutFailing(t *testing.T) {
 		cmd    *cobra.Command
 		header string
 	}{
-		{KindModel, NewModelsCmd(WithRoot(root), WithoutCloudOverlay()), "NAME  BAND  KIND"},
-		{KindAgent, NewAgentsCmd(WithRoot(root), WithoutCloudOverlay()), "NAME  NICK  BAND"},
+		{KindModel, NewModelsCmd(WithRoot(root), WithoutCloudOverlay(), WithBaselineFS(fstest.MapFS{})), "NAME  BAND  KIND"},
+		{KindAgent, NewAgentsCmd(WithRoot(root), WithoutCloudOverlay(), WithBaselineFS(fstest.MapFS{})), "NAME  NICK  BAND"},
 	} {
 		var out, errOut bytes.Buffer
 		tc.cmd.SetOut(&out)
