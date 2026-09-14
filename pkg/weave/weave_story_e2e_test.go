@@ -591,3 +591,35 @@ func mustStoryRoot(t *testing.T) string {
 	}
 	return root
 }
+
+// `sprint track --repo --plain` once recorded the literal "<cwd>/--plain" as a
+// tracked store, and there was no way to remove it short of editing the queue.
+// track refuses a root that is not a directory; untrack is track's inverse.
+func TestSprintTrackRefusesAMissingRootAndUntrackRemovesOne(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("WEAVE_CONDUCTOR", "boss")
+	seedLiveAgent(t, "boss")
+
+	root := mustStoryRoot(t)
+	if out, code := runSprint(t, "add", "track hygiene"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	bogus := filepath.Join(root, "--plain")
+	if out, code := runSprint(t, "track", "1", "--repo", bogus); code == 0 || !strings.Contains(out, "--plain") {
+		t.Fatalf("track accepted a non-directory root: exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "track", "1", "--repo", root); code != 0 {
+		t.Fatalf("track exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "untrack", "1", "--repo", bogus); code == 0 {
+		t.Fatalf("untrack removed a root that was never tracked: %s", out)
+	}
+	if out, code := runSprint(t, "untrack", "1", "--repo", root); code != 0 {
+		t.Fatalf("untrack exit=%d: %s", code, out)
+	}
+	if out, code := runSprint(t, "untrack", "1", "--repo", root); code == 0 {
+		t.Fatalf("untrack removed the same root twice: %s", out)
+	}
+}

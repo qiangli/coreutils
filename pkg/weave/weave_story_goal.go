@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -181,7 +182,13 @@ func normalizeStoryRoot(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Clean(abs), nil
+	abs = filepath.Clean(abs)
+	// A root that is not a directory is a mistake, not a store: `--repo --plain`
+	// once recorded "<cwd>/--plain" as a tracked repo.
+	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
+		return "", fmt.Errorf("repo root %q is not an existing directory", abs)
+	}
+	return abs, nil
 }
 
 func sprintStoryRoots(s *weaveStory) []string {
@@ -334,6 +341,49 @@ func newSprintTrackCmd() *cobra.Command {
 			s.StoryRoots = append(s.StoryRoots, root)
 			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", "tracked story repo "+root)
 			return fmt.Sprintf("sprint #%d tracks %s", id, root), nil
+		})
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "repo root (default current git repo)")
+	flags.attach(cmd)
+	return cmd
+}
+
+// newSprintUntrackCmd is the exact inverse of track: drop one root from the
+// sprint's derived story index. The root is matched as recorded, so a root
+// that no longer exists on disk can still be removed.
+func newSprintUntrackCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var repo string
+	cmd := &cobra.Command{Use: "untrack <sprint>", Short: "Remove a repo todo store from the sprint's derived story index", Args: cobra.ExactArgs(1)}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		id, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("sprint must be an integer: %q", args[0])
+		}
+		root := strings.TrimSpace(repo)
+		if root == "" {
+			if root, err = normalizeStoryRoot(""); err != nil {
+				return err
+			}
+		} else if abs, err := filepath.Abs(root); err == nil {
+			root = filepath.Clean(abs)
+		}
+		return runWeaveStoryMutate(cmd, id, "sprint untrack", &flags, func(s *weaveStory) (string, error) {
+			kept := s.StoryRoots[:0]
+			removed := false
+			for _, old := range s.StoryRoots {
+				if old == root {
+					removed = true
+					continue
+				}
+				kept = append(kept, old)
+			}
+			if !removed {
+				return "", fmt.Errorf("sprint #%d does not track %s", id, root)
+			}
+			s.StoryRoots = kept
+			weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", "untracked story repo "+root)
+			return fmt.Sprintf("sprint #%d no longer tracks %s", id, root), nil
 		})
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "repo root (default current git repo)")
