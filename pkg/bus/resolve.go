@@ -34,8 +34,201 @@ package bus
 // happened is the whole point.
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/qiangli/coreutils/pkg/ref"
 	"github.com/qiangli/coreutils/pkg/room"
 )
+
+// RegisterRefs wires message-board posts and host-room bus events into the
+// shared ref registry.
+func RegisterRefs(g *ref.Registry) {
+	g.Register(ref.MB, ref.ResolverFunc(resolveMBRef))
+	g.Register(ref.Bus, ref.ResolverFunc(resolveBusRef))
+}
+
+func resolveMBRef(id string) (ref.Node, error) {
+	seq, err := parsePositiveSeq("mb", id)
+	if err != nil {
+		return ref.Node{}, err
+	}
+	p, ok, err := findPost(seq)
+	if err != nil {
+		return ref.Node{}, err
+	}
+	if !ok {
+		return ref.Node{}, fmt.Errorf("%w: mb:%d", ref.ErrNotFound, seq)
+	}
+	n := ref.NewNode(ref.MB, strconv.FormatInt(p.Seq, 10))
+	n.Title = refFirstLine(p.Body)
+	n.Status = "posted"
+	n.Where = BoardDir()
+	n.Open = "bashy mb show " + strconv.FormatInt(p.Seq, 10)
+	return n, nil
+}
+
+func resolveBusRef(id string) (ref.Node, error) {
+	seq, err := parsePositiveSeq("bus", id)
+	if err != nil {
+		return ref.Node{}, err
+	}
+	e, ok, err := findEvent(seq)
+	if err != nil {
+		return ref.Node{}, err
+	}
+	if !ok {
+		return ref.Node{}, fmt.Errorf("%w: bus:%d", ref.ErrNotFound, seq)
+	}
+	n := ref.NewNode(ref.Bus, strconv.FormatInt(e.Seq, 10))
+	n.Title = eventTitle(e)
+	n.Where = room.Dir()
+	n.Open = "bashy bus watch --json --from " + strconv.FormatInt(e.Seq, 10)
+	return n, nil
+}
+
+func parsePositiveSeq(kind, id string) (int64, error) {
+	seq, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(id, "#")), 10, 64)
+	if err != nil || seq < 1 {
+		return 0, fmt.Errorf("%s: %q is not a positive sequence", kind, id)
+	}
+	return seq, nil
+}
+
+func findPost(seq int64) (Post, bool, error) {
+	posts, err := Posts()
+	if err != nil {
+		return Post{}, false, err
+	}
+	for _, p := range posts {
+		if p.Seq == seq {
+			return p, true, nil
+		}
+	}
+	return findArchivedPost(seq)
+}
+
+func findArchivedPost(seq int64) (Post, bool, error) {
+	paths, err := filepath.Glob(filepath.Join(archiveDir(), "*.jsonl"))
+	if err != nil {
+		return Post{}, false, err
+	}
+	for _, path := range paths {
+		p, ok, err := scanPostFile(path, seq)
+		if err != nil {
+			return Post{}, false, err
+		}
+		if ok {
+			return p, true, nil
+		}
+	}
+	return Post{}, false, nil
+}
+
+func scanPostFile(path string, seq int64) (Post, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Post{}, false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var p Post
+		if json.Unmarshal([]byte(line), &p) != nil {
+			continue
+		}
+		if p.Seq == seq {
+			return p, true, nil
+		}
+	}
+	return Post{}, false, sc.Err()
+}
+
+func findEvent(seq int64) (room.Event, bool, error) {
+	events, err := room.Timeline(0)
+	if err != nil {
+		return room.Event{}, false, err
+	}
+	for _, e := range events {
+		if e.Seq == seq {
+			return e, true, nil
+		}
+	}
+	return findArchivedEvent(seq)
+}
+
+func findArchivedEvent(seq int64) (room.Event, bool, error) {
+	paths, err := filepath.Glob(filepath.Join(room.Dir(), "archive", "*.jsonl"))
+	if err != nil {
+		return room.Event{}, false, err
+	}
+	for _, path := range paths {
+		e, ok, err := scanEventFile(path, seq)
+		if err != nil {
+			return room.Event{}, false, err
+		}
+		if ok {
+			return e, true, nil
+		}
+	}
+	return room.Event{}, false, nil
+}
+
+func scanEventFile(path string, seq int64) (room.Event, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return room.Event{}, false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var e room.Event
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		if e.Seq == seq {
+			return e, true, nil
+		}
+	}
+	return room.Event{}, false, sc.Err()
+}
+
+func eventTitle(e room.Event) string {
+	subject := strings.TrimSpace(e.Topic)
+	if subject == "" {
+		subject = refFirstLine(e.Body)
+	} else if body := refFirstLine(e.Body); body != "" {
+		subject += " - " + body
+	}
+	if subject == "" {
+		return strings.TrimSpace(e.Type)
+	}
+	return strings.TrimSpace(e.Type + " " + subject)
+}
+
+func refFirstLine(s string) string {
+	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
+}
 
 // ResolveFor delivers everything subscriber has not yet been given, into its
 // pending buffer. Returns how many were queued.

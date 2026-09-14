@@ -48,6 +48,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/ref"
 )
 
 // NewMessageBoardCmd returns the top-level `mb` verb.
@@ -121,7 +123,7 @@ through one cursor-safe view.`,
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts and declared concerns are never capped")
 	f.DurationVar(&wait, "wait", 0, "wait up to this duration for a new relevant post")
-	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
+	cmd.AddCommand(newMBSendCmd(), newMBPostCmd(), newMBShowCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd
 }
@@ -263,6 +265,56 @@ func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) erro
 // content, which is what keeps this simple enough to be used — the moment a
 // read could destroy history it would need a permission model, and a permission
 // model is how a messaging feature stops being one.
+// newMBShowCmd is `mb show <seq>`: the single-record read behind an [[mb:N]]
+// citation. Why it exists: a post is citable and resolvable (`bashy define
+// mb:N`) but --history was the only way to read one, and that is the whole
+// board. Why it is ONLY this: a citation INSIDE a post is resolved by define,
+// not here — the board sits below kb and todo in the import graph, so a
+// `--links` here would need a second copy of the link grammar, and a second
+// grammar drifts. Adopts the comms canon: --json means what it means on todo
+// and sprint show; no new meaning for -n or --all.
+func newMBShowCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "show <seq>",
+		Short: "show one message-board post (the record behind an [[mb:N]] citation)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			seq, err := parsePositiveSeq("mb", args[0])
+			if err != nil {
+				return err
+			}
+			p, ok, err := findPost(seq)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("mb: post %d not found", seq)
+			}
+			w := cmd.OutOrStdout()
+			if jsonOut {
+				out := struct {
+					Ref string `json:"ref"`
+					Post
+				}{Ref: ref.Format(ref.MB, fmt.Sprint(p.Seq)), Post: p}
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+			fmt.Fprintf(w, "mb:%d  %s from %s -> %s\n", p.Seq, p.Topic, p.From, p.Audiences())
+			if p.At != "" {
+				fmt.Fprintf(w, "at     %s\n", p.At)
+			}
+			if body := strings.TrimSpace(p.Body); body != "" {
+				fmt.Fprintf(w, "\n%s\n", body)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	return cmd
+}
+
 func newMBSendCmd() *cobra.Command {
 	var topic, as, to, tool, provider, family, version, role string
 	var band int

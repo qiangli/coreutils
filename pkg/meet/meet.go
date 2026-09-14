@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -16,8 +17,10 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/capability"
+	"github.com/qiangli/coreutils/pkg/kb"
 	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/room"
+	"github.com/qiangli/coreutils/pkg/scope"
 	"github.com/spf13/cobra"
 )
 
@@ -1582,7 +1585,7 @@ func newApplyCmd() *cobra.Command {
 }
 
 func newShowCmd() *cobra.Command {
-	var jsonOut bool
+	var jsonOut, links bool
 	cmd := &cobra.Command{
 		Use:   "show <room>|<id>",
 		Short: "show a meeting's roster, per-participant coverage, and artifacts",
@@ -1599,19 +1602,80 @@ func newShowCmd() *cobra.Command {
 			}
 			events, _ := readTranscript(st.ID)
 			w := cmd.OutOrStdout()
+			linkRefs := meetingLinks(events)
 			if jsonOut {
 				enc := json.NewEncoder(w)
 				enc.SetIndent("", "  ")
 				return enc.Encode(map[string]any{
-					"state": st, "coverage": coverage(st, events), "synthesis": loadSynthesis(st.ID),
+					"state": st, "coverage": coverage(st, events), "synthesis": loadSynthesis(st.ID), "links": linkRefs,
 				})
 			}
 			writeShow(w, st, events, loadSynthesis(st.ID))
+			if links {
+				printMeetingLinks(w, linkRefs)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the session, coverage, and synthesis as JSON")
+	cmd.Flags().BoolVar(&links, "links", false, "resolve transcript links at read time against this repo's kb and todo stores")
 	return cmd
+}
+
+type meetLinkRef struct {
+	Ref    string `json:"ref"`
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+func meetingLinks(events []Event) []meetLinkRef {
+	nodes := repoLinkNodes()
+	seen := map[string]bool{}
+	var out []meetLinkRef
+	for _, e := range events {
+		for _, l := range kb.ParseLinks(e.Text) {
+			ref := l.Ref()
+			if seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			if n, ok := kb.ResolveLink(l, nodes); ok {
+				out = append(out, meetLinkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved"})
+				continue
+			}
+			out = append(out, meetLinkRef{Ref: ref, Status: l.Status()})
+		}
+	}
+	return out
+}
+
+func repoLinkNodes() []kb.LinkNode {
+	root, ok := scope.FindGitRoot()
+	if !ok {
+		return nil
+	}
+	var nodes []kb.LinkNode
+	if pages, err := kb.Open(filepath.Join(root, kb.RepoSub)).List(); err == nil {
+		nodes = append(nodes, kb.KBNodes(pages)...)
+	}
+	if todos, err := kb.TodoNodesFromDir(filepath.Join(root, "docs", "todo")); err == nil {
+		nodes = append(nodes, todos...)
+	}
+	return nodes
+}
+
+func printMeetingLinks(w io.Writer, links []meetLinkRef) {
+	fmt.Fprintf(w, "\nlinks (%d)\n", len(links))
+	for _, l := range links {
+		fmt.Fprintf(w, "  -> %s  %s  %s\n", l.Ref, emptyDash(l.Title), l.Status)
+	}
+}
+
+func emptyDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 func newContributionsCmd() *cobra.Command {

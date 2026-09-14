@@ -1,9 +1,16 @@
 package bus
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/ref"
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
@@ -165,6 +172,153 @@ func TestPrependForAgent_PutsMailBeforeThePrompt(t *testing.T) {
 	}
 	if strings.Index(got, "gate is red") > strings.Index(got, "fix the parser") {
 		t.Fatal("mail must come BEFORE the prompt — it is context for the work, not a footnote")
+	}
+}
+
+func TestRegisterRefsMBFound(t *testing.T) {
+	busInTempHome(t)
+	seq, err := PostMessageSeq(Post{From: "tester", Topic: "announce", Body: "first line\nsecond line"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	n, err := g.Resolve("mb:" + strconv.FormatInt(seq, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Ref != "mb:1" || n.Title != "first line" || n.Status != "posted" || n.Where != BoardDir() {
+		t.Fatalf("node = %+v", n)
+	}
+	if n.Open != "bashy mb show 1" {
+		t.Fatalf("open = %q", n.Open)
+	}
+}
+
+func TestRegisterRefsMBNotFound(t *testing.T) {
+	busInTempHome(t)
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	_, err := g.Resolve("mb:404")
+	if !errors.Is(err, ref.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRegisterRefsMBFindsArchivedPost(t *testing.T) {
+	busInTempHome(t)
+	p := Post{SchemaVersion: BoardSchema, Seq: 12, At: "2026-09-14T00:00:00Z", From: "tester", Body: "rotated post"}
+	writeJSONL(t, filepath.Join(BoardDir(), "archive", "2026-09.jsonl"), p)
+
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	n, err := g.Resolve("mb:12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Ref != "mb:12" || n.Title != "rotated post" {
+		t.Fatalf("node = %+v", n)
+	}
+}
+
+func TestRegisterRefsBusFound(t *testing.T) {
+	busInTempHome(t)
+	if err := room.Emit(room.Event{Type: room.EventNotify, Topic: "gate", Body: "green"}); err != nil {
+		t.Fatal(err)
+	}
+
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	n, err := g.Resolve("bus:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Ref != "bus:1" || n.Title != "notify gate - green" || n.Where != room.Dir() {
+		t.Fatalf("node = %+v", n)
+	}
+	if n.Open != "bashy bus watch --json --from 1" {
+		t.Fatalf("open = %q", n.Open)
+	}
+}
+
+func TestRegisterRefsBusNotFound(t *testing.T) {
+	busInTempHome(t)
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	_, err := g.Resolve("bus:404")
+	if !errors.Is(err, ref.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRegisterRefsBusFindsArchivedEvent(t *testing.T) {
+	busInTempHome(t)
+	e := room.Event{Seq: 14, TS: "2026-09-14T00:00:00Z", Type: room.EventNotify, Topic: "archive", Body: "rotated event"}
+	writeJSONL(t, filepath.Join(room.Dir(), "archive", "2026-09.jsonl"), e)
+
+	g := ref.NewRegistry()
+	RegisterRefs(g)
+	n, err := g.Resolve("bus:14")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Ref != "bus:14" || n.Title != "notify archive - rotated event" {
+		t.Fatalf("node = %+v", n)
+	}
+}
+
+// TestMBShowPrintsOnePost: `mb show <seq>` is the single-record read behind an
+// [[mb:N]] citation — the post, its ref, and NOTHING resolved: a citation inside
+// the body is define's job, because the board cannot see kb/todo without a
+// second copy of the link grammar.
+func TestMBShowPrintsOnePost(t *testing.T) {
+	busInTempHome(t)
+	seq, err := PostMessageSeq(Post{From: "tester", Topic: "cite", Body: "read [[kb:missing-page]] then [[meet:room-1]]"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewMessageBoardCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"show", strconv.FormatInt(seq, 10)})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"mb:" + strconv.FormatInt(seq, 10), "read [[kb:missing-page]] then [[meet:room-1]]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mb show missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "dangling") || strings.Contains(got, "external") {
+		t.Fatalf("mb show must not resolve citations (that is define's job):\n%s", got)
+	}
+
+	out.Reset()
+	cmd = NewMessageBoardCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"show", strconv.FormatInt(seq, 10), "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"ref": "mb:`+strconv.FormatInt(seq, 10)+`"`) {
+		t.Fatalf("mb show --json lacks the ref field:\n%s", out.String())
+	}
+}
+
+func writeJSONL(t *testing.T, path string, v any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
