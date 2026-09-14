@@ -15,11 +15,12 @@ const ext = ".yaml"
 
 // Noun directory names, used for both the local store and shared dirs.
 const (
-	dirTools  = "tools"
-	dirModels = "models"
-	dirAgents = "agents"
-	dirPeople = "people"
-	dirHosts  = "hosts"
+	dirTools    = "tools"
+	dirModels   = "models"
+	dirAgents   = "agents"
+	dirPeople   = "people"
+	dirHosts    = "hosts"
+	dirCommands = "commands"
 )
 
 // DefaultRoot is the parent of every noun's local store. $BASHY_FLEET_DIR
@@ -37,20 +38,22 @@ func DefaultRoot() string {
 
 // nounEnv maps a noun to its per-noun directory override.
 var nounEnv = map[string]string{
-	dirTools:  "BASHY_TOOLS_DIR",
-	dirModels: "BASHY_MODELS_DIR",
-	dirAgents: "BASHY_AGENTS_DIR",
-	dirPeople: "BASHY_PEOPLE_DIR",
-	dirHosts:  "BASHY_HOSTS_DIR",
+	dirTools:    "BASHY_TOOLS_DIR",
+	dirModels:   "BASHY_MODELS_DIR",
+	dirAgents:   "BASHY_AGENTS_DIR",
+	dirPeople:   "BASHY_PEOPLE_DIR",
+	dirHosts:    "BASHY_HOSTS_DIR",
+	dirCommands: "BASHY_COMMANDS_DIR",
 }
 
 // nounPathEnv maps a noun to its PATH-list of read-only shared dirs.
 var nounPathEnv = map[string]string{
-	dirTools:  "BASHY_TOOLS_PATH",
-	dirModels: "BASHY_MODELS_PATH",
-	dirAgents: "BASHY_AGENTS_PATH",
-	dirPeople: "BASHY_PEOPLE_PATH",
-	dirHosts:  "BASHY_HOSTS_PATH",
+	dirTools:    "BASHY_TOOLS_PATH",
+	dirModels:   "BASHY_MODELS_PATH",
+	dirAgents:   "BASHY_AGENTS_PATH",
+	dirPeople:   "BASHY_PEOPLE_PATH",
+	dirHosts:    "BASHY_HOSTS_PATH",
+	dirCommands: "BASHY_COMMANDS_PATH",
 }
 
 // NounDir resolves a noun's local store directory.

@@ -15,6 +15,11 @@ const (
 	KindAgent  = "agent"
 	KindPerson = "person"
 	KindHost   = "host"
+	// KindCommand is the registered-command noun (`bashy commands add`): a
+	// host asset whose FACET is an action (docs/bashy-action-model.md). It is
+	// the sixth fleet noun and the only one with no embedded ring — bashy
+	// ships the mechanism, never a catalog of commands.
+	KindCommand = "command"
 )
 
 // Tool kind discriminators. The cloudbox Tool registry is shared between

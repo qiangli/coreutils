@@ -68,6 +68,28 @@ func ResolveURL(ctx context.Context, spec URLSpec) (Tool, error) {
 	}, nil
 }
 
+// ResolveURLPinned is ResolveURL for a caller that already HOLDS the digest —
+// a registered command record, whose reviewed YAML is the trust root the way
+// pins.go is for the compiled-in externals. It touches no network: the
+// template is expanded for the current platform and the asset carries the
+// given sha256, which Ensure then verifies the download against.
+func ResolveURLPinned(spec URLSpec, sha256 string) Tool {
+	goos, goarch := splitPlatform(Platform())
+	if spec.OSAlias != nil {
+		goos = spec.OSAlias(goos)
+	}
+	if spec.ArchAlias != nil {
+		goarch = spec.ArchAlias(goarch)
+	}
+	return Tool{
+		Name:    spec.Name,
+		Version: spec.Version,
+		Assets: map[string]Asset{
+			Platform(): {URL: expandTokens(spec.URLTemplate, spec.Version, goos, goarch), SHA256: strings.ToLower(sha256), Binary: spec.Member},
+		},
+	}
+}
+
 func expandTokens(tmpl, version, goos, goarch string) string {
 	ext := ""
 	if goos == "windows" {

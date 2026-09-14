@@ -172,6 +172,10 @@ func (c *Catalog) claimName(kind, canonical string, aliases []string, force bool
 			if p, ok := c.Person(n); ok {
 				return p.Handle, true
 			}
+		case KindCommand:
+			if r, ok := c.Command(n); ok {
+				return r.Name, true
+			}
 		}
 		return "", false
 	}

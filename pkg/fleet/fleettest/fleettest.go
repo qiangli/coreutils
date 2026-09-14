@@ -52,7 +52,8 @@ func Ring(t testing.TB) string {
 	t.Setenv("BASHY_AGENTS_PATH", filepath.Join(dir, "agents"))
 	root := t.TempDir()
 	t.Setenv("BASHY_FLEET_DIR", root)
-	for _, key := range []string{"BASHY_TOOLS_DIR", "BASHY_MODELS_DIR", "BASHY_AGENTS_DIR", "BASHY_PEOPLE_DIR", "BASHY_HOSTS_DIR"} {
+	t.Setenv("BASHY_COMMANDS_PATH", "")
+	for _, key := range []string{"BASHY_TOOLS_DIR", "BASHY_MODELS_DIR", "BASHY_AGENTS_DIR", "BASHY_PEOPLE_DIR", "BASHY_HOSTS_DIR", "BASHY_COMMANDS_DIR"} {
 		t.Setenv(key, "")
 	}
 	return root

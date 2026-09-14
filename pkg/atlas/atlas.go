@@ -143,6 +143,7 @@ const (
 const (
 	SubclassProvisioner     = "provisioner"
 	SubclassManagedExternal = "managed-external"
+	SubclassRegistered      = "registered" // an operator-registered command (registered.go)
 )
 
 // Origin says WHERE a command came from — the provenance axis. It is
@@ -162,6 +163,12 @@ const (
 	OriginUnix     = "unix"     // other classic Unix tool reimplemented in Go (awk, sed, jq, tar, …)
 	OriginExternal = "external" // bin-managed: binmgr CLI, toolchain provisioner, pinned POSIX provider — exec'd, never linked
 	OriginBashy    = "bashy"    // the YOKE commands: bashy's agentic third substrate (Classic · Bash++ · Yoke) — built for agentic tools; many need no model (deterministic rungs: tz, clip, tokens)
+	// OriginRegistered marks a command the OPERATOR added with `bashy commands
+	// add` (or an org published through a shared ring) — the one origin that is
+	// never a table entry. Its atlas record is derived from the record's data
+	// by RegisteredEntry, the same way a declarative-registry CLI's is by
+	// RegistryEntry. See registered.go.
+	OriginRegistered = "registered"
 )
 
 // Entry is one command's atlas record. The classical class (builtin /
@@ -298,7 +305,7 @@ func Effects() []string {
 // the shell first, then the userland by how far it is from the standard,
 // then what bashy exec's, then what bashy invented.
 func Origins() []string {
-	return []string{OriginBash, OriginGNU, OriginUnix, OriginExternal, OriginBashy}
+	return []string{OriginBash, OriginGNU, OriginUnix, OriginExternal, OriginBashy, OriginRegistered}
 }
 
 // OriginLabel is the human/agent-readable name of an origin, for listings.
@@ -321,6 +328,8 @@ func OriginLabel(origin string) string {
 		return "bin-managed external"
 	case OriginBashy:
 		return "yoke — added by bashy"
+	case OriginRegistered:
+		return "registered — added with bashy commands add"
 	}
 	return origin
 }
@@ -1095,7 +1104,11 @@ func init() {
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
 
 	// platform
-	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	// commands is the lister AND, since Sprint 179, the CRUD front door of the
+	// registered-command ring (`commands add|set|rm|…`): rm deletes a local
+	// entry outright (destructive, like the other registry nouns), add/set
+	// write it, and `verify` on a download: record provisions over the net.
+	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapDestructive, CapJSON}})
 	// inspect: the one diagnostics verb whose SUBJECT IS BASHY ITSELF. `doctor`
 	// answers about the host, `why` about the process tree, `otel` about a
 	// trace, `audit` about one store; inspect is the resource map (where every
@@ -1267,6 +1280,8 @@ func init() {
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
 		"tool", "model", "person", "kb", "skill", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
+		// commands add/set write the registered-command ring (Sprint 179).
+		"commands",
 		"rclone", "meet", "mb", "messages", "ping", "inbox", "bus", "notify",
 		// app WRITES through its terminal (a real shell) and its session key.
 		"app",
@@ -1282,6 +1297,8 @@ func init() {
 		// The registry nouns' `rm` deletes a local-store entry outright; the
 		// four rows declare it alike (see the tool/model/agent entries).
 		"tool", "model", "agent", "skill",
+		// commands rm deletes a registered command's local entry the same way.
+		"commands",
 	)
 
 	// net — opens a network connection (the egress / exfiltration surface).
@@ -1293,6 +1310,8 @@ func init() {
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secret",
 		"otel", "tessaro", "login", "app",
+		// commands verify on a download: record provisions the pinned binary.
+		"commands",
 	)
 
 	// exec — spawns a process bashy no longer governs (the coreutils userland,

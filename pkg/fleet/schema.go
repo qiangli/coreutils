@@ -26,6 +26,8 @@ func nounType(noun string) reflect.Type {
 		return reflect.TypeOf(Model{})
 	case KindAgent:
 		return reflect.TypeOf(Agent{})
+	case KindCommand:
+		return reflect.TypeOf(Command{})
 	default:
 		return nil
 	}

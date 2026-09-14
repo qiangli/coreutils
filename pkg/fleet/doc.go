@@ -11,6 +11,13 @@
 // always names both. Roles are an orthogonal axis and do not belong to
 // the binding.
 //
+// The same store also carries people, hosts and — since Sprint 179 —
+// registered COMMANDS (`bashy commands add`, commands.go). fleet is the
+// host ASSET store; a registered command is a host asset whose facet is an
+// action (see docs/bashy-action-model.md in the umbrella), and it is the one
+// noun with no embedded ring: bashy ships the mechanism, never a catalog of
+// commands.
+//
 // # Nicknames
 //
 // An agent's identity is its tool:model binding; its names are aliases.

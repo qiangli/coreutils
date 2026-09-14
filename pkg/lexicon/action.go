@@ -70,6 +70,10 @@ const (
 	ExecutorVerb      = "verb"
 	ExecutorDhnt      = "dhnt"
 	ExecutorDag       = "dag"
+	// ExecutorRegistered runs a command the operator registered with `bashy
+	// commands add` (fleet.Command): an exec'd program, a provisioned release
+	// binary, or an inline script body re-entering bashy.
+	ExecutorRegistered = "registered"
 
 	EnvelopeRun    = "bashy-run-v1"
 	EnvelopeAttest = "attest-jsonl"

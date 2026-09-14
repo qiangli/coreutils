@@ -63,3 +63,19 @@ func TestResolveURL_RequiresFields(t *testing.T) {
 		t.Fatal("expected error for missing version/template")
 	}
 }
+
+// A pinned resolution never reaches the network: the record's digest is the
+// trust root, and the URL is expanded for this platform verbatim.
+func TestResolveURLPinnedIsOffline(t *testing.T) {
+	tool := ResolveURLPinned(URLSpec{Name: "x", Version: "v1", URLTemplate: "http://127.0.0.1:1/{version}/x-{goos}-{goarch}{ext}", Member: "m"}, "ABCD")
+	a, ok := tool.Assets[Platform()]
+	if !ok {
+		t.Fatalf("no asset for %s", Platform())
+	}
+	if a.SHA256 != "abcd" || a.Binary != "m" || !strings.Contains(a.URL, "/v1/x-") {
+		t.Errorf("asset = %+v", a)
+	}
+	if tool.Name != "x" || tool.Version != "v1" {
+		t.Errorf("tool = %+v", tool)
+	}
+}

@@ -296,3 +296,36 @@ func contains(xs []string, want string) bool {
 	}
 	return false
 }
+
+// A registered command (`bashy commands add`) is projected like a shipped
+// verb: one concept, aliases as terms, and an exact/deterministic command
+// facet whose effects are the AUTHOR's declaration and whose executor says
+// it came from the ring.
+func TestAction_RegisteredCommandFacet(t *testing.T) {
+	isolateStores(t)
+	fleettest.Ring(t)
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root), fleet.WithoutCloudOverlay())
+	if err := cat.SaveCommand(fleet.Command{
+		Name: "gl", Aliases: []string{"glog"}, Synopsis: "compact log",
+		Script: "git log --oneline", Effects: []string{atlas.EffRead, atlas.EffExec},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := Build(cat, nil, "test-host", Overlay{})
+	got := facetOf(t, s, "verb:gl")
+	want := &ActionFacet{
+		Kind: ActionCommand, Identity: "verb:gl",
+		Contract: ContractNone, Latitude: LatitudeExact, Authority: AuthorityDeterministic,
+		EffectsDeclared: atlas.ProjectEffects([]string{atlas.EffExec, atlas.EffRead}),
+		AtlasEffects:    []string{atlas.EffExec, atlas.EffRead},
+		Executor:        ExecutorRegistered, Envelope: EnvelopeRun, Scope: ScopeGeneric,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("\n got %+v\nwant %+v", got, want)
+	}
+	c, ok := s.Resolve("glog")
+	if !ok || c.ID != "verb:gl" || c.Source != "commands-registry" {
+		t.Errorf("alias glog resolved to %+v", c)
+	}
+}

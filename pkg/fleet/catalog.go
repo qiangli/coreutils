@@ -23,7 +23,22 @@ type Config struct {
 
 	liveProbe     LiveProbe
 	contextCloner ContextCloner
+	reservedName  ReservedName
+	commandProbe  CommandProbe
 }
+
+// ReservedName reports whether a command name is already taken by something
+// the embedding shell ships — a builtin, an applet, a front-door verb, a
+// managed external, an alias, a skill — and by what. INJECTED for the usual
+// reason: only the binary knows its whole command surface, and this package
+// must not import it. Without it `commands add` checks only the ring itself.
+type ReservedName func(name string) (holder string, taken bool)
+
+// CommandProbe is an extra per-record check the binary can wire into
+// `commands verify` — a script body's syntax, say — beyond what this package
+// can see. Reports !ok with a reason; a nil probe skips nothing silently
+// (verify says the probe is unwired).
+type CommandProbe func(rec Command) (reason string, ok bool)
 
 // LiveProbe launches an agent on a trivial prompt and reports whether it can
 // actually speak.
@@ -57,6 +72,16 @@ type Option func(*Config)
 // agent's context. Without it, cloning still mints the record and says plainly
 // that the clone starts fresh.
 func WithContextCloner(f ContextCloner) Option { return func(c *Config) { c.contextCloner = f } }
+
+// WithReservedNames supplies the embedding shell's command surface so
+// `commands add`/`set` refuse a name that already resolves to something bashy
+// ships, and `commands list`/`verify` report a ring entry a newer bashy has
+// since shadowed.
+func WithReservedNames(f ReservedName) Option { return func(c *Config) { c.reservedName = f } }
+
+// WithCommandProbe supplies an extra verification step for registered
+// commands (see CommandProbe).
+func WithCommandProbe(p CommandProbe) Option { return func(c *Config) { c.commandProbe = p } }
 
 // WithLiveProbe supplies the launcher `agents verify --live` uses.
 //
@@ -154,7 +179,9 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 	}
 	// The seeded roster (models + agents) can be switched off; the tool
 	// launch contracts cannot — see SeedsEnv.
-	seeded := noun == dirTools || !seedsOff()
+	// Registered commands have NO embedded ring by design (rod, not fish):
+	// bashy ships the mechanism and never a catalog of commands.
+	seeded := (noun == dirTools || !seedsOff()) && noun != dirCommands
 	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil && seeded {
 		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
 	}

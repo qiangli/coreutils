@@ -269,6 +269,33 @@ func Build(cat *fleet.Catalog, synopses map[string]string, host string, ov Overl
 		}
 	}
 
+	// Registered commands — the operator's own ring (`bashy commands add`),
+	// projected exactly like a shipped verb: a concept per record, aliases as
+	// extra terms, the action facet derived from the record the way the atlas
+	// derives it (atlas.RegisteredEntry). Host-specific, like the fleet half.
+	if cat != nil {
+		cmds, _ := cat.Commands()
+		for _, r := range cmds {
+			e := atlas.RegisteredEntry(r.AtlasSpec())
+			def := r.Synopsis
+			if def == "" {
+				def = fmt.Sprintf("registered command (%s)", r.Mode())
+			}
+			s.add(Concept{
+				ID:         "verb:" + r.Name,
+				Kind:       KindVerb,
+				PrefLabel:  r.Name,
+				AltLabels:  r.Aliases,
+				Definition: def + " (registered — bashy commands add)",
+				ScopeNote:  DefaultScopeNote,
+				Use:        r.Name,
+				Source:     "commands-registry",
+				Host:       host,
+				Action:     commandFacet(r.Name, e, ExecutorRegistered),
+			}, ov)
+		}
+	}
+
 	// Sorting REORDERS the slice, which invalidates every index in byTerm. Rebuild
 	// the map afterwards. (The pointer version of this code had the same hazard and
 	// hid it: sort would have left the pointers aimed at the wrong concepts.)

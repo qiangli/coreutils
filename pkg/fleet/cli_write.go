@@ -704,6 +704,11 @@ func allNames(c *Catalog, noun string) []string {
 		for _, a := range agents {
 			out = append(out, a.Name)
 		}
+	case KindCommand:
+		cmds, _ := c.Commands()
+		for _, r := range cmds {
+			out = append(out, r.Name)
+		}
 	}
 	return out
 }
