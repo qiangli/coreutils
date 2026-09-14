@@ -268,7 +268,11 @@ func TestRegisterRefsBusFindsArchivedEvent(t *testing.T) {
 	}
 }
 
-func TestMBShowPrintsOnePostWithLinks(t *testing.T) {
+// TestMBShowPrintsOnePost: `mb show <seq>` is the single-record read behind an
+// [[mb:N]] citation — the post, its ref, and NOTHING resolved: a citation inside
+// the body is define's job, because the board cannot see kb/todo without a
+// second copy of the link grammar.
+func TestMBShowPrintsOnePost(t *testing.T) {
 	busInTempHome(t)
 	seq, err := PostMessageSeq(Post{From: "tester", Topic: "cite", Body: "read [[kb:missing-page]] then [[meet:room-1]]"})
 	if err != nil {
@@ -278,15 +282,29 @@ func TestMBShowPrintsOnePostWithLinks(t *testing.T) {
 	cmd := NewMessageBoardCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"show", strconv.FormatInt(seq, 10), "--links"})
+	cmd.SetArgs([]string{"show", strconv.FormatInt(seq, 10)})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"read [[kb:missing-page]]", "kb:missing-page", "dangling", "meet:room-1", "external"} {
+	for _, want := range []string{"mb:" + strconv.FormatInt(seq, 10), "read [[kb:missing-page]] then [[meet:room-1]]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("mb show missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "dangling") || strings.Contains(got, "external") {
+		t.Fatalf("mb show must not resolve citations (that is define's job):\n%s", got)
+	}
+
+	out.Reset()
+	cmd = NewMessageBoardCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"show", strconv.FormatInt(seq, 10), "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"ref": "mb:`+strconv.FormatInt(seq, 10)+`"`) {
+		t.Fatalf("mb show --json lacks the ref field:\n%s", out.String())
 	}
 }
 
