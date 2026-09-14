@@ -37,8 +37,13 @@ type OpenRelation struct {
 // DoctorReport is the result of a doctor pass. Empty slices (not nil) so the
 // JSON shape is stable whether or not a category fired.
 type DoctorReport struct {
-	Ring               string         `json:"ring,omitempty"`
-	Dangling           []DanglingLink `json:"dangling"`
+	Ring     string         `json:"ring,omitempty"`
+	Dangling []DanglingLink `json:"dangling"`
+	// UnknownKind is a body link whose scheme is not in the ref vocabulary
+	// ([[note: x]], [[urn:dhnt:issue:1]]). Before the vocabulary existed these
+	// were misfiled as dangling kb slugs; they are their own class now so the
+	// row MOVES rather than vanishes when the parser stops guessing.
+	UnknownKind        []DanglingLink `json:"unknown_kind"`
 	Orphans            []string       `json:"orphans"`
 	NearDuplicates     []DupPair      `json:"near_duplicates"`
 	MissingForm        []string       `json:"missing_form"`
@@ -48,7 +53,7 @@ type DoctorReport struct {
 
 // Clean reports whether the pass found nothing.
 func (r DoctorReport) Clean() bool {
-	return len(r.Dangling) == 0 && len(r.Orphans) == 0 && len(r.NearDuplicates) == 0 &&
+	return len(r.Dangling) == 0 && len(r.UnknownKind) == 0 && len(r.Orphans) == 0 && len(r.NearDuplicates) == 0 &&
 		len(r.MissingForm) == 0 && len(r.MissingDescription) == 0 &&
 		len(r.OpenRelations) == 0
 }
@@ -64,6 +69,7 @@ func (r DoctorReport) Clean() bool {
 func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) DoctorReport {
 	r := DoctorReport{
 		Dangling:           []DanglingLink{},
+		UnknownKind:        []DanglingLink{},
 		Orphans:            []string{},
 		NearDuplicates:     []DupPair{},
 		MissingForm:        []string{},
@@ -73,10 +79,13 @@ func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) D
 	kbNodes := KBNodes(pages)
 	allNodes := append(append([]LinkNode{}, kbNodes...), todoNodes...)
 
-	// Dangling links across every record (kb and todo).
+	// Dangling and unknown-kind links across every record (kb and todo).
 	for _, n := range allNodes {
 		for _, l := range ParseLinks(n.Body) {
-			if danglingLink(l, allNodes, todoKnown) {
+			switch {
+			case l.Kind == LinkUnknown:
+				r.UnknownKind = append(r.UnknownKind, DanglingLink{From: n.Ref(), Target: l.Target, Raw: l.Raw})
+			case danglingLink(l, allNodes, todoKnown):
 				r.Dangling = append(r.Dangling, DanglingLink{From: n.Ref(), Target: l.Ref(), Raw: l.Raw})
 			}
 		}
@@ -129,8 +138,8 @@ func DoctorRelations(relations []Relation) []OpenRelation {
 
 // danglingLink reports whether link l resolves to nothing within a namespace we
 // can authoritatively enumerate. kb is always enumerable; todo only when
-// todoKnown; sprint never (kb holds no sprint records, so a sprint link is
-// external, not broken).
+// todoKnown; every other vocabulary kind never (kb holds no sprint/run/meet/…
+// records, so such a link is external, not broken — its own store answers).
 func danglingLink(l Link, nodes []LinkNode, todoKnown bool) bool {
 	switch l.Kind {
 	case LinkKB:

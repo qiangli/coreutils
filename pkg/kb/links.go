@@ -1,12 +1,14 @@
 package kb
 
 import (
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/ref"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,26 +17,38 @@ import (
 // consumed, and the body is never rewritten to "materialise" a link (that is
 // resolve-at-consumption — docs/kb-self-organization.md). This file is the pure
 // parser + resolver both `kb backlinks`/`kb doctor` and `bashy todo show
-// --links` call; it reads scope/bus/git and stdlib only, so pkg/kb stays an
-// import leaf and cannot reach pkg/issue or pkg/todo.
+// --links` call. pkg/kb is an import LEAF with respect to its consumers (todo,
+// weave, chat, recall, lexicon, …): it parses EVERY kind in the ref vocabulary
+// but resolves only kb + todo nodes, and TestKBIsALeaf pins that none of its
+// consumers can ever be imported here.
 //
-// The four link spellings, and the two relative-markdown forms:
+// The link grammar is pkg/ref's — one `<kind>:<id>` for everything bashy can
+// name — read through the prose spellings:
 //
-//	[[slug]]        a bare kb slug
-//	[[kb:slug]]     an explicit kb slug
-//	[[todo:<id>]]   a todo/issue id (matched by id or unique prefix, git-style)
-//	[[sprint:<n>]]  a sprint card (classified, never resolved here — kb cannot
-//	                see the sprint store while staying a leaf)
+//	[[slug]]                a bare kb slug
+//	[[<kind>:<id>]]         any ref: kb:slug, todo:<id> (id or unique prefix,
+//	                        git-style), sprint:<n>, run:…, meet:…, agent:… —
+//	                        kb resolves kb + todo; every other kind is classified
+//	                        and left for its own store (`external` at this layer)
+//	[[urn:dhnt:<kind>:<id>]] the fully-qualified spelling, identical to the above
+//	[[<other>:<x>]]         an unknown scheme → LinkUnknown, reported, never
+//	                        dropped and never mistaken for a slug
 //	[text](pages/x.md)        → kb slug x
 //	[text](../todo/<id>-….md) → todo id
 
-// LinkKind is the namespace a parsed link points into.
-type LinkKind string
+// LinkKind is the namespace a parsed link points into. It IS the ref
+// vocabulary (pkg/ref): the constants below are the three kinds kb has always
+// named, kept for the callers that switch on them; every other vocabulary kind
+// comes through as its ref.Kind value.
+type LinkKind = ref.Kind
 
 const (
-	LinkKB     LinkKind = "kb"
-	LinkTodo   LinkKind = "todo"
-	LinkSprint LinkKind = "sprint"
+	LinkKB     LinkKind = ref.KB
+	LinkTodo   LinkKind = ref.Todo
+	LinkSprint LinkKind = ref.Sprint
+	// LinkUnknown is a `<scheme>:<rest>` whose scheme is not in the vocabulary.
+	// Target keeps the whole inner text so a report can show what was written.
+	LinkUnknown LinkKind = ref.Unknown
 )
 
 // Link is one reference parsed out of a record body.
@@ -46,6 +60,25 @@ type Link struct {
 
 // Ref is the canonical address a link resolves to, e.g. "kb:never-pkill".
 func (l Link) Ref() string { return string(l.Kind) + ":" + l.Target }
+
+// Local reports whether kb itself can resolve this link's kind (kb and todo).
+// Every other vocabulary kind is EXTERNAL at this layer — its own store
+// resolves it — and LinkUnknown is neither.
+func (l Link) Local() bool { return l.Kind == LinkKB || l.Kind == LinkTodo }
+
+// Status classifies a link a consumer could not resolve against its nodes:
+// "external" for a vocabulary kind kb does not hold, "unknown" for a scheme
+// outside the vocabulary, "dangling" for a local kind that resolved to nothing.
+// The one word every --links renderer prints, so they cannot drift apart.
+func (l Link) Status() string {
+	switch {
+	case l.Kind == LinkUnknown:
+		return "unknown"
+	case !l.Local():
+		return "external"
+	}
+	return "dangling"
+}
 
 // LinkNode is a record in the link graph — a kb page or a todo/issue — viewed as
 // both a potential link source (Body) and a potential target (Ref). The page
@@ -115,26 +148,29 @@ func ParseLinks(body string) []Link {
 	return out
 }
 
-// classifyWiki turns the inside of a [[…]] into a Link. A known scheme prefix
-// (kb:/todo:/sprint:) selects the namespace; a bare token is a kb slug.
+// classifyWiki turns the inside of a [[…]] into a Link. A bare token is a kb
+// slug (slugs are [a-z0-9-], so a colon is always a scheme attempt); anything
+// with a colon goes through the one grammar. A known kind selects the
+// namespace; an unknown scheme is LinkUnknown — classified so doctor can report
+// it, never filed as a slug and never dropped. An empty id ([[kb:]]) is not a
+// link.
 func classifyWiki(inner, raw string) (Link, bool) {
 	inner = strings.TrimSpace(inner)
 	if inner == "" {
 		return Link{}, false
 	}
-	if scheme, rest, ok := strings.Cut(inner, ":"); ok {
-		rest = strings.TrimSpace(rest)
-		switch scheme {
-		case "kb":
-			return Link{Kind: LinkKB, Target: rest, Raw: raw}, rest != ""
-		case "todo":
-			return Link{Kind: LinkTodo, Target: strings.TrimPrefix(rest, "#"), Raw: raw}, rest != ""
-		case "sprint":
-			return Link{Kind: LinkSprint, Target: strings.TrimPrefix(rest, "#"), Raw: raw}, rest != ""
-		}
+	if !strings.Contains(inner, ":") {
+		return Link{Kind: LinkKB, Target: inner, Raw: raw}, true
 	}
-	// A bare [[token]] is a kb slug.
-	return Link{Kind: LinkKB, Target: inner, Raw: raw}, true
+	r, err := ref.Parse(inner)
+	switch {
+	case err == nil:
+		return Link{Kind: r.Kind, Target: r.ID, Raw: raw}, true
+	case errors.Is(err, ref.ErrEmptyID):
+		return Link{}, false
+	default: // ErrNotRef (unknown scheme) or ErrUnknownKind (urn:dhnt:<unknown>)
+		return Link{Kind: LinkUnknown, Target: inner, Raw: raw}, true
+	}
 }
 
 // classifyRel turns a relative markdown target into a Link. Only repo-relative
@@ -166,8 +202,9 @@ func classifyRel(raw string) (Link, bool) {
 }
 
 // matches reports whether link l points at node n. kb matches by exact slug;
-// todo matches by exact id or a git-style unique prefix; sprint never matches a
-// node (kb holds no sprint records).
+// todo matches by exact id or a git-style unique prefix; every other kind never
+// matches a node here (kb holds no sprint/run/meet/… records — their stores
+// resolve them, and `bashy define` is where all of them meet).
 func (l Link) matches(n LinkNode) bool {
 	switch l.Kind {
 	case LinkKB:
@@ -179,7 +216,7 @@ func (l Link) matches(n LinkNode) bool {
 }
 
 // ResolveLink returns the node link l points at within nodes, or (zero, false)
-// when it is dangling or external (sprint).
+// when it is dangling or external (any kind kb does not hold).
 func ResolveLink(l Link, nodes []LinkNode) (LinkNode, bool) {
 	for _, n := range nodes {
 		if l.matches(n) {

@@ -30,6 +30,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/ref"
 	"github.com/qiangli/coreutils/pkg/scope"
 )
 
@@ -957,9 +958,9 @@ func newDoctorCmd(dir, ring *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Flag link-graph and hygiene problems (never fixes — repair with update/supersede)",
-		Long: `Report, and only report: dangling links, orphan pages (no inbound, no
-outbound, not validated), near-duplicate pairs, and records missing a form or
-description. doctor FLAGS, it is never 'kb fix' — nothing here rewrites a body,
+		Long: `Report, and only report: dangling links, links whose <kind>: is not in
+the ref vocabulary, orphan pages (no inbound, no outbound, not validated),
+near-duplicate pairs, and records missing a form or description. doctor FLAGS, it is never 'kb fix' — nothing here rewrites a body,
 so a reported page is left byte-identical on disk. Scope it with --ring.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
@@ -997,6 +998,12 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				fmt.Fprintf(out, "dangling links (%d):\n", len(rep.Dangling))
 				for _, d := range rep.Dangling {
 					fmt.Fprintf(out, "  %s -> %s  %s\n", d.From, d.Target, d.Raw)
+				}
+			}
+			if len(rep.UnknownKind) > 0 {
+				fmt.Fprintf(out, "unknown-kind links (%d; kinds: %s):\n", len(rep.UnknownKind), strings.Join(ref.KindNames(), " "))
+				for _, d := range rep.UnknownKind {
+					fmt.Fprintf(out, "  %s -> [[%s]]  %s\n", d.From, d.Target, d.Raw)
 				}
 			}
 			if len(rep.Orphans) > 0 {

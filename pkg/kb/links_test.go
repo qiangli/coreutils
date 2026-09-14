@@ -2,10 +2,14 @@ package kb
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/ref"
 )
 
 func TestParseLinks(t *testing.T) {
@@ -35,6 +39,90 @@ Ignore [external](https://example.com/x.md) and [anchor](#section) and [non-md](
 		if l.Kind != wk {
 			t.Errorf("%q: kind %q, want %q", l.Ref(), l.Kind, wk)
 		}
+	}
+}
+
+// TestParseLinksEveryKind is the S168.1 gate: the prose parser yields EVERY
+// kind in the ref vocabulary, in both spellings, and an unknown scheme is
+// classified (LinkUnknown) rather than dropped or filed as a kb slug.
+func TestParseLinksEveryKind(t *testing.T) {
+	var b strings.Builder
+	for _, k := range ref.Kinds() {
+		fmt.Fprintf(&b, "see [[%s:x-%s]] and [[urn:dhnt:%s:y-%s]]\n", k, k, k, k)
+	}
+	got := ParseLinks(b.String())
+	byRef := map[string]Link{}
+	for _, l := range got {
+		byRef[l.Ref()] = l
+	}
+	for _, k := range ref.Kinds() {
+		for _, id := range []string{"x-" + string(k), "y-" + string(k)} {
+			l, ok := byRef[string(k)+":"+id]
+			if !ok {
+				t.Errorf("kind %q: link %s:%s not parsed (have %v)", k, k, id, keys(byRef))
+				continue
+			}
+			if l.Kind != k || l.Target != id {
+				t.Errorf("kind %q: got %+v", k, l)
+			}
+		}
+	}
+	if len(got) != 2*len(ref.Kinds()) {
+		t.Errorf("parsed %d links, want %d", len(got), 2*len(ref.Kinds()))
+	}
+
+	// urn:dhnt: is a SPELLING, not a different link: the two dedupe to one.
+	same := ParseLinks("[[kb:one]] and [[urn:dhnt:kb:one]]")
+	if len(same) != 1 || same[0].Ref() != "kb:one" {
+		t.Errorf("urn spelling did not collapse: %+v", same)
+	}
+
+	// Unknown schemes: classified, never dropped, never a slug. A tool:model
+	// binding written in brackets is the realistic case.
+	unk := ParseLinks("[[note: remember this]] [[codex:gpt5.6-sol]] [[urn:dhnt:issue:12]] [[kb:]]")
+	if len(unk) != 3 {
+		t.Fatalf("unknown schemes: got %d links %+v, want 3 (the empty-id [[kb:]] is not a link)", len(unk), unk)
+	}
+	for _, l := range unk {
+		if l.Kind != LinkUnknown {
+			t.Errorf("%+v: want LinkUnknown", l)
+		}
+		if l.Kind == LinkKB {
+			t.Errorf("%+v: an unknown scheme was misfiled as a kb slug", l)
+		}
+	}
+	if unk[0].Target != "note: remember this" || unk[1].Target != "codex:gpt5.6-sol" {
+		t.Errorf("unknown targets should keep the inner text: %+v", unk)
+	}
+	// The # tolerance the parser always had survives the move to pkg/ref.
+	if h := ParseLinks("[[todo:#abc123]] [[sprint:#7]]"); len(h) != 2 || h[0].Target != "abc123" || h[1].Target != "7" {
+		t.Errorf("# tolerance: %+v", h)
+	}
+}
+
+func keys(m map[string]Link) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestDoctorUnknownKindIsReportedNotDropped: before the vocabulary, an unknown
+// scheme was a dangling kb slug; now it is its own class. The row must MOVE,
+// not vanish — and the sprint link stays external (not dangling) as before.
+func TestDoctorUnknownKindIsReportedNotDropped(t *testing.T) {
+	p := &Page{Slug: "a", Title: "A", Body: "cites [[note: remember]] and [[sprint:9]] and [[kb:missing]]"}
+	rep := Doctor([]*Page{p}, nil, nil, false)
+	if len(rep.UnknownKind) != 1 || rep.UnknownKind[0].Target != "note: remember" || rep.UnknownKind[0].From != "kb:a" {
+		t.Errorf("unknown_kind = %+v", rep.UnknownKind)
+	}
+	if len(rep.Dangling) != 1 || rep.Dangling[0].Target != "kb:missing" {
+		t.Errorf("dangling = %+v (sprint must be external, the unknown scheme must not be here)", rep.Dangling)
+	}
+	if rep.Clean() {
+		t.Error("a report with an unknown-kind link is not clean")
 	}
 }
 

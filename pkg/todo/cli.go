@@ -418,9 +418,9 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 
 // linkRef is one resolved (or dangling) link on the todo show --links surface.
 type linkRef struct {
-	Ref    string `json:"ref"`              // kb:<slug> | todo:<id> | sprint:<n>
+	Ref    string `json:"ref"`              // <kind>:<id> — any ref vocabulary kind (pkg/ref)
 	Title  string `json:"title,omitempty"`  // the target's title, when resolved
-	Status string `json:"status,omitempty"` // "resolved" | "dangling" | "external"
+	Status string `json:"status,omitempty"` // "resolved" | "dangling" | "external" | "unknown"
 }
 
 // resolveLinks computes an item's outbound links and inbound backlinks through
@@ -441,10 +441,10 @@ func resolveLinks(st *issue.Store, it *issue.Issue) (outbound, inbound []linkRef
 	for _, l := range kb.ParseLinks(self.Body) {
 		if n, ok := kb.ResolveLink(l, nodes); ok && n.Ref() != self.Ref() {
 			outbound = append(outbound, linkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved"})
-		} else if l.Kind == kb.LinkSprint {
-			outbound = append(outbound, linkRef{Ref: l.Ref(), Status: "external"})
 		} else {
-			outbound = append(outbound, linkRef{Ref: l.Ref(), Status: "dangling"})
+			// external (a kind another store owns), unknown (a scheme outside
+			// the vocabulary), or dangling (a kb/todo target that is not here).
+			outbound = append(outbound, linkRef{Ref: l.Ref(), Status: l.Status()})
 		}
 	}
 	for _, n := range kb.Backlinks(self, nodes) {

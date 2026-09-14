@@ -26,7 +26,7 @@ import (
 type sprintLinkRef struct {
 	Ref    string `json:"ref"`
 	Title  string `json:"title,omitempty"`
-	Status string `json:"status,omitempty"` // resolved | dangling | external
+	Status string `json:"status,omitempty"` // schema | resolved | dangling | external | unknown
 	Field  string `json:"field,omitempty"`  // spec | acceptance | continuity | goal | thread
 }
 
@@ -103,15 +103,12 @@ func resolveSprintLinks(s *weaveStory) []sprintLinkRef {
 				continue
 			}
 			seen[key] = true
-			switch {
-			case l.Kind == kb.LinkSprint:
-				out = append(out, sprintLinkRef{Ref: l.Ref(), Status: "external", Field: f[0]})
-			default:
-				if n, ok := kb.ResolveLink(l, nodes); ok {
-					out = append(out, sprintLinkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved", Field: f[0]})
-				} else {
-					out = append(out, sprintLinkRef{Ref: l.Ref(), Status: "dangling", Field: f[0]})
-				}
+			if n, ok := kb.ResolveLink(l, nodes); ok {
+				out = append(out, sprintLinkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved", Field: f[0]})
+			} else {
+				// external (sprint, run, meet, … — another store's kind),
+				// unknown (a scheme outside the vocabulary), or dangling.
+				out = append(out, sprintLinkRef{Ref: l.Ref(), Status: l.Status(), Field: f[0]})
 			}
 		}
 	}
