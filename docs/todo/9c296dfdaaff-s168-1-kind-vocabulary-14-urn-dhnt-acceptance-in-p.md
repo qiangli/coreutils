@@ -3,10 +3,11 @@ id: 9c296dfdaaff
 kind: task
 title: 'S168.1 kind vocabulary (14) + urn:dhnt: acceptance in pkg/kb/links.go; LinkUnknown never dropped; ratchet test'
 seq: 129
-status: todo
+status: done
 priority: p1
 created: 2026-09-13T22:56:21.66083Z
 sprint: 168
+closed: 2026-09-14T02:07:54.781848Z
 ---
 
 S168.1 (W0, seam owner). Plan: dhnt docs/sprint-168-master-execution-plan.md, D1/D2/D3, trap 1+5.
