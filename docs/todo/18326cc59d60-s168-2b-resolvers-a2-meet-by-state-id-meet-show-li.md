@@ -3,10 +3,15 @@ id: 18326cc59d60
 kind: task
 title: 'S168.2b resolvers A2: meet (by State.ID; meet show --links), bus (mb + bus incl. archive; NEW mb show <seq>)'
 seq: 132
-status: todo
+status: done
 priority: p1
 created: 2026-09-14T02:10:17.916357Z
+weave: 22
+assignee: qiangli
 sprint: 168
+closed: 2026-09-14T02:52:09.467116Z
+resolution: fixed
+closed_by: codex-gpt-5.5-v
 ---
 
 CONTRACT (all Sprint 168 lanes). Read pkg/ref/ref.go FIRST - it is the grammar and the node type; do NOT edit pkg/ref or pkg/kb/links.go (owned by the seam commit f9df88a1). Each store package adds ONE new file resolve.go exposing func RegisterRefs(g *ref.Registry, <the same options its CLI takes>) that registers a ref.ResolverFunc per kind it owns. A resolver returns ref.Node built with ref.NewNode(kind, fullID) and fills Title (the record title or one-line summary), Status (the store status word), Where (path/store/ring), Open (the bashy command that prints the whole record, e.g. "bashy kb show <slug>"). Return ref.ErrNotFound (wrapping is fine) ONLY when the store was readable and the id is absent; any read failure is its own error, never ErrNotFound - the two must stay distinct. Tests are hermetic (t.Setenv BASHY_HOME plus the store dir var) and cover: found, not-found, and the kind-specific edge named below. No new dependencies. Gate before each commit: gofmt, go test ./pkg/<pkg>, scripts/crossvet.sh. COMMIT AS YOU GO (small commits) on the workspace branch with the trailers below as the LAST paragraph; never git stash; no hostnames or /Users paths in code, comments or messages. Plan of record (umbrella, read-only context): docs/sprint-168-master-execution-plan.md D5-D9.

@@ -3,10 +3,11 @@ id: 21c7a3d3a428
 kind: task
 title: 'S168.2 per-store resolvers: weave/meet/mb/bus/fleet expose Resolve(id); meet show --links, mb show --links'
 seq: 130
-status: todo
+status: done
 priority: p1
 created: 2026-09-13T22:56:21.706423Z
 sprint: 168
+closed: 2026-09-14T02:52:09.554694Z
 ---
 
 S168.2 (A1/A2/A3, file-disjoint, after W0 types are pushed). Plan: dhnt docs/sprint-168-master-execution-plan.md, D5/D6/D7/D8/D9, traps 2+3+8+9.
