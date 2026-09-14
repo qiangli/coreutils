@@ -56,3 +56,46 @@ func TestSprintStoryAuditRejectsClosedStoryWithoutAcceptanceEvidence(t *testing.
 		t.Fatalf("audit error = %v", err)
 	}
 }
+
+func TestSprintManagerAcceptIsTheOnlyClosePath(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("BASHY_SPRINT_DIR", home)
+	t.Setenv("WEAVE_CONDUCTOR", "manager")
+	st := todopkg.RepoStore(repo)
+	it, err := todopkg.Add(st, "delivered", "", "p0", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.Sprint = 1
+	it.Assignee = "worker"
+	it.Status = todopkg.StatusAssigned
+	if _, err := st.Save(it); err != nil {
+		t.Fatal(err)
+	}
+	s := &weaveStory{ID: 1, Title: "neutral", PrimaryGoal: "deliver", SpecRef: "docs/plan.md", Column: "doing", Owner: "manager", Lease: &weaveStoryLease{Holder: "manager", At: time.Now().UTC()}, StoryRoots: []string{repo}, Created: time.Now().UTC()}
+	weaveStoryAppend(s, "worker", "decision", "worker submitted story "+shortSprintStoryID(it.ID)+" for review/merge: commit abc; tests pass")
+	if err := saveWeaveQueue(home, &weaveQueue{NextStoryID: 2, Stories: []*weaveStory{s}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewSprintCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"accept", "1", it.ID, "--repo", repo, "-m", "independent gate passed"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("accept: %v\n%s", err, out.String())
+	}
+	got, _ := todopkg.ResolveRef(st, it.ID)
+	if got.Status != todopkg.StatusDone || got.Closed == nil || got.ClosedBy != "manager" {
+		t.Fatalf("accepted story = %+v", got)
+	}
+	q, err := loadWeaveQueue(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sprintAcceptanceEvidence(q.Stories[0], it.ID) {
+		t.Fatal("manager acceptance evidence was not persisted")
+	}
+}

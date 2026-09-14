@@ -397,7 +397,7 @@ func sprintStoryAcceptanceAudit(s *weaveStory) error {
 	for _, root := range sprintDeclaredStoryRoots(s) {
 		items, err := todopkg.List(todopkg.RepoStore(root), "")
 		if err != nil {
-			continue
+			return fmt.Errorf("sprint #%d cannot audit stories in %s: %w", s.ID, root, err)
 		}
 		for _, it := range items {
 			if it.Sprint != s.ID || (it.Status != todopkg.StatusDone && it.Status != issue.StatusClosed) {
