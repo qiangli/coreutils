@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/resources"
 )
 
 func TestWeaveSourceCarriesWorkspaceAndMeasuresItsDiskUsage(t *testing.T) {
@@ -44,34 +46,20 @@ func TestWeaveSourceCarriesWorkspaceAndMeasuresItsDiskUsage(t *testing.T) {
 	if len(b.Runs) != 1 {
 		t.Fatalf("runs = %+v", b.Runs)
 	}
-	if got := b.Runs[0]; got.Workspace != workspace || got.WorkspaceDiskBytes != 777 || got.WorkspaceDiskError != "" {
+	if got := b.Runs[0]; got.Workspace != workspace {
 		t.Fatalf("workspace projection = %+v", got)
+	}
+	disk, cpu, rss := uint64(777), 12.5, uint64(2048)
+	applyUsageToRuns(b.Runs, []resources.UsageRow{{Repo: repo, Run: 7, Sprint: 177, Todo: "abc", WorkspaceBytes: resources.ObservationValue[uint64]{Value: &disk}, CPUPercent: resources.ObservationValue[float64]{Value: &cpu}, RSSBytes: resources.ObservationValue[uint64]{Value: &rss}}})
+	if got := b.Runs[0]; got.WorkspaceDiskBytes != 777 || got.SprintID != 177 || got.TodoID != "abc" || got.CPUPercent == nil || *got.CPUPercent != 12.5 || got.RSSBytes == nil || *got.RSSBytes != 2048 {
+		t.Fatalf("usage projection = %+v", got)
 	}
 }
 
-func TestWorkspaceDiskUsageAndPanel(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "one"), make([]byte, 1024), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "nested", "two"), make([]byte, 2048), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, detail := workspaceDiskUsage(context.Background(), root)
-	if got != 3072 || detail != "" {
-		t.Fatalf("workspaceDiskUsage = %d, %q; want 3072, empty", got, detail)
-	}
-	_, missing := workspaceDiskUsage(context.Background(), filepath.Join(root, "missing"))
-	if missing == "" {
-		t.Fatal("missing workspace reported a valid zero-byte footprint")
-	}
-
+func TestWorkspaceUsagePanel(t *testing.T) {
+	cpu, rss := 10.25, uint64(4096)
 	b := &Board{Runs: []Run{
-		{ID: 1, State: "working", Repo: "/repo/a", Workspace: "/work/small", WorkspaceDiskBytes: 1024},
+		{ID: 1, SprintID: 177, TodoID: "abc", State: "working", Repo: "/repo/a", Workspace: "/work/small", WorkspaceDiskBytes: 1024, CPUPercent: &cpu, RSSBytes: &rss},
 		{ID: 2, State: "done", Repo: "/repo/b", Workspace: "/work/large", WorkspaceDiskBytes: 2048},
 		{ID: 3, State: "failed", Repo: "/repo/c", Workspace: "/work/missing", WorkspaceDiskError: "not found"},
 	}}
@@ -79,14 +67,17 @@ func TestWorkspaceDiskUsageAndPanel(t *testing.T) {
 	if v.ID != "workspaces" || len(v.Rows) != 3 {
 		t.Fatalf("workspace panel = %+v", v)
 	}
-	if v.Rows[0][0] != "#2" || v.Rows[0][2] != "2.0KiB" {
+	if v.Rows[0][0] != "#2" || v.Rows[0][4] != "2.0KiB" {
 		t.Errorf("largest workspace is not first: %v", v.Rows[0])
 	}
 	if !strings.Contains(v.Collapsed, "3.0KiB on disk") || !strings.Contains(v.Collapsed, "1 unavailable") {
 		t.Errorf("collapsed workspace summary = %q", v.Collapsed)
 	}
-	if !strings.HasPrefix(v.Rows[2][2], "unavailable:") {
+	if !strings.HasPrefix(v.Rows[2][4], "unavailable:") {
 		t.Errorf("failed measurement is silent: %v", v.Rows[2])
+	}
+	if v.Rows[1][1] != "#177" || v.Rows[1][2] != "abc" || v.Rows[1][5] != "10.2%" || v.Rows[1][6] != "4.0KiB" {
+		t.Errorf("runtime columns missing: %v", v.Rows[1])
 	}
 }
 

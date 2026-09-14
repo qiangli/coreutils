@@ -28,7 +28,7 @@ func TestSprintResourceInventorySeparatesRecycledRunsAndKeepsCompetitors(t *test
 	}
 	born := time.Now().UTC()
 	write(filepath.Join(store, "queue.json"), weaveQueue{Stories: []*weaveStory{{ID: 138, Owner: "manager", Runs: []sprintRun{{Repo: "repo", Queue: "repo-hash", ID: 1, Born: born}, {Repo: "repo", Queue: "repo-hash", ID: 2, Born: born.Add(-time.Hour)}}}}})
-	write(filepath.Join(weaveStateRoot(home), "repo-hash", "queue.json"), weaveQueue{Root: "/repo", Items: []*weaveItem{{ID: 1, Created: born, State: "working", Owner: "worker", WrapperPid: 123, WrapperStartID: "fixture:old"}, {ID: 2, Created: born, State: "working", Owner: "competitor", WrapperPid: 456}}})
+	write(filepath.Join(weaveStateRoot(home), "repo-hash", "queue.json"), weaveQueue{Root: "/repo", Items: []*weaveItem{{ID: 1, Created: born, State: "working", Owner: "worker", Register: "todo-123", WrapperPid: 123, WrapperStartID: "fixture:old"}, {ID: 2, Created: born, State: "working", Owner: "competitor", WrapperPid: 456}}})
 	cache := filepath.Join(home, "cache")
 	got, err := ReadSprintInventory(context.Background(), cache)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestSprintResourceInventorySeparatesRecycledRunsAndKeepsCompetitors(t *test
 	if !got.Complete || len(got.Workloads) != 2 {
 		t.Fatalf("inventory=%+v", got)
 	}
-	if got.Workloads[0].Sprint != 138 || got.Workloads[0].StartID != "fixture:old" || got.Workloads[1].Sprint != 0 || got.Workloads[0].ID == got.Workloads[1].ID {
+	if got.Workloads[0].Sprint != 138 || got.Workloads[0].Todo != "todo-123" || got.Workloads[0].StartID != "fixture:old" || got.Workloads[1].Sprint != 0 || got.Workloads[0].ID == got.Workloads[1].ID {
 		t.Fatalf("run generations/competitors lost: %+v", got.Workloads)
 	}
 	before, err := os.Stat(filepath.Join(cache, "sprint-inventory.json"))

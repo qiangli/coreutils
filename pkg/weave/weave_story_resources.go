@@ -97,6 +97,7 @@ type SprintInventorySeat struct {
 type SprintInventoryWorkload struct {
 	ID        string    `json:"id"`
 	Sprint    int64     `json:"sprint"`
+	Todo      string    `json:"todo,omitempty"`
 	Run       int64     `json:"run"`
 	Repo      string    `json:"repo"`
 	Agent     string    `json:"agent"`
@@ -268,7 +269,7 @@ func ReadSprintInventory(ctx context.Context, cacheDir string) (*SprintInventory
 				}
 				run := sprintRun{Repo: filepath.Base(q.Root), Queue: queueName, ID: it.ID, Born: it.Created}
 				id := monitorRunKey(run)
-				row := SprintInventoryWorkload{ID: id, Sprint: linked[id], Run: it.ID, Repo: q.Root, Agent: it.Owner, Tool: it.Tool, Workspace: it.Workspace, PID: it.WrapperPid, StartID: it.WrapperStartID, StartedAt: it.StartedAt, State: it.State}
+				row := SprintInventoryWorkload{ID: id, Sprint: linked[id], Todo: it.Register, Run: it.ID, Repo: q.Root, Agent: it.Owner, Tool: it.Tool, Workspace: it.Workspace, PID: it.WrapperPid, StartID: it.WrapperStartID, StartedAt: it.StartedAt, State: it.State}
 				if it.LaunchSpec != nil {
 					row.Model = it.LaunchSpec.Model
 					if row.Agent == "" {

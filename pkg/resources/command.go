@@ -8,13 +8,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewCommand builds `resources` — the host-resource front door a host
-// mounts as `bashy resources`. Today it carries one subcommand, `system`;
-// the noun is deliberately broader than the verb so per-agent and
-// per-process views can land beside it without renaming anything.
+// NewCommand builds the singular host-resource front door.
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "resources",
+		Use:          "resource",
+		Aliases:      []string{"resources"},
 		Short:        "Report host resource utilization",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
@@ -22,7 +20,7 @@ func NewCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(NewSystemCommand())
+	cmd.AddCommand(NewSystemCommand(), NewUsageCommand())
 	// Hosts with a board reader should re-mount this with their provider:
 	//   cmd.AddCommand(resources.NewUtilizationCommand(board.PendingWork))
 	cmd.AddCommand(NewUtilizationCommand(nil))

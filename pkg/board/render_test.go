@@ -56,10 +56,8 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 || got.Summary.Unattended != 1 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	// Rebased 2026-08-31 for explicit per-sprint story progress. Even a sprint
-	// with zero stories carries total/open/closed zeroes so old-vs-empty is not
-	// another value a consumer has to guess.
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "1edc65155e6c83642b1a10ff7c255a3350f7f9ec330f689128920dce806ad218"; sum != want {
+	// Rebased 2026-09-14 for the workspace panel's attributed resource columns.
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "eda9587c4c2280bd800cf8552db5051c2598eb16e3378fa3c5154358927e3ed3"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
 	}
 	if strings.Contains(string(raw), "dag_runs") {

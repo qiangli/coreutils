@@ -64,7 +64,7 @@ func TestBareCommandShowsHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bare resources: %v", err)
 	}
-	if !strings.Contains(out, "system") {
-		t.Errorf("help does not mention the system subcommand:\n%s", out)
+	if !strings.Contains(out, "system") || !strings.Contains(out, "usage") {
+		t.Errorf("help does not mention the resource subcommands:\n%s", out)
 	}
 }

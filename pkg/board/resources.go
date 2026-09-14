@@ -13,11 +13,9 @@ import (
 // HOST the bottleneck? A board full of slow runs reads very differently
 // when the machine is at 98% CPU with no free disk.
 //
-// The panel samples with Interval 0 — a single counter read, no sleep.
-// The board is a projection a steward refreshes often, so it must not pay
-// a rate-sampling delay; CPU therefore reports the since-boot average (or
-// the load average on darwin) and `resources system` remains the place to
-// get a live rate.
+// The panel reads the shared bounded observation cache. The board is a
+// projection a steward refreshes often, so it neither sleeps for a sample nor
+// starts a second workspace walk; successive cache refreshes provide rates.
 
 type resourceSource struct{}
 
@@ -28,12 +26,37 @@ func NewResourceSource() Source { return resourceSource{} }
 func (resourceSource) Name() string { return "resources" }
 
 func (resourceSource) Load(ctx context.Context, b *Board, _ Options) error {
-	sys, err := resources.Collect(ctx, resources.Options{Interval: 0})
+	usage, err := resources.CollectUsage(ctx, resources.UsageOptions{})
 	if err != nil {
 		return err
 	}
-	b.Resources = sys
+	if usage.Observation != nil {
+		b.Resources = usage.Observation.System
+	}
+	applyUsageToRuns(b.Runs, usage.Rows)
 	return nil
+}
+
+func applyUsageToRuns(runs []Run, rows []resources.UsageRow) {
+	byRun := make(map[string]resources.UsageRow, len(rows))
+	for _, row := range rows {
+		byRun[row.Repo+"#"+strconv.FormatInt(row.Run, 10)] = row
+	}
+	for i := range runs {
+		run := &runs[i]
+		row, ok := byRun[run.Repo+"#"+strconv.FormatInt(run.ID, 10)]
+		if !ok {
+			continue
+		}
+		run.SprintID, run.TodoID = row.Sprint, row.Todo
+		run.CPUPercent, run.RSSBytes = row.CPUPercent.Value, row.RSSBytes.Value
+		if row.WorkspaceBytes.Value != nil {
+			run.WorkspaceDiskBytes = *row.WorkspaceBytes.Value
+			run.WorkspaceDiskError = ""
+		} else {
+			run.WorkspaceDiskError = row.WorkspaceBytes.Status.Reason
+		}
+	}
 }
 
 func resourcePanel() Panel {

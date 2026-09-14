@@ -155,7 +155,7 @@ func workspacePanel() Panel {
 
 		v := PanelView{ID: "workspaces", Title: "Workspaces",
 			Collapsed: fmt.Sprintf("%d workspace(s); %s on disk", len(rows), resources.HumanBytes(total)),
-			Columns:   []string{"RUN", "STATE", "DISK", "REPO", "WORKSPACE"}}
+			Columns:   []string{"RUN", "SPRINT", "TODO", "STATE", "DISK", "CPU", "RSS", "REPO", "WORKSPACE"}}
 		if unavailable > 0 {
 			v.Collapsed += fmt.Sprintf("; %d unavailable", unavailable)
 		}
@@ -164,10 +164,31 @@ func workspacePanel() Panel {
 			if x.run.WorkspaceDiskError != "" {
 				disk = "unavailable: " + x.run.WorkspaceDiskError
 			}
-			v.Rows = append(v.Rows, []string{"#" + itoa(x.run.ID), x.run.State, disk, x.run.Repo, x.run.Workspace})
+			v.Rows = append(v.Rows, []string{"#" + itoa(x.run.ID), sprintLabel(x.run.SprintID), dash(x.run.TodoID), x.run.State, disk, percentPtr(x.run.CPUPercent), bytesPtr(x.run.RSSBytes), x.run.Repo, x.run.Workspace})
 		}
 		return v
 	}}
+}
+
+func sprintLabel(id int64) string {
+	if id == 0 {
+		return "-"
+	}
+	return "#" + itoa(id)
+}
+
+func percentPtr(v *float64) string {
+	if v == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", *v)
+}
+
+func bytesPtr(v *uint64) string {
+	if v == nil {
+		return "-"
+	}
+	return resources.HumanBytes(*v)
 }
 
 func salvagePanel() Panel {

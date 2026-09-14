@@ -241,18 +241,20 @@ type Run struct {
 	FinishedAt      time.Time `json:"finished_at,omitempty,omitzero"`
 	Points          int       `json:"points,omitempty"`
 	SprintID        int64     `json:"sprint_id,omitempty"`
+	TodoID          string    `json:"todo_id,omitempty"`
 	Blocked         bool      `json:"blocked,omitempty"`
 	Salvageable     bool      `json:"salvageable,omitempty"`
 	UnmergedCommits int       `json:"unmerged_commits,omitempty"`
 	AgeSeconds      int64     `json:"age_seconds,omitempty"`
 	Stale           bool      `json:"stale,omitempty"`
 	// Workspace is the filesystem-isolated clone backing this weave run.
-	// WorkspaceDiskBytes is measured from the directory tree at board collection time;
-	// an error keeps the workspace visible while explaining why its footprint
-	// is unavailable.
-	Workspace          string `json:"workspace,omitempty"`
-	WorkspaceDiskBytes uint64 `json:"workspace_disk_bytes,omitempty"`
-	WorkspaceDiskError string `json:"workspace_disk_error,omitempty"`
+	// Resource fields come from the shared bounded observation snapshot; an
+	// unavailable measurement keeps the workspace visible with its reason.
+	Workspace          string   `json:"workspace,omitempty"`
+	WorkspaceDiskBytes uint64   `json:"workspace_disk_bytes,omitempty"`
+	WorkspaceDiskError string   `json:"workspace_disk_error,omitempty"`
+	CPUPercent         *float64 `json:"cpu_percent,omitempty"`
+	RSSBytes           *uint64  `json:"rss_bytes,omitempty"`
 }
 
 // DagRun is one `bashy dag` run as recorded by that package's run journal.

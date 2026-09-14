@@ -3,18 +3,25 @@
 The steward can see every run, sprint, and todo on the machine, but not
 whether the **machine itself** is the reason they are all slow. This
 package supplies that missing axis: a live system-level reading of CPU,
-memory, disk, network, and GPU, surfaced as `bashy resources system` and
+memory, disk, network, and GPU, surfaced as `bashy resource` and
 as the board's `resources` panel.
 
 ## Surfaces
 
 ```
-bashy resources system                 # human table
-bashy resources system --json          # bashy-resources-v1 envelope
-bashy resources system --interval 2s   # widen the rate sample window
+bashy resource system                  # human host table
+bashy resource system --json           # bashy-resources-v1 envelope
+bashy resource usage                   # host totals + active weave usage by repo
+bashy resource usage --by sprint       # repo|sprint|todo|run|agent
+bashy resource usage --sprint 177 --json
+bashy resource usage --watch --duration 1m
 bashy steward dashboard --expand resources  # the panel, inside the steward dashboard
-bashy steward dashboard --expand resources
 ```
+
+`bashy resources` is a hidden compatibility alias. Workspace disk usage is
+apparent file bytes from the shared bounded scanner. CPU and RSS are attributed
+to a weave workload only through its verified process-root birth identity; GPU
+is host-level because the portable collectors cannot attribute it per process.
 
 The host mounts it with `resources.NewCommand()` (cobra). The board wires
 itself: `board.DefaultSources()` includes the collector and
