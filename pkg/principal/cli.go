@@ -165,6 +165,9 @@ func printResolution(w io.Writer, r Resolution) {
 	if len(r.Aliases) > 0 {
 		fmt.Fprintf(w, "aliases: %s\n", strings.Join(r.Aliases, " "))
 	}
+	if r.Canonical != "" {
+		fmt.Fprintf(w, "%-14s %s\n", "ref:", r.Canonical)
+	}
 	if r.Source != "" {
 		s := r.Source
 		if r.Confidence != "" {

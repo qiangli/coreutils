@@ -187,13 +187,18 @@ const (
 
 // Resolution is what a name resolves to.
 type Resolution struct {
-	URN     string   `json:"urn"`
-	Kind    Kind     `json:"kind"`
-	Name    string   `json:"name"`
-	Owner   string   `json:"owner,omitempty"`
-	Aliases []string `json:"aliases,omitempty"`
-	Display string   `json:"display,omitempty"`
-	Summary string   `json:"summary,omitempty"`
+	URN string `json:"urn"`
+	// Canonical is the uniform `<kind>:<id>` ref (pkg/ref) for this
+	// principal — the spelling prose, the command line, and JSON share.
+	// The JSON key is `ref`; the Go name differs only because Ref()
+	// already returns the structured principal.Ref.
+	Canonical string   `json:"ref,omitempty"`
+	Kind      Kind     `json:"kind"`
+	Name      string   `json:"name"`
+	Owner     string   `json:"owner,omitempty"`
+	Aliases   []string `json:"aliases,omitempty"`
+	Display   string   `json:"display,omitempty"`
+	Summary   string   `json:"summary,omitempty"`
 	// Source and Confidence grade the identity claim itself, so a caller can
 	// tell a declared catalog entry from one inferred out of observation.
 	// An observed match is always Inferred — below any catalog entry.

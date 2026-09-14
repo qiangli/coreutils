@@ -114,6 +114,9 @@ func (r *Resolver) Resolve(query string) Answer {
 		try(KindPerson, func(n string) (Resolution, bool) { return r.observedPerson(n, t) })
 	}
 
+	for i := range ans.Matches {
+		ans.Matches[i].Canonical = canonicalRef(ans.Matches[i])
+	}
 	ans.Resolved = len(ans.Matches) > 0
 	return ans
 }
