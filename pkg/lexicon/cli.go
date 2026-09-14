@@ -5,6 +5,7 @@ package lexicon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/ref"
 )
 
 // Synopses is set by the embedding shell (bashy) so the lexicon can carry a verb's
@@ -190,12 +192,25 @@ and nothing reports the error.
 A term that looks like a credential is classified but NEVER echoed back, never
 stored, and never looked up. "That is an API key" is a useful answer; repeating
 the key into a terminal, a log, or an agent transcript is how it ends up
-somewhere permanent.`,
+somewhere permanent.
+
+A REF is answered by its store. Anything bashy can name has one canonical
+address, <kind>:<id> (kb:deploy-runbook, todo:a5f5c1d2e3b4, sprint:168,
+run:coreutils-7, agent:codex …; urn:dhnt:<kind>:<id> is the same ref spelled
+for text that leaves bashy). define parses it, asks the store that owns the
+kind, and prints the record's title, status, where it lives and the command
+that opens it. Only the vocabulary counts: codex:gpt5.6-sol is a tool:model
+binding and stays a word. A ref that names nothing is an error, and it says
+which of three things happened — the store has no such id, the kind is not in
+the vocabulary, or this build never wired a resolver for the kind (a hook
+left nil is not an empty store). --list-kinds prints the vocabulary.`,
 		Example: `  bashy define handoff        # a bashy verb
   bashy define codex          # an agent binding ON THIS HOST
   bashy define WEAVE_AGENT    # an environment variable this fleet sets
   bashy define outpost        # a local command, outside the standard userland
-  bashy define sk-proj-...    # classified as a credential, and not echoed`,
+  bashy define sk-proj-...    # classified as a credential, and not echoed
+  bashy define kb:deploy-runbook       # a ref: the kb page, from the kb store
+  bashy define urn:dhnt:sprint:168     # the same grammar, fully qualified`,
 		// MaximumNArgs, not ExactArgs: `--list-kinds` takes no term, and under
 		// ExactArgs it could not be reached at all — `bashy define --list-kinds`
 		// failed with "accepts 1 arg(s), received 0". That is the flag the
@@ -210,11 +225,25 @@ somewhere permanent.`,
 				return fmt.Errorf("define needs exactly one term — the word to look up " +
 					"(`--list-kinds` lists the namespaces this host can answer for instead)")
 			}
-			s := buildFull(opts)
 			if listKinds {
-				fmt.Fprintln(cmd.OutOrStdout(), strings.Join(s.Kinds(), "\n"))
+				out := cmd.OutOrStdout()
+				fmt.Fprintln(out, strings.Join(buildFull(opts).Kinds(), "\n"))
+				// The ref vocabulary is a second group: those kinds are answered
+				// by their stores through RefResolvers, not by the projections.
+				fmt.Fprintln(out)
+				fmt.Fprintln(out, "refs:")
+				for _, k := range ref.KindNames() {
+					fmt.Fprintf(out, "  %s\n", k)
+				}
 				return nil
 			}
+			// A ref is answered by its store, before any projection is built:
+			// the token's shape decides, and only a non-ref reaches the term
+			// path (see defineRef for the outcomes it owns).
+			if err := defineRef(cmd.OutOrStdout(), args[0], asJSON); !errors.Is(err, errNotARef) {
+				return err
+			}
+			s := buildFull(opts)
 			kinds := make([]Kind, 0, len(kindFilter))
 			for _, k := range kindFilter {
 				kinds = append(kinds, Kind(strings.TrimSpace(k)))
