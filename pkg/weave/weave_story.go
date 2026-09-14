@@ -1380,21 +1380,28 @@ func resolveAndValidateSprintRunLink(repo string, task int64, queue string) (spr
 		return sprintRun{}, fmt.Errorf("repo %q has no weave run #%d", repo, task)
 	}
 	cap, valid := weavePointRuntimeCap(run.Points)
-	if !valid {
-		if run.Points == 0 {
-			return sprintRun{}, fmt.Errorf("cannot link %s#%d: run has no story points; set one of 1,2,3,5,8 first", repo, task)
-		}
+	if !valid && run.Points != 0 {
 		return sprintRun{}, fmt.Errorf("cannot link %s#%d: invalid story points %d (want 1,2,3,5,8)", repo, task, run.Points)
 	}
+	// Linking promises that the run's execution is bounded. Points bound it
+	// through their derived cap; a run that needs more than the 8-point cap
+	// stays unpointed and is bounded by the explicit --max-runtime it was
+	// launched with instead — the same promise, so it links once launched.
+	// An unpointed run still in planning has made no promise yet.
+	if run.Points == 0 && run.State == "todo" {
+		return sprintRun{}, fmt.Errorf("cannot link %s#%d: run has no story points; set one of 1,2,3,5,8, or launch it with an explicit --max-runtime and link it then", repo, task)
+	}
 	// A run that has left planning may already have a wrapper or preserved
-	// execution record. Linking it promises that its point estimate actually
-	// bounded that execution, so fail closed on legacy/unbounded or stale
-	// over-cap launch specs. A running watchdog cannot be retrofitted safely.
+	// execution record. Fail closed on legacy/unbounded or stale over-cap
+	// launch specs. A running watchdog cannot be retrofitted safely.
 	if run.State != "todo" {
 		if run.LaunchSpec == nil || run.LaunchSpec.MaxRuntime <= 0 {
+			if run.Points == 0 {
+				return sprintRun{}, fmt.Errorf("cannot link %s#%d: state %q has no bounded launch runtime; stop and restart it with --max-runtime (or story points) first", repo, task, run.State)
+			}
 			return sprintRun{}, fmt.Errorf("cannot link %s#%d: state %q has no bounded launch runtime; stop and restart it under its point cap first", repo, task, run.State)
 		}
-		if run.LaunchSpec.MaxRuntime > cap {
+		if valid && run.LaunchSpec.MaxRuntime > cap {
 			return sprintRun{}, fmt.Errorf("cannot link %s#%d: launch runtime %s exceeds the %d-point cap %s; stop and restart it under its point cap first", repo, task, run.LaunchSpec.MaxRuntime, run.Points, cap)
 		}
 	}

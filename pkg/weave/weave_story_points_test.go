@@ -181,3 +181,76 @@ func TestWeavePointRejectsChangesAfterClaimWithoutMutation(t *testing.T) {
 		t.Fatalf("rejected point change mutated points to %d", got)
 	}
 }
+
+// TestSprintLinkAcceptsUnpointedRunWithExplicitBound pins the Sprint 175
+// story filed by Sprint 171: story points derive the run's wall-clock cap
+// (8 points = 30 m) and a larger explicit --max-runtime is rejected, so a
+// lane that legitimately needs hours must stay unpointed — and an unlinked
+// run leaves the sprint's token totals "missing". Linking promises a
+// bounded execution; an explicit --max-runtime is that promise too, so an
+// unpointed run links once launched under one. Unpointed runs still in
+// planning, and unbounded launches, stay refused.
+func TestSprintLinkAcceptsUnpointedRunWithExplicitBound(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if out, code := runSprint(t, "add", "bounded sprint", "--json"); code != 0 {
+		t.Fatalf("sprint add failed (exit %d): %s", code, out)
+	}
+	if out, code := runWeave(t, "add", "long lane", "--json"); code != 0 {
+		t.Fatalf("weave add failed (exit %d): %s", code, out)
+	}
+	repo := filepath.Base(root)
+	dir, _ := weaveQueueDir(root)
+	setState := func(state string, spec *weaveLaunchSpec) {
+		t.Helper()
+		if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+			it := findWeaveItem(q, 1)
+			it.State = state
+			it.LaunchSpec = spec
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linked := func() int {
+		t.Helper()
+		storyDir, _ := sprintStoreDir()
+		q, err := loadWeaveQueue(storyDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := findWeaveStory(q, 1)
+		if s == nil {
+			return 0
+		}
+		return len(s.Runs)
+	}
+
+	// Still planning: no promise yet, and the message names both ways out.
+	out, code := runSprint(t, "link", "1", "--repo", repo, "--task", "1")
+	if code == 0 || !strings.Contains(out, "no story points") || !strings.Contains(out, "--max-runtime") {
+		t.Fatalf("unpointed todo link exit=%d output=%q", code, out)
+	}
+	if linked() != 0 {
+		t.Fatal("unpointed todo link mutated the story")
+	}
+
+	// Launched without a bound: still refused.
+	setState("working", &weaveLaunchSpec{})
+	out, code = runSprint(t, "link", "1", "--repo", repo, "--task", "1")
+	if code == 0 || !strings.Contains(out, "no bounded launch runtime") {
+		t.Fatalf("unbounded link exit=%d output=%q", code, out)
+	}
+	if linked() != 0 {
+		t.Fatal("unbounded link mutated the story")
+	}
+
+	// Launched with an explicit bound well past the 8-point cap: links.
+	setState("working", &weaveLaunchSpec{MaxRuntime: 150 * time.Minute})
+	if out, code := runSprint(t, "link", "1", "--repo", repo, "--task", "1"); code != 0 {
+		t.Fatalf("bounded unpointed link failed (exit %d): %s", code, out)
+	}
+	if linked() != 1 {
+		t.Fatalf("bounded unpointed link did not record the run: %d runs", linked())
+	}
+}
