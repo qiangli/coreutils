@@ -202,6 +202,20 @@ func emitJSON(cmd *cobra.Command, v any) error {
 	return nil
 }
 
+// noteArg resolves --note the way `skill add -` and `agent add -` resolve a
+// source: "-" is stdin, anything else is the literal body. Sprint 178 filed a
+// story whose body was the single character "-".
+func noteArg(cmd *cobra.Command, note string) (string, error) {
+	if note != "-" {
+		return note, nil
+	}
+	data, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil {
+		return "", fmt.Errorf("--note -: %w", err)
+	}
+	return string(data), nil
+}
+
 func newAddCmd(sf storeFunc) *cobra.Command {
 	var priority, note string
 	var dueStr, recurring, assignee string
@@ -221,6 +235,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			}
 			due, err := parseDue(dueStr)
 			if err != nil {
+				return err
+			}
+			if note, err = noteArg(cmd, note); err != nil {
 				return err
 			}
 			it, err := Add(st, strings.Join(args, " "), note, priority, due, recurring, assignee)
@@ -253,7 +270,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&priority, "priority", "", "priority tier (p0|p1|p2|p3)")
-	cmd.Flags().StringVar(&note, "note", "", "task body/details")
+	cmd.Flags().StringVar(&note, "note", "", "task body/details (- reads stdin)")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
@@ -563,7 +580,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 				it.Priority = priority
 			}
 			if cmd.Flags().Changed("note") {
-				it.Body = note
+				if it.Body, err = noteArg(cmd, note); err != nil {
+					return err
+				}
 			}
 			if cmd.Flags().Changed("due") {
 				due, err := parseDue(dueStr)
@@ -613,7 +632,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority (p0|p1|p2|p3)")
-	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details")
+	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details (- reads stdin)")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
