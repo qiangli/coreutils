@@ -79,7 +79,7 @@ func TestParseErrors(t *testing.T) {
 		{"guard no args", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "guard"}]}`, "guard takes exactly one argument"},
 		{"guard wrong arg", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "guard", "args": {"cap": "read"}}]}`, "guard takes exactly one argument"},
 		{"guard non-string", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "guard", "args": {"effects": 3}}]}`, "guard effects must be a string"},
-		{"guard bad effect", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "guard", "args": {"effects": "read,exec"}}]}`, `unknown effect "exec"`},
+		{"guard bad effect", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "guard", "args": {"effects": "read,madeup"}}]}`, `unknown effect "madeup"`},
 		{"guard empty cap", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "guard", "args": {"effects": " , "}}]}`, "empty effect cap"},
 		{"float arg", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "trace", "args": {"x": 1.5}}]}`, "not an integer"},
 		{"array arg", `{"schema": "bashy-advice-v1", "rules": [{"name": "*", "decorator": "trace", "args": {"x": []}}]}`, "unsupported value type"},

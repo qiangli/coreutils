@@ -12,13 +12,8 @@ import (
 	"github.com/qiangli/coreutils/pkg/atlas"
 )
 
-// Cap is a guard's effect cap: the set of dhnt-6 effect atoms a guarded call
-// is allowed to exercise. It is spelled in the PROJECTED vocabulary — the
-// dhnt-6 lattice atlas.ProjectEffects targets — not the atlas-11, so a skill
-// cap and a guard cap read the same. A command's atlas effects are projected
-// before the check; atoms the projection drops (pure, exec, cred, priv,
-// persist) are outside what a cap can constrain, by the projection's own
-// contract — a consumer that needs them reads the atlas effects unprojected.
+// Cap is a guard's effect cap: the set of atlas-11 effect atoms a guarded call
+// is allowed to exercise.
 //
 // Caps only ever narrow. WithCap intersects with any cap already on the
 // context, so a nested guard cannot widen what an outer guard allowed —
@@ -27,16 +22,17 @@ type Cap struct {
 	set map[string]bool
 }
 
-// capVocabulary is the dhnt-6 effect lattice (the codomain of
-// atlas.ProjectEffects plus "time", which the lattice defines but no atlas
-// atom projects to). TestCapVocabularyCoversProjection pins the codomain
-// relationship.
-var capVocabulary = map[string]bool{
-	"read": true, "write": true, "net": true, "spend": true, "destroy": true, "time": true,
-}
+// capVocabulary is the atlas-11 effect vocabulary.
+var capVocabulary = func() map[string]bool {
+	m := make(map[string]bool, len(atlas.Effects()))
+	for _, e := range atlas.Effects() {
+		m[e] = true
+	}
+	return m
+}()
 
 // ParseCap parses a comma-separated effect list ("read,net") into a Cap,
-// rejecting empty lists and atoms outside the dhnt-6 vocabulary.
+// rejecting empty lists and atoms outside the atlas-11 vocabulary.
 func ParseCap(spec string) (Cap, error) {
 	set := map[string]bool{}
 	for tok := range strings.SplitSeq(spec, ",") {
@@ -90,17 +86,35 @@ func (c Cap) Intersect(o Cap) Cap {
 	return Cap{set: set}
 }
 
-// Exceeded projects atlasEffects onto the dhnt-6 lattice and returns the
-// projected atoms the cap does not allow, sorted; empty means the effects
-// fit the cap. This is the guard decision: a non-empty return is a deny
-// (audit Record.Decision "deny"), naming exactly which effects exceeded.
+// Exceeded compares unprojected effects and returns the
+// atoms the cap does not allow, sorted and deduplicated; empty means the effects
+// fit the cap. Pure is ignored as intrinsically no governed side effect.
+// Unknown atoms deny, and an empty/missing command effect declaration denies as unknown.
 func (c Cap) Exceeded(atlasEffects []string) []string {
-	var out []string
-	for _, e := range atlas.ProjectEffects(atlasEffects) {
-		if !c.set[e] {
-			out = append(out, e) // ProjectEffects output is sorted + deduped
+	if len(atlasEffects) == 0 {
+		return []string{"unknown"}
+	}
+
+	denySet := map[string]bool{}
+	for _, e := range atlasEffects {
+		if e == atlas.EffPure {
+			continue
+		}
+		if !capVocabulary[e] {
+			denySet["unknown"] = true
+		} else if !c.set[e] {
+			denySet[e] = true
 		}
 	}
+
+	if len(denySet) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(denySet))
+	for k := range denySet {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 

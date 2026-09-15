@@ -25,43 +25,43 @@ func TestParseCap(t *testing.T) {
 	if got := c.String(); got != "net,read" {
 		t.Fatalf("cap = %q, want canonical sorted dedup", got)
 	}
-	for _, bad := range []string{"", " , ", "read,exec", "pure", "cred", "READ"} {
+	for _, bad := range []string{"", " , ", "read,time", "invalid", "READ"} {
 		if _, err := ParseCap(bad); err == nil {
 			t.Fatalf("ParseCap(%q) accepted", bad)
 		}
 	}
+	// Pure is accepted as an atlas-11 constant
+	mustCap(t, "pure")
 }
 
-// The cap vocabulary is exactly the dhnt-6 lattice: everything
-// atlas.ProjectEffects can emit parses as a cap atom.
-func TestCapVocabularyCoversProjection(t *testing.T) {
-	projected := atlas.ProjectEffects(atlas.Effects())
-	if len(projected) == 0 {
-		t.Fatal("projection emitted nothing")
+// The cap vocabulary is exactly the atlas-11 constants.
+func TestCapVocabularyMatchesAtlas(t *testing.T) {
+	if len(capVocabulary) != len(atlas.Effects()) {
+		t.Fatalf("vocabulary size = %d, want %d", len(capVocabulary), len(atlas.Effects()))
 	}
-	for _, e := range projected {
+	for _, e := range atlas.Effects() {
 		if !capVocabulary[e] {
-			t.Fatalf("projected atom %q is not a cap atom", e)
+			t.Fatalf("atlas effect %q is not a cap atom", e)
 		}
 	}
-	// "time" is in the lattice but nothing projects to it; it still parses.
-	mustCap(t, "time")
 }
 
 func TestExceeded(t *testing.T) {
-	c := mustCap(t, "read,net")
+	c := mustCap(t, "read")
 	cases := []struct {
 		name    string
 		effects []string
 		want    []string
 	}{
-		{"within cap", []string{atlas.EffRead, atlas.EffNet}, nil},
-		{"remote folds into net", []string{atlas.EffRemote, atlas.EffRead}, nil},
-		{"write and destroy exceed, sorted", []string{atlas.EffDestroy, atlas.EffWrite}, []string{"destroy", "write"}},
-		{"mixed reports only the excess", []string{atlas.EffRead, atlas.EffSpend}, []string{"spend"}},
-		// Atoms the projection drops are outside what a cap constrains.
-		{"unprojected atoms pass", []string{atlas.EffPure, atlas.EffExec, atlas.EffCred, atlas.EffPriv, atlas.EffPersist}, nil},
-		{"no effects", nil, nil},
+		{"within cap", []string{atlas.EffRead}, nil},
+		{"pure is ignored and allows under any cap", []string{atlas.EffRead, atlas.EffPure}, nil},
+		{"pure alone passes", []string{atlas.EffPure}, nil},
+		{"write exceeds", []string{atlas.EffWrite, atlas.EffRead}, []string{"write"}},
+		{"exec, cred, priv, persist, remote deny under read", []string{atlas.EffExec, atlas.EffCred, atlas.EffPriv, atlas.EffPersist, atlas.EffRemote, atlas.EffRead}, []string{"cred", "exec", "persist", "priv", "remote"}},
+		{"unknown atoms deny", []string{atlas.EffRead, "madeup"}, []string{"unknown"}},
+		{"empty missing effects denies as unknown", []string{}, []string{"unknown"}},
+		{"nil missing effects denies as unknown", nil, []string{"unknown"}},
+		{"deterministic dedup", []string{atlas.EffWrite, atlas.EffWrite, atlas.EffNet}, []string{"net", "write"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
