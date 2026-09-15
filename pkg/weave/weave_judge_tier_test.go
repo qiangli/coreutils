@@ -80,9 +80,10 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	return root
 }
 
-// (a) A Judge=="none" item with a green gate MERGES, and the pair runner is
-// NEVER invoked — a deterministically-verifiable unit needs no LLM arbiter.
-func TestWeavePullJudgeNoneSkipsPairAndMerges(t *testing.T) {
+// An explicit --review-agent opts into the pair even when the item's persisted
+// tier is none. Without the flag, no model process is involved.
+func TestWeavePullReviewAgentOverridesJudgeNone(t *testing.T) {
+	pinPassthroughJudge(t)
 	root := setupSubmittedRun(t, "test -f feature.txt")
 	dir, _ := weaveQueueDir(root)
 	patchWeaveItem(t, dir, 1, func(it *weaveItem) { it.Judge = weaveJudgeNone })
@@ -92,15 +93,45 @@ func TestWeavePullJudgeNoneSkipsPairAndMerges(t *testing.T) {
 	called := 0
 	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
 		called++
-		return weavePairReviewResult{}, nil
+		return weavePairReviewResult{
+			CodingAgent: "sh", ReviewAgent: "codex:gpt",
+			Verdict: weavePairPass, Reason: "explicit pair completed", ExitCode: weavePairPassExit,
+		}, nil
 	}
 
 	out, code := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--json")
 	if code != 0 || !strings.Contains(out, `"status": "merged"`) {
-		t.Fatalf("judge=none item did not merge on the probe alone (exit %d): %s", code, out)
+		t.Fatalf("explicit pair on judge=none item did not merge (exit %d): %s", code, out)
 	}
-	if called != 0 {
-		t.Fatalf("pair runner invoked %d times for a judge=none item; must be 0", called)
+	if called != 1 {
+		t.Fatalf("pair runner calls=%d, want 1 for explicit --review-agent", called)
+	}
+}
+
+func TestWeaveDefaultNeedsNeitherJudgeNorTestGate(t *testing.T) {
+	root := setupSubmittedRun(t, "")
+	dir, _ := weaveQueueDir(root)
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it.Judge != weaveJudgeNone || weaveJudgeMode(it) != weaveJudgeNone {
+		t.Fatalf("default judge = stored %q normalized %q, want none", it.Judge, weaveJudgeMode(it))
+	}
+	if it.VerifyCommand != "" || it.SuiteGate != "" {
+		t.Fatalf("fixture unexpectedly configured a test gate: %#v", it)
+	}
+
+	original := weavePairReviewRunner
+	t.Cleanup(func() { weavePairReviewRunner = original })
+	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
+		t.Fatal("ordinary ungated pull invoked a model reviewer")
+		return weavePairReviewResult{}, nil
+	}
+	out, code := runWeave(t, "pull", "1", "--json")
+	if code != 0 || !strings.Contains(out, `"status": "merged"`) {
+		t.Fatalf("clean committed run without judge/test gates did not merge (exit %d): %s", code, out)
 	}
 }
 

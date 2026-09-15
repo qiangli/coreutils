@@ -39,36 +39,24 @@ func salvageMainSubject(t *testing.T, root string) string {
 	return strings.TrimSpace(gitT(t, root, "log", "--format=%s", "-1"))
 }
 
-// The P0 regression: `weave salvage <N>` merged unreviewed WIP to the base
-// branch, routing around the fleet's `pull --review-agent` gate entirely. Bare
-// salvage must now exit NON-ZERO and leave the base branch unmoved.
-func TestWeaveSalvageRefusesMergeWithoutReviewVerdict(t *testing.T) {
+// Bare salvage uses the same optional deterministic gates as pull and never
+// invokes a model reviewer unless --review-agent is explicitly supplied.
+func TestWeaveSalvageMergesWithoutModelReview(t *testing.T) {
 	root := setupSalvageableRun(t, "test -f feature.txt")
 
 	original := weavePairReviewRunner
 	t.Cleanup(func() { weavePairReviewRunner = original })
 	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
-		t.Fatalf("bare salvage ran a pair review; it must refuse before merging")
+		t.Fatalf("bare salvage ran a pair review")
 		return weavePairReviewResult{}, nil
 	}
 
 	out, code := runWeave(t, "salvage", "1", "--json")
-	if code == 0 {
-		t.Fatalf("bare salvage exited 0 — unreviewed work merged around the gate: %s", out)
+	if code != 0 || !strings.Contains(out, `"status": "merged"`) {
+		t.Fatalf("bare salvage did not merge through deterministic gates (exit %d): %s", code, out)
 	}
-	if !strings.Contains(out, "--review-agent") || !strings.Contains(out, "--no-review") {
-		t.Fatalf("refusal did not name both the review route and the escape: %s", out)
-	}
-	if got := salvageMainSubject(t, root); got != "seed" {
-		t.Fatalf("base branch moved on a refused salvage: %s", got)
-	}
-	dir, _ := weaveQueueDir(root)
-	q, err := loadWeaveQueue(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if it := findWeaveItem(q, 1); it.State != "killed" {
-		t.Fatalf("refused salvage promoted the item anyway: state=%q", it.State)
+	if got := salvageMainSubject(t, root); got == "seed" {
+		t.Fatalf("bare salvage left the base branch unmoved: %s", got)
 	}
 }
 
@@ -134,8 +122,8 @@ func TestWeaveSalvageReviewAgentMergesOnPass(t *testing.T) {
 	}
 }
 
-// The escape exists, but it must never be quiet: an operator merging unreviewed
-// WIP on their own authority has to see that named in the output.
+// --no-review remains a compatibility spelling. Model review is already off by
+// default, so it need not emit an alarming escape warning.
 func TestWeaveSalvageNoReviewOverridesStoredReviewAgent(t *testing.T) {
 	root := setupSalvageableRun(t, "test -f feature.txt")
 	dir, _ := weaveQueueDir(root)
@@ -161,8 +149,8 @@ func TestWeaveSalvageNoReviewOverridesStoredReviewAgent(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("salvage --no-review exit=%d: %s", code, out)
 	}
-	if !strings.Contains(out, "--no-review") || !strings.Contains(strings.ToUpper(out), "UNREVIEWED") {
-		t.Fatalf("the escape was taken silently: %s", out)
+	if strings.Contains(strings.ToUpper(out), "MERGING UNREVIEWED WORK") {
+		t.Fatalf("compatibility flag emitted obsolete mandatory-review warning: %s", out)
 	}
 	if strings.Contains(out, "PAIR HARNESS-ERROR") || strings.Contains(out, "context deadline exceeded") {
 		t.Fatalf("--no-review presented stored pair evidence as though a pair ran now: %s", out)

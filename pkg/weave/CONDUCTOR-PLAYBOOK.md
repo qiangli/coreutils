@@ -506,11 +506,9 @@ WHAT THE SCREEN ASKS:
   Resume works from any state with a preserved workspace.
 - A run marked `failed`/`killed` that is flagged **salvageable** has committed
   work on its branch — measured from git, not from the record the dead wrapper
-  never wrote. `weave salvage N --review-agent <agent>`, do NOT re-run it.
-  Salvage handles the least trustworthy work in the fleet (killed mid-flight,
-  auto-committed WIP nobody declared finished), so it REFUSES to merge without
-  a passing adversarial verdict unless you name `--no-review` explicitly. It
-  shows the diff before merging, and never pushes.
+  never wrote. Inspect it, then `weave salvage N`; do NOT re-run it. Salvage
+  shows the diff, honors any configured deterministic gates, and never pushes.
+  Add `--review-agent <agent>` only when model review is explicitly wanted.
 - A `submitted` run flagged **needs-steward** has been sitting unmerged past the
   threshold; the flag names the decision owed (pull, reverify, or abandon). The
   reaper deliberately does not merge for you — `weave pull` owns the verify /
@@ -707,8 +705,8 @@ When a run encounters provider-level rate limits, 429s, or route exhaustion, fol
 
 1. **Targeted kill**: Perform a targeted kill of the affected worker process tree when a provider failover trigger or throttle occurs, leaving the workspace intact on disk.
 2. **Retained workspace/branch/commit**: Ensure the run workspace directory, git branch, and any committed work (`commits_ahead > 0`, `salvageable: true`) remain intact on disk. The reaper and watchdog surface work on killed/failed runs rather than destroying it.
-3. **Guarded salvage**: Execute `weave salvage <issue>` (or let salvage evaluation run) to review and verify the retained commit under the mandatory review + deterministic verification gate before merging or continuing.
-4. **Deterministic continuation (when no eligible L3 judge exists)**: If no eligible L3 judge (Band 3+ model/agent from a distinct model family with available quota) exists to perform the LLM review, create a deterministic continuation run that fetches the retained commit directly from the retained branch/workspace into the new continuation context. This guarantees progress without re-executing already-completed work or stalling in limbo.
+3. **Guarded salvage**: Inspect the retained commit, then execute `weave salvage <issue>` (or let salvage evaluation run); configured deterministic gates are honored, while absent gates do not block the merge.
+4. **Deterministic continuation**: If salvage cannot proceed, create a continuation run that fetches the retained commit directly from the retained branch/workspace into the new continuation context. This guarantees progress without re-executing already-completed work or stalling in limbo.
 5. **Route quota distinction (Native AGY Gemini vs AGY Third-Party)**: Native AGY Gemini routes (direct Google Gemini quota) and AGY third-party routes (e.g. Anthropic/OpenAI or proxy routes accessible via AGY or cloudbox gateway) operate under distinct, independent rate limits and quota allocations. A 429 or quota limit on native AGY Gemini does NOT mean AGY third-party routes are exhausted (or vice versa); failover selection must evaluate availability across these separate quota pools rather than assuming a global outage across distinct route types.
 
 ## Conformance / fidelity campaign patterns (learned 2026-06-24, bash-5.3 drive 86%→90%)

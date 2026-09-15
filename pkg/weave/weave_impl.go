@@ -235,11 +235,10 @@ type weaveItem struct {
 	// Judge is the item's VERIFIABILITY TIER — how much evidence a merge needs
 	// beyond the deterministic gate. "none" means the probe (build+test / suite /
 	// clean-room verify) is sufficient on its own: work whose correctness a machine
-	// can settle needs no LLM arbiter. "required" (the conservative DEFAULT — an
-	// empty value reads as required) means a merge ALSO needs a passing adversarial
-	// judge verdict. It never relaxes the probe (see weaveJudgeMode); it only decides
-	// whether the extra LLM judge runs, so deterministically-testable work stops
-	// paying for a judge on every merge and stops blocking when the judge is down.
+	// can settle needs no LLM arbiter. This is the DEFAULT: an empty value reads as
+	// none. "required" is retained as compatibility metadata for callers that
+	// explicitly classify work; model review runs only when --review-agent is
+	// supplied. It never relaxes a configured deterministic probe.
 	Judge string `json:"judge,omitempty"`
 	// Band is the issue's DIFFICULTY band (L1-L4; 0 = unpegged). It raises the
 	// judge floor: a verdict-required merge needs a judge at max(L3, Band). When
@@ -2073,13 +2072,16 @@ func runWeaveAddFullTiered(cmd *cobra.Command, title, body, priority, verify, su
 	}
 	if !weaveValidJudgeTier(judge) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add",
-			weavecli.ExitInvalidArg, fmt.Errorf("--judge must be %q or %q (empty defaults to %q)", weaveJudgeNone, weaveJudgeRequired, weaveJudgeRequired)))
+			weavecli.ExitInvalidArg, fmt.Errorf("--judge must be %q or %q (empty defaults to %q)", weaveJudgeNone, weaveJudgeRequired, weaveJudgeNone)))
 	}
 	if band < 0 || band > fleet.MaxBand {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add",
 			weavecli.ExitInvalidArg, fmt.Errorf("--band must be 1-%d (0 = unpegged)", fleet.MaxBand)))
 	}
 	judge = strings.ToLower(strings.TrimSpace(judge))
+	if judge == "" {
+		judge = weaveJudgeNone
+	}
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
 	if err != nil {
@@ -4623,13 +4625,12 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		// is not written back, so a concurrent writer's edit to an untouched
 		// item is never clobbered.
 		before := weaveItemFingerprints(q)
-		// FAIL-CLOSED pre-pass. When review is in force, refuse to BEGIN the merge
-		// loop unless every verdict-required item in scope has an eligible,
+		// When review is explicitly requested, refuse to BEGIN the merge loop unless
+		// every submitted item in scope has an eligible,
 		// band-matched, different-family judge. Running this before any merge means
 		// the loop never proceeds per-run: a required item that cannot be judged
 		// HALTS the whole pull (non-zero exit) instead of silently merging its
-		// peers around it. Judge=="none" items are skipped here — their probe is
-		// enough, and the tier gate below never invokes the pair runner for them.
+		// peers around it. With no reviewer, deterministic gates remain authoritative.
 		if err := weaveRequireEligibleJudge(q.Items, reviewAgent, issueID, issueSpecified); err != nil {
 			return err
 		}
@@ -4696,16 +4697,6 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				if err := weaveRequireReviewGate(it); err != nil {
 					return err
 				}
-			}
-			// A recorded pair verdict means adversarial review was put in force
-			// for this submission. A later bare pull must not turn a missing pass
-			// into approval merely because --review-agent was omitted this time.
-			// Salvage --no-review is the one explicit waiver and is threaded here
-			// separately from an empty reviewer.
-			hasRecordedPair := strings.TrimSpace(it.ReviewAgent) != "" || strings.TrimSpace(it.PairVerdict) != ""
-			if !waiveRecordedPair && reviewAgent == "" && hasRecordedPair && !weaveHasNamedPairPass(it) {
-				return fmt.Errorf("run #%d has recorded adversarial verdict %q, not a named pass — re-run with `--review-agent <agent>`, or explicitly waive review with `weave salvage %d --no-review`",
-					it.ID, it.PairVerdict, it.ID)
 			}
 			if it.State == "working" && it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "running",
@@ -4775,12 +4766,10 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// adds is committed as evidence, then the existing verify/suite gate
 			// below is the only arbiter. Default-off preserves legacy pull.
 			//
-			// CONDITIONAL by verifiability tier: the pair runner is invoked ONLY
-			// for verdict-required items. A Judge=="none" item skips it entirely
-			// and merges on the deterministic gate alone — no LLM invocation, no
-			// block when the judge is down. Eligibility was already vetted by the
-			// fail-closed pre-pass above, so reaching the runner here is safe.
-			if reviewAgent != "" && it.State == "submitted" && weaveJudgeIsRequired(it) {
+			// Model review is strictly opt-in through --review-agent. In its absence,
+			// the deterministic gates below are sufficient regardless of stored tier
+			// or stale pair evidence. Eligibility was vetted by the pre-pass above.
+			if reviewAgent != "" && it.State == "submitted" {
 				if it.Workspace == "" {
 					pr := weaveNormalizePairReview(weavePairReviewResult{}, errors.New("no workspace recorded for adversarial review"))
 					it.PairVerdict, it.PairReason, it.PairExit = string(pr.Verdict), pr.Reason, pr.ExitCode
@@ -4965,7 +4954,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 						SuiteGateExit:   &sgExit,
 						SuiteGateOutput: sgOutput,
 					}
-					if !waiveRecordedPair {
+					if !waiveRecordedPair && reviewAgent != "" {
 						suiteResult.ReviewAgent = it.ReviewAgent
 						suiteResult.ReviewAddedTest = it.ReviewAddedTest
 						suiteResult.PairVerdict = it.PairVerdict
@@ -5051,7 +5040,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// An explicit no-review salvage may retain old forensic evidence on
 			// the queue item, but that evidence did not authorize this merge and
 			// must not be rendered as though the pair ran in this invocation.
-			if !waiveRecordedPair {
+			if !waiveRecordedPair && reviewAgent != "" {
 				mergedResult.ReviewAgent = it.ReviewAgent
 				mergedResult.ReviewAddedTest = it.ReviewAddedTest
 				mergedResult.PairVerdict = it.PairVerdict
@@ -5061,7 +5050,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			results = append(results, mergedResult)
 			// A merge with no suite gate and no pair verdict adds no evidence
 			// beyond what the finalize path already recorded; skip those.
-			if suiteGateExit != nil || it.PairVerdict != "" {
+			if suiteGateExit != nil || (reviewAgent != "" && it.PairVerdict != "") {
 				gateDecisions = append(gateDecisions, *it)
 			}
 		}
@@ -5496,7 +5485,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 	fmt.Fprintf(w, "  commits:  %s\n", branchInfo)
 	if it.Salvageable {
-		fmt.Fprintf(w, "  salvage:  SALVAGEABLE — has %d unmerged commit(s); inspect with `weave shell %d`, then `weave salvage %d --review-agent <agent>` to review and merge\n", it.UnmergedCommits, it.ID, it.ID)
+		fmt.Fprintf(w, "  salvage:  SALVAGEABLE — has %d unmerged commit(s); inspect with `weave shell %d`, then `weave salvage %d` to run configured deterministic gates and merge\n", it.UnmergedCommits, it.ID, it.ID)
 	}
 	if it.ExitCode != nil {
 		fmt.Fprintf(w, "  exit:     %d\n", *it.ExitCode)
@@ -6675,17 +6664,9 @@ func weaveTestPauseAfterFinalizeClaim() {
 // supported path for "the agent did good work but its TUI was killed, so it
 // landed in `killed` state."
 //
-// REVIEW IS NOT OPTIONAL HERE. Salvage is the path taken for exactly the runs
-// that are LEAST trustworthy: killed mid-flight, holding auto-committed WIP that
-// no agent ever declared finished. That is the code most in need of adversarial
-// review, and before this gate it was the code that got the least — salvage
-// merged around the fleet's `pull --review-agent` gate entirely, landing
-// unreviewed dead code on the base branch with a single line of output. So
-// salvage now REFUSES to merge unless one of these holds:
-//
-//	--review-agent <agent>   run the adversarial pair (same gate as pull)
-//	a recorded pair PASS     a previous reviewed attempt already passed
-//	--no-review              the explicit escape, named loudly in the output
+// Model review is opt-in here, as it is for pull. A bare salvage still runs the
+// deterministic dirty / verify / suite / isolation gates. --no-review remains
+// accepted for compatibility but is no longer needed to bypass a model gate.
 //
 // Salvage never pushes: merging and publishing are separate decisions, and
 // nothing in weave contacts a remote. Publishing salvaged work is the operator's
@@ -6721,9 +6702,6 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64,
 		default:
 			return fmt.Errorf("run #%d is %q — salvage applies to killed/failed items holding committed work (done/abandoned/allocated have nothing to merge)", issueID, it.State)
 		}
-		if err := weaveSalvageReviewGate(it, reviewAgent, noReview); err != nil {
-			return err
-		}
 		if it.State == "submitted" || it.State == "working" {
 			diffStat = weaveSalvageDiffStat(it, base)
 			return nil
@@ -6757,38 +6735,11 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64,
 		}
 		fmt.Fprintf(w, "weave salvage: run #%d — the diff about to be merged into %s:\n%s\n", issueID, base, diffStat)
 	}
-	if noReview {
-		fmt.Fprintf(cmd.ErrOrStderr(), "weave salvage: --no-review — MERGING UNREVIEWED WORK for run #%d; no adversarial pair ran and no fresh verdict is recorded\n", issueID)
-	}
 	// Delegate to pull: re-acquires the lock and runs the full verify + merge
 	// path on the now-"submitted" item. force=false — salvage rescues work a
 	// run committed, which is no reason to skip the isolation gate; a flagged
 	// run still has to be reviewed and pulled with an explicit --force.
 	return runWeavePull(cmd, flags, issueID, true, false, false, noReview, reviewAgent)
-}
-
-// weaveSalvageReviewGate is the refusal half of salvage's review contract. It
-// returns nil only when the merge that follows will be reviewed, has already
-// been reviewed with a passing verdict, or was explicitly waived.
-func weaveSalvageReviewGate(it *weaveItem, reviewAgent string, noReview bool) error {
-	if reviewAgent != "" || noReview {
-		return nil
-	}
-	if weaveHasNamedPairPass(it) {
-		return nil
-	}
-	recorded := "none recorded"
-	if v := strings.TrimSpace(it.PairVerdict); v != "" {
-		recorded = "recorded verdict " + v
-	}
-	return fmt.Errorf("run #%d has no passing adversarial review (%s) — salvage merges the LEAST trustworthy work in the fleet (killed mid-flight, auto-committed WIP nobody declared finished), so it will not merge unreviewed: re-run with `--review-agent <agent>` to put it through the same gate as `weave pull`, or `--no-review` to merge it unreviewed on your own authority",
-		it.ID, recorded)
-}
-
-func weaveHasNamedPairPass(it *weaveItem) bool {
-	return it != nil &&
-		weavePairVerdict(it.PairVerdict) == weavePairPass &&
-		strings.TrimSpace(it.ReviewAgent) != ""
 }
 
 // weaveSalvageDiffStat renders what salvage is about to merge. Best-effort: a
@@ -7276,7 +7227,7 @@ func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
 func weaveNotPullableDetail(it *weaveItem, base string, ahead int) string {
 	next := fmt.Sprintf("inspect with `weave status %d`", it.ID)
 	if weaveSalvageableState(it.State) {
-		next = fmt.Sprintf("a killed/failed run needs review: `weave salvage %d --review-agent <agent>`", it.ID)
+		next = fmt.Sprintf("inspect the killed/failed run, then `weave salvage %d`", it.ID)
 	}
 	return fmt.Sprintf("run is %q and holds %d commit(s) not on %s — NOT empty; pull merges `submitted` runs, so %s. Do NOT abandon/prune: those commits exist only in this run's workspace clone",
 		it.State, ahead, base, next)
@@ -7349,7 +7300,7 @@ func weavePruneHoldReason(ahead, dirtyFiles, untracked int) string {
 	var parts []string
 	if ahead > 0 {
 		// This is the dangerous one. The commits exist ONLY here.
-		parts = append(parts, fmt.Sprintf("%d unmerged commit(s) — `weave salvage %s --review-agent <agent>` to keep them", ahead, "<id>"))
+		parts = append(parts, fmt.Sprintf("%d unmerged commit(s) — inspect them, then `weave salvage %s` to keep them", ahead, "<id>"))
 	}
 	if n := dirtyFiles + untracked; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d uncommitted file(s) — `weave abandon %s --force --yes` preserves them under a salvage ref before removal", n, "<id>"))
@@ -7378,7 +7329,7 @@ func weaveCrashedAutoCommitMessage(it *weaveItem, exitCode int, killReason strin
 		"The agent did not exit cleanly, so this run is NOT submitted and this\n"+
 		"commit asserts nothing about whether the work is correct or complete.\n"+
 		"It exists so the work is not lost: it was sitting uncommitted in a\n"+
-		"workspace, and an unreviewed tree is one `weave prune` away from gone.\n\n"+
-		"Review it, then `weave salvage %d --review-agent <agent>` to put it through the gate.",
+		"workspace, and an uncommitted tree is one `weave prune` away from gone.\n\n"+
+		"Inspect it, then `weave salvage %d` to run any configured deterministic gates and merge.",
 		it.ID, how, strings.TrimSpace(it.Title), it.ID)
 }
