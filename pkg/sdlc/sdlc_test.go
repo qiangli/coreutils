@@ -152,8 +152,23 @@ func TestDefaultConfigUsesDetectedConductor(t *testing.T) {
 	if cfg.Conductor.Agent != "agy" {
 		t.Fatalf("default conductor=%q, want agy", cfg.Conductor.Agent)
 	}
+	if cfg.Reviewer.Agent != "" || cfg.QA.Agent != "" {
+		t.Fatalf("zero-config roles must be opt-in: reviewer=%q qa=%q", cfg.Reviewer.Agent, cfg.QA.Agent)
+	}
+	if defaults := DefaultConfigYAML(); strings.Contains(defaults, "reviewer:") || strings.Contains(defaults, "qa:") {
+		t.Fatalf("generated zero-config YAML assigns opt-in roles:\n%s", defaults)
+	}
 	if cfg.Policies["intake_labels_required"] != "false" || !strings.Contains(cfg.Policies["reserved_skip_labels"], "sdlc:blocked") {
 		t.Fatalf("default intake policies missing: %+v", cfg.Policies)
+	}
+}
+
+func TestDefaultBriefDoesNotAssignReviewOrQA(t *testing.T) {
+	brief := BuildConductorBrief(DefaultConfig(), Issue{Title: "Keep it simple"})
+	for _, unwanted := range []string{"review agent", "qa agent", "send the result to the configured review", "send the result to the configured qa", "tests and review pass"} {
+		if strings.Contains(strings.ToLower(brief), unwanted) {
+			t.Fatalf("zero-config brief contains opt-in step %q:\n%s", unwanted, brief)
+		}
 	}
 }
 

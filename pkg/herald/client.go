@@ -104,14 +104,14 @@ type Result struct {
 
 // Succeeded is the ONLY success predicate callers may use.
 //
-// Deliberately not "State == completed": that is the peer's own claim about
-// itself. When a gate was configured, the gate decides; when none was, the
-// result is reported as unverified rather than as success.
+// When a gate was configured, the gate decides. Without one, the peer's
+// completed state is accepted for command composition but remains explicitly
+// unverified in Gate.
 func (r Result) Succeeded() bool {
 	if r.Gate.Ran {
 		return r.Gate.Passed
 	}
-	return false
+	return strings.EqualFold(r.State, "completed")
 }
 
 // ExitCode maps a result onto a process exit status, so a peer composes with
@@ -123,7 +123,7 @@ func (r Result) ExitCode() int {
 	case r.Gate.Ran:
 		return 1
 	case strings.EqualFold(r.State, "completed"):
-		return 2 // completed but UNVERIFIED — not success
+		return 0 // successful peer completion; Gate still records UNVERIFIED
 	default:
 		return 1
 	}

@@ -42,12 +42,10 @@
 //
 // # Evidence, not assertion
 //
-// A2A's terminal TASK_STATE_COMPLETED is SELF-REPORTED by the peer. The
-// fleet's own three-harness A/B measured the failure mode this invites: all
-// three harnesses exited 0 when they failed. herald therefore treats a peer's
-// completion as a claim, and settles it with a gate — see gate.go. A peer
-// that ignores the gate extension is not trusted more, only measured
-// differently: the gate runs locally on the returned artifacts instead.
+// A2A's terminal TASK_STATE_COMPLETED is self-reported by the peer. herald
+// accepts that completion by default and labels it unverified. Callers that
+// need an authoritative verdict opt into a gate — see gate.go. A peer that
+// ignores the gate extension is measured locally when a gate was supplied.
 package herald
 
 import (

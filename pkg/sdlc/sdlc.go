@@ -1769,8 +1769,6 @@ func DefaultConfig() Config {
 	conductor := DefaultConductorAgent()
 	return Config{
 		Conductor: RoleConfig{Agent: conductor},
-		Reviewer:  RoleConfig{Agent: "codex"},
-		QA:        RoleConfig{Agent: "codex"},
 		Intake:    IntakeConfig{Provider: "local"},
 		Deploy: DeploymentConfig{
 			Staging:    TargetConfig{Name: "staging"},
@@ -2516,7 +2514,10 @@ func BuildConductorBrief(cfg Config, issue Issue) string {
 	fmt.Fprintf(&b, "You are the SDLC conductor for this repository.\n\n")
 	fmt.Fprintf(&b, "Boundary:\n")
 	fmt.Fprintf(&b, "- SDLC owns intake pointers, lifecycle state, validation gates, and deployment routing.\n")
-	fmt.Fprintf(&b, "- You own implementation planning and sprint execution. Use bashy sprint/weave and delegate coding, review, and QA work to the available agent fleet.\n")
+	fmt.Fprintf(&b, "- You own implementation planning and sprint execution. Use bashy sprint/weave when useful.\n")
+	if cfg.Reviewer.Agent != "" || cfg.QA.Agent != "" {
+		fmt.Fprintf(&b, "- Delegate configured follow-up roles to the available agent fleet.\n")
+	}
 	fmt.Fprintf(&b, "- Source guardrail: work in a mutable workspace whose origin is a local Loom workspace repo; use a baseline remote for the immutable Loom mirror. Do not push to GitHub or any production upstream during implementation.\n")
 	fmt.Fprintf(&b, "- Do not deploy to the configured rollout target without explicit approval when policy requires it.\n\n")
 	fmt.Fprintf(&b, "Issue:\n")
@@ -2563,10 +2564,17 @@ func BuildConductorBrief(cfg Config, issue Issue) string {
 	}
 	fmt.Fprintf(&b, "\nExpected loop:\n")
 	fmt.Fprintf(&b, "1. Analyze priority/risk and create a sprint plan.\n")
-	fmt.Fprintf(&b, "2. Assign implementation work to agentic tools.\n")
-	fmt.Fprintf(&b, "3. Merge only after tests and review pass.\n")
-	fmt.Fprintf(&b, "4. Prepare validation evidence for deterministic smoke checks, optional QA, and optional UAT approval.\n")
-	fmt.Fprintf(&b, "5. Iterate on rejection/failure evidence until accepted, then prepare rollout instructions for the configured deployment target.\n")
+	fmt.Fprintf(&b, "2. Implement the requested change.\n")
+	step := 3
+	if cfg.Reviewer.Agent != "" {
+		fmt.Fprintf(&b, "%d. Send the result to the configured review agent.\n", step)
+		step++
+	}
+	if cfg.QA.Agent != "" {
+		fmt.Fprintf(&b, "%d. Send the result to the configured QA agent.\n", step)
+		step++
+	}
+	fmt.Fprintf(&b, "%d. Prepare rollout instructions for the configured deployment target.\n", step)
 	return b.String()
 }
 

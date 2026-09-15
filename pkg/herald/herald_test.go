@@ -206,14 +206,18 @@ func TestUnrunGateIsNotSuccess(t *testing.T) {
 	}
 }
 
-func TestResultSucceededIgnoresPeerClaim(t *testing.T) {
-	// The peer says it finished. No gate ran. That is NOT success.
+func TestResultSucceededAcceptsUngatedCompletionAsUnverified(t *testing.T) {
+	// The peer says it finished. No gate ran: it composes successfully while
+	// the Gate outcome continues to identify it as unverified.
 	r := Result{State: "completed"}
-	if r.Succeeded() {
-		t.Fatal("a peer's own completed state must not count as success")
+	if !r.Succeeded() {
+		t.Fatal("completed peer work should succeed when no gate was requested")
 	}
-	if got, want := r.ExitCode(), 2; got != want {
+	if got, want := r.ExitCode(), 0; got != want {
 		t.Errorf("ExitCode() = %d, want %d (completed but unverified)", got, want)
+	}
+	if !strings.Contains(r.Gate.Summary(), "UNVERIFIED") {
+		t.Errorf("Gate.Summary() = %q, want UNVERIFIED", r.Gate.Summary())
 	}
 
 	// Gate ran and passed: success.

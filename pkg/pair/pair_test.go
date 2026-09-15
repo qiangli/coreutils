@@ -2,7 +2,6 @@ package pair
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -61,15 +60,29 @@ func TestBlindRoleNeverSeesTheProposal(t *testing.T) {
 	}
 }
 
-func TestRejectAuthorityWithoutAGateIsAnError(t *testing.T) {
-	_, err := NewPlan(nil, BuiltinRoles["break"], Agents{Proposer: "a:x", Pair: "b:y"}, "task", "")
-	if !errors.Is(err, ErrNoGate) {
-		t.Fatalf("a reject-authority pair ran with no gate — the MODEL becomes the arbiter of done. got: %v", err)
+func TestRolesMayRunWithoutAGate(t *testing.T) {
+	for _, name := range []string{"break", "second-opinion"} {
+		if _, err := NewPlan(nil, BuiltinRoles[name], Agents{Proposer: "a:x", Pair: "b:y"}, "task", ""); err != nil {
+			t.Fatalf("role %q was refused a gateless advisory run: %v", name, err)
+		}
 	}
+}
 
-	// Advise roles are allowed to be ungated: they cannot block, so they cannot arbitrate.
-	if _, err := NewPlan(nil, BuiltinRoles["second-opinion"], Agents{Proposer: "a:x", Pair: "b:y"}, "task", ""); err != nil {
-		t.Fatalf("an advise-authority pair was refused a gateless run: %v", err)
+func TestRejectAuthorityWithoutGateIsReportedUngated(t *testing.T) {
+	plan, err := NewPlan(nil, BuiltinRoles["break"], Agents{Proposer: "a:x", Pair: "b:y"}, "task", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(_ context.Context, _, _ string, _ bool) (string, error) { return "advisory contribution", nil }
+	res, err := plan.Run(context.Background(), run, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeUngated || !strings.Contains(res.Headline(), "UNGATED") {
+		t.Fatalf("gateless reject role was not clearly advisory: %+v", res)
+	}
+	if prompt := plan.PairPrompt("proposal"); !strings.Contains(prompt, "advisory and unverified") {
+		t.Fatalf("gateless reject prompt did not explain its authority:\n%s", prompt)
 	}
 }
 
@@ -84,6 +97,9 @@ func TestAgentFlagAliasesPair(t *testing.T) {
 	cmd := NewPairCmd()
 	if cmd.Flags().Lookup("agent") == nil || cmd.Flags().Lookup("pair") == nil || cmd.Flags().Lookup("yolo") == nil {
 		t.Fatal("pair must accept --agent/--pair and an explicit --yolo permission opt-in")
+	}
+	if got := cmd.Flags().Lookup("verify").Usage; strings.Contains(got, "default") {
+		t.Fatalf("--verify help implies an implicit gate: %q", got)
 	}
 }
 

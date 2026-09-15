@@ -1,5 +1,5 @@
-// Package pair runs work through TWO agents and a gate: one proposes, one pairs with it in
-// a declared role, and a real gate — not a model — decides whether it is done.
+// Package pair runs work through two agents: one proposes and one pairs with
+// it in a declared role. An optional command gate can verify the outcome.
 //
 // It replaces `judge`, which could only ever TALK.
 //
@@ -40,7 +40,7 @@
 // declare the branch shippable. CI does that.
 //
 //	the pair may ACT freely, and REJECT or ADVISE.
-//	the pair may never APPROVE.  Only the GATE may, and the gate is a command.
+//	the pair may never APPROVE. An ungated result is advisory; an opted-in gate is authoritative.
 //
 // # 3. Does the pair SEE the proposal?
 //
@@ -248,8 +248,8 @@ For each fix:
   - Leave both. The test is the evidence that the fix was necessary; without it your patch is
     indistinguishable from a rewrite you happened to prefer.
 
-You may not approve your own work, and you may not declare the whole thing done. A gate runs
-after you and it is the only thing that gets to say that.`,
+You may not approve your own work or declare the whole thing done. If the caller supplied a
+gate, that command determines the verified outcome; otherwise your result is advisory.`,
 	},
 
 	"second-opinion": {
@@ -313,8 +313,8 @@ Rules:
   - file:line, or it did not happen.
   - Every finding needs a FAILURE SCENARIO: concrete inputs, and the wrong output they
     produce. "This could be clearer" is not a finding.
-  - You may not approve. A gate decides that, and it runs after you. Your job is to make sure
-    it is not the first thing to notice a problem.
+  - You may not approve. If the caller supplied a gate, it decides the verified outcome.
+    Otherwise your result is advisory.
   - If you attacked it and it held, SAY SO. Inventing a finding to fill the slot is worse than
     an empty slot.
 

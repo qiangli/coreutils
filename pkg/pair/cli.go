@@ -52,8 +52,8 @@ func NewPairCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "pair [task]",
-		Short: "two agents and a gate: one proposes, one pairs with it, and a COMMAND decides",
-		Long: `Run work through two agents in different roles, then let a real gate decide.
+		Short: "run two agents in complementary roles, with optional command verification",
+		Long: `Run work through two agents in different roles, optionally followed by a real gate.
 
 The pair ACTS — it has the keyboard. It writes the failing test, or the fix, or its own
 independent implementation. That is the difference between this and a reviewer:
@@ -61,8 +61,8 @@ independent implementation. That is the difference between this and a reviewer:
     a critic's finding is a CLAIM.  Someone must now adjudicate it.
     a pair's failing test is a PROOF.  The gate reads it. Nobody adjudicates.
 
-And the pair may never approve. It may act freely and it may reject; only the gate can say
-the work is done, because a gate is a command and a model is not.`,
+The pair may never approve. Without --verify, its result is an ungated advisory claim.
+When --verify is supplied, that command decides the verified outcome.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if listRoles {
@@ -83,7 +83,7 @@ the work is done, because a gate is a command and a model is not.`,
 	// human-facing original; both feed the same identity and therefore the same
 	// separation-of-duties checks in NewPlan.
 	f.StringVar(&pairAgent, "agent", "", "agent that pairs with it (alias for --pair)")
-	f.StringVar(&gateOvr, "verify", "", "the gate command (default: the project's gate)")
+	f.StringVar(&gateOvr, "verify", "", "run this authoritative gate command after pairing")
 	f.DurationVar(&timeout, "timeout", 20*time.Minute, "per-agent timeout")
 	f.BoolVar(&asJSON, "json", false, "emit "+SchemaVersion)
 	f.BoolVar(&listRoles, "roles", false, "list the available roles and what each produces")
@@ -128,14 +128,11 @@ func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, d
 	// the definition up front and run that same definition both times; the pair may change
 	// the code, never the ruler.
 	var def *gate.Definition
-	if strings.TrimSpace(gateOvr) != "" || role.Authority == AuthorityReject {
+	if strings.TrimSpace(gateOvr) != "" {
 		root, _ := os.Getwd()
 		def, err = gate.Resolve(root, gateOvr)
 		if err != nil {
-			if role.Authority == AuthorityReject {
-				return fmt.Errorf("%w\n\nunderlying: %v", ErrNoGate, err)
-			}
-			def = nil
+			return fmt.Errorf("pair: resolve --verify: %w", err)
 		}
 	}
 
@@ -281,6 +278,8 @@ func render(cmd *cobra.Command, r *Result) {
 		fmt.Fprintf(out, "  gate      before=%s  after=%s\n", gateWord(r.GateBefore), gateWord(r.GateAfter))
 	} else if r.GateAfter != nil {
 		fmt.Fprintf(out, "  gate      %s\n", gateWord(r.GateAfter))
+	} else {
+		fmt.Fprintln(out, "  gate      not run (ungated advisory result)")
 	}
 	if r.DiversityNote != "" {
 		fmt.Fprintf(out, "\n  ! %s\n", r.DiversityNote)

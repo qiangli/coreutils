@@ -32,9 +32,8 @@ A peer is an ordinary binding. ` + "`herald add reviewer https://…`" + ` write
 fleet model, so ` + "`herald:reviewer`" + ` is then addressable by meet, weave and
 foreman with no further setup.
 
-A peer's own "completed" is a CLAIM, not a result. Pass --gate to say what
-would convince you; herald runs it and reports the verdict, so a delegated
-task composes with && like any other command.`),
+A peer's own "completed" is accepted as an unverified result. Pass --gate when
+you need an authoritative verdict; herald runs it and reports the result.`),
 		SilenceUsage: true,
 	}
 	root.AddCommand(newDiscoverCmd(), newAddCmd(), newListCmd(), newRemoveCmd(), newSendCmd(), newACPCmd())
@@ -213,17 +212,17 @@ func newSendCmd() *cobra.Command {
 	var stream bool
 	c := &cobra.Command{
 		Use:   "send <peer> <prompt>",
-		Short: "Delegate a task to a peer and gate the result",
+		Short: "Delegate a task to a peer, optionally gating the result",
 		Long: strings.TrimSpace(`
-Delegates a task and returns a GATED result.
+Delegates a task and returns the peer's result.
 
-Exit status is the point: 0 only when the gate passed, 2 when the peer claimed
-completion but nothing verified it, non-zero otherwise. So a peer composes:
+With --gate, that command is authoritative: exit 0 only when it passes. So a
+gated peer composes:
 
     bashy herald send reviewer "review PR 41" --gate './ci.sh' && echo shipped
 
-Without --gate the result is reported as UNVERIFIED and exits 2, because a
-peer's own "completed" is a claim about itself.`),
+Without --gate, completed peer work exits 0 and is clearly reported as
+UNVERIFIED.`),
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := bookFor(cmd).Get(args[0])

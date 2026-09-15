@@ -34,8 +34,7 @@ import (
 // Outcome is the verdict on one delegated task.
 type Outcome struct {
 	// Ran reports whether a gate was executed at all. False means the task
-	// was delegated with no gate — permitted, but the result is unverified
-	// and callers must not report it as success.
+	// was delegated with no gate — permitted, but the result is unverified.
 	Ran bool `json:"ran"`
 	// Passed is the verdict. Meaningless unless Ran.
 	Passed bool `json:"passed"`
@@ -120,7 +119,7 @@ func RunLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
 func RunLocalWithProbe(ctx context.Context, dir, command, peerClaimed string, probe *MutationProbe) Outcome {
 	out := Outcome{Where: "local", Command: command, PeerClaimed: peerClaimed}
 	if strings.TrimSpace(command) == "" {
-		return out // Ran stays false: no gate, no verdict, no success.
+		return out // Ran stays false: no gate and no verified verdict.
 	}
 	if dir == "" {
 		dir, _ = os.Getwd()

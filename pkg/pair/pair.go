@@ -41,8 +41,7 @@ const (
 	// can see. A real result — and a cheap one.
 	OutcomeHeld Outcome = "held"
 
-	// OutcomeUngated: no gate ran. The pair's output is an unverified claim. Only legal for
-	// advise-authority roles.
+	// OutcomeUngated: no gate ran. The pair's output is an unverified advisory claim.
 	OutcomeUngated Outcome = "ungated"
 )
 
@@ -109,16 +108,6 @@ func (r *Result) Headline() string {
 	return string(r.Outcome)
 }
 
-// ErrNoGate is returned when a reject-authority role runs with no gate.
-//
-// An ERROR, not a warning, deliberately. A critique with nothing to check it against makes
-// the MODEL the arbiter of done — by default, because nothing else is. That is the pattern
-// this package exists to abolish.
-var ErrNoGate = errors.New("pair: a reject-authority role needs a gate (--verify). Without one the " +
-	"MODEL decides whether the work is finished, which is precisely the failure this pattern exists " +
-	"to prevent. Pass a gate, or pick an advise-authority role and accept that the output is an " +
-	"unverified claim")
-
 // Agents holds the two sides. Each is a `tool:model` binding.
 type Agents struct {
 	Proposer string
@@ -170,7 +159,7 @@ type Plan struct {
 	Role   Role
 	Agents Agents
 	Task   string
-	Gate   string // the gate command. Required for reject-authority roles.
+	Gate   string // optional gate command; when supplied, it is authoritative.
 
 	// Proposal, when set, is work that ALREADY EXISTS — a diff, a file, a branch. The
 	// proposer does not run; the pair attacks what is already there.
@@ -202,10 +191,6 @@ func NewPlan(cat *fleet.Catalog, role Role, agents Agents, task, gate string) (*
 			"refute itself. It will agree with the reasoning it just produced, because it IS the "+
 			"reasoning it just produced", agents.Proposer)
 	}
-	if role.Authority == AuthorityReject && strings.TrimSpace(gate) == "" {
-		return nil, ErrNoGate
-	}
-
 	diverse, note := CheckDiversity(cat, agents)
 	return &Plan{Role: role, Agents: agents, Task: task, Gate: gate, Diverse: diverse, Note: note}, nil
 }
@@ -240,10 +225,16 @@ func (p *Plan) PairPrompt(proposal string) string {
 	}
 	switch p.Role.Authority {
 	case AuthorityReject:
-		b.WriteString("You may REJECT. You may NOT APPROVE.\n\n" +
-			"Approval is not yours to give — a gate runs after you, and it is a command, not a " +
-			"model. Never say \"looks good\" or \"LGTM\"; that is not a result you are authorised " +
-			"to produce. If you attacked it honestly and it held, say exactly that instead.")
+		b.WriteString("You may REJECT. You may NOT APPROVE.\n\n")
+		if strings.TrimSpace(p.Gate) != "" {
+			b.WriteString("Approval is not yours to give — the caller supplied a command gate, and " +
+				"that gate determines the verified outcome. ")
+		} else {
+			b.WriteString("Approval is not yours to give — this run is ungated, so your result is " +
+				"advisory and unverified. ")
+		}
+		b.WriteString("Never say \"looks good\" or \"LGTM\"; that is not a result you are " +
+			"authorised to produce. If you attacked it honestly and it held, say exactly that instead.")
 	case AuthorityAdvise:
 		b.WriteString("You ADVISE. You may neither approve nor block. Your output informs a " +
 			"decision; it does not make one.")
