@@ -3,9 +3,11 @@ id: 921c23c99f4a
 kind: task
 title: S194.3 make sed grep cut sort tr usable under macOS LANG=en_US.UTF-8
 seq: 145
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-15T12:05:21.468931Z
+weave: 28
+assignee: qiangli
 sprint: 194
 ---
 
