@@ -133,7 +133,23 @@ func targetEffects(doc *dag.Document, target string) ([]dhntskills.Effect, error
 
 // runDagTarget executes one target of a task file through the dag
 // engine (the same engine as `bashy dag`), streaming output to log.
+//
+// `bashy dag` runs bodies in the INVOKING cwd (make parity, Sprint 185); a
+// skill's tasks.md has always run in the directory holding the task file (the
+// skill dir for an embedded tasks.md, the project for a `tasks:` pointer
+// materialized under cwd), so that directory is entered for the duration of
+// the run. Whether skill tasks should instead act in the project cwd is a
+// separate decision — this preserves the shipped behaviour, nothing more.
 func runDagTarget(tasksPath, target string, log io.Writer) error {
+	dir := filepath.Dir(tasksPath)
+	prev, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("skills: dag target %q: %w", target, err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		return fmt.Errorf("skills: dag target %q: %w", target, err)
+	}
+	defer os.Chdir(prev)
 	cmd := dag.NewDagCmd()
 	cmd.SetArgs([]string{tasksPath, target})
 	cmd.SetOut(log)

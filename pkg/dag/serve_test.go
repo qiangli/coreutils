@@ -284,6 +284,7 @@ func TestEventsCoverSkippedAndUpToDateTargets(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("DAG_CACHE_DIR", root)
 			path := writeDAG(t, md)
+			t.Chdir(filepath.Dir(path)) // bodies run in the invoking cwd (make parity)
 			if err := os.WriteFile(filepath.Join(filepath.Dir(path), "in.txt"), []byte("seed\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}

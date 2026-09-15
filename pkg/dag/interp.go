@@ -56,8 +56,10 @@ var (
 )
 
 // RegisterInterpreter associates an interpreter with a fenced-code lang tag.
-// "" registers the default (used when a body has no info string). Later phases
-// add "go" (yaegi), "python" (gpython), "starlark".
+// "" registers the default (used when a body has no info string). Shipped tags:
+// ""/bash/sh/shell (Classic) and bashpp/bash++ (Bash++, which is also how a
+// body reaches Python or TypeScript — as a `~~~py`/`~~~typescript` fence
+// declared inside the Bash++ body, not as a top-level body language).
 func RegisterInterpreter(lang string, i Interpreter) {
 	interpMu.Lock()
 	defer interpMu.Unlock()

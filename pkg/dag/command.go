@@ -100,12 +100,27 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			// DAG.md), so a conventional deploy folder like `.bashy/deploy/`
 			// works as the single entry point (`bashy dag .bashy/deploy deploy-qa`).
 			// An explicit --file wins.
+			// Bodies run in the INVOKING working directory (make parity):
+			// `-f FILE` / a positional file only picks the file, exactly as
+			// `make -f` does, so a task file kept elsewhere (a checked-in
+			// example, a shared pipeline) drives THIS checkout. There is
+			// deliberately no `-C DIR` flag — `awd DIR -- bashy dag …` is the
+			// one "run it over there" mechanism, so verbs never grow their own.
+			// The single exception is the positional DIRECTORY form below,
+			// which names both the file and the place to run it.
+			workDir, err := os.Getwd()
+			if err != nil {
+				return emitErr(errOut, mode, err)
+			}
 			path := fileArg
 			if path == "" && len(targets) > 0 {
 				if fi, statErr := os.Stat(targets[0]); statErr == nil {
 					if fi.IsDir() {
 						if p, derr := Discover(targets[0]); derr == nil {
 							path, targets = p, targets[1:]
+							if abs, aerr := filepath.Abs(filepath.Dir(p)); aerr == nil {
+								workDir = abs
+							}
 						}
 					} else {
 						path, targets = targets[0], targets[1:]
@@ -219,7 +234,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			bodyEnv = append(bodyEnv, overrides...)
 			eng := &Engine{
 				Graph:       g,
-				Dir:         filepath.Dir(absPath),
+				Dir:         workDir,
 				Env:         bodyEnv,
 				Concurrency: concurrency,
 				FailFast:    !keepGoing,
@@ -243,7 +258,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				if err != nil {
 					return emitErr(errOut, mode, err)
 				}
-				return runExplain(out, mode, path, targets, items)
+				return runExplain(out, mode, path, workDir, targets, items)
 			}
 
 			// Open the journal only once we know a run is actually happening —
@@ -516,14 +531,18 @@ type explainItem struct {
 
 type explainResult struct {
 	File    string        `json:"file"`
+	Dir     string        `json:"dir"`
 	Targets []string      `json:"targets"`
 	Plan    []explainItem `json:"plan"`
 }
 
 // runExplain prints the per-target run/skip decision computed by Engine.Explain
 // without running anything. JSON mode emits a dag envelope carrying the plan.
-func runExplain(out io.Writer, mode weavecli.OutputMode, path string, targets []string, items []ExplainItem) error {
-	res := explainResult{File: path, Targets: targets}
+// dir is the effective working directory bodies would run in — the invoking
+// cwd, or the positional directory — so an operator can see where a task file
+// kept elsewhere is about to act before it acts.
+func runExplain(out io.Writer, mode weavecli.OutputMode, path, dir string, targets []string, items []ExplainItem) error {
+	res := explainResult{File: path, Dir: dir, Targets: targets}
 	for _, it := range items {
 		res.Plan = append(res.Plan, explainItem{
 			Name: it.Name, Venue: it.Venue, Distribution: it.Distribution,
@@ -534,6 +553,7 @@ func runExplain(out io.Writer, mode weavecli.OutputMode, path string, targets []
 		emitOK(out, res)
 		return nil
 	}
+	fmt.Fprintf(out, "dir        %s\n", dir)
 	for _, it := range items {
 		decision := "up-to-date"
 		if it.WouldRun {

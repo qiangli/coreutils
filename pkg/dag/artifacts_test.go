@@ -36,6 +36,7 @@ func TestArtifactsRecordedInResult(t *testing.T) {
 
 func TestArtifactsInJSONEnvelope(t *testing.T) {
 	dir := t.TempDir()
+	t.Chdir(dir) // bodies run in the invoking cwd (make parity)
 	p := filepath.Join(dir, "DAG.md")
 	md := "## Tasks\n\n### make\nArtifacts: out.txt\n" + block("bash", "echo hi > out.txt")
 	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {

@@ -598,6 +598,7 @@ func (x countingTransport) Close() error { return nil }
 // pins, and each one receives its own case list.
 func TestCommandFleetRunsCommittedChunks(t *testing.T) {
 	dir := t.TempDir()
+	t.Chdir(dir) // bodies run in the invoking cwd (make parity)
 	dagPath := filepath.Join(dir, "DAG.md")
 	if err := os.WriteFile(dagPath, []byte(chunkedSuite), 0o644); err != nil {
 		t.Fatal(err)
@@ -694,6 +695,7 @@ func TestCommandRejectsManifestThatBindsNothing(t *testing.T) {
 // sharded (an explicitly-named one still must bind, per the test above).
 func TestDiscoveredManifestIgnoredForUnshardedFile(t *testing.T) {
 	dir := t.TempDir()
+	t.Chdir(dir) // bodies run in the invoking cwd (make parity)
 	dagPath := filepath.Join(dir, "DAG.md")
 	if err := os.WriteFile(dagPath, []byte("## Tasks\n\n### build\n"+block("bash", "echo hi > built.txt")), 0o644); err != nil {
 		t.Fatal(err)

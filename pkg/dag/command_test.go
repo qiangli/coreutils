@@ -215,6 +215,7 @@ func TestCommandExplain(t *testing.T) {
 
 func TestCommandCachePortableImportExport(t *testing.T) {
 	dir := t.TempDir()
+	t.Chdir(dir) // bodies run in the invoking cwd (make parity), not the file's dir
 	p := filepath.Join(dir, "DAG.md")
 	md := "## Tasks\n\n### gen\nSources: in.txt\nGenerates: out.txt\n" +
 		block("bash", "cat in.txt > out.txt")

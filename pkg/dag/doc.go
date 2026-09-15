@@ -24,8 +24,22 @@
 // output. Later phases layer parallel scheduling + fingerprint skip (P1.5), the
 // dhnt contract/effects/attestation model (P2 — each target may declare an
 // `Ensure:` postcondition and an `Effects:` cap), and multi-interpreter bodies
-// (P3 — go/python/starlark via RegisterInterpreter). The `Ensure:`/`Effects:`
-// metadata is already parsed-and-ignored here so a P2 file parses cleanly today.
+// via RegisterInterpreter: a ```bashpp body runs as Bash++ and may declare
+// `~~~py`/`~~~typescript` fences whose functions it calls directly, which is
+// how a task reaches another language without a second body interpreter.
+//
+// # Working directory
+//
+// Bodies run in the INVOKING working directory, as make recipes do: `-f FILE`
+// or a positional file only selects the task file, so a task file kept
+// elsewhere (a checked-in example, a shared pipeline) drives the checkout you
+// are standing in. To run a graph against another directory use bashy's
+// `awd DIR -- bashy dag …` — there is deliberately no `-C DIR` flag. The one
+// exception is a positional DIRECTORY (`bashy dag .bashy/deploy target`),
+// which names both the file and the place to run it. Fingerprint paths
+// (`Sources:`/`Generates:`/`Inputs:`/`Artifacts:`) and `Ensure:` checks resolve
+// against that same directory; `include:` and `chunks.json` stay file-relative
+// because they describe the file, not the run.
 //
 // # Includes: sharing one build graph across repositories
 //
