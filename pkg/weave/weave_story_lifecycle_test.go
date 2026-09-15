@@ -141,7 +141,7 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 	}
 }
 
-func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
+func TestSprintEndWithoutGateClosesLifecycleAsUnverified(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -155,11 +155,9 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
 		t.Fatalf("start exit=%d: %s", code, out)
 	}
-	if out, code := runSprint(t, "end", "1"); code == 0 {
-		t.Fatalf("end without a gate must fail, exit=%d: %s", code, out)
-	}
-	if out, code := runSprint(t, "end", "1", "--gate", "true"); code != 0 {
-		t.Fatalf("end exit=%d: %s", code, out)
+	out, code := runSprint(t, "end", "1")
+	if code != 0 || !strings.Contains(out, "NO GATE RAN") {
+		t.Fatalf("end without gate must record unverified and succeed, exit=%d: %s", code, out)
 	}
 
 	q, err := loadWeaveQueue(home + "/.bashy/sprint")
@@ -169,6 +167,56 @@ func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
 	s := findWeaveStory(q, 1)
 	if s == nil || s.Column != "done" || s.Lease != nil || s.currentBox() != nil {
 		t.Fatalf("end must close the box, release the lease, and move done: %+v", s)
+	}
+}
+
+func TestSprintStopWithoutGateRecordsUnverified(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+	t.Setenv("WEAVE_CONDUCTOR", "Ada")
+	seedLiveAgent(t, "Ada")
+
+	if out, code := runSprint(t, "add", "stop test"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
+		t.Fatal(out)
+	}
+	out, code := runSprint(t, "stop", "1")
+	if code != 0 || !strings.Contains(out, "NO GATE RAN") {
+		t.Fatalf("stop without gate must record unverified and succeed, exit=%d: %s", code, out)
+	}
+	q, err := loadWeaveQueue(home + "/.bashy/sprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := findWeaveStory(q, 1)
+	if s == nil || len(s.Boxes) != 1 || s.Boxes[0].StoppedAt == nil || s.Boxes[0].GateRan {
+		t.Fatalf("stop must persist an unverified closed box: %+v", s)
+	}
+}
+
+func TestSprintSuppliedGateStillBlocksStopAndEnd(t *testing.T) {
+	for _, verb := range []string{"stop", "end"} {
+		t.Run(verb, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("BASHY_AGENTIC", "")
+			t.Setenv("WEAVE_CONDUCTOR", "Ada")
+			seedLiveAgent(t, "Ada")
+			if out, code := runSprint(t, "add", verb+" gate test"); code != 0 {
+				t.Fatal(out)
+			}
+			if out, code := runSprint(t, "start", "1", "--owner", "Ada", "--for", "1h"); code != 0 {
+				t.Fatal(out)
+			}
+			if out, code := runSprint(t, verb, "1", "--gate", "false"); code == 0 || !strings.Contains(out, "gate FAILED") {
+				t.Fatalf("supplied failing gate must block %s, exit=%d: %s", verb, code, out)
+			}
+		})
 	}
 }
 

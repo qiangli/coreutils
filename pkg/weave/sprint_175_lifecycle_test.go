@@ -43,7 +43,7 @@ func TestSprintSubmitRefusesUnclaimedStoryWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestSprintStoryAuditRejectsClosedStoryWithoutAcceptanceEvidence(t *testing.T) {
+func TestSprintStoryClosureAuditNeedsClosureNotAcceptanceEvidence(t *testing.T) {
 	repo := t.TempDir()
 	st := todopkg.RepoStore(repo)
 	now := time.Now().UTC()
@@ -52,8 +52,15 @@ func TestSprintStoryAuditRejectsClosedStoryWithoutAcceptanceEvidence(t *testing.
 		t.Fatal(err)
 	}
 	s := &weaveStory{ID: 9, StoryRoots: []string{repo}}
-	if err := sprintStoryAcceptanceAudit(s); err == nil || !strings.Contains(err.Error(), "acceptance evidence") {
-		t.Fatalf("audit error = %v", err)
+	if err := sprintStoryClosureAudit(s); err != nil {
+		t.Fatalf("closed story without acceptance artifact must pass: %v", err)
+	}
+	it.Status, it.Closed = todopkg.StatusTodo, nil
+	if _, err := st.Save(it); err != nil {
+		t.Fatal(err)
+	}
+	if err := sprintStoryClosureAudit(s); err == nil || !strings.Contains(err.Error(), "still todo") {
+		t.Fatalf("open story must block end: %v", err)
 	}
 }
 
@@ -74,16 +81,24 @@ func TestSprintManagerAcceptIsTheOnlyClosePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &weaveStory{ID: 1, Title: "neutral", PrimaryGoal: "deliver", SpecRef: "docs/plan.md", Column: "doing", Owner: "manager", Lease: &weaveStoryLease{Holder: "manager", At: time.Now().UTC()}, StoryRoots: []string{repo}, Created: time.Now().UTC()}
-	weaveStoryAppend(s, "worker", "decision", "worker submitted story "+shortSprintStoryID(it.ID)+" for review/merge: commit abc; tests pass")
 	if err := saveWeaveQueue(home, &weaveQueue{NextStoryID: 2, Stories: []*weaveStory{s}}); err != nil {
 		t.Fatal(err)
+	}
+
+	submit := NewSprintCmd()
+	var submitOut bytes.Buffer
+	submit.SetOut(&submitOut)
+	submit.SetErr(&submitOut)
+	submit.SetArgs([]string{"submit", "1", it.ID, "--repo", repo, "--as", "worker"})
+	if err := submit.Execute(); err != nil {
+		t.Fatalf("submit without message: %v\n%s", err, submitOut.String())
 	}
 
 	cmd := NewSprintCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"accept", "1", it.ID, "--repo", repo, "-m", "independent gate passed"})
+	cmd.SetArgs([]string{"accept", "1", it.ID, "--repo", repo})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("accept: %v\n%s", err, out.String())
 	}

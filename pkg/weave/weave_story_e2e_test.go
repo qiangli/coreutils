@@ -333,7 +333,7 @@ func TestSprintEndGatesOnCoverageAndHygiene(t *testing.T) {
 	}
 	body := string(src)
 	// The gate must sit on the ending path itself, not on a sibling verb.
-	for _, want := range []string{"sprintCoverageGate(s, false, \"\")", "sprintCheckHygiene(s); !hy.Clean()"} {
+	for _, want := range []string{"sprintStoryClosureAudit(s)", "sprintCoverageGate(s, false, \"\")", "sprintCheckHygiene(s); !hy.Clean()"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sprint end is missing its close gate %q — a sprint could end over open or unclean work", want)
 		}

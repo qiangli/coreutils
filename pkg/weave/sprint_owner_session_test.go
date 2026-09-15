@@ -161,11 +161,6 @@ func TestSprintStopAndEndStopManagedOwnerSession(t *testing.T) {
 				return nil
 			})
 			args := []string{verb, "1"}
-			if verb == "stop" {
-				args = append(args, "--no-verify")
-			} else {
-				args = append(args, "--gate", "true")
-			}
 			if out, code := runSprint(t, args...); code != 0 {
 				t.Fatalf("%s exit=%d: %s", verb, code, out)
 			}

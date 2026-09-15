@@ -427,9 +427,10 @@ func newSprintStopCmd() *cobra.Command {
 }
 
 // newSprintEndCmd closes the lifecycle, not merely the current time-box.
-// It deliberately has no --force or --no-verify escape hatch: "done" must
-// mean that linked work is parked, repositories are wrapped, and a real gate
-// passed. Callers that only need to close a cadence cycle retain `stop`.
+// It deliberately has no --force escape hatch: "done" must mean that linked
+// work is parked and repositories are wrapped. A supplied gate is also binding,
+// but a sprint that has no applicable gate may still end and records that fact
+// as unverified.
 func newSprintEndCmd() *cobra.Command {
 	return newSprintCloseCmd(true)
 }
@@ -446,9 +447,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 		short = "Finish a sprint after workers, repositories, and gates are consistent"
 	}
 	op := "sprint " + verb
-	long := "stop DRAINS a sprint: it parks the workers, proves the tree still builds,\n"
+	long := "stop DRAINS a sprint: it parks the workers and records the current state,\n"
 	if ending {
-		long = "end DRAINS and closes the sprint lifecycle: it parks linked workers, requires wrapped repositories and a green gate, moves the card to done, and releases the conductor lease.\n\n"
+		long = "end DRAINS and closes the sprint lifecycle: it parks linked workers, requires wrapped repositories, runs any supplied gate, moves the card to done, and releases the conductor lease.\n\n"
 	}
 	cmd := &cobra.Command{
 		Use:   verb + " <sprint>",
@@ -459,8 +460,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 			"yield, and it must yield in a state somebody can pick up cold. A stop is not\n" +
 			"graceful because it was polite — it is graceful because three things are TRUE\n" +
 			"when it finishes: no worker is still running (workspace and branch preserved,\n" +
-			"exactly as `weave pause` leaves them), the tree compiles and its tests pass,\n" +
-			"and there is a continuity record saying where it left off.\n\n" +
+			"exactly as `weave pause` leaves them), any supplied gate has passed, and there\n" +
+			"is a continuity record saying where it left off. Without a gate, the record\n" +
+			"says UNVERIFIED and lifecycle tracking still proceeds.\n\n" +
 			"A RED GATE REFUSES TO CLOSE THE SPRINT, and that is the feature. The workers\n" +
 			"are already parked so nothing is burning, and the remaining job is narrow:\n" +
 			"fix the regression and run stop again. Closing over a red gate would file the\n" +
@@ -471,8 +473,8 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 			"LANDED, which is the next sprint's inheritance either way. The escape hatch\n" +
 			"is never --force; it is to leave the weave unmerged or `weave abandon` it,\n" +
 			"losing one branch instead of a repo.\n\n" +
-			"NO GATE IS NOT A PASS. Without --gate nothing is verified, and stop says so\n" +
-			"rather than assuming; --no-verify closes anyway and records it as unverified.\n\n" +
+			"NO GATE IS NOT A PASS. Without --gate nothing is verified, and stop records\n" +
+			"that state without turning optional test policy into a lifecycle blocker.\n\n" +
 			"It also writes what ACTUALLY happened beside what was\n" +
 			"planned.\n\n" +
 			"That record is the only thing that makes a cadence real. A two-hour box\n" +
@@ -496,7 +498,6 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				if gateTimeout <= 0 {
 					return fmt.Errorf("gate timeout must be positive")
 				}
-				requireGate := !noVerify
 				var rep drainReport
 				var closedOwner string
 				cwd, _ := os.Getwd()
@@ -574,10 +575,6 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 								"  gate: %s (exit %d)\n%s",
 								id, id, out.Command, out.ExitCode, tail)
 						}
-						if !out.Ran && requireGate {
-							return "", fmt.Errorf("sprint #%d NOT stopped — no gate given, so \"it still builds\" is unverified.\n"+
-								"  pass --gate '<cmd>', or --no-verify to close it unverified on the record", id)
-						}
 					}
 
 					msg := ""
@@ -612,16 +609,15 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 					}
 					closedOwner = strings.TrimSpace(s.Owner)
 					if ending {
-						// "done" must mean done. end deliberately carries no
-						// --force / --no-verify, so these are HARD refusals: the
-						// gate above proves the code still builds, and these two
-						// prove nothing was left behind or left out. A sprint that
-						// closes over an open story nobody planned, or over a dirty
-						// tree, is a green result reached because nothing looked.
+						// "done" must mean done. End deliberately carries no
+						// --force, so open stories and dirty repositories remain
+						// HARD refusals. Test/review artifacts are optional; when no
+						// gate was supplied the lifecycle records UNVERIFIED rather
+						// than manufacturing a pass.
 						if err := sprintUnansweredGate(s, "end"); err != nil {
 							return "", err
 						}
-						if err := sprintStoryAcceptanceAudit(s); err != nil {
+						if err := sprintStoryClosureAudit(s); err != nil {
 							return "", err
 						}
 						if err := sprintCoverageGate(s, false, ""); err != nil {
@@ -659,17 +655,19 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 		},
 	}
 	if ending {
-		cmd.Long = `end closes the sprint lifecycle only after it can prove a clean handoff state.
+		cmd.Long = `end closes the sprint lifecycle only after it establishes a clean handoff state.
 
 It parks every linked working agent in a resumable weave state, refuses missing
 or half-allocated linked runs, verifies linked repositories are committed,
-pushed, and pinned, and requires the supplied gate to pass. It then closes the
-time box, moves the card to done, closes the conductor room, and releases the
-lease.
+pushed, and pinned, and requires every story to be closed. When --gate is
+supplied it must pass; without one, end succeeds and records the lifecycle as
+unverified. It then closes the time box, moves the card to done, closes the
+conductor room, and releases the lease.
 
-There is deliberately no --force or --no-verify. Use sprint stop when the
-intent is only to close the current cadence cycle.`
-		cmd.Example = "  bashy sprint end 3 --gate 'go test ./...'\n" +
+There is deliberately no --force. Use sprint stop when the intent is only to
+close the current cadence cycle.`
+		cmd.Example = "  bashy sprint end 3\n" +
+			"  bashy sprint end 3 --gate 'go test ./...'\n" +
 			"  bashy sprint end 3 --gate 'make test' --note \"release accepted\""
 	}
 	cmd.Flags().StringVar(&note, "note", "", "what the box actually produced")
@@ -678,7 +676,7 @@ intent is only to close the current cadence cycle.`
 	cmd.Flags().DurationVar(&gateTimeout, "gate-timeout", 15*time.Minute, "maximum time allowed for the gate")
 	if !ending {
 		cmd.Flags().BoolVar(&force, "force", false, "close even over a red gate or an unparked worker — recorded as not clean")
-		cmd.Flags().BoolVar(&noVerify, "no-verify", false, "close with no gate at all, on the record as unverified")
+		cmd.Flags().BoolVar(&noVerify, "no-verify", false, "deprecated compatibility flag; omitting --gate already records an unverified close")
 	}
 	flags.attach(cmd)
 	return cmd
