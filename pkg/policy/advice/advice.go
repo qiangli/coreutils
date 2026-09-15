@@ -38,6 +38,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sort"
@@ -164,6 +165,10 @@ func (r *Rules) All() []Rule {
 	copy(out, r.rules)
 	for i := range out {
 		out[i].Spec.Args = append([]Arg(nil), out[i].Spec.Args...)
+		if out[i].Agentic != nil {
+			b := *out[i].Agentic
+			out[i].Agentic = &b
+		}
 	}
 	return out
 }
@@ -229,7 +234,8 @@ func Parse(data []byte) (*Rules, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("advice: parse rules: %w", err)
 	}
-	if dec.More() {
+	var dummy any
+	if err := dec.Decode(&dummy); err != io.EOF {
 		return nil, fmt.Errorf("advice: parse rules: trailing data after the rules object")
 	}
 	if f.Schema != SchemaVersion {

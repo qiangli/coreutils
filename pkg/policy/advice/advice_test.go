@@ -62,6 +62,9 @@ func TestParseErrors(t *testing.T) {
 		{"missing schema", `{"rules": []}`, "schema"},
 		{"unknown field", `{"schema": "bashy-advice-v1", "rules": [{"nmae": "x", "decorator": "trace"}]}`, "unknown field"},
 		{"trailing data", `{"schema": "bashy-advice-v1", "rules": []} {}`, "trailing data"},
+		{"trailing closing brace", `{"schema": "bashy-advice-v1", "rules": []} }`, "trailing data"},
+		{"trailing closing bracket", `{"schema": "bashy-advice-v1", "rules": []} ]`, "trailing data"},
+		{"trailing garbage", `{"schema": "bashy-advice-v1", "rules": []} garbage`, "trailing data"},
 		{"no selector", `{"schema": "bashy-advice-v1", "rules": [{"decorator": "trace"}]}`, "no selector"},
 		{"no decorator", `{"schema": "bashy-advice-v1", "rules": [{"name": "*"}]}`, "no decorator"},
 		{"bad name glob", `{"schema": "bashy-advice-v1", "rules": [{"name": "[", "decorator": "trace"}]}`, `name glob "["`},
@@ -168,6 +171,13 @@ func TestDeterministicOrderAndIdempotence(t *testing.T) {
 	}
 	if second[0].Spec.Decorator != "trace" || second[1].Spec.Args[0].Value.Str != "read,net" {
 		t.Fatalf("mutating a For result leaked into the rule set: %+v", second)
+	}
+
+	all := r.All()
+	b := false
+	all[2].Agentic = &b
+	if len(r.For(q)) != 3 {
+		t.Fatalf("mutating Agentic bool in All result leaked into the rule set")
 	}
 	// Derived IDs are content-stable: a reload and a reorder both keep them.
 	again := parseValid(t)
