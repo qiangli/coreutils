@@ -87,17 +87,20 @@ func firstWords(s string, n int) string {
 func (p *Plan) writeReport(res *Result) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Supervision — %s\n", p.Goal)
-	fmt.Fprintf(&b, "Session: `%s`  ·  supervisor: %s  ·  fleet: %s\n\n",
-		p.ID, p.Supervisor, strings.Join(p.Fleet, ", "))
+	fmt.Fprintf(&b, "Session: `%s`  ·  fleet: %s", p.ID, strings.Join(p.Fleet, ", "))
+	if strings.TrimSpace(p.Supervisor) != "" {
+		fmt.Fprintf(&b, "  ·  optional supervisor: %s", p.Supervisor)
+	}
+	b.WriteString("\n\n")
 
 	pass, fail, unver := 0, 0, 0
 	for _, v := range res.Verdicts {
-		switch {
-		case v.Unverified:
+		if v.Unverified {
 			unver++
-		case v.Passed:
+		}
+		if v.Passed {
 			pass++
-		default:
+		} else {
 			fail++
 		}
 	}
@@ -105,7 +108,7 @@ func (p *Plan) writeReport(res *Result) (string, error) {
 	if res.Converged {
 		verdict = "CONVERGED"
 	}
-	fmt.Fprintf(&b, "**%s** — %d/%d gates passed", verdict, pass, len(p.Contracts))
+	fmt.Fprintf(&b, "**%s** — %d/%d tasks passed", verdict, pass, len(p.Contracts))
 	if fail > 0 {
 		fmt.Fprintf(&b, ", %d failed", fail)
 	}
@@ -115,18 +118,20 @@ func (p *Plan) writeReport(res *Result) (string, error) {
 	b.WriteString("\n\n")
 
 	if s := strings.TrimSpace(res.Judgment); s != "" {
-		fmt.Fprintf(&b, "## Supervisor judgment\n%s\n\n", redactHome(s))
+		fmt.Fprintf(&b, "## Supervisor summary (optional)\n%s\n\n", redactHome(s))
 	}
 
-	b.WriteString("## Verdicts (gate = source of truth)\n\n")
-	b.WriteString("| Task | Verdict | Worker | Attempts | Gate exit |\n|---|---|---|---:|---:|\n")
+	b.WriteString("## Task outcomes (supplied gates are authoritative)\n\n")
+	b.WriteString("| Task | Verdict | Worker | Attempts | Exit |\n|---|---|---|---:|---:|\n")
 	for _, v := range res.Verdicts {
 		st := "❌ fail"
 		switch {
-		case v.Unverified:
-			st = "· unverified"
+		case v.Passed && v.Unverified:
+			st = "✅ pass (unverified)"
 		case v.Passed:
 			st = "✅ pass"
+		case v.Unverified:
+			st = "❌ fail (unverified)"
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %d | %d |\n", v.Contract, st, v.Worker, v.Attempts, v.GateExit)
 	}

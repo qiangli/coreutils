@@ -1,8 +1,9 @@
 // Package supervise implements `bashy supervise` — the conductor-as-a-verb.
 //
-// One SUPERVISOR agent (the Manager/hub) drives a FLEET of worker agents (the
-// spokes) against a GOAL decomposed into gated CONTRACTS, judges the results,
-// and files a report. It is the turnkey form of the conductor pattern
+// A FLEET of worker agents (the spokes) works against a GOAL decomposed into
+// CONTRACTS, with optional deterministic gates, and files a report. An optional
+// SUPERVISOR agent may add a final summary, but it never determines success.
+// It is the turnkey form of the conductor pattern
 // (docs/conductor-team-model.md) and the in-place, shared-tree counterpart to
 // `bashy weave`: weave isolates each agent in its own git worktree, which is the
 // wrong tool when the work spans a sibling repo or depends on gitignored assets
@@ -18,8 +19,8 @@
 // worker that says "done" but did not actually make the tree pass the gate is
 // recorded as FAIL and retried.
 //
-// It is a flexible primitive, not a policy: fleet size, the supervisor, attempts,
-// and whether to keep going past a failure are all the caller's choice. It
+// It is a flexible primitive, not a policy: fleet size, optional supervisor,
+// attempts, and whether to keep going past a failure are all the caller's choice. It
 // launches every agent through pkg/chat (the shared agentic-CLI layer), never
 // directly.
 package supervise
@@ -49,15 +50,15 @@ type Contract struct {
 	// Gate is a shell command run by the ORCHESTRATOR after the worker's turn.
 	// Exit 0 => the contract is met. Empty gate => advisory only (the worker's
 	// exit code stands in), which the report marks as UNVERIFIED so nobody
-	// mistakes an ungated task for a judged one.
+	// mistakes an ungated task for independently verified work.
 	Gate   string `json:"gate,omitempty"`
 	Worker string `json:"worker,omitempty"` // pinned spoke, or "" to rotate the fleet
 }
 
 func (c *Contract) gated() bool { return strings.TrimSpace(c.Gate) != "" }
 
-// Verdict is a contract's sealed outcome. Passed reflects the GATE, not the
-// agent's self-report.
+// Verdict is a contract's sealed outcome. A supplied gate determines Passed;
+// otherwise the worker exit does and Unverified records the weaker evidence.
 type Verdict struct {
 	Contract   string    `json:"contract"`
 	Worker     string    `json:"worker"`
@@ -74,9 +75,9 @@ type Plan struct {
 	Schema      string      `json:"schema"`
 	ID          string      `json:"id"`
 	Goal        string      `json:"goal"`
-	Brief       []string    `json:"brief,omitempty"` // context files handed to every worker
-	Supervisor  string      `json:"supervisor"`      // the Manager/judge agent
-	Fleet       []string    `json:"fleet"`           // worker spokes
+	Brief       []string    `json:"brief,omitempty"`      // context files handed to every worker
+	Supervisor  string      `json:"supervisor,omitempty"` // optional agent that adds a final summary
+	Fleet       []string    `json:"fleet"`                // worker spokes
 	Contracts   []*Contract `json:"contracts"`
 	MaxAttempts int         `json:"max_attempts,omitempty"`
 	Sandbox     string      `json:"sandbox,omitempty"` // e.g. danger-full-access
@@ -122,9 +123,6 @@ func (p *Plan) Validate() error {
 	if len(p.Contracts) == 0 {
 		return fmt.Errorf("supervise: at least one --task is required")
 	}
-	if strings.TrimSpace(p.Supervisor) == "" {
-		return fmt.Errorf("supervise: --supervisor is required (the agent that judges the work)")
-	}
 	for _, c := range p.Contracts {
 		if strings.TrimSpace(c.Goal) == "" {
 			return fmt.Errorf("supervise: a task has no goal")
@@ -150,7 +148,7 @@ func contains(ss []string, s string) bool {
 
 // Event is one append-only record in a supervision transcript.
 type Event struct {
-	Kind     string    `json:"kind"` // dispatch|turn|gate|verdict|judge|note
+	Kind     string    `json:"kind"` // dispatch|turn|gate|verdict|summary|note
 	Contract string    `json:"contract,omitempty"`
 	Worker   string    `json:"worker,omitempty"`
 	Attempt  int       `json:"attempt,omitempty"`

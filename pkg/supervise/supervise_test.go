@@ -27,7 +27,30 @@ func TestWorkerLaunchFailureCannotPassAnAlreadyGreenGate(t *testing.T) {
 	}
 }
 
-func TestUnavailableSupervisorFailsClosed(t *testing.T) {
+func TestNoSupervisorDoesNotLaunchSummaryAndConverges(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
+	}
+	calls := 0
+	r := funcRunner(func(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
+		calls++
+		if agent != "agy" {
+			t.Fatalf("unexpected final model invocation for %q", agent)
+		}
+		return "done", 0, nil
+	})
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Converged || res.Judged || calls != 1 {
+		t.Fatalf("gate-only run should converge after one worker call: calls=%d result=%+v", calls, res)
+	}
+}
+
+func TestUnavailableOptionalSupervisorDoesNotBlockConvergence(t *testing.T) {
 	testEnv(t)
 	p := &Plan{
 		Goal: "g", Supervisor: "ycode", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
@@ -38,8 +61,24 @@ func TestUnavailableSupervisorFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Converged || res.Judged {
-		t.Fatalf("missing supervisor judgment must fail closed: %+v", res)
+	if !res.Converged || res.Judged {
+		t.Fatalf("optional supervisor availability must not determine convergence: %+v", res)
+	}
+}
+
+func TestExplicitSupervisorSummaryCannotOverrideConvergence(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Supervisor: "ycode", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
+	}
+	r := scriptRunner{reply: map[string]string{"agy": "done", "ycode": "I would not ship this."}}
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Converged || !res.Judged || !strings.Contains(res.Judgment, "not ship") {
+		t.Fatalf("explicit summary should be recorded but cannot override the gate: %+v", res)
 	}
 }
 
@@ -129,10 +168,10 @@ func TestGateDecidesVerdictNotTheWorker(t *testing.T) {
 func TestGatePassConverges(t *testing.T) {
 	testEnv(t)
 	p := &Plan{
-		Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, MaxAttempts: 2, Cwd: os.TempDir(),
+		Goal: "g", Fleet: []string{"codex"}, MaxAttempts: 2, Cwd: os.TempDir(),
 		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
 	}
-	r := scriptRunner{reply: map[string]string{"codex": "ok", "claude": "looks good"}}
+	r := scriptRunner{reply: map[string]string{"codex": "ok"}}
 	res, err := Run(context.Background(), p, r, noProgress{})
 	if err != nil {
 		t.Fatal(err)
@@ -189,24 +228,40 @@ func TestPinnedWorkerNotRotated(t *testing.T) {
 	}
 }
 
-// An ungated task is UNVERIFIED and does not count toward convergence — you
-// cannot "review" what has no gate.
-func TestUngatedTaskDoesNotConverge(t *testing.T) {
+// An ungated task can converge from a successful worker exit, while UNVERIFIED
+// records that no independent gate supplied stronger evidence.
+func TestUngatedSuccessfulTaskConvergesAsUnverified(t *testing.T) {
 	testEnv(t)
 	p := &Plan{
-		Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, Cwd: os.TempDir(),
+		Goal: "g", Fleet: []string{"codex"}, Cwd: os.TempDir(),
 		Contracts: []*Contract{{ID: "t1", Goal: "do"}}, // no gate
 	}
-	r := scriptRunner{reply: map[string]string{"codex": "ok", "claude": "hmm"}}
+	r := scriptRunner{reply: map[string]string{"codex": "ok"}}
 	res, err := Run(context.Background(), p, r, noProgress{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Converged {
-		t.Error("an ungated task must not count as converged")
+	if !res.Converged {
+		t.Error("a successful ungated task should converge")
 	}
 	if !res.Verdicts[0].Unverified {
 		t.Error("ungated task should be marked Unverified")
+	}
+}
+
+func TestUngatedWorkerFailureIsUnverifiedAndDoesNotConverge(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Fleet: []string{"codex"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do"}},
+	}
+	r := scriptRunner{reply: map[string]string{"codex": "failed"}, code: map[string]int{"codex": 1}}
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Converged || res.Verdicts[0].Passed || !res.Verdicts[0].Unverified {
+		t.Fatalf("failed ungated task must retain evidence metadata without converging: %+v", res)
 	}
 }
 
@@ -218,8 +273,7 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{"no goal", Plan{Supervisor: "c", Fleet: []string{"x"}, Contracts: []*Contract{{Goal: "g"}}}, "--goal"},
-		{"no supervisor", Plan{Goal: "g", Fleet: []string{"x"}, Contracts: []*Contract{{Goal: "g"}}}, "--supervisor"},
-		{"no worker", Plan{Goal: "g", Supervisor: "c", Contracts: []*Contract{{Goal: "g"}}}, "--worker"},
+		{"no worker", Plan{Goal: "g", Contracts: []*Contract{{Goal: "g"}}}, "--worker"},
 		{"no tasks", Plan{Goal: "g", Supervisor: "c", Fleet: []string{"x"}}, "--task"},
 		{"pinned worker off-fleet", Plan{Goal: "g", Supervisor: "c", Fleet: []string{"x"},
 			Contracts: []*Contract{{ID: "t1", Goal: "g", Worker: "codex"}}}, "not in --worker fleet"},
@@ -230,14 +284,14 @@ func TestValidate(t *testing.T) {
 			t.Errorf("%s: want error containing %q, got %v", tc.name, tc.want, err)
 		}
 	}
-	ok := Plan{Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, Contracts: []*Contract{{ID: "t1", Goal: "g", Gate: "true"}}}
+	ok := Plan{Goal: "g", Fleet: []string{"codex"}, Contracts: []*Contract{{ID: "t1", Goal: "g", Gate: "true"}}}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("valid plan rejected: %v", err)
 	}
 }
 
-// The report captures the verdict table and the supervisor judgment; home is
-// redacted.
+// The report captures the verdict table and an explicitly requested supervisor
+// summary; home is redacted.
 func TestReportContents(t *testing.T) {
 	testEnv(t)
 	p := &Plan{
@@ -251,9 +305,25 @@ func TestReportContents(t *testing.T) {
 	}
 	b, _ := os.ReadFile(res.Report)
 	md := string(b)
-	for _, must := range []string{"# Supervision — fix the thing", "CONVERGED", "Supervisor judgment", "The goal is met", "| Task | Verdict |"} {
+	for _, must := range []string{"# Supervision — fix the thing", "CONVERGED", "Supervisor summary (optional)", "The goal is met", "| Task | Verdict |"} {
 		if !strings.Contains(md, must) {
 			t.Fatalf("report missing %q\n%s", must, md)
+		}
+	}
+}
+
+func TestHelpMakesGateAndSupervisorOptional(t *testing.T) {
+	cmd := NewSuperviseCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	help := out.String()
+	for _, want := range []string{"goal [:: gate]", "gate optional", "optional final summary", "never determines convergence"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("help missing %q:\n%s", want, help)
 		}
 	}
 }

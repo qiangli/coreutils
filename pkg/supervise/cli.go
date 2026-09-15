@@ -37,15 +37,16 @@ func NewSuperviseCmd() *cobra.Command {
 		// but that is a result, not a misuse — don't dump usage/help on it.
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Use:           "supervise --goal TEXT --supervisor AGENT --worker AGENT --task 'goal :: gate' ...",
-		Short:         "drive a fleet of agents against a goal, each task gated and judged (conductor-as-a-verb)",
-		Long: "One supervisor agent drives worker agents against a goal decomposed into gated\n" +
-			"tasks, IN the current working tree (the in-place counterpart to `bashy weave`'s\n" +
-			"isolated workspaces — use this when work spans a sibling repo or gitignored\n" +
-			"assets weave can't see). Each task's `:: <gate>` is a shell command the\n" +
-			"supervisor runs ITSELF after the worker's turn — the verdict is that command's\n" +
-			"exit code, never the agent's claim of success. Retries land on a different\n" +
-			"fleet member. The supervisor judges the gate-verified results and files a report.",
+		Use:           "supervise --goal TEXT --worker AGENT --task 'goal [:: gate]' ...",
+		Short:         "drive a fleet of agents against a goal with optional deterministic gates",
+		Long: "Drive worker agents against a goal decomposed into tasks, IN the current\n" +
+			"working tree (the in-place counterpart to `bashy weave`'s isolated workspaces —\n" +
+			"use this when work spans a sibling repo or gitignored\n" +
+			"assets weave can't see). When supplied, a task's `:: <gate>` is a shell command\n" +
+			"the orchestrator runs after the worker's turn and its exit code is authoritative.\n" +
+			"Without a gate, the worker exit decides the task and is marked UNVERIFIED. Retries\n" +
+			"land on a different fleet member. --supervisor optionally adds a final summary;\n" +
+			"it is never required and never determines convergence.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contracts, err := parseTasks(tasks)
 			if err != nil {
@@ -81,7 +82,7 @@ func NewSuperviseCmd() *cobra.Command {
 				writeSummary(w, p, res)
 			}
 			if !res.Converged {
-				return fmt.Errorf("supervise: not converged (%d/%d gates passed) — see %s",
+				return fmt.Errorf("supervise: not converged (%d/%d tasks passed) — see %s",
 					passCount(res), len(p.Contracts), redactHome(res.Report))
 			}
 			return nil
@@ -89,9 +90,9 @@ func NewSuperviseCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&goal, "goal", "", "the overall goal (required)")
-	f.StringVar(&supervisor, "supervisor", "", "the agent that judges the work (required)")
+	f.StringVar(&supervisor, "supervisor", "", "agent that adds an optional final summary (never affects convergence)")
 	f.StringArrayVar(&fleet, "worker", nil, "worker agent — decides content (repeatable, required)")
-	f.StringArrayVar(&tasks, "task", nil, "a task as 'goal :: gate-shell-command' (repeatable; the gate is the objective verdict)")
+	f.StringArrayVar(&tasks, "task", nil, "a task as 'goal [:: gate-shell-command]' (repeatable; gate optional)")
 	f.StringArrayVar(&brief, "brief", nil, "file handed to every worker as context (repeatable)")
 	f.IntVar(&maxAttempts, "max-attempts", 3, "gate-fail retries per task, each on the next fleet member")
 	f.StringVar(&sandbox, "sandbox", "", "agent sandbox (e.g. danger-full-access for full write/push access)")
@@ -142,7 +143,9 @@ func printPreview(w io.Writer, p *Plan) {
 	fmt.Fprintln(w, "supervise: resolved plan")
 	fmt.Fprintf(w, "  id          %s\n", p.ID)
 	fmt.Fprintf(w, "  goal        %s\n", p.Goal)
-	fmt.Fprintf(w, "  supervisor  %s (judges)\n", p.Supervisor)
+	if strings.TrimSpace(p.Supervisor) != "" {
+		fmt.Fprintf(w, "  supervisor  %s (optional summary)\n", p.Supervisor)
+	}
 	fmt.Fprintf(w, "  fleet       %s\n", strings.Join(p.Fleet, ", "))
 	fmt.Fprintf(w, "  attempts    %d per task, rotating the fleet on retry\n", p.maxAttempts())
 	if p.Sandbox != "" {
@@ -169,9 +172,9 @@ func printPreview(w io.Writer, p *Plan) {
 func writeSummary(w io.Writer, p *Plan, res *Result) {
 	fmt.Fprintln(w)
 	if res.Converged {
-		fmt.Fprintf(w, "✅ CONVERGED — all %d gates passed\n", len(p.Contracts))
+		fmt.Fprintf(w, "✅ CONVERGED — all %d tasks passed\n", len(p.Contracts))
 	} else {
-		fmt.Fprintf(w, "⚠ NOT CONVERGED — %d/%d gates passed\n", passCount(res), len(p.Contracts))
+		fmt.Fprintf(w, "⚠ NOT CONVERGED — %d/%d tasks passed\n", passCount(res), len(p.Contracts))
 	}
 	for _, v := range res.Verdicts {
 		mark := "✗"
