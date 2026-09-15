@@ -174,8 +174,7 @@ func TestDeterministicOrderAndIdempotence(t *testing.T) {
 	}
 
 	all := r.All()
-	b := false
-	all[2].Agentic = &b
+	*all[2].Agentic = false
 	if len(r.For(q)) != 3 {
 		t.Fatalf("mutating Agentic bool in All result leaked into the rule set")
 	}
