@@ -217,6 +217,16 @@ func runCommands(ctx context.Context, def *Definition, shell string) runResult {
 		cs := time.Now()
 		c := exec.CommandContext(ctx, shell, "-c", cmdline)
 		c.Dir = def.Root
+		// Cancellation must reach the gate's DESCENDANTS, not just the shell.
+		// A gate is usually `go test ./...`, which forks a test binary
+		// (interp.test) that in turn spawns its own children; exec.CommandContext
+		// alone SIGKILLs only `sh`, so on a sprint timeout those descendants are
+		// reparented to init and keep burning CPU for hours. prepareGateCommand
+		// puts the shell in its own process group and directs the kill at the
+		// whole group. Without it, this Run path leaked exactly that — the
+		// RunLocal path in attest.go already prepared its command, this one did
+		// not. (No-op on platforms without POSIX process groups.)
+		prepareGateCommand(c)
 		out, err := c.CombinedOutput()
 		code := -1
 		if c.ProcessState != nil {

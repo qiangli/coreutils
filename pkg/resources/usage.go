@@ -114,6 +114,10 @@ func CollectUsage(ctx context.Context, opt UsageOptions) (*Usage, error) {
 	}
 	out.Observation = host
 	out.At = host.At
+	// Surface stale orphan test processes (a leaked, timed-out gate's residue)
+	// so their CPU has an owner in the diagnostics rather than distorting alerts
+	// silently. See pkg/resources/orphans.go and the pkg/gate process-group fix.
+	out.Warnings = append(out.Warnings, orphanTestProcessWarnings(host.Processes)...)
 	out.Host = usageHost(host)
 	out.Storage = storageTotals(host.System)
 	workloads := map[string]WorkloadObservation{}
