@@ -7,21 +7,19 @@ import (
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
-// Conditional judge, by verifiability tier.
+// Opt-in model review metadata and eligibility.
 //
-// A merge ALWAYS requires the deterministic PROBE (the existing verify / suite /
-// clean-room gate). The LLM adversarial JUDGE is layered on top and is
-// CONDITIONAL: it runs only when an item's tier demands a verdict. That saves a
-// judge invocation (and the block when the judge is unavailable) for work whose
-// correctness a machine can settle on its own, while keeping the judge mandatory
-// — and FAIL-CLOSED — for work that needs human-grade judgment.
+// A configured deterministic PROBE (verify / suite / clean-room gate) is always
+// honored. An LLM adversarial review runs only when the caller supplies
+// --review-agent. Persisted tiers remain for compatibility and auditability; they
+// do not make an ordinary pull, salvage, or autopilot invoke a model.
 
 const (
 	// weaveJudgeNone — the deterministic probe is sufficient; no LLM verdict is
 	// sought for this item.
 	weaveJudgeNone = "none"
-	// weaveJudgeRequired — a passing adversarial verdict is required IN ADDITION
-	// to the probe. The conservative default (see weaveJudgeMode).
+	// weaveJudgeRequired is retained as explicit compatibility metadata. Model
+	// review is activated by --review-agent, not by a workflow default.
 	weaveJudgeRequired = "required"
 
 	// weaveJudgeBandFloor is the minimum band a judge must serve to issue a
@@ -31,7 +29,7 @@ const (
 )
 
 // weaveValidJudgeTier reports whether s is an accepted verifiability tier. Empty
-// is accepted (it reads as the conservative default at use time).
+// is accepted (it reads as the deterministic-only default at use time).
 func weaveValidJudgeTier(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", weaveJudgeNone, weaveJudgeRequired:
@@ -41,20 +39,14 @@ func weaveValidJudgeTier(s string) bool {
 	}
 }
 
-// weaveJudgeMode normalizes an item's declared verifiability tier. ABSENCE of an
-// explicit "none" is never permission to skip the judge: an empty or unrecognized
-// value reads as "required" (fail-closed / conservative default).
+// weaveJudgeMode normalizes an item's declared verifiability tier. An empty or
+// unrecognized value reads as "none": deterministic verify/suite gates are the
+// default authority, including for queue records created by older clients.
 func weaveJudgeMode(it *weaveItem) string {
-	if it != nil && strings.EqualFold(strings.TrimSpace(it.Judge), weaveJudgeNone) {
-		return weaveJudgeNone
+	if it != nil && strings.EqualFold(strings.TrimSpace(it.Judge), weaveJudgeRequired) {
+		return weaveJudgeRequired
 	}
-	return weaveJudgeRequired
-}
-
-// weaveJudgeIsRequired reports whether this item's merge needs an LLM verdict in
-// addition to the deterministic probe.
-func weaveJudgeIsRequired(it *weaveItem) bool {
-	return weaveJudgeMode(it) == weaveJudgeRequired
+	return weaveJudgeNone
 }
 
 // weaveBindingBand resolves the capability band of a tool:model binding via the
@@ -195,11 +187,9 @@ func weaveResolveJudge(requested string, it *weaveItem) (reviewer, coder string,
 	return reviewer, coder, nil
 }
 
-// weaveRequireEligibleJudge is the FAIL-CLOSED pre-pass shared by the pull merge
-// loop and the autopilot loop: for every submitted, verdict-required item in
-// scope, an eligible judge must exist for the configured reviewer, or the whole
-// operation HALTS. It never merges anything; it only refuses to begin a
-// review-required merge run that cannot produce a verdict.
+// weaveRequireEligibleJudge is the pre-pass shared by pull and autopilot when a
+// reviewer was explicitly requested: every submitted item in scope must have an
+// eligible reviewer. It is a no-op on the normal reviewer-free path.
 func weaveRequireEligibleJudge(items []*weaveItem, reviewAgent string, issueID int64, issueSpecified bool) error {
 	if strings.TrimSpace(reviewAgent) == "" {
 		return nil
@@ -211,7 +201,7 @@ func weaveRequireEligibleJudge(items []*weaveItem, reviewAgent string, issueID i
 		if issueSpecified && it.ID != issueID {
 			continue
 		}
-		if it.State != "submitted" || !weaveJudgeIsRequired(it) {
+		if it.State != "submitted" {
 			continue
 		}
 		reviewer, _, jerr := weaveVetJudge(reviewAgent, it)

@@ -131,18 +131,17 @@ repos (~/.bashy/kb). The discipline that stops the fleet repeating errors:
 4. MONITOR — ` + "`bashy weave list`" + `, ` + "`bashy weave log <N> -f`" + `. Steer with
    ` + "`bashy weave say <N> \"<line>\"`" + ` (only steerable/TUI modes; headless
    ` + "`-p`/`exec`" + ` ignore injected input).
-5. CONVERGE — ` + "`bashy weave status <N>`" + ` → ` + "`bashy weave pull <N>`" + ` (verified,
-   ONE at a time). Then RE-VERIFY the merged result YOURSELF — the tool's
-   self-report is not the gate. ` + "`bashy weave salvage <N> --review-agent <agent>`" + `
-   recovers a killed item's committed work through the same review + verify gate;
-   salvage REFUSES to merge unreviewed unless you name ` + "`--no-review`" + `.
+5. CONVERGE — ` + "`bashy weave status <N>`" + ` → ` + "`bashy weave pull <N>`" + ` (ONE
+   at a time). Configured verify/suite gates are honored; their absence is not a
+   blocker. ` + "`bashy weave salvage <N>`" + ` recovers a killed item's committed
+   work through the same deterministic gates.
    Opt-in adversarial review: ` + "`weave pull <N> --review-agent <agent>`" + ` runs
    ` + "`bashy pair`" + ` in the run workspace before terminal verification. The pair may
    add and commit a failing test but may never approve; verify/suite_gate alone
    decides whether merge proceeds. The reviewer is forced to differ from the coder
    (use ` + "`--review-agent auto`" + ` to derive one). Passing ` + "`--review-agent`" + ` to
-   autopilot or heartbeat applies the same requirement fleet-wide. Omitting it keeps
-   today's behavior unchanged.
+   autopilot or heartbeat explicitly opts the fleet into the same pair step.
+   Omitting it invokes no model reviewer.
 6. REASSIGN failures to another tool; reseed early finishers (work-stealing).
 
 ## Active supervision — do NOT fire-and-forget
@@ -158,7 +157,7 @@ forget is why a run comes back empty.
    the conductor's core duty — an unanswered question is a wasted run.
 3. ABORTED / failed / killed — reassign to another tool
    (` + "`weave start --issue N -- <other-tool> …`" + `) or recover committed partial work
-   with ` + "`weave salvage <N> --review-agent <agent>`" + `.
+   with ` + "`weave salvage <N>`" + ` (optionally add ` + "`--review-agent <agent>`" + `).
 4. COMPLETED — verify + merge (loop step 5); if todo issues remain, assign the
    freed tool the next one (work-stealing) — keep the fleet busy.
 After EVERY such action, UPDATE THE BATON (` + "`weave baton write …`" + `). This is the
@@ -193,8 +192,8 @@ the queue is enough to pick up without reading code or docs.
 When a worker encounters rate limits, 429s, or route exhaustion:
   1. TARGETED KILL — kill the stuck worker process tree without deleting its workspace.
   2. RETAINED COMMIT — workspace, branch, and committed work remain intact (` + "`salvageable=true`" + `).
-  3. GUARDED SALVAGE — ` + "`weave salvage <issue>`" + ` reviews and verifies retained commits before merging.
-  4. DETERMINISTIC CONTINUATION — when no eligible L3 judge exists, launch a deterministic continuation task that fetches the retained commit directly from the retained branch/workspace into the new continuation context.
+  3. GUARDED SALVAGE — ` + "`weave salvage <issue>`" + ` inspects retained commits and runs any configured deterministic gates before merging.
+  4. DETERMINISTIC CONTINUATION — if salvage cannot proceed, launch a continuation task that fetches the retained commit directly from the retained branch/workspace into the new context.
   5. ROUTE QUOTAS — native AGY Gemini (Google quota) and AGY third-party routes (OpenAI/Anthropic proxies) operate under separate quota pools; a throttle on native AGY Gemini does not exhaust third-party routes.
 
 ## Hard rules (learned the hard way)

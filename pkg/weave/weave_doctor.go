@@ -224,7 +224,7 @@ func weaveNextSteps(it *weaveItem) string {
 		return it.StewardReason
 	}
 	if it.Salvageable {
-		return fmt.Sprintf("committed work survives this %s run — `weave salvage %d --review-agent <agent>`, or `weave abandon %d`", it.State, it.ID, it.ID)
+		return fmt.Sprintf("committed work survives this %s run — inspect it, then `weave salvage %d`, or `weave abandon %d`", it.State, it.ID, it.ID)
 	}
 	// The declared first edge out of failed/killed is `weave start --resume`,
 	// which is only real while the workspace is. When it is gone the run is

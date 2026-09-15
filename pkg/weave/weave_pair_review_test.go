@@ -224,7 +224,7 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	}
 }
 
-func TestWeavePullDoesNotBypassRecordedHarnessError(t *testing.T) {
+func TestWeavePullIgnoresRecordedHarnessErrorWithoutReviewer(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
 	if out, code := runWeave(t, "add", "review retry required", "--verify", "test -f feature.txt", "--json"); code != 0 {
@@ -250,11 +250,14 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	}
 
 	out, code := runWeave(t, "pull", "1", "--plain")
-	if code == 0 || !strings.Contains(out, "not a named pass") {
-		t.Fatalf("bare pull bypassed or misreported the recorded harness error (exit %d): %s", code, out)
+	if code != 0 || !strings.Contains(out, "merged") {
+		t.Fatalf("bare deterministic pull was poisoned by stale pair evidence (exit %d): %s", code, out)
 	}
-	if got := gitT(t, root, "log", "--format=%s", "-1"); got != "seed" {
-		t.Fatalf("run merged without replacing the recorded harness error with a pass: %s", got)
+	if strings.Contains(out, "PAIR HARNESS-ERROR") || strings.Contains(out, "context deadline exceeded") {
+		t.Fatalf("bare pull presented stale pair evidence as part of this invocation: %s", out)
+	}
+	if got := gitT(t, root, "log", "--format=%s", "-1"); got == "seed" {
+		t.Fatalf("bare deterministic pull did not merge: %s", got)
 	}
 }
 

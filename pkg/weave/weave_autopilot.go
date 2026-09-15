@@ -595,7 +595,7 @@ func buildWeaveAutopilotPrompt(repoRoot, queueDir, brief string, reviewAgents ..
 	fmt.Fprintf(&b, "Repo root: %s\nQueue dir: %s\n\n", repoRoot, queueDir)
 	b.WriteString("At safe top-of-loop boundaries, inspect the queue and run the normal weave gate/merge/launch flow. Never hand off mid-merge.\n\n")
 	if reviewAgent != "" {
-		fmt.Fprintf(&b, "Adversarial review is REQUIRED fleet-wide: merge submitted runs only with `bashy weave pull <issue> --review-agent %s`. The pair writes evidence; the gate alone decides.\n\n", reviewAgent)
+		fmt.Fprintf(&b, "Adversarial review was explicitly requested for this fleet: use `bashy weave pull <issue> --review-agent %s`. The pair writes evidence; configured deterministic gates decide.\n\n", reviewAgent)
 	}
 	b.WriteString("Current queue:\n")
 	for _, it := range q.Items {

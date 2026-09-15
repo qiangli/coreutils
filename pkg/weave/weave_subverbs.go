@@ -83,7 +83,7 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 	cmd.Flags().StringVar(&fromTodo, "from-todo", "", "Seed from a repo/host `bashy todo` entry (id, unique prefix, or #seq); links both ways")
 	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the workspace at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
 	cmd.Flags().StringVar(&suiteGate, "suite-gate", "", "Integration suite command run (`bash -c`) at the base repo root after merge; non-zero resets the merge and records suite_gate_exit/suite_gate_output")
-	cmd.Flags().StringVar(&judge, "judge", "", "Verifiability tier: none (deterministic probe alone may merge) | required (also needs a passing adversarial judge verdict). Default required (conservative)")
+	cmd.Flags().StringVar(&judge, "judge", "", "Verifiability metadata: none (default) | required (compatibility label; use --review-agent on pull to invoke model review)")
 	cmd.Flags().IntVar(&band, "band", 0, "Issue difficulty band (1-4; 0 = infer from the coding agent). Raises the judge floor to max(L3, band)")
 	return cmd
 }
@@ -571,7 +571,8 @@ func newWeavePullCmd() *cobra.Command {
 		Short: "Fast-forward your local main with the merged agent branches",
 		Long: `pull merges each submitted agent branch into the base branch, after
 measuring — never merely believing — that it is mergeable: commits ahead,
-a clean workspace, a passing verify, and an intact isolation baseline.
+a clean workspace, any configured verify/suite gates passing, and an intact
+isolation baseline. A run need not configure a test gate to merge.
 
 A run is "isolation-violated" when the LIVE checkout changed while the run
 held its workspace: either the agent escaped its workspace and wrote here
@@ -671,12 +672,9 @@ It promotes the item to 'submitted' only after confirming it has commits ahead
 of the base branch and a clean working tree, then runs the normal pull merge —
 so the dirty and verify-exit gates still apply. It is not a blind force.
 
-Salvage handles the LEAST trustworthy work in the fleet: runs killed mid-flight,
-holding auto-committed WIP that no agent ever declared finished. So it refuses to
-merge without adversarial review — pass --review-agent <agent> to run the same
-pair gate as 'weave pull', or --no-review to merge unreviewed on your own
-authority (named loudly in the output). A run that already carries a passing pair
-verdict needs neither.
+Model review is optional: pass --review-agent <agent> to run the same pair as
+'weave pull'. Without it, deterministic dirty, verify, suite and isolation gates
+decide the merge. --no-review remains accepted as a compatibility no-op.
 
 Salvage shows the diff it is about to merge, and never pushes: publishing
 salvaged work to a remote is a separate, deliberate decision.`,
@@ -695,7 +693,7 @@ salvaged work to a remote is a separate, deliberate decision.`,
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Run an adversarial pair in the workspace before merging (same gate as `weave pull --review-agent`)")
-	cmd.Flags().BoolVar(&noReview, "no-review", false, "Merge without any adversarial review — the explicit escape; salvage names it loudly in its output")
+	cmd.Flags().BoolVar(&noReview, "no-review", false, "Compatibility flag; model review is already off unless --review-agent is supplied")
 	return cmd
 }
 
