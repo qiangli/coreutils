@@ -30,6 +30,9 @@ const (
 // must surface before reading input or writing output.
 func resolveEncoding(env []string) (encodingMode, error) {
 	name := locale.Resolve(env, locale.CType)
+	if locale.IsMacOSDefaultUTF8(env, locale.CType) {
+		return encodingUTF8, nil
+	}
 	base, codeset := splitLocaleName(name)
 	switch {
 	case (base == "C" || base == "POSIX") && codeset == "":

@@ -1,6 +1,7 @@
 package grepcmd
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -177,5 +178,20 @@ func TestGrepLocaleRejectsUnreviewedCodesetsBeforeInput(t *testing.T) {
 				t.Fatalf("LC_ALL=%s = (%x, %q, %d), want fail-closed exit 2", localeName, out, errOut, code)
 			}
 		})
+	}
+}
+
+func TestGrepMacOSDefaultUTF8NormalModeOnly(t *testing.T) {
+	out, errOut, code := runGrepEnv(t, "", "é\n", []string{"LANG=en_US.UTF-8"}, "é")
+	if runtime.GOOS == "darwin" {
+		if code != 0 || errOut != "" || out != "é\n" {
+			t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (é, empty, 0)", out, errOut, code)
+		}
+	} else if code != 2 || out != "" || !strings.Contains(errOut, "unsupported locale") {
+		t.Fatalf("non-Darwin default UTF-8 = (%q, %q, %d), want rejection", out, errOut, code)
+	}
+	_, errOut, code = runGrepEnv(t, "", "unread\n", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, "x")
+	if code != 2 || !strings.Contains(errOut, "unsupported locale") {
+		t.Fatalf("cert default UTF-8 = (%q, %d), want unsupported diagnostic and 2", errOut, code)
 	}
 }

@@ -3,6 +3,7 @@ package cutcmd
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -354,6 +355,21 @@ func TestIssue736UnsupportedLocaleFailsBeforeInput(t *testing.T) {
 				args, code, out.Bytes(), errOut.String(),
 			)
 		}
+	}
+}
+
+func TestIssue736MacOSDefaultUTF8NormalModeOnly(t *testing.T) {
+	out, errOut, code := runToolEnv(t, []string{"LANG=en_US.UTF-8"}, "éx\n", "-c", "1")
+	if runtime.GOOS == "darwin" {
+		if code != 0 || errOut != "" || out != "é\n" {
+			t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (é, empty, 0)", out, errOut, code)
+		}
+	} else if code != 1 || out != "" || !strings.Contains(errOut, "unavailable") {
+		t.Fatalf("non-Darwin default UTF-8 = (%q, %q, %d), want rejection", out, errOut, code)
+	}
+	_, errOut, code = runToolEnv(t, []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, "unread\n", "-c", "1")
+	if code != 1 || !strings.Contains(errOut, "unavailable") {
+		t.Fatalf("cert default UTF-8 = (%q, %d), want unavailable diagnostic and 1", errOut, code)
 	}
 }
 

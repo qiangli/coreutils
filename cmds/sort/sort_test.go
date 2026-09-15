@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -74,6 +75,21 @@ func TestOpenOperandsValidatesAllBeforeReading(t *testing.T) {
 	want := []string{"open:first", "open:missing", "close:first"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("events = %v, want %v (the first operand must not be read)", events, want)
+	}
+}
+
+func TestSortMacOSDefaultUTF8NormalModeOnly(t *testing.T) {
+	out, errOut, code := runToolEnv(t, t.TempDir(), []string{"LANG=en_US.UTF-8"}, "é\na\n", "-f")
+	if runtime.GOOS == "darwin" {
+		if code != 0 || errOut != "" || out != "a\né\n" {
+			t.Fatalf("normal default UTF-8 = (%q, %q, %d)", out, errOut, code)
+		}
+	} else if code != 2 || out != "" || !strings.Contains(errOut, "LC_COLLATE=en_US.UTF-8") {
+		t.Fatalf("non-Darwin default UTF-8 = (%q, %q, %d), want rejection", out, errOut, code)
+	}
+	_, errOut, code = runToolEnv(t, t.TempDir(), []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, "unread\n", "-f")
+	if code != 2 || !strings.Contains(errOut, "LC_COLLATE=en_US.UTF-8") {
+		t.Fatalf("cert default UTF-8 = (%q, %d), want provider diagnostic and 2", errOut, code)
 	}
 }
 

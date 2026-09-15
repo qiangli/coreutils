@@ -2,6 +2,7 @@ package locale
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -105,6 +106,43 @@ func TestResolve(t *testing.T) {
 			got := Resolve(tc.env, tc.cat)
 			if got != tc.want {
 				t.Errorf("Resolve(%v, %q) = %q; want %q", tc.env, tc.cat, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsMacOSDefaultUTF8(t *testing.T) {
+	for _, tc := range []struct {
+		goos string
+		want bool
+	}{
+		{"darwin", true},
+		{"linux", false},
+		{"windows", false},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			if got := isDarwin(tc.goos); got != tc.want {
+				t.Fatalf("isDarwin(%q) = %v, want %v", tc.goos, got, tc.want)
+			}
+		})
+	}
+
+	macOS := runtime.GOOS == "darwin"
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want bool
+	}{
+		{"LANG fallback", []string{"LANG=en_US.UTF-8"}, macOS},
+		{"category overrides LANG", []string{"LANG=en_US.UTF-8", "LC_CTYPE=C"}, false},
+		{"LC_ALL selects it", []string{"LC_ALL=en_US.UTF-8", "LANG=C"}, macOS},
+		{"cert profile remains closed", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, false},
+		{"near alias is not carried", []string{"LANG=en_US.utf8"}, false},
+		{"other UTF-8 locale is not carried", []string{"LANG=ja_JP.UTF-8"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsMacOSDefaultUTF8(tc.env, CType); got != tc.want {
+				t.Fatalf("IsMacOSDefaultUTF8(%v) = %v, want %v", tc.env, got, tc.want)
 			}
 		})
 	}

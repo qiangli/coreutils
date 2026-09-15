@@ -201,7 +201,7 @@ func runWithProviders(rc *tool.RunContext, args []string, openCollator collatorO
 	// Initialize locale providers only after all keys have been validated and
 	// effective key modes are known. This keeps invalid-key diagnostics first
 	// and avoids LC_NUMERIC for a global -n overridden by key-local -f.
-	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
+	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" && !locale.IsMacOSDefaultUTF8(rc.Env, locale.Collate) {
 		provider, err := openCollator(name)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "sort: LC_COLLATE=%s: %v\n", name, err)
@@ -215,7 +215,7 @@ func runWithProviders(rc *tool.RunContext, args []string, openCollator collatorO
 		usesNumeric = usesNumeric || k.opts.numeric
 	}
 	if usesNumeric {
-		if name := locale.Resolve(rc.Env, locale.Numeric); name != "C" && name != "POSIX" {
+		if name := locale.Resolve(rc.Env, locale.Numeric); name != "C" && name != "POSIX" && !locale.IsMacOSDefaultUTF8(rc.Env, locale.Numeric) {
 			switch strings.ToLower(name) {
 			case "de_de.iso-8859-1", "de_de.iso88591":
 				s.decPt, s.thousSep = ',', '.'
@@ -230,7 +230,7 @@ func runWithProviders(rc *tool.RunContext, args []string, openCollator collatorO
 		usesTextClass = usesTextClass || k.opts.fold || k.opts.dict || k.opts.ignoreNP
 	}
 	if usesTextClass {
-		if name := locale.Resolve(rc.Env, locale.CType); name != "C" && name != "POSIX" {
+		if name := locale.Resolve(rc.Env, locale.CType); name != "C" && name != "POSIX" && !locale.IsMacOSDefaultUTF8(rc.Env, locale.CType) {
 			provider, err := openCtype(name)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "sort: LC_CTYPE=%s: %v\n", name, err)

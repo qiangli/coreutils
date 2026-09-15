@@ -3,6 +3,8 @@ package grepcmd
 import (
 	"fmt"
 	"strings"
+
+	"github.com/qiangli/coreutils/pkg/locale"
 )
 
 // grepLocale is the locale-dependent part of POSIX regular-expression
@@ -19,6 +21,12 @@ func (l grepLocale) latin1Bytes() bool { return l.ctypeGerman || l.collateGerman
 func grepLocaleFromEnv(env []string) (grepLocale, error) {
 	ctypeName := localeCategory(env, "LC_CTYPE")
 	collateName := localeCategory(env, "LC_COLLATE")
+	if locale.IsMacOSDefaultUTF8(env, locale.CType) {
+		ctypeName = "POSIX"
+	}
+	if locale.IsMacOSDefaultUTF8(env, locale.Collate) {
+		collateName = "POSIX"
+	}
 	ctypeGerman, err := germanLocale(ctypeName)
 	if err != nil {
 		return grepLocale{}, fmt.Errorf("LC_CTYPE=%s: %w", ctypeName, err)

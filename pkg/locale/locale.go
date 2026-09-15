@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -102,6 +103,30 @@ func Resolve(env []string, cat Category) string {
 		}
 	}
 	return Default
+}
+
+// IsMacOSDefaultUTF8 reports the one host-default UTF-8 locale which the
+// normal (non-certification) command tier carries without a locale provider.
+//
+// This is intentionally an exact spelling, rather than a generic "ends in
+// UTF-8" test: accepting arbitrary locale names would silently claim locale
+// data (collation, classes, and case mappings) the pure-Go providers do not
+// carry. The VSC certification profile stays fail-closed so its reviewed
+// locale/provider matrix cannot be changed by the developer host's default.
+func IsMacOSDefaultUTF8(env []string, cat Category) bool {
+	if !isDarwin(runtime.GOOS) {
+		return false
+	}
+	if profile, ok := getEnv(env, "VSC_PROFILE"); ok && profile == "cert" {
+		return false
+	}
+	return Resolve(env, cat) == "en_US.UTF-8"
+}
+
+// isDarwin keeps the host boundary independently testable without allowing
+// locale tests to claim macOS behavior on Linux or Windows.
+func isDarwin(goos string) bool {
+	return goos == "darwin"
 }
 
 // ResolveAll resolves every supported category from the same environment

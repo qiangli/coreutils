@@ -197,7 +197,15 @@ func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOp
 	lcCType := locale.Resolve(rc.Env, locale.CType)
 	lcCollate := locale.Resolve(rc.Env, locale.Collate)
 	ctypeModel := resolveSedCType(lcCType)
+	if locale.IsMacOSDefaultUTF8(rc.Env, locale.CType) {
+		ctypeModel = sedCTypeUTF8
+	}
 	collateModel := resolveSedCollate(lcCollate)
+	if locale.IsMacOSDefaultUTF8(rc.Env, locale.Collate) {
+		// UTF-8's encoded code-point order is byte order, the same bounded
+		// collation used for C.UTF-8 above. No host collation is implied.
+		collateModel = sedCollateC
+	}
 	var tables *bre.LocaleByteTables
 	if ctypeModel == sedCTypeProvider {
 		provider, err := ctypeOpen(lcCType)

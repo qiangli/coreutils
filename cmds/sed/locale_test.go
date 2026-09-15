@@ -22,6 +22,7 @@ package sedcmd
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,6 +47,21 @@ func TestSedAcceptsCarriedUTF8LocaleAliases(t *testing.T) {
 		if code != 0 || errOut != "" || out != "XXX\n" {
 			t.Errorf("env %v: got (%q, %q, %d), want (\"XXX\\n\", no diagnostic, 0)", env, out, errOut, code)
 		}
+	}
+}
+
+func TestSedMacOSDefaultUTF8NormalModeOnly(t *testing.T) {
+	out, errOut, code := runSedInDirEnv(t, t.TempDir(), []string{"LANG=en_US.UTF-8"}, "é\n", "s/./X/")
+	if runtime.GOOS == "darwin" {
+		if code != 0 || errOut != "" || out != "X\n" {
+			t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (X, empty, 0)", out, errOut, code)
+		}
+	} else if code != 2 || out != "" || !strings.Contains(errOut, `LC_CTYPE "en_US.UTF-8"`) {
+		t.Fatalf("non-Darwin default UTF-8 = (%q, %q, %d), want rejection", out, errOut, code)
+	}
+	_, errOut, code = runSedInDirEnv(t, t.TempDir(), []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, "unread\n", "s/x/y/")
+	if code != 2 || !strings.Contains(errOut, `LC_CTYPE "en_US.UTF-8"`) {
+		t.Fatalf("cert default UTF-8 = (%q, %d), want unavailable diagnostic and 2", errOut, code)
 	}
 }
 
@@ -222,7 +238,7 @@ func TestSedRejectsUncarriedLocalesByCategory(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			env := []string{"LC_CTYPE=C", "LC_COLLATE=C", tc.env}
+			env := []string{"VSC_PROFILE=cert", "LC_CTYPE=C", "LC_COLLATE=C", tc.env}
 			out, errOut, code := runSedInDirEnv(t, t.TempDir(), env, "abc\n", "s/a/X/")
 			if code != 2 || out != "" || !strings.Contains(errOut, tc.want) {
 				t.Errorf("env %v: got (%q, %q, %d), want exit 2 naming %s", env, out, errOut, code, tc.want)
