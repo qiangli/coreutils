@@ -57,6 +57,38 @@ func TestGenesisRoot(t *testing.T) {
 	}
 }
 
+// The Decision slot carries a guard's deny verdict: it round-trips through
+// the chain, is covered by the hash, and Effects stay in canonical sorted
+// order. This is the seam a policy-applied guard decorator writes into
+// (allow-only in practice until enforcement ships — Record.Decision).
+func TestDenyDecisionIsChained(t *testing.T) {
+	w, p := newLog(t)
+	r := rec("curl", "https://x")
+	r.Decision = "deny"
+	r.Effects = []string{"net", "read"}
+	stored, err := w.Append(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Decision != "deny" {
+		t.Fatalf("decision = %q, want deny", stored.Decision)
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), `"decision":"deny"`) {
+		t.Fatalf("deny not serialized: %s", raw)
+	}
+	res := Verify(strings.NewReader(string(raw)))
+	if !res.OK {
+		t.Fatalf("deny record broke the chain: %+v", res)
+	}
+	// Flipping the verdict after the fact must break verification — the
+	// decision is tamper-evident like every other field.
+	flipped := strings.Replace(string(raw), `"decision":"deny"`, `"decision":"allow"`, 1)
+	if Verify(strings.NewReader(flipped)).OK {
+		t.Fatal("an altered decision verified as intact")
+	}
+}
+
 // Editing a single byte of any record must be caught, and caught AT that record
 // — this is the whole point of the chain.
 func TestTamperIsCaught(t *testing.T) {
