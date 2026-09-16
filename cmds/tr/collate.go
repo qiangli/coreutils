@@ -115,7 +115,7 @@ func snapshotCollation(p collateProvider) (*collationTables, error) {
 
 func openCollationTables(env []string, charModel *charTables, opener collateOpener) (*collationTables, string, error) {
 	name := locale.Resolve(env, locale.Collate)
-	if isCPOSIX(name) {
+	if isCPOSIX(name) || locale.IsMacOSDefaultUTF8(env, locale.Collate) {
 		return cCollationTables(), name, nil
 	}
 	if charModel.multibyte {

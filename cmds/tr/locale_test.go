@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +34,34 @@ func runTrOpener(t *testing.T, env []string, stdin string, opener ctypeOpener, a
 }
 
 func posixUTF8() []string { return []string{"POSIXLY_CORRECT=1", "LC_ALL=en_US.UTF-8"} }
+
+// Exercise the registered command: runTrEnv bypasses collation resolution.
+func TestTrMacOSDefaultLocaleCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		env    []string
+		accept bool
+	}{
+		{"default", []string{"LANG=en_US.UTF-8"}, runtime.GOOS == "darwin"},
+		{"cert", []string{"LANG=en_US.UTF-8", "VSC_PROFILE=cert"}, false},
+		{"explicit unsupported collation", []string{"LANG=en_US.UTF-8", "LC_COLLATE=fr_FR.UTF-8"}, false},
+		{"C override", []string{"LANG=en_US.UTF-8", "LC_ALL=C"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Env: tc.env,
+				Stdio: tool.Stdio{In: strings.NewReader("abc é\xff\n"), Out: &out, Err: &errOut}}
+			code := cmd.Run(rc, []string{"a-z", "A-Z"})
+			if tc.accept {
+				if code != 0 || out.String() != "ABC é\xff\n" || errOut.Len() != 0 {
+					t.Fatalf("got (%q, %q, %d)", out.String(), errOut.String(), code)
+				}
+			} else if code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), "LC_COLLATE") {
+				t.Fatalf("expected collation rejection, got (%q, %q, %d)", out.String(), errOut.String(), code)
+			}
+		})
+	}
+}
 
 // errUnusableLocale stands in for a provider that cannot serve a locale.
 var errUnusableLocale = errors.New("locale unavailable")
