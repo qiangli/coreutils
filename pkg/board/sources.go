@@ -642,7 +642,7 @@ func StoryDetail(t Todo) (*Story, error) {
 	if t.ID == "" {
 		return nil, fmt.Errorf("story: no id")
 	}
-	args := append(append([]string(nil), t.Store...), "show", t.ID, "--json")
+	args := append(append([]string(nil), t.Store...), "show", t.ID, "--json", "--links")
 	raw, err := executeJSON(todo.NewTodoCmd(), args...)
 	if err != nil {
 		return nil, err

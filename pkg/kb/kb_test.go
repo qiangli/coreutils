@@ -775,6 +775,27 @@ func TestLegacyPageReadsAsForm(t *testing.T) {
 	}
 }
 
+// TestTypeFilterOnListAndSearch covers --type on list and search: a runbook
+// is found by its type and a lesson is excluded; an unknown type is refused
+// rather than silently matching nothing.
+func TestTypeFilterOnListAndSearch(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--type", "runbook", "--slug", "cut-release", "--title", "cut a paired release", "--description", "WHEN releasing the pair")
+	mustRun(t, dir, "add", "--type", "lesson", "--slug", "release-lesson", "--title", "a release lesson", "--description", "WHEN a release surprised us")
+
+	listOut := mustRun(t, dir, "list", "--type", "runbook")
+	if !strings.Contains(listOut, "cut-release") || strings.Contains(listOut, "release-lesson") {
+		t.Fatalf("list --type runbook should keep only the runbook:\n%s", listOut)
+	}
+	searchOut := mustRun(t, dir, "search", "--type", "runbook", "--k", "10", "release")
+	if !strings.Contains(searchOut, "cut-release") || strings.Contains(searchOut, "release-lesson") {
+		t.Fatalf("search --type runbook should keep only the runbook:\n%s", searchOut)
+	}
+	if _, err := run(t, dir, "", "list", "--type", "bogus"); err == nil {
+		t.Fatal("list --type bogus should be refused")
+	}
+}
+
 // TestAgentRingResolvesUnderAgentDataAndIsOwnerOnly covers the agent ring: it
 // resolves under <YCODE_DATA_DIR>/kb, a write lands there and nowhere else, and
 // it is invisible to another principal (ToolID mismatch).

@@ -178,6 +178,19 @@ type Story struct {
 	Closed   *time.Time `json:"closed,omitempty"`
 	Body     string     `json:"body,omitempty"`
 	Scope    string     `json:"scope,omitempty"`
+	// Outbound is the body's resolved citations (todo show --links). The
+	// board keeps it so a story that cites a kb runbook can surface it; the
+	// inbound backlinks are not carried — nothing on the page reads them.
+	Outbound []LinkRef `json:"outbound,omitempty"`
+}
+
+// LinkRef mirrors one entry of todo show --links: the canonical ref, the
+// target's title and (for a kb page) its type, and whether it resolved.
+type LinkRef struct {
+	Ref    string `json:"ref"`
+	Title  string `json:"title,omitempty"`
+	Type   string `json:"type,omitempty"`
+	Status string `json:"status,omitempty"`
 }
 
 type Sprint struct {

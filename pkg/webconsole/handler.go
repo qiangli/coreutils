@@ -363,6 +363,10 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.HandleFunc("GET /api/sprint", s.handleBoardOverview)
 		mux.HandleFunc("GET /api/sprint/panel/{id}", s.handleBoardPanel)
 		mux.HandleFunc("GET /api/sprint/story/{id}", s.handleBoardStory)
+		// Runbooks: the kb pages of type runbook that this board's sprints
+		// can cite — read-only, one list and one body (panel_runbooks.go).
+		mux.HandleFunc("GET /api/sprint/runbooks", s.handleRunbooks)
+		mux.HandleFunc("GET /api/sprint/runbook/{slug}", s.handleRunbook)
 	}
 
 	closers := []func() error{}

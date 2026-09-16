@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"path/filepath"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -44,6 +45,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/qiangli/coreutils/pkg/board"
+	"github.com/qiangli/coreutils/pkg/kb"
 	"github.com/qiangli/coreutils/pkg/resources"
 	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/websession"
@@ -1923,5 +1925,146 @@ func TestDOMEveryTileShowsAMarkNotALetter(t *testing.T) {
 		if mark != "svg" {
 			t.Errorf("tile %q renders the placeholder %q instead of its mark", p.Label, mark)
 		}
+	}
+}
+
+// The Runbooks section, in a real browser.
+//
+// A runbook is a kb page of type runbook: the reusable PROCEDURE a story cites
+// while the story carries this iteration's values. The Sprint page has ONE
+// section for them and ONE pane a runbook's body renders into — both the
+// section's own chips and a story's "runbooks" chip land there.
+func stubRunbooks(t *testing.T) {
+	t.Helper()
+	repo := kb.Open(filepath.Join(t.TempDir(), kb.RepoSub))
+	write := func(slug, typ, title, body string) {
+		t.Helper()
+		if err := repo.Write(&kb.Page{
+			Slug: slug, Form: kb.FormPage, Type: typ, Title: title,
+			Description: "WHEN the DOM test needs a runbook", Status: kb.StatusCandidate, Body: body,
+		}, "add"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("cut-release", kb.TypeRunbook, "cut a release", "## Steps\n\n1. tag it\n2. promote it\n")
+	write("some-lesson", kb.TypeLesson, "some lesson", "not a runbook")
+	orig := runbookRingsFn
+	t.Cleanup(func() { runbookRingsFn = orig })
+	runbookRingsFn = func([]string) []runbookRing { return []runbookRing{{Name: "repo x", Store: repo}} }
+}
+
+func TestDOMRunbooksSectionOpensAPageBody(t *testing.T) {
+	stubBoard(t)
+	stubRunbooks(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	var chips, pane, hash string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll("#bd-runbooks .ref.link")).map(b => b.textContent).join(",")`, &chips),
+		chromedp.Click(`#bd-runbooks .ref.link`, chromedp.ByQuery),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(`(() => {
+			const d = document.querySelector("#bd-runbooks .story-detail");
+			if (!d) return "NO PANE";
+			const h = d.querySelector(".story-body .story-h");
+			return (d.hidden ? "HIDDEN:" : "SHOWN:") + (h ? h.textContent.trim() : "NO HEADING");
+		})()`, &pane),
+		chromedp.Evaluate(`location.hash`, &hash),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "runbooks section", errs())
+
+	if chips != "cut-release" {
+		t.Fatalf("the section lists runbooks only (the lesson is excluded): %q", chips)
+	}
+	if pane != "SHOWN:Steps" {
+		t.Errorf("clicking a runbook chip should show its body through the markdown renderer: %s", pane)
+	}
+	if !strings.Contains(hash, "runbook=cut-release") {
+		t.Errorf("the open runbook is not deep-linked in the hash: %s", hash)
+	}
+}
+
+func TestDOMStoryRunbookChipOpensTheSharedPane(t *testing.T) {
+	stubBoard(t)
+	stubRunbooks(t)
+	origStory := storyDetailFn
+	t.Cleanup(func() { storyDetailFn = origStory })
+	storyDetailFn = func(board.Todo) (*board.Story, error) {
+		return &board.Story{
+			ID: "aaaa1111", Seq: 1, Title: "still open", Status: "todo",
+			Body: "Runbook: [[kb:cut-release]] — also see [[kb:some-lesson]].",
+			Outbound: []board.LinkRef{
+				{Ref: "kb:cut-release", Title: "cut a release", Type: "runbook", Status: "resolved"},
+				{Ref: "kb:some-lesson", Title: "some lesson", Type: "lesson", Status: "resolved"},
+				{Ref: "kb:typo-slug", Status: "dangling"},
+			},
+		}, nil
+	}
+	base, ctx, errs := domEnv(t, Options{})
+
+	var chips, needs, pane string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Click(`.bd-sprint .refs .ref.link`, chromedp.ByQuery), // the first story chip
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll(".bd-sprint .story-detail .refs .ref.link")).map(b => b.textContent).join(",")`, &chips),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll(".bd-sprint .story-detail .refs .ref.needs")).map(b => b.textContent).join(",")`, &needs),
+		chromedp.Click(`.bd-sprint .story-detail .refs .ref.link`, chromedp.ByQuery),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(`(() => {
+			const d = document.querySelector("#bd-runbooks .story-detail");
+			if (!d) return "NO PANE";
+			return (d.hidden ? "HIDDEN:" : "SHOWN:") + d.textContent.trim().slice(0, 40);
+		})()`, &pane),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "story runbook chip", errs())
+
+	if chips != "cut-release" {
+		t.Errorf("a story's runbook row shows runbook-typed kb refs only, not the lesson: %q", chips)
+	}
+	if needs != "typo-slug" {
+		t.Errorf("a dangling kb ref must stay visible as a warning chip: %q", needs)
+	}
+	if !strings.HasPrefix(pane, "SHOWN:kb:cut-release") {
+		t.Errorf("the story's chip must open the SAME pane the section uses: %s", pane)
+	}
+}
+
+func TestDOMRunbookPaneSurvivesARefresh(t *testing.T) {
+	stubBoard(t)
+	stubRunbooks(t)
+	base, ctx, errs := domEnv(t, Options{})
+
+	const readPane = `(() => {
+		const d = document.querySelector("#bd-runbooks .story-detail");
+		return d ? String(!d.hidden) + ":" + d.textContent.trim().slice(0, 15) : "NONE";
+	})()`
+	var before, after string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/sprint/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Click(`#bd-runbooks .ref.link`, chromedp.ByQuery),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(readPane, &before),
+		chromedp.Evaluate(`load()`, nil, awaitPromise),
+		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Evaluate(readPane, &after),
+	); err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	assertNoJSErrors(t, "runbook refresh", errs())
+
+	if !strings.HasPrefix(before, "true:kb:cut-release") {
+		t.Fatalf("the runbook pane did not open: %s", before)
+	}
+	if before != after {
+		t.Errorf("a refresh closed the runbook the reader had open.\n before = %s\n after  = %s", before, after)
 	}
 }

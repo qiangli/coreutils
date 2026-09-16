@@ -179,7 +179,7 @@ func newSearchCmd(dir, ring *string) *cobra.Command {
 		minCov         float64
 		useWeight      float64
 		retireAfter    time.Duration
-		form           string
+		form, typ      string
 	)
 	cmd := &cobra.Command{
 		Use:   "search <term>...",
@@ -200,12 +200,15 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			if form != "" && !ValidForm(form) {
 				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
 			}
+			if typ != "" && !ValidType(typ) {
+				return fmt.Errorf("kb: invalid type %q (lesson|gotcha|runbook|decision|fact)", typ)
+			}
 			store := openRing(*dir, *ring)
 			pages, err := store.List()
 			if err != nil {
 				return err
 			}
-			pages = filterForm(pages, form)
+			pages = filterType(filterForm(pages, form), typ)
 			if repo == "" {
 				if cwd, err := os.Getwd(); err == nil {
 					if root := repoRootOf(cwd); root != "" {
@@ -303,7 +306,23 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
 	cmd.Flags().BoolVar(&why, "why", false, "also explain the search: which query terms the corpus carries, and where (always shown when nothing matches)")
 	cmd.Flags().StringVar(&form, "form", "", "filter to one record form: note|page|relation|code (legacy pages read as page)")
+	cmd.Flags().StringVar(&typ, "type", "", "filter to one page type: lesson|gotcha|runbook|decision|fact")
 	return cmd
+}
+
+// filterType keeps only pages of the given type (exact match on the required
+// frontmatter field). An empty type keeps everything.
+func filterType(pages []*Page, typ string) []*Page {
+	if typ == "" {
+		return pages
+	}
+	out := pages[:0:0]
+	for _, p := range pages {
+		if p.Type == typ {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // filterForm keeps only pages of the given form (by effective form, so legacy
@@ -795,7 +814,7 @@ write distilled strategy, not transcript; capture failures as guardrails.
 
 func newListCmd(dir, ring *string) *cobra.Command {
 	var jsonOut bool
-	var form string
+	var form, typ string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List every page, one line each",
@@ -804,12 +823,15 @@ func newListCmd(dir, ring *string) *cobra.Command {
 			if form != "" && !ValidForm(form) {
 				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
 			}
+			if typ != "" && !ValidType(typ) {
+				return fmt.Errorf("kb: invalid type %q (lesson|gotcha|runbook|decision|fact)", typ)
+			}
 			store := openRing(*dir, *ring)
 			pages, err := store.List()
 			if err != nil {
 				return err
 			}
-			pages = filterForm(pages, form)
+			pages = filterType(filterForm(pages, form), typ)
 			if jsonOut {
 				// list has no query, so there is nothing to explain (no why).
 				// ResLine matches this verb's own contract — "one line each",
@@ -828,6 +850,7 @@ func newListCmd(dir, ring *string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON output")
 	cmd.Flags().StringVar(&form, "form", "", "filter to one record form: note|page (legacy pages read as page)")
+	cmd.Flags().StringVar(&typ, "type", "", "filter to one page type: lesson|gotcha|runbook|decision|fact")
 	return cmd
 }
 

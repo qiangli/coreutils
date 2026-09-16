@@ -36,8 +36,8 @@ func TestResolveLinksBothDirections(t *testing.T) {
 
 	out, in := resolveLinks(st, it)
 
-	if len(out) != 1 || out[0].Ref != "kb:pkill-guard" || out[0].Status != "resolved" {
-		t.Fatalf("outbound: want one resolved kb:pkill-guard, got %+v", out)
+	if len(out) != 1 || out[0].Ref != "kb:pkill-guard" || out[0].Status != "resolved" || out[0].Type != kb.TypeLesson {
+		t.Fatalf("outbound: want one resolved kb:pkill-guard of type lesson, got %+v", out)
 	}
 	if len(in) != 1 || in[0].Ref != "kb:pkill-guard" {
 		t.Fatalf("inbound: want kb:pkill-guard citing the todo, got %+v", in)

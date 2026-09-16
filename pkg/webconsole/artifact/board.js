@@ -28,7 +28,18 @@ const el = (tag, cls, text) => {
 // with replaceChildren, so anything a reader opened lives here or it collapses
 // under them mid-read: `open` is the panels, `stories`/`cont` are a sprint
 // card's two disclosures, and `story` is the one story whose body is showing.
-const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [] };
+const state = { all: false, open: {}, stories: {}, cont: {}, story: {}, runs: [], runbook: "" };
+
+// writeHash mirrors the two things a reader can deep-link into the URL: the
+// history toggle and the open runbook. Keep it the one writer so a reload
+// lands the reader where they were.
+function writeHash() {
+  const q = new URLSearchParams();
+  if (state.all) q.set("all", "1");
+  if (state.runbook) q.set("runbook", state.runbook);
+  const h = q.toString();
+  history.replaceState(null, "", h ? "#" + h : "#");
+}
 
 // disclose wires a toggle button to its body and REMEMBERS the answer under
 // key, so the next render restores it. Every disclosure on this page goes
@@ -247,6 +258,34 @@ function runRefsEl(refs) {
   return wrap;
 }
 
+// The RUNBOOKS a story cites are its procedure — the story carries this
+// iteration's values, the runbook the reusable steps (`Runbook: [[kb:<slug>]]`
+// in the body). Only kb refs of type runbook are runbooks; a cited lesson is
+// not one and must not be labelled one. A dangling kb ref is shown in the
+// warning colour so a typo in a slug is visible rather than silently absent.
+function runbookRefsEl(outbound) {
+  const refs = (outbound || []).filter((r) => typeof r.ref === "string" && r.ref.startsWith("kb:")
+    && (r.type === "runbook" || r.status === "dangling"));
+  if (!refs.length) return null;
+  const wrap = el("div", "refs");
+  wrap.append(el("span", "k", "runbooks"));
+  for (const r of refs) {
+    const slug = r.ref.slice(3);
+    if (r.status === "dangling") {
+      const chip = el("span", "ref needs", slug);
+      chip.title = "kb:" + slug + " — not found in the tracked repos' kb";
+      wrap.append(chip);
+      continue;
+    }
+    const chip = el("button", "ref link", slug);
+    chip.type = "button";
+    chip.title = r.title || r.ref;
+    chip.addEventListener("click", () => openRunbook(slug));
+    wrap.append(chip);
+  }
+  return wrap;
+}
+
 // The linked STORIES are what a sprint is FOR, and this page showed none of
 // them: the overview payload carried sprints and runs and dropped todos
 // entirely, so every card rendered as a title with no work under it. A sprint
@@ -458,6 +497,8 @@ async function openStory(id, host, sprintID) {
       rows.push(m);
     }
     rows.push(...workerRows(d));
+    const rb = runbookRefsEl(d.outbound);
+    if (rb) rows.push(rb);
     // THE BODY, whole and in its own shape. Never truncated — a long record
     // scrolls inside its pane, because a detail view that quietly stops
     // mid-sentence is the defect class this page exists to report on.
@@ -881,17 +922,102 @@ async function load() {
   renderSummary(d);
   state.runs = d.runs || [];
   renderSprints(d);
+  renderRunbooks();
   renderLanes(d);
   renderPanels(d);
   renderMeta(d);
 }
 
+// runbookDetail fetches ONE runbook page, cached per slug like storyDetail:
+// the poll re-renders the section every 15s and must not re-read the page.
+// (Server-side the read is Store.Load, never RecordOpen, for the same reason.)
+const runbookCache = new Map();
+async function runbookDetail(slug) {
+  if (runbookCache.has(slug)) return runbookCache.get(slug);
+  const p = fetch(url("api/sprint/runbook/" + encodeURIComponent(slug)))
+    .then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+      return d;
+    });
+  runbookCache.set(slug, p);
+  p.catch(() => runbookCache.delete(slug));
+  return p;
+}
+
+// openRunbook renders a runbook's body into the Runbooks section's one pane.
+// Both entry points — a story's runbook chip and the section's own list —
+// land here, so the page has exactly one place a procedure is shown.
+async function openRunbook(slug) {
+  state.runbook = slug;
+  writeHash();
+  const host = $("bd-runbooks").querySelector(".story-detail");
+  if (!host) return;
+  host.hidden = false;
+  host.replaceChildren(el("div", "sec-v", "loading kb:" + slug + " …"));
+  try {
+    const d = await runbookDetail(slug);
+    const head = el("div", "sec");
+    head.append(el("div", "sec-k", "kb:" + d.slug));
+    head.append(el("div", "sec-v", d.title || ""));
+    const meta = [d.status, d.ring, (d.tags || []).join(", ")].filter(Boolean).join(" · ");
+    const m = el("div", "sec");
+    m.append(el("div", "sec-k", "meta"));
+    m.append(el("div", "sec-v", meta));
+    host.replaceChildren(head, m, storyBodyEl(d.body));
+  } catch (e) {
+    const row = el("div", "sec");
+    row.append(el("div", "sec-k needs", "error"));
+    row.append(el("div", "sec-v", String(e.message || e)));
+    host.replaceChildren(row);
+  }
+}
+
+// renderRunbooks is the one Runbooks section: the runbook-typed kb pages of
+// every repo a live sprint tracks (plus the host ring), as chips, over one
+// shared detail pane. An open runbook survives the poll because openRunbook
+// is replayed from state after each render — from cache, so no refetch.
+async function renderRunbooks() {
+  let d;
+  try {
+    const r = await fetch(url("api/sprint/runbooks"));
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+  } catch (e) {
+    $("bd-runbooks").replaceChildren(el("p", "empty", String(e.message || e)));
+    return;
+  }
+  const rows = d.runbooks || [];
+  const card = el("article", "bd-sprint");
+  if (!rows.length) {
+    card.append(el("p", "empty", "No runbooks — author one with: bashy kb add --type runbook"));
+  } else {
+    const wrap = el("div", "refs");
+    wrap.append(el("span", "k", "runbooks"));
+    for (const rb of rows) {
+      const chip = el("button", "ref link" + (rb.slug === state.runbook ? " open" : ""), rb.slug);
+      chip.type = "button";
+      chip.title = [rb.title, rb.description, rb.ring].filter(Boolean).join(" · ");
+      chip.addEventListener("click", () => openRunbook(rb.slug));
+      wrap.append(chip);
+    }
+    card.append(wrap);
+  }
+  const detail = el("div", "continuity story-detail");
+  detail.hidden = true;
+  card.append(detail);
+  $("bd-runbooks").replaceChildren(card);
+  if (state.runbook) openRunbook(state.runbook);
+}
+
 function init() {
-  state.all = new URLSearchParams(location.hash.replace(/^#/, "")).get("all") === "1";
+  const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+  state.all = params.get("all") === "1";
+  state.runbook = params.get("runbook") || "";
   $("f-all").checked = state.all;
   $("f-all").addEventListener("change", () => {
     state.all = $("f-all").checked;
-    history.replaceState(null, "", state.all ? "#all=1" : "#");
+    writeHash();
     load();
   });
   $("f-refresh").addEventListener("click", load);

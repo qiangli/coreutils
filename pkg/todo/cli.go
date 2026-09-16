@@ -270,7 +270,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&priority, "priority", "", "priority tier (p0|p1|p2|p3)")
-	cmd.Flags().StringVar(&note, "note", "", "task body/details (- reads stdin)")
+	cmd.Flags().StringVar(&note, "note", "", "task body/details (- reads stdin); this item's own facts — a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
@@ -452,6 +452,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 type linkRef struct {
 	Ref    string `json:"ref"`              // <kind>:<id> — any ref vocabulary kind (pkg/ref)
 	Title  string `json:"title,omitempty"`  // the target's title, when resolved
+	Type   string `json:"type,omitempty"`   // a kb target's page type (runbook, lesson, …); empty for todos
 	Status string `json:"status,omitempty"` // "resolved" | "dangling" | "external" | "unknown"
 }
 
@@ -472,7 +473,7 @@ func resolveLinks(st *issue.Store, it *issue.Issue) (outbound, inbound []linkRef
 
 	for _, l := range kb.ParseLinks(self.Body) {
 		if n, ok := kb.ResolveLink(l, nodes); ok && n.Ref() != self.Ref() {
-			outbound = append(outbound, linkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved"})
+			outbound = append(outbound, linkRef{Ref: n.Ref(), Title: n.Title, Type: n.Type, Status: "resolved"})
 		} else {
 			// external (a kind another store owns), unknown (a scheme outside
 			// the vocabulary), or dangling (a kb/todo target that is not here).
@@ -480,7 +481,7 @@ func resolveLinks(st *issue.Store, it *issue.Issue) (outbound, inbound []linkRef
 		}
 	}
 	for _, n := range kb.Backlinks(self, nodes) {
-		inbound = append(inbound, linkRef{Ref: n.Ref(), Title: n.Title, Status: "resolved"})
+		inbound = append(inbound, linkRef{Ref: n.Ref(), Title: n.Title, Type: n.Type, Status: "resolved"})
 	}
 	return outbound, inbound
 }
@@ -632,7 +633,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority (p0|p1|p2|p3)")
-	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details (- reads stdin)")
+	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details (- reads stdin) — the whole body, so re-supply what should stay; a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
