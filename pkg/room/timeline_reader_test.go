@@ -120,6 +120,14 @@ func TestTimelineReaderReplacementAndSameSizeRewrite(t *testing.T) {
 				}
 			} else {
 				readerWrite(t, path, readerLine(EventAck))
+				// Exercise a metadata-visible rewrite, independently of the
+				// filesystem clock's granularity. Two writes within one tick
+				// can otherwise retain the same inode, size and modification
+				// time and are indistinguishable to the unchanged fast path.
+				modified := r.info.ModTime().Add(time.Second)
+				if err := os.Chtimes(path, modified, modified); err != nil {
+					t.Fatal(err)
+				}
 			}
 			got := readerLatest(t, r)
 			if got.Generation == before.Generation || got.Seq != 1 {
