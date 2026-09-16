@@ -3,11 +3,13 @@ id: 0e9e06a60083
 kind: task
 title: kb --type filter, story links carry page type, Sprint app Runbooks section
 seq: 146
-status: assigned
+status: done
 priority: p1
 created: 2026-09-16T15:59:06.72538Z
 assignee: transom
 sprint: 201
+closed: 2026-09-16T16:14:17.675594Z
+closed_by: transom
 ---
 
 Sprint #201 story 3 (code, coreutils only, ~400 LOC incl. tests). KISS: no /kb tile, no new ref kind, no kb edit/rm, no context injection, no sprint advance change.
