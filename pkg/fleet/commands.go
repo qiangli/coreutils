@@ -212,6 +212,10 @@ func (c Command) Validate(reserved ReservedName) error {
 		if strings.ContainsAny(n, " \t\n") {
 			return fmt.Errorf("fleet: command name %q must be a bare identifier", n)
 		}
+		switch n {
+		case "var", "const", "func", "import", "package", "goto":
+			return fmt.Errorf("fleet: %q is reserved by Bash++; rename the registered command or alias; to invoke an external program, use command %s, %q, or an explicit path", n, n, n)
+		}
 		if slices.Contains(reservedCommandWords, n) {
 			return fmt.Errorf("fleet: %q is a word `bashy commands` keeps for itself (%s)", n, strings.Join(reservedCommandWords, " "))
 		}

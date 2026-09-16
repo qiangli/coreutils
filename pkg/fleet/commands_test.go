@@ -143,6 +143,89 @@ func TestCommandArgv(t *testing.T) {
 	}
 }
 
+func TestCommandsBashPPReservedNames(t *testing.T) {
+	for _, word := range []string{"var", "const", "func", "import", "package", "goto"} {
+		t.Run(word, func(t *testing.T) {
+			root := t.TempDir()
+			opts := []Option{WithRoot(root)}
+			cat := New(opts...)
+			if err := cat.SaveCommand(Command{Name: "safe", Exec: []string{"external-program"}}); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "commands", "safe.yaml")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, args := range [][]string{
+				{"add", word, "--set", "exec.0=external-program"},
+				{"add", "other", "--set", "exec.0=external-program", "--set", "aliases.0=" + word},
+				{"set", "safe", "--set", "name=" + word},
+				{"set", "safe", "--set", "aliases.0=" + word},
+				{"set", "safe", "--add-alias", word},
+			} {
+				_, err := runCmd(t, NewCommandsCmd(opts...), args...)
+				if err == nil {
+					t.Fatalf("%v accepted reserved name", args)
+				}
+				for _, want := range []string{"reserved by Bash++", "rename the registered command or alias", "external program", "command " + word} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%v: error %q lacks %q", args, err, want)
+					}
+				}
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(before) != string(after) {
+				t.Fatalf("rejected update changed existing record: %v", err)
+			}
+			for _, name := range []string{word, "other"} {
+				if _, err := os.Stat(filepath.Join(root, "commands", name+".yaml")); !os.IsNotExist(err) {
+					t.Errorf("rejected write left %s: %v", name, err)
+				}
+			}
+			// Records created by an older binary or supplied by a ring still
+			// load, but verification must identify their invalid name/alias.
+			for _, rec := range []Command{
+				{Name: word, Exec: []string{"external-program"}},
+				{Name: "old", Aliases: []string{word}, Exec: []string{"external-program"}},
+			} {
+				data, err := Marshal(rec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "commands", rec.Name+".yaml"), data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if chk := cat.VerifyCommand(context.Background(), rec.Name); chk.OK || !strings.Contains(chk.Reason, "reserved by Bash++") {
+					t.Errorf("old record verify = %+v", chk)
+				}
+				if _, err := runCmd(t, NewCommandsCmd(opts...), "verify", rec.Name); err == nil {
+					t.Errorf("CLI verify accepted old record %s", rec.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestCommandGoAndTypeUseShippedNamePolicy(t *testing.T) {
+	for _, word := range []string{"go", "type"} {
+		for _, alias := range []bool{false, true} {
+			rec := Command{Name: word, Exec: []string{"external-program"}}
+			if alias {
+				rec.Name, rec.Aliases = "safe", []string{word}
+			}
+			rec.applyDefaults()
+			if err := rec.Validate(nil); err != nil {
+				t.Errorf("%s (alias %v) must not be a language-keyword ban: %v", word, alias, err)
+			}
+			reserved := func(name string) (string, bool) { return "shipped command", name == word }
+			if err := rec.Validate(reserved); err == nil || !strings.Contains(err.Error(), "already resolves to shipped command") {
+				t.Errorf("%s (alias %v) lost shipped protection: %v", word, alias, err)
+			}
+		}
+	}
+}
+
 // A download record without a digest for THIS platform is refused before any
 // network is touched.
 func TestCommandEnsureRefusesWithoutPlatformDigest(t *testing.T) {
