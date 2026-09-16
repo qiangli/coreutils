@@ -533,6 +533,10 @@ func (e *Engine) flushGroup(n *Node, r TaskResult) {
 		if r.Err != nil {
 			fmt.Fprintf(e.Stdout, "    %s\n", r.Err)
 		}
+		fmt.Fprintf(e.Stderr, "==> %s FAILED (exit %d)\n", n.Task.Name, r.ExitCode)
+		if r.Err != nil {
+			fmt.Fprintf(e.Stderr, "    %s\n", r.Err)
+		}
 	}
 	fmt.Fprintln(e.Stdout, "::endgroup::")
 }

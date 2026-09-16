@@ -82,7 +82,7 @@ func writeObservationJSON(path string, limit int, value any) error {
 	return os.Rename(tmp, path)
 }
 func observationLock(ctx context.Context, path string) (*lockfile.Lock, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	for {
 		if err := ctx.Err(); err != nil {
