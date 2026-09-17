@@ -651,6 +651,17 @@ body.standalone #bar { flex: none; }
 }
 .bd-sprint .refs .ref.needs { color: var(--warn); border-color: var(--warn); }
 
+/* A runbook chip: `#seq slug`. The slug is clipped to a fixed width — a kb
+   slug is a kebab-case sentence, and one long name used to push every other
+   chip onto the next line — with an ellipsis; the button's title carries the
+   complete kb:<slug>, so hovering reads what was cut. The seq is the short,
+   stable handle and is never clipped. */
+.bd-sprint .refs .ref.rb .seq { color: var(--muted-foreground); }
+.bd-sprint .refs .ref.rb .slug {
+  display: inline-block; max-width: 20ch; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: bottom;
+}
+
 /* The head's progress chip: open/closed WITHOUT expanding the list. */
 .bd-sprint .stories {
   border-radius: .3rem; padding: 0 .35rem; border: 1px solid currentColor;

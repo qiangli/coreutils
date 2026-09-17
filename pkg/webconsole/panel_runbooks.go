@@ -27,7 +27,9 @@ import (
 // the body (the same payload discipline as `kb list --json`).
 type runbookRow struct {
 	Slug        string   `json:"slug"`
-	Ref         string   `json:"ref"` // kb:<slug> — copy straight into a story body
+	Seq         int      `json:"seq,omitempty"` // the ring-local human handle (kb:<seq>); 0 for a page written before seqs
+	ID          string   `json:"id,omitempty"`  // the UUIDv7 identity
+	Ref         string   `json:"ref"`           // kb:<slug> — copy straight into a story body
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
@@ -90,7 +92,7 @@ func sprintRoots(roots [][]string) []string {
 
 func rowOf(p *kb.Page, ring string) runbookRow {
 	return runbookRow{
-		Slug: p.Slug, Ref: "kb:" + p.Slug, Title: p.Title, Description: p.Description,
+		Slug: p.Slug, Seq: p.Seq, ID: p.ID, Ref: "kb:" + p.Slug, Title: p.Title, Description: p.Description,
 		Tags: p.Tags, Status: p.Status, Ring: ring,
 	}
 }

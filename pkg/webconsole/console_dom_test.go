@@ -1934,6 +1934,10 @@ func TestDOMEveryTileShowsAMarkNotALetter(t *testing.T) {
 // while the story carries this iteration's values. The Sprint page has ONE
 // section for them and ONE pane a runbook's body renders into — both the
 // section's own chips and a story's "runbooks" chip land there.
+// longSlug is wider than the chip's fixed slug width (app.css: 20ch), so the
+// section test can see the ellipsis engage.
+const longSlug = "rotate-the-signing-key-and-republish-every-platform-artifact"
+
 func stubRunbooks(t *testing.T) {
 	t.Helper()
 	repo := kb.Open(filepath.Join(t.TempDir(), kb.RepoSub))
@@ -1948,6 +1952,7 @@ func stubRunbooks(t *testing.T) {
 	}
 	write("cut-release", kb.TypeRunbook, "cut a release", "## Steps\n\n1. tag it\n2. promote it\n")
 	write("some-lesson", kb.TypeLesson, "some lesson", "not a runbook")
+	write(longSlug, kb.TypeRunbook, "a long one", "## Long\n\nthe slug is a sentence\n")
 	orig := runbookRingsFn
 	t.Cleanup(func() { runbookRingsFn = orig })
 	runbookRingsFn = func([]string) []runbookRing { return []runbookRing{{Name: "repo x", Store: repo}} }
@@ -1958,11 +1963,16 @@ func TestDOMRunbooksSectionOpensAPageBody(t *testing.T) {
 	stubRunbooks(t)
 	base, ctx, errs := domEnv(t, Options{})
 
-	var chips, pane, hash string
+	var chips, tips, clipped, pane, hash string
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(base+"/sprint/"),
 		chromedp.Sleep(2*time.Second),
 		chromedp.Evaluate(`Array.from(document.querySelectorAll("#bd-runbooks .ref.link")).map(b => b.textContent).join(",")`, &chips),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll("#bd-runbooks .ref.link")).map(b => b.title).join(",")`, &tips),
+		chromedp.Evaluate(`(() => {
+			const s = Array.from(document.querySelectorAll("#bd-runbooks .ref.link .slug"));
+			return s.map(x => (x.scrollWidth > x.clientWidth ? "clipped" : "fits") + ":" + getComputedStyle(x).textOverflow).join(",");
+		})()`, &clipped),
 		chromedp.Click(`#bd-runbooks .ref.link`, chromedp.ByQuery),
 		chromedp.Sleep(1500*time.Millisecond),
 		chromedp.Evaluate(`(() => {
@@ -1977,8 +1987,19 @@ func TestDOMRunbooksSectionOpensAPageBody(t *testing.T) {
 	}
 	assertNoJSErrors(t, "runbooks section", errs())
 
-	if chips != "cut-release" {
-		t.Fatalf("the section lists runbooks only (the lesson is excluded): %q", chips)
+	// Two chips: the seeded runbook and the one with a slug longer than the
+	// chip's fixed width (the lesson is excluded). Each names its page by seq
+	// AND slug — the seq is the handle a human types (kb:1), the slug what a
+	// story body cites — and the tooltip carries the complete kb:<slug>, so a
+	// clipped slug can be read by hovering.
+	if chips != "#1 cut-release,#3 "+longSlug {
+		t.Fatalf("the section lists runbooks only, as `#seq slug`: %q", chips)
+	}
+	if !strings.HasPrefix(tips, "kb:cut-release (kb:1) — cut a release") || !strings.Contains(tips, "kb:"+longSlug+" (kb:3)") {
+		t.Errorf("each chip's title must carry the complete kb:<slug> and the seq handle: %q", tips)
+	}
+	if clipped != "fits:ellipsis,clipped:ellipsis" {
+		t.Errorf("a short slug fits and a long one is clipped with an ellipsis (both at the fixed width): %q", clipped)
 	}
 	if pane != "SHOWN:Steps" {
 		t.Errorf("clicking a runbook chip should show its body through the markdown renderer: %s", pane)
@@ -1998,7 +2019,7 @@ func TestDOMStoryRunbookChipOpensTheSharedPane(t *testing.T) {
 			ID: "aaaa1111", Seq: 1, Title: "still open", Status: "todo",
 			Body: "Runbook: [[kb:cut-release]] — also see [[kb:some-lesson]].",
 			Outbound: []board.LinkRef{
-				{Ref: "kb:cut-release", Title: "cut a release", Type: "runbook", Status: "resolved"},
+				{Ref: "kb:cut-release", Seq: 1, Title: "cut a release", Type: "runbook", Status: "resolved"},
 				{Ref: "kb:some-lesson", Title: "some lesson", Type: "lesson", Status: "resolved"},
 				{Ref: "kb:typo-slug", Status: "dangling"},
 			},
@@ -2026,8 +2047,8 @@ func TestDOMStoryRunbookChipOpensTheSharedPane(t *testing.T) {
 	}
 	assertNoJSErrors(t, "story runbook chip", errs())
 
-	if chips != "cut-release" {
-		t.Errorf("a story's runbook row shows runbook-typed kb refs only, not the lesson: %q", chips)
+	if chips != "#1 cut-release" {
+		t.Errorf("a story's runbook row shows runbook-typed kb refs only, not the lesson, as `#seq slug`: %q", chips)
 	}
 	if needs != "typo-slug" {
 		t.Errorf("a dangling kb ref must stay visible as a warning chip: %q", needs)

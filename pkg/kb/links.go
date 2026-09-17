@@ -88,6 +88,7 @@ func (l Link) Status() string {
 type LinkNode struct {
 	Kind  LinkKind
 	ID    string // kb slug | todo id
+	Seq   int    // kb page seq (the ring-local human handle, `kb:22`); 0 for todo nodes or a page written before seqs
 	Title string
 	Type  string // kb page type (lesson|gotcha|runbook|…); empty for todo nodes
 	Body  string
@@ -100,7 +101,7 @@ func (n LinkNode) Ref() string { return string(n.Kind) + ":" + n.ID }
 
 // KBNode wraps a kb page as a link-graph node.
 func KBNode(p *Page) LinkNode {
-	return LinkNode{Kind: LinkKB, ID: p.Slug, Title: p.Title, Type: p.Type, Body: p.Body, page: p}
+	return LinkNode{Kind: LinkKB, ID: p.Slug, Seq: p.Seq, Title: p.Title, Type: p.Type, Body: p.Body, page: p}
 }
 
 // KBNodes wraps every page as a link-graph node.

@@ -263,6 +263,24 @@ function runRefsEl(refs) {
 // in the body). Only kb refs of type runbook are runbooks; a cited lesson is
 // not one and must not be labelled one. A dangling kb ref is shown in the
 // warning colour so a typo in a slug is visible rather than silently absent.
+// runbookChip is the one shape a runbook is named by on this page: the
+// ring-local seq (`#12`, the handle a human types as kb:12) beside the slug.
+// A slug is a sentence in kebab-case and long ones used to stretch the chip row
+// across the card, so the slug is CLIPPED to a fixed width with an ellipsis
+// (app.css .ref .slug) and the tooltip carries the complete kb:<slug> — hover
+// to read what the chip cut off. A page written before seqs were minted has
+// none and shows the slug alone.
+function runbookChip(slug, seq, tip, cls) {
+  const chip = el("button", "ref link rb" + (cls ? " " + cls : ""));
+  chip.type = "button";
+  if (seq) chip.append(el("span", "seq", "#" + seq), " ");
+  const s = el("span", "slug", slug);
+  chip.append(s);
+  chip.title = ["kb:" + slug + (seq ? " (kb:" + seq + ")" : "")].concat(tip.filter(Boolean)).join(" — ");
+  chip.addEventListener("click", () => openRunbook(slug));
+  return chip;
+}
+
 function runbookRefsEl(outbound) {
   const refs = (outbound || []).filter((r) => typeof r.ref === "string" && r.ref.startsWith("kb:")
     && (r.type === "runbook" || r.status === "dangling"));
@@ -277,11 +295,7 @@ function runbookRefsEl(outbound) {
       wrap.append(chip);
       continue;
     }
-    const chip = el("button", "ref link", slug);
-    chip.type = "button";
-    chip.title = r.title || r.ref;
-    chip.addEventListener("click", () => openRunbook(slug));
-    wrap.append(chip);
+    wrap.append(runbookChip(slug, r.seq, [r.title], ""));
   }
   return wrap;
 }
@@ -958,7 +972,7 @@ async function openRunbook(slug) {
   try {
     const d = await runbookDetail(slug);
     const head = el("div", "sec");
-    head.append(el("div", "sec-k", "kb:" + d.slug));
+    head.append(el("div", "sec-k", "kb:" + d.slug + (d.seq ? "  ·  #" + d.seq : "")));
     head.append(el("div", "sec-v", d.title || ""));
     const meta = [d.status, d.ring, (d.tags || []).join(", ")].filter(Boolean).join(" · ");
     const m = el("div", "sec");
@@ -995,11 +1009,9 @@ async function renderRunbooks() {
     const wrap = el("div", "refs");
     wrap.append(el("span", "k", "runbooks"));
     for (const rb of rows) {
-      const chip = el("button", "ref link" + (rb.slug === state.runbook ? " open" : ""), rb.slug);
-      chip.type = "button";
-      chip.title = [rb.title, rb.description, rb.ring].filter(Boolean).join(" · ");
-      chip.addEventListener("click", () => openRunbook(rb.slug));
-      wrap.append(chip);
+      wrap.append(runbookChip(rb.slug, rb.seq,
+        [[rb.title, rb.description, rb.ring].filter(Boolean).join(" · ")],
+        rb.slug === state.runbook ? "open" : ""));
     }
     card.append(wrap);
   }

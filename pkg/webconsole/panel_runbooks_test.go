@@ -56,6 +56,14 @@ func TestRunbooksListsRepoAndHostRingsDedupedBySlug(t *testing.T) {
 	if first["slug"] != "audit-deps" || first["ring"] != "host" || first["ref"] != "kb:audit-deps" {
 		t.Errorf("rows are sorted by slug and carry ring + ref: %v", first)
 	}
+	// The seq is the ring-local handle a human types (kb:<seq>) and the id
+	// the identity; both are minted by Store.Write, so a row carries them.
+	if seq, _ := first["seq"].(float64); seq < 1 {
+		t.Errorf("a row carries the page's seq beside the slug: %v", first)
+	}
+	if id, _ := first["id"].(string); id == "" {
+		t.Errorf("a row carries the page's id: %v", first)
+	}
 	second := rows[1].(map[string]any)
 	if second["slug"] != "cut-release" || second["ring"] != "repo x" || second["title"] != "cut a release (repo)" {
 		t.Errorf("the repo ring must win over the host ring for a duplicate slug: %v", second)

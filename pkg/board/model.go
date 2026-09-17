@@ -188,6 +188,7 @@ type Story struct {
 // target's title and (for a kb page) its type, and whether it resolved.
 type LinkRef struct {
 	Ref    string `json:"ref"`
+	Seq    int    `json:"seq,omitempty"` // a kb target's ring-local seq, when resolved and minted
 	Title  string `json:"title,omitempty"`
 	Type   string `json:"type,omitempty"`
 	Status string `json:"status,omitempty"`

@@ -451,6 +451,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 // linkRef is one resolved (or dangling) link on the todo show --links surface.
 type linkRef struct {
 	Ref    string `json:"ref"`              // <kind>:<id> — any ref vocabulary kind (pkg/ref)
+	Seq    int    `json:"seq,omitempty"`    // a kb target's ring-local seq (kb:<seq>), when resolved and minted
 	Title  string `json:"title,omitempty"`  // the target's title, when resolved
 	Type   string `json:"type,omitempty"`   // a kb target's page type (runbook, lesson, …); empty for todos
 	Status string `json:"status,omitempty"` // "resolved" | "dangling" | "external" | "unknown"
@@ -473,7 +474,7 @@ func resolveLinks(st *issue.Store, it *issue.Issue) (outbound, inbound []linkRef
 
 	for _, l := range kb.ParseLinks(self.Body) {
 		if n, ok := kb.ResolveLink(l, nodes); ok && n.Ref() != self.Ref() {
-			outbound = append(outbound, linkRef{Ref: n.Ref(), Title: n.Title, Type: n.Type, Status: "resolved"})
+			outbound = append(outbound, linkRef{Ref: n.Ref(), Seq: n.Seq, Title: n.Title, Type: n.Type, Status: "resolved"})
 		} else {
 			// external (a kind another store owns), unknown (a scheme outside
 			// the vocabulary), or dangling (a kb/todo target that is not here).
