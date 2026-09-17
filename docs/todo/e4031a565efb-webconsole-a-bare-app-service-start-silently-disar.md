@@ -6,7 +6,6 @@ seq: 147
 status: todo
 priority: p1
 created: 2026-09-16T17:01:52.827335Z
-sprint: 202
 ---
 
 Observed on the operator's dev host 2026-09-16: after `make install` an agent
