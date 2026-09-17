@@ -3,10 +3,13 @@ id: c081345fd901
 kind: task
 title: 'ref shapes + kb id/seq + kb/todo resolve by seq/uuid/slug[/scope] (S1, merges #149)'
 seq: 148
-status: doing
+status: done
 priority: p0
 created: 2026-09-16T18:56:38.594073Z
+assignee: transom
 sprint: 202
+closed: 2026-09-17T01:40:37.101057Z
+closed_by: transom
 ---
 
 Sprint #202 S1 (coreutils) — the whole coreutils half; was stories #148 + #149, merged (same owner, same pin, 149 depended on 148). Plan: docs/sprint-202-master-execution-plan.md in the umbrella.
