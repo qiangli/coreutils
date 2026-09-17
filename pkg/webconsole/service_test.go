@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/svcd"
 )
@@ -64,6 +65,74 @@ func TestServicePairingIsExplicitAndDoesNotMutateTheBaseSpec(t *testing.T) {
 	}
 	if got := strings.Join(spec.Argv, " "); got != "apps serve" {
 		t.Fatalf("base service spec mutated to %q", got)
+	}
+}
+
+func TestBareServiceStartReusesTheSavedPairingProfile(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	want := svcd.Options{Bind: "192.0.2.55", Port: 23456}
+	if err := saveServiceProfile(want, true); err != nil {
+		t.Fatal(err)
+	}
+
+	gotOpt, gotPair, err := serviceStartPlan(svcd.Options{}, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotPair {
+		t.Fatal("bare service start did not reuse the saved --pair profile")
+	}
+	if gotOpt.Bind != want.Bind || gotOpt.Port != want.Port {
+		t.Fatalf("start options = %+v, want %+v", gotOpt, want)
+	}
+}
+
+func TestBareServiceStartRefusesToDisarmLivePairingState(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	store, err := openPairStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := store.issueTicket(nil, time.Hour, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.redeem(secret, "phone", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = serviceStartPlan(svcd.Options{}, false, false)
+	if err == nil {
+		t.Fatal("bare service start with live paired devices succeeded")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "refusing a bare start") ||
+		!strings.Contains(msg, "live device") ||
+		!strings.Contains(msg, "bashy app service start --pair --bind") {
+		t.Fatalf("error did not name the recurring pairing repair: %v", err)
+	}
+}
+
+func TestExplicitServiceStartMayChooseANewProfileEvenWithLiveDevices(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	store, err := openPairStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := store.issueTicket(nil, time.Hour, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.redeem(secret, "phone", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := svcd.Options{Bind: "127.0.0.1", Port: DefaultPort}
+	gotOpt, gotPair, err := serviceStartPlan(want, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPair || gotOpt != want {
+		t.Fatalf("explicit start plan = %+v pair=%v, want %+v pair=false", gotOpt, gotPair, want)
 	}
 }
 

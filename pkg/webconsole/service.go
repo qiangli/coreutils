@@ -85,8 +85,25 @@ func newServiceCmd() *cobra.Command {
 			Use: "start", Short: "start the console daemon",
 			SilenceUsage: true, SilenceErrors: true,
 			RunE: func(c *cobra.Command, _ []string) error {
-				st, err := serviceSpec(pair).Start(opt)
+				effectiveOpt, effectivePair, err := serviceStartPlan(opt, pair,
+					c.Flags().Changed("pair") || c.Flags().Changed("bind") || c.Flags().Changed("port"))
+				if err != nil {
+					return err
+				}
+				svc := serviceSpec(effectivePair)
+				if st, serr := svc.StatusOf(effectiveOpt); serr == nil && st.Running {
+					printServiceStatus(c.OutOrStdout(), st, asJSON, "start")
+					printServicePairingNotice(c.OutOrStdout(), asJSON)
+					return nil
+				}
+				st, err := svc.Start(effectiveOpt)
 				printServiceStatus(c.OutOrStdout(), st, asJSON, "start")
+				if err == nil && st.Running {
+					if perr := saveServiceProfile(effectiveOpt, effectivePair); perr != nil {
+						return perr
+					}
+				}
+				printServicePairingNotice(c.OutOrStdout(), asJSON)
 				return err
 			},
 		},
@@ -96,6 +113,7 @@ func newServiceCmd() *cobra.Command {
 			RunE: func(c *cobra.Command, _ []string) error {
 				st, err := spec.StatusOf(opt)
 				printServiceStatus(c.OutOrStdout(), st, asJSON, "status")
+				printServicePairingNotice(c.OutOrStdout(), asJSON)
 				if err != nil {
 					return err
 				}
@@ -158,6 +176,15 @@ func printServiceStatus(w io.Writer, st svcd.Status, asJSON bool, action string)
 	}
 	if action == "start" && st.LogFile != "" && st.Running {
 		fmt.Fprintf(w, "  log: %s\n", st.LogFile)
+	}
+}
+
+func printServicePairingNotice(w io.Writer, asJSON bool) {
+	if asJSON {
+		return
+	}
+	if notice := servicePairingNotice(); notice != "" {
+		fmt.Fprintf(w, "  %s\n", notice)
 	}
 }
 

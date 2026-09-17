@@ -3,9 +3,11 @@ id: e4031a565efb
 kind: task
 title: 'webconsole: a bare ''app service start'' silently disarms phone pairing'
 seq: 147
-status: todo
+status: done
 priority: p1
 created: 2026-09-16T17:01:52.827335Z
+sprint: 205
+closed: 2026-09-17T12:50:00Z
 ---
 
 Observed on the operator's dev host 2026-09-16: after `make install` an agent
@@ -28,3 +30,9 @@ Candidates (pick one, keep fail-closed):
   them when `start` is given neither flag; explicit flags still override.
 - `service status` reports `pairing: armed|off` so the supervisor (and a
   human) can see the drift.
+
+Resolved 2026-09-17: `app service start` now persists the Apps launch profile
+after an actual daemon launch, reuses it for a bare start, and refuses a bare
+start when live paired devices/pending pairing codes exist but no profile can
+re-arm the LAN listener. Human `service status` also reports paired-service
+drift without using the supervisor's restart trigger words.
