@@ -2,15 +2,20 @@ package kb
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/qiangli/coreutils/git"
+	"github.com/qiangli/coreutils/pkg/ref"
 )
 
 // Store is the host-scope kb directory: one wiki of OKF-style pages shared
@@ -171,6 +176,17 @@ func (s *Store) Write(p *Page, op string) error {
 	if p.Status == "" {
 		p.Status = StatusCandidate
 	}
+	// Mint the two derived handles ON WRITE ONLY: an id the page keeps for
+	// life, and the next running number in this ring. A read never mints — a
+	// repo-ring read must not dirty the checkout.
+	if p.ID == "" {
+		p.ID = uuid.Must(uuid.NewV7()).String()
+	}
+	if p.Seq == 0 {
+		if max, err := s.MaxSeq(); err == nil {
+			p.Seq = max + 1
+		}
+	}
 	// The writer always emits form:. A record built without one (or an older
 	// page loaded before the facet existed) is a page.
 	if p.Form == "" {
@@ -186,7 +202,7 @@ func (s *Store) Write(p *Page, op string) error {
 	if err := atomicWrite(s.PagePath(p.Slug), b); err != nil {
 		return err
 	}
-	s.journal(op, p.Slug)
+	s.journal(op, p.Slug, p.ID)
 	if err := s.RebuildIndex(); err != nil {
 		return err
 	}
@@ -233,6 +249,7 @@ func atomicWrite(path string, data []byte) error {
 type journalRecord struct {
 	Op      string    `json:"op"`
 	Slug    string    `json:"slug"`
+	ID      string    `json:"id,omitempty"` // the page's uuid, so a renamed or superseded slug still joins
 	Tool    string    `json:"tool,omitempty"`
 	Host    string    `json:"host,omitempty"`
 	Episode string    `json:"episode,omitempty"`
@@ -242,8 +259,8 @@ type journalRecord struct {
 // journal appends one record. O_APPEND keeps concurrent multi-agent writes
 // safe without a lock; failures are swallowed — the page write is the
 // operation, the journal is the trail.
-func (s *Store) journal(op, slug string) {
-	rec := journalRecord{Op: op, Slug: slug, Tool: ToolID(), Host: HostID(), Episode: EpisodeID(), At: time.Now().UTC()}
+func (s *Store) journal(op, slug, id string) {
+	rec := journalRecord{Op: op, Slug: slug, ID: id, Tool: ToolID(), Host: HostID(), Episode: EpisodeID(), At: time.Now().UTC()}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return
@@ -304,12 +321,97 @@ func (s *Store) RebuildIndex() error {
 	b.WriteString("# kb index\n\n")
 	fmt.Fprintf(&b, "%d page(s). Search: `bashy kb search <query>` — check before starting a task; `bashy kb retro` after. Pages live under pages/.\n\n", len(live))
 	for _, p := range live {
-		fmt.Fprintf(&b, "- [%s](pages/%s.md) `%s/%s` %s — %s\n", p.Slug, p.Slug, p.Status, p.Type, p.Title, p.Description)
+		fmt.Fprintf(&b, "- %s[%s](pages/%s.md) `%s/%s` %s — %s\n", seqTag(p), p.Slug, p.Slug, p.Status, p.Type, p.Title, p.Description)
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
 	return atomicWrite(s.indexPath(), []byte(b.String()))
+}
+
+// seqTag renders the running number a listing shows beside the slug ("#22 "),
+// or nothing for a page that has not been written since seq existed. It is a
+// display of the handle, never the ref: the ref stays kb:<slug>.
+func seqTag(p *Page) string {
+	if p.Seq == 0 {
+		return ""
+	}
+	return fmt.Sprintf("#%d ", p.Seq)
+}
+
+// MaxSeq is the highest running number in this ring (0 when none). Superseded
+// pages count: a number is never reused, so a tombstone keeps its seq.
+func (s *Store) MaxSeq() (int, error) {
+	pages, err := s.List()
+	if err != nil {
+		return 0, err
+	}
+	max := 0
+	for _, p := range pages {
+		if p.Seq > max {
+			max = p.Seq
+		}
+	}
+	return max, nil
+}
+
+// ErrAmbiguous marks a handle that matches MORE than one page in a ring — a
+// uuid prefix too short, or a seq two branches each minted (doctor reports it).
+// It is deliberately not os.ErrNotExist: the page is not absent, the query is
+// under-specified, and the message names the candidates.
+var ErrAmbiguous = errors.New("kb: ambiguous")
+
+// LoadByHandle reads one page by whichever handle the local part spells
+// (ref.ShapeOf): seq → the running number; uid → the uuid, exact then unique
+// prefix; slug → Load. Absent is os.ErrNotExist exactly as Load reports it;
+// more than one match wraps ErrAmbiguous.
+func (s *Store) LoadByHandle(local string) (*Page, error) {
+	local = strings.TrimPrefix(strings.TrimSpace(local), "#")
+	shape := ref.ShapeOf(local)
+	if shape == ref.ShapeSlug {
+		return s.Load(local)
+	}
+	pages, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	var hits []*Page
+	switch shape {
+	case ref.ShapeSeq:
+		n, _ := strconv.Atoi(local)
+		for _, p := range pages {
+			if p.Seq == n {
+				hits = append(hits, p)
+			}
+		}
+	case ref.ShapeUID:
+		want := strings.ToLower(local)
+		for _, p := range pages {
+			if p.ID == want {
+				return p, nil
+			}
+		}
+		for _, p := range pages {
+			if strings.HasPrefix(p.ID, want) {
+				hits = append(hits, p)
+			}
+		}
+	}
+	switch len(hits) {
+	case 0:
+		// A hex-looking slug (`cafe`, `deadbeef`) is still a slug on disk.
+		if p, err := s.Load(local); err == nil {
+			return p, nil
+		}
+		return nil, os.ErrNotExist
+	case 1:
+		return hits[0], nil
+	}
+	names := make([]string, 0, len(hits))
+	for _, p := range hits {
+		names = append(names, fmt.Sprintf("#%d %s %s", p.Seq, p.ID, p.Slug))
+	}
+	return nil, fmt.Errorf("%w — kb:%s matches %d pages:\n  %s", ErrAmbiguous, local, len(hits), strings.Join(names, "\n  "))
 }
 
 // gitSnapshot best-effort commits the store via the pure-Go git package

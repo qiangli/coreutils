@@ -157,3 +157,51 @@ func parseRunID(id string) (base string, n int64, err error) {
 	}
 	return base, n, nil
 }
+
+// ScopeLookup is the one map from a scope segment to a checkout root that the
+// embedding shell hands to every store resolving scoped refs (`kb:<repo>/…`,
+// `todo:<repo>/…`; ref.ScopeLookup). A scope names a checkout by BASENAME, the
+// same rule `run:<repo>-<n>` uses, and the answer comes from the same place:
+// the checkout we are standing in first, then every weave queue on the
+// machine. Two known checkouts sharing a basename is an error naming both —
+// a guess would open the wrong #N silently. No registry: weave already knows
+// every repo it has run for, and a repo nothing has run in is reached by
+// `cd`-ing into it (the unscoped ref).
+func ScopeLookup() ref.ScopeLookup {
+	return func(scope string) (string, error) {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			return "", fmt.Errorf("empty scope")
+		}
+		if cwd, err := os.Getwd(); err == nil {
+			if root, err := weaveRepoRoot(cwd); err == nil && filepath.Base(filepath.Clean(root)) == scope {
+				return root, nil
+			}
+		}
+		seen := map[string]bool{}
+		var roots []string
+		dirs, _ := runQueueDirs()
+		for _, dir := range dirs {
+			q, err := loadWeaveQueue(dir)
+			if err != nil {
+				continue
+			}
+			root := filepath.Clean(strings.TrimSpace(q.Root))
+			if root == "." || filepath.Base(root) != scope || seen[root] {
+				continue
+			}
+			if _, err := os.Stat(root); err != nil {
+				continue // a queue whose checkout is gone cannot be a scope
+			}
+			seen[root] = true
+			roots = append(roots, root)
+		}
+		switch len(roots) {
+		case 0:
+			return "", fmt.Errorf("no checkout named %q is known here (a scope is a repo basename weave has run in, or `user`); cd into the repo and use the unscoped ref", scope)
+		case 1:
+			return roots[0], nil
+		}
+		return "", fmt.Errorf("scope %q is ambiguous — %d checkouts share that basename: %s; cd into the one you mean", scope, len(roots), strings.Join(roots, ", "))
+	}
+}

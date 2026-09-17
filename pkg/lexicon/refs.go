@@ -134,6 +134,14 @@ func writeNode(out io.Writer, n ref.Node) {
 	if n.Status != "" {
 		fmt.Fprintf(out, "  status: %s\n", n.Status)
 	}
+	// The entity's other handles (ref.Shape): the uuid it is known by across
+	// hosts, and the running number a human types — shown, never made the ref.
+	if n.UID != "" && n.UID != n.ID {
+		fmt.Fprintf(out, "  uid:    %s\n", n.UID)
+	}
+	if n.Seq != 0 {
+		fmt.Fprintf(out, "  seq:    #%d\n", n.Seq)
+	}
 	if n.Where != "" {
 		fmt.Fprintf(out, "  where:  %s\n", n.Where)
 	}

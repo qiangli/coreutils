@@ -50,10 +50,12 @@ type Renderer struct {
 	Ref bool
 }
 
-// addr is the page's address as this renderer prints it.
+// addr is the page's address as this renderer prints it. With Ref on, the
+// running number rides in front (`#22 kb:<slug>`) — the handle a human types,
+// shown beside the ref it stands for; the ref itself never carries the seq.
 func (rd Renderer) addr(p *Page) string {
 	if rd.Ref {
-		return "kb:" + p.Slug
+		return seqTag(p) + "kb:" + p.Slug
 	}
 	return p.Slug
 }

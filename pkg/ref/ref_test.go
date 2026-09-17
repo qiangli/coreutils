@@ -202,3 +202,53 @@ func TestRegistry(t *testing.T) {
 	}()
 	g.Register(Unknown, nil)
 }
+
+func TestShapeOf(t *testing.T) {
+	cases := map[string]Shape{
+		"0192f3a4":                               ShapeUID, // UUIDv7 prefix — leading zero keeps it out of seq
+		"12345678":                               ShapeSeq, // decimal wins over hex at 8
+		"deadbeef":                               ShapeUID,
+		"123456789012":                           ShapeUID, // 12 hex is ALWAYS a uid (an all-digit todo id)
+		"c081345fd901":                           ShapeUID,
+		"release-cycle":                          ShapeSlug,
+		"cafe":                                   ShapeSlug, // hex but too short for a prefix
+		"#3":                                     ShapeSeq,
+		"3":                                      ShapeSeq,
+		"007":                                    ShapeSlug, // leading zero: not a seq, too short for a uid
+		"":                                       ShapeSlug,
+		"0192f3a4-7c1e-7d2a-9b1f-1234567890ab":   ShapeUID,
+		"0192f3a4-7c1e":                          ShapeUID,  // dashed prefix
+		"0192f3a4-7c1e-7d2a-9b1f-1234567890abcd": ShapeSlug, // too long for a uuid
+		"not-a-uuid-1":                           ShapeSlug,
+		"e2e-refs-note":                          ShapeSlug,
+	}
+	for in, want := range cases {
+		if got := ShapeOf(in); got != want {
+			t.Errorf("ShapeOf(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestSplitScope(t *testing.T) {
+	for _, c := range []struct{ in, scope, local string }{
+		{"release-cycle", "", "release-cycle"},
+		{"coreutils/release-cycle", "coreutils", "release-cycle"},
+		{"coreutils/148", "coreutils", "148"},
+		{"user/3", "user", "3"},
+		{"a/b/c", "a", "b/c"}, // FIRST slash only
+	} {
+		scope, local := SplitScope(c.in)
+		if scope != c.scope || local != c.local {
+			t.Errorf("SplitScope(%q) = (%q, %q), want (%q, %q)", c.in, scope, local, c.scope, c.local)
+		}
+	}
+	// `#` is stripped on the local part only, scope untouched.
+	r, err := Parse("todo:coreutils/#3")
+	if err != nil || r.ID != "coreutils/3" {
+		t.Fatalf("Parse(todo:coreutils/#3) = %+v, %v", r, err)
+	}
+	r, err = Parse("kb:#22")
+	if err != nil || r.ID != "22" {
+		t.Fatalf("Parse(kb:#22) = %+v, %v", r, err)
+	}
+}

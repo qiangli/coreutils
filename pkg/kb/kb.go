@@ -346,6 +346,9 @@ func filterForm(pages []*Page, form string) []*Page {
 // so a leaner resolution is leaner on the wire and not just in intent.
 type searchHitJSON struct {
 	Slug        string   `json:"slug"`
+	Ref         string   `json:"ref"`           // kb:<slug> — the address, copy as-is
+	ID          string   `json:"id,omitempty"`  // uuid — the identity (empty on a page not yet rewritten)
+	Seq         int      `json:"seq,omitempty"` // running number within this ring — input only
 	Type        string   `json:"type,omitempty"`
 	Status      string   `json:"status,omitempty"`
 	Title       string   `json:"title"`
@@ -436,7 +439,7 @@ func writeSearchJSON(w io.Writer, hits []Hit, rel []Relation, fed []FedHit, rep 
 		// ResCue is the ADDRESS: enough to decide whether to open a page, not
 		// enough to decide whether it applies. Same contract as render.go.
 		hit := searchHitJSON{
-			Slug: p.Slug, Title: p.Title, Score: h.Score,
+			Slug: p.Slug, Ref: "kb:" + p.Slug, ID: p.ID, Seq: p.Seq, Title: p.Title, Score: h.Score,
 			Why: MatchedFields(p, terms),
 		}
 		if res >= ResLine {
@@ -469,30 +472,31 @@ func writeSearchJSON(w io.Writer, hits []Hit, rel []Relation, fed []FedHit, rep 
 func newShowCmd(dir, ring *string) *cobra.Command {
 	var form string
 	cmd := &cobra.Command{
-		Use:   "show <slug>",
-		Short: "Print one page (frontmatter + body)",
+		Use:   "show <slug|#seq|uuid>",
+		Short: "Print one page (frontmatter + body) — by slug, running number or uuid (prefix)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			if form != "" && !ValidForm(form) {
 				return fmt.Errorf("kb: invalid form %q (note|page|relation|code)", form)
 			}
 			store := openRing(*dir, *ring)
-			// Load applies the agent ring's owner scope: another principal's
-			// page reports as absent, so it is invisible here too.
-			p, err := store.Load(args[0])
+			// The three handles of one entity (ref.Shape) all open the same
+			// page. LoadByHandle applies the agent ring's owner scope the way
+			// Load does: another principal's page reports as absent.
+			p, err := store.LoadByHandle(strings.TrimPrefix(args[0], "kb:"))
 			if err != nil {
 				return err
 			}
 			if form != "" && p.EffForm() != form {
-				return fmt.Errorf("kb: %s is form %s, not %s", args[0], p.EffForm(), form)
+				return fmt.Errorf("kb: %s is form %s, not %s", p.Slug, p.EffForm(), form)
 			}
-			b, err := os.ReadFile(store.PagePath(args[0]))
+			b, err := os.ReadFile(store.PagePath(p.Slug))
 			if err != nil {
 				return err
 			}
 			// An OPEN is the use signal — the reader's judgement, not the
 			// ranker's own output. See pkg/kb/activation.go.
-			store.RecordOpen(args[0])
+			store.RecordOpen(p.Slug)
 			_, err = c.OutOrStdout().Write(b)
 			return err
 		},
@@ -564,6 +568,13 @@ func (f *pageFlags) buildPage(c *cobra.Command) (*Page, error) {
 	slug := f.slug
 	if slug == "" {
 		slug = Slugify(f.title)
+	}
+	// A slug is the page's readable handle; the other two shapes are taken.
+	// A number would collide with the running number (`kb:22`), a hex run
+	// with a uuid prefix — and a resolver that guessed would open the wrong
+	// page silently. Refuse at creation; the slug is immutable after.
+	if shape := ref.ShapeOf(slug); shape != ref.ShapeSlug {
+		return nil, fmt.Errorf("kb: slug %q reads as a %s, not a slug — a running number and a hex uuid prefix are the page's OTHER two handles; pick a name with a letter in it (--slug)", slug, shape)
 	}
 	p := &Page{
 		Slug:        slug,
@@ -1053,6 +1064,18 @@ so a reported page is left byte-identical on disk. Scope it with --ring.`,
 				fmt.Fprintf(out, "missing description (%d):\n", len(rep.MissingDescription))
 				for _, s := range rep.MissingDescription {
 					fmt.Fprintf(out, "  %s\n", s)
+				}
+			}
+			if len(rep.MissingID) > 0 {
+				fmt.Fprintf(out, "missing id/seq (%d) — resolve by slug only until rewritten (`kb update <slug>`):\n", len(rep.MissingID))
+				for _, s := range rep.MissingID {
+					fmt.Fprintf(out, "  %s\n", s)
+				}
+			}
+			if len(rep.DuplicateSeq) > 0 {
+				fmt.Fprintf(out, "duplicate seq (%d) — kb:<seq> is ambiguous for these; slug and uuid still resolve:\n", len(rep.DuplicateSeq))
+				for _, d := range rep.DuplicateSeq {
+					fmt.Fprintf(out, "  #%d  %s\n", d.Seq, strings.Join(d.Slugs, "  "))
 				}
 			}
 			if len(rep.OpenRelations) > 0 {

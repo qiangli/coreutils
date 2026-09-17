@@ -3,7 +3,7 @@ id: c081345fd901
 kind: task
 title: 'ref shapes + kb id/seq + kb/todo resolve by seq/uuid/slug[/scope] (S1, merges #149)'
 seq: 148
-status: todo
+status: doing
 priority: p0
 created: 2026-09-16T18:56:38.594073Z
 sprint: 202

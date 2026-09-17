@@ -27,7 +27,7 @@ func TestResolveKBFound(t *testing.T) {
 	})
 
 	g := ref.NewRegistry()
-	RegisterRefs(g, dir)
+	RegisterRefs(g, dir, nil)
 
 	n, err := g.Resolve("kb:deploy-runbook")
 	if err != nil {
@@ -56,7 +56,7 @@ func TestResolveKBFound(t *testing.T) {
 func TestResolveKBNotFound(t *testing.T) {
 	dir := t.TempDir() // readable, empty store
 	g := ref.NewRegistry()
-	RegisterRefs(g, dir)
+	RegisterRefs(g, dir, nil)
 
 	_, err := g.Resolve("kb:nothing-here")
 	if !errors.Is(err, ref.ErrNotFound) {
@@ -80,7 +80,7 @@ func TestResolveKBSupersededCarriesSuccessor(t *testing.T) {
 	})
 
 	g := ref.NewRegistry()
-	RegisterRefs(g, dir)
+	RegisterRefs(g, dir, nil)
 
 	n, err := g.Resolve("kb:old-way")
 	if err != nil {
@@ -112,7 +112,7 @@ func TestResolveKBRepoRingBeatsHost(t *testing.T) {
 	})
 
 	g := ref.NewRegistry()
-	RegisterRefs(g, "") // auto: repo ring first, then host
+	RegisterRefs(g, "", nil) // auto: repo ring first, then host
 
 	n, err := g.Resolve("kb:shared")
 	if err != nil {
@@ -123,5 +123,109 @@ func TestResolveKBRepoRingBeatsHost(t *testing.T) {
 	}
 	if want := "repo " + repoDir; n.Where != want {
 		t.Errorf("where = %q, want %q", n.Where, want)
+	}
+}
+
+func TestResolveKBThreeHandles(t *testing.T) {
+	dir := t.TempDir()
+	writePage(t, dir, &Page{Slug: "release-cycle", Type: TypeRunbook, Title: "Release cycle", Description: "d"})
+	writePage(t, dir, &Page{Slug: "second", Type: TypeRunbook, Title: "Second", Description: "d"})
+	st := Open(dir)
+	p, err := st.Load("release-cycle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ID == "" || p.Seq != 1 {
+		t.Fatalf("Write did not mint id/seq: id=%q seq=%d", p.ID, p.Seq)
+	}
+	if q, _ := st.Load("second"); q.Seq != 2 || q.ID == p.ID {
+		t.Fatalf("second page: seq=%d id=%q", q.Seq, q.ID)
+	}
+	// Re-writing keeps both handles (mint only when empty).
+	p.Description = "changed"
+	if err := st.Write(p, "update"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := st.Load("release-cycle"); r.ID != p.ID || r.Seq != 1 {
+		t.Fatalf("rewrite changed handles: %+v", r)
+	}
+
+	g := ref.NewRegistry()
+	RegisterRefs(g, dir, nil)
+	// MEASURED: two UUIDv7s minted in the same minute share their first 8 hex
+	// (the top of the ms timestamp), so the 8-char prefix is AMBIGUOUS here —
+	// the resolver names both candidates — and the 13-char dashed prefix
+	// (the full ms timestamp) is the shortest unique one.
+	if _, err := g.Resolve("kb:" + p.ID[:8]); err == nil || !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("8-hex prefix of same-minute v7 ids: err = %v, want ErrAmbiguous", err)
+	}
+	for _, in := range []string{"kb:release-cycle", "kb:1", "kb:#1", "kb:" + p.ID, "kb:" + p.ID[:13], "urn:dhnt:kb:" + p.ID} {
+		n, err := g.Resolve(in)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", in, err)
+		}
+		// seq is input only: the ref is always kb:<slug>.
+		if n.ID != "release-cycle" || n.Ref != "kb:release-cycle" || n.UID != p.ID || n.Seq != 1 {
+			t.Errorf("%s → %+v", in, n)
+		}
+	}
+	for _, in := range []string{"kb:99", "kb:0192ffffffff"} {
+		if _, err := g.Resolve(in); !errors.Is(err, ref.ErrNotFound) {
+			t.Errorf("%s: err = %v, want ErrNotFound", in, err)
+		}
+	}
+}
+
+func TestResolveKBDuplicateSeqIsAmbiguous(t *testing.T) {
+	dir := t.TempDir()
+	// Two branches each minted MaxSeq+1 — after the merge both pages say seq 1.
+	writePage(t, dir, &Page{Slug: "a", Seq: 1, Type: TypeRunbook, Title: "A", Description: "d"})
+	writePage(t, dir, &Page{Slug: "b", Seq: 1, Type: TypeRunbook, Title: "B", Description: "d"})
+	g := ref.NewRegistry()
+	RegisterRefs(g, dir, nil)
+	_, err := g.Resolve("kb:1")
+	if err == nil || errors.Is(err, ref.ErrNotFound) || !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("duplicate seq: err = %v, want ErrAmbiguous", err)
+	}
+	// The slugs still resolve — nothing is renumbered.
+	for _, in := range []string{"kb:a", "kb:b"} {
+		if _, err := g.Resolve(in); err != nil {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
+}
+
+func TestResolveKBScopeSegment(t *testing.T) {
+	t.Setenv("BASHY_KB_DIR", t.TempDir()) // the host store, hermetic
+	writePage(t, DefaultDir(), &Page{Slug: "host-note", Type: TypeRunbook, Title: "Host", Description: "d"})
+	repo := t.TempDir()
+	writePage(t, filepath.Join(repo, RepoSub), &Page{Slug: "repo-note", Type: TypeRunbook, Title: "Repo", Description: "d"})
+	lookup := func(scope string) (string, error) {
+		if scope == "myrepo" {
+			return repo, nil
+		}
+		return "", errors.New("unknown checkout " + scope)
+	}
+	g := ref.NewRegistry()
+	RegisterRefs(g, "", lookup)
+	if n, err := g.Resolve("kb:myrepo/repo-note"); err != nil || n.ID != "repo-note" {
+		t.Fatalf("scoped slug: %+v %v", n, err)
+	}
+	if n, err := g.Resolve("kb:myrepo/1"); err != nil || n.ID != "repo-note" {
+		t.Fatalf("scoped seq: %+v %v", n, err)
+	}
+	if n, err := g.Resolve("kb:user/host-note"); err != nil || n.ID != "host-note" {
+		t.Fatalf("user scope: %+v %v", n, err)
+	}
+	if _, err := g.Resolve("kb:myrepo/host-note"); !errors.Is(err, ref.ErrNotFound) {
+		t.Fatalf("a scope is ONLY that ring: %v", err)
+	}
+	if _, err := g.Resolve("kb:nowhere/x"); err == nil || errors.Is(err, ref.ErrNotFound) {
+		t.Fatalf("unknown scope must be a named error: %v", err)
+	}
+	g2 := ref.NewRegistry()
+	RegisterRefs(g2, "", nil)
+	if _, err := g2.Resolve("kb:myrepo/repo-note"); err == nil || errors.Is(err, ref.ErrNotFound) {
+		t.Fatalf("nil lookup: %v", err)
 	}
 }

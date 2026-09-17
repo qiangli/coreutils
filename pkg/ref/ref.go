@@ -22,6 +22,15 @@
 // Design of record: dhnt docs/uniform-ref-addressing.md; plan:
 // docs/sprint-168-master-execution-plan.md (D1–D9).
 //
+// An ENTITY is anything with a ref. Beyond its canonical id an entity may carry
+// up to three HANDLES that all name the same record (Shape): a seq — the
+// running number humans type, unique within the entity's scope; a uid — the
+// uuid or 12-hex identity agents carry across hosts; and a slug — the readable
+// name the web and prose use. The scope is the store the entity lives in,
+// spelled as a leading `<scope>/` segment and elided in context (SplitScope);
+// it is a virtual parent, never a kind. seq is accepted as input and never
+// emitted as a ref. Sprint 202: docs/uniform-ref-addressing.md D10–D13.
+//
 // The vocabulary is CLOSED and ratcheted (TestKindsIsTheVocabulary): adding a
 // kind is one table row here plus the owning store's resolver, and nothing
 // else. A token whose prefix is not in the table is not a ref — it is a word,
@@ -208,14 +217,139 @@ func parseLegacy(s, raw string) (Ref, error) {
 	return Ref{Kind: k, ID: name, Qualifier: strings.TrimSpace(owner), Raw: raw}, nil
 }
 
-// cleanID trims and strips the tolerated `#` on the kinds humans number.
+// cleanID trims and strips the tolerated `#` on the kinds humans number. The
+// `#` is stripped from the LOCAL part only, so `todo:coreutils/#3` cleans to
+// `todo:coreutils/3` and the scope segment is left alone.
 func cleanID(k Kind, id string) string {
 	id = strings.TrimSpace(id)
 	switch k {
-	case Todo, Sprint, MB, Bus:
-		id = strings.TrimPrefix(id, "#")
+	case Todo, Sprint, MB, Bus, KB:
+		scope, local := SplitScope(id)
+		local = strings.TrimPrefix(local, "#")
+		if scope == "" {
+			return local
+		}
+		return scope + "/" + local
 	}
 	return id
+}
+
+// Shape is which of an entity's three handles a local id spells. An ENTITY is
+// anything with a ref — one of Kinds(). Its ref's local part may be written
+// three ways, and a store resolves all three to the same record:
+//
+//   - seq  — the running number humans type and say (`kb:22`, `#3`); unique
+//     within the entity's SCOPE (the store it lives in), never emitted as a ref.
+//   - uid  — the uuid (or 12-hex id) agents carry across hosts and stores;
+//     universal; THE identity. A unique prefix of at least 8 hex is accepted.
+//   - slug — the readable name a web page or a prose link uses; unique within
+//     its scope.
+//
+// The scope is nameable as a leading path segment (`kb:coreutils/release-cycle`,
+// `todo:coreutils/148`) and elided when the reader shares the context; see
+// SplitScope. Design of record: dhnt docs/uniform-ref-addressing.md D10–D13
+// (Sprint 202).
+type Shape int
+
+const (
+	ShapeSlug Shape = iota // anything that is neither of the other two
+	ShapeSeq               // all decimal, no leading zero
+	ShapeUID               // >= 12 hex, or a dashed uuid, or a >= 8 hex prefix
+)
+
+func (s Shape) String() string {
+	switch s {
+	case ShapeSeq:
+		return "seq"
+	case ShapeUID:
+		return "uid"
+	}
+	return "slug"
+}
+
+// ShapeOf classifies the LOCAL part of a ref (after SplitScope, `#` already
+// stripped). The rules, in order: 12 or more hex digits, or a dashed uuid, is
+// always a uid — a seq never reaches 12 digits and a todo id is exactly 12 hex,
+// so an all-digit id (`123456789012`) stays reachable by itself; all decimal
+// without a leading zero is a seq (UUIDv7 prefixes start with `0`, so they
+// never land here); 8 or more hex digits is a uid prefix; anything else is a
+// slug. A store refuses to CREATE a slug of the first two shapes.
+func ShapeOf(local string) Shape {
+	local = strings.TrimPrefix(strings.TrimSpace(local), "#")
+	if local == "" {
+		return ShapeSlug
+	}
+	if isDashedUUID(local) {
+		return ShapeUID
+	}
+	hex := allHex(local)
+	if hex && len(local) >= 12 {
+		return ShapeUID
+	}
+	if allDecimal(local) && local[0] != '0' {
+		return ShapeSeq
+	}
+	if hex && len(local) >= 8 {
+		return ShapeUID
+	}
+	return ShapeSlug
+}
+
+// SplitScope splits a ref's id into its optional scope segment and the local
+// part, on the FIRST "/". The scope names the store the entity lives in (a repo
+// checkout by basename, or `user` for the personal store); it is a virtual
+// parent, not a kind. Empty scope when there is no "/".
+func SplitScope(id string) (scope, local string) {
+	id = strings.TrimSpace(id)
+	i := strings.IndexByte(id, '/')
+	if i < 0 {
+		return "", id
+	}
+	return id[:i], id[i+1:]
+}
+
+func allDecimal(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func allHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// isDashedUUID accepts the 8-4-4-4-12 spelling (36 chars) — a full uuid as a
+// tool prints it — and any PREFIX of it that is at least 8 hex digits long
+// (`01a0acfe-6f4c`), so a prefix copied out of a dashed uuid is still a uid.
+func isDashedUUID(s string) bool {
+	if len(s) > 36 || !strings.Contains(s, "-") {
+		return false
+	}
+	hex := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !allHex(s[i : i+1]) {
+				return false
+			}
+			hex++
+		}
+	}
+	return hex >= 8
 }
 
 // Is reports whether s parses as a ref of a known kind. The convenience for
@@ -240,12 +374,27 @@ type Node struct {
 	// it. A superseded ref still resolves (a ref is stable for the record's
 	// life, design note D6); this is the pointer forward.
 	Successor string `json:"successor,omitempty"`
+	// UID and Seq are the entity's other two handles when the store has them
+	// (see Shape): the uuid / 12-hex identity, and the running number that is
+	// accepted as input but never emitted as a ref. Zero when the kind has no
+	// such handle.
+	UID string `json:"uid,omitempty"`
+	Seq int64  `json:"seq,omitempty"`
 }
 
 // NewNode fills the redundant Ref field so callers cannot get it wrong.
 func NewNode(kind Kind, id string) Node {
 	return Node{Kind: kind, ID: id, Ref: Format(kind, id)}
 }
+
+// ScopeLookup maps a scope segment (see SplitScope) to the root directory of
+// the store it names: a repo checkout by basename, or `user` for the personal
+// store. The embedding shell builds ONE of these (it knows the checkouts) and
+// hands it to every store that resolves scoped refs; nil means no scopes — a
+// scoped ref is then an error naming the scope, never a silent fallback. The
+// root returned is the CHECKOUT root (the store's sub-directory is the store's
+// own business); "" with a nil error is the personal store.
+type ScopeLookup func(scope string) (root string, err error)
 
 // ErrNotFound is what a resolver returns when the store is readable and the id
 // is not in it. Any OTHER error means the store could not be read — and the

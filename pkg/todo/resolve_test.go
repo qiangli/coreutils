@@ -40,7 +40,7 @@ func todoRegistry(t *testing.T) *ref.Registry {
 	g := ref.NewRegistry()
 	// forceUser so resolution never depends on the cwd being (or not being) a
 	// git repo — the store is the hermetic host store seedTodo set up.
-	RegisterRefs(g, "steward", false, true, "")
+	RegisterRefs(g, "steward", false, true, "", nil)
 	return g
 }
 

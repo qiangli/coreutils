@@ -49,13 +49,27 @@ type DoctorReport struct {
 	MissingForm        []string       `json:"missing_form"`
 	MissingDescription []string       `json:"missing_description"`
 	OpenRelations      []OpenRelation `json:"open_relations"`
+	// MissingID lists pages that predate the id/seq handles (no `id:` or no
+	// `seq:` in frontmatter) — they resolve by slug only until next written;
+	// the repair is an explicit `kb update <slug>`, never a doctor rewrite.
+	// DuplicateSeq lists running numbers two live pages share (two branches
+	// each minted MaxSeq+1): `kb:<seq>` is ambiguous for them while slug and
+	// uuid keep resolving; nothing is renumbered.
+	MissingID    []string `json:"missing_id"`
+	DuplicateSeq []DupSeq `json:"duplicate_seq"`
+}
+
+// DupSeq is one running number shared by more than one page in a ring.
+type DupSeq struct {
+	Seq   int      `json:"seq"`
+	Slugs []string `json:"slugs"`
 }
 
 // Clean reports whether the pass found nothing.
 func (r DoctorReport) Clean() bool {
 	return len(r.Dangling) == 0 && len(r.UnknownKind) == 0 && len(r.Orphans) == 0 && len(r.NearDuplicates) == 0 &&
 		len(r.MissingForm) == 0 && len(r.MissingDescription) == 0 &&
-		len(r.OpenRelations) == 0
+		len(r.OpenRelations) == 0 && len(r.MissingID) == 0 && len(r.DuplicateSeq) == 0
 }
 
 // Doctor runs every hygiene check over the kb pages, using todoNodes (when the
@@ -73,6 +87,8 @@ func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) D
 		Orphans:            []string{},
 		NearDuplicates:     []DupPair{},
 		MissingForm:        []string{},
+		MissingID:          []string{},
+		DuplicateSeq:       []DupSeq{},
 		MissingDescription: []string{},
 		OpenRelations:      []OpenRelation{},
 	}
@@ -111,7 +127,26 @@ func Doctor(pages []*Page, store *Store, todoNodes []LinkNode, todoKnown bool) D
 		if store != nil && !declaresForm(store, p.Slug) {
 			r.MissingForm = append(r.MissingForm, p.Slug)
 		}
+		if p.ID == "" || p.Seq == 0 {
+			r.MissingID = append(r.MissingID, p.Slug)
+		}
 	}
+	// Duplicate running numbers — a merge of two branches that each minted
+	// MaxSeq+1. Reported, never renumbered: a renumber would silently move
+	// what `kb:<seq>` opens.
+	bySeq := map[int][]string{}
+	for _, p := range pages {
+		if p.Seq != 0 {
+			bySeq[p.Seq] = append(bySeq[p.Seq], p.Slug)
+		}
+	}
+	for seq, slugs := range bySeq {
+		if len(slugs) > 1 {
+			sort.Strings(slugs)
+			r.DuplicateSeq = append(r.DuplicateSeq, DupSeq{Seq: seq, Slugs: slugs})
+		}
+	}
+	sort.Slice(r.DuplicateSeq, func(i, j int) bool { return r.DuplicateSeq[i].Seq < r.DuplicateSeq[j].Seq })
 
 	// Near-duplicate pairs — reuse NearDuplicate, the one reconciler.
 	r.NearDuplicates = nearDuplicatePairs(pages)

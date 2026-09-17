@@ -15,6 +15,14 @@ import (
 type Page struct {
 	Slug string `yaml:"-"` // filename stem under pages/
 
+	// ID and Seq are the page's other two handles beside the slug (ref.Shape):
+	// ID is a UUIDv7 — the identity, universal across hosts and rings — and Seq
+	// the running number unique within THIS ring, the one a human types
+	// (`kb:22`). Both are minted by Store.Write when empty, never on read; a
+	// page that predates them resolves by slug until it is next written.
+	ID  string `yaml:"id,omitempty"`
+	Seq int    `yaml:"seq,omitempty"`
+
 	Form         string   `yaml:"form,omitempty"` // note|page (the SHAPE; a legacy record with none reads as page)
 	Type         string   `yaml:"type"`           // lesson|gotcha|runbook|decision|fact (OKF: the one required field)
 	Title        string   `yaml:"title"`

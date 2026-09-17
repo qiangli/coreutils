@@ -264,8 +264,13 @@ func (s *Store) dir() string {
 }
 
 func (s *Store) path(it *Issue) string {
-	return filepath.Join(s.dir(), it.ID+"-"+slugify(it.Title)+".md")
+	return filepath.Join(s.dir(), it.ID+"-"+it.Slug()+".md")
 }
+
+// Slug is the readable half of the item's filename (`<id>-<slug>.md`): the
+// title slugified. It is derived, never stored, so it follows a retitle — which
+// is why the ID stays the identity and the slug is only a handle.
+func (it *Issue) Slug() string { return slugify(it.Title) }
 
 // List returns every issue in the register, newest first.
 func (s *Store) List() ([]*Issue, error) {
