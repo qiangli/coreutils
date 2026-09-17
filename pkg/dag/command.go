@@ -37,9 +37,12 @@ func newDagCmd() *cobra.Command {
 real dependency graph — an agent-first replacement for make.
 
 Each target is a heading with an optional description, metadata lines
-(Requires:/Inputs:/Sources:/Generates:), and a fenced code block run through
-the in-process shell. Targets execute in topological order; a target whose
-dependency failed is skipped.
+(Requires:/Inputs:/Sources:/Generates:), an optional contract
+(Require: precondition, checked before the body; Ensure: postcondition,
+checked after it; Effects: declared cap — a failed check exits 3 naming
+the clause), and a fenced code block run through the in-process shell.
+Targets execute in topological order; a target whose dependency failed is
+skipped.
 
   dag --list                 # show targets (add --json for machine output)
   dag build                  # run "build" and its dependencies

@@ -582,6 +582,21 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 	secretVals := e.secretValues(node.Task)
 	captureRun := capture || len(secretVals) > 0
 
+	// Contract (Sprint 203): Require preconditions gate the body. A failed
+	// precondition is a failed target with ExitPrecondFail and an invalid
+	// attestation naming the check — the body is never run, and there is
+	// nothing to retry.
+	if att := requireHolds(ctx, node.Task, e.Dir, e.envFor(node)); att != nil {
+		res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusFailed,
+			ExitCode: weavecli.ExitPrecondFail, Err: firstFailedCheck(att, "precondition"), Attestation: att}
+		e.emitEvent(Event{Kind: EventTaskStart, Task: node.Task.Name, Attempt: 1,
+			Log: filepath.ToSlash(attemptLogPath(node.Task.Name, 1))})
+		e.emitEvent(Event{Kind: EventTaskEnd, Task: node.Task.Name, Attempt: 1,
+			Status: res.Status.String(), ExitCode: res.ExitCode})
+		e.record(node.Task, worker, 1, res)
+		return res
+	}
+
 	attempts := node.Task.Retries + 1
 	if attempts < 1 {
 		attempts = 1
@@ -655,7 +670,7 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 		if !att.Valid && res.Status == StatusDone {
 			res.Status = StatusFailed
 			res.ExitCode = weavecli.ExitPrecondFail
-			res.Err = firstFailedCheck(att)
+			res.Err = firstFailedCheck(att, "postcondition")
 		}
 	}
 	res.Host = node.Task.Host

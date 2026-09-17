@@ -60,6 +60,7 @@ func (d *Document) expandVars(env, overrides []string) map[string]string {
 		substSlice(t.Sources, vals)
 		substSlice(t.Generates, vals)
 		substSlice(t.Env, vals)
+		substSlice(t.Require, vals)
 		substSlice(t.Ensure, vals)
 		substSlice(t.Tools, vals)
 		t.Host = substVars(t.Host, vals) // placement (e.g. Host: ${HOST})

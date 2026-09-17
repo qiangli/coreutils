@@ -45,6 +45,23 @@ type Attestation struct {
 	Valid   bool          `json:"valid"`
 	Checks  []CheckResult `json:"checks,omitempty"`
 	Effects []string      `json:"effects,omitempty"`
+	// Clause is "require" when a precondition sealed this verdict before the
+	// body ran; empty for the postcondition verdict (the shape shipped today).
+	Clause string `json:"clause,omitempty"`
+}
+
+// requireHolds evaluates a target's Require preconditions BEFORE its body runs.
+// The first failing check seals an invalid Attestation naming it and the body
+// is never run — that is the whole difference from Ensure, which judges the
+// world after the body. nil means every precondition held (or none declared).
+func requireHolds(ctx context.Context, t *Task, dir string, env []string) *Attestation {
+	for _, expr := range t.Require {
+		cr := evalCheck(ctx, dir, env, expr)
+		if !cr.Pass {
+			return &Attestation{Target: t.Name, Valid: false, Checks: []CheckResult{cr}, Effects: t.Effects, Clause: "require"}
+		}
+	}
+	return nil
 }
 
 // attest evaluates a target's Ensure postconditions after its body ran and seals
@@ -66,22 +83,23 @@ func attest(ctx context.Context, t *Task, dir string, env []string, bodyOK bool)
 	return a
 }
 
-// firstFailedCheck returns an error naming the first failed postcondition, for
-// the result's Err / the human-mode message.
-func firstFailedCheck(a *Attestation) error {
+// firstFailedCheck returns an error naming the first failed check and its
+// clause ("precondition" / "postcondition"), for the result's Err / the
+// human-mode message.
+func firstFailedCheck(a *Attestation, clause string) error {
 	for _, c := range a.Checks {
 		if !c.Pass {
 			detail := c.Detail
 			if detail != "" {
 				detail = " (" + detail + ")"
 			}
-			return errf(weavecli.ExitPrecondFail, "postcondition failed: %s%s", c.Expr, detail)
+			return errf(weavecli.ExitPrecondFail, "%s failed: %s%s", clause, c.Expr, detail)
 		}
 	}
 	return errf(weavecli.ExitPrecondFail, "contract not satisfied")
 }
 
-// evalCheck evaluates one Ensure expression. Sugar forms:
+// evalCheck evaluates one Require/Ensure expression. Sugar forms:
 //
 //	file-exists <path> | file-exists path=<path>
 //	file-absent <path> | file-absent path=<path>

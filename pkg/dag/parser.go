@@ -73,6 +73,12 @@ type Task struct {
 	Backoff time.Duration // optional `Retries: 3 backoff=2s` — sleep between attempts
 
 	// P2 (parsed-and-ignored in P1, so a contract-bearing file parses today).
+	// Require is the precondition set (Sprint 203): shell checks evaluated
+	// BEFORE the body; one failing means the body never runs. Its plural
+	// neighbour Requires is make's prerequisite list — a prerequisite is a
+	// precondition the engine can satisfy by running a target, a Require: is
+	// one it cannot.
+	Require []string
 	Ensure  []string
 	Effects []string
 	Tools   []string // builtin tool preflight: `Tools: git go:1.25 podman`
@@ -115,7 +121,7 @@ func (d *Document) Lookup(name string) (*Task, bool) {
 
 var metaKeys = map[string]bool{
 	"requires": true, "inputs": true, "sources": true,
-	"generates": true, "env": true, "ensure": true, "effects": true, "tools": true,
+	"generates": true, "env": true, "require": true, "ensure": true, "effects": true, "tools": true,
 	"timeout": true, "retries": true,
 	// P1 metadata.
 	"matrix": true, "secrets": true, "artifacts": true, "when": true,
@@ -490,6 +496,10 @@ func (t *Task) absorb(lines []string) {
 				t.Generates = append(t.Generates, splitList(v)...)
 			case "env":
 				t.Env = append(t.Env, splitList(v)...)
+			case "require":
+				if s := strings.TrimSpace(v); s != "" {
+					t.Require = append(t.Require, s)
+				}
 			case "ensure":
 				if s := strings.TrimSpace(v); s != "" {
 					t.Ensure = append(t.Ensure, s)
@@ -751,6 +761,7 @@ func (t *Task) clone() *Task {
 	c.Env = append([]string(nil), t.Env...)
 	c.Secrets = append([]string(nil), t.Secrets...)
 	c.Artifacts = append([]string(nil), t.Artifacts...)
+	c.Require = append([]string(nil), t.Require...)
 	c.Ensure = append([]string(nil), t.Ensure...)
 	c.Effects = append([]string(nil), t.Effects...)
 	if t.ExitCodes != nil {

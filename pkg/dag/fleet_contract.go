@@ -453,6 +453,7 @@ func (s RunStatus) HasVerdict() bool { return s == RunPassed || s == RunFailed }
 const (
 	FailExitNonzero   = "exit-nonzero"         // conformance: body exited non-zero
 	FailTimeout       = "timeout"              // conformance: body exceeded its declared Timeout
+	FailPrecondition  = "precondition-failed"  // conformance: a Require check failed, body never ran
 	FailPostcondition = "postcondition-failed" // conformance: body exited 0 but Ensure failed
 	FailNoWorker      = "no-eligible-worker"   // infra: no worker could ever satisfy the spec
 	FailUnreachable   = "worker-unreachable"   // infra: transport could not reach the worker
@@ -563,6 +564,8 @@ func RecordAttempt(t *Task, w *Worker, attempt int, res TaskResult) RunRecord {
 		switch {
 		case res.ExitCode == 124:
 			code = FailTimeout
+		case res.Attestation != nil && !res.Attestation.Valid && res.Attestation.Clause == "require":
+			code = FailPrecondition
 		case res.Attestation != nil && !res.Attestation.Valid:
 			code = FailPostcondition
 		}
@@ -595,7 +598,7 @@ func classifiedBy(c FleetFailure) (RunStatus, *FailureReason) {
 
 func knownFailureCode(code string) bool {
 	switch code {
-	case FailExitNonzero, FailTimeout, FailPostcondition, FailNoWorker,
+	case FailExitNonzero, FailTimeout, FailPrecondition, FailPostcondition, FailNoWorker,
 		FailUnreachable, FailCanceled, FailUnclassified:
 		return true
 	default:
