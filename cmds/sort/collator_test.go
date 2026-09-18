@@ -118,7 +118,9 @@ func TestRunWithCollatorInitFailureHasNoInputRandomFiles0OrOutputSideEffects(t *
 	dir := t.TempDir()
 	output := filepath.Join(dir, "output")
 	var out, errb bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_COLLATE=fr_FR.UTF-8"}, Stdio: tool.Stdio{In: panicReader{}, Out: &out, Err: &errb}}
+	// A non-UTF-8 provider locale still opens a collator (a UTF-8 codeset is
+	// carried as C byte order and would skip the provider entirely).
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_COLLATE=fr_FR.ISO-8859-1"}, Stdio: tool.Stdio{In: panicReader{}, Out: &out, Err: &errb}}
 	called := false
 	code := runWithCollator(rc, []string{"--random-source", "missing-random", "--files0-from", "missing-files0", "-o", output}, func(string) (stringCollator, error) {
 		called = true

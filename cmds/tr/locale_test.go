@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -36,15 +35,15 @@ func runTrOpener(t *testing.T, env []string, stdin string, opener ctypeOpener, a
 func posixUTF8() []string { return []string{"POSIXLY_CORRECT=1", "LC_ALL=en_US.UTF-8"} }
 
 // Exercise the registered command: runTrEnv bypasses collation resolution.
-func TestTrMacOSDefaultLocaleCommand(t *testing.T) {
+func TestTrDefaultLocaleCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		env    []string
 		accept bool
 	}{
-		{"default", []string{"LANG=en_US.UTF-8"}, runtime.GOOS == "darwin"},
+		{"default", []string{"LANG=en_US.UTF-8"}, true},
 		{"cert", []string{"LANG=en_US.UTF-8", "VSC_PROFILE=cert"}, false},
-		{"explicit unsupported collation", []string{"LANG=en_US.UTF-8", "LC_COLLATE=fr_FR.UTF-8"}, false},
+		{"explicit incompatible collation", []string{"LANG=en_US.UTF-8", "LC_COLLATE=fr_FR.ISO-8859-1"}, false},
 		{"C override", []string{"LANG=en_US.UTF-8", "LC_ALL=C"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

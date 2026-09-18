@@ -2,7 +2,6 @@ package locale
 
 import (
 	"errors"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -111,40 +110,40 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestIsMacOSDefaultUTF8(t *testing.T) {
-	for _, tc := range []struct {
-		goos string
-		want bool
-	}{
-		{"darwin", true},
-		{"linux", false},
-		{"windows", false},
-	} {
-		t.Run(tc.goos, func(t *testing.T) {
-			if got := isDarwin(tc.goos); got != tc.want {
-				t.Fatalf("isDarwin(%q) = %v, want %v", tc.goos, got, tc.want)
-			}
-		})
-	}
-
-	macOS := runtime.GOOS == "darwin"
+func TestIsHostDefaultUTF8(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		env  []string
 		want bool
 	}{
-		{"LANG fallback", []string{"LANG=en_US.UTF-8"}, macOS},
-		{"category overrides LANG", []string{"LANG=en_US.UTF-8", "LC_CTYPE=C"}, false},
-		{"LC_ALL selects it", []string{"LC_ALL=en_US.UTF-8", "LANG=C"}, macOS},
-		{"cert profile remains closed", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, false},
-		{"near alias is not carried", []string{"LANG=en_US.utf8"}, false},
-		{"other UTF-8 locale is not carried", []string{"LANG=ja_JP.UTF-8"}, false},
+		// Any UTF-8 codeset, any language/territory, any host, is carried.
 		{"C.UTF-8 is carried on every host", []string{"LANG=C.UTF-8"}, true},
 		{"C.utf8 spelling is carried", []string{"LC_ALL=C.utf8"}, true},
-		{"C.UTF-8 stays closed under cert", []string{"VSC_PROFILE=cert", "LANG=C.UTF-8"}, false},
 		{"C.UTF-8 with a modifier is carried", []string{"LANG=C.UTF-8@x"}, true},
+		{"en_US.UTF-8 is carried on every host", []string{"LANG=en_US.UTF-8"}, true},
+		{"en_US.utf8 spelling is carried", []string{"LANG=en_US.utf8"}, true},
+		{"en_GB.UTF-8 is carried", []string{"LANG=en_GB.UTF-8"}, true},
+		{"de_DE.UTF-8 is carried", []string{"LANG=de_DE.UTF-8"}, true},
+		{"ja_JP.UTF-8 is carried", []string{"LANG=ja_JP.UTF-8"}, true},
+		{"LC_ALL selects it", []string{"LC_ALL=en_US.UTF-8", "LANG=C"}, true},
+
+		// A non-UTF-8 codeset — or no codeset — is not carried here.
+		{"category overrides LANG with C", []string{"LANG=en_US.UTF-8", "LC_CTYPE=C"}, false},
+		{"POSIX is not UTF-8", []string{"LANG=POSIX"}, false},
+		{"plain C is not UTF-8", []string{"LANG=C"}, false},
+		{"bare language name (no codeset) is not carried", []string{"LANG=en_US"}, false},
+		{"ISO-8859-1 provider locale is not carried", []string{"LANG=de_DE.ISO-8859-1"}, false},
+
+		// The certification profile stays fail-closed for every UTF-8 name.
+		{"cert profile refuses en_US.UTF-8", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, false},
+		{"cert profile refuses C.UTF-8", []string{"VSC_PROFILE=cert", "LANG=C.UTF-8"}, false},
+		{"cert profile refuses de_DE.UTF-8", []string{"VSC_PROFILE=cert", "LANG=de_DE.UTF-8"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if got := IsHostDefaultUTF8(tc.env, CType); got != tc.want {
+				t.Fatalf("IsHostDefaultUTF8(%v) = %v, want %v", tc.env, got, tc.want)
+			}
+			// IsMacOSDefaultUTF8 is the same predicate under its old name.
 			if got := IsMacOSDefaultUTF8(tc.env, CType); got != tc.want {
 				t.Fatalf("IsMacOSDefaultUTF8(%v) = %v, want %v", tc.env, got, tc.want)
 			}
@@ -423,9 +422,13 @@ func TestResolveCarried(t *testing.T) {
 	}{
 		{"C.UTF-8 collates as C", []string{"LANG=C.UTF-8"}, Collate, "C"},
 		{"C.utf8 ctype stays UTF-8", []string{"LC_ALL=C.utf8"}, CType, "C.UTF-8"},
+		{"en_US.UTF-8 collates as C", []string{"LANG=en_US.UTF-8"}, Collate, "C"},
+		{"en_GB.UTF-8 ctype stays UTF-8", []string{"LANG=en_GB.UTF-8"}, CType, "C.UTF-8"},
+		{"ja_JP.UTF-8 ctype now carried as UTF-8", []string{"LANG=ja_JP.UTF-8"}, CType, "C.UTF-8"},
 		{"cert keeps the name", []string{"VSC_PROFILE=cert", "LANG=C.UTF-8"}, Collate, "C.UTF-8"},
+		{"cert keeps en_US.UTF-8 as-is", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, CType, "en_US.UTF-8"},
 		{"provider locale untouched", []string{"LANG=de_DE.ISO-8859-1"}, Collate, "de_DE.ISO-8859-1"},
-		{"refused locale untouched", []string{"LANG=ja_JP.UTF-8"}, CType, "ja_JP.UTF-8"},
+		{"bare language name untouched", []string{"LANG=en_US"}, CType, "en_US"},
 		{"plain C", []string{"LANG=C"}, Collate, "C"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

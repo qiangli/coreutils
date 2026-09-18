@@ -1,7 +1,6 @@
 package grepcmd
 
 import (
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -171,7 +170,10 @@ func TestGrepLocaleAllLatin1ClassMembership(t *testing.T) {
 }
 
 func TestGrepLocaleRejectsUnreviewedCodesetsBeforeInput(t *testing.T) {
-	for _, localeName := range []string{"de_DE.UTF-8", "de_DE.ISO-8859-15", "de_DE"} {
+	// Non-UTF-8 codesets the pure-Go providers do not carry stay fail-closed
+	// in normal mode. A UTF-8 codeset (de_DE.UTF-8) is carried now — see
+	// TestGrepCarriesAnyUTF8LocaleInNormalMode.
+	for _, localeName := range []string{"de_DE.ISO-8859-15", "de_DE"} {
 		t.Run(localeName, func(t *testing.T) {
 			out, errOut, code := runGrepEnv(t, "", "a\n", []string{"LC_ALL=" + localeName}, "a")
 			if code != 2 || out != "" || !strings.Contains(errOut, "unsupported locale") {
@@ -181,14 +183,32 @@ func TestGrepLocaleRejectsUnreviewedCodesetsBeforeInput(t *testing.T) {
 	}
 }
 
-func TestGrepMacOSDefaultUTF8NormalModeOnly(t *testing.T) {
+func TestGrepCarriesAnyUTF8LocaleInNormalMode(t *testing.T) {
+	// Outside cert, any UTF-8 codeset (any language/territory, any host) runs
+	// as C semantics with UTF-8 text; it must not draw the unsupported-locale
+	// refusal a distro default would otherwise trip on the first pipeline.
+	for _, localeName := range []string{"en_US.UTF-8", "en_GB.UTF-8", "de_DE.UTF-8", "ja_JP.UTF-8", "C.UTF-8"} {
+		t.Run(localeName, func(t *testing.T) {
+			out, errOut, code := runGrepEnv(t, "", "a\n", []string{"LC_ALL=" + localeName}, "a")
+			if code != 0 || errOut != "" || out != "a\n" {
+				t.Fatalf("LC_ALL=%s = (%q, %q, %d), want (a, empty, 0)", localeName, out, errOut, code)
+			}
+		})
+		t.Run(localeName+" refused under cert", func(t *testing.T) {
+			_, errOut, code := runGrepEnv(t, "", "unread\n", []string{"VSC_PROFILE=cert", "LC_ALL=" + localeName}, "x")
+			if code != 2 || !strings.Contains(errOut, "unsupported locale") {
+				t.Fatalf("cert LC_ALL=%s = (%q, %d), want unsupported diagnostic and 2", localeName, errOut, code)
+			}
+		})
+	}
+}
+
+func TestGrepDefaultUTF8NormalModeOnly(t *testing.T) {
+	// en_US.UTF-8 is carried in normal mode on every host now (it was macOS-
+	// only before the UTF-8 widening), and refused under cert everywhere.
 	out, errOut, code := runGrepEnv(t, "", "é\n", []string{"LANG=en_US.UTF-8"}, "é")
-	if runtime.GOOS == "darwin" {
-		if code != 0 || errOut != "" || out != "é\n" {
-			t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (é, empty, 0)", out, errOut, code)
-		}
-	} else if code != 2 || out != "" || !strings.Contains(errOut, "unsupported locale") {
-		t.Fatalf("non-Darwin default UTF-8 = (%q, %q, %d), want rejection", out, errOut, code)
+	if code != 0 || errOut != "" || out != "é\n" {
+		t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (é, empty, 0)", out, errOut, code)
 	}
 	_, errOut, code = runGrepEnv(t, "", "unread\n", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, "x")
 	if code != 2 || !strings.Contains(errOut, "unsupported locale") {

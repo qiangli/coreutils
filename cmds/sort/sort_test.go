@@ -672,11 +672,18 @@ func TestSortLCNumeric(t *testing.T) {
 		t.Fatalf("unsupported locale touched output: got=%q err=%v", got, err)
 	}
 
-	for _, name := range []string{"de_DE", "de_DE.ISO-8859-2", "de_DE.ISO-8859-15", "de_DE.UTF-8", "de_DE.iso88591x"} {
+	// Non-UTF-8 numeric locales the provider does not carry still fail early.
+	// A UTF-8 codeset (de_DE.UTF-8) is carried as C numeric ('.') — see below.
+	for _, name := range []string{"de_DE", "de_DE.ISO-8859-2", "de_DE.ISO-8859-15", "de_DE.iso88591x"} {
 		_, errb, code := runToolEnv(t, dir, []string{"LC_NUMERIC=" + name}, "unread\n", "-n", "missing_file")
 		if code != 2 || !strings.Contains(errb, "not supported") || strings.Contains(errb, "missing_file") {
 			t.Errorf("invalid alias %q: code=%d stderr=%q", name, code, errb)
 		}
+	}
+	// de_DE.UTF-8 numeric is carried (C decimal point), so -n sorts and the
+	// only error is the missing input file, never "not supported".
+	if _, errb, code := runToolEnv(t, dir, []string{"LC_NUMERIC=de_DE.UTF-8"}, "unread\n", "-n", "missing_file"); code != 2 || strings.Contains(errb, "not supported") || !strings.Contains(errb, "missing_file") {
+		t.Errorf("carried UTF-8 numeric locale: code=%d stderr=%q", code, errb)
 	}
 	_, errb, code = runToolEnv(t, dir, []string{"LC_NUMERIC=fr_FR", "LC_COLLATE=C"}, "", "-k1z", "missing_file")
 	if code == 0 || !strings.Contains(errb, "invalid field") || strings.Contains(errb, "not supported") || strings.Contains(errb, "missing_file") {

@@ -65,7 +65,18 @@ and the generated [applet matrix](docs/applet-matrix.md).
 Every tool in this repo follows the same rules:
 
 - **Deterministic output.** `LC_ALL=C` semantics always; no locale,
-  color, or terminal-width variance by default.
+  color, or terminal-width variance by default. Outside the certification
+  profile (`VSC_PROFILE=cert`), any locale whose codeset is UTF-8 (`C.UTF-8`,
+  `en_US.UTF-8`, `en_GB.UTF-8`, `de_DE.UTF-8`, `ja_JP.UTF-8`, …, on every
+  platform) is *carried* by the text applets (`grep`, `sed`, `sort`, `tr`,
+  `cut`, …) as C collation with UTF-8 character handling, so a distribution
+  whose default `LANG` is a UTF-8 locale does not make them refuse to run on
+  the first pipeline. The locale's own **collation** data is deliberately
+  *not* carried — UTF-8 code-point order is byte order, so `sort` under
+  `en_US.UTF-8` orders as `C.UTF-8` does, not as the host's GNU `sort` would.
+  A non-UTF-8 charset the pure-Go providers cannot carry still fails loudly.
+  Under `VSC_PROFILE=cert` the reviewed locale/provider matrix is unchanged,
+  byte for byte.
 - **Reference-compatible where implemented.** POSIX certification behavior
   follows POSIX. Commands that belong to GNU Coreutils use the GNU Coreutils
   9.11 manual and runtime: full behavioral compatibility with 9.11 is the
