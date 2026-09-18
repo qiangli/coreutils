@@ -139,6 +139,26 @@ func IsHostDefaultUTF8(env []string, cat Category) bool {
 	return isDarwin(runtime.GOOS) && name == "en_US.UTF-8"
 }
 
+// ResolveCarried is Resolve with the host-default UTF-8 locales (see
+// IsHostDefaultUTF8) answered by what they carry: "C" for collation (UTF-8
+// code-point order is byte order) and "C.UTF-8" for the other categories (the
+// text is UTF-8; an applet with no UTF-8 model treats that name as C — see
+// IsCUTF8). Everything else — C, POSIX, the provider locales, and the names
+// that must be refused — comes back exactly as Resolve returns it.
+func ResolveCarried(env []string, cat Category) string {
+	if IsHostDefaultUTF8(env, cat) {
+		if cat == Collate {
+			return "C"
+		}
+		return "C.UTF-8"
+	}
+	return Resolve(env, cat)
+}
+
+// IsCUTF8 reports the C locale with a UTF-8 codeset in any of its spellings
+// (C.UTF-8, C.utf8, with or without a modifier).
+func IsCUTF8(name string) bool { return isCUTF8(name) }
+
 // isCUTF8 reports the C locale with a UTF-8 codeset in any of its spellings.
 func isCUTF8(name string) bool {
 	base, codeset := splitLocaleName(name)

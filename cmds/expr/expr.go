@@ -68,8 +68,8 @@ type evalError struct{ msg string }
 func (e *evalError) Error() string { return e.msg }
 
 func resolveExprLocale(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen collateOpener) (*exprLocale, int) {
-	lcCType := locale.Resolve(rc.Env, locale.CType)
-	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	lcCType := locale.ResolveCarried(rc.Env, locale.CType)
+	lcCollate := locale.ResolveCarried(rc.Env, locale.Collate)
 	characters, err := resolveCharacterCodec(lcCType)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "expr: %v\n", err)

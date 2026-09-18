@@ -206,7 +206,7 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 	// stays on the byte path exactly as GNU join does (keycmp uses memcasecmp,
 	// not xmemcoll, when ignore_case is set).
 	if !opt.ignoreCase {
-		if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != locale.Default {
+		if name := locale.ResolveCarried(rc.Env, locale.Collate); name != "C" && name != locale.Default {
 			provider, err := open(name)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "join: LC_COLLATE=%s: %v\n", name, err)

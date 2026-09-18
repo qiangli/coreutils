@@ -157,10 +157,10 @@ func readLines(rc *tool.RunContext, name string) ([]string, error) {
 }
 
 func localeRegexpTables(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen collateOpener) (*bre.LocaleByteTables, int) {
-	lcCType := locale.Resolve(rc.Env, locale.CType)
-	lcCollate := locale.Resolve(rc.Env, locale.Collate)
+	lcCType := locale.ResolveCarried(rc.Env, locale.CType)
+	lcCollate := locale.ResolveCarried(rc.Env, locale.Collate)
 	var tables *bre.LocaleByteTables
-	if lcCType != "C" && lcCType != "POSIX" {
+	if lcCType != "C" && lcCType != "POSIX" && !locale.IsCUTF8(lcCType) {
 		provider, err := ctypeOpen(lcCType)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "csplit: LC_CTYPE %q: %v\n", lcCType, err)

@@ -413,3 +413,25 @@ func TestBenchResolveManyEnvEntries(t *testing.T) {
 		t.Errorf("Resolve with large env = %q; want final_ALL", got)
 	}
 }
+
+func TestResolveCarried(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		cat  Category
+		want string
+	}{
+		{"C.UTF-8 collates as C", []string{"LANG=C.UTF-8"}, Collate, "C"},
+		{"C.utf8 ctype stays UTF-8", []string{"LC_ALL=C.utf8"}, CType, "C.UTF-8"},
+		{"cert keeps the name", []string{"VSC_PROFILE=cert", "LANG=C.UTF-8"}, Collate, "C.UTF-8"},
+		{"provider locale untouched", []string{"LANG=de_DE.ISO-8859-1"}, Collate, "de_DE.ISO-8859-1"},
+		{"refused locale untouched", []string{"LANG=ja_JP.UTF-8"}, CType, "ja_JP.UTF-8"},
+		{"plain C", []string{"LANG=C"}, Collate, "C"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveCarried(tc.env, tc.cat); got != tc.want {
+				t.Fatalf("ResolveCarried(%v, %v) = %q, want %q", tc.env, tc.cat, got, tc.want)
+			}
+		})
+	}
+}

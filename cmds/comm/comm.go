@@ -136,7 +136,7 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 	}
 
 	compare := func(a, b string) (int, error) { return strings.Compare(a, b), nil }
-	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
+	if name := locale.ResolveCarried(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
 		provider, err := openCollator(name)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "comm: LC_COLLATE=%s: %v\n", name, err)
