@@ -105,22 +105,44 @@ func Resolve(env []string, cat Category) string {
 	return Default
 }
 
-// IsMacOSDefaultUTF8 reports the one host-default UTF-8 locale which the
-// normal (non-certification) command tier carries without a locale provider.
+// IsMacOSDefaultUTF8 reports whether the normal (non-certification) command
+// tier carries the resolved locale for cat as C semantics with UTF-8 text —
+// the two host-default UTF-8 locales, and nothing else:
 //
-// This is intentionally an exact spelling, rather than a generic "ends in
+//   - en_US.UTF-8, the macOS default, on darwin only;
+//   - C.UTF-8 (any spelling of the codeset: C.UTF-8, C.utf8), glibc's and
+//     musl's default and the one Debian, Ubuntu and CI runners ship, on every
+//     host. C.UTF-8 is C by definition — codepoint collation, which is byte
+//     order in UTF-8 — so carrying it claims no locale data the providers do
+//     not have.
+//
+// This is intentionally an exact allow-list, rather than a generic "ends in
 // UTF-8" test: accepting arbitrary locale names would silently claim locale
 // data (collation, classes, and case mappings) the pure-Go providers do not
 // carry. The VSC certification profile stays fail-closed so its reviewed
 // locale/provider matrix cannot be changed by the developer host's default.
+//
+// The name predates the C.UTF-8 door; IsHostDefaultUTF8 is the same predicate.
 func IsMacOSDefaultUTF8(env []string, cat Category) bool {
-	if !isDarwin(runtime.GOOS) {
-		return false
-	}
+	return IsHostDefaultUTF8(env, cat)
+}
+
+// IsHostDefaultUTF8 is IsMacOSDefaultUTF8 under its accurate name.
+func IsHostDefaultUTF8(env []string, cat Category) bool {
 	if profile, ok := getEnv(env, "VSC_PROFILE"); ok && profile == "cert" {
 		return false
 	}
-	return Resolve(env, cat) == "en_US.UTF-8"
+	name := Resolve(env, cat)
+	if isCUTF8(name) {
+		return true
+	}
+	return isDarwin(runtime.GOOS) && name == "en_US.UTF-8"
+}
+
+// isCUTF8 reports the C locale with a UTF-8 codeset in any of its spellings.
+func isCUTF8(name string) bool {
+	base, codeset := splitLocaleName(name)
+	return base == "C" && normalizeCodeset(codeset) == "UTF8"
 }
 
 // isDarwin keeps the host boundary independently testable without allowing

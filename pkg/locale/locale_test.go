@@ -139,6 +139,10 @@ func TestIsMacOSDefaultUTF8(t *testing.T) {
 		{"cert profile remains closed", []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, false},
 		{"near alias is not carried", []string{"LANG=en_US.utf8"}, false},
 		{"other UTF-8 locale is not carried", []string{"LANG=ja_JP.UTF-8"}, false},
+		{"C.UTF-8 is carried on every host", []string{"LANG=C.UTF-8"}, true},
+		{"C.utf8 spelling is carried", []string{"LC_ALL=C.utf8"}, true},
+		{"C.UTF-8 stays closed under cert", []string{"VSC_PROFILE=cert", "LANG=C.UTF-8"}, false},
+		{"C.UTF-8 with a modifier is carried", []string{"LANG=C.UTF-8@x"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := IsMacOSDefaultUTF8(tc.env, CType); got != tc.want {
