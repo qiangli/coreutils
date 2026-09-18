@@ -166,7 +166,13 @@ func (r *rm) remove1(op, displayOp string) bool {
 // the working directory and could remove that directory instead of reporting
 // the invalid prefix. Absolute operands already carry their own base.
 func rawOperandPath(rc *tool.RunContext, operand string) string {
-	if filepath.IsAbs(operand) || rc.Dir == "" {
+	// An absolute operand in the shell's spelling (/tmp/x, or on Windows the
+	// MSYS drive form bashy hands out, /c/Users/…) resolves to its native
+	// form; only a RELATIVE operand is kept raw for the "." semantics above.
+	if native, ok := tool.NativeAbs(operand); ok {
+		return native
+	}
+	if rc.Dir == "" {
 		return operand
 	}
 	if strings.HasSuffix(rc.Dir, string(filepath.Separator)) {

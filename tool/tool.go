@@ -125,6 +125,19 @@ func (rc *RunContext) Getenv(key string) string {
 // kernel resolves it against the process cwd exactly as it would for
 // the GNU binary. Below the limit the joined absolute form is returned
 // as always.
+// NativeAbs reports whether operand is an absolute path in the shell's own
+// spelling and, if so, returns it in the host's native form — on Windows that
+// maps the MSYS drive form (/c/… or \c\…) and a drive-relative /foo onto a
+// real drive path. It does no joining with rc.Dir: applets that must keep a
+// RELATIVE operand raw for POSIX semantics (rmdir's trailing "." check) use
+// it for the absolute case and their own rule for the rest.
+func NativeAbs(operand string) (string, bool) {
+	if !isAbsPath(operand) {
+		return "", false
+	}
+	return normalizePath(operand), true
+}
+
 func (rc *RunContext) Path(operand string) string {
 	if isAbsPath(operand) || rc.Dir == "" {
 		return normalizePath(operand)

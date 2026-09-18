@@ -131,8 +131,14 @@ func toOSPath(p string) string {
 // returns the UPPERCASE drive letter and the remainder beginning with a slash
 // ("/c" -> "C","/"; "/c/Users" -> "C","/Users"). This is the standard way every
 // Windows dev tool spells C:\ as a POSIX path, so a node's scripts are portable.
+// msysDriveSplit recognises the MSYS/Git-Bash drive form with EITHER
+// separator: /c/foo and \c\foo. bashy hands scripts /c/… for $HOME, $TEMP
+// and pwd, and an applet that runs filepath.FromSlash on an operand before
+// resolving it (rmdir, mktemp's join, …) turns that into \c\foo; both must
+// still mean C:\foo, never the drive-relative C:\c\foo.
 func msysDriveSplit(p string) (drive, rest string, ok bool) {
-	if len(p) >= 2 && p[0] == '/' && isASCIILetter(p[1]) && (len(p) == 2 || p[2] == '/') {
+	isSep := func(c byte) bool { return c == '/' || c == '\\' }
+	if len(p) >= 2 && isSep(p[0]) && isASCIILetter(p[1]) && (len(p) == 2 || isSep(p[2])) {
 		r := p[2:]
 		if r == "" {
 			r = "/"

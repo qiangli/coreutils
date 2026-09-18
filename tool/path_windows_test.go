@@ -14,6 +14,10 @@ func TestMSYSDriveMapping(t *testing.T) {
 		{"/c", `C:\`},
 		{"/d/foo/bar", `D:\foo\bar`},
 		{"/C/Up", `C:\Up`}, // uppercase drive letter
+		// The same form after filepath.FromSlash — how rmdir and mktemp's
+		// join hand it on — must still mean the drive, not C:\c\....
+		{`\c\Users\Lern`, `C:\Users\Lern`},
+		{`\d\foo/bar`, `D:\foo\bar`},
 	}
 	for _, c := range cases {
 		if got := normalizePath(c.in); got != c.want {

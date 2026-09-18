@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -81,7 +82,12 @@ func run(rc *tool.RunContext, args []string) int {
 
 	printed := template
 	if base != "" {
-		printed = filepath.Join(base, template)
+		// Not filepath.Join: on Windows it rewrites a shell-form base such as
+		// /c/Users/… (what bashy hands out as $TEMP and $HOME) into
+		// \c\Users\…, which RunContext.Path can no longer recognise as the
+		// MSYS drive form — the directory then "does not exist". Keep the
+		// base as given; Path resolves the joined shell form.
+		printed = strings.TrimRight(base, `/\`) + "/" + template
 	}
 
 	dir, file := filepath.Split(printed)
