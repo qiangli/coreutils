@@ -25,14 +25,14 @@
 # The aix build is a DELIBERATE canary, not a shipping target. A build tag that
 # says `!windows` is a claim that every other OS is a unix with flock — and aix
 # and solaris lock through fcntl, so such a tag does not merely mislabel them,
-# it fails to COMPILE. Locking code is where this keeps happening (pkg/steward,
-# pkg/policy/coord), and the fail-closed implementations those packages ship
-# for unsupported platforms are only reachable if the package builds there at
-# all. `go build` rather than `go vet`, since aix has no test-runner story and
+# it fails to COMPILE. Locking code is where this keeps happening (pkg/lockfile
+# here; pkg/steward and pkg/policy/coord in yoke), and the fail-closed
+# implementations those packages ship for unsupported platforms are only
+# reachable if the package builds there at all. `go build` rather than `go vet`, since aix has no test-runner story and
 # the point is the tag selection.
 #
-# Scope EXCLUDES the vendored external/ forks (ollama, podman): they pull cgo +
-# platform backends and are upstream's to test. That is the CI scope.
+# Scope is the whole tree: since Sprint 208 this module is the certified
+# required set only (the vendored forks and every agentic package are yoke's).
 #
 # Usage: scripts/crossvet.sh            # windows linux darwin + wasm/aix canaries
 #        scripts/crossvet.sh windows    # a subset, for a fast inner loop
@@ -45,7 +45,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/posix_manifest_test.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/posix_manifest.py --check
 
 targets=${*:-"windows linux darwin"}
-pkgs=$(go list ./... | grep -v /external/)
+pkgs=$(go list ./...)
 failed=""
 
 for os in $targets; do
@@ -68,7 +68,7 @@ if [ $# -eq 0 ]; then
     fi
   done
 
-  if GOOS=aix GOARCH=ppc64 go build ./pkg/steward/ ./pkg/policy/coord/ ./cmds/dd/; then
+  if GOOS=aix GOARCH=ppc64 go build ./pkg/lockfile/ ./cmds/dd/; then
     echo "crossvet: GOOS=aix PASS (fail-closed-lock and dd ABI canaries)"
   else
     echo "crossvet: GOOS=aix FAIL (fail-closed-lock and dd ABI canaries)"

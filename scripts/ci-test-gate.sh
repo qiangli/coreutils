@@ -44,16 +44,10 @@ GOOS=$(go env GOOS)
 [ -f "$BASELINE" ] || { echo "gate: missing $BASELINE" >&2; exit 2; }
 
 # The package set the workflow tests: coreutils' own packages, minus the
-# vendored external/ forks (cgo + platform backends, upstream's to test), plus
-# the lean pure-Go externals so they stay built on every platform.
-base="$(go list ./... | grep -v '/external/')"
-if [ "$GOOS" = "windows" ]; then
-    base="$(printf '%s\n' "$base" | grep -vE '/pkg/weave$')"
-fi
-pkgs="$base
-github.com/qiangli/coreutils/external/gotoolchain
-github.com/qiangli/coreutils/external/act
-github.com/qiangli/coreutils/external/gh"
+# coreutils is the certified required set (Sprint 208): every package here is
+# pure-Go userland with no engine or external wrapper, so the whole tree is
+# in scope on every platform.
+pkgs="$(go list ./...)"
 
 events=$(mktemp)
 trap 'rm -f "$events" "$events".*' EXIT

@@ -1,24 +1,25 @@
-// Package all registers every implemented command via blank imports.
-// Consumers that want the whole userland import this one package;
-// consumers embedding a subset import the specific cmds packages.
+// Package all registers every command of the REQUIRED set via blank imports:
+// the 116 POSIX-required names ∪ GNU coreutils that bashy implements as Go
+// applets, plus the two certification applets (posix-gate, posix-providers).
+// This is the certified inventory — the multicall binary cmd/coreutils links
+// exactly this list and nothing from yoke.
 //
-// Keep the list alphabetical; it is the shipped-tool inventory
-// (docs/commands.md is the plan, this is the build).
+// Everything else that used to live here (the agentic and non-POSIX applets:
+// ast, browser, fetch, jq, tar, tree, which, …) moved to
+// github.com/qiangli/yoke/cmds/all, which blank-imports this package and adds
+// its own. Consumers that want the whole userland import yoke's list;
+// consumers that want the certified set import this one.
 //
-// Deliberately EXCLUDED (like cmds/graph): cmds/foreman and cmds/resources.
-// foreman imports pkg/dag, whose tests import this package, so including it
-// creates an import cycle. resources imports the AgentOS weave/chat/telemetry
-// stack. Both are host front-door verbs rather than bare userland tools; hosts
-// register them directly. Keeping them out also prevents cmd/coreutils from
-// linking an observability engine it never initializes.
+// Membership is ONE rule, recorded row by row in the umbrella's
+// docs/coreutils-required-set.tsv: a name stays iff it is POSIX-required or a
+// GNU coreutils program (yoke's atlas.PosixRequired ∪ atlas.GNUCoreutilsUpstream).
+//
+// Keep the list alphabetical.
 package all
 
 import (
 	_ "github.com/qiangli/coreutils/cmds/arch"
-	_ "github.com/qiangli/coreutils/cmds/ast"
 	_ "github.com/qiangli/coreutils/cmds/at"
-	_ "github.com/qiangli/coreutils/cmds/atq"
-	_ "github.com/qiangli/coreutils/cmds/atrm"
 	_ "github.com/qiangli/coreutils/cmds/awk"
 	_ "github.com/qiangli/coreutils/cmds/b2sum"
 	_ "github.com/qiangli/coreutils/cmds/base32"
@@ -27,15 +28,12 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/basenc"
 	_ "github.com/qiangli/coreutils/cmds/batch"
 	_ "github.com/qiangli/coreutils/cmds/bc"
-	_ "github.com/qiangli/coreutils/cmds/browser"
-	_ "github.com/qiangli/coreutils/cmds/cal"
 	_ "github.com/qiangli/coreutils/cmds/cat"
 	_ "github.com/qiangli/coreutils/cmds/chcon"
 	_ "github.com/qiangli/coreutils/cmds/chgrp"
 	_ "github.com/qiangli/coreutils/cmds/chmod"
 	_ "github.com/qiangli/coreutils/cmds/chown"
 	_ "github.com/qiangli/coreutils/cmds/cksum"
-	_ "github.com/qiangli/coreutils/cmds/clip"
 	_ "github.com/qiangli/coreutils/cmds/cmp"
 	_ "github.com/qiangli/coreutils/cmds/comm"
 	_ "github.com/qiangli/coreutils/cmds/cp"
@@ -50,7 +48,6 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/dircolors"
 	_ "github.com/qiangli/coreutils/cmds/dirname"
 	_ "github.com/qiangli/coreutils/cmds/du"
-	_ "github.com/qiangli/coreutils/cmds/duration"
 	_ "github.com/qiangli/coreutils/cmds/echo"
 	_ "github.com/qiangli/coreutils/cmds/ed"
 	_ "github.com/qiangli/coreutils/cmds/env"
@@ -58,7 +55,6 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/expr"
 	_ "github.com/qiangli/coreutils/cmds/factor"
 	_ "github.com/qiangli/coreutils/cmds/false"
-	_ "github.com/qiangli/coreutils/cmds/fetch"
 	_ "github.com/qiangli/coreutils/cmds/file"
 	_ "github.com/qiangli/coreutils/cmds/find"
 	_ "github.com/qiangli/coreutils/cmds/fmt"
@@ -66,16 +62,13 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/getconf"
 	_ "github.com/qiangli/coreutils/cmds/grep"
 	_ "github.com/qiangli/coreutils/cmds/groups"
-	_ "github.com/qiangli/coreutils/cmds/gzip"
 	_ "github.com/qiangli/coreutils/cmds/head"
-	_ "github.com/qiangli/coreutils/cmds/hexdump"
 	_ "github.com/qiangli/coreutils/cmds/hostid"
 	_ "github.com/qiangli/coreutils/cmds/hostname"
 	_ "github.com/qiangli/coreutils/cmds/iconv"
 	_ "github.com/qiangli/coreutils/cmds/id"
 	_ "github.com/qiangli/coreutils/cmds/install"
 	_ "github.com/qiangli/coreutils/cmds/join"
-	_ "github.com/qiangli/coreutils/cmds/jq"
 	_ "github.com/qiangli/coreutils/cmds/kill"
 	_ "github.com/qiangli/coreutils/cmds/link"
 	_ "github.com/qiangli/coreutils/cmds/ln"
@@ -98,7 +91,6 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/nl"
 	_ "github.com/qiangli/coreutils/cmds/nohup"
 	_ "github.com/qiangli/coreutils/cmds/nproc"
-	_ "github.com/qiangli/coreutils/cmds/ntp"
 	_ "github.com/qiangli/coreutils/cmds/numfmt"
 	_ "github.com/qiangli/coreutils/cmds/od"
 	_ "github.com/qiangli/coreutils/cmds/paste"
@@ -106,17 +98,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/pathchk"
 	_ "github.com/qiangli/coreutils/cmds/pax"
 	_ "github.com/qiangli/coreutils/cmds/pinky"
-	// posixgate registers `posix-gate`, the fail-closed effective-owner gate
-	// over the 116 POSIX-required names: it proves the assembled runtime
-	// selects the intended owner (Go applet, shell, or pinned provider) for
-	// every name, and rejects count drift, ambiguous ownership, missing
-	// provider pins/provenance, and host PATH fallback.
 	_ "github.com/qiangli/coreutils/cmds/posixgate"
-	// posixproviders registers ten pinned POSIX external providers
-	// (m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef) plus the
-	// `posix-providers` provisioning applet. It must be in this list: the
-	// certification harness rebuilds its measured PATH from tool.Names(), so a
-	// name that is not registered is a name the arm silently takes from the host.
 	_ "github.com/qiangli/coreutils/cmds/posixproviders"
 	_ "github.com/qiangli/coreutils/cmds/pr"
 	_ "github.com/qiangli/coreutils/cmds/printenv"
@@ -151,22 +133,17 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/tac"
 	_ "github.com/qiangli/coreutils/cmds/tail"
 	_ "github.com/qiangli/coreutils/cmds/talk"
-	_ "github.com/qiangli/coreutils/cmds/tar"
 	_ "github.com/qiangli/coreutils/cmds/tee"
-	// registers both `test` and its `[` spelling, as upstream does
 	_ "github.com/qiangli/coreutils/cmds/test"
 	_ "github.com/qiangli/coreutils/cmds/time"
 	_ "github.com/qiangli/coreutils/cmds/timeout"
-	_ "github.com/qiangli/coreutils/cmds/tokens"
 	_ "github.com/qiangli/coreutils/cmds/touch"
 	_ "github.com/qiangli/coreutils/cmds/tput"
 	_ "github.com/qiangli/coreutils/cmds/tr"
-	_ "github.com/qiangli/coreutils/cmds/tree"
 	_ "github.com/qiangli/coreutils/cmds/true"
 	_ "github.com/qiangli/coreutils/cmds/truncate"
 	_ "github.com/qiangli/coreutils/cmds/tsort"
 	_ "github.com/qiangli/coreutils/cmds/tty"
-	_ "github.com/qiangli/coreutils/cmds/tz"
 	_ "github.com/qiangli/coreutils/cmds/uname"
 	_ "github.com/qiangli/coreutils/cmds/unexpand"
 	_ "github.com/qiangli/coreutils/cmds/uniq"
@@ -176,12 +153,9 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/uudecode"
 	_ "github.com/qiangli/coreutils/cmds/uuencode"
 	_ "github.com/qiangli/coreutils/cmds/vdir"
-	_ "github.com/qiangli/coreutils/cmds/watch"
 	_ "github.com/qiangli/coreutils/cmds/wc"
-	_ "github.com/qiangli/coreutils/cmds/which"
 	_ "github.com/qiangli/coreutils/cmds/who"
 	_ "github.com/qiangli/coreutils/cmds/whoami"
-	_ "github.com/qiangli/coreutils/cmds/why"
 	_ "github.com/qiangli/coreutils/cmds/write"
 	_ "github.com/qiangli/coreutils/cmds/xargs"
 	_ "github.com/qiangli/coreutils/cmds/yes"

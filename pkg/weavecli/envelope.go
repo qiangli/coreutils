@@ -13,8 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // SchemaVersion is stamped into every envelope's schema_version field.
@@ -122,9 +120,17 @@ func IsAgentDriven() bool {
 	if IsAgent() {
 		return true
 	}
-	_, detected := fleet.DetectTool()
+	_, detected := DetectTool()
 	return detected
 }
+
+// DetectTool reports whether an agent CLI is driving this shell, and which.
+// The marker table is DATA that lives in the tool registry
+// (github.com/qiangli/yoke/pkg/fleet), which sets this variable at init; the
+// bare coreutils build — the certified POSIX package, which never links yoke —
+// detects nothing and so only BASHY_AGENTIC counts. A variable, not an
+// interface: this is the one seam that keeps fleet out of the required set.
+var DetectTool = func() (string, bool) { return "", false }
 
 func truthyAgent(v string) bool {
 	switch v {

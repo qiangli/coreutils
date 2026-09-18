@@ -1,3 +1,0 @@
-- [outpost deploy](outpost-deploy.md) — deploy force
-- [paired host rule](paired-host-rule.md) — never pkill
-- index only; not a memory entry

@@ -174,13 +174,13 @@ func TestExactlyOneScopedPlatformPair(t *testing.T) {
 		t.Fatal("runtime.Caller")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(here), "..", ".."))
+	// The consumers that used to be scanned here (pkg/weave, pkg/meet,
+	// pkg/steward, pkg/policy/{coord,audit}) live in the yoke module since
+	// Sprint 208; yoke's pkg/lockfile_consumers_test.go asserts the other
+	// half of the invariant — that none of them grew a platform pair of
+	// their own.
 	scoped := []string{
 		"pkg/lockfile",
-		"pkg/weave",
-		"pkg/meet",
-		"pkg/steward",
-		"pkg/policy/coord",
-		"pkg/policy/audit",
 	}
 	var got []string
 	for _, dir := range scoped {

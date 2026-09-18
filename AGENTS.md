@@ -2,18 +2,18 @@
 
 ## Project Structure & Module Organization
 
-This Go module (`github.com/qiangli/coreutils`) implements a pure-Go, cross-platform userland for agents. Command packages live in `cmds/`, one utility per directory (`cmds/ls`, `cmds/sed`, `cmds/tar`); `cmds/all` registers the multicall set. Entrypoints are under `cmd/`: `cmd/coreutils` is the busybox-style binary, and `cmd/perfbench` is a benchmark/conformance host. Shared runtime and flags live in `tool/`, in-process git support is in `git/`, and reusable packages are in `pkg/`. Docs live in `docs/`; mirrored upstream projects live under `external/`.
+This Go module (`github.com/qiangli/coreutils`) is the certified POSIX package of bashy's pure-Go, cross-platform userland: the 116 POSIX-required names ∪ GNU coreutils, and nothing else (everything agentic is the flat sibling `github.com/qiangli/yoke`, which imports this module). Command packages live in `cmds/`, one utility per directory (`cmds/ls`, `cmds/sed`, `cmds/awk`); `cmds/all` registers the required set. Entrypoints are under `cmd/`: `cmd/coreutils` is the busybox-style certification binary, and `cmd/perfbench` is a benchmark/conformance host. Shared runtime and flags live in `tool/`; the few shared packages the applets need are in `pkg/`. Docs live in `docs/`.
 
 ## Build, Test, and Development Commands
 
 - `go build ./cmd/coreutils` builds the multicall userland binary.
-- `go test ./cmds/... ./tool ./git ./pkg/...` runs main tests while avoiding heavyweight vendored forks.
+- `go test ./...` runs the suite (the whole tree is pure Go; nothing vendored).
 - `go test ./cmds/ls ./tool` runs focused packages while iterating.
-- `go vet <pkgs>` runs static checks; mirror CI by using `go list ./...`, excluding `/external/`, then adding `external/gotoolchain`, `external/act`, and `external/gh`.
+- `go vet ./...` runs static checks (CI runs `scripts/ci-test-gate.sh`, the no-regression ratchet).
 - `go run ./cmd/perfbench --help` runs the development conformance/benchmark harness.
 - `gofmt -w <files>` formats changed Go files before review.
 
-Use Go from `go.mod` (`go 1.26.4`). The module replaces `mvdan.cc/sh/v3` with sibling `../sh`; standalone clones need that checkout. CI initializes `external/ollama/src` and `external/podman/src` submodules.
+Use Go from `go.mod`. The module replaces `mvdan.cc/sh/v3` with sibling `../sh`; standalone clones need that checkout. There are no submodules.
 
 ## Coding Style & Naming Conventions
 
@@ -21,7 +21,7 @@ Use standard Go formatting: tabs from `gofmt`, short package names, and idiomati
 
 ## Testing Guidelines
 
-Tests use Go's standard `testing` package and `*_test.go` files. Place command tests beside implementations (`cmds/head/head_test.go`); shared runtime tests belong with their package (`tool/tool_test.go`, `git/*_test.go`). Prefer table-driven coverage for flags, stdio, stderr, exit codes, and platform paths. For parity work, update relevant docs or `cmds/perfbench/results/` artifacts.
+Tests use Go's standard `testing` package and `*_test.go` files. Place command tests beside implementations (`cmds/head/head_test.go`); shared runtime tests belong with their package (`tool/tool_test.go`, `pkg/bre/*_test.go`). Prefer table-driven coverage for flags, stdio, stderr, exit codes, and platform paths. For parity work, update relevant docs or `cmds/perfbench/results/` artifacts.
 
 ## Commit & Pull Request Guidelines
 

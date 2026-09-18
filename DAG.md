@@ -39,14 +39,12 @@ consumer `../bashy` against THIS tree, and (b) refuses a versioned `replace`
 whose commit is not an ancestor of the fork's default branch. Run it beside
 `test` and `crossvet` before merge.
 
-The default `test`/`vet` scope **excludes the vendored `external/` forks**
-(ollama, podman) — they pull cgo + platform-specific backends (MLX, btrfs) and
-are upstream's to test; this is exactly the cross-platform CI scope, so the
-Windows leg (the product) stays green. `test-all` includes everything for a unix
-host with the submodules hydrated.
+The whole tree is the CI scope: since Sprint 208 this module is the certified
+required set only — pure-Go applets, no engines, no externals, no submodules
+(those are yoke's, the flat sibling that imports this one).
 
-Resolving the engine: coreutils replaces `mvdan.cc/sh/v3 => ../sh` and the
-ollama/podman forks via submodules; inside the dhnt umbrella both are present.
+Resolving the engine: coreutils replaces `mvdan.cc/sh/v3 => ../sh`; inside the
+dhnt umbrella it is present as a submodule.
 
 ## Tasks
 
@@ -65,14 +63,13 @@ go build -trimpath -o bin/coreutils ./cmd/coreutils
 ```
 
 ### test
-Test coreutils' own packages — the cross-platform CI scope (excludes the
-vendored external/ forks).
+Test coreutils' own packages — the cross-platform CI scope (the whole tree).
 Effects: read
 
 ```bash
 set -e
-go vet $(go list ./... | grep -v /external/)
-go test $(go list ./... | grep -v /external/)
+go vet ./...
+go test ./...
 ```
 
 ### crossvet
@@ -154,16 +151,7 @@ Static check, same scope as `test`.
 Effects: read
 
 ```bash
-go vet $(go list ./... | grep -v /external/)
-```
-
-### test-all
-Full test including the vendored external/ forks. Needs a unix host with cgo and
-the ollama/podman submodules hydrated.
-Effects: read
-
-```bash
-go test ./...
+go vet ./...
 ```
 
 ### dist

@@ -1,7 +1,15 @@
 # coreutils
 
-A pure-Go agent userland: one canonical set of Unix-style Go applets with
-identical behavior on every major platform (Linux, macOS, Windows).
+The **certified POSIX package** of bashy's pure-Go agent userland: the 116
+POSIX-required utility names ∪ the GNU coreutils programs, as Go applets
+with identical behavior on every major platform (Linux, macOS, Windows).
+
+Everything agentic — the AgentOS hub, the non-POSIX applets (`tar`, `jq`,
+`tree`, `which`, `browser`, …), the pure-Go `git` client, managed externals
+and embedded engines — lives in the flat sibling
+[yoke](https://github.com/qiangli/yoke), which imports this module and never
+the reverse (Sprint 208, 2026-09-18). This package is stable: bug fixes
+only, feature-level change only when the reference coordinate moves.
 
 This repo exists for **agents**, not humans. Agentic tools (shells,
 tool executors, automation harnesses) need a predictable command
@@ -82,15 +90,6 @@ Every tool in this repo follows the same rules:
 
 ## Packages
 
-- `git/` — self-contained git client built on go-git/v5: the typed API
-  (`Clone`, `Pull`, `Merge`, …) for CLIs that own their flag parsing,
-  and `Exec(ctx, dir, args)` for argv-style callers, with
-  `ErrUnsupported` as the fall-back-or-fail signal. Pull and merge
-  integrate fast-forwards only (preserving non-conflicting local
-  changes, like real git); conflict resolution is out of scope by
-  design. Even local-path remotes use go-git's in-process server
-  transport — `git-upload-pack` is never spawned.
-
 - `pkg/posixprovider` + `cmds/posixproviders` — the pinned POSIX external
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
@@ -114,36 +113,39 @@ Every tool in this repo follows the same rules:
   Profile D: Bashy 5.3). See
   [the POSIX owner gate](docs/posix-owner-gate.md).
 
-- `cmds/` — the userland: 158 shipped Go command packages advertising 176
-  applet names, ten of which are external providers rather than Go
-  implementations (see the generated [applet matrix](docs/applet-matrix.md)),
+- `cmds/` — the required set: 141 registered Go command packages (see the
+  generated [applet matrix](docs/applet-matrix.md); ten names are external
+  providers rather than Go implementations),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),
   text (cat, head, tail, wc, sort, uniq, cut, tr, grep, diff, …),
   system info (date, uname, id, …), checksums (md5/sha\*sum,
   base64/32), conditionals (`test` and its `[` spelling — the full
   POSIX primary set, `!`/`-a`/`-o`/parentheses, exit 0 true / 1 false /
-  2 malformed), and archives (tar, gzip). Each command is its own
-  importable package registered into `tool/`'s registry; `cmds/all`
-  pulls in everything. Agent-traffic compatibility includes GNU grep
+  2 malformed), and the POSIX archive/patch/edit family (pax, patch, ed,
+  mailx, make, bc). Each command is its own importable package registered
+  into `tool/`'s registry; `cmds/all` pulls in the required set, and yoke's
+  `cmds/all` adds the rest of the userland on top. Agent-traffic compatibility includes GNU grep
   `-A`/`-B`/`-C` context and ordered `--include` filtering, plus sed
   `addr,+N` ranges and `-i[SUFFIX]` in-place editing.
 - `tool/` — the framework: registry + per-invocation RunContext
   (stdio, working directory, environment — tools never touch process
   globals) + strict GNU-style flags with automatic `--help`/`--version`.
 - `cmd/coreutils` — busybox-style multicall binary (`coreutils ls …`,
-  or symlink a tool name to the binary for argv[0] dispatch).
+  or symlink a tool name to the binary for argv[0] dispatch). It links
+  this module only — it is the certification SUT.
 
 Current priorities and withheld implementations are maintained in
 [docs/commands.md](docs/commands.md).
 
 ## Consumers
 
-- [outpost](https://github.com/qiangli/outpost) — `outpost git …` is a
-  cobra CLI over `git/`'s typed API.
-- [ycode](https://github.com/qiangli/ycode) — `yc git …` dispatches
-  through `git.Exec` natively, falling back to a host git binary (and
-  then a container) for anything `ErrUnsupported`.
+- [yoke](https://github.com/qiangli/yoke) — the agentic userland; imports
+  `tool/`, `multicall/`, `shell/` and the shared `pkg/` packages.
+- [bashy](https://github.com/qiangli/bashy) — the shell; wires
+  `shell.Handler()` so the applets run in-process.
+- [outpost](https://github.com/qiangli/outpost),
+  [ycode](https://github.com/qiangli/ycode) — through yoke.
 
 ## License
 

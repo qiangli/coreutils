@@ -63,13 +63,12 @@ KEYWORD_OVERLAP = {"time"}
 AVAILABILITY_PIN = {"go_applet": 92, "shell": 14, "external_provider": 10}
 EFFECTIVE_PIN = {"go_applet": 84, "shell": 22, "external_provider": 10}
 
+# Aliases of packages in the REQUIRED set only. gunzip/zcat (gzip), ncal (cal)
+# and sntp (ntp) left with their packages for yoke in Sprint 208; this matrix
+# describes the certified inventory and does not count them.
 ALIASES = {
     "[": "test",
-    "gunzip": "gzip",
     "mail": "mailx",
-    "ncal": "cal",
-    "sntp": "ntp",
-    "zcat": "gzip",
 }
 
 TEST_FUNC = re.compile(r"^func (?:Test|Fuzz|Benchmark)\w+", re.MULTILINE)
@@ -160,7 +159,9 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 160 or len(result) != 176:
+    # Sprint 208: the required set — 141 packages / 153 advertised names
+    # (160 / 176 before the yoke split).
+    if len(packages) != 141 or len(result) != 153:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"

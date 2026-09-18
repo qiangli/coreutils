@@ -221,7 +221,7 @@ func FireJob(j *Job, w io.Writer, deliver MailDelivery) error {
 }
 
 func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
-	return j.fireWithAdmission(w, deliver, BudgetAdmission(nil))
+	return j.fireWithAdmission(w, deliver, DefaultAdmission)
 }
 func (j *Job) fireWithAdmission(w io.Writer, deliver MailDelivery, admit JobAdmission) error {
 	if len(j.Command) == 0 {
@@ -275,9 +275,9 @@ func (j *Job) fireWithAdmission(w io.Writer, deliver MailDelivery, admit JobAdmi
 	runErr := c.Run()
 	finishReason := runErr
 	if c.Process == nil {
-		finishReason = errBudgetJobNotStarted
+		finishReason = ErrBudgetJobNotStarted
 	} else if !budgetOwnedJobGone(c) {
-		finishReason = errBudgetJobLifetime
+		finishReason = ErrBudgetJobLifetime
 	} else {
 		finishReason = nil
 	} // The group ended; preserve command error separately from lifetime proof.
