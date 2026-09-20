@@ -1,7 +1,7 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-//go:build !(linux && (amd64 || arm64))
+//go:build bashy_scratch || !(linux && (amd64 || arm64))
 
 package collate
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-//go:build !(linux && (amd64 || arm64))
+//go:build bashy_scratch || !(linux && (amd64 || arm64))
 
 package ctype
 
@@ -13,7 +13,8 @@ type Provider struct{}
 // Open validates the locale name exactly as the real provider does — so
 // callers on any platform get the same ErrUnsupportedLocale for an
 // unaccepted name — and then reports ErrUnsupportedPlatform, because no
-// glibc provider is built off linux/amd64 and linux/arm64.
+// glibc provider is built off linux/amd64 and linux/arm64 or in the
+// bashy_scratch profile.
 func Open(name string) (*Provider, error) {
 	if _, _, ok := normalizeLocale(name); !ok {
 		return nil, ErrUnsupportedLocale
