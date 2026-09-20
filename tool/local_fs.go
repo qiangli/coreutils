@@ -9,8 +9,11 @@ import (
 // LocalFS is a lightweight passthrough virtual filesystem that delegates
 // every operation to the local OS filesystem. It provides path translation
 // so callers can work with Unix-style paths and the VFS handles the
-// platform-level mapping: on Windows, /foo becomes C:\foo for the system
-// drive, and C:\foo is presented back as /foo. On Unix it is identity.
+// platform-level mapping via the shared mvdan.cc/sh/v3/pathconv converter:
+// on Windows, /c/foo, /mnt/c/foo and a drive-less /foo all become C:\foo
+// (the last via the system drive), /dev/null becomes NUL, /tmp becomes the
+// temp directory, and C:\foo is presented back as /c/foo. On Unix it is
+// identity.
 //
 // LocalFS is a concrete type, not an interface — tools reference it
 // directly. The overhead is zero: every method translates paths then calls

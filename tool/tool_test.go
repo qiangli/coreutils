@@ -484,18 +484,21 @@ func TestToOSPath(t *testing.T) {
 
 func TestFromOSPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		sd := systemDrive()
+		// fromOSPath is pathconv.FromOS: a drive path comes back in the
+		// MSYS spelling (C:\x -> /c/x, the shape cygpath -u prints under
+		// MSYS2), which toOSPath maps back to the same file — including
+		// non-system drives, which the old SystemDrive stripping lost.
 		tests := []struct {
 			path string
 			want string
 		}{
-			{sd + "foo\\bar", "/foo/bar"},
-			{sd, "/"},
-			{sd + "Users\\Alice", "/Users/Alice"},
-			{`\foo\bar`, `/foo/bar`},
+			{`C:\foo\bar`, `/c/foo/bar`},
+			{`C:\`, `/c/`},
+			{`C:\Users\Alice`, `/c/Users/Alice`},
+			{`c:\Foo\BAR`, `/c/Foo/BAR`}, // drive letter lowercased
+			{`D:\x`, `/d/x`},             // non-system drive round-trips now
+			{`\foo\bar`, `/foo/bar`},     // drive-relative stays drive-less
 			{`\`, `/`},
-			{`C:\foo\bar`, `/foo/bar`},
-			{`c:\Foo\BAR`, `/Foo/BAR`}, // case-insensitive drive match
 			{`\\server\share\path`, `//server/share/path`},
 			{`foo\bar\baz`, `foo/bar/baz`},
 			{``, ``},
@@ -529,7 +532,15 @@ func TestLocalFSToOSFromOSRoundtrip(t *testing.T) {
 	for _, p := range paths {
 		osPath := fs.ToOS(p)
 		back := fs.FromOS(osPath)
-		if back != p {
+		// On Windows, FromOS returns the canonical MSYS spelling (C:\foo
+		// comes back as /c/foo, not the /foo it may have entered as), so
+		// the invariant is OS-level: the shell form must name the same
+		// native path. On Unix both conversions are the identity, so the
+		// exact spelling must survive too.
+		if fs.ToOS(back) != osPath {
+			t.Errorf("roundtrip %q: ToOS=%q FromOS=%q ToOS=%q, want %q", p, osPath, back, fs.ToOS(back), osPath)
+		}
+		if runtime.GOOS != "windows" && back != p {
 			t.Errorf("roundtrip %q: ToOS=%q FromOS=%q, want %q", p, osPath, back, p)
 		}
 	}

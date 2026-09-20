@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // pathLengthLimit for Windows is the \\?\ namespace bound (~32767
@@ -32,12 +34,14 @@ func isAbsPath(p string) bool {
 }
 
 // normalizePath converts a shell-style path into a real Windows path. It is the
-// tool entry point (RunContext.Path resolves operands through it), so the
-// MSYS/Git-Bash drive convention is honored here: /c/foo -> C:\foo. A drive-less
-// path is just slash-converted (a leading "/" stays drive-relative, as before).
+// tool entry point (RunContext.Path resolves operands through it), so every
+// shell spelling the shared pathconv package recognizes is honored here:
+// /c/foo and /mnt/c/foo -> C:\foo, /dev/null -> NUL, /tmp -> the host temp
+// directory. A drive-less path is just slash-converted (a leading "/" stays
+// drive-relative, as before).
 func normalizePath(p string) string {
-	if drive, rest, ok := msysDriveSplit(p); ok {
-		return drive + ":" + filepath.FromSlash(rest)
+	if native, ok := shellSpecialPath(p); ok {
+		return native
 	}
 	return filepath.FromSlash(p)
 }
@@ -114,55 +118,63 @@ func systemDrive() string {
 }
 
 // toOSPath converts a shell path (localFS layer) to a Windows path. It honors
-// the MSYS /c/ drive convention, then the legacy drive-less "/foo -> SystemDrive"
-// mapping (kept so the toOSPath<->fromOSPath round-trip holds).
+// every shell spelling the shared pathconv package recognizes (MSYS /c/…,
+// WSL /mnt/c/…, /dev/null, /tmp), then the legacy drive-less
+// "/foo -> SystemDrive" mapping (kept so the toOSPath<->fromOSPath
+// round-trip holds).
 func toOSPath(p string) string {
-	if drive, rest, ok := msysDriveSplit(p); ok {
-		return drive + ":" + filepath.FromSlash(rest)
+	if native, ok := shellSpecialPath(p); ok {
+		return native
 	}
 	if len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/') {
 		return systemDrive() + filepath.FromSlash(p[1:])
 	}
-	return normalizePath(p)
+	return filepath.FromSlash(p)
 }
 
-// msysDriveSplit recognizes the MSYS/Git-Bash drive convention "/c" or "/c/...":
-// a leading slash, one ASCII letter, then end-of-string or another slash. It
-// returns the UPPERCASE drive letter and the remainder beginning with a slash
-// ("/c" -> "C","/"; "/c/Users" -> "C","/Users"). This is the standard way every
-// Windows dev tool spells C:\ as a POSIX path, so a node's scripts are portable.
-// msysDriveSplit recognises the MSYS/Git-Bash drive form with EITHER
-// separator: /c/foo and \c\foo. bashy hands scripts /c/… for $HOME, $TEMP
-// and pwd, and an applet that runs filepath.FromSlash on an operand before
-// resolving it (rmdir, mktemp's join, …) turns that into \c\foo; both must
-// still mean C:\foo, never the drive-relative C:\c\foo.
-func msysDriveSplit(p string) (drive, rest string, ok bool) {
-	isSep := func(c byte) bool { return c == '/' || c == '\\' }
-	if len(p) >= 2 && isSep(p[0]) && isASCIILetter(p[1]) && (len(p) == 2 || isSep(p[2])) {
-		r := p[2:]
-		if r == "" {
-			r = "/"
-		}
-		return string(p[1] &^ 0x20), r, true // &^0x20 = ASCII upper
+// shellSpecialPath converts the shell-spelling forms recognized by the shared
+// mvdan.cc/sh/v3/pathconv package — the SAME converter bashy's sh interpreter
+// runs, so a path names the same file inside and outside a script: the
+// MSYS/Git-Bash drive form (/c/…, also \c\… — bashy hands scripts /c/… for
+// $HOME, $TEMP and pwd, and an applet that runs filepath.FromSlash on an
+// operand before resolving it turns that into \c\foo; both must still mean
+// C:\foo, never the drive-relative C:\c\foo), the WSL mount form (/mnt/c/…,
+// forward-slash spelling only, exactly as pathconv defines it), and the two
+// POSIX pseudo-operands /dev/null (-> NUL) and /tmp[/…] (-> the host temp
+// directory). ok=false means p is none of those and the caller applies its
+// own drive-less rule (normalizePath keeps a bare /foo drive-relative;
+// toOSPath maps it onto SystemDrive).
+//
+// The drive form is assembled with FromSlash rather than routed through
+// pathconv.ToOS wholesale: ToOS runs filepath.Clean, and RunContext.Path
+// treats a trailing separator (and every ".." component a caller kept) as
+// semantic, not cosmetic.
+func shellSpecialPath(p string) (string, bool) {
+	if drive, rest, ok := pathconv.DrivePath(p); ok {
+		return string(drive) + ":" + filepath.FromSlash(rest), true
 	}
-	return "", "", false
+	// The pseudo-operand MAPPINGS (which device, which directory) live in
+	// pathconv.ToOS; only the recognition gate is local, so the drive-less
+	// fallbacks above are not subjected to ToOS's volume-prepend rule.
+	if p == "/dev/null" {
+		return pathconv.ToOS("", p), true
+	}
+	if strings.HasPrefix(p, "/tmp") && (len(p) == 4 || p[4] == '/') {
+		out := pathconv.ToOS("", p)
+		if hasTrailingPathSeparator(p) && !hasTrailingPathSeparator(out) {
+			out += `\`
+		}
+		return out, true
+	}
+	return "", false
 }
 
-func isASCIILetter(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
+// fromOSPath converts a native path back to the shell's spelling via the
+// shared converter: C:\Users\x -> /c/Users/x (the MSYS drive form bashy
+// speaks; cygpath -u prints the same shape under MSYS2), \foo -> /foo, UNC
+// and relative paths are slash-converted only. The former SystemDrive
+// stripping (C:\foo -> /foo) was lossy — /foo does not name a drive, and
+// D:\foo could not round-trip at all.
 func fromOSPath(p string) string {
-	drv := systemDrive()
-	drvLen := len(drv)
-	if len(p) >= drvLen && strings.EqualFold(p[:drvLen], drv) {
-		if rest := p[drvLen:]; rest != "" {
-			return "/" + filepath.ToSlash(rest)
-		}
-		return "/"
-	}
-	if len(p) > 0 && p[0] == '\\' && (len(p) < 2 || p[1] != '\\') {
-		return "/" + filepath.ToSlash(p[1:])
-	}
-	return filepath.ToSlash(p)
+	return pathconv.FromOS(p)
 }

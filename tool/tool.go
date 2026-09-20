@@ -113,7 +113,10 @@ func (rc *RunContext) Getenv(key string) string {
 // On Windows, both / and \ separators are accepted, and /foo (no drive
 // letter) is recognised as drive-relative absolute (matching the
 // behaviour of every Windows API, which treats it as root on the
-// current drive).
+// current drive). The shell spellings recognised by the shared
+// mvdan.cc/sh/v3/pathconv converter map to their native equivalents:
+// the MSYS drive form (/c/…), the WSL mount form (/mnt/c/…), /dev/null
+// (-> NUL) and /tmp[/…] (-> the host temp directory).
 //
 // A valid working directory and a valid relative operand can join into
 // a single string longer than the platform's path-length limit (each
@@ -127,8 +130,9 @@ func (rc *RunContext) Getenv(key string) string {
 // as always.
 // NativeAbs reports whether operand is an absolute path in the shell's own
 // spelling and, if so, returns it in the host's native form — on Windows that
-// maps the MSYS drive form (/c/… or \c\…) and a drive-relative /foo onto a
-// real drive path. It does no joining with rc.Dir: applets that must keep a
+// maps the MSYS drive form (/c/… or \c\…), the WSL mount form (/mnt/c/…),
+// the /dev/null and /tmp pseudo-operands, and a drive-relative /foo onto a
+// real path. It does no joining with rc.Dir: applets that must keep a
 // RELATIVE operand raw for POSIX semantics (rmdir's trailing "." check) use
 // it for the absolute case and their own rule for the rest.
 func NativeAbs(operand string) (string, bool) {
