@@ -82,41 +82,12 @@ README.md and is the review bar for every PR.
 
 ## Prior art (`priorart/`, gitignored)
 
-Local clones of permissive open-source reimplementations, for studying
-and — where the license allows — adapting. **Conformance is judged
-against the original command's official documentation, never against
-prior art**: these projects have their own gaps and deviations (u-root
-is deliberately flag-partial; aict changes output formats), so anything
-copied must be verified against the GNU manual / POSIX and covered by
-tests before it counts as supported.
-
-| Clone | Project | Lang | License | Policy |
-|---|---|---|---|---|
-| `priorart/aict` | aict (agent-oriented coreutils, XML/JSON output) | Go | MIT | copy/adapt |
-| `priorart/guonaihong-coreutils` | guonaihong/coreutils | Go | Apache-2.0 | copy/adapt |
-| `priorart/u-root` | u-root/u-root (`cmds/core/…`) | Go | BSD-3-Clause | copy/adapt |
-| `priorart/coreutils` | microsoft/coreutils | Rust | MIT | reference only |
-| `priorart/uutils-coretuils` | uutils/coreutils | Rust | MIT | reference only (best GNU-fidelity reference) |
-
-When adapting code from a copy/adapt clone:
-
-- Keep a provenance header on the file: source repo, path, license.
-- Add the source to `THIRD_PARTY_LICENSES.md` (license text included).
-  Apache-2.0 sources (guonaihong) additionally require stating changes.
-- Strip anything that violates the agent contract while adapting —
-  Linux-only assumptions (u-root), non-GNU output modes (aict's
-  XML/JSON), locale-dependent behavior.
-- aict's XML/JSON output idea is explicitly NOT adopted as default
-  behavior — upstream tools don't do it, and rule 3 forbids changing
-  output shapes under upstream names. If structured output ever lands,
-  it will be an explicitly documented extension flag.
-
-The Rust clones are semantic references: uutils is the most
-GNU-faithful reimplementation in existence and is often the fastest way
-to resolve "what does GNU actually do here" questions — but code flows
-from it only as understanding, never as translation (reference-only by
-policy to keep provenance simple, even though its license would allow
-more).
+Local clones of permissive reimplementations (aict, guonaihong/coreutils,
+u-root — copy/adapt; microsoft + uutils coreutils — reference only). Table,
+provenance rules and the adaptation checklist: `docs/prior-art.md`.
+**Conformance is judged against the original command's official
+documentation, never against prior art.** Anything copied carries a
+provenance header, an entry in `THIRD_PARTY_LICENSES.md`, and tests.
 
 ## Build & test
 
@@ -240,65 +211,13 @@ no long form pre-parsed manually (never invent long names), numeric
 shorthands (-NUM) pre-scanned before pflag. Repo convention: usage
 errors exit 2 even where GNU uses 1 (documented deviation).
 
-## Roadmap status (as of 2026-07)
+## Roadmap status
 
-Done: git relocation; the `tool/` framework + Phase A userland (incl. the
-2026-07 file-utilities batch: dd, install, shred, mkfifo, mknod, chcon,
-dircolors, dir/vdir); the `shell/` adapter (`shell/Handler()` /
-`HandlerFunc()` — an `interp.ExecHandler` middleware for `mvdan.cc/sh/v3`
-that dispatches any argv[0] naming a registered `tool.Tool` to `Tool.Run`,
-else falls through to PATH; precedence is **pure-Go first**, a host opts
-out by not wiring it — bashy's AgentOS shell turns it on, the `bash`
-drop-in leaves it off; the adapter imports sh, sh never imports
-coreutils); the `cmd/coreutils` multicall binary (the `multicall/`
-package factors out Resolve/Dispatch/Main so bashy reuses the same
-argv[0] dispatch); and much of the former Phase C — sed, xargs, awk
-(goawk), jq (gojq), time/timeout, watch, tree, and the agentic extras
-(at/atq/atrm/batch/crontab, browser, fetch, clip, tokens, duration, tz,
-ntp, cal, tsort).
-
-Phase B is essentially complete (2026-07): expr, od, nl, fold,
-expand/unexpand, cksum, b2sum, basenc, csplit, numfmt, nproc, arch,
-tail -f (polling follow), plus the sh-utils sweep (who/users/pinky,
-pr, ptx, factor, stdbuf, stty, hexdump, yes, which, …) all shipped.
-Remaining (per docs/commands.md): printf, test/[. The 2026-07-07
-**uutils option-parity sprint** then closed flag/option gaps against
-`reference/uutils-coreutils` across the whole userland (ls, df, du,
-ln, tail, sort, stat, checksums, …) — see
-`docs/uutils-parity-sprint-2026-07-07.md` for what landed and
-`docs/bashy-uutils-option-comparison.md` for the final per-command
-gap status. Conformance is still judged against GNU/POSIX docs; the
-uutils reference was parity guidance, never translated source.
-
-The not-supported tier is docs/commands.md's **NO list** (canonical —
-grouped by reason: needs-exec, unix-only machinery, low agent value,
-sysadmin out-of-scope). Recognized-but-NO names get a clear error naming
-the command, the reason, and the nearest alternative — never a silent
-fallthrough. Note the list evolves: several early "NO ↻ revisit" entries
-(timeout, time) and former skips (mkfifo, mknod, dircolors, chcon, tsort)
-have since shipped — trust docs/commands.md + `cmds/all/all.go` over any
-older skip list.
-
-**Known defect — `env` breaks the never-a-silent-fallthrough rule (found
-2026-08-05).** `env` correctly and loudly refuses to RUN a COMMAND (needs-exec,
-NO list). But its option parsing does **not stop at the first operand** the way
-POSIX/GNU `env` does, so it consumes the *command's* flags as its own:
-
-```
-env FOO=1 ls -l            -> env: unknown shorthand flag: 'l' in -l     (loud, fine)
-env FOO=1 bashy --version  -> env (qiangli/coreutils) dev                (SILENT WRONG ANSWER)
-```
-
-The second is the serious one: `--version`/`--help` are recognised by `env`, so
-it answers about *itself* while appearing to answer about the command. That is
-exactly the "recognized-but-NO names get a clear error … never a silent
-fallthrough" invariant, inverted. Fix: stop option parsing at the first
-non-option operand, then report the needs-exec refusal naming the command.
-Until then, do not use `env VAR=x <cmd> <flags>` in scripts or tests on a bashy
-shell — it will either error confusingly or answer the wrong question. (It cost
-a false bug report during the execlog work: `env -u X bashy -c '…'` never ran
-bashy at all, and with stderr redirected that was indistinguishable from the
-recorder failing to write.)
+History through 2026-07 (phases A/B/C, the uutils option-parity sprint, the
+`env` option-parsing defect): `docs/roadmap-status-2026-07.md`. Live truth:
+`docs/commands.md` (incl. the canonical **NO list** — recognized-but-NO names
+get a clear error naming command, reason and alternative, never a silent
+fallthrough) + `cmds/all/all.go`. Work items come from `bashy sprint`.
 
 ## What moved to yoke (Sprint 208)
 

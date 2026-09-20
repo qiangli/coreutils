@@ -1,6 +1,9 @@
 # Repository Guidelines
 
+**`bashy sprint` is the source of requests, plans and details for every agent** — read the sprint card (spec-ref, acceptance, continuity) for what to do, never this file. Delivery commits carry `Sprint:` / `Story:` / `Story-ID:` trailers.
+
 ## Project Structure & Module Organization
+
 
 This Go module (`github.com/qiangli/coreutils`) is the certified POSIX package of bashy's pure-Go, cross-platform userland: the 116 POSIX-required names ∪ GNU coreutils, and nothing else (everything agentic is the flat sibling `github.com/qiangli/yoke`, which imports this module). Command packages live in `cmds/`, one utility per directory (`cmds/ls`, `cmds/sed`, `cmds/awk`); `cmds/all` registers the required set. Entrypoints are under `cmd/`: `cmd/coreutils` is the busybox-style certification binary, and `cmd/perfbench` is a benchmark/conformance host. Shared runtime and flags live in `tool/`; the few shared packages the applets need are in `pkg/`. Docs live in `docs/`.
 
