@@ -16,14 +16,17 @@
 // The narrow surface is the safety story: the only code path that ever reaches
 // glibc has already been proven to name a single-byte Latin-1 locale.
 //
-// The real provider is built only on linux/amd64 and linux/arm64
-// (collate_glibc.go). Every other platform gets a stub (collate_stub.go) whose
-// [Open] returns [ErrUnsupportedPlatform] after the same locale validation, so
-// callers get one consistent, honest contract everywhere.
+// The real provider is built only on linux/amd64 and linux/arm64 when the
+// bashy_scratch build tag is not set (collate_glibc.go). Every other platform,
+// and every bashy_scratch build, gets a stub (collate_stub.go) whose [Open]
+// returns [ErrUnsupportedPlatform] after the same locale validation, so callers
+// get one consistent, honest contract everywhere. The tag is an explicit
+// dependency seam for bare scratch binaries; it does not emulate locale data.
 //
 // # Third-party provenance
 //
-// The dlopen/dlsym FFI is provided by github.com/ebitengine/purego (v0.10.0),
+// In normal Linux builds, the dlopen/dlsym FFI is provided by
+// github.com/ebitengine/purego (v0.10.1),
 // upstream https://github.com/ebitengine/purego, Apache-2.0 licensed. purego is
 // used directly — no cgo — via purego.Dlopen/Dlsym/RegisterFunc. See
 // THIRD_PARTY_LICENSES.md.
@@ -37,8 +40,8 @@ import (
 // Sentinel errors. These are platform-independent so callers can switch on them
 // identically on Linux and on the stub platforms.
 var (
-	// ErrUnsupportedPlatform is returned by Open on any platform other than
-	// linux/amd64 and linux/arm64, where no glibc provider is built.
+	// ErrUnsupportedPlatform is returned by Open when no glibc provider is
+	// built: outside linux/amd64 and linux/arm64, or under bashy_scratch.
 	ErrUnsupportedPlatform = errors.New("collate: glibc collation provider is only built for linux/amd64 and linux/arm64")
 
 	// ErrUnsupportedLocale is returned when the requested locale name is not one
