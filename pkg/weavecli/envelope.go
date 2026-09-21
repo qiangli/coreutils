@@ -52,10 +52,20 @@ type Envelope struct {
 // the worker's ("ValueError") and the exit class is still the process exit
 // status EmitError returns.
 //
-// Help and Cause are the structured worker detail from Sprint 221 B4. Both
-// are omitempty, so an envelope for an ordinary Go error serializes exactly
-// as it did before they existed, and a legacy reader that decodes only
-// {code,message} keeps working. Cause is bounded by MaxCauseDepth.
+// Message is ALWAYS the error as rendered for humans, err.Error(): the same
+// text plain mode prints and the same text the envelope carried before
+// Sprint 221 B4 added Help and Cause. That holds whether the error is an
+// ordinary Go error, a foreign-worker error used directly, or a
+// foreign-worker error wrapped by a Go caller (fmt.Errorf("island call: %w",
+// err)) — the wrapper's context lives nowhere else, so it is never dropped
+// in favor of the worker's bare message. A legacy {code,message} reader
+// therefore sees exactly the message it always saw.
+//
+// Help and Cause are the structured worker detail from Sprint 221 B4 and
+// are purely additive. Both are omitempty, so an envelope for an ordinary Go
+// error serializes exactly as it did before they existed. Cause carries the
+// worker's nested DTO field for field (its levels have no rendered text of
+// their own) and is bounded by MaxCauseDepth.
 type EnvelopeError struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
@@ -70,11 +80,20 @@ type EnvelopeError struct {
 // again on its own rather than trusting the peer; deeper levels are dropped.
 const MaxCauseDepth = 8
 
-// NewEnvelopeError builds the envelope's error shape for an ordinary Go
-// error and is what EmitError uses. It is a thin front over
-// EnvelopeErrorFromDetail: it asks sh whether err carries structured
-// foreign-worker detail and hands whatever it finds, plus err.Error() as the
-// legacy text, to the one adapter. nil yields just the exit-class code.
+// NewEnvelopeError builds the envelope's error shape for a Go error and is
+// what EmitError uses. It is a thin front over EnvelopeErrorFromDetail: it
+// asks sh whether err carries structured foreign-worker detail anywhere in
+// its wrap chain (errors.As semantics) and hands whatever it finds, plus
+// err.Error() as the rendered text, to the one adapter. nil yields just the
+// exit-class code.
+//
+// The mapping is the same for a direct and a wrapped foreign error: Message
+// is err.Error() in full, Code/Help/Cause come from the detail. For a direct
+// foreign error that text is sh's own rendering ("ValueError: boom", or the
+// bare string for a legacy plain-string worker); for a wrapped one it is the
+// wrapper's context followed by that rendering ("island call: ValueError:
+// boom"). Errors that carry no detail — ordinary Go errors, wrapped ordinary
+// errors, worker transport failures — are the legacy {code,message} pair.
 func NewEnvelopeError(code int, err error) *EnvelopeError {
 	if err == nil {
 		return &EnvelopeError{Code: codeToString(code)}
@@ -87,17 +106,22 @@ func NewEnvelopeError(code int, err error) *EnvelopeError {
 // foreign-worker failure (polyglot.ErrorDetail, the neutral wire DTO a Python
 // or Rust island returns) into EnvelopeError. code is the exit class the
 // caller chose; text is the error as already rendered for humans
-// (err.Error()), which is also the legacy plain-string worker form.
+// (err.Error()), including any context a Go caller wrapped around the
+// worker's failure.
 //
 //   - detail nil (an ordinary Go error, or a worker transport failure such
 //     as "invalid worker response"): the legacy {code,message} pair, Code
 //     from the exit class and Message = text. Byte-identical to the envelope
 //     emitted before Help/Cause existed.
-//   - structured detail: Code/Message/Help map field for field and Cause is
-//     the worker's nested cause chain, bounded by MaxCauseDepth. A missing
-//     worker code falls back to the exit class (the legacy string form
-//     decodes to Message only, so it lands here); a missing worker message
-//     falls back to text so Message is never empty for a non-nil error.
+//   - structured detail: Message is still text — the rendered outer error is
+//     preserved whole, never replaced by the worker's bare message, so
+//     wrapper context and the legacy plain-string form both survive. Code is
+//     the worker's when it named one and the exit class otherwise (the legacy
+//     string form decodes to Message only, so it lands here). Help maps
+//     field for field and Cause is the worker's nested chain, bounded by
+//     MaxCauseDepth. Only when there is no rendered text at all does the
+//     worker's message stand in, so Message is never empty when the worker
+//     said anything.
 //
 // The detail stays sh's DTO and this is its only translation; there is no
 // second error type and no new wire field beyond help and cause.
@@ -109,7 +133,7 @@ func EnvelopeErrorFromDetail(code int, detail *polyglot.ErrorDetail, text string
 	if detail.Code != "" {
 		out.Code = detail.Code
 	}
-	if detail.Message != "" {
+	if out.Message == "" {
 		out.Message = detail.Message
 	}
 	out.Help = detail.Help
