@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"mvdan.cc/sh/v3/polyglot"
 )
 
 // SchemaVersion is stamped into every envelope's schema_version field.
@@ -43,11 +45,116 @@ type Envelope struct {
 	Hints         []Hint         `json:"hints,omitempty"`
 }
 
-// EnvelopeError carries the agent-actionable error code (matching one
-// of the Exit* constants by suffix) and a human-readable message.
+// EnvelopeError carries the agent-actionable error code and a
+// human-readable message. Code is one of the Exit* class strings
+// ("precondition_failed", …) unless the error came from a foreign worker
+// (a Python or Rust island) that named its own code, in which case Code is
+// the worker's ("ValueError") and the exit class is still the process exit
+// status EmitError returns.
+//
+// Message is ALWAYS the error as rendered for humans, err.Error(): the same
+// text plain mode prints and the same text the envelope carried before
+// Sprint 221 B4 added Help and Cause. That holds whether the error is an
+// ordinary Go error, a foreign-worker error used directly, or a
+// foreign-worker error wrapped by a Go caller (fmt.Errorf("island call: %w",
+// err)) — the wrapper's context lives nowhere else, so it is never dropped
+// in favor of the worker's bare message. A legacy {code,message} reader
+// therefore sees exactly the message it always saw.
+//
+// Help and Cause are the structured worker detail from Sprint 221 B4 and
+// are purely additive. Both are omitempty, so an envelope for an ordinary Go
+// error serializes exactly as it did before they existed. Cause carries the
+// worker's nested DTO field for field (its levels have no rendered text of
+// their own) and is bounded by MaxCauseDepth.
 type EnvelopeError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Help    string         `json:"help,omitempty"`
+	Cause   *EnvelopeError `json:"cause,omitempty"`
+}
+
+// MaxCauseDepth bounds the nested Cause chain NewEnvelopeError emits: the
+// top-level error plus at most this many nested causes. The sh worker side
+// already truncates a Python __cause__ chain at 16 levels and breaks cycles,
+// but the envelope is what an agent has to read, so the mapper bounds it
+// again on its own rather than trusting the peer; deeper levels are dropped.
+const MaxCauseDepth = 8
+
+// NewEnvelopeError builds the envelope's error shape for a Go error and is
+// what EmitError uses. It is a thin front over EnvelopeErrorFromDetail: it
+// asks sh whether err carries structured foreign-worker detail anywhere in
+// its wrap chain (errors.As semantics) and hands whatever it finds, plus
+// err.Error() as the rendered text, to the one adapter. nil yields just the
+// exit-class code.
+//
+// The mapping is the same for a direct and a wrapped foreign error: Message
+// is err.Error() in full, Code/Help/Cause come from the detail. For a direct
+// foreign error that text is sh's own rendering ("ValueError: boom", or the
+// bare string for a legacy plain-string worker); for a wrapped one it is the
+// wrapper's context followed by that rendering ("island call: ValueError:
+// boom"). Errors that carry no detail — ordinary Go errors, wrapped ordinary
+// errors, worker transport failures — are the legacy {code,message} pair.
+func NewEnvelopeError(code int, err error) *EnvelopeError {
+	if err == nil {
+		return &EnvelopeError{Code: codeToString(code)}
+	}
+	detail, _ := polyglot.ForeignErrorDetail(err)
+	return EnvelopeErrorFromDetail(code, detail, err.Error())
+}
+
+// EnvelopeErrorFromDetail is the ONE adapter from sh's structured
+// foreign-worker failure (polyglot.ErrorDetail, the neutral wire DTO a Python
+// or Rust island returns) into EnvelopeError. code is the exit class the
+// caller chose; text is the error as already rendered for humans
+// (err.Error()), including any context a Go caller wrapped around the
+// worker's failure.
+//
+//   - detail nil (an ordinary Go error, or a worker transport failure such
+//     as "invalid worker response"): the legacy {code,message} pair, Code
+//     from the exit class and Message = text. Byte-identical to the envelope
+//     emitted before Help/Cause existed.
+//   - structured detail: Message is still text — the rendered outer error is
+//     preserved whole, never replaced by the worker's bare message, so
+//     wrapper context and the legacy plain-string form both survive. Code is
+//     the worker's when it named one and the exit class otherwise (the legacy
+//     string form decodes to Message only, so it lands here). Help maps
+//     field for field and Cause is the worker's nested chain, bounded by
+//     MaxCauseDepth. Only when there is no rendered text at all does the
+//     worker's message stand in, so Message is never empty when the worker
+//     said anything.
+//
+// The detail stays sh's DTO and this is its only translation; there is no
+// second error type and no new wire field beyond help and cause.
+func EnvelopeErrorFromDetail(code int, detail *polyglot.ErrorDetail, text string) *EnvelopeError {
+	out := &EnvelopeError{Code: codeToString(code), Message: text}
+	if detail == nil {
+		return out
+	}
+	if detail.Code != "" {
+		out.Code = detail.Code
+	}
+	if out.Message == "" {
+		out.Message = detail.Message
+	}
+	out.Help = detail.Help
+	out.Cause = causeFromDetail(detail.Cause, MaxCauseDepth)
+	return out
+}
+
+// causeFromDetail copies a nested worker cause chain into EnvelopeError
+// form, keeping at most budget levels. A level the worker left empty is
+// still kept: a bare {"cause":{}} frame is the worker saying "there was a
+// cause I could not describe", and dropping it would hide that.
+func causeFromDetail(d *polyglot.ErrorDetail, budget int) *EnvelopeError {
+	if d == nil || budget <= 0 {
+		return nil
+	}
+	return &EnvelopeError{
+		Code:    d.Code,
+		Message: d.Message,
+		Help:    d.Help,
+		Cause:   causeFromDetail(d.Cause, budget-1),
+	}
 }
 
 // Hint is a structured suggestion emitted by the agent-mode engine
@@ -223,10 +330,7 @@ func EmitError(stderr io.Writer, mode OutputMode, command string, code int, err 
 			SchemaVersion: SchemaVersion,
 			Command:       command,
 			Status:        "error",
-			Error: &EnvelopeError{
-				Code:    codeToString(code),
-				Message: err.Error(),
-			},
+			Error:         NewEnvelopeError(code, err),
 		})
 		return code
 	}
