@@ -172,6 +172,22 @@ func operandJoinMode(base string, elems []string, windows bool) string {
 	return out
 }
 
+// operandCleanMode is OperandClean with an explicit windows flag.
+func operandCleanMode(p string, windows bool) string {
+	if posixSpelledMode(p, windows) {
+		return path.Clean(p)
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Clean(p)
+	}
+	// Host-independent Clean for a native spelling is not needed by any
+	// caller; the trailing separators are all the mode seam has to remove.
+	for len(p) > 1 && isSlashByte(p[len(p)-1]) {
+		p = p[:len(p)-1]
+	}
+	return p
+}
+
 // operandDirMode is OperandDir with an explicit windows flag.
 func operandDirMode(p string, windows bool) string {
 	if posixSpelledMode(p, windows) {
@@ -211,7 +227,7 @@ func nativeDirMode(p string) string {
 // resolves through the /tmp mount and prints as the caller spelled it),
 // while C:\x + "y" gets the native join. Off Windows it is filepath.Join.
 func OperandJoin(base string, elems ...string) string {
-	return operandJoinMode(base, elems, runtime.GOOS == "windows")
+	return operandJoinMode(base, elems, operandWindows)
 }
 
 // OperandDir is filepath.Dir for an operand in the caller's spelling: the
@@ -219,7 +235,24 @@ func OperandJoin(base string, elems ...string) string {
 // upwards (mkdir -p, rmdir -p, "create the destination's parent") must use
 // it, because the native spelling stops matching the mount table.
 func OperandDir(p string) string {
-	return operandDirMode(p, runtime.GOOS == "windows")
+	return operandDirMode(p, operandWindows)
+}
+
+// OperandSeparator is the path separator the operand was spelled with. On
+// Unix there is only one; on Windows an operand may arrive in either
+// spelling, and an applet that compares or builds a "./" or "../" prefix
+// must use the one the caller typed rather than impose the host's.
+func OperandSeparator(p string) string {
+	if operandWindows && strings.ContainsRune(p, '\\') {
+		return `\`
+	}
+	return "/"
+}
+
+// OperandClean is filepath.Clean for an operand in the caller's spelling:
+// /tmp/a/b/ cleans to /tmp/a/b, not \tmp\a\b.
+func OperandClean(p string) string {
+	return operandCleanMode(p, operandWindows)
 }
 
 func isDriveLetterByte(c byte) bool {

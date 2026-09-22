@@ -10,11 +10,9 @@ package rmdircmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"unicode"
 
 	"github.com/qiangli/coreutils/cmds/internal/pathops"
 	"github.com/qiangli/coreutils/tool"
@@ -52,16 +50,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	r := &rm{rc: rc, verbose: *verbose, ignoreNonEmpty: *ignoreNonEmpty}
 	for _, op := range operands {
-		displayOp := op
-		// Normalize slashes to the OS separator so the explicit
-		// current-directory ("./") ancestor logic below is separator-
-		// consistent on every platform. On Unix this is a no-op; on
-		// Windows it rewrites an operand typed with "/" (e.g. "./a/b")
-		// to native form so the -p walk still reaches ".". Keep the
-		// original spelling for diagnostics: GNU reports the operand as
-		// supplied, even when the host uses a different path separator.
-		op = filepath.FromSlash(op)
-		if !r.remove1(op, displayOp) {
+		if !r.remove1(op) {
 			continue
 		}
 		if !*parents {
@@ -71,18 +60,23 @@ func run(rc *tool.RunContext, args []string) int {
 		// remove each ancestor, stopping at the first failure. The
 		// filesystem root itself is never attempted. Clean first so
 		// a trailing separator does not yield the operand itself as
-		// its own first "ancestor".
-		cur := parentStart(op)
+		// its own first "ancestor". Every step stays in the operand's
+		// OWN spelling (tool.OperandDir/OperandClean, and the separator
+		// the caller typed): rewriting /tmp/a/b into the host's native
+		// \tmp\a\b would take the ancestors out of the Windows mount
+		// table, and the diagnostic must name the operand as supplied.
+		sep := tool.OperandSeparator(op)
+		cur := parentStart(op, sep)
 		for {
-			parent := filepath.Dir(cur)
-			if strings.HasPrefix(cur, "."+string(filepath.Separator)) && parent != "." && !strings.HasPrefix(parent, "."+string(filepath.Separator)) {
-				parent = "." + string(filepath.Separator) + parent
+			parent := tool.OperandDir(cur)
+			if strings.HasPrefix(cur, "."+sep) && parent != "." && !strings.HasPrefix(parent, "."+sep) {
+				parent = "." + sep + parent
 			}
-			if parent == cur || (parent == "." && !strings.HasPrefix(cur, "."+string(filepath.Separator))) || (parent != "." && filepath.Dir(parent) == parent) {
+			if parent == cur || (parent == "." && !strings.HasPrefix(cur, "."+sep)) || (parent != "." && tool.OperandDir(parent) == parent) {
 				break
 			}
 			cur = parent
-			if !r.remove1(cur, cur) {
+			if !r.remove1(cur) {
 				break
 			}
 		}
@@ -97,20 +91,21 @@ func run(rc *tool.RunContext, args []string) int {
 // current-directory prefix. The prefix is significant to -p: for ./a/b,
 // the current directory is an ancestor that rmdir must try after a and
 // report if it cannot be removed.
-func parentStart(op string) string {
-	cur := filepath.Clean(op)
-	if strings.HasPrefix(op, "."+string(filepath.Separator)) && cur != "." && !strings.HasPrefix(cur, "."+string(filepath.Separator)) {
-		return "." + string(filepath.Separator) + cur
+func parentStart(op, sep string) string {
+	cur := tool.OperandClean(op)
+	if strings.HasPrefix(op, "."+sep) && cur != "." && !strings.HasPrefix(cur, "."+sep) {
+		return "." + sep + cur
 	}
 	return cur
 }
 
-// remove1 removes one empty directory. op is the native filesystem path;
-// displayOp preserves the user's spelling for diagnostics. The -v diagnostic
-// is printed before the attempt, as GNU rmdir does.
-func (r *rm) remove1(op, displayOp string) bool {
+// remove1 removes one empty directory. op is the operand in the caller's own
+// spelling — it is both what the diagnostics print and what rawOperandPath
+// converts, so a Windows operand still resolves through the mount table. The
+// -v diagnostic is printed before the attempt, as GNU rmdir does.
+func (r *rm) remove1(op string) bool {
 	if r.verbose {
-		fmt.Fprintf(r.rc.Out, "rmdir: removing directory, '%s'\n", displayOp)
+		fmt.Fprintf(r.rc.Out, "rmdir: removing directory, '%s'\n", op)
 	}
 	if op == "" {
 		r.errf("failed to remove '': No such file or directory")
@@ -137,24 +132,24 @@ func (r *rm) remove1(op, displayOp string) bool {
 	// normalization preserves path components, so "a/." and "a/./" are both
 	// caught here.
 	if base := filepath.Base(op); base == "." {
-		r.errf("failed to remove '%s': Invalid argument", displayOp)
+		r.errf("failed to remove '%s': Invalid argument", op)
 		return false
 	}
 	rp := rawOperandPath(r.rc, op)
 	fi, err := pathops.Lstat(rp)
 	if err != nil {
-		r.errf("failed to remove '%s': %s", displayOp, reason(err))
+		r.errf("failed to remove '%s': %s", op, reason(err))
 		return false
 	}
 	if !fi.IsDir() {
-		r.errf("failed to remove '%s': Not a directory", displayOp)
+		r.errf("failed to remove '%s': Not a directory", op)
 		return false
 	}
 	if err := pathops.Remove(rp); err != nil {
 		if r.ignoreNonEmpty && isNonEmpty(err) {
 			return false
 		}
-		r.errf("failed to remove '%s': %s", displayOp, reason(err))
+		r.errf("failed to remove '%s': %s", op, reason(err))
 		return false
 	}
 	return true
@@ -182,23 +177,12 @@ func (r *rm) errf(format string, a ...any) {
 	r.failed = true
 }
 
-// reason unwraps err to its root cause and capitalizes the first
-// letter, matching the strerror() shape GNU diagnostics use
-// ("Directory not empty").
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	s := err.Error()
-	if s == "" {
-		return s
-	}
-	rs := []rune(s)
-	rs[0] = unicode.ToUpper(rs[0])
-	return string(rs)
+	return tool.SysErrString(err)
 }

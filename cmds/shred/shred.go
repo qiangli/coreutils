@@ -4,12 +4,10 @@ package shredcmd
 
 import (
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
-	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -197,20 +195,12 @@ func (s *shredder) verbosef(format string, a ...any) {
 	}
 }
 
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	text := err.Error()
-	if text == "" {
-		return text
-	}
-	r := []rune(text)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	return tool.SysErrString(err)
 }

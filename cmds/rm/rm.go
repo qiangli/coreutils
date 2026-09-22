@@ -21,7 +21,6 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"unicode"
 
 	"github.com/qiangli/coreutils/cmds/internal/pathops"
 	"github.com/qiangli/coreutils/cmds/internal/rootguard"
@@ -305,7 +304,11 @@ func (r *remover) removeTree(op string) {
 		for i := len(entries) - 1; i >= 0; i-- {
 			entry := entries[i]
 			rel := filepath.Join(current.rel, entry.Name())
-			display := filepath.Join(current.display, entry.Name())
+			// display is what the diagnostics print, so it keeps the
+			// operand's own spelling: on Windows filepath.Join would report
+			// a \-separated path the caller never typed. rel is os.Root-
+			// relative and goes back through filepath.ToSlash below.
+			display := tool.OperandJoin(current.display, entry.Name())
 			fi, statErr := root.Lstat(filepath.ToSlash(rel))
 			if statErr != nil {
 				r.errf("cannot remove '%s': %s", display, reason(statErr))
@@ -434,24 +437,14 @@ func optionRecognitionEnds(arg string) bool {
 	return arg == "--" || arg == "-" || !strings.HasPrefix(arg, "-")
 }
 
-// reason unwraps err to its root cause and capitalizes the first
-// letter, matching the strerror() shape GNU diagnostics use.
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	s := err.Error()
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	return tool.SysErrString(err)
 }
 
 func (r *remover) shouldPrompt(rp string, fi os.FileInfo) bool {

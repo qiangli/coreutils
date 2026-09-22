@@ -136,7 +136,7 @@ func run(rc *tool.RunContext, args []string) int {
 			dest = filepath.Base(target)
 		}
 		if dir != "" {
-			dest = filepath.Join(dir, filepath.Base(target))
+			dest = destFor(dir, target)
 		}
 		destPath := rc.Path(dest)
 		// POSIX: if the destination path exists and names the same directory
@@ -308,6 +308,13 @@ func backupName(path, mode, suffix string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%s.~%d~", path, n), nil
+}
+
+// destFor is the link name created under -t DIRECTORY. tool.OperandJoin
+// keeps it in the caller's spelling: on Windows filepath.Join would rewrite
+// /tmp/d into \tmp\d, which no longer matches the /tmp mount (Story #682).
+func destFor(dir, target string) string {
+	return tool.OperandJoin(dir, filepath.Base(target))
 }
 
 func hasNumberedBackup(path string) bool {

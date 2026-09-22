@@ -19,7 +19,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -251,7 +250,12 @@ func (m *maker) makeAll(op string, final bool) (ok, createdSelf bool) {
 		m.errf("cannot create directory '%s': File exists", op)
 		return false, false
 	}
-	parent := filepath.Dir(op)
+	// tool.OperandDir, not filepath.Dir: the operand stays in the spelling
+	// the caller used, so on Windows the ancestors of /tmp/empty/a/a/a still
+	// resolve through the /tmp mount (filepath.Dir would hand back
+	// \tmp\empty\a\a, which lands on C:\tmp instead) and the diagnostic
+	// names the directory as it was typed.
+	parent := tool.OperandDir(op)
 	if parent != op && parent != "." {
 		if ok, _ := m.makeAll(parent, false); !ok {
 			return false, false
@@ -548,22 +552,12 @@ func (m *maker) verbosef(format string, a ...any) {
 	}
 }
 
-// reason unwraps err to its root cause and capitalizes the first
-// letter, matching the strerror() shape GNU diagnostics use.
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	s := err.Error()
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	return tool.SysErrString(err)
 }

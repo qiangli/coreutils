@@ -6,16 +6,13 @@ package installcmd
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -111,10 +108,10 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "missing file operand")
 		}
 		if *createParents {
-			in.makeParentDir(filepath.Join(*targetDir, "x"))
+			in.makeParentDir(tool.OperandJoin(*targetDir, "x"))
 		}
 		for _, src := range operands {
-			dst := filepath.Join(*targetDir, filepath.Base(src))
+			dst := destFor(*targetDir, src)
 			in.copyFile(src, dst, *createParents, *preserveTimestamps, *compare)
 		}
 	default:
@@ -135,13 +132,13 @@ func run(rc *tool.RunContext, args []string) int {
 				return 1
 			}
 			for _, src := range srcs {
-				in.copyFile(src, filepath.Join(dest, filepath.Base(src)), false, *preserveTimestamps, *compare)
+				in.copyFile(src, destFor(dest, src), false, *preserveTimestamps, *compare)
 			}
 			break
 		}
 		dst := dest
 		if !*noTargetDir && isDir(rc.Path(dest)) {
-			dst = filepath.Join(dest, filepath.Base(srcs[0]))
+			dst = destFor(dest, srcs[0])
 		}
 		in.copyFile(srcs[0], dst, *createParents, *preserveTimestamps, *compare)
 	}
@@ -217,8 +214,16 @@ func (in *installer) makeDir(name string) {
 	}
 }
 
+// destFor is the destination operand for one SOURCE when the target is a
+// directory. tool.OperandJoin keeps it in the caller's spelling: on Windows
+// filepath.Join would rewrite /tmp/d into \tmp\d, which no longer matches
+// the /tmp mount (Story #682).
+func destFor(dest, src string) string {
+	return tool.OperandJoin(dest, filepath.Base(src))
+}
+
 func (in *installer) makeParentDir(dst string) bool {
-	parent := filepath.Dir(dst)
+	parent := tool.OperandDir(dst)
 	if parent == "." || parent == dst {
 		return true
 	}
@@ -346,23 +351,12 @@ func (in *installer) verbosef(format string, a ...any) {
 	}
 }
 
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		err = fs.ErrNotExist
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	s := err.Error()
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	return tool.SysErrString(err)
 }
