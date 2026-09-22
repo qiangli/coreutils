@@ -25,11 +25,16 @@ func lstat(path string) (os.FileInfo, error) {
 	if !ok {
 		return fi, err
 	}
-	path16, convErr := windows.UTF16PtrFromString(path)
+	// The fixture spells this //./pipe/name, but WaitNamedPipeW requires the
+	// native \\.\pipe\name form. Never pass the slash spelling through to Win32.
+	path16, convErr := windows.UTF16PtrFromString(`\\.\pipe\` + name)
 	if convErr != nil {
 		return fi, err
 	}
-	r1, _, waitErr := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(path16)), 0)
+	// Zero asks for the server's default wait, which need not be short. One
+	// millisecond is enough to distinguish an absent pipe from a busy one:
+	// ERROR_SEM_TIMEOUT still proves an instance exists.
+	r1, _, waitErr := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(path16)), 1)
 	if r1 != 0 || waitErr == windows.ERROR_SEM_TIMEOUT || waitErr == windows.ERROR_PIPE_BUSY {
 		return namedPipeInfo{name: name}, nil
 	}
