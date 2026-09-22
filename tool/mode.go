@@ -44,7 +44,7 @@ func Stat(path string) (os.FileInfo, error) {
 // mode of its own to record, so this differs from [os.Lstat] only for the
 // file a link is not.
 func Lstat(path string) (os.FileInfo, error) {
-	fi, err := os.Lstat(path)
+	fi, err := lstat(path)
 	if err != nil {
 		return fi, err
 	}
