@@ -5,9 +5,11 @@
 // cmds/core/mkdir (BSD-3-Clause).
 // Changes: rewired to the tool framework; per-component -p creation
 // so -v reports each created ancestor; -m applies to the final
-// directory only (intermediates get the default mode); -m refused on
-// windows (no POSIX mode bits); symbolic modes follow chmod syntax.
-// -Z/--context accepted as no-op on non-SELinux platforms.
+// directory only (intermediates get the default mode); on windows -m
+// takes chmod's path (read-only-attribute projection plus the recorded
+// mode in the ACL — tool.RecordMode, Story #686), so `mkdir -m MODE d`
+// and `mkdir d && chmod MODE d` cannot disagree; symbolic modes follow
+// chmod syntax. -Z/--context accepted as no-op on non-SELinux platforms.
 package mkdircmd
 
 import (
@@ -47,15 +49,17 @@ type maker struct {
 }
 
 type mkdirDeps struct {
-	stat  func(string) (os.FileInfo, error)
-	mkdir func(string, os.FileMode) error
-	chmod func(string, os.FileMode) error
+	stat   func(string) (os.FileInfo, error)
+	mkdir  func(string, os.FileMode) error
+	chmod  func(string, os.FileMode) error
+	record func(string, os.FileMode) error
 }
 
 var defaultMkdirDeps = mkdirDeps{
-	stat:  os.Stat,
-	mkdir: os.Mkdir,
-	chmod: os.Chmod,
+	stat:   os.Stat,
+	mkdir:  os.Mkdir,
+	chmod:  os.Chmod,
+	record: tool.RecordMode,
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -89,9 +93,6 @@ func run(rc *tool.RunContext, args []string) int {
 
 	m := &maker{rc: rc, parents: *parents, verbose: *verbose, deps: defaultMkdirDeps}
 	if fs.Changed("mode") {
-		if runtime.GOOS == "windows" {
-			return tool.NotSupported(rc, cmd, "-m/--mode on windows (no POSIX mode bits; mapping to read-only would change the documented meaning)")
-		}
 		mode, symbolic, errCode := parseMode(rc, *modeStr)
 		if errCode >= 0 {
 			return errCode
@@ -318,8 +319,9 @@ func (m *maker) applyFinalMode(op string, created bool) {
 
 // finalMode returns the mode to supply to mkdir and whether a post-create
 // check/correction is required. A virtual umask is a Unix permission concept;
-// on Windows the default creation path remains ACL-owned and -m is refused
-// before a maker is constructed.
+// on Windows the default creation path remains ACL-owned, and only an
+// explicit -m mode is applied — through the same projection-and-record
+// transition chmod uses (see correctCreatedMode).
 func (m *maker) finalMode() (os.FileMode, bool) {
 	if !m.useMode {
 		if !m.rc.UmaskSet || runtime.GOOS == "windows" {
@@ -347,6 +349,9 @@ func (m *maker) parentMode() os.FileMode {
 // them as a permission-only chmod would.
 func (m *maker) correctCreatedMode(op string, requested os.FileMode, preserveInherited bool) bool {
 	full := m.rc.Path(op)
+	if tool.ModesAreRecorded {
+		return m.applyRecordedMode(op, full, requested)
+	}
 	fi, err := m.deps.stat(full)
 	if err != nil {
 		m.errf("cannot set permissions of '%s': %s", op, reason(err))
@@ -365,6 +370,38 @@ func (m *maker) correctCreatedMode(op string, requested os.FileMode, preserveInh
 		return false
 	}
 	return true
+}
+
+// applyRecordedMode is correctCreatedMode on a host whose filesystem does
+// not store POSIX mode bits (Windows): the same two-step transition chmod
+// performs there, so `mkdir -m MODE d` and `mkdir d && chmod MODE d` leave
+// the directory in the same state. The bits are projected onto the one
+// attribute the platform has (readOnlyProjection), then recorded in the
+// directory's ACL where every reader of a mode — chmod, test, ls -l,
+// find -perm, and the shell's own access checks — will find them. The
+// only Windows caller is the explicit -m path; default creation stays
+// ACL-owned and records nothing.
+func (m *maker) applyRecordedMode(op, full string, requested os.FileMode) bool {
+	if err := m.deps.chmod(full, readOnlyProjection(requested)); err != nil {
+		m.errf("cannot set permissions of '%s': %s", op, reason(err))
+		return false
+	}
+	if err := m.deps.record(full, requested); err != nil {
+		m.errf("cannot set permissions of '%s': %s", op, reason(err))
+		return false
+	}
+	return true
+}
+
+// readOnlyProjection is chmod's Windows mapping (Story #682), kept in the
+// same shape so the two commands cannot drift: a mode with any write bit
+// keeps the directory writable (0666, which os.Chmod turns into "clear
+// FILE_ATTRIBUTE_READONLY"), a mode with none sets the attribute (0444).
+func readOnlyProjection(mode os.FileMode) os.FileMode {
+	if mode&0o222 != 0 {
+		return 0o666
+	}
+	return 0o444
 }
 
 func (m *maker) umask() uint32 {

@@ -145,9 +145,19 @@ func TestMkdirMissingParentWithoutP(t *testing.T) {
 func TestMkdirMode(t *testing.T) {
 	dir := t.TempDir()
 	if runtime.GOOS == "windows" {
+		// -m takes chmod's recorded-mode path here (Story #686): the mode
+		// is written to the directory's ACL, and tool.Stat is the reader
+		// every mode-consuming applet shares.
 		_, errb, code := runTool(t, dir, "-m", "700", "d")
-		if code != 2 || !strings.Contains(errb, "not supported") {
-			t.Errorf("windows -m: code=%d err=%q", code, errb)
+		if code != 0 {
+			t.Fatalf("windows -m 700: code=%d err=%q", code, errb)
+		}
+		fi, err := tool.Stat(filepath.Join(dir, "d"))
+		if err != nil || !fi.IsDir() {
+			t.Fatalf("directory not created: %v", err)
+		}
+		if fi.Mode().Perm() != 0o700 {
+			t.Errorf("recorded mode = %o, want 700", fi.Mode().Perm())
 		}
 		return
 	}
@@ -186,11 +196,97 @@ func TestMkdirMode(t *testing.T) {
 	}
 }
 
+// TestMkdirModeAttachedValue pins the spelling bash's glob5.sub fixture
+// uses (`mkdir -m700 dir`): the attached value is -m's argument, and the
+// final directory carries mode 700 as read back through tool.Stat — the
+// reader that reports the recorded mode on a host without POSIX mode bits
+// and the host mode everywhere else.
+func TestMkdirModeAttachedValue(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-m700", "d")
+	if code != 0 {
+		t.Fatalf("mkdir -m700: code=%d err=%q", code, errb)
+	}
+	fi, err := tool.Stat(filepath.Join(dir, "d"))
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("directory not created: %v", err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Errorf("mode = %o, want 700", fi.Mode().Perm())
+	}
+}
+
+// TestMkdirRecordedModeTransition pins the recorded-modes half of -m on
+// every host, through the same seams chmod's recorded_mode_test uses: the
+// maker hands the FULL computed mode to the recorder — special bits and
+// the r/x bits the read-only attribute cannot express included — and hands
+// chmod only the projection (any write bit keeps the directory writable,
+// none makes it read-only). The split mirrors chmod's hostMode/recordMode
+// so the two commands cannot drift.
+func TestMkdirRecordedModeTransition(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	var errb bytes.Buffer
+	var chmodGot, recordGot os.FileMode
+	m := &maker{
+		rc: &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Err: &errb}},
+		deps: mkdirDeps{
+			stat:   os.Stat,
+			mkdir:  os.Mkdir,
+			chmod:  func(_ string, mode os.FileMode) error { chmodGot = mode; return nil },
+			record: func(_ string, mode os.FileMode) error { recordGot = mode; return nil },
+		},
+	}
+	full := filepath.Join(dir, "d")
+	if !m.applyRecordedMode("d", full, 0o500|os.ModeSticky) {
+		t.Fatalf("applyRecordedMode failed: %q", errb.String())
+	}
+	if chmodGot != 0o444 {
+		t.Errorf("chmod got %o, want the read-only projection 444", chmodGot)
+	}
+	if recordGot != 0o500|os.ModeSticky {
+		t.Errorf("recorded %v, want 0500|sticky in full", recordGot)
+	}
+	if !m.applyRecordedMode("d", full, 0o700) {
+		t.Fatalf("applyRecordedMode failed: %q", errb.String())
+	}
+	if chmodGot != 0o666 {
+		t.Errorf("chmod got %o, want the writable projection 666", chmodGot)
+	}
+}
+
+// TestMkdirRecordedModeFailureIsReported pins that a mode the recorder
+// cannot store is a loud per-operand failure, not an appearance of success.
+func TestMkdirRecordedModeFailureIsReported(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	var errb bytes.Buffer
+	m := &maker{
+		rc: &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Err: &errb}},
+		deps: mkdirDeps{
+			stat:   os.Stat,
+			mkdir:  os.Mkdir,
+			chmod:  func(string, os.FileMode) error { return nil },
+			record: func(string, os.FileMode) error { return os.ErrPermission },
+		},
+	}
+	if m.applyRecordedMode("d", filepath.Join(dir, "d"), 0o700) {
+		t.Fatal("applyRecordedMode succeeded despite a failing recorder")
+	}
+	if !m.failed {
+		t.Error("recorder failure did not mark the run failed")
+	}
+	if !strings.Contains(errb.String(), "cannot set permissions of 'd'") {
+		t.Errorf("diagnostic = %q", errb.String())
+	}
+}
+
 func TestMkdirModeErrors(t *testing.T) {
 	dir := t.TempDir()
-	if runtime.GOOS == "windows" {
-		t.Skipf("-m is refused before value validation on windows")
-	}
 	_, errb, code := runTool(t, dir, "-m", "999", "d")
 	if code != 2 || !strings.Contains(errb, "invalid mode '999'") {
 		t.Errorf("-m 999: code=%d err=%q", code, errb)
@@ -207,7 +303,7 @@ func TestMkdirModeErrors(t *testing.T) {
 
 func TestMkdirLeadingPlusNumericModeExtension(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("-m is loudly unsupported on Windows")
+		t.Skip("asserts host mode bits via os.Stat; the windows -m path is covered by TestMkdirMode and mkdir_windows_test.go")
 	}
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "-m", "+777", "d")
