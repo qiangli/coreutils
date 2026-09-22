@@ -1,11 +1,12 @@
-# Sprint 253 Windows locale provider feasibility
+# Sprint 253 Windows NLS locale provider feasibility
 
 Story: #711 (`f3f0e3ef7aae`)
 
 ## Result
 
-The requested provider cannot truthfully satisfy the current contract from
-Windows host data alone. No provider code is submitted. In particular, the
+Windows NLS alone cannot truthfully satisfy the current contract. A
+provisioned POSIX locale service on Windows remains to be checked. No provider
+code is submitted. In particular, the
 rejected `HostLocaleProvider`-only candidate was removed rather than leaving an
 uninstalled interface that could make `locale -a` claim unserviceable names.
 
@@ -61,11 +62,14 @@ resolve the independent `LC_MESSAGES` blocker above.
 
 Therefore the complete seven-locale corpus set cannot be provisioned and
 served under the present all-category, no-bundled-data contract using Windows
-NLS. A serviceable implementation needs one of these contract changes or host
-facilities:
+NLS alone. Probe-only CI run 35776069474 checks whether Git Bash has a POSIX
+`locale` service for the requested names and `LC_MESSAGES`; its result is
+pending. A serviceable implementation needs one of these host facilities or
+contract changes:
 
 1. a host-installed POSIX locale archive/service that exposes `LC_MESSAGES`
-   expressions and Big5-HKSCS, with an in-process API coreutils may call;
+   expressions and Big5-HKSCS, callable by coreutils without recursive
+   dispatch;
 2. authorization to ship compiled locale data (currently expressly forbidden);
    or
 3. an explicit reduction of the advertised category contract (currently
