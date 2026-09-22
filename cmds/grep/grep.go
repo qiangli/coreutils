@@ -371,9 +371,11 @@ func run(rc *tool.RunContext, args []string) int {
 // the kernel to resolve, as POSIX pathname-resolution assertions require. An
 // embedded invocation still resolves against its virtual RunContext directory.
 func operandPath(rc *tool.RunContext, operand string) string {
-	if rc.DirIsProcessCwd && !filepath.IsAbs(operand) {
+	if rc.DirIsProcessCwd && !tool.IsAbsPath(operand) {
 		return operand
 	}
+	// An absolute operand in the shell's spelling (/c/x, /tmp/x on Windows)
+	// must be converted before the OS sees it.
 	return rc.Path(operand)
 }
 

@@ -142,6 +142,11 @@ func NativeAbs(operand string) (string, bool) {
 	return normalizePath(operand), true
 }
 
+// IsAbsPath reports whether operand is absolute in the shell's spelling on
+// this platform: on Windows that includes a leading slash (/c/x, /tmp/x,
+// /usr/bin) which filepath.IsAbs rejects; on Unix it is filepath.IsAbs.
+func IsAbsPath(operand string) bool { return isAbsPath(operand) }
+
 func (rc *RunContext) Path(operand string) string {
 	if isAbsPath(operand) || rc.Dir == "" {
 		return normalizePath(operand)
