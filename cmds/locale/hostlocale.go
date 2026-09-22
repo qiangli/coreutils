@@ -163,7 +163,14 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return []string{value}, kindNumber, nil
 	}
-	parts := strings.Split(value, ";")
+	if value == "" {
+		// Git Bash emits empty LC_TIME era fields as era= and alt_digits=.
+		return []string{""}, kindString, nil
+	}
+	parts, err := splitHostLocaleValue(value)
+	if err != nil {
+		return nil, kindString, err
+	}
 	values := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if len(part) < 2 || part[0] != '"' || part[len(part)-1] != '"' {
@@ -179,6 +186,33 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 		return values, kindStringList, nil
 	}
 	return values, kindString, nil
+}
+
+// splitHostLocaleValue separates the quoted list elements emitted by
+// locale(1). A semicolon is a list separator only outside a quoted value;
+// locale data itself may contain semicolons (for example in abday).
+func splitHostLocaleValue(value string) ([]string, error) {
+	var parts []string
+	start := 0
+	inQuotes := false
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case value[i] == '\\':
+			escaped = true
+		case value[i] == '"':
+			inQuotes = !inQuotes
+		case value[i] == ';' && !inQuotes:
+			parts = append(parts, value[start:i])
+			start = i + 1
+		}
+	}
+	if escaped || inQuotes {
+		return nil, fmt.Errorf("malformed quoted value %q", value)
+	}
+	return append(parts, value[start:]), nil
 }
 
 // unquoteHostLocaleString is byte-oriented. Host locale(1) output for a
