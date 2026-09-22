@@ -297,6 +297,26 @@ func localeData(rc *tool.RunContext, cat string) (data, error) {
 			return data{name: name, keywords: keywords}, nil
 		}
 	}
+	if base == "de_DE" && isUTF8(codeset) {
+		var keywords []keyword
+		switch cat {
+		case "LC_COLLATE":
+			// Carried UTF-8 locales collate as C; LC_COLLATE still has no
+			// scalar locale(1) keywords to write.
+			keywords = []keyword{}
+		case "LC_CTYPE":
+			keywords = codesetKeywords("UTF-8", 4)
+		case "LC_NUMERIC":
+			keywords = germanISO88591NumericKeywords
+		case "LC_MONETARY":
+			keywords = germanISO88591MonetaryKeywords
+		case "LC_TIME":
+			keywords = germanUTF8TimeKeywords
+		}
+		if keywords != nil {
+			return data{name: name, keywords: keywords}, nil
+		}
+	}
 	if base != "C" && base != "POSIX" {
 		return data{}, fmt.Errorf(
 			"locale %q is not available: pure-Go coreutils does not carry %s data for it",

@@ -190,6 +190,23 @@ var germanISO88591TimeKeywords = []keyword{
 	str("LC_TIME", "alt_digits", ""),
 }
 
+var germanUTF8TimeKeywords = []keyword{
+	list("LC_TIME", "abday", "So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"),
+	list("LC_TIME", "day", "Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"),
+	list("LC_TIME", "abmon", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"),
+	list("LC_TIME", "mon", "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"),
+	list("LC_TIME", "am_pm", "", ""),
+	str("LC_TIME", "d_t_fmt", "%a %d %b %Y %T %Z"),
+	str("LC_TIME", "d_fmt", "%d.%m.%Y"),
+	str("LC_TIME", "t_fmt", "%T"),
+	str("LC_TIME", "t_fmt_ampm", ""),
+	str("LC_TIME", "era", ""),
+	str("LC_TIME", "era_d_fmt", ""),
+	str("LC_TIME", "era_t_fmt", ""),
+	str("LC_TIME", "era_d_t_fmt", ""),
+	str("LC_TIME", "alt_digits", ""),
+}
+
 // codesetKeywords are the LC_CTYPE entries whose values depend on the locale's
 // codeset rather than being fixed by the POSIX locale definition.
 func codesetKeywords(charmap string, mbCurMax int) []keyword {

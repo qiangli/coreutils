@@ -25,9 +25,10 @@ var (
 // which is the opposite of the truth.
 func availableLocales() []string {
 	// Do not advertise arbitrary host locale-directory names that localeData
-	// cannot subsequently serve. The German single-byte fixture is carried in
-	// full by the built-in database, so it is available on every host too.
-	return []string{"C", "POSIX", "de_DE.ISO-8859-1"}
+	// cannot subsequently serve. The German fixture data is carried in the
+	// built-in database for both the single-byte and UTF-8 spellings, so those
+	// names are available on every host too.
+	return []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8"}
 }
 
 // availableCharmaps lists the charmap names this host can offer. Charmap files
