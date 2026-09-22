@@ -386,7 +386,7 @@ func quoteMakeflag(s string) string {
 
 func newMakefile(noBuiltins bool) *makefile {
 	m := &makefile{vars: map[string]variable{}, rules: map[string][]*rule{}, precious: map[string]bool{}, silent: map[string]bool{}, ignore: map[string]bool{}}
-	m.assign("SHELL", "/bin/sh", originBuiltin, false)
+	m.assign("SHELL", defaultRecipeShell, originBuiltin, false)
 	if !noBuiltins {
 		m.installBuiltins()
 	}
@@ -1090,11 +1090,11 @@ prefixesDone:
 	}
 	shell := e.m.expand(e.m.vars["SHELL"].value, nil, map[string]bool{})
 	if shell == "" {
-		shell = "/bin/sh"
+		shell = defaultRecipeShell
 	}
 	path := e.child.ResolveCommand(shell)
 	if path == "" {
-		path = shell
+		path = recipeShellFallback(shell)
 	}
 	args := []string{"-c", line}
 	if !ignore {
