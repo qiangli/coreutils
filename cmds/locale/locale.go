@@ -73,7 +73,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	switch {
 	case *all:
-		return writeLines(rc, availableLocales())
+		return writeLines(rc, availableLocales(rc))
 	case *charmaps:
 		return writeLines(rc, availableCharmaps())
 	case len(operands) == 0:
@@ -272,6 +272,11 @@ func (d data) keyword(name string) (keyword, bool) {
 // or an error naming the locale this build cannot describe.
 func localeData(rc *tool.RunContext, cat string) (data, error) {
 	name := locale.Resolve(rc.Env, locale.Category(cat))
+	if provider := defaultHostLocaleProvider(rc); provider != nil && provider.selected(name) {
+		if keywords, err := provider.query(name, cat); err == nil {
+			return data{name: name, keywords: keywords}, nil
+		}
+	}
 	if cat == "LC_MESSAGES" {
 		if messages, ok := locale.LookupMessages(name); ok {
 			return data{name: name, keywords: messagesKeywords(messages)}, nil

@@ -477,6 +477,57 @@ func TestAllLocales(t *testing.T) {
 	}
 }
 
+func TestHostLocaleProviderFiltersFallbackAndDelegatesKeywords(t *testing.T) {
+	provider := hostLocaleProvider{run: func(env, args []string) (string, string, error) {
+		locale := ""
+		for _, entry := range env {
+			if strings.HasPrefix(entry, "LC_ALL=") {
+				locale = strings.TrimPrefix(entry, "LC_ALL=")
+			}
+		}
+		if len(args) == 1 && args[0] == "-a" {
+			return "en_US.UTF-8\nzh_HK.big5hkscs\n", "", nil
+		}
+		if len(args) == 0 {
+			if locale == "zh_HK.big5hkscs" {
+				return "LC_CTYPE=\"C\"\n", "", nil
+			}
+			return "LC_CTYPE=\"" + locale + "\"\n", "", nil
+		}
+		if locale != "en_US.UTF-8" {
+			t.Fatalf("host service queried unsupported locale %q with %v", locale, args)
+		}
+		switch args[1] {
+		case "LC_COLLATE":
+			return "", "", nil
+		case "charmap":
+			return "charmap=\"UTF-8\"\n", "", nil
+		case "LC_NUMERIC":
+			return "decimal_point=\".\"\ngrouping=\"3\"\n", "", nil
+		default:
+			return "yesstr=\"yes\"\n", "", nil
+		}
+	}}
+
+	got := availableLocalesFromProvider(&provider)
+	want := []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8", "en_US.UTF-8"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("available host locales = %v, want %v", got, want)
+	}
+	keywords, err := provider.query("en_US.UTF-8", "LC_NUMERIC")
+	if err != nil || len(keywords) != 2 || render(keywords[0], true) != `decimal_point="."` {
+		t.Fatalf("host LC_NUMERIC = %#v, %v", keywords, err)
+	}
+}
+
+func TestHostLocaleNamesProvisioningFormat(t *testing.T) {
+	got := hostLocaleNames("ja_JP.SJIS;\nfr_FR.ISO8859-1\r\n")
+	want := []string{"fr_FR.ISO8859-1", "ja_JP.SJIS"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("host locale candidate names = %v, want %v", got, want)
+	}
+}
+
 func TestCharmaps(t *testing.T) {
 	charmapDir := withFixtureCharmapDir(t)
 	// Charmap files are conventionally gzipped; the compression is not part of
