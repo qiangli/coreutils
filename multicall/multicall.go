@@ -114,7 +114,10 @@ func processRunContext() *tool.RunContext {
 // tool.Tool.Run, which never signal the process.
 func Main(selfNames ...string) {
 	preserveInheritedSignalDispositions()
-	name, args, listOnly := Resolve(os.Args[0], os.Args[1:], selfNames...)
+	// Windows: a bashy parent spells argv bytes that are not UTF-8 as Cygwin
+	// lone surrogates on the UTF-16 command line; turn them back into the
+	// bytes the script passed. Identity elsewhere.
+	name, args, listOnly := Resolve(os.Args[0], decodeSurrogateArgs(os.Args[1:]), selfNames...)
 	if listOnly {
 		fmt.Println(strings.Join(tool.Names(), "\n"))
 		return
