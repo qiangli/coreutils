@@ -5,6 +5,7 @@ package localecmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -24,11 +25,23 @@ func TestHostLocaleProviderRunnerProbe(t *testing.T) {
 	rc := &tool.RunContext{Dir: dir, Env: os.Environ()}
 	path := rc.Getenv(hostLocalePathEnv)
 	t.Logf("host path=%q absolute=%v candidate names=%q", path, filepath.IsAbs(path), rc.Getenv(hostLocaleNamesEnv))
+	for _, entry := range rc.Env {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(key, "LC_ALL") {
+			t.Logf("inherited locale selector=%q", entry)
+		}
+	}
 	provider := defaultHostLocaleProvider(rc)
 	if provider == nil {
 		t.Fatal("defaultHostLocaleProvider returned nil")
 	}
 	for _, name := range []string{"en_US.UTF-8", "zh_TW.big5", "ja_JP.SJIS", "fr_FR.ISO8859-1", "de_DE.UTF-8", "ru_RU.CP1251", "zh_HK.big5hkscs"} {
+		if name == "en_US.UTF-8" {
+			stdout, stderr, err := provider.run([]string{"LC_ALL=" + name}, nil)
+			t.Logf("raw %s locale: stdout=%q stderr=%q err=%v", name, stdout, stderr, err)
+			stdout, stderr, err = provider.run([]string{"LC_ALL=" + name}, []string{"-k", "LC_CTYPE"})
+			t.Logf("raw %s LC_CTYPE: stdout=%q stderr=%q err=%v", name, stdout, stderr, err)
+		}
 		selected := provider.selected(name)
 		charmap := provider.matchesRequestedCharmap(name)
 		t.Logf("%s: selected=%v matching_charmap=%v", name, selected, charmap)
