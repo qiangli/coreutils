@@ -617,7 +617,11 @@ func runWithLocale(rc *tool.RunContext, args []string, openCollator collatorOpen
 	var files, dirs []entry
 	for _, op := range operands {
 		full := rc.Path(op)
-		fi, err := os.Lstat(full)
+		// tool.Lstat, not os.Lstat: the long listing's mode column, -F's
+		// executable indicator and every other mode question have to
+		// report the mode chmod set, which on a host with no POSIX mode
+		// bits is not in the file attributes io/fs derives one from.
+		fi, err := tool.Lstat(full)
 		if err != nil {
 			l.fail(2, "cannot access '%s': %s", op, errMsg(err))
 			continue
@@ -626,7 +630,7 @@ func runWithLocale(rc *tool.RunContext, args []string, openCollator collatorOpen
 		isDir := fi.IsDir()
 		if fi.Mode()&os.ModeSymlink != 0 {
 			if opt.deref != dereferenceDefault {
-				ti, terr := os.Stat(full)
+				ti, terr := tool.Stat(full)
 				if terr != nil {
 					l.fail(2, "cannot access '%s': %s", op, errMsg(terr))
 					continue
@@ -634,14 +638,14 @@ func runWithLocale(rc *tool.RunContext, args []string, openCollator collatorOpen
 				isDir = ti.IsDir()
 				e.info = ti
 			} else if derefCLDir {
-				if ti, terr := os.Stat(full); terr == nil && ti.IsDir() {
+				if ti, terr := tool.Stat(full); terr == nil && ti.IsDir() {
 					isDir = true
 					e.info = ti
 				}
 			} else if !opt.dirOnly && !opt.long && opt.indicator != indicatorClassify {
 				// By default, follow command-line symlinks to directories unless
 				// -d, -F, or -l requires information about the link itself.
-				if ti, terr := os.Stat(full); terr == nil && ti.IsDir() {
+				if ti, terr := tool.Stat(full); terr == nil && ti.IsDir() {
 					isDir = true
 					e.info = ti
 				}
@@ -761,6 +765,9 @@ func dirFailCode(commandLine bool) int {
 
 func (l *lister) listDirWithAncestors(display, full string, header, commandLine bool, ancestors []os.FileInfo) {
 	if l.opt.recursive && l.opt.deref == dereferenceAll {
+		// os.Stat, not tool.Stat: what this asks is file identity, not
+		// permission, and os.SameFile below recognizes only the FileInfo
+		// os.Stat itself returns.
 		info, err := os.Stat(full)
 		if err != nil {
 			l.fail(dirFailCode(commandLine), "cannot access '%s': %s", display, errMsg(err))
@@ -812,7 +819,7 @@ func (l *lister) listDirWithAncestors(display, full string, header, commandLine 
 			if dot == ".." {
 				p = filepath.Join(full, "..")
 			}
-			if fi, ferr := os.Stat(p); ferr == nil {
+			if fi, ferr := tool.Stat(p); ferr == nil {
 				e := entry{name: dot, path: p, info: fi}
 				e.tm = l.entryTime(e)
 				ents = append(ents, e)
@@ -832,14 +839,14 @@ func (l *lister) listDirWithAncestors(display, full string, header, commandLine 
 			continue
 		}
 		p := filepath.Join(full, onDisk)
-		fi, lerr := os.Lstat(p)
+		fi, lerr := tool.Lstat(p)
 		if lerr != nil {
 			l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(lerr))
 			continue
 		}
 		// -L reports the referenced file rather than the link itself.
 		if l.opt.deref == dereferenceAll && fi.Mode()&os.ModeSymlink != 0 {
-			ti, terr := os.Stat(p)
+			ti, terr := tool.Stat(p)
 			if terr != nil {
 				l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(terr))
 				// -L requires information about the referenced file.  If the

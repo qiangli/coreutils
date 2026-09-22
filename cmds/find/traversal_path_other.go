@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 // Non-Linux platforms retain pathname traversal until an equivalent,
@@ -19,10 +21,15 @@ func (*traversalState) readDir(_ []string, fallback string) ([]os.DirEntry, erro
 	return os.ReadDir(fallback)
 }
 
+// The child stats go through tool, which reports the mode chmod set on a
+// host that keeps it outside the filesystem — -perm, -executable and -type
+// would otherwise match against a mode nobody set. On Linux the
+// descriptor-relative traversal beside this file needs no such thing,
+// because the filesystem holds the mode itself.
 func (*traversalState) lstatChild(_ []string, fallback, name string) (fs.FileInfo, error) {
-	return os.Lstat(filepath.Join(fallback, name))
+	return tool.Lstat(filepath.Join(fallback, name))
 }
 
 func (*traversalState) statChild(_ []string, fallback, name string) (fs.FileInfo, error) {
-	return os.Stat(filepath.Join(fallback, name))
+	return tool.Stat(filepath.Join(fallback, name))
 }

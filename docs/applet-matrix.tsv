@@ -14,7 +14,7 @@ bc	cmds/bc		POSIX/Unix utility	no	yes	1	15
 cat	cmds/cat		GNU Coreutils	yes	yes	5	16
 chcon	cmds/chcon		GNU Coreutils	yes	no	2	7
 chgrp	cmds/chgrp		GNU Coreutils	yes	yes	5	39
-chmod	cmds/chmod		GNU Coreutils	yes	yes	7	41
+chmod	cmds/chmod		GNU Coreutils	yes	yes	8	44
 chown	cmds/chown		GNU Coreutils	yes	yes	5	35
 cksum	cmds/cksum		GNU Coreutils	yes	yes	2	14
 cmp	cmds/cmp		POSIX/Unix utility	no	yes	2	17
