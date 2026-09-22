@@ -68,14 +68,20 @@ func TestPath(t *testing.T) {
 		},
 	}
 
+	pinNoMounts(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rc := &RunContext{Ctx: context.Background(), Dir: tt.dir}
 			got := rc.Path(tt.operand)
 			if runtime.GOOS == "windows" {
-				// On Windows the test expectations with / need adjustment.
-				// We test the structural property: Path() produces platform-separated paths.
+				// On Windows a /work directory and a /usr/bin operand are
+				// the shell's spelling of drive-less absolute paths: without
+				// a mount table they resolve onto C:, as the interpreter's
+				// own pathconv.ToOS resolves them.
 				want := filepath.FromSlash(tt.want)
+				if strings.HasPrefix(tt.want, "/") {
+					want = "C:" + want
+				}
 				if got != want {
 					t.Errorf("Path(%q) with dir=%q = %q, want %q", tt.operand, tt.dir, got, want)
 				}
@@ -352,13 +358,14 @@ func TestParseHelpVersionAliases(t *testing.T) {
 
 func TestNormalizePath(t *testing.T) {
 	if runtime.GOOS == "windows" {
+		pinNoMounts(t)
 		tests := []struct {
 			in   string
 			want string
 		}{
 			{`C:\foo`, `C:\foo`},
 			{`C:/foo`, `C:\foo`},
-			{`/foo/bar`, `\foo\bar`},
+			{`/foo/bar`, `C:\foo\bar`}, // drive-less: the interpreter's C: fallback
 			{`foo/bar/baz`, `foo\bar\baz`},
 			{`foo\bar`, `foo\bar`},
 		}
@@ -451,6 +458,7 @@ func TestSystemDrive(t *testing.T) {
 
 func TestToOSPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
+		pinNoMounts(t)
 		sd := systemDrive()
 		tests := []struct {
 			path string
@@ -746,10 +754,11 @@ func TestRunContextHasFS(t *testing.T) {
 // the limit — and every invocation without the guarantee — keeps the
 // joined absolute form.
 func TestPathNativeProcessCwd(t *testing.T) {
-	sep := string(filepath.Separator)
+	pinNoMounts(t)
+	root := testRoot()
 	// Valid on its own (one byte under the limit), overlong once joined
 	// with anything.
-	deepDir := sep + strings.Repeat("d", pathLengthLimit-1)
+	deepDir := root + strings.Repeat("d", pathLengthLimit-len(root))
 	operand := filepath.Join("sub", "file")
 
 	native := &RunContext{Dir: deepDir, DirIsProcessCwd: true}
@@ -763,22 +772,34 @@ func TestPathNativeProcessCwd(t *testing.T) {
 			operand, embedded.Path(operand), want)
 	}
 
-	shortNative := &RunContext{Dir: sep + "work", DirIsProcessCwd: true}
-	if want := filepath.Join(sep+"work", operand); shortNative.Path(operand) != want {
+	shortNative := &RunContext{Dir: root + "work", DirIsProcessCwd: true}
+	if want := filepath.Join(root+"work", operand); shortNative.Path(operand) != want {
 		t.Errorf("native under-limit join: Path(%q) = %q, want %q", operand, shortNative.Path(operand), want)
 	}
 
-	abs := sep + filepath.Join("abs", "x")
+	abs := root + filepath.Join("abs", "x")
 	if got := native.Path(abs); got != abs {
 		t.Errorf("absolute operand never consults Dir: Path(%q) = %q", abs, got)
 	}
 }
 
+// testRoot is a native absolute directory prefix for path tests: "/" on
+// Unix, "C:\" on Windows (where a bare "\" is drive-relative and would be
+// resolved onto a volume by Path).
+func testRoot() string {
+	if runtime.GOOS == "windows" {
+		return `C:\`
+	}
+	return "/"
+}
+
 func TestPathPreservesTrailingDirectorySeparator(t *testing.T) {
+	pinNoMounts(t)
 	sep := string(filepath.Separator)
-	rc := &RunContext{Dir: sep + "work"}
+	root := testRoot()
+	rc := &RunContext{Dir: root + "work"}
 	operand := "link" + sep
-	want := filepath.Join(sep+"work", "link") + sep
+	want := filepath.Join(root+"work", "link") + sep
 	if got := rc.Path(operand); got != want {
 		t.Fatalf("Path(%q) = %q, want terminating directory separator in %q", operand, got, want)
 	}

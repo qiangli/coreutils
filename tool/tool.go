@@ -105,29 +105,6 @@ func (rc *RunContext) Getenv(key string) string {
 	return ""
 }
 
-// Path resolves operand against the invocation working directory.
-// Absolute operands pass through (after separator normalization on
-// Windows). Tools must route every file-system operand through this
-// (or equivalent) — never through process cwd.
-//
-// On Windows, both / and \ separators are accepted, and /foo (no drive
-// letter) is recognised as drive-relative absolute (matching the
-// behaviour of every Windows API, which treats it as root on the
-// current drive). The shell spellings recognised by the shared
-// mvdan.cc/sh/v3/pathconv converter map to their native equivalents:
-// the MSYS drive form (/c/…), the WSL mount form (/mnt/c/…), /dev/null
-// (-> NUL) and /tmp[/…] (-> the host temp directory).
-//
-// A valid working directory and a valid relative operand can join into
-// a single string longer than the platform's path-length limit (each
-// was built and is resolvable one component at a time — a shell's cd
-// and a near-PATH_MAX relative pathname are both legitimate), and the
-// OS would reject that materialized string with ENAMETOOLONG even
-// though the file is plainly reachable. When the host has declared
-// DirIsProcessCwd, Path keeps such an operand relative instead, so the
-// kernel resolves it against the process cwd exactly as it would for
-// the GNU binary. Below the limit the joined absolute form is returned
-// as always.
 // NativeAbs reports whether operand is an absolute path in the shell's own
 // spelling and, if so, returns it in the host's native form — on Windows that
 // maps the MSYS drive form (/c/… or \c\…), the WSL mount form (/mnt/c/…),
@@ -147,11 +124,39 @@ func NativeAbs(operand string) (string, bool) {
 // /usr/bin) which filepath.IsAbs rejects; on Unix it is filepath.IsAbs.
 func IsAbsPath(operand string) bool { return isAbsPath(operand) }
 
+// Path resolves operand against the invocation working directory.
+// Absolute operands pass through (after conversion to the host's native
+// form on Windows). Tools must route every file-system operand through
+// this (or equivalent) — never through process cwd.
+//
+// On Windows an operand in the shell's spelling resolves exactly as
+// bashy's interpreter resolves it — the SAME mvdan.cc/sh/v3/pathconv
+// converter, with the process mount table: under BASHY_ROOT /tmp is the
+// run's %TEMP%, /bin and /usr/bin are root\usr\bin, /etc is root\etc and
+// any other /foo is root\foo; the MSYS drive form (/c/…) and the WSL
+// mount form (/mnt/c/…) name drives; /dev/null is NUL; without a mount
+// table a drive-less /foo lands on the invocation directory's volume. The
+// characters NTFS refuses in a filename (: * ? " < > |) are encoded as
+// U+F000+c, the Cygwin/MSYS convention, so `touch 'x*x'` creates the file
+// the shell's own `>'x*x'` would; DisplayName decodes them on the way
+// back out. rc.Dir may itself be in the shell's spelling (an in-process
+// applet gets the interpreter's cwd) and is converted before joining.
+//
+// A valid working directory and a valid relative operand can join into
+// a single string longer than the platform's path-length limit (each
+// was built and is resolvable one component at a time — a shell's cd
+// and a near-PATH_MAX relative pathname are both legitimate), and the
+// OS would reject that materialized string with ENAMETOOLONG even
+// though the file is plainly reachable. When the host has declared
+// DirIsProcessCwd, Path keeps such an operand relative instead, so the
+// kernel resolves it against the process cwd exactly as it would for
+// the GNU binary. Below the limit the joined absolute form is returned
+// as always.
 func (rc *RunContext) Path(operand string) string {
 	if isAbsPath(operand) || rc.Dir == "" {
-		return normalizePath(operand)
+		return normalizePathIn(rc.Dir, operand)
 	}
-	joined := normalizePath(filepath.Join(rc.Dir, operand))
+	joined := joinPath(rc.Dir, operand)
 	// A terminating separator is semantic, not cosmetic: POSIX pathname
 	// resolution requires the preceding component to resolve as a directory.
 	// filepath.Join cleans it away, which can turn "symlink/" back into the
@@ -161,10 +166,51 @@ func (rc *RunContext) Path(operand string) string {
 		joined += string(filepath.Separator)
 	}
 	if rc.DirIsProcessCwd && len(joined) > pathLengthLimit {
-		return normalizePath(operand)
+		return normalizePathIn(rc.Dir, operand)
 	}
 	return joined
 }
+
+// RawPath resolves operand under the invocation directory WITHOUT
+// filepath.Join's lexical Clean: every component the caller kept (f/..,
+// missing/.., a trailing ".") reaches the kernel, as POSIX pathname
+// resolution requires for applets such as rmdir. An absolute operand is
+// converted exactly as Path converts it; a relative one is spelled natively
+// (on Windows: separators and the NTFS-special encoding, nothing else) and
+// appended to NativeDir with one separator. With no directory the operand
+// is returned as spelled.
+func (rc *RunContext) RawPath(operand string) string {
+	if native, ok := NativeAbs(operand); ok {
+		return native
+	}
+	rel := normalizePathIn(rc.Dir, operand)
+	if rc.Dir == "" {
+		return rel
+	}
+	dir := rc.NativeDir()
+	if hasTrailingPathSeparator(dir) {
+		return dir + rel
+	}
+	return dir + string(filepath.Separator) + rel
+}
+
+// NativeDir is the invocation directory in the host's native form. On
+// Windows rc.Dir may arrive in the shell's spelling (an in-process applet
+// gets the interpreter's /tmp/x or /c/Users/x); an applet that opens or
+// stats the directory itself, rather than an operand under it, must resolve
+// it through this. Elsewhere it is rc.Dir.
+func (rc *RunContext) NativeDir() string {
+	return normalizePathIn("", rc.Dir)
+}
+
+// DisplayName spells a name read back from the filesystem — a directory
+// entry, or an operand echoed in a diagnostic — the way the shell prints
+// it. On Windows the U+F000 private-use runes that stand for the
+// characters NTFS refuses in a filename (: * ? " < > |, the Cygwin/MSYS
+// convention pathconv encodes on the way in) become those characters again,
+// so a file the shell created as x*x lists as x*x. Elsewhere it is the
+// identity.
+func DisplayName(name string) string { return displayName(name) }
 
 func hasTrailingPathSeparator(path string) bool {
 	return len(path) > 0 && os.IsPathSeparator(path[len(path)-1])

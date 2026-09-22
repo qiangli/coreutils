@@ -31,6 +31,12 @@ func normalizePath(p string) string {
 	return p
 }
 
+func normalizePathIn(_ string, p string) string { return p }
+
+func joinPath(dir, operand string) string { return filepath.Join(dir, operand) }
+
+func displayName(name string) string { return name }
+
 func pathextFromEnv(_ []string) []string {
 	return nil
 }

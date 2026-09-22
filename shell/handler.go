@@ -19,6 +19,7 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/pathconv"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -60,7 +61,7 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 				Umask:           umask,
 				UmaskSet:        true,
 				SIGPIPEIgnored:  hc.SignalIgnored("PIPE"),
-				DirIsProcessCwd: processCwdMatches(hc.Dir),
+				DirIsProcessCwd: processCwdMatches(shellDirToOS(hc.Dir)),
 				Stdio: tool.Stdio{
 					In:  hc.Stdin,
 					Out: hc.Stdout,
@@ -74,6 +75,17 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 			return nil
 		}
 	}
+}
+
+// shellDirToOS spells the interpreter's directory natively: on Windows
+// hc.Dir is in the shell's spelling (/tmp/x, /c/Users/x) and os.Stat of
+// that form fails, which silently reported "not the process cwd" for
+// every in-process applet. Elsewhere it is the identity.
+func shellDirToOS(dir string) string {
+	if dir == "" {
+		return dir
+	}
+	return pathconv.ToOS(dir, dir)
 }
 
 func processCwdMatches(dir string) bool {

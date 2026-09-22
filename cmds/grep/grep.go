@@ -30,6 +30,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -371,7 +372,10 @@ func run(rc *tool.RunContext, args []string) int {
 // the kernel to resolve, as POSIX pathname-resolution assertions require. An
 // embedded invocation still resolves against its virtual RunContext directory.
 func operandPath(rc *tool.RunContext, operand string) string {
-	if rc.DirIsProcessCwd && !tool.IsAbsPath(operand) {
+	// On Windows the lexical form is never what CreateFile sees anyway (Win32
+	// canonicalizes `..` itself), and a relative operand still needs the
+	// shell's NTFS-special encoding (x*x); rc.Path applies it.
+	if rc.DirIsProcessCwd && !tool.IsAbsPath(operand) && runtime.GOOS != "windows" {
 		return operand
 	}
 	// An absolute operand in the shell's spelling (/c/x, /tmp/x on Windows)
@@ -875,7 +879,7 @@ func (g *grepper) walkFollow(dir, display string, seen map[string]bool) {
 			return
 		}
 		p := filepath.Join(dir, e.Name())
-		disp := display + "/" + e.Name()
+		disp := display + "/" + tool.DisplayName(e.Name())
 		st, err := os.Stat(p) // follows symlinks
 		if err != nil {
 			g.report(disp, err)
@@ -1250,7 +1254,9 @@ func joinDisplay(operand, root, p string) string {
 	if err != nil || rel == "." {
 		return operand
 	}
-	rel = filepath.ToSlash(rel)
+	// The on-disk spelling of a walked entry is decoded for display (on
+	// Windows the NTFS specials come back from their U+F000 encoding).
+	rel = tool.DisplayName(filepath.ToSlash(rel))
 	if strings.HasSuffix(operand, "/") {
 		return operand + rel
 	}
