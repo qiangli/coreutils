@@ -60,7 +60,11 @@ func run(rc *tool.RunContext, args []string) int {
 	base := ""
 	switch {
 	case *tmpdir != "":
-		if filepath.IsAbs(template) {
+		// tool.IsAbsPath, not filepath.IsAbs: on Windows the shell's own
+		// absolute spelling (/tmp/xXXXX) is what a script writes, and
+		// filepath.IsAbs rejects it — GNU's "may not be absolute" check
+		// would then silently pass and join it under --tmpdir.
+		if tool.IsAbsPath(template) {
 			if !*quiet {
 				fmt.Fprintf(rc.Err, "mktemp: invalid template, '%s'; with --tmpdir, it may not be absolute\n", template)
 			}
@@ -68,7 +72,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		base = *tmpdir
 	case *useTmp:
-		if filepath.IsAbs(template) {
+		if tool.IsAbsPath(template) {
 			if !*quiet {
 				fmt.Fprintf(rc.Err, "mktemp: invalid template, '%s'; with -t, it may not be absolute\n", template)
 			}

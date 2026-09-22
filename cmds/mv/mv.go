@@ -11,7 +11,6 @@ package mvcmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
@@ -232,7 +230,7 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 	for _, src := range srcs {
 		dst := dest
 		if todir {
-			dst = filepath.Join(dest, filepath.Base(src))
+			dst = destFor(dest, src)
 		}
 		m.move(src, dst)
 	}
@@ -240,6 +238,14 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 		return 1
 	}
 	return 0
+}
+
+// destFor is the destination operand for one SOURCE when the target is a
+// directory. tool.OperandJoin keeps it in the caller's spelling: on Windows
+// filepath.Join would rewrite /tmp/d into \tmp\d, which no longer matches
+// the /tmp mount (Story #682).
+func destFor(dest, src string) string {
+	return tool.OperandJoin(dest, filepath.Base(src))
 }
 
 func envPresent(env []string, key string) bool {
@@ -483,7 +489,7 @@ func (m *mover) copyNode(src, dst string) bool {
 		}
 		ok := true
 		for _, e := range entries {
-			if !m.copyNode(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())) {
+			if !m.copyNode(tool.OperandJoin(src, e.Name()), tool.OperandJoin(dst, e.Name())) {
 				ok = false
 			}
 		}
@@ -631,26 +637,12 @@ func maybeStripTrailingSlashes(args []string, enabled bool) []string {
 	return out
 }
 
-// reason unwraps err to its root cause and capitalizes the first
-// letter, matching the strerror() shape GNU diagnostics use.
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		err = le.Err
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	s := err.Error()
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	return tool.SysErrString(err)
 }

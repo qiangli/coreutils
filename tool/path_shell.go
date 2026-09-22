@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -110,3 +111,150 @@ func isSlashByte(c byte) bool { return c == '/' || c == '\\' }
 func hasTrailingSlashByte(p string) bool { return p != "" && isSlashByte(p[len(p)-1]) }
 
 func toBackslash(p string) string { return strings.ReplaceAll(p, "/", `\`) }
+
+// An operand travels through an applet as the CALLER spelled it: cp's
+// destination directory is joined with the source's basename, mkdir -p walks
+// its operand up one component at a time, rmdir -p does the same. On Windows
+// filepath.Join and filepath.Dir are wrong for that job in two ways at once.
+// They Clean to the native separator, so /tmp/d + bash.exe becomes
+// \tmp\d\bash.exe: the mount table is keyed on the POSIX spelling
+// (pathconv's lookup requires a leading "/"), so the joined operand no longer
+// resolves under /tmp and lands on C:\tmp instead — "The system cannot find
+// the path specified". And the applet then prints that native spelling in its
+// diagnostic, which the caller never typed. OperandJoin and OperandDir keep
+// the operand in its own spelling; the conversion to a native path stays
+// where it belongs, in RunContext.Path.
+
+// posixSpelledMode reports whether an operand is in the shell's POSIX
+// spelling rather than the host's native one — no backslash separator and no
+// drive prefix. Only such an operand may be manipulated with path.Join and
+// path.Dir and still resolve through the mount table. Off windows mode every
+// operand is POSIX-spelled.
+func posixSpelledMode(p string, windows bool) bool {
+	if !windows {
+		return true
+	}
+	if strings.ContainsRune(p, '\\') {
+		return false
+	}
+	return !(len(p) >= 2 && isDriveLetterByte(p[0]) && p[1] == ':')
+}
+
+// operandJoinMode is OperandJoin with an explicit windows flag. A
+// native-spelled base gets the native join; off a Windows host that branch
+// is spelled out here rather than deferred to filepath, so the windows-mode
+// behavior is the same on every host the tests run on.
+func operandJoinMode(base string, elems []string, windows bool) string {
+	if posixSpelledMode(base, windows) {
+		parts := make([]string, 0, len(elems)+1)
+		parts = append(parts, base)
+		parts = append(parts, elems...)
+		return path.Join(parts...)
+	}
+	if runtime.GOOS == "windows" {
+		parts := make([]string, 0, len(elems)+1)
+		parts = append(parts, base)
+		parts = append(parts, elems...)
+		return filepath.Join(parts...)
+	}
+	out := base
+	for _, e := range elems {
+		switch {
+		case e == "":
+		case out == "":
+			out = e
+		case hasTrailingSlashByte(out):
+			out += e
+		default:
+			out += `\` + e
+		}
+	}
+	return out
+}
+
+// operandCleanMode is OperandClean with an explicit windows flag.
+func operandCleanMode(p string, windows bool) string {
+	if posixSpelledMode(p, windows) {
+		return path.Clean(p)
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Clean(p)
+	}
+	// Host-independent Clean for a native spelling is not needed by any
+	// caller; the trailing separators are all the mode seam has to remove.
+	for len(p) > 1 && isSlashByte(p[len(p)-1]) {
+		p = p[:len(p)-1]
+	}
+	return p
+}
+
+// operandDirMode is OperandDir with an explicit windows flag.
+func operandDirMode(p string, windows bool) string {
+	if posixSpelledMode(p, windows) {
+		return path.Dir(p)
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Dir(p)
+	}
+	return nativeDirMode(p)
+}
+
+// nativeDirMode is filepath.Dir for a native Windows spelling on any host:
+// the volume is kept, the last component is dropped and the separators that
+// remain are trimmed to one for a root. It exists only so the windows-mode
+// seam behaves identically under `go test` on darwin and linux.
+func nativeDirMode(p string) string {
+	vol := 0
+	if len(p) >= 2 && isDriveLetterByte(p[0]) && p[1] == ':' {
+		vol = 2
+	}
+	i := len(p) - 1
+	for i >= vol && !isSlashByte(p[i]) {
+		i--
+	}
+	if i < vol {
+		return p[:vol] + "."
+	}
+	dir := p[vol : i+1]
+	for len(dir) > 1 && isSlashByte(dir[len(dir)-1]) {
+		dir = dir[:len(dir)-1]
+	}
+	return p[:vol] + dir
+}
+
+// OperandJoin joins elems onto the operand base, keeping base's spelling:
+// /tmp/execdir-1 + "bash.exe" stays /tmp/execdir-1/bash.exe (so it still
+// resolves through the /tmp mount and prints as the caller spelled it),
+// while C:\x + "y" gets the native join. Off Windows it is filepath.Join.
+func OperandJoin(base string, elems ...string) string {
+	return operandJoinMode(base, elems, operandWindows)
+}
+
+// OperandDir is filepath.Dir for an operand in the caller's spelling: the
+// parent of /tmp/a/b is /tmp/a, never \tmp\a. Applets that walk an operand
+// upwards (mkdir -p, rmdir -p, "create the destination's parent") must use
+// it, because the native spelling stops matching the mount table.
+func OperandDir(p string) string {
+	return operandDirMode(p, operandWindows)
+}
+
+// OperandSeparator is the path separator the operand was spelled with. On
+// Unix there is only one; on Windows an operand may arrive in either
+// spelling, and an applet that compares or builds a "./" or "../" prefix
+// must use the one the caller typed rather than impose the host's.
+func OperandSeparator(p string) string {
+	if operandWindows && strings.ContainsRune(p, '\\') {
+		return `\`
+	}
+	return "/"
+}
+
+// OperandClean is filepath.Clean for an operand in the caller's spelling:
+// /tmp/a/b/ cleans to /tmp/a/b, not \tmp\a\b.
+func OperandClean(p string) string {
+	return operandCleanMode(p, operandWindows)
+}
+
+func isDriveLetterByte(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+}

@@ -66,7 +66,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -650,7 +649,10 @@ func openOperandDir(rc *tool.RunContext, operand string) (*os.File, bool) {
 // canRetryAgainstDir reports whether operand is a relative name that a
 // directory-handle retry could help with — see openOperandDir.
 func canRetryAgainstDir(rc *tool.RunContext, operand string) bool {
-	return rc.Dir != "" && !filepath.IsAbs(operand)
+	// tool.IsAbsPath, not filepath.IsAbs: on Windows an operand in the
+	// shell's spelling (/tmp/x) is absolute, and retrying it against a
+	// directory handle can only fail.
+	return rc.Dir != "" && !tool.IsAbsPath(operand)
 }
 
 // statOperand resolves operand the way rc.Path + os.Stat always have,

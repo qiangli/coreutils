@@ -35,6 +35,12 @@ func SysErrString(err error) string {
 	if errors.As(err, &se) {
 		err = se.Err
 	}
+	// On Windows the errno's Error() is the OS's own sentence ("The system
+	// cannot find the file specified."); GNU prints the POSIX strerror text.
+	// See strerror.go.
+	if text, ok := posixErrorText(err); ok {
+		return text
+	}
 	return capitalizeFirst(err.Error())
 }
 

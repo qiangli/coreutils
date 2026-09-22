@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
@@ -215,11 +214,7 @@ func run(rc *tool.RunContext, args []string) int {
 	for _, src := range srcs {
 		dst := dest
 		if todir {
-			if c.parents {
-				dst = filepath.Join(dest, parentPath(src))
-			} else {
-				dst = filepath.Join(dest, filepath.Base(src))
-			}
+			dst = c.destFor(dest, src)
 		}
 		c.copyEntry(src, dst)
 	}
@@ -230,6 +225,19 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func (c *copier) path(operand string) string { return c.paths.path(operand) }
+
+// destFor is the destination operand for one SOURCE when the target is a
+// directory. tool.OperandJoin, not filepath.Join: the destination stays in
+// the spelling the caller used. On Windows filepath.Join would Clean
+// `cp SRC /tmp/execdir-1` into \tmp\execdir-1\SRC, and pathconv's mount
+// lookup is defined on the POSIX spelling — so the copy landed on C:\tmp
+// and failed with "The system cannot find the path specified" (Story #682).
+func (c *copier) destFor(dest, src string) string {
+	if c.parents {
+		return tool.OperandJoin(dest, parentPath(src))
+	}
+	return tool.OperandJoin(dest, filepath.Base(src))
+}
 
 // copyEntry dispatches one SOURCE operand. Without -r symlinks are
 // followed (os.Stat); with -r they are copied as symlinks, per the
@@ -356,8 +364,8 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 		c.errf("cannot access '%s': %s", src, reason(err))
 	} else {
 		for _, e := range entries {
-			csrc := filepath.Join(src, e.Name())
-			cdst := filepath.Join(dst, e.Name())
+			csrc := tool.OperandJoin(src, e.Name())
+			cdst := tool.OperandJoin(dst, e.Name())
 			ci, err := os.Lstat(c.path(csrc))
 			if err != nil {
 				c.errf("cannot stat '%s': %s", csrc, reason(err))
@@ -651,7 +659,7 @@ func (c *copier) prepareParent(dst string) bool {
 	if !c.parents {
 		return true
 	}
-	parent := filepath.Dir(dst)
+	parent := tool.OperandDir(dst)
 	if parent == "." || parent == dst {
 		return true
 	}
@@ -929,11 +937,15 @@ func maybeStripTrailingSlashes(args []string, enabled bool) []string {
 }
 
 func parentPath(src string) string {
-	clean := filepath.Clean(src)
-	for strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		clean = strings.TrimPrefix(clean, ".."+string(filepath.Separator))
+	// The operand keeps its own spelling and separator throughout: --parents
+	// reproduces the source's directory prefix under the destination, and on
+	// Windows a prefix rewritten to backslashes would leave the mount table.
+	sep := tool.OperandSeparator(src)
+	clean := tool.OperandClean(src)
+	for strings.HasPrefix(clean, ".."+sep) {
+		clean = strings.TrimPrefix(clean, ".."+sep)
 	}
-	clean = strings.TrimPrefix(clean, string(filepath.Separator))
+	clean = strings.TrimPrefix(clean, sep)
 	if clean == "." || clean == "" {
 		return filepath.Base(src)
 	}
@@ -1037,27 +1049,12 @@ func envPresent(env []string, key string) bool {
 	return false
 }
 
-// reason unwraps err to its root cause and capitalizes the first
-// letter, matching the strerror() shape GNU diagnostics use
-// ("No such file or directory").
+// reason renders the filesystem cause of err the way GNU does: the errno
+// text with its first letter capitalized, with the os wrappers unwrapped so
+// the caller's own "<tool>: <name>: " prefix is not doubled. tool.SysErrString
+// is the one implementation; on Windows it also maps the OS's own sentence
+// ("The system cannot find the file specified.") onto the POSIX strerror
+// wording every GNU diagnostic — and bash's fixtures — expect.
 func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
-	}
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		err = le.Err
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		err = se.Err
-	}
-	s := err.Error()
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	return tool.SysErrString(err)
 }

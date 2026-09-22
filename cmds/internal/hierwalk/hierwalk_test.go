@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 type record struct {
@@ -373,5 +375,41 @@ func TestWalkLogicalThreeWayLoopTerminates(t *testing.T) {
 	}
 	if len(r.cycles) != 0 {
 		t.Errorf("-L reported a corrupt hierarchy for a symbolic-link loop: %v", r.cycles)
+	}
+}
+
+// Story #682 (S245.5f) item 4: the display path is the operand in the
+// CALLER's spelling — chmod -R, chgrp -R and chown -R print it in their
+// diagnostics, and bash's fixtures diff those messages. The native path and
+// the display path are joined by different rules for that reason. Pinning
+// the operand-spelling mode to Windows makes the distinction observable on a
+// Unix host, where a backslash is an ordinary filename character.
+func TestDisplayPathKeepsOperandSpelling(t *testing.T) {
+	defer tool.SetOperandWindows(true)()
+
+	if got, want := tool.OperandJoin("/tmp/d", "f"), "/tmp/d/f"; got != want {
+		t.Errorf("display join = %q; want %q", got, want)
+	}
+	if got, want := tool.OperandJoin(`C:\d`, "f"), `C:\d\f`; got != want {
+		t.Errorf("native display join = %q; want %q", got, want)
+	}
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d", "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var displays []string
+	w := &Walker{
+		Recursive: true,
+		Visit: func(_, display string, _, _ bool) {
+			displays = append(displays, display)
+		},
+	}
+	w.Walk(filepath.Join(dir, "d"), "d")
+	if got, want := strings.Join(displays, " "), "d/f d"; got != want {
+		t.Errorf("visited displays = %q; want %q", got, want)
 	}
 }

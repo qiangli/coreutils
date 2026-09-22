@@ -25,6 +25,8 @@ package hierwalk
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 // sameFile is the directory-identity predicate the cycle check uses. It
@@ -148,7 +150,11 @@ func (w *Walker) walk(path, display string, ancestors []os.FileInfo, isOperand b
 	}
 	ancestors = append(ancestors, info)
 	for _, entry := range entries {
-		w.walk(filepath.Join(path, entry.Name()), filepath.Join(display, entry.Name()), ancestors, false)
+		// path is native and gets the host's join; display is the operand
+		// in the CALLER's spelling and gets tool.OperandJoin, so a
+		// diagnostic names /tmp/d/f and not \tmp\d\f on Windows — the
+		// fixtures diff those messages (Story #682).
+		w.walk(filepath.Join(path, entry.Name()), tool.OperandJoin(display, entry.Name()), ancestors, false)
 	}
 	w.visit(path, display, isLink, followed)
 }
