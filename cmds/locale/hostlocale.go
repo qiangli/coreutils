@@ -347,6 +347,7 @@ func commandHostLocaleRunner(rc *tool.RunContext, path string) hostLocaleRunner 
 		if err != nil {
 			return out.String(), errOut.String(), err
 		}
-		return out.String(), errOut.String(), cmd.Wait()
+		waitErr := cmd.Wait()
+		return out.String(), errOut.String(), waitErr
 	}
 }

@@ -1,9 +1,34 @@
 package localecmd
 
 import (
+	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/tool"
 )
+
+func TestCommandHostLocaleRunnerWaitsForOutput(t *testing.T) {
+	const helperEnv = "COREUTILS_LOCALE_RUNNER_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		time.Sleep(25 * time.Millisecond)
+		fmt.Fprint(os.Stdout, "late stdout")
+		fmt.Fprint(os.Stderr, "late stderr")
+		return
+	}
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := &tool.RunContext{Dir: t.TempDir(), Env: append(os.Environ(), helperEnv+"=1")}
+	stdout, stderr, err := commandHostLocaleRunner(rc, path)(nil, []string{"-test.run=^TestCommandHostLocaleRunnerWaitsForOutput$"})
+	if err != nil || !strings.Contains(stdout, "late stdout") || !strings.Contains(stderr, "late stderr") {
+		t.Fatalf("runner output = (%q, %q, %v), want delayed stdout and stderr", stdout, stderr, err)
+	}
+}
 
 func TestParseHostLocaleValueGitBashTimeValues(t *testing.T) {
 	for _, tc := range []struct {
