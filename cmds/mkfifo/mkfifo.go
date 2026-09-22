@@ -1,8 +1,10 @@
 // Package mkfifocmd implements mkfifo(1): create named pipes.
 //
-// The native operation is split behind build tags so non-Unix platforms
-// fail loudly instead of approximating FIFO semantics.
-// -Z/--context accepted as no-op on non-SELinux platforms.
+// The native operation is split behind build tags: Unix uses mkfifo(2);
+// Windows creates the marker file of docs/windows-fifo.md, which the
+// shell's open path resolves to a \\.\pipe\ named pipe (Cygwin's design);
+// every other platform fails loudly instead of approximating FIFO
+// semantics. -Z/--context accepted as no-op on non-SELinux platforms.
 package mkfifocmd
 
 import (

@@ -34,7 +34,7 @@ File operations:
 | touch | guonaihong, u-root | -a, -m, -c, -d, -r, -t |
 | ln | u-root | -s, -f, -v; uutils-parity additions: -t/--target-directory, -T/--no-target-directory, -n/--no-dereference, -r/--relative |
 | link / unlink | guonaihong, u-root | trivial pair |
-| mkfifo | fresh | -m octal; Unix native, clear unsupported error elsewhere |
+| mkfifo | fresh | -m octal; Unix native, Windows via the marker + named-pipe contract (docs/windows-fifo.md), clear unsupported error elsewhere |
 | mknod | fresh | NAME TYPE [MAJOR MINOR], -m octal; Unix native, clear unsupported error elsewhere |
 | mktemp | u-root | -d, -p, -u, templates |
 | truncate | u-root | -s (K/M/G suffixes), -c |

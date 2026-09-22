@@ -30,9 +30,32 @@ func runToolContext(t *testing.T, dir string, mask os.FileMode, maskSet bool, ar
 	return out.String(), errb.String(), code
 }
 
+// assertFIFO checks that path is a FIFO in the platform's own sense: a
+// named pipe on Unix, a valid marker file (docs/windows-fifo.md) on Windows.
+func assertFIFO(t *testing.T, path string) {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("missing fifo %s: %v", path, err)
+	}
+	if runtime.GOOS == "windows" {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading marker %s: %v", path, err)
+		}
+		if _, ok := ParseMarker(content); !ok {
+			t.Fatalf("%s is not a FIFO marker: %q", path, content)
+		}
+		return
+	}
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("%s mode=%v, want named pipe", path, fi.Mode())
+	}
+}
+
 func TestMkfifoSymbolicModeHonorsOmittedWhoUmask(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
+		t.Skip("perm-bit assertions are unix-only: Windows modes live in the recorded ACL (tool/mode.go)")
 	}
 	tests := []struct {
 		name, mode string
@@ -65,7 +88,7 @@ func TestMkfifoSymbolicModeHonorsOmittedWhoUmask(t *testing.T) {
 
 func TestMkfifoDefaultModeHonorsVirtualUmask(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
+		t.Skip("perm-bit assertions are unix-only: Windows modes live in the recorded ACL (tool/mode.go)")
 	}
 	dir := t.TempDir()
 	_, errb, code := runToolContext(t, dir, 0o027, true, "pipe")
@@ -84,27 +107,15 @@ func TestMkfifoDefaultModeHonorsVirtualUmask(t *testing.T) {
 func TestMkfifoCreatesFIFO(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := runTool(t, dir, "pipe")
-	if runtime.GOOS == "windows" {
-		if code != 1 || !strings.Contains(strings.ToLower(errb), "not supported") {
-			t.Fatalf("windows mkfifo: code=%d err=%q", code, errb)
-		}
-		return
-	}
 	if code != 0 || out != "" || errb != "" {
 		t.Fatalf("mkfifo pipe: code=%d out=%q err=%q", code, out, errb)
 	}
-	fi, err := os.Lstat(filepath.Join(dir, "pipe"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode()&os.ModeNamedPipe == 0 {
-		t.Fatalf("mode=%v, want named pipe", fi.Mode())
-	}
+	assertFIFO(t, filepath.Join(dir, "pipe"))
 }
 
 func TestMkfifoMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
+		t.Skip("perm-bit assertions are unix-only: Windows modes live in the recorded ACL (tool/mode.go)")
 	}
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "-m", "600", "pipe")
@@ -122,7 +133,7 @@ func TestMkfifoMode(t *testing.T) {
 
 func TestMkfifoSymbolicMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
+		t.Skip("perm-bit assertions are unix-only: Windows modes live in the recorded ACL (tool/mode.go)")
 	}
 	tests := []struct {
 		mode   string
@@ -171,12 +182,6 @@ func TestMkfifoSymbolicMode(t *testing.T) {
 func TestMkfifoContextNoop(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := runTool(t, dir, "--context", "system_u:object_r:mkfifo_t:s0", "pipe")
-	if runtime.GOOS == "windows" {
-		if code != 1 || !strings.Contains(strings.ToLower(errb), "not supported") {
-			t.Fatalf("windows mkfifo --context: code=%d err=%q", code, errb)
-		}
-		return
-	}
 	if code != 0 || out != "" {
 		t.Fatalf("mkfifo --context: code=%d out=%q err=%q", code, out, errb)
 	}
@@ -195,21 +200,19 @@ func TestMkfifoContextNoop(t *testing.T) {
 }
 
 func TestMkfifoMultipleOperands(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
-	}
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "-m", "600", "a", "b", "c")
 	if code != 0 || errb != "" {
 		t.Fatalf("mkfifo a b c: code=%d err=%q", code, errb)
 	}
 	for _, name := range []string{"a", "b", "c"} {
+		assertFIFO(t, filepath.Join(dir, name))
+		if runtime.GOOS == "windows" {
+			continue // perm bits are unix-only; see the recorded-ACL note above
+		}
 		fi, err := os.Lstat(filepath.Join(dir, name))
 		if err != nil {
-			t.Fatalf("missing %s: %v", name, err)
-		}
-		if fi.Mode()&os.ModeNamedPipe == 0 {
-			t.Errorf("%s is not a FIFO: %v", name, fi.Mode())
+			t.Fatal(err)
 		}
 		if fi.Mode().Perm() != 0o600 {
 			t.Errorf("%s mode=%o, want 600", name, fi.Mode().Perm())
@@ -218,9 +221,6 @@ func TestMkfifoMultipleOperands(t *testing.T) {
 }
 
 func TestMkfifoPartialFailureContinues(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
-	}
 	dir := t.TempDir()
 	// Pre-create an entry so the middle operand fails; the others must still
 	// succeed and the exit code is 1, not 2 (system error, not usage error).
@@ -235,19 +235,13 @@ func TestMkfifoPartialFailureContinues(t *testing.T) {
 		t.Errorf("missing mid error in %q", errb)
 	}
 	for _, name := range []string{"good", "good2"} {
-		fi, err := os.Lstat(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("expected %s created despite partial failure: %v", name, err)
-		}
-		if fi.Mode()&os.ModeNamedPipe == 0 {
-			t.Errorf("%s is not a FIFO", name)
-		}
+		assertFIFO(t, filepath.Join(dir, name))
 	}
 }
 
 func TestMkfifoOctalSpecialBits(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
+		t.Skip("perm-bit assertions are unix-only: Windows modes live in the recorded ACL (tool/mode.go)")
 	}
 	tests := []struct {
 		mode   string
@@ -292,21 +286,12 @@ func TestMkfifoOctalSpecialBits(t *testing.T) {
 // POSIX Issue 7: each file operand is a pathname; "-" has no stdin meaning
 // for mkfifo and names an ordinary FIFO called "-".
 func TestMkfifoDashOperandIsPathname(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
-	}
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "-")
 	if code != 0 || errb != "" {
 		t.Fatalf("mkfifo -: code=%d err=%q", code, errb)
 	}
-	fi, err := os.Lstat(filepath.Join(dir, "-"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode()&os.ModeNamedPipe == 0 {
-		t.Fatalf("mode=%v, want named pipe", fi.Mode())
-	}
+	assertFIFO(t, filepath.Join(dir, "-"))
 }
 
 // POSIX Issue 7: "--" ends option parsing, after which a dash-prefixed token
@@ -314,27 +299,15 @@ func TestMkfifoDashOperandIsPathname(t *testing.T) {
 // mode option (and demand an argument), so its acceptance as a FIFO name is
 // positive proof that "--" delimits the option list.
 func TestMkfifoDoubleDashEndsOptions(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
-	}
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "--", "-m")
 	if code != 0 || errb != "" {
 		t.Fatalf("mkfifo -- -m: code=%d err=%q", code, errb)
 	}
-	fi, err := os.Lstat(filepath.Join(dir, "-m"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode()&os.ModeNamedPipe == 0 {
-		t.Fatalf("mode=%v, want named pipe", fi.Mode())
-	}
+	assertFIFO(t, filepath.Join(dir, "-m"))
 }
 
 func TestMkfifoPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
-	}
 	dir := t.TempDir()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
@@ -345,19 +318,13 @@ func TestMkfifoPOSIXStopsOptionsAtFirstOperand(t *testing.T) {
 		t.Fatalf("mkfifo first -m --: code=%d err=%q", code, errb.String())
 	}
 	for _, name := range []string{"first", "-m", "--"} {
-		fi, err := os.Lstat(filepath.Join(dir, name))
-		if err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
-			t.Errorf("POSIX operand %q was not created as a FIFO: mode=%v err=%v", name, fi, err)
-		}
+		assertFIFO(t, filepath.Join(dir, name))
 	}
 }
 
 // POSIX Issue 7 STDIN: "The standard input shall not be used." mkfifo must
 // create its FIFOs without reading a single byte of standard input.
 func TestMkfifoDoesNotConsumeStdin(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native FIFO creation is unsupported on windows")
-	}
 	dir := t.TempDir()
 	const payload = "mkfifo must not read standard input\n"
 	in := strings.NewReader(payload)
