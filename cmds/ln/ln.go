@@ -177,7 +177,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		var err error
 		if *symbolic {
-			err = os.Symlink(linkTarget, destPath)
+			err = createSymlink(linkTarget, destPath, srcPath)
 		} else {
 			err = createHardLink(rc.Path(target), destPath, *logical)
 		}
