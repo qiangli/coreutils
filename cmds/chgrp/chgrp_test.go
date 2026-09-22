@@ -107,6 +107,11 @@ func TestChgrpErrors(t *testing.T) {
 	}
 }
 
+// On a platform with no POSIX uid/gid ownership chgrp is a SUCCESSFUL
+// NO-OP: there is no ownership for it to change, and refusing outright
+// derailed bash's test.tests over an operation the platform cannot have.
+// The operand check survives — that one is real everywhere. See
+// chgrp_other.go for the full rationale.
 func TestChgrpWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("windows-only assertion")
@@ -115,9 +120,19 @@ func TestChgrpWindows(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, errb, code := runTool(t, dir, "somegroup", "f")
-	if code != 1 || !strings.Contains(errb, "not supported on windows") {
-		t.Errorf("windows: code=%d err=%q", code, errb)
+	out, errb, code := runTool(t, dir, "somegroup", "f")
+	if code != 0 || out != "" || errb != "" {
+		t.Errorf("windows no-op: code=%d out=%q err=%q", code, out, errb)
+	}
+	// A missing operand still fails, with the GNU diagnostic.
+	_, errb, code = runTool(t, dir, "somegroup", "no-such-file")
+	if code != 1 || !strings.Contains(errb, "cannot access 'no-such-file'") {
+		t.Errorf("windows missing operand: code=%d err=%q", code, errb)
+	}
+	// -f suppresses the message but not the failure.
+	_, errb, code = runTool(t, dir, "-f", "somegroup", "no-such-file")
+	if code != 1 || errb != "" {
+		t.Errorf("windows -f missing operand: code=%d err=%q", code, errb)
 	}
 }
 
