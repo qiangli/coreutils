@@ -1335,7 +1335,10 @@ func lookCommand(rc *tool.RunContext, name string) string {
 	for _, dir := range commandSearchPath(pathValue) {
 		cand := name // zero-length element: search the working directory
 		if dir != "" {
-			cand = filepath.Join(dir, name)
+			// tool.OperandJoin: a PATH element arrives in the shell's
+			// spelling (/usr/bin), and filepath.Join would Clean it to
+			// \usr\bin on Windows — out of the mount table and onto C:.
+			cand = tool.OperandJoin(dir, name)
 		}
 		if got := resolve(cand); got != "" {
 			return got
