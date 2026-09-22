@@ -200,6 +200,9 @@ func render(k keyword, withKeyword bool) string {
 	if !withKeyword {
 		return strings.Join(k.Values, ";")
 	}
+	if k.HostRaw {
+		return k.Name + "=" + k.RawValue
+	}
 	switch k.Kind {
 	case kindNumber:
 		return k.Name + "=" + k.Values[0]

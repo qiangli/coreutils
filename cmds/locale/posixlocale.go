@@ -31,6 +31,11 @@ type keyword struct {
 	Kind     valueKind
 	// Values holds one entry for a scalar keyword and N for a list.
 	Values []string
+	// HostRaw preserves the host locale service's original -k value. Some
+	// legacy encodings use an ASCII backslash byte within a multibyte
+	// character, so re-quoting parsed Values would corrupt those bytes.
+	HostRaw  bool
+	RawValue string
 }
 
 func str(cat, name, v string) keyword {

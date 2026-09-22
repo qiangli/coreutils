@@ -38,9 +38,9 @@ func TestParseHostLocaleKeywordsGitBashTimeCategory(t *testing.T) {
 		t.Fatalf("parse Git Bash LC_TIME output: %v", err)
 	}
 	want := []keyword{
-		{Name: "abday", Category: "LC_TIME", Kind: kindStringList, Values: []string{"Sun;Mon;Tue", "Wed;Thu;Fri;Sat"}},
-		{Name: "era", Category: "LC_TIME", Kind: kindString, Values: []string{""}},
-		{Name: "alt_digits", Category: "LC_TIME", Kind: kindString, Values: []string{""}},
+		{Name: "abday", Category: "LC_TIME", Kind: kindStringList, Values: []string{"Sun;Mon;Tue", "Wed;Thu;Fri;Sat"}, HostRaw: true, RawValue: `"Sun;Mon;Tue";"Wed;Thu;Fri;Sat"`},
+		{Name: "era", Category: "LC_TIME", Kind: kindString, Values: []string{""}, HostRaw: true},
+		{Name: "alt_digits", Category: "LC_TIME", Kind: kindString, Values: []string{""}, HostRaw: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsed Git Bash LC_TIME output = %#v, want %#v", got, want)
@@ -80,6 +80,9 @@ func TestHostLocaleProviderCP932TrailBackslash(t *testing.T) {
 	}
 	if got, want := keywords[0].Values, []string{string([]byte{0x8f, 0x5c}), "2"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("raw CP932 alt_digits = %#v, want %#v", got, want)
+	}
+	if got, want := render(keywords[0], true), "alt_digits="+value; got != want {
+		t.Errorf("rendered CP932 alt_digits = %q, want %q", got, want)
 	}
 	if !provider.serves("ja_JP.SJIS") {
 		t.Error("serves(ja_JP.SJIS) = false, want true")

@@ -160,7 +160,7 @@ func parseHostLocaleKeywordsForLocale(locale, category, out string) ([]keyword, 
 		if err != nil {
 			return nil, fmt.Errorf("host locale %s: %w", name, err)
 		}
-		result = append(result, keyword{Name: name, Category: categoryForHostKeyword(category, name), Kind: kind, Values: values})
+		result = append(result, keyword{Name: name, Category: categoryForHostKeyword(category, name), Kind: kind, Values: values, HostRaw: true, RawValue: value})
 	}
 	return result, nil
 }
