@@ -183,6 +183,51 @@ func TestCatUnbufferedFlushesBeforeEOF(t *testing.T) {
 	}
 }
 
+func TestCatDefaultFlushesBeforeEOF(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+
+	var out lockedBuffer
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb},
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- cmd.Run(rc, nil)
+	}()
+
+	if _, err := pw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for out.String() != "x" {
+		select {
+		case <-deadline:
+			t.Fatalf("cat did not flush before EOF; out=%q err=%q", out.String(), errb.String())
+		case <-tick.C:
+		}
+	}
+
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 || errb.String() != "" {
+			t.Fatalf("cat after close: code=%d err=%q", code, errb.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cat did not finish after stdin close")
+	}
+}
+
 func TestCatErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.txt", "one\n")

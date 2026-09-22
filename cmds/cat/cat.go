@@ -278,8 +278,24 @@ func extractShortOnly(args []string) (out []string, e, t, u bool) {
 func catStream(r io.Reader, tw *trackingWriter, o catOpts, st *catState) error {
 	br := bufio.NewReader(r)
 	if o == (catOpts{}) {
-		_, err := io.Copy(tw, br)
-		return err
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := br.Read(buf)
+			if n > 0 {
+				if _, werr := tw.Write(buf[:n]); werr != nil {
+					return werr
+				}
+				if ferr := tw.Flush(); ferr != nil {
+					return ferr
+				}
+			}
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if o == (catOpts{unbuffered: true}) {
 		buf := make([]byte, 32*1024)
