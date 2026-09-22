@@ -2,6 +2,7 @@ package localecmd
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -498,10 +499,13 @@ func TestHostLocaleProviderFiltersFallbackAndDelegatesKeywords(t *testing.T) {
 			t.Fatalf("host service queried unsupported locale %q with %v", locale, args)
 		}
 		switch args[1] {
+		case "LC_CTYPE":
+			return "charmap=\"UTF-8\"\ncode_set_name=\"UTF-8\"\n", "", nil
 		case "LC_COLLATE":
 			return "", "", nil
 		case "charmap":
-			return "charmap=\"UTF-8\"\n", "", nil
+			t.Fatalf("host service must not be queried with standalone -k charmap")
+			return "", "", nil
 		case "LC_NUMERIC":
 			return "decimal_point=\".\"\ngrouping=\"3\"\n", "", nil
 		default:
@@ -566,8 +570,10 @@ func fakeHostLocale(charmap string) hostLocaleRunner {
 			return "LC_CTYPE=\"" + locale + "\"\n", "", nil
 		}
 		switch args[1] {
+		case "LC_CTYPE":
+			return "charmap=\"" + charmap + "\"\ncode_set_name=\"" + charmap + "\"\n", "", nil
 		case "charmap":
-			return "charmap=\"" + charmap + "\"\n", "", nil
+			return "", "standalone -k charmap is not supported by this fake", fmt.Errorf("unexpected standalone charmap query")
 		case "LC_COLLATE":
 			return "", "", nil
 		default:

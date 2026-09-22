@@ -72,11 +72,20 @@ func (p hostLocaleProvider) matchesRequestedCharmap(name string) bool {
 	if !ok {
 		return false
 	}
-	keywords, err := p.query(name, "charmap")
-	if err != nil || len(keywords) != 1 || len(keywords[0].Values) != 1 {
+	keywords, err := p.query(name, "LC_CTYPE")
+	if err != nil {
 		return false
 	}
-	got, ok := canonicalHostCodeset(keywords[0].Values[0])
+	var charmaps []keyword
+	for _, keyword := range keywords {
+		if keyword.Name == "charmap" {
+			charmaps = append(charmaps, keyword)
+		}
+	}
+	if len(charmaps) != 1 || charmaps[0].Kind != kindString || len(charmaps[0].Values) != 1 {
+		return false
+	}
+	got, ok := canonicalHostCodeset(charmaps[0].Values[0])
 	return ok && got == want
 }
 
