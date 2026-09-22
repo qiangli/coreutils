@@ -26,23 +26,30 @@ var (
 // directory exists would report a host that cannot run a conforming program,
 // which is the opposite of the truth.
 func availableLocales(rc *tool.RunContext) []string {
-	return availableLocalesFromProvider(defaultHostLocaleProvider(rc))
+	provider := defaultHostLocaleProvider(rc)
+	if provider == nil {
+		return availableLocalesFromProvider(nil)
+	}
+	return availableLocalesCached(provider, rc.Getenv(hostLocaleCacheEnv), rc.Getenv(hostLocalePathEnv))
 }
 
 func availableLocalesFromProvider(provider *hostLocaleProvider) []string {
+	if provider == nil {
+		return []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8"}
+	}
+	return availableLocalesFromHostNames(provider, provider.names())
+}
+
+func availableLocalesFromHostNames(provider *hostLocaleProvider, names []string) []string {
 	// Do not advertise arbitrary host locale-directory names that localeData
 	// cannot subsequently serve. The German fixture data is carried in the
 	// built-in database for both the single-byte and UTF-8 spellings, so those
 	// names are available on every host too.
 	available := []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8"}
-	if provider == nil {
-		return available
-	}
 	seen := make(map[string]bool, len(available))
 	for _, name := range available {
 		seen[name] = true
 	}
-	names := provider.names()
 	candidates := make([]string, 0, len(names))
 	for _, name := range names {
 		if name != "" && !seen[name] {

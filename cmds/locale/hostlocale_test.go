@@ -3,7 +3,9 @@ package localecmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,6 +13,42 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+func TestVerifiedHostLocaleCacheReusesOnlyMatchingHostNames(t *testing.T) {
+	hostNames := "en_US.UTF-8\n"
+	selected := 0
+	provider := hostLocaleProvider{run: func(env, args []string) (string, string, error) {
+		if len(args) == 1 && args[0] == "-a" {
+			return hostNames, "", nil
+		}
+		name := strings.TrimPrefix(env[0], "LC_ALL=")
+		if len(args) == 0 {
+			selected++
+			return "LC_CTYPE=\"" + name + "\"\n", "", nil
+		}
+		if len(args) == 2 && args[0] == "-k" {
+			if args[1] == "LC_CTYPE" {
+				return "charmap=\"UTF-8\"\n", "", nil
+			}
+			return "yesstr=\"yes\"\n", "", nil
+		}
+		return "", "", fmt.Errorf("unexpected args %v", args)
+	}}
+	path := filepath.Join(t.TempDir(), "host-locales.json")
+	first := availableLocalesCached(&provider, path, "host-locale.exe")
+	if selected != 1 || !slices.Contains(first, "en_US.UTF-8") {
+		t.Fatalf("first listing = %v; selected calls = %d", first, selected)
+	}
+	second := availableLocalesCached(&provider, path, "host-locale.exe")
+	if selected != 1 || !reflect.DeepEqual(second, first) {
+		t.Fatalf("cached listing = %v; selected calls = %d", second, selected)
+	}
+	hostNames += "fr_FR.UTF-8\n"
+	third := availableLocalesCached(&provider, path, "host-locale.exe")
+	if selected != 3 || !slices.Contains(third, "fr_FR.UTF-8") {
+		t.Fatalf("changed host listing = %v; selected calls = %d", third, selected)
+	}
+}
 
 func TestHostLocaleServiceabilityRunsConcurrentlyWithoutChangingListing(t *testing.T) {
 	var active, maxActive atomic.Int32

@@ -20,6 +20,10 @@ const (
 	// The fixture provisioner may add candidate names here (semicolon or newline
 	// separated); every candidate is still verified against the host service.
 	hostLocaleNamesEnv = "BASHY_HOST_LOCALE_NAMES"
+	// The Bashy fixture runner gives each Windows suite a private root. This
+	// optional path lets separate locale applet processes reuse a listing whose
+	// names were already checked against every host category in that root.
+	hostLocaleCacheEnv = "BASHY_HOST_LOCALE_CACHE"
 )
 
 type hostLocaleRunner func(env []string, args []string) (stdout, stderr string, err error)
