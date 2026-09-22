@@ -492,7 +492,7 @@ func (p *parser) binaryOperator() bool {
 	case "-ef":
 		li, lerr := statOperand(p.rc, left)
 		ri, rerr := statOperand(p.rc, right)
-		return lerr == nil && rerr == nil && os.SameFile(li, ri)
+		return lerr == nil && rerr == nil && tool.SameFile(li, ri)
 	case "-nt", "-ot":
 		li, lerr := statOperand(p.rc, left)
 		ri, rerr := statOperand(p.rc, right)
@@ -661,15 +661,21 @@ func canRetryAgainstDir(rc *tool.RunContext, operand string) bool {
 // handle instead of a materialized absolute string. See
 // openOperandDir for why the plain join can fail where GNU's test would
 // not.
+//
+// The stat goes through tool.Stat so that -u, -g, -k and the -r/-w/-x
+// trio answer for the mode chmod last set, which on a host with no POSIX
+// mode bits is recorded outside the filesystem; the os.Root retry gets
+// the same treatment rather than being the one path that reads a mode
+// nobody set.
 func statOperand(rc *tool.RunContext, operand string) (os.FileInfo, error) {
-	fi, err := os.Stat(rc.Path(operand))
+	fi, err := tool.Stat(rc.Path(operand))
 	if err == nil || !canRetryAgainstDir(rc, operand) {
 		return fi, err
 	}
 	if root, rerr := os.OpenRoot(rc.Dir); rerr == nil {
 		defer root.Close()
 		if fi2, err2 := root.Stat(operand); err2 == nil {
-			return fi2, nil
+			return tool.StatInfo(rc.Path(operand), fi2), nil
 		}
 	}
 	return fi, err
@@ -677,14 +683,14 @@ func statOperand(rc *tool.RunContext, operand string) (os.FileInfo, error) {
 
 // lstatOperand is statOperand for the symlink-preserving primaries (-h/-L).
 func lstatOperand(rc *tool.RunContext, operand string) (os.FileInfo, error) {
-	fi, err := os.Lstat(rc.Path(operand))
+	fi, err := tool.Lstat(rc.Path(operand))
 	if err == nil || !canRetryAgainstDir(rc, operand) {
 		return fi, err
 	}
 	if root, rerr := os.OpenRoot(rc.Dir); rerr == nil {
 		defer root.Close()
 		if fi2, err2 := root.Lstat(operand); err2 == nil {
-			return fi2, nil
+			return tool.StatInfo(rc.Path(operand), fi2), nil
 		}
 	}
 	return fi, err

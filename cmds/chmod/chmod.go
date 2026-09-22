@@ -1,10 +1,13 @@
 // Package chmodcmd implements chmod(1), with POSIX.1-2008 Issue 7 mode
 // semantics and a separately documented set of compatibility extensions.
 //
-// On Windows there are no POSIX mode bits, only FILE_ATTRIBUTE_READONLY;
-// the computed mode is projected onto it the way Cygwin and MSYS do (any
-// write bit clears the attribute, none sets it; everything else is
-// accepted and remembered nowhere) — see hostMode in chmod_apply.go.
+// On Windows there are no POSIX mode bits, only FILE_ATTRIBUTE_READONLY.
+// The computed mode is projected onto that attribute the way Cygwin and
+// MSYS do (any write bit clears it, none sets it) AND recorded in the
+// file's discretionary ACL, so the r/x/s/t bits the attribute cannot
+// express survive to be read back by the next chmod, by test, ls -l and
+// find -perm, and by the shell's own access checks — see hostMode and
+// recordMode in chmod_apply.go and tool/mode.go.
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/chmod (BSD-3-Clause).
 // Changes: rewired to tool framework; symbolic-mode parser extended to

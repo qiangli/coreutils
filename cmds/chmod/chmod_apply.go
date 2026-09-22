@@ -20,6 +20,15 @@ var isFilesystemRoot = rootguard.IsRoot
 // what maps the computed POSIX bits onto that call there.
 var changeMode = os.Chmod
 
+// recordMode is the second half of the transition on a host with no POSIX
+// mode bits: changeMode projects the mode onto the one attribute the
+// platform has, and this writes the mode itself where every reader of a
+// mode — this command's own next invocation, test, ls -l, find -perm, and
+// the shell's access checks — will find it. It is a no-op where the
+// filesystem stores the mode, and a test seam for the same reasons
+// changeMode is one.
+var recordMode = tool.RecordMode
+
 // chmodOpts is the parsed command line plus the file creation mask an
 // omitted-who clause consults (the shell's virtual umask when embedded, the
 // process mask on Unix, the conventional 022 on a host without one).
@@ -32,11 +41,16 @@ type chmodOpts struct {
 // bits. Unix passes them through. Windows has no POSIX mode bits — only
 // FILE_ATTRIBUTE_READONLY — so the bits are projected onto that attribute
 // the way Cygwin and MSYS do: a mode with no write bit anywhere makes the
-// file read-only, a mode with any write bit clears the attribute, and the
-// r/x/s/t bits are accepted, reported by -v, and remembered nowhere. The
-// projection is deliberate (Story #682): refusing outright broke every
-// script that does `chmod +x` or `chmod 644` before running something,
-// while the read-only attribute is the one thing the platform CAN honor.
+// file read-only, and a mode with any write bit clears it. The projection
+// is deliberate (Story #682): refusing outright broke every script that
+// does `chmod +x` or `chmod 644` before running something, while the
+// read-only attribute is the one thing every Windows tool honors.
+//
+// The projection is no longer the whole story: the r/x/s/t bits it cannot
+// express are recorded by recordMode in the file's ACL (Story #686), which
+// is what makes them readable again. The attribute is still set, so a file
+// this command made unwritable looks unwritable to Explorer and to every
+// program that has never heard of the ACL convention.
 func hostMode(bits uint32) os.FileMode {
 	if !readOnlyHost {
 		return bitsToFileMode(bits)
@@ -172,9 +186,13 @@ func reportCycle(rc *tool.RunContext, name string, opts chmodOpts) {
 }
 
 func chmodPath(rc *tool.RunContext, change *modeChange, path, display string, opts chmodOpts, follow bool) bool {
-	stat := os.Stat
+	// tool.Stat, not os.Stat: the mode a symbolic MODE operand starts from
+	// is the file's current mode, and on a host that keeps it outside the
+	// filesystem `chmod -x f` would otherwise compute from 0666 and throw
+	// away everything the last chmod set.
+	stat := tool.Stat
 	if !follow {
-		stat = os.Lstat
+		stat = tool.Lstat
 	}
 	fi, err := stat(path)
 	if err != nil {
@@ -192,6 +210,12 @@ func chmodPath(rc *tool.RunContext, change *modeChange, path, display string, op
 	// permission checking, ctime, and any other filesystem side effects;
 	// treating equality as success would bypass all three.
 	if err := changeMode(path, hostMode(newBits)); err != nil {
+		if !opts.silent {
+			fmt.Fprintf(rc.Err, "chmod: changing permissions of '%s': %v\n", display, reason(err))
+		}
+		return false
+	}
+	if err := recordMode(path, bitsToFileMode(newBits)); err != nil {
 		if !opts.silent {
 			fmt.Fprintf(rc.Err, "chmod: changing permissions of '%s': %v\n", display, reason(err))
 		}

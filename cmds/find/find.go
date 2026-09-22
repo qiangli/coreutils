@@ -1409,7 +1409,7 @@ func (w *walker) noteWriteErr(err error) {
 
 func (w *walker) walkRoot(operand string) {
 	root := w.rc.Path(operand)
-	lst, err := os.Lstat(root)
+	lst, err := tool.Lstat(root)
 	if err != nil {
 		w.reportErr(operand, err)
 		return
@@ -1434,7 +1434,7 @@ func (w *walker) walkRoot(operand string) {
 // back to the link's own data per POSIX (-type then matches 'l');
 // any other failure (ELOOP, permission) is diagnosed.
 func (w *walker) followLink(disp, osPath string, lst fs.FileInfo) fs.FileInfo {
-	st, err := os.Stat(osPath)
+	st, err := tool.Stat(osPath)
 	if err == nil {
 		return st
 	}
@@ -1457,7 +1457,9 @@ func (w *walker) visit(disp, osPath string, rel []string, info fs.FileInfo, dept
 	if descend && w.follow == 'L' {
 		// Loop detection: following symlinks can revisit an ancestor.
 		for _, a := range ancestors {
-			if os.SameFile(a, info) {
+			// tool.SameFile: these FileInfos may carry a recorded mode,
+			// and os.SameFile recognizes only the platform's own type.
+			if tool.SameFile(a, info) {
 				w.reportErr(disp, errors.New("file system loop detected"))
 				return
 			}

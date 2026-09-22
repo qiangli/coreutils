@@ -25,12 +25,19 @@ var errNoOwnership = errors.New("file ownership tests need POSIX uid/gid, which 
 
 func ownedByEffective(*tool.RunContext, string, bool) (bool, error) { return false, errNoOwnership }
 
-// accessOK answers -r/-w/-x with the Windows notions of the three
-// permissions: everything that can be stat'ed can be read; writability
-// is the read-only attribute (which Go surfaces as the 0200 mode bit);
-// and executability is directory search, or an extension listed in
-// PATHEXT — the same rule RunContext.ResolveExecutable applies, and the
-// rule Windows uses to decide what it will run.
+// accessOK answers -r/-w/-x.
+//
+// A mode chmod set is recorded in the file's ACL and comes back through
+// statOperand, and when it is there it IS the answer — that is what makes
+// `chmod a-r f; test -r f` false here, and what makes this applet and the
+// shell's own `test -r` agree, since both read the same record.
+//
+// With no recorded mode the platform's own notions stand: everything that
+// can be stat'ed can be read; writability is the read-only attribute
+// (which Go surfaces as the 0200 mode bit); and executability is directory
+// search, or an extension listed in PATHEXT — the same rule
+// RunContext.ResolveExecutable applies, and the rule Windows uses to
+// decide what it will run.
 //
 // Resolution goes through statOperand rather than a plain os.Stat on
 // the joined path, so a long-but-valid working directory does not turn
@@ -40,6 +47,16 @@ func accessOK(rc *tool.RunContext, operand string, op byte) (bool, error) {
 	fi, err := statOperand(rc, operand)
 	if err != nil {
 		return false, nil
+	}
+	if tool.ModeRecorded(fi) {
+		switch op {
+		case 'r':
+			return fi.Mode()&0400 != 0, nil
+		case 'w':
+			return fi.Mode()&0200 != 0, nil
+		default: // 'x'
+			return fi.Mode()&0100 != 0, nil
+		}
 	}
 	switch op {
 	case 'r':
