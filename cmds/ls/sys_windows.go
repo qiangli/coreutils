@@ -14,7 +14,14 @@ import (
 // equivalent: nlink reports 1 and blocks derive from the apparent
 // size.
 func sysOf(fi os.FileInfo, path string) sysInfo {
-	owner, group, ownerNum, groupNum := ownerGroup(path)
+	var owner, group, ownerNum, groupNum string
+	// A named-pipe path is a connection endpoint, not a filesystem object
+	// whose ACL can be queried harmlessly. GetNamedSecurityInfo may connect
+	// to it, consuming the first process-substitution reader and allowing
+	// its server to close before a second ls of the same path.
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		owner, group, ownerNum, groupNum = ownerGroup(path)
+	}
 	return sysInfo{
 		nlink:     1,
 		owner:     owner,

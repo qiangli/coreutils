@@ -102,7 +102,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 3 | 32 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 2 | 10 |
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 34 |
-| `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 5 | 70 |
+| `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 6 | 71 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 34 |
 | `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 4 | 37 |
 | `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 4 | 37 |
