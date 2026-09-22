@@ -135,6 +135,13 @@ func (r *rm) remove1(op string) bool {
 		r.errf("failed to remove '%s': Invalid argument", op)
 		return false
 	}
+	if err, terminal := terminalDotDotError(r.rc, op); terminal {
+		if r.ignoreNonEmpty && isNonEmpty(err) {
+			return false
+		}
+		r.errf("failed to remove '%s': %s", op, reason(err))
+		return false
+	}
 	rp := rawOperandPath(r.rc, op)
 	fi, err := pathops.Lstat(rp)
 	if err != nil {
@@ -145,7 +152,7 @@ func (r *rm) remove1(op string) bool {
 		r.errf("failed to remove '%s': Not a directory", op)
 		return false
 	}
-	if err := pathops.Remove(rp); err != nil {
+	if err := removeDirectory(rp, fi); err != nil {
 		if r.ignoreNonEmpty && isNonEmpty(err) {
 			return false
 		}
