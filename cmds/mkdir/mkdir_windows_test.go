@@ -50,6 +50,35 @@ func TestMkdirModeRecordsOnWindows(t *testing.T) {
 	}
 }
 
+func TestMkdirSymbolicModesForGlobFixtureOnWindows(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		mode string
+		name string
+		want os.FileMode
+	}{
+		{mode: "a=x", name: "searchable", want: 0o111},
+		{mode: "a=r", name: "readable", want: 0o444},
+	} {
+		_, errb, code := runTool(t, dir, "-m", tc.mode, tc.name)
+		if code != 0 {
+			t.Fatalf("mkdir -m %s: code=%d err=%q", tc.mode, code, errb)
+		}
+		path := filepath.Join(dir, tc.name)
+		t.Cleanup(func() {
+			_ = tool.RecordMode(path, 0o700)
+			_ = os.Chmod(path, 0o666)
+		})
+		fi, err := tool.Stat(path)
+		if err != nil || !fi.IsDir() {
+			t.Fatalf("stat %s: %v", tc.name, err)
+		}
+		if got := fi.Mode().Perm(); got != tc.want {
+			t.Errorf("mkdir -m %s recorded %03o, want %03o", tc.mode, got, tc.want)
+		}
+	}
+}
+
 func TestMkdirVirtualUmaskDoesNotApproximatePOSIXModesOnWindows(t *testing.T) {
 	dir := t.TempDir()
 	var chmodCalled bool
