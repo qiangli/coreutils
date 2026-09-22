@@ -272,7 +272,7 @@ func (d data) keyword(name string) (keyword, bool) {
 // or an error naming the locale this build cannot describe.
 func localeData(rc *tool.RunContext, cat string) (data, error) {
 	name := locale.Resolve(rc.Env, locale.Category(cat))
-	if provider := defaultHostLocaleProvider(rc); provider != nil && provider.selected(name) {
+	if provider := defaultHostLocaleProvider(rc); provider != nil && provider.serves(name) {
 		if keywords, err := provider.query(name, cat); err == nil {
 			return data{name: name, keywords: keywords}, nil
 		}

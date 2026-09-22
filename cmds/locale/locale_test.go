@@ -520,6 +520,62 @@ func TestHostLocaleProviderFiltersFallbackAndDelegatesKeywords(t *testing.T) {
 	}
 }
 
+func TestHostLocaleProviderCharmapAliasesAndRawBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+		got  string
+		ok   bool
+	}{
+		{"UTF-8 aliases", "en_US.UTF-8", "utf8", true},
+		{"ISO-8859-1 aliases", "de_DE.ISO8859-1", "ISO-8859-1", true},
+		{"BIG5 aliases", "zh_TW.BIG5", "big5", true},
+		{"SJIS maps to CP932", "ja_JP.SJIS", "CP932", true},
+		{"SHIFT maps to CP932", "ja_JP.SHIFT", "cp932", true},
+		{"CP1251 aliases", "ru_RU.CP1251", "windows-1251", true},
+		{"Big5-HKSCS aliases", "zh_HK.big5hkscs", "BIG5-HKSCS", true},
+		{"Big5 is not Big5-HKSCS", "zh_HK.big5hkscs", "BIG5", false},
+		{"C fallback is not Big5-HKSCS", "zh_HK.big5hkscs", "ANSI_X3.4-1968", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := hostLocaleProvider{run: fakeHostLocale(tc.got)}
+			if got := provider.serves(tc.want); got != tc.ok {
+				t.Fatalf("serves(%q) = %v, want %v (charmap %q)", tc.want, got, tc.ok, tc.got)
+			}
+		})
+	}
+
+	keywords, err := parseHostLocaleKeywords("LC_MESSAGES", "yesstr=\"\xe4\"\n")
+	if err != nil || len(keywords) != 1 {
+		t.Fatalf("parse raw ISO-8859-1 locale bytes = %#v, %v", keywords, err)
+	}
+	if got, want := render(keywords[0], true), "yesstr=\"\xe4\""; got != want {
+		t.Errorf("render raw ISO-8859-1 locale bytes = %q, want %q", got, want)
+	}
+}
+
+func fakeHostLocale(charmap string) hostLocaleRunner {
+	return func(env, args []string) (string, string, error) {
+		locale := ""
+		for _, entry := range env {
+			if strings.HasPrefix(entry, "LC_ALL=") {
+				locale = strings.TrimPrefix(entry, "LC_ALL=")
+			}
+		}
+		if len(args) == 0 {
+			return "LC_CTYPE=\"" + locale + "\"\n", "", nil
+		}
+		switch args[1] {
+		case "charmap":
+			return "charmap=\"" + charmap + "\"\n", "", nil
+		case "LC_COLLATE":
+			return "", "", nil
+		default:
+			return "yesstr=\"yes\"\n", "", nil
+		}
+	}
+}
+
 func TestHostLocaleNamesProvisioningFormat(t *testing.T) {
 	got := hostLocaleNames("ja_JP.SJIS;\nfr_FR.ISO8859-1\r\n")
 	want := []string{"fr_FR.ISO8859-1", "ja_JP.SJIS"}

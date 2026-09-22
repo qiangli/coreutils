@@ -51,13 +51,57 @@ func (p hostLocaleProvider) serves(name string) bool {
 	if !p.selected(name) {
 		return false
 	}
+	if !p.matchesRequestedCharmap(name) {
+		return false
+	}
 	for _, category := range categories {
 		if _, err := p.query(name, category); err != nil {
 			return false
 		}
 	}
+	return true
+}
+
+// matchesRequestedCharmap checks the data the service actually selected, not
+// merely the label echoed by `locale`. Git Bash can echo a requested name yet
+// supply C or plain Big5 data for it. Keep this deliberately small and
+// explicit: an unknown spelling is not evidence that two encodings are equal.
+func (p hostLocaleProvider) matchesRequestedCharmap(name string) bool {
+	_, requested := splitLocaleName(name)
+	want, ok := canonicalHostCodeset(requested)
+	if !ok {
+		return false
+	}
 	keywords, err := p.query(name, "charmap")
-	return err == nil && len(keywords) == 1 && keywords[0].Values[0] != ""
+	if err != nil || len(keywords) != 1 || len(keywords[0].Values) != 1 {
+		return false
+	}
+	got, ok := canonicalHostCodeset(keywords[0].Values[0])
+	return ok && got == want
+}
+
+// canonicalHostCodeset recognizes only the aliases required by the provisioned
+// locale corpus. In particular, BIG5-HKSCS is distinct from BIG5: accepting
+// the latter for zh_HK.big5hkscs would silently advertise a fallback.
+func canonicalHostCodeset(codeset string) (string, bool) {
+	normalized := strings.ToUpper(codeset)
+	normalized = strings.NewReplacer("-", "", "_", "", ".", "").Replace(normalized)
+	switch normalized {
+	case "UTF8":
+		return "UTF8", true
+	case "ISO88591":
+		return "ISO88591", true
+	case "BIG5":
+		return "BIG5", true
+	case "BIG5HKSCS":
+		return "BIG5HKSCS", true
+	case "CP932", "SJIS", "SHIFT", "SHIFTJIS":
+		return "CP932", true
+	case "CP1251", "WINDOWS1251":
+		return "CP1251", true
+	default:
+		return "", false
+	}
 }
 
 // selected verifies the host did not silently substitute C for an unsupported
@@ -125,7 +169,7 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 		if len(part) < 2 || part[0] != '"' || part[len(part)-1] != '"' {
 			return nil, kindString, fmt.Errorf("malformed value %q", value)
 		}
-		unquoted, err := strconv.Unquote(part)
+		unquoted, err := unquoteHostLocaleString(part)
 		if err != nil {
 			return nil, kindString, err
 		}
@@ -135,6 +179,71 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 		return values, kindStringList, nil
 	}
 	return values, kindString, nil
+}
+
+// unquoteHostLocaleString is byte-oriented. Host locale(1) output for a
+// single-byte codeset can contain bytes which are not valid UTF-8; strconv's
+// Go-string decoder replaces those bytes with U+FFFD. Keep them intact so the
+// delegated locale -k result remains usable in its advertised codeset.
+func unquoteHostLocaleString(value string) (string, error) {
+	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
+		return "", fmt.Errorf("malformed quoted value %q", value)
+	}
+	var out []byte
+	for i := 1; i < len(value)-1; i++ {
+		c := value[i]
+		if c != '\\' {
+			out = append(out, c)
+			continue
+		}
+		i++
+		if i >= len(value)-1 {
+			return "", fmt.Errorf("unfinished escape in %q", value)
+		}
+		switch value[i] {
+		case 'a':
+			out = append(out, '\a')
+		case 'b':
+			out = append(out, '\b')
+		case 'f':
+			out = append(out, '\f')
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 't':
+			out = append(out, '\t')
+		case 'v':
+			out = append(out, '\v')
+		case '\\', '"':
+			out = append(out, value[i])
+		case 'x':
+			if i+2 >= len(value)-1 {
+				return "", fmt.Errorf("short hex escape in %q", value)
+			}
+			n, err := strconv.ParseUint(value[i+1:i+3], 16, 8)
+			if err != nil {
+				return "", fmt.Errorf("bad hex escape in %q: %w", value, err)
+			}
+			out = append(out, byte(n))
+			i += 2
+		default:
+			if value[i] < '0' || value[i] > '7' {
+				return "", fmt.Errorf("unsupported escape in %q", value)
+			}
+			end := i + 1
+			for end < len(value)-1 && end < i+3 && value[end] >= '0' && value[end] <= '7' {
+				end++
+			}
+			n, err := strconv.ParseUint(value[i:end], 8, 8)
+			if err != nil {
+				return "", fmt.Errorf("bad octal escape in %q: %w", value, err)
+			}
+			out = append(out, byte(n))
+			i = end - 1
+		}
+	}
+	return string(out), nil
 }
 
 func hostLocaleNames(value string) []string {
