@@ -54,3 +54,41 @@ func TestParseHostLocaleValueRejectsMalformedOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestHostLocaleProviderCP932TrailBackslash(t *testing.T) {
+	// 0x8f 0x5c is one CP932 character. The following quote closes the
+	// first list element and the semicolon starts the second one.
+	raw := []byte{'"', 0x8f, 0x5c, '"', ';', '"', '2', '"'}
+	value := string(raw)
+	provider := hostLocaleProvider{run: func(env, args []string) (string, string, error) {
+		if len(args) == 0 {
+			return "LC_CTYPE=\"ja_JP.SJIS\"\n", "", nil
+		}
+		switch args[1] {
+		case "LC_CTYPE":
+			return "charmap=\"CP932\"\ncode_set_name=\"CP932\"\n", "", nil
+		case "LC_TIME":
+			return "alt_digits=" + value + "\n", "", nil
+		default:
+			return "yesstr=\"yes\"\n", "", nil
+		}
+	}}
+
+	keywords, err := provider.query("ja_JP.SJIS", "LC_TIME")
+	if err != nil || len(keywords) != 1 {
+		t.Fatalf("query CP932 LC_TIME = %#v, %v", keywords, err)
+	}
+	if got, want := keywords[0].Values, []string{string([]byte{0x8f, 0x5c}), "2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("raw CP932 alt_digits = %#v, want %#v", got, want)
+	}
+	if !provider.serves("ja_JP.SJIS") {
+		t.Error("serves(ja_JP.SJIS) = false, want true")
+	}
+
+	if _, _, err := parseHostLocaleValueForLocale("ja_JP.SJIS", `"bad\q"`); err == nil {
+		t.Error("CP932 parser accepted malformed ASCII escape")
+	}
+	if _, _, err := parseHostLocaleValueForLocale("de_DE.ISO-8859-1", value); err == nil {
+		t.Error("non-CP932 parser accepted CP932 trail backslash")
+	}
+}

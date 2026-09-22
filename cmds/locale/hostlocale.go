@@ -139,10 +139,14 @@ func (p hostLocaleProvider) query(name, category string) ([]keyword, error) {
 		}
 		return nil, fmt.Errorf("host locale %s: %w", category, err)
 	}
-	return parseHostLocaleKeywords(category, out)
+	return parseHostLocaleKeywordsForLocale(name, category, out)
 }
 
 func parseHostLocaleKeywords(category, out string) ([]keyword, error) {
+	return parseHostLocaleKeywordsForLocale("", category, out)
+}
+
+func parseHostLocaleKeywordsForLocale(locale, category, out string) ([]keyword, error) {
 	var result []keyword
 	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
 		if line == "" {
@@ -152,7 +156,7 @@ func parseHostLocaleKeywords(category, out string) ([]keyword, error) {
 		if !ok || name == "" {
 			return nil, fmt.Errorf("malformed host locale output %q", line)
 		}
-		values, kind, err := parseHostLocaleValue(value)
+		values, kind, err := parseHostLocaleValueForLocale(locale, value)
 		if err != nil {
 			return nil, fmt.Errorf("host locale %s: %w", name, err)
 		}
@@ -169,6 +173,10 @@ func categoryForHostKeyword(requested, name string) string {
 }
 
 func parseHostLocaleValue(value string) ([]string, valueKind, error) {
+	return parseHostLocaleValueForLocale("", value)
+}
+
+func parseHostLocaleValueForLocale(locale, value string) ([]string, valueKind, error) {
 	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return []string{value}, kindNumber, nil
 	}
@@ -176,7 +184,8 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 		// Git Bash emits empty LC_TIME era fields as era= and alt_digits=.
 		return []string{""}, kindString, nil
 	}
-	parts, err := splitHostLocaleValue(value)
+	cp932 := hostLocaleUsesCP932(locale)
+	parts, err := splitHostLocaleValueForCP932(value, cp932)
 	if err != nil {
 		return nil, kindString, err
 	}
@@ -185,7 +194,7 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 		if len(part) < 2 || part[0] != '"' || part[len(part)-1] != '"' {
 			return nil, kindString, fmt.Errorf("malformed value %q", value)
 		}
-		unquoted, err := unquoteHostLocaleString(part)
+		unquoted, err := unquoteHostLocaleStringForCP932(part, cp932)
 		if err != nil {
 			return nil, kindString, err
 		}
@@ -201,11 +210,19 @@ func parseHostLocaleValue(value string) ([]string, valueKind, error) {
 // locale(1). A semicolon is a list separator only outside a quoted value;
 // locale data itself may contain semicolons (for example in abday).
 func splitHostLocaleValue(value string) ([]string, error) {
+	return splitHostLocaleValueForCP932(value, false)
+}
+
+func splitHostLocaleValueForCP932(value string, cp932 bool) ([]string, error) {
 	var parts []string
 	start := 0
 	inQuotes := false
 	escaped := false
 	for i := 0; i < len(value); i++ {
+		if cp932 && cp932LeadByte(value[i]) && i+1 < len(value) && cp932TrailByte(value[i+1]) {
+			i++
+			continue
+		}
 		switch {
 		case escaped:
 			escaped = false
@@ -229,12 +246,21 @@ func splitHostLocaleValue(value string) ([]string, error) {
 // Go-string decoder replaces those bytes with U+FFFD. Keep them intact so the
 // delegated locale -k result remains usable in its advertised codeset.
 func unquoteHostLocaleString(value string) (string, error) {
+	return unquoteHostLocaleStringForCP932(value, false)
+}
+
+func unquoteHostLocaleStringForCP932(value string, cp932 bool) (string, error) {
 	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
 		return "", fmt.Errorf("malformed quoted value %q", value)
 	}
 	var out []byte
 	for i := 1; i < len(value)-1; i++ {
 		c := value[i]
+		if cp932 && cp932LeadByte(c) && i+1 < len(value)-1 && cp932TrailByte(value[i+1]) {
+			out = append(out, c, value[i+1])
+			i++
+			continue
+		}
 		if c != '\\' {
 			out = append(out, c)
 			continue
@@ -287,6 +313,23 @@ func unquoteHostLocaleString(value string) (string, error) {
 		}
 	}
 	return string(out), nil
+}
+
+// hostLocaleUsesCP932 is deliberately limited to names whose codeset is one
+// of the CP932 aliases we advertise. Other non-UTF-8 locale data remains
+// subject to the ordinary byte-oriented quoting rules.
+func hostLocaleUsesCP932(locale string) bool {
+	_, codeset := splitLocaleName(locale)
+	canonical, ok := canonicalHostCodeset(codeset)
+	return ok && canonical == "CP932"
+}
+
+func cp932LeadByte(b byte) bool {
+	return b >= 0x81 && b <= 0x9f || b >= 0xe0 && b <= 0xfc
+}
+
+func cp932TrailByte(b byte) bool {
+	return b >= 0x40 && b <= 0x7e || b >= 0x80 && b <= 0xfc
 }
 
 func hostLocaleNames(value string) []string {
