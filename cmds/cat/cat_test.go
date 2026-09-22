@@ -285,6 +285,41 @@ func TestCatSameFile(t *testing.T) {
 	})
 }
 
+// A pipe on stdout is never "the same file" as a pipe on stdin: GNU cat only
+// guards a REGULAR output file, and on Windows os.SameFile calls every
+// anonymous pipe identical, which made `echo x | cat` refuse to run.
+func TestCatPipesAreNeverSameFile(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inW.WriteString("hello\n"); err != nil {
+		t.Fatal(err)
+	}
+	inW.Close()
+	got := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(outR)
+		got <- string(b)
+	}()
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: inR, Out: outW, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"-"})
+	outW.Close()
+	inR.Close()
+	if out := <-got; code != 0 || out != "hello\n" || errb.Len() != 0 {
+		t.Fatalf("cat over pipes = code %d, out %q, err %q; want 0, hello, empty", code, out, errb.String())
+	}
+}
+
 type failWriter struct{}
 
 func (failWriter) Write(p []byte) (int, error) {

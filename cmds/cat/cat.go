@@ -137,9 +137,16 @@ func run(rc *tool.RunContext, args []string) int {
 		files = []string{"-"}
 	}
 
+	// GNU cat refuses to copy a file onto itself only when the output is a
+	// REGULAR file (cat.c: out_isreg && SAME_INODE). Pipes and devices are
+	// never "the same file" in that sense — and on Windows os.SameFile
+	// reports every anonymous pipe as identical (no volume/index), so the
+	// regular-file guard is also what keeps `echo x | cat` working there.
 	var outFi os.FileInfo
 	if f, ok := rc.Out.(*os.File); ok {
-		outFi, _ = f.Stat()
+		if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() {
+			outFi = fi
+		}
 	}
 
 	bw := bufio.NewWriter(rc.Out)
