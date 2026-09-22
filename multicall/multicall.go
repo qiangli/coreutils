@@ -29,8 +29,15 @@ import (
 //
 // The returned listOnly is true when the multicall front-end was asked to
 // list available tools rather than run one (no operand, or "--list").
+//
+// The basename is taken as a login shell takes it: ONE leading dash is
+// stripped (bash's `exec -l printenv`, and every login(1)-style launcher,
+// spell argv[0] as "-printenv" — see execve(2)/bash(1) "-l"), and a
+// Windows ".exe" suffix is dropped case-insensitively (the filesystem
+// that put it there is case-insensitive too, so LS.EXE and ls.exe are the
+// same program).
 func Resolve(argv0 string, args []string, selfNames ...string) (name string, toolArgs []string, listOnly bool) {
-	base := strings.TrimSuffix(filepath.Base(argv0), ".exe")
+	base := commandName(argv0)
 	for _, self := range selfNames {
 		if base == self {
 			if len(args) == 0 || args[0] == "--list" {
@@ -40,6 +47,21 @@ func Resolve(argv0 string, args []string, selfNames ...string) (name string, too
 		}
 	}
 	return base, args, false
+}
+
+// commandName is the tool name argv0 stands for: its basename, without
+// one leading dash and without a case-insensitive ".exe" suffix. A name
+// that is only a dash, or only ".exe", is left alone rather than reduced
+// to nothing.
+func commandName(argv0 string) string {
+	base := filepath.Base(argv0)
+	if len(base) > 1 && base[0] == '-' {
+		base = base[1:]
+	}
+	if n := len(base) - len(".exe"); n > 0 && strings.EqualFold(base[n:], ".exe") {
+		base = base[:n]
+	}
+	return base
 }
 
 // Dispatch runs the named tool against rc and returns its exit code. It

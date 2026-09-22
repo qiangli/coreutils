@@ -38,6 +38,21 @@ func TestResolve(t *testing.T) {
 		{"argv0 dispatch", "/usr/bin/ls", []string{"-a"}, []string{"coreutils"}, "ls", []string{"-a"}, false},
 		{"argv0 .exe stripped", "/bin/ls.exe", []string{"-a"}, []string{"coreutils"}, "ls", []string{"-a"}, false},
 		{"bashy frontend", "bashy", []string{"grep", "x"}, []string{"coreutils", "bashy"}, "grep", []string{"x"}, false},
+		// bash's `exec -l printenv` (builtins.tests) and every login(1)-style
+		// launcher spell argv[0] with one leading dash: it names the same
+		// program. Story #682.
+		{"login-style argv0", "-printenv", nil, []string{"coreutils"}, "printenv", nil, false},
+		{"login-style argv0 with path", "/usr/bin/-printenv", []string{"FOO"}, []string{"coreutils"}, "printenv", []string{"FOO"}, false},
+		{"login-style frontend", "-bashy", []string{"grep", "x"}, []string{"coreutils", "bashy"}, "grep", []string{"x"}, false},
+		{"only one dash is stripped", "--ls", nil, []string{"coreutils"}, "-ls", nil, false},
+		{"a lone dash stays", "-", nil, []string{"coreutils"}, "-", nil, false},
+		// The .exe suffix is dropped case-insensitively, as the filesystem
+		// that put it there matches names.
+		{"argv0 .EXE stripped", "/bin/LS.EXE", []string{"-a"}, []string{"coreutils"}, "LS", []string{"-a"}, false},
+		{"argv0 .Exe stripped", "ls.Exe", nil, []string{"coreutils"}, "ls", nil, false},
+		{"login-style .exe", "-printenv.exe", nil, []string{"coreutils"}, "printenv", nil, false},
+		{"frontend .EXE", "COREUTILS.EXE", []string{"ls"}, []string{"COREUTILS"}, "ls", nil, false},
+		{"bare .exe stays", ".exe", nil, []string{"coreutils"}, ".exe", nil, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
