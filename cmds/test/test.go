@@ -640,7 +640,7 @@ func openOperandDir(rc *tool.RunContext, operand string) (*os.File, bool) {
 	if !canRetryAgainstDir(rc, operand) {
 		return nil, false
 	}
-	f, err := os.Open(rc.Dir)
+	f, err := os.Open(rc.NativeDir())
 	if err != nil {
 		return nil, false
 	}

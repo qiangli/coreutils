@@ -18,32 +18,47 @@ import (
 // never needed here.
 var pathLengthLimit = 32000
 
+// isAbsPath is pathconv.IsAbsMode: a native C:\x, and a leading slash or
+// backslash in the shell's spelling (/tmp/x, /usr/bin, /c/x, \foo — all of
+// which filepath.IsAbs rejects). A UNC or device path (//server/share,
+// \\.\pipe\x) is absolute too and passes through normalizePath untouched.
 func isAbsPath(p string) bool {
-	if filepath.IsAbs(p) {
-		return true
-	}
-	if p == "" {
-		return false
-	}
-	// A leading slash OR backslash is a drive-relative absolute path on Windows
-	// (we map it onto the system drive); a doubled separator (UNC) is not.
-	if p[0] == '/' || p[0] == '\\' {
-		return len(p) < 2 || (p[1] != '/' && p[1] != '\\')
-	}
-	return false
+	return pathconv.IsAbsMode(p, true)
 }
 
-// normalizePath converts a shell-style path into a real Windows path. It is the
-// tool entry point (RunContext.Path resolves operands through it), so every
-// shell spelling the shared pathconv package recognizes is honored here:
-// /c/foo and /mnt/c/foo -> C:\foo, /dev/null -> NUL, /tmp -> the host temp
-// directory. A drive-less path is just slash-converted (a leading "/" stays
-// drive-relative, as before).
+// normalizePath converts a shell-style path into a real Windows path. It is
+// the tool entry point (RunContext.Path resolves operands through it), so
+// the operand resolves exactly as bashy's interpreter resolves it:
+// shellAbsMode delegates to pathconv.ToOS with the process mount table
+// (BASHY_ROOT: /tmp -> %TEMP%, /bin -> root\usr\bin, /etc -> root\etc,
+// / -> root), the MSYS and WSL drive forms, /dev/null -> NUL and the
+// U+F000 encoding of the characters NTFS refuses. Without a mount table a
+// drive-less /foo lands on C: (the interpreter's own fallback), not the
+// process's current drive.
 func normalizePath(p string) string {
-	if native, ok := shellSpecialPath(p); ok {
-		return native
-	}
-	return filepath.FromSlash(p)
+	return normalizePathIn("", p)
+}
+
+// normalizePathIn is normalizePath with the invocation directory supplying
+// the volume for a drive-relative /foo — the interpreter resolves such an
+// operand against its cwd's drive, so an applet must too.
+func normalizePathIn(dir, p string) string {
+	return shellAbsMode(pathconv.CurrentMounts(), dir, p, true)
+}
+
+// joinPath resolves a relative operand under the invocation directory. The
+// directory may be in the shell's spelling (bashy's in-process applets get
+// hc.Dir as /tmp/x or /c/Users/x): it is converted first, so the join never
+// produces the drive-relative \tmp\x that CreateFile resolves as C:\tmp\x.
+func joinPath(dir, operand string) string {
+	return shellJoinMode(pathconv.CurrentMounts(), dir, operand, true)
+}
+
+// displayName decodes the U+F000 NTFS specials in a name read back from
+// the filesystem (ls output, diagnostics) so it prints as the shell spelled
+// it.
+func displayName(name string) string {
+	return displayNameMode(name, true)
 }
 
 func pathextFromEnv(env []string) []string {
@@ -117,56 +132,14 @@ func systemDrive() string {
 	return sd + `\`
 }
 
-// toOSPath converts a shell path (localFS layer) to a Windows path. It honors
-// every shell spelling the shared pathconv package recognizes (MSYS /c/…,
-// WSL /mnt/c/…, /dev/null, /tmp), then the legacy drive-less
-// "/foo -> SystemDrive" mapping (kept so the toOSPath<->fromOSPath
-// round-trip holds).
+// toOSPath converts a shell path (localFS layer) to a Windows path through
+// the same resolver as normalizePath. The drive-less "/foo -> SystemDrive"
+// mapping survives as ToOS's volume fallback with SystemDrive as the
+// directory, so the toOSPath<->fromOSPath round-trip still holds; under a
+// BASHY_ROOT mount table "/" is the root directory instead, as it is for
+// the interpreter.
 func toOSPath(p string) string {
-	if native, ok := shellSpecialPath(p); ok {
-		return native
-	}
-	if len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/') {
-		return systemDrive() + filepath.FromSlash(p[1:])
-	}
-	return filepath.FromSlash(p)
-}
-
-// shellSpecialPath converts the shell-spelling forms recognized by the shared
-// mvdan.cc/sh/v3/pathconv package — the SAME converter bashy's sh interpreter
-// runs, so a path names the same file inside and outside a script: the
-// MSYS/Git-Bash drive form (/c/…, also \c\… — bashy hands scripts /c/… for
-// $HOME, $TEMP and pwd, and an applet that runs filepath.FromSlash on an
-// operand before resolving it turns that into \c\foo; both must still mean
-// C:\foo, never the drive-relative C:\c\foo), the WSL mount form (/mnt/c/…,
-// forward-slash spelling only, exactly as pathconv defines it), and the two
-// POSIX pseudo-operands /dev/null (-> NUL) and /tmp[/…] (-> the host temp
-// directory). ok=false means p is none of those and the caller applies its
-// own drive-less rule (normalizePath keeps a bare /foo drive-relative;
-// toOSPath maps it onto SystemDrive).
-//
-// The drive form is assembled with FromSlash rather than routed through
-// pathconv.ToOS wholesale: ToOS runs filepath.Clean, and RunContext.Path
-// treats a trailing separator (and every ".." component a caller kept) as
-// semantic, not cosmetic.
-func shellSpecialPath(p string) (string, bool) {
-	if drive, rest, ok := pathconv.DrivePath(p); ok {
-		return string(drive) + ":" + filepath.FromSlash(rest), true
-	}
-	// The pseudo-operand MAPPINGS (which device, which directory) live in
-	// pathconv.ToOS; only the recognition gate is local, so the drive-less
-	// fallbacks above are not subjected to ToOS's volume-prepend rule.
-	if p == "/dev/null" {
-		return pathconv.ToOS("", p), true
-	}
-	if strings.HasPrefix(p, "/tmp") && (len(p) == 4 || p[4] == '/') {
-		out := pathconv.ToOS("", p)
-		if hasTrailingPathSeparator(p) && !hasTrailingPathSeparator(out) {
-			out += `\`
-		}
-		return out, true
-	}
-	return "", false
+	return shellAbsMode(pathconv.CurrentMounts(), systemDrive(), p, true)
 }
 
 // fromOSPath converts a native path back to the shell's spelling via the

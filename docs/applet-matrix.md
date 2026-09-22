@@ -54,7 +54,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 5 | 16 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 5 | 39 |
-| `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 6 | 38 |
+| `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 6 | 39 |
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 5 | 35 |
 | `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 2 | 14 |
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 17 |
@@ -96,7 +96,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 3 | 23 |
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 6 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
-| `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 37 |
+| `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 3 | 41 |
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 24 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 34 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 3 | 32 |

@@ -819,14 +819,19 @@ func (l *lister) listDirWithAncestors(display, full string, header, commandLine 
 			}
 		}
 	}
-	for _, name := range names {
+	for _, onDisk := range names {
+		// The directory entry is spelled as the filesystem stores it; the
+		// listed name is the shell's spelling of it (on Windows the NTFS
+		// specials come back from their U+F000 encoding, so a file created
+		// as x*x lists as x*x). Only the on-disk form is joined for stat.
+		name := tool.DisplayName(onDisk)
 		if !l.opt.all && !l.opt.almostAll && strings.HasPrefix(name, ".") {
 			continue
 		}
 		if matchesAny(name, l.opt.ignore) || (!l.opt.all && !l.opt.almostAll && matchesAny(name, l.opt.hide)) {
 			continue
 		}
-		p := filepath.Join(full, name)
+		p := filepath.Join(full, onDisk)
 		fi, lerr := os.Lstat(p)
 		if lerr != nil {
 			l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(lerr))

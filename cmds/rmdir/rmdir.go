@@ -169,16 +169,8 @@ func rawOperandPath(rc *tool.RunContext, operand string) string {
 	// An absolute operand in the shell's spelling (/tmp/x, or on Windows the
 	// MSYS drive form bashy hands out, /c/Users/…) resolves to its native
 	// form; only a RELATIVE operand is kept raw for the "." semantics above.
-	if native, ok := tool.NativeAbs(operand); ok {
-		return native
-	}
-	if rc.Dir == "" {
-		return operand
-	}
-	if strings.HasSuffix(rc.Dir, string(filepath.Separator)) {
-		return rc.Dir + operand
-	}
-	return rc.Dir + string(filepath.Separator) + operand
+	// RunContext.RawPath is exactly that rule.
+	return rc.RawPath(operand)
 }
 
 func isNonEmpty(err error) bool {

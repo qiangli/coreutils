@@ -8,23 +8,26 @@ import (
 	"mvdan.cc/sh/v3/pathconv"
 )
 
-// TestShellSpecialPathMapping covers the shell-spelling conversions the tool
-// entry points now take from the shared mvdan.cc/sh/v3/pathconv converter:
-// the MSYS/Git-Bash drive form, the WSL mount form, and the /dev/null and
-// /tmp pseudo-operands. Expected values are derived from the official
-// converters' documented behavior, not from prior art:
+// TestShellSpecialPathMapping covers the Windows entry points end to end:
+// normalizePath (rc.Path's absolute case) and toOSPath (the localFS layer)
+// both delegate to the shared mvdan.cc/sh/v3/pathconv converter — the SAME
+// one bashy's sh interpreter runs — so a path names the same file inside and
+// outside a script. Expected values follow the official converters'
+// documented behavior, not prior art:
 //
 //	wslpath -w /mnt/c/Users -> C:\Users   (wslpath(1), WSL distro tool)
 //	cygpath -w /c/Users     -> C:\Users   (cygpath(1); MSYS2 mounts drives at /c)
-//	Cygwin/MSYS map /dev/null onto the NUL device and /tmp onto the
-//	temp directory (Cygwin User's Guide, "Mapping path names").
+//	Cygwin/MSYS map /dev/null onto the NUL device, /tmp onto the temp
+//	directory, and the characters NTFS refuses onto U+F000+c (Cygwin
+//	User's Guide, "Mapping path names"; "Special characters in filenames").
 //
-// Both the rc.Path entry (normalizePath) and the localFS layer (toOSPath)
-// must agree on every one of these; they diverge only on a bare drive-less
-// "/foo", covered at the bottom. The legacy "/foo -> SystemDrive" mapping
+// The mount-table cases (BASHY_ROOT) and the join are covered
+// host-independently in path_shell_test.go; this file pins the tagged
+// wrappers on a real Windows host. The legacy "/foo -> SystemDrive" mapping
 // and the round-trip are covered by TestToOSPath/TestFromOSPath in
 // tool_test.go.
 func TestShellSpecialPathMapping(t *testing.T) {
+	pinNoMounts(t)
 	// Pin pathconv's temp-dir hook so the /tmp expectations are stable.
 	oldTempDir := pathconv.TempDir
 	pathconv.TempDir = func() string { return `C:\Users\me\AppData\Local\Temp` }
@@ -57,6 +60,9 @@ func TestShellSpecialPathMapping(t *testing.T) {
 		// A trailing separator is semantic (RunContext.Path); it survives.
 		{"/tmp/", tmp + `\`},
 		{"/c/Users/", `C:\Users\`},
+		// NTFS-forbidden characters are encoded the Cygwin/MSYS way.
+		{"/tmp/x*x", tmp + "\\x\uf02ax"},
+		{`C:\d\a:b`, "C:\\d\\a\uf03ab"},
 	}
 	for _, c := range cases {
 		if got := normalizePath(c.in); got != c.want {
@@ -69,22 +75,29 @@ func TestShellSpecialPathMapping(t *testing.T) {
 
 	// Boundary: near-miss spellings are NOT drive references or
 	// pseudo-operands (wslpath and cygpath reject or pass these through
-	// too): rc.Path keeps them drive-relative, exactly as before.
-	boundary := []struct{ in, want string }{
-		{"/mnt", `\mnt`},   // bare /mnt is not a drive
-		{"/mnt/", `\mnt\`}, // /mnt/ with no letter
-		{"/mntx/foo", `\mntx\foo`},
-		{`\mnt\c\x`, `\mnt\c\x`}, // WSL form is forward-slash only (pathconv)
-		{"/tmpdir/x", `\tmpdir\x`},
-		{"/tmpx", `\tmpx`},
-		{`\tmp\x`, `\tmp\x`},               // native backslash /tmp is drive-relative
-		{"/dev/tcp/h/80", `\dev\tcp\h\80`}, // only /dev/null is special
-		{"/dev/nullx", `\dev\nullx`},
-		{"/foo/bar", `\foo\bar`},
+	// too). Without a mount table they are drive-less absolute paths, which
+	// the interpreter lands on C: (normalizePath, no directory) or the
+	// system drive (toOSPath). A native backslash spelling (\tmp\x) is
+	// drive-relative in the same way.
+	sd := systemDrive()
+	boundary := []struct{ in, rest string }{
+		{"/mnt", `mnt`}, // bare /mnt is not a drive
+		{"/mnt/", `mnt\`},
+		{"/mntx/foo", `mntx\foo`},
+		{`\mnt\c\x`, `mnt\c\x`}, // WSL form is forward-slash only (pathconv)
+		{"/tmpdir/x", `tmpdir\x`},
+		{"/tmpx", `tmpx`},
+		{`\tmp\x`, `tmp\x`},               // native backslash /tmp is drive-relative
+		{"/dev/tcp/h/80", `dev\tcp\h\80`}, // only /dev/null is special
+		{"/dev/nullx", `dev\nullx`},
+		{"/foo/bar", `foo\bar`},
 	}
 	for _, c := range boundary {
-		if got := normalizePath(c.in); got != c.want {
-			t.Errorf("normalizePath(%q) = %q, want %q", c.in, got, c.want)
+		if got, want := normalizePath(c.in), `C:\`+c.rest; got != want {
+			t.Errorf("normalizePath(%q) = %q, want %q", c.in, got, want)
+		}
+		if got, want := toOSPath(c.in), sd+c.rest; got != want {
+			t.Errorf("toOSPath(%q) = %q, want %q", c.in, got, want)
 		}
 	}
 
@@ -103,5 +116,35 @@ func TestShellSpecialPathMapping(t *testing.T) {
 		if got := toOSPath(c.in); got != c.want {
 			t.Errorf("toOSPath(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestPathUnderMountsWindows drives RunContext.Path on a Windows host with
+// the fixture's mount table installed: the shell-spelled operands and
+// directory the bash-5.3 corpus produces must resolve into the private
+// root and tmp (Story #682).
+func TestPathUnderMountsWindows(t *testing.T) {
+	old := pathconv.CurrentMounts()
+	pathconv.SetMounts(fixtureMounts())
+	t.Cleanup(func() { pathconv.SetMounts(old) })
+
+	rc := &RunContext{Dir: "/tmp/bash-test-1"}
+	cases := []struct{ in, want string }{
+		{"/tmp/bash-test-1", fixtureTmp + `\bash-test-1`},
+		{"/bin/sh", fixtureRoot + `\usr\bin\sh`},
+		{"x", fixtureTmp + `\bash-test-1\x`},
+		{"x*x", fixtureTmp + "\\bash-test-1\\x\uf02ax"},
+		{"sub/", fixtureTmp + `\bash-test-1\sub\`},
+	}
+	for _, c := range cases {
+		if got := rc.Path(c.in); got != c.want {
+			t.Errorf("Path(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if got := rc.NativeDir(); got != fixtureTmp+`\bash-test-1` {
+		t.Errorf("NativeDir() = %q", got)
+	}
+	if got := DisplayName("x\uf02ax"); got != "x*x" {
+		t.Errorf("DisplayName = %q, want x*x", got)
 	}
 }
