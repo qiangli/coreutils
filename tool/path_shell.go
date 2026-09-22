@@ -50,7 +50,7 @@ func shellAbsMode(m *pathconv.Mounts, dir, operand string, windows bool) string 
 		// A relative operand with nothing to join onto: encode the NTFS
 		// specials and spell the separators natively, exactly as the
 		// absolute case does for the remainder under a mount.
-		out = pathconv.EncodeSpecialMode(toBackslash(operand), true)
+		out = toBackslash(pathconv.EncodeShellRelativeMode(operand, true))
 	}
 	if hasTrailingSlashByte(operand) && !hasTrailingSlashByte(out) {
 		out += `\`
@@ -69,7 +69,8 @@ func shellJoinMode(m *pathconv.Mounts, dir, operand string, windows bool) string
 		return filepath.Join(dir, operand)
 	}
 	nativeDir := shellDirMode(m, dir, true)
-	enc := pathconv.EncodeSpecialMode(toBackslash(operand), true)
+	enc := pathconv.EncodeShellRelativeMode(operand, true)
+	enc = toBackslash(enc)
 	if runtime.GOOS == "windows" {
 		return filepath.Join(nativeDir, enc)
 	}
