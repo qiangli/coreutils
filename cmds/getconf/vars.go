@@ -197,6 +197,21 @@ func compileTimeMinimum(name string) bool {
 	return ok
 }
 
+// productConstants are the system variables whose value is a compile-time
+// constant of this multicall or of the C/Go data model every supported
+// target shares (INT_MAX is 2147483647 wherever bashy builds), as opposed
+// to a host capability a platform must be entitled to claim. A platform
+// provider that has no sysconf ABI still answers these from the shared
+// table rather than reporting them undefined.
+var productConstants = map[string]bool{
+	"BC_BASE_MAX": true, "BC_DIM_MAX": true, "BC_SCALE_MAX": true, "BC_STRING_MAX": true,
+	"INT_MAX": true, "LINE_MAX": true,
+}
+
+// ProductConstant reports whether NAME is answered from the product-owned
+// constant table on every platform.
+func productConstant(name string) bool { return productConstants[name] }
+
 func undefinedVal() (string, bool) { return undefined, true }
 
 // systemValue resolves a system variable. The second result reports whether the

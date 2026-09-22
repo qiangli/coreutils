@@ -6,9 +6,12 @@ package getconfcmd
 // that happen to resemble POSIX, LP64, or a Unix default are not claims this
 // platform is entitled to make.
 func platformValue(name string) (string, bool) {
-	// BC_BASE_MAX describes the bc bundled in this multicall, not a host ABI.
-	// Let the shared product-owned value answer it on every supported target.
-	if name == "BC_BASE_MAX" {
+	// A compile-time constant of this multicall or of the data model every
+	// target shares (BC_BASE_MAX describes the bundled bc; INT_MAX and
+	// LINE_MAX are the same number wherever bashy builds) is not a host ABI
+	// claim. Let the shared product-owned value answer it. bash's own
+	// printf7.sub reads `getconf INT_MAX` to build an overflow case.
+	if productConstant(name) {
 		return "", false
 	}
 	// The *_MIN names are specification constants, not Windows capability

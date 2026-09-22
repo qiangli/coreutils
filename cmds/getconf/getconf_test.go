@@ -472,3 +472,23 @@ func TestMissingOperand(t *testing.T) {
 	}
 	_ = os.Getenv
 }
+
+// A compile-time constant of this multicall or of the shared data model is
+// answered on every platform, including one with no sysconf ABI: bash's
+// printf7.sub reads `getconf INT_MAX` to build its overflow case.
+func TestProductConstantsAreNotPlatformClaims(t *testing.T) {
+	for _, name := range []string{"INT_MAX", "LINE_MAX", "BC_BASE_MAX", "BC_DIM_MAX", "BC_SCALE_MAX", "BC_STRING_MAX"} {
+		if !productConstant(name) {
+			t.Errorf("%s should be a product constant", name)
+		}
+	}
+	for _, name := range []string{"ARG_MAX", "OPEN_MAX", "PAGESIZE", "CHILD_MAX", "NGROUPS_MAX"} {
+		if productConstant(name) {
+			t.Errorf("%s is a host capability, not a product constant", name)
+		}
+	}
+	out, _, code := runCmd(t, "INT_MAX")
+	if code != 0 || strings.TrimSpace(out) != "2147483647" {
+		t.Fatalf("getconf INT_MAX = %q (code %d)", out, code)
+	}
+}
