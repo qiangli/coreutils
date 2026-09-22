@@ -5,11 +5,45 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+func TestHostLocaleServiceabilityRunsConcurrentlyWithoutChangingListing(t *testing.T) {
+	var active, maxActive atomic.Int32
+	provider := hostLocaleProvider{parallelism: 3, run: func(env, args []string) (string, string, error) {
+		if len(args) == 1 && args[0] == "-a" {
+			return "ru_RU.UTF-8\nen_US.UTF-8\nfr_FR.UTF-8\n", "", nil
+		}
+		name := strings.TrimPrefix(env[0], "LC_ALL=")
+		if len(args) == 0 {
+			n := active.Add(1)
+			for prev := maxActive.Load(); n > prev && !maxActive.CompareAndSwap(prev, n); prev = maxActive.Load() {
+			}
+			time.Sleep(10 * time.Millisecond)
+			active.Add(-1)
+			return "LC_CTYPE=\"" + name + "\"\n", "", nil
+		}
+		if len(args) == 2 && args[0] == "-k" {
+			if args[1] == "LC_CTYPE" {
+				return "charmap=\"UTF-8\"\n", "", nil
+			}
+			return "yesstr=\"yes\"\n", "", nil
+		}
+		return "", "", fmt.Errorf("unexpected args %v", args)
+	}}
+	got := availableLocalesFromProvider(&provider)
+	want := []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8", "en_US.UTF-8", "fr_FR.UTF-8", "ru_RU.UTF-8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("locale -a = %v, want %v", got, want)
+	}
+	if maxActive.Load() < 2 {
+		t.Fatalf("host verification was serialized; max active = %d", maxActive.Load())
+	}
+}
 
 func TestCommandHostLocaleRunnerWaitsForOutput(t *testing.T) {
 	const helperEnv = "COREUTILS_LOCALE_RUNNER_HELPER"

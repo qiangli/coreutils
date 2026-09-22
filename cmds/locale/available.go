@@ -42,8 +42,16 @@ func availableLocalesFromProvider(provider *hostLocaleProvider) []string {
 	for _, name := range available {
 		seen[name] = true
 	}
-	for _, name := range provider.names() {
-		if name == "" || seen[name] || !provider.serves(name) {
+	names := provider.names()
+	candidates := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "" && !seen[name] {
+			candidates = append(candidates, name)
+		}
+	}
+	valid := provider.serviceable(candidates)
+	for i, name := range candidates {
+		if !valid[i] {
 			continue
 		}
 		seen[name] = true

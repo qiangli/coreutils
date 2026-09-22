@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -26,6 +27,37 @@ type hostLocaleRunner func(env []string, args []string) (stdout, stderr string, 
 type hostLocaleProvider struct {
 	run        hostLocaleRunner
 	candidates []string
+	// Host commands are independent per locale. Only the real Windows provider
+	// enables parallel checks; injected test providers remain sequential.
+	parallelism int
+}
+
+func (p hostLocaleProvider) serviceable(names []string) []bool {
+	valid := make([]bool, len(names))
+	workers := min(p.parallelism, len(names))
+	if workers <= 1 {
+		for i, name := range names {
+			valid[i] = p.serves(name)
+		}
+		return valid
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				valid[i] = p.serves(names[i])
+			}
+		}()
+	}
+	for i := range names {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	return valid
 }
 
 func (p hostLocaleProvider) names() []string {

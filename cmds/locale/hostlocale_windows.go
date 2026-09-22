@@ -17,7 +17,8 @@ func defaultHostLocaleProvider(rc *tool.RunContext) *hostLocaleProvider {
 		return nil
 	}
 	return &hostLocaleProvider{
-		run:        commandHostLocaleRunner(rc, path),
-		candidates: hostLocaleNames(rc.Getenv(hostLocaleNamesEnv)),
+		run:         commandHostLocaleRunner(rc, path),
+		candidates:  hostLocaleNames(rc.Getenv(hostLocaleNamesEnv)),
+		parallelism: 8,
 	}
 }
