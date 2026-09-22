@@ -298,14 +298,14 @@ func TestUnknownNameIsAnErrorButLaterOperandsStillRun(t *testing.T) {
 // The refusal that keeps this honest: a locale whose data this build does not
 // carry is named in the diagnostic, never answered with C's values.
 func TestUnavailableLocaleIsRefusedByName(t *testing.T) {
-	out, errOut, code := runCmd(t, []string{"LC_ALL=de_DE.UTF-8"}, "decimal_point")
+	out, errOut, code := runCmd(t, []string{"LC_ALL=zh_TW.big5"}, "decimal_point")
 	if code == 0 {
 		t.Fatal("a locale with no data must not be answered")
 	}
 	if out != "" {
 		t.Errorf("stdout = %q, want nothing rather than C's decimal point", out)
 	}
-	if !strings.Contains(errOut, "de_DE.UTF-8") {
+	if !strings.Contains(errOut, "zh_TW.big5") {
 		t.Errorf("stderr = %q, want the locale named", errOut)
 	}
 }
@@ -346,6 +346,18 @@ func TestGermanISO88591CodesetAndNumericData(t *testing.T) {
 				t.Fatalf("German charmap = (%q, %q, %d)", plain, plainErr, plainCode)
 			}
 		})
+	}
+}
+
+func TestGermanUTF8Data(t *testing.T) {
+	env := []string{"LC_ALL=de_DE.UTF-8"}
+	out, errOut, code := runCmd(t, env, "-k", "charmap", "mb_cur_max", "mon", "decimal_point")
+	want := "charmap=\"UTF-8\"\n" +
+		"mb_cur_max=4\n" +
+		"mon=\"Januar\";\"Februar\";\"März\";\"April\";\"Mai\";\"Juni\";\"Juli\";\"August\";\"September\";\"Oktober\";\"November\";\"Dezember\"\n" +
+		"decimal_point=\",\"\n"
+	if code != 0 || errOut != "" || out != want {
+		t.Fatalf("German UTF-8 query = (%q, %q, %d), want %q", out, errOut, code, want)
 	}
 }
 
@@ -398,9 +410,9 @@ func TestGermanMessagesDataUsesAuthoritativeYesexpr(t *testing.T) {
 }
 
 // The refusal is per CATEGORY, because each category resolves its own locale.
-// A German LC_MONETARY must not poison an LC_TIME query that is still POSIX.
+// An unsupported LC_MONETARY must not poison an LC_TIME query that is still POSIX.
 func TestRefusalIsPerCategory(t *testing.T) {
-	env := []string{"LANG=C", "LC_MONETARY=de_DE.UTF-8"}
+	env := []string{"LANG=C", "LC_MONETARY=zh_TW.big5"}
 
 	out, errOut, code := runCmd(t, env, "d_fmt")
 	if code != 0 {
@@ -452,7 +464,7 @@ func TestAllLocales(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	got := lines(out)
-	want := []string{"C", "POSIX", "de_DE.ISO-8859-1"}
+	want := []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("locale -a = %v, want exactly supported public locales %v", got, want)
 	}
