@@ -51,7 +51,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `basenc` | `cmds/basenc` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `batch` | `cmds/batch` | — | POSIX/Unix utility | no | yes | 4 | 15 |
 | `bc` | `cmds/bc` | — | POSIX/Unix utility | no | yes | 1 | 15 |
-| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 5 | 16 |
+| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 5 | 17 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 5 | 39 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 8 | 44 |
