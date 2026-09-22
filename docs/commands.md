@@ -40,7 +40,7 @@ File operations:
 | truncate | u-root | -s (K/M/G suffixes), -c |
 | dd | fresh; XSI conv=ascii/ebcdic/ibm tables adapted from FreeBSD `bin/dd/conv_tab.c` (BSD-3-Clause, see THIRD_PARTY_LICENSES.md) | if/of/bs/ibs/obs/count/skip/seek/status=none\|noxfer/conv=notrunc,noerror,sync,block,unblock,lcase,ucase,swab,ascii,ebcdic,ibm; POSIX seek= semantics (preserves skipped blocks, truncates at seek offset); output is re-blocked when a data conversion is active (bs= otherwise writes as read); GNU-compatible single-byte case mapping and odd-byte swab handling; conv=ascii/ebcdic/ibm are mutually exclusive, each requires cbs=, and each implies unblock (ascii) or block (ebcdic/ibm) per POSIX XCU dd; trailer is a plain "N bytes copied" — no timing/throughput (deterministic-output deviation) |
 | shred | fresh | -n, -z, -u, -f, -v; warns by documentation caveat, regular files only; -u truncates+unlinks without GNU wipesync's rename-to-shorter-names pass (documented deviation) |
-| chmod | guonaihong, u-root | octal + symbolic; **unix only** — clear error on Windows (no POSIX mode bits; mapping to read-only would change the documented meaning) |
+| chmod | guonaihong, u-root | octal + symbolic; on Windows (no POSIX mode bits) the computed mode is projected onto FILE_ATTRIBUTE_READONLY the Cygwin/MSYS way — any write bit clears it, none sets it, r/x/s/t accepted and remembered nowhere — never a refusal |
 | chown / chgrp | guonaihong | **unix only**, same rule |
 | chcon | fresh | CONTEXT FILE... via Linux `security.selinux` xattr; clear unsupported error elsewhere |
 

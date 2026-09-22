@@ -2,17 +2,20 @@
 
 package chmodcmd
 
-import (
-	"fmt"
-	"runtime"
+import "github.com/qiangli/coreutils/tool"
 
-	"github.com/qiangli/coreutils/tool"
-)
+// readOnlyHost: no POSIX mode bits exist here, only the read-only
+// attribute; hostMode projects the computed bits onto it (see
+// readOnlyProjection). chmod never refuses on this platform.
+const readOnlyHost = true
 
-// apply fails loudly where POSIX file mode bits are unavailable. Mapping MODE
-// onto a read-only attribute or another host concept would silently change the
-// meaning of the required interface.
-func apply(rc *tool.RunContext, _ *modeChange, _ options) int {
-	fmt.Fprintf(rc.Err, "chmod: not supported on %s: no POSIX file mode bits exist on this platform\n", runtime.GOOS)
-	return 1
+// effectiveUmask returns the invoking shell's virtual mask when the command
+// is embedded. A standalone invocation has no process mask to snapshot on
+// this platform; the conventional 022 (what Cygwin and MSYS report for a
+// fresh shell) is used so an omitted-who clause behaves as it would there.
+func effectiveUmask(rc *tool.RunContext) uint32 {
+	if rc.UmaskSet {
+		return uint32(rc.Umask.Perm())
+	}
+	return 0o022
 }

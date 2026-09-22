@@ -209,28 +209,127 @@ func TestChmodErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.WriteFile(filepath.Join(dir, "exists"), nil, 0o644); err != nil {
-			t.Fatal(err)
+	if err := os.WriteFile(filepath.Join(dir, "exists"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "644", "no-such-file")
+	if code != 1 || !strings.Contains(errb, "cannot access 'no-such-file'") {
+		t.Errorf("missing file: code=%d err=%q", code, errb)
+	}
+}
+
+// TestReadOnlyProjection pins the Windows rule host-independently: the
+// modes the bash-5.3 fixtures use (alias, glob-test, posix2, shopt run
+// chmod +x / -x / 644 / 311 / a=wx / 0000 on temp files) project onto the
+// read-only attribute — any write bit keeps the file writable, none makes
+// it read-only — and never produce a refusal (Story #682).
+func TestReadOnlyProjection(t *testing.T) {
+	cases := []struct {
+		mode string
+		old  uint32 // what os.Stat reports on Windows: 0666 writable, 0444 read-only
+		want os.FileMode
+	}{
+		{"+x", 0o666, 0o666},
+		{"-x", 0o666, 0o666},
+		{"u+x", 0o666, 0o666},
+		{"644", 0o666, 0o666},
+		{"311", 0o666, 0o666}, // owner w only
+		{"a=wx", 0o666, 0o666},
+		{"0000", 0o666, 0o444},
+		{"444", 0o666, 0o444},
+		{"a-w", 0o666, 0o444},
+		{"u-w", 0o666, 0o666},   // group/other w remain
+		{"+w", 0o444, 0o666},    // read-only file made writable again
+		{"+x", 0o444, 0o444},    // x alone does not touch the attribute
+		{"u=rwx", 0o444, 0o666}, // an explicit-who = sets w back
+	}
+	for _, c := range cases {
+		change, err := parseMode(c.mode)
+		if err != nil {
+			t.Fatalf("parseMode(%q): %v", c.mode, err)
 		}
-		_, errb, code = runTool(t, dir, "644", "no-such-file")
-		if code != 1 || !strings.Contains(errb, "cannot access 'no-such-file'") {
-			t.Errorf("missing file: code=%d err=%q", code, errb)
+		bits := change.apply(c.old, false, 0o022)
+		if got := readOnlyProjection(bits); got != c.want {
+			t.Errorf("chmod %s on %04o: bits %04o -> host mode %04o, want %04o", c.mode, c.old, bits, got, c.want)
+		}
+	}
+	if readOnlyHost != (runtime.GOOS == "windows") {
+		t.Errorf("readOnlyHost = %v on %s", readOnlyHost, runtime.GOOS)
+	}
+	if runtime.GOOS != "windows" {
+		if got := hostMode(0o4755); got != bitsToFileMode(0o4755) {
+			t.Errorf("hostMode on Unix altered the bits: %v", got)
 		}
 	}
 }
 
+// TestChmodWindows runs chmod for real on a Windows host: every mode the
+// fixtures use exits 0, and the read-only attribute follows the write bits.
 func TestChmodWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("windows-only assertion")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, errb, code := runTool(t, dir, "644", "f")
-	if code != 1 || !strings.Contains(errb, "not supported on windows") {
-		t.Errorf("windows: code=%d err=%q", code, errb)
+	if err := os.MkdirAll(filepath.Join(dir, "d", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d", "sub", "g"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writable := func(path string) bool {
+		t.Helper()
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Mode().Perm()&0o200 != 0
+	}
+	for _, mode := range []string{"+x", "-x", "u+x", "644", "311", "a=wx"} {
+		if _, errb, code := runTool(t, dir, mode, "f"); code != 0 || errb != "" {
+			t.Errorf("chmod %s: code=%d err=%q", mode, code, errb)
+		}
+		if !writable(f) {
+			t.Errorf("chmod %s left f read-only", mode)
+		}
+	}
+	for _, mode := range []string{"0000", "444", "a-w"} {
+		if _, errb, code := runTool(t, dir, mode, "f"); code != 0 || errb != "" {
+			t.Errorf("chmod %s: code=%d err=%q", mode, code, errb)
+		}
+		if writable(f) {
+			t.Errorf("chmod %s did not set read-only on f", mode)
+		}
+		if _, errb, code := runTool(t, dir, "+w", "f"); code != 0 || errb != "" {
+			t.Errorf("chmod +w: code=%d err=%q", code, errb)
+		}
+		if !writable(f) {
+			t.Errorf("chmod +w did not clear read-only on f")
+		}
+	}
+	// -R applies the projection to every entry, children first.
+	if _, errb, code := runTool(t, dir, "-R", "a-w", "d"); code != 0 || errb != "" {
+		t.Errorf("chmod -R a-w: code=%d err=%q", code, errb)
+	}
+	if writable(filepath.Join(dir, "d", "sub", "g")) {
+		t.Errorf("chmod -R a-w did not reach d/sub/g")
+	}
+	if _, errb, code := runTool(t, dir, "-R", "u+w", "d"); code != 0 || errb != "" {
+		t.Errorf("chmod -R u+w: code=%d err=%q", code, errb)
+	}
+	if !writable(filepath.Join(dir, "d", "sub", "g")) {
+		t.Errorf("chmod -R u+w did not restore d/sub/g")
+	}
+	out, _, code := runTool(t, dir, "-v", "755", "f")
+	if code != 0 || !strings.Contains(out, "mode of 'f'") {
+		t.Errorf("-v on windows: code=%d out=%q", code, out)
+	}
+	_, errb, code := runTool(t, dir, "644", "no-such-file")
+	if code != 1 || !strings.Contains(errb, "cannot access 'no-such-file'") {
+		t.Errorf("missing file: code=%d err=%q", code, errb)
 	}
 }
 
