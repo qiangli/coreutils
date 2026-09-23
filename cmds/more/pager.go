@@ -1239,7 +1239,7 @@ var runEditor = func(ctx context.Context, rc *tool.RunContext, tty *ttyChannel, 
 	if err := tool.CheckExecBudget(c.Args, c.Env); err != nil {
 		return err
 	}
-	return c.Run()
+	return tool.RunOwnedCommand(c)
 }
 
 func (p *pager) editor() bool {

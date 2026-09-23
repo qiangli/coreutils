@@ -62,6 +62,11 @@ jobs:
             go test -run '^$' ./...
           fi
 
+      - name: Verified owned-child handoff (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: go test ./tool -run '^TestOwnedExecLargeArgumentsAndEnvironment$' -count=1
+
       # The suite runs through the RATCHET, not `go test` directly: tests for
       # open stories are committed red on purpose, so a plain gate is
       # permanently red and therefore reports nothing. The script derives the

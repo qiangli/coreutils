@@ -316,7 +316,7 @@ func execProvider(rc *tool.RunContext, name, path string, args []string) int {
 
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = c.Start()
+		err = tool.StartOwnedCommand(c)
 	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", name, err)
@@ -579,7 +579,7 @@ func runBuildScript(rc *tool.RunContext, script, cacheRoot, manifest, name strin
 	c.Stdin, c.Stdout, c.Stderr = rc.In, rc.Out, rc.Err
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = c.Run()
+		err = tool.RunOwnedCommand(c)
 	}
 	if err != nil {
 		var ee *exec.ExitError

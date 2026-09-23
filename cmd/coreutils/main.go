@@ -9,11 +9,19 @@
 package main
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/qiangli/coreutils/multicall"
+	"mvdan.cc/sh/v3/interp/ownedexec"
 
 	_ "github.com/qiangli/coreutils/cmds/all"
 )
 
 func main() {
+	if err := ownedexec.Adopt(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(126)
+	}
 	multicall.Main("coreutils")
 }

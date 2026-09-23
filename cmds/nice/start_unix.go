@@ -69,7 +69,7 @@ func startPriorityCommand(rc *tool.RunContext, name, path string, args []string,
 	if err := tool.CheckExecBudget(c.Args, c.Env); err != nil {
 		return c, &niceStartError{err}
 	}
-	if err := c.Start(); err != nil {
+	if err := tool.StartOwnedCommand(c); err != nil {
 		return c, &niceStartError{err}
 	}
 	// The helper cannot exec the utility until this attempt has completed.

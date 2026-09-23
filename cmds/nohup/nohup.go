@@ -244,7 +244,7 @@ func openNohupOutput(rc *tool.RunContext) (*os.File, string, error) {
 
 var nohupOutputOpener = openNohupOutput
 
-var nohupCommandRunner = func(c *exec.Cmd) error { return c.Run() }
+var nohupCommandRunner = func(c *exec.Cmd) error { return tool.RunOwnedCommand(c) }
 
 func isClosedFile(w io.Writer) bool {
 	f, ok := w.(*os.File)

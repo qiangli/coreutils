@@ -317,7 +317,7 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 	restoreSignals := ignoreForCommandStart(signals)
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = c.Start()
+		err = tool.StartOwnedCommand(c)
 	}
 	if err != nil && isExecFormatError(err) && scriptInterpreter != "" {
 		// Historical exec() behavior, relied on by the GNU baseline via
@@ -329,7 +329,7 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 		// so an --argv0 override does not survive the retry.
 		c = newCmd(scriptInterpreter, append([]string{path}, argv[1:]...))
 		if err = tool.CheckExecBudget(c.Args, c.Env); err == nil {
-			err = c.Start()
+			err = tool.StartOwnedCommand(c)
 		}
 	}
 	restoreSignals()

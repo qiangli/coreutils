@@ -8,7 +8,6 @@ package posixproviderscmd
 import (
 	"fmt"
 	"os"
-	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -33,7 +32,7 @@ func execProviderDedicated(rc *tool.RunContext, name, path string, args []string
 		fmt.Fprintf(rc.Err, "%s: %v\n", name, err)
 		return true, 126
 	}
-	if err := syscall.Exec(path, argv, env); err != nil {
+	if err := tool.ExecOwnedCommand(path, argv, env); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", name, err)
 		return true, 126
 	}

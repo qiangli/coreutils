@@ -4,7 +4,6 @@ package envcmd
 
 import (
 	"os"
-	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -34,7 +33,7 @@ func replaceCommand(rc *tool.RunContext, path string, argv, env []string, argv0 
 	}
 	restoreSignals := ignoreForCommandStart(signals)
 	defer restoreSignals()
-	if err := syscall.Exec(path, execArgv, env); !isExecFormatError(err) {
+	if err := tool.ExecOwnedCommand(path, execArgv, env); !isExecFormatError(err) {
 		return true, err
 	}
 
@@ -45,7 +44,7 @@ func replaceCommand(rc *tool.RunContext, path string, argv, env []string, argv0 
 	if err := tool.CheckExecBudget(shellArgv, env); err != nil {
 		return true, err
 	}
-	return true, syscall.Exec(scriptInterpreter, shellArgv, env)
+	return true, tool.ExecOwnedCommand(scriptInterpreter, shellArgv, env)
 }
 
 // processStdio proves that replacing this process preserves the invocation's

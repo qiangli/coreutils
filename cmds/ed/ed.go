@@ -170,7 +170,7 @@ func runCore(rc *tool.RunContext, args []string) int {
 		c.Stdout = &out
 		err := tool.CheckExecBudget(c.Args, c.Env)
 		if err == nil {
-			err = c.Run()
+			err = tool.RunOwnedCommand(c)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && ctx.Err() == nil {

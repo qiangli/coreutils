@@ -99,7 +99,7 @@ func startExecShell(ctx context.Context, rc *tool.RunContext, spec shellSpec, cr
 	if err := tool.CheckExecBudget(c.Args, c.Env); err != nil {
 		return nil, err
 	}
-	if err := c.Start(); err != nil {
+	if err := tool.StartOwnedCommand(c); err != nil {
 		return nil, err
 	}
 	if controlWrite != nil {
