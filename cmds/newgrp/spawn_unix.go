@@ -25,7 +25,7 @@ const (
 
 var (
 	umaskHelperExecutable = os.Executable
-	umaskHelperExec       = syscall.Exec
+	umaskHelperExec       = tool.ExecOwnedCommand
 )
 
 func init() {

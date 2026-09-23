@@ -56,6 +56,11 @@ func StartOwnedCommand(c *exec.Cmd) error {
 	}
 	defer cleanup()
 	nativeEnv = append(nativeEnv, ownedexec.Marker+"="+strconv.FormatUint(handle, 10))
+	originalArgs, originalEnv, originalFiles := c.Args, c.Env, c.ExtraFiles
+	if runtime.GOOS != "windows" {
+		originalFiles = originalFiles[:len(originalFiles)-1]
+	}
+	defer func() { c.Args, c.Env, c.ExtraFiles = originalArgs, originalEnv, originalFiles }()
 	c.Env = nativeEnv
 	c.Args = []string{c.Path, ownedexec.Sentinel}
 	return c.Start()
@@ -162,6 +167,10 @@ func earlyOwnedEnv(env []string) []string {
 	}
 	return out
 }
+
+// VerifiedOwnedImage reports whether path is a Bashy image whose entrypoint
+// adopts the inherited frame. It does not trust the executable's basename.
+func VerifiedOwnedImage(path string) bool { return verifiedOwnedImage(path) }
 
 // RunOwnedCommand starts and waits for a child through the same verified
 // handoff boundary as StartOwnedCommand.

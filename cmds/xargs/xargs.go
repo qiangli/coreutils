@@ -199,7 +199,14 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
 	}
 
+	command := args[i:]
+	if len(command) == 0 {
+		command = []string{"echo"}
+	}
 	maxSupported := commandSizeLimit(rc.Env)
+	if path := rc.ResolveCommand(command[0]); path != "" && tool.VerifiedOwnedImage(path) {
+		maxSupported = ownedCommandSizeLimit(rc.Env)
+	}
 	if maxSupported <= 0 {
 		fmt.Fprintln(rc.Err, "xargs: environment is too large for exec")
 		return 1
@@ -218,11 +225,6 @@ func run(rc *tool.RunContext, args []string) int {
 		// ceiling, rather than the explicit -s operand, is the binding
 		// constraint, do not apply -s's strict-less-than comparison to it.
 		o.strictSize = false
-	}
-
-	command := args[i:]
-	if len(command) == 0 {
-		command = []string{"echo"}
 	}
 
 	items, err := readItems(rc.In, o)
@@ -708,6 +710,14 @@ var systemArgMax = func() int { return min(sysArgMax(), execbudget.BashyArgMax) 
 
 // commandSizeLimit returns the generated argv-string budget after reserving
 // POSIX's required headroom and every environment string passed to exec.
+func ownedCommandSizeLimit(env []string) int {
+	limit := execbudget.BashyArgMax - argMaxHeadroom
+	for _, entry := range env {
+		limit -= len(entry) + 1
+	}
+	return limit
+}
+
 func commandSizeLimit(env []string) int {
 	limit := systemArgMax() - argMaxHeadroom
 	for _, entry := range env {

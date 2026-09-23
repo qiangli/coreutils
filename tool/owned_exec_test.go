@@ -38,6 +38,9 @@ func TestOwnedExecLargeArgumentsAndEnvironment(t *testing.T) {
 	if err := StartOwnedCommand(c); err != nil {
 		t.Fatal(err)
 	}
+	if c.Args[0] != "owned-argv0" || len(c.Args) != 4 || len(c.Env) == 0 || len(c.ExtraFiles) != 0 {
+		t.Fatalf("launch mutated caller command: argv=%d argv0=%q env=%d extra=%d", len(c.Args), c.Args[0], len(c.Env), len(c.ExtraFiles))
+	}
 	if err := c.Wait(); err != nil {
 		t.Fatalf("child: %v: %s", err, output.String())
 	}

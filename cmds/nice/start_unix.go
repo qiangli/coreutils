@@ -24,7 +24,7 @@ const (
 // deterministic without changing a live test process's scheduler state.
 // The production exec call does not return on success.
 var (
-	helperExec       = syscall.Exec
+	helperExec       = tool.ExecOwnedCommand
 	helperExecutable = os.Executable
 	prioritySetter   = setPriority
 )

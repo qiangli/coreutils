@@ -65,7 +65,10 @@ jobs:
       - name: Verified owned-child handoff (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: go test ./tool -run '^TestOwnedExecLargeArgumentsAndEnvironment$' -count=1
+        run: |
+          go test ./tool -run '^TestOwnedExecLargeArgumentsAndEnvironment$' -count=1
+          go build -o coreutils-owned-proof.exe ./cmd/coreutils
+          python scripts/owned-exec-windows-proof.py coreutils-owned-proof.exe
 
       # The suite runs through the RATCHET, not `go test` directly: tests for
       # open stories are committed red on purpose, so a plain gate is
