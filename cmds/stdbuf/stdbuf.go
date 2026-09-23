@@ -211,7 +211,10 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string) i
 	c.Stdin = rc.In
 	c.Stdout = rc.Out
 	c.Stderr = rc.Err
-	err := c.Run()
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Run()
+	}
 	if err == nil {
 		return 0
 	}

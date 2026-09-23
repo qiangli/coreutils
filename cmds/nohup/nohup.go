@@ -175,7 +175,10 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	restoreHangup := ignoreHangup()
 	defer restoreHangup()
 
-	err := nohupCommandRunner(c)
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = nohupCommandRunner(c)
+	}
 	if err == nil {
 		return 0
 	}

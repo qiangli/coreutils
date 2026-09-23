@@ -271,6 +271,14 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 		fmt.Fprintf(rc.Err, "env: %s: No such file or directory\n", argv[0])
 		return 127
 	}
+	budgetArgv := append([]string(nil), argv...)
+	if argv0 != "" {
+		budgetArgv[0] = argv0
+	}
+	if err := tool.CheckExecBudget(budgetArgv, env); err != nil {
+		fmt.Fprintf(rc.Err, "env: %s: %v\n", argv[0], err)
+		return 126
+	}
 
 	// POSIX env overlays itself with COMMAND.  Preserve that process identity
 	// whenever this invocation owns a disposable standalone process: a signal
@@ -307,7 +315,10 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 	}
 
 	restoreSignals := ignoreForCommandStart(signals)
-	err := c.Start()
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Start()
+	}
 	if err != nil && isExecFormatError(err) && scriptInterpreter != "" {
 		// Historical exec() behavior, relied on by the GNU baseline via
 		// glibc's execvp: a file that the kernel does not recognize as an
@@ -317,7 +328,9 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 		// glibc's own fallback, argv[0] is always the resolved path here,
 		// so an --argv0 override does not survive the retry.
 		c = newCmd(scriptInterpreter, append([]string{path}, argv[1:]...))
-		err = c.Start()
+		if err = tool.CheckExecBudget(c.Args, c.Env); err == nil {
+			err = c.Start()
+		}
 	}
 	restoreSignals()
 	if err != nil {

@@ -127,7 +127,10 @@ func runChroot(rc *tool.RunContext, root string, argv []string, skipChdir bool, 
 		c.Dir = "/"
 	}
 	setChroot(c, root, cred)
-	err := c.Run()
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Run()
+	}
 	if err == nil {
 		return 0
 	}

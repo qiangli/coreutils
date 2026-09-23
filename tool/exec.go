@@ -31,6 +31,9 @@ func (rc *RunContext) StartCommand(path string, args []string, stdin io.Reader, 
 		c.Stdin = stdin
 		c.Stdout = stdout
 		c.Stderr = stderr
+		if err := CheckExecBudget(c.Args, c.Env); err != nil {
+			return c, err
+		}
 		return c, c.Start()
 	}
 

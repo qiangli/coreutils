@@ -132,7 +132,11 @@ func run(rc *tool.RunContext, args []string) int {
 		setProcGroup(c) // unix: own process group so the whole child tree is signalled
 	}
 
-	if err := c.Start(); err != nil {
+	err = tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Start()
+	}
+	if err != nil {
 		fmt.Fprintf(rc.Err, "timeout: failed to run command %q: %v\n", command[0], err)
 		if os.IsNotExist(err) {
 			return 127

@@ -314,7 +314,11 @@ func execProvider(rc *tool.RunContext, name, path string, args []string) int {
 	}
 	c.Stdin, c.Stdout, c.Stderr = rc.In, rc.Out, rc.Err
 
-	if err := c.Start(); err != nil {
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Start()
+	}
+	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", name, err)
 		return 126
 	}
@@ -573,7 +577,11 @@ func runBuildScript(rc *tool.RunContext, script, cacheRoot, manifest, name strin
 	}
 	c.Env = env
 	c.Stdin, c.Stdout, c.Stderr = rc.In, rc.Out, rc.Err
-	if err := c.Run(); err != nil {
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Run()
+	}
+	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if code := ee.ExitCode(); code >= 0 {

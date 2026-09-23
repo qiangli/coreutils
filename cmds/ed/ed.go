@@ -168,7 +168,10 @@ func runCore(rc *tool.RunContext, args []string) int {
 		}
 		var out bytes.Buffer
 		c.Stdout = &out
-		err := c.Run()
+		err := tool.CheckExecBudget(c.Args, c.Env)
+		if err == nil {
+			err = c.Run()
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && ctx.Err() == nil {
 			// ed submits the line to the command interpreter; the utility's

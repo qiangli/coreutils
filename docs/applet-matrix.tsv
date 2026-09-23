@@ -34,7 +34,7 @@ dirname	cmds/dirname		GNU Coreutils	yes	yes	1	6
 du	cmds/du		GNU Coreutils	yes	yes	3	38
 echo	cmds/echo		GNU Coreutils	yes	yes	1	4
 ed	cmds/ed		POSIX/Unix utility	no	yes	4	48
-env	cmds/env		GNU Coreutils	yes	yes	6	37
+env	cmds/env		GNU Coreutils	yes	yes	6	38
 ex	cmds/posixproviders		POSIX external provider	no	yes	4	34
 expand	cmds/expand		GNU Coreutils	yes	yes	2	29
 expr	cmds/expr		GNU Coreutils	yes	yes	2	19

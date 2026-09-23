@@ -1236,6 +1236,9 @@ var runEditor = func(ctx context.Context, rc *tool.RunContext, tty *ttyChannel, 
 	if tty != nil && tty.editorIO != nil {
 		c.Stdin, c.Stdout, c.Stderr = tty.editorIO, tty.editorIO, tty.editorIO
 	}
+	if err := tool.CheckExecBudget(c.Args, c.Env); err != nil {
+		return err
+	}
 	return c.Run()
 }
 

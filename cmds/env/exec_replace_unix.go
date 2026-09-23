@@ -42,6 +42,9 @@ func replaceCommand(rc *tool.RunContext, path string, argv, env []string, argv0 
 	// a shebang.  As in the fork/wait path, an argv0 override does not survive
 	// the shell retry.
 	shellArgv := append([]string{scriptInterpreter, path}, argv[1:]...)
+	if err := tool.CheckExecBudget(shellArgv, env); err != nil {
+		return true, err
+	}
 	return true, syscall.Exec(scriptInterpreter, shellArgv, env)
 }
 

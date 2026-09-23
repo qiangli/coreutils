@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
+	"mvdan.cc/sh/v3/execbudget"
 )
 
 type failingWriter struct{ err error }
@@ -27,6 +29,17 @@ func runTool(t *testing.T, env []string, args ...string) (stdout, stderr string,
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+func TestEnvRejectsOverBashyExecBudget(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runTool(t, []string{"BIG=" + strings.Repeat("x", execbudget.BashyArgMax)}, self)
+	if code != 126 || !strings.Contains(stderr, syscall.E2BIG.Error()) {
+		t.Fatalf("env oversized launch = (exit %d, stderr %q), want E2BIG/126", code, stderr)
+	}
 }
 
 func TestEnv(t *testing.T) {

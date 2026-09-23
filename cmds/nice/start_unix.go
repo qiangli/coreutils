@@ -66,6 +66,9 @@ func startPriorityCommand(rc *tool.RunContext, name, path string, args []string,
 	diagnostic, childErr := synchronizedStderr(rc.Err)
 	c.Stdin, c.Stdout, c.Stderr = rc.In, rc.Out, childErr
 	c.ExtraFiles = []*os.File{barrierRead}
+	if err := tool.CheckExecBudget(c.Args, c.Env); err != nil {
+		return c, &niceStartError{err}
+	}
 	if err := c.Start(); err != nil {
 		return c, &niceStartError{err}
 	}
@@ -107,10 +110,15 @@ func runPriorityHelper(args, environ []string, stderr io.Writer, barrier io.Read
 	}
 	name, path, utilityArgs := args[0], args[1], args[2:]
 	targetArgv := append([]string{path}, utilityArgs...)
-	err := helperExec(path, targetArgv, environ)
+	err := tool.CheckExecBudget(targetArgv, environ)
+	if err == nil {
+		err = helperExec(path, targetArgv, environ)
+	}
 	if errors.Is(err, syscall.ENOEXEC) {
 		targetArgv = append([]string{"/bin/sh", path}, utilityArgs...)
-		err = helperExec("/bin/sh", targetArgv, environ)
+		if err = tool.CheckExecBudget(targetArgv, environ); err == nil {
+			err = helperExec("/bin/sh", targetArgv, environ)
+		}
 	}
 	if errors.Is(err, syscall.ENOENT) {
 		fmt.Fprintf(stderr, "%s: failed to run command %q: %v\n", name, path, err)

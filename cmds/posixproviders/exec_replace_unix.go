@@ -25,7 +25,15 @@ func execProviderDedicated(rc *tool.RunContext, name, path string, args []string
 		return false, 0
 	}
 	argv := append([]string{name}, args...)
-	if err := syscall.Exec(path, argv, rc.Env); err != nil {
+	env := rc.Env
+	if env == nil {
+		env = []string{}
+	}
+	if err := tool.CheckExecBudget(argv, env); err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", name, err)
+		return true, 126
+	}
+	if err := syscall.Exec(path, argv, env); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", name, err)
 		return true, 126
 	}

@@ -96,6 +96,9 @@ func startExecShell(ctx context.Context, rc *tool.RunContext, spec shellSpec, cr
 	if controlRead != nil {
 		c.ExtraFiles = []*os.File{controlRead}
 	}
+	if err := tool.CheckExecBudget(c.Args, c.Env); err != nil {
+		return nil, err
+	}
 	if err := c.Start(); err != nil {
 		return nil, err
 	}
@@ -135,7 +138,12 @@ func runUmaskHelper(args, environ []string, stderr io.Writer, control io.Reader)
 		return 1
 	}
 	syscall.Umask(int(mask))
-	if err := umaskHelperExec(args[1], []string{args[2]}, environ); err != nil {
+	argv := []string{args[2]}
+	if err := tool.CheckExecBudget(argv, environ); err != nil {
+		fmt.Fprintf(stderr, "newgrp: cannot run %s: %v\n", args[1], err)
+		return 1
+	}
+	if err := umaskHelperExec(args[1], argv, environ); err != nil {
 		fmt.Fprintf(stderr, "newgrp: cannot run %s: %v\n", args[1], err)
 		return 1
 	}

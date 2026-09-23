@@ -51,6 +51,9 @@ func defaultRunConfig() runConfig {
 			ec := exec.CommandContext(ctx, editorPath, path)
 			ec.Dir, ec.Env = rc.Dir, append([]string(nil), rc.Env...)
 			ec.Stdin, ec.Stdout, ec.Stderr = rc.In, rc.Out, rc.Err
+			if err := tool.CheckExecBudget(ec.Args, ec.Env); err != nil {
+				return err
+			}
 			return ec.Run()
 		},
 	}

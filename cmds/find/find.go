@@ -1259,7 +1259,10 @@ func (w *walker) spawn(path string, argv []string, isOK bool) (int, error) {
 	}
 	c.Stdout = w.rc.Out
 	c.Stderr = w.rc.Err
-	err := c.Run()
+	err := tool.CheckExecBudget(c.Args, c.Env)
+	if err == nil {
+		err = c.Run()
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		if code := ee.ExitCode(); code >= 0 {
