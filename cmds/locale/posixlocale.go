@@ -23,6 +23,7 @@ const (
 	kindString valueKind = iota
 	kindNumber
 	kindStringList
+	kindNumberList
 )
 
 type keyword struct {

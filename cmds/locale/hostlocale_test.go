@@ -113,6 +113,7 @@ func TestParseHostLocaleValueGitBashTimeValues(t *testing.T) {
 		{name: "quoted semicolons", input: `"Sun;Mon;Tue";"Wed;Thu;Fri;Sat"`, kind: kindStringList, want: []string{"Sun;Mon;Tue", "Wed;Thu;Fri;Sat"}},
 		{name: "hex escape", input: `"Sun\x3bMon"`, kind: kindString, want: []string{"Sun;Mon"}},
 		{name: "number", input: "7", kind: kindNumber, want: []string{"7"}},
+		{name: "numeric list", input: "1;1", kind: kindNumberList, want: []string{"1", "1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, kind, err := parseHostLocaleValue(tc.input)
@@ -123,6 +124,36 @@ func TestParseHostLocaleValueGitBashTimeValues(t *testing.T) {
 				t.Fatalf("parseHostLocaleValue(%q) = %#v, %v; want %#v, %v", tc.input, got, kind, tc.want, tc.kind)
 			}
 		})
+	}
+}
+
+func TestHostLocaleProviderAcceptsGlibcMonetaryNumericList(t *testing.T) {
+	provider := hostLocaleProvider{run: func(env, args []string) (string, string, error) {
+		locale := strings.TrimPrefix(env[0], "LC_ALL=")
+		if len(args) == 0 {
+			return "LC_CTYPE=\"" + locale + "\"\n", "", nil
+		}
+		switch args[1] {
+		case "LC_CTYPE":
+			return "charmap=\"BIG5-HKSCS\"\n", "", nil
+		case "LC_COLLATE":
+			return "", "", nil
+		case "LC_MONETARY":
+			return "conversion_rate=1;1\n", "", nil
+		default:
+			return "yesstr=\"yes\"\n", "", nil
+		}
+	}}
+
+	if !provider.serves("zh_HK.big5hkscs") {
+		t.Fatal("provider rejected glibc LC_MONETARY conversion_rate numeric list")
+	}
+	keywords, err := provider.query("zh_HK.big5hkscs", "LC_MONETARY")
+	if err != nil || len(keywords) != 1 {
+		t.Fatalf("query glibc LC_MONETARY = %#v, %v", keywords, err)
+	}
+	if got, want := render(keywords[0], true), "conversion_rate=1;1"; got != want {
+		t.Fatalf("rendered conversion_rate = %q, want %q", got, want)
 	}
 }
 

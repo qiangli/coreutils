@@ -206,6 +206,8 @@ func render(k keyword, withKeyword bool) string {
 	switch k.Kind {
 	case kindNumber:
 		return k.Name + "=" + k.Values[0]
+	case kindNumberList:
+		return k.Name + "=" + strings.Join(k.Values, ";")
 	case kindStringList:
 		quoted := make([]string, len(k.Values))
 		for i, v := range k.Values {

@@ -216,6 +216,22 @@ func parseHostLocaleValueForLocale(locale, value string) ([]string, valueKind, e
 	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return []string{value}, kindNumber, nil
 	}
+	if strings.Contains(value, ";") {
+		parts := strings.Split(value, ";")
+		allNumbers := true
+		for _, part := range parts {
+			if _, err := strconv.ParseInt(part, 10, 64); err != nil {
+				allNumbers = false
+				break
+			}
+		}
+		if allNumbers {
+			// glibc emits numeric-list extensions such as LC_MONETARY's
+			// conversion_rate=1;1 without quotes. They use the same list
+			// separator as quoted string lists, but each element remains bare.
+			return parts, kindNumberList, nil
+		}
+	}
 	if value == "" {
 		// Git Bash emits empty LC_TIME era fields as era= and alt_digits=.
 		return []string{""}, kindString, nil
