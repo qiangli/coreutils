@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"golang.org/x/sys/unix"
 	"mvdan.cc/sh/v3/interp/ownedexec"
 	"os"
 	"os/exec"
@@ -38,7 +39,7 @@ func ExecOwnedCommand(path string, args, env []string) error {
 	if _, err := f.Seek(0, 0); err != nil {
 		return err
 	}
-	fd, err := syscall.Dup(int(f.Fd()))
+	fd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD, 3)
 	if err != nil {
 		return err
 	}
