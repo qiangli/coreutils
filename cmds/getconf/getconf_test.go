@@ -48,7 +48,7 @@ func TestAgreesWithSystemGetconf(t *testing.T) {
 		t.Skip("no system getconf to compare against")
 	}
 	for _, name := range []string{
-		"PAGESIZE", "OPEN_MAX", "NGROUPS_MAX", "ARG_MAX", "CLK_TCK",
+		"PAGESIZE", "OPEN_MAX", "NGROUPS_MAX", "CLK_TCK",
 		// BC_BASE_MAX is intentionally absent: it describes the bundled bc
 		// product, whose supported maximum can exceed the host libc value.
 		"BC_STRING_MAX", "INT_MAX", "LINE_MAX",
@@ -65,10 +65,9 @@ func TestAgreesWithSystemGetconf(t *testing.T) {
 			continue
 		}
 		if got != expect {
-			// ARG_MAX and OPEN_MAX track LIVE rlimits, which legitimately differ
-			// between two processes (Go raises RLIMIT_NOFILE at startup); the
-			// rest must match exactly.
-			if name == "ARG_MAX" || name == "OPEN_MAX" {
+			// OPEN_MAX tracks a live rlimit, which legitimately differs
+			// between two processes (Go raises RLIMIT_NOFILE at startup).
+			if name == "OPEN_MAX" {
 				t.Logf("%s: ours %q, system %q (rlimit-derived, informational)", name, got, expect)
 				continue
 			}
@@ -202,7 +201,7 @@ func TestDarwinAdapterMatchesEverySafelyQueryableValue(t *testing.T) {
 	// OPEN_MAX is deliberately absent: the Go runtime raises its own descriptor
 	// limit during startup, while a separately exec'd getconf observes the
 	// shell's original limit. The applet must report its process limit.
-	for _, name := range []string{"ARG_MAX", "CHILD_MAX", "NGROUPS_MAX", "PAGESIZE", "PAGE_SIZE", "_NPROCESSORS_CONF", "_NPROCESSORS_ONLN"} {
+	for _, name := range []string{"CHILD_MAX", "NGROUPS_MAX", "PAGESIZE", "PAGE_SIZE", "_NPROCESSORS_CONF", "_NPROCESSORS_ONLN"} {
 		want, err := exec.Command("getconf", name).Output()
 		if err != nil {
 			t.Fatal(err)
@@ -473,16 +472,16 @@ func TestMissingOperand(t *testing.T) {
 	_ = os.Getenv
 }
 
-// A compile-time constant of this multicall or of the shared data model is
-// answered on every platform, including one with no sysconf ABI: bash's
-// printf7.sub reads `getconf INT_MAX` to build its overflow case.
+// A Bashy-owned value or shared data-model constant is answered on every
+// platform, including one with no sysconf ABI. Bash's printf7.sub reads
+// `getconf INT_MAX` to build its overflow case.
 func TestProductConstantsAreNotPlatformClaims(t *testing.T) {
-	for _, name := range []string{"INT_MAX", "LINE_MAX", "BC_BASE_MAX", "BC_DIM_MAX", "BC_SCALE_MAX", "BC_STRING_MAX"} {
+	for _, name := range []string{"ARG_MAX", "INT_MAX", "LINE_MAX", "BC_BASE_MAX", "BC_DIM_MAX", "BC_SCALE_MAX", "BC_STRING_MAX"} {
 		if !productConstant(name) {
 			t.Errorf("%s should be a product constant", name)
 		}
 	}
-	for _, name := range []string{"ARG_MAX", "OPEN_MAX", "PAGESIZE", "CHILD_MAX", "NGROUPS_MAX"} {
+	for _, name := range []string{"OPEN_MAX", "PAGESIZE", "CHILD_MAX", "NGROUPS_MAX"} {
 		if productConstant(name) {
 			t.Errorf("%s is a host capability, not a product constant", name)
 		}

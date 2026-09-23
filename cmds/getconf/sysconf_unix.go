@@ -29,7 +29,12 @@ func sysconfStr(which int) (string, bool) {
 	case scOpenMax:
 		return rlimitStr(unix.RLIMIT_NOFILE)
 	case scArgMax:
-		return argMaxStr()
+		value, _ := argMaxStr()
+		host, err := strconv.Atoi(value)
+		if err != nil || host <= 0 {
+			return undefined, true
+		}
+		return strconv.Itoa(effectiveArgMax(host)), true
 	case scChildMax:
 		return childMaxStr()
 	case scNgroupsMax:

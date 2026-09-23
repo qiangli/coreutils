@@ -25,6 +25,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
+	"mvdan.cc/sh/v3/execbudget"
 )
 
 var cmd = &tool.Tool{
@@ -702,7 +703,8 @@ const (
 	lineMax        = 2048
 )
 
-var systemArgMax = sysArgMax
+// The native host limit may be lower than Bashy's product-wide launch cap.
+var systemArgMax = func() int { return min(sysArgMax(), execbudget.BashyArgMax) }
 
 // commandSizeLimit returns the generated argv-string budget after reserving
 // POSIX's required headroom and every environment string passed to exec.

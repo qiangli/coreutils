@@ -2,12 +2,17 @@
 
 package getconfcmd
 
-import "github.com/qiangli/coreutils/tool"
+import (
+	"strconv"
 
-// Windows has no sysconf/pathconf. Rather than invent numbers, the selectors
-// are inert and every probed value reports "undefined"; the standard's
-// compile-time minimums in vars.go remain correct and are still answered, since
-// those are constants from the specification rather than host measurements.
+	"github.com/qiangli/coreutils/tool"
+	"mvdan.cc/sh/v3/execbudget"
+)
+
+// Windows has no sysconf/pathconf. Rather than invent host numbers, the
+// selectors are inert except for Bashy's enforced ARG_MAX. Specification
+// minimums and product constants pass through platformValue; other host
+// capabilities still report "undefined".
 const (
 	scArgMax = iota
 	scChildMax
@@ -41,7 +46,12 @@ const (
 	pcTimestampResolution = pcUndefined
 )
 
-func sysconfStr(int) (string, bool) { return undefined, true }
+func sysconfStr(which int) (string, bool) {
+	if which == scArgMax {
+		return strconv.Itoa(execbudget.BashyArgMax), true
+	}
+	return undefined, true
+}
 
 func symloopMaxStr() (string, bool) { return undefined, true }
 func clockTicksStr() (string, bool) { return undefined, true }

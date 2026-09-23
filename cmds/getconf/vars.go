@@ -26,7 +26,7 @@ func knownSpecification(s string) bool {
 // confstr-style string variables (PATH, CS_PATH) are handled separately because
 // their result is text rather than a number.
 var sysVars = map[string]func() (string, bool){
-	// Runtime invariant values obtainable from the OS.
+	// Runtime invariant values obtainable from the OS or Bashy contract.
 	"ARG_MAX":           func() (string, bool) { return sysconfStr(scArgMax) },
 	"BC_BASE_MAX":       constVal(bcinterp.MaxBase),
 	"BC_DIM_MAX":        constVal(2048),
@@ -197,13 +197,13 @@ func compileTimeMinimum(name string) bool {
 	return ok
 }
 
-// productConstants are the system variables whose value is a compile-time
-// constant of this multicall or of the C/Go data model every supported
-// target shares (INT_MAX is 2147483647 wherever bashy builds), as opposed
-// to a host capability a platform must be entitled to claim. A platform
-// provider that has no sysconf ABI still answers these from the shared
-// table rather than reporting them undefined.
+// productConstants are system variables whose values are governed by Bashy or
+// a shared data model, rather than an unmodified host sysconf value. ARG_MAX
+// is the effective Bashy launch limit: on Unix the host can be stricter than
+// the product cap. A platform without a sysconf ABI still answers these
+// instead of reporting them undefined.
 var productConstants = map[string]bool{
+	"ARG_MAX":     true,
 	"BC_BASE_MAX": true, "BC_DIM_MAX": true, "BC_SCALE_MAX": true, "BC_STRING_MAX": true,
 	"INT_MAX": true, "LINE_MAX": true,
 }
