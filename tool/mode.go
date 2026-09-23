@@ -33,7 +33,7 @@ const ModesAreRecorded = winmode.Supported
 
 // Stat is [os.Stat] reporting the recorded mode.
 func Stat(path string) (os.FileInfo, error) {
-	fi, err := os.Stat(path)
+	fi, err := stat(path)
 	if err != nil {
 		return fi, err
 	}

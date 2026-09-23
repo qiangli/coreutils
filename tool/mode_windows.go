@@ -11,6 +11,16 @@ import (
 
 var procWaitNamedPipeW = windows.NewLazySystemDLL("kernel32.dll").NewProc("WaitNamedPipeW")
 
+// Stat of a named pipe must inspect its namespace without opening a client
+// connection. Go's os.Stat can connect to the pipe, consuming a process
+// substitution listener before the command actually reads it.
+func stat(path string) (os.FileInfo, error) {
+	if _, ok := namedPipeName(path); ok {
+		return lstat(path)
+	}
+	return os.Stat(path)
+}
+
 // lstat keeps os.Lstat for filesystem objects. A Windows named-pipe path must
 // be recognized first: os.Lstat can report a live pipe as an ordinary regular
 // file, losing its type, or report it absent. An os.Open would create a client

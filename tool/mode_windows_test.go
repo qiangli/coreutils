@@ -41,11 +41,28 @@ func TestLstatNamedPipeTracksServerLifetime(t *testing.T) {
 		windows.CloseHandle(h)
 		t.Fatalf("Lstat(%q) = name %q mode %v, want live named pipe", shellPath, fi.Name(), fi.Mode())
 	}
+	// Stat must not connect either: diff stats each process-substitution
+	// operand before it opens the body, and this server offers one instance.
+	fi, err = Stat(shellPath)
+	if err != nil || fi.Name() != name || fi.Mode()&fs.ModeNamedPipe == 0 {
+		windows.CloseHandle(h)
+		t.Fatalf("Stat(%q) = %v, %v; want live named pipe", shellPath, fi, err)
+	}
+	client, err := windows.CreateFile(name16, windows.GENERIC_WRITE, 0, nil,
+		windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		windows.CloseHandle(h)
+		t.Fatalf("Stat(%q) consumed the sole pipe instance: %v", shellPath, err)
+	}
+	windows.CloseHandle(client)
 	if err := windows.CloseHandle(h); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := Lstat(shellPath); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Lstat(%q) after final server close = %v, want not exist", shellPath, err)
+	}
+	if _, err := Stat(shellPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Stat(%q) after final server close = %v, want not exist", shellPath, err)
 	}
 }

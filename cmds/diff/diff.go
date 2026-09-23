@@ -263,7 +263,7 @@ func dispatch(rc *tool.RunContext, paths *pathResolver, opts *options, a, b stri
 		if name == "-" {
 			return false, false, nil
 		}
-		fi, err := os.Stat(paths.path(name))
+		fi, err := tool.Stat(paths.path(name))
 		if err != nil {
 			if opts.newFile && errors.Is(err, iofs.ErrNotExist) {
 				return false, true, nil
@@ -374,12 +374,12 @@ func sortedUnion(a, b map[string]bool) []string {
 
 // comparePair handles an entry present in both directories.
 func comparePair(rc *tool.RunContext, paths *pathResolver, opts *options, pa, pb string) int {
-	fa, err := os.Stat(paths.path(pa))
+	fa, err := tool.Stat(paths.path(pa))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", pa, errText(err))
 		return 2
 	}
-	fb, err := os.Stat(paths.path(pb))
+	fb, err := tool.Stat(paths.path(pb))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", pb, errText(err))
 		return 2
@@ -416,7 +416,7 @@ func onlyIn(rc *tool.RunContext, paths *pathResolver, opts *options, dir, name, 
 		fmt.Fprintf(rc.Out, "Only in %s: %s\n", dir, name)
 		return 1
 	}
-	fi, err := os.Stat(paths.path(present))
+	fi, err := tool.Stat(paths.path(present))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", present, errText(err))
 		return 2
@@ -488,7 +488,7 @@ func loadSide(rc *tool.RunContext, paths *pathResolver, opts *options, name stri
 		return s, nil
 	}
 	path := paths.path(name)
-	fi, err := os.Stat(path)
+	fi, err := tool.Stat(path)
 	if err != nil {
 		if opts.newFile && errors.Is(err, iofs.ErrNotExist) {
 			s.mtime = time.Unix(0, 0) // GNU stamps absent files with the epoch
