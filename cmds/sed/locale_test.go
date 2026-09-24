@@ -22,7 +22,6 @@ package sedcmd
 import (
 	"bytes"
 	"context"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -50,14 +49,12 @@ func TestSedAcceptsCarriedUTF8LocaleAliases(t *testing.T) {
 	}
 }
 
-func TestSedMacOSDefaultUTF8NormalModeOnly(t *testing.T) {
+func TestSedDefaultUTF8NormalModeOnly(t *testing.T) {
 	out, errOut, code := runSedInDirEnv(t, t.TempDir(), []string{"LANG=en_US.UTF-8"}, "é\n", "s/./X/")
-	if runtime.GOOS == "darwin" {
-		if code != 0 || errOut != "" || out != "X\n" {
-			t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (X, empty, 0)", out, errOut, code)
-		}
-	} else if code != 2 || out != "" || !strings.Contains(errOut, `LC_CTYPE "en_US.UTF-8"`) {
-		t.Fatalf("non-Darwin default UTF-8 = (%q, %q, %d), want rejection", out, errOut, code)
+	// en_US.UTF-8 is carried in normal mode on every host since the UTF-8
+	// widening (09308e22); it was macOS-only before. Cert still refuses it.
+	if code != 0 || errOut != "" || out != "X\n" {
+		t.Fatalf("normal default UTF-8 = (%q, %q, %d), want (X, empty, 0)", out, errOut, code)
 	}
 	_, errOut, code = runSedInDirEnv(t, t.TempDir(), []string{"VSC_PROFILE=cert", "LANG=en_US.UTF-8"}, "unread\n", "s/x/y/")
 	if code != 2 || !strings.Contains(errOut, `LC_CTYPE "en_US.UTF-8"`) {

@@ -22,8 +22,10 @@ func TestLinuxDerivedValuesMatchHostGetconf(t *testing.T) {
 	if err != nil {
 		t.Skip("no independent host getconf oracle")
 	}
+	// ARG_MAX is absent: since 9175655a it reports min(host, Bashy launch
+	// budget), pinned by TestArgMaxUsesStricterOfHostAndBashy.
 	for _, name := range []string{
-		"ARG_MAX", "CHILD_MAX", "CLK_TCK", "NGROUPS_MAX", "OPEN_MAX",
+		"CHILD_MAX", "CLK_TCK", "NGROUPS_MAX", "OPEN_MAX",
 		"PAGESIZE", "PAGE_SIZE", "SIGQUEUE_MAX", "_NPROCESSORS_CONF",
 		"_NPROCESSORS_ONLN",
 	} {
