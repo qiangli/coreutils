@@ -141,7 +141,7 @@ func TestShellJoinMode(t *testing.T) {
 		{"/tmp/bash-test-7844", "x", fixtureTmp + `\bash-test-7844\x`},
 		{"/tmp/bash-test-7844", "sub/y", fixtureTmp + `\bash-test-7844\sub\y`},
 		{"/tmp/eglob-test-1", "x*x", fixtureTmp + "\\eglob-test-1\\x\uf02ax"},
-		{"/tmp/eglob-test-1", `a\*b`, fixtureTmp + "\\eglob-test-1\\a\uf05c\uf02ab"},
+		{"/tmp/eglob-test-1", `a\*b`, fixtureTmp + "\\eglob-test-1\\a|\uf02ab"},
 		{"/c/Users/me", "f", `C:\Users\me\f`},
 		{fixtureRoot + `\etc`, "passwd", fixtureRoot + `\etc\passwd`},
 		{`C:\work\`, "f", `C:\work\f`},
