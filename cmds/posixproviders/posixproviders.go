@@ -49,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mvdan.cc/sh/v3/pathconv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -305,7 +306,7 @@ func execProvider(rc *tool.RunContext, name, path string, args []string) int {
 	c := exec.CommandContext(ctx, path)
 	// Overriding Args after CommandContext is the documented way to set argv[0]
 	// independently of the executable path.
-	c.Args = append([]string{name}, args...)
+	c.Args = append([]string{name}, pathconv.NativeArgs(args)...)
 	c.Dir = rc.Dir
 	if rc.Env == nil {
 		c.Env = []string{}
