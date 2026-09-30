@@ -89,21 +89,6 @@ func TestArgvPassthrough(t *testing.T) {
 	}
 }
 
-func TestM4ProviderSelectsPOSIXSemantics(t *testing.T) {
-	root := t.TempDir()
-	provisionSelf(t, root, "m4")
-
-	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "m4", rc, out, errb, "-Dname=value", "input.m4")
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr = %q", code, stderr)
-	}
-	want := "argv0:m4\narg:--traditional\narg:--fatal-warnings\narg:-Dname=value\narg:input.m4\n"
-	if stdout != want {
-		t.Errorf("stdout = %q, want %q", stdout, want)
-	}
-}
-
 func TestM4ProviderArgsDoNotMutateCaller(t *testing.T) {
 	in := []string{"-s", "input.m4"}
 	got := m4ProviderArgs(in)
@@ -375,7 +360,7 @@ func TestProviderNamesAreRegisteredOnEveryPlatform(t *testing.T) {
 
 func TestUnprovisionedProviderFailsLoudly(t *testing.T) {
 	rc, out, errb := newRC(t, t.TempDir())
-	code, stdout, stderr := run(t, "m4", rc, out, errb)
+	code, stdout, stderr := run(t, "ar", rc, out, errb)
 
 	if code != 127 {
 		t.Errorf("exit = %d, want 127 (command not found)", code)
@@ -386,20 +371,20 @@ func TestUnprovisionedProviderFailsLoudly(t *testing.T) {
 	if !strings.Contains(stderr, "not provisioned") {
 		t.Errorf("stderr does not say why: %q", stderr)
 	}
-	if !strings.Contains(stderr, "bashy posix-providers build m4") {
+	if !strings.Contains(stderr, "bashy posix-providers build ar") {
 		t.Errorf("stderr does not name the fix: %q", stderr)
 	}
 }
 
 func TestProviderWithBadProvenanceFailsLoudly(t *testing.T) {
 	root := t.TempDir()
-	bin := provision(t, root, "m4", "#!/bin/sh\nexit 0\n")
+	bin := provision(t, root, "ar", "#!/bin/sh\nexit 0\n")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	rc, out, errb := newRC(t, root)
-	code, _, stderr := run(t, "m4", rc, out, errb)
+	code, _, stderr := run(t, "ar", rc, out, errb)
 	if code != 127 {
 		t.Errorf("exit = %d, want 127", code)
 	}
@@ -569,7 +554,7 @@ func TestAdminHelp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"list", "check", "build", "BASHY_POSIX_PROVIDERS=off",
-		"Active external providers (9): " + strings.Join(posixprovider.DispatchNames(), ", "),
+		"Active external providers (8): " + strings.Join(posixprovider.DispatchNames(), ", "),
 		"Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk",
 		"lp is Apache-2.0",
 	} {
@@ -687,12 +672,8 @@ func TestM4BuildRecipePinsPOSIXCorrection(t *testing.T) {
 		}
 	}
 
-	e, ok := posixprovider.Lookup("m4")
-	if !ok {
-		t.Fatal("m4 is absent from provider manifest")
-	}
-	if e.RecipeRevision != "posix-semantics-2" {
-		t.Fatalf("m4 recipe revision = %q, want posix-semantics-2", e.RecipeRevision)
+	if posixprovider.Has("m4") {
+		t.Fatal("m4 remains in the provider manifest after the Go applet switch-over")
 	}
 }
 
@@ -800,14 +781,14 @@ func TestAdminDispatchPlan(t *testing.T) {
 	}
 
 	// A tampered provider has no verifiable dispatch target: FAIL, exit 1.
-	e, _ := posixprovider.Lookup("m4")
-	if err := os.WriteFile(filepath.Join(root, "m4", e.Version, "m4"), []byte("tampered"), 0o755); err != nil {
+	e, _ := posixprovider.Lookup("ar")
+	if err := os.WriteFile(filepath.Join(root, "ar", e.Version, "ar"), []byte("tampered"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rc, out, errb = newRC(t, root)
 	code, _, stderr = run(t, "posix-providers", rc, out, errb, "dispatch-plan")
-	if code != 1 || !strings.Contains(stderr, "FAIL m4") || !strings.Contains(stderr, "no verifiable dispatch target") {
-		t.Errorf("tampered m4: exit = %d, stderr = %q", code, stderr)
+	if code != 1 || !strings.Contains(stderr, "FAIL ar") || !strings.Contains(stderr, "no verifiable dispatch target") {
+		t.Errorf("tampered ar: exit = %d, stderr = %q", code, stderr)
 	}
 
 	// Operands are a usage error: the plan is always the whole pinned set.

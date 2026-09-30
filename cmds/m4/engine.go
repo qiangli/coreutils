@@ -127,6 +127,9 @@ func (p *processor) process() (code int) {
 			if len(p.wraps) > 0 {
 				w := strings.Join(p.wraps, "")
 				p.wraps = nil
+				// Wrapped input is evaluated after the source is exhausted;
+				// GNU-compatible synclines identify that synthetic input as line 0.
+				p.line = 0
 				p.pushback(w)
 				continue
 			}
