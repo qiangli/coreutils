@@ -54,7 +54,7 @@ locale	yes	cmds/locale	no	go_applet
 localedef	no	cmds/posixproviders	no	external_provider
 logger	yes	cmds/logger	no	go_applet
 logname	yes	cmds/logname	no	go_applet
-lp	no	cmds/posixproviders	no	external_provider
+lp	yes	cmds/lp	no	go_applet
 ls	yes	cmds/ls	no	go_applet
 m4	no	cmds/posixproviders	no	external_provider
 mailx	yes	cmds/mailx	no	go_applet
