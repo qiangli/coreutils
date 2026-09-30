@@ -18,6 +18,7 @@ func newLines(r io.Reader) *lineReader {
 }
 func (r *lineReader) next() (string, int, error) {
 	var b strings.Builder
+	continued := false
 	start := r.line + 1
 	for {
 		s, err := r.r.ReadString('\n')
@@ -25,13 +26,19 @@ func (r *lineReader) next() (string, int, error) {
 			return "", start, err
 		}
 		if s == "" && err == io.EOF {
-			if b.Len() > 0 {
+			if continued {
 				return "", start, problem(start, "unfinished continuation")
 			}
 			return "", start, io.EOF
 		}
 		r.line++
 		s = strings.TrimSuffix(strings.TrimSuffix(s, "\n"), "\r")
+		// The character operand of a directive is literal, even when it is
+		// the current escape character at the end of the physical line.
+		fields := strings.Fields(s)
+		if !continued && len(fields) == 2 && (strings.Trim(fields[0], "<>") == "escape_char" || strings.Trim(fields[0], "<>") == "comment_char") {
+			return s, start, nil
+		}
 		if strings.HasPrefix(strings.TrimSpace(s), string(r.comment)) {
 			if b.Len() == 0 {
 				return "", start, nil
@@ -47,6 +54,7 @@ func (r *lineReader) next() (string, int, error) {
 				return "", start, problem(start, "unfinished continuation")
 			}
 			b.WriteString(s[:len(s)-1])
+			continued = true
 			continue
 		}
 		b.WriteString(s)

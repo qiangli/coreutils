@@ -83,6 +83,9 @@ func ParseSource(in io.Reader) (*Source, error) {
 			if err := balanced(vs[1:]); err != nil {
 				return nil, atLine(line, err)
 			}
+			if err := entrySyntax(section.Name, key, vs[1:]); err != nil {
+				return nil, atLine(line, err)
+			}
 			if vs[0].Kind == Symbol {
 				key = "<" + key + ">"
 			}
@@ -190,4 +193,49 @@ func Validate(src *Source, cm *Charmap) []Diagnostic {
 		}
 	}
 	return ds
+}
+
+// Check the basic operand shapes here; category defaults and semantic
+// constraints (such as mutually exclusive character classes) belong to compilation.
+func entrySyntax(category, key string, values []Value) error {
+	if category == "LC_COLLATE" {
+		switch key {
+		case "collating-symbol":
+			if len(values) != 1 || values[0].Kind != Symbol {
+				return problem(0, "collating-symbol requires one symbolic name")
+			}
+		case "collating-element":
+			if len(values) != 3 || values[0].Kind != Symbol || values[1].Text != "from" || values[2].Kind != String {
+				return problem(0, "collating-element requires a symbolic name and from string")
+			}
+		case "order_end":
+			if len(values) != 0 {
+				return problem(0, "order_end takes no operands")
+			}
+		}
+		return nil
+	}
+	if len(values) == 0 {
+		return problem(0, "%s requires operands", key)
+	}
+	if key == "toupper" || key == "tolower" {
+		char := func(v Value) bool { return v.Kind == Symbol || v.Kind == Bytes || v.Kind == Word || v.Kind == Number }
+		for i := 0; i < len(values); {
+			if i+4 >= len(values) || values[i].Text != "(" || !char(values[i+1]) || values[i+2].Text != "," || !char(values[i+3]) || values[i+4].Text != ")" {
+				return problem(0, "%s requires (character,character) pairs", key)
+			}
+			i += 5
+			if i < len(values) {
+				if values[i].Text != ";" {
+					return problem(0, "expected semicolon between pairs")
+				}
+				i++
+			}
+		}
+	}
+	scalarStrings := " decimal_point thousands_sep int_curr_symbol currency_symbol mon_decimal_point mon_thousands_sep positive_sign negative_sign d_t_fmt d_fmt t_fmt t_fmt_ampm era_d_fmt era_t_fmt era_d_t_fmt yesexpr noexpr yesstr nostr "
+	if strings.Contains(scalarStrings, " "+key+" ") && (len(values) != 1 || values[0].Kind != String) {
+		return problem(0, "%s requires one string", key)
+	}
+	return nil
 }

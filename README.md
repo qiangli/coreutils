@@ -50,6 +50,10 @@ measured the distro's binaries. There is no fallback: an unprovisioned provider
 exits 127 with the command that fixes it. See
 [POSIX external providers](docs/posix-external-providers.md).
 
+The staged pure-Go [`cmds/localedef` parser](docs/localedef-parser.md) validates
+locale sources for embedded callers; locale compilation and multicall migration
+are separate follow-up work.
+
 Profile B deliberately uses Bashy with pinned GNU/system utilities and excludes
 these Go applets. Profiles C/D place the Go multicall provider first. Any
 resulting evidence applies to the exact staged profile and provider manifest,

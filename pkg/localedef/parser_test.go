@@ -151,3 +151,31 @@ func TestSystemSource(t *testing.T) {
 		t.Fatal("missing LC_TIME")
 	}
 }
+
+func TestSyntaxEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name, input    string
+		charmap, valid bool
+	}{
+		{"explicit default escape", "escape_char \\\nLC_TIME\ncopy \"C\"\nEND LC_TIME\n", false, true},
+		{"charmap whitespace", "CHARMAP # begin\n<X> \\x41\nEND\tCHARMAP # end\n", true, true},
+		{"empty continuation", "\\\n", false, false},
+		{"bare decimal", "LC_NUMERIC\ndecimal_point\nEND LC_NUMERIC\n", false, false},
+		{"numeric string", "LC_NUMERIC\ndecimal_point 4\nEND LC_NUMERIC\n", false, false},
+		{"bad pair", "LC_CTYPE\ntolower (<A>;<a>)\nEND LC_CTYPE\n", false, false},
+		{"collating declaration", "LC_COLLATE\ncollating-element <ch> from \"<c><h>\"\norder_start forward\n<ch>\norder_end\nEND LC_COLLATE\n", false, true},
+		{"custom class", "LC_CTYPE\ncharclass \"vowel\"\nvowel <a>;<e>\nEND LC_CTYPE\n", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.charmap {
+				_, err = ParseCharmap(strings.NewReader(tc.input))
+			} else {
+				_, err = ParseSource(strings.NewReader(tc.input))
+			}
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}

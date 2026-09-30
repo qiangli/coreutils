@@ -33,20 +33,20 @@ func ParseCharmap(in io.Reader) (*Charmap, error) {
 		if s == "" {
 			continue
 		}
-		if state == "width" {
-			if s == "END WIDTH" {
-				state = "done"
-			}
-			continue
-		}
 		vs, err := lex(s, r.escape, r.comment)
 		if err != nil {
-			return nil, problem(line, "%v", err)
+			return nil, atLine(line, err)
 		}
 		if len(vs) == 0 {
 			continue
 		}
-		if s == "CHARMAP" {
+		if state == "width" {
+			if len(vs) == 2 && vs[0].Text == "END" && vs[1].Text == "WIDTH" {
+				state = "done"
+			}
+			continue
+		}
+		if len(vs) == 1 && vs[0].Text == "CHARMAP" {
 			if seen {
 				return nil, problem(line, "duplicate CHARMAP")
 			}
@@ -55,14 +55,14 @@ func ParseCharmap(in io.Reader) (*Charmap, error) {
 			start = line
 			continue
 		}
-		if s == "END CHARMAP" {
+		if len(vs) == 2 && vs[0].Text == "END" && vs[1].Text == "CHARMAP" {
 			if state != "map" {
 				return nil, problem(line, "unexpected END CHARMAP")
 			}
 			state = "done"
 			continue
 		}
-		if s == "WIDTH" && state == "done" {
+		if len(vs) == 1 && vs[0].Text == "WIDTH" && state == "done" {
 			state = "width"
 			start = line
 			continue
