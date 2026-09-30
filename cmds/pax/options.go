@@ -172,7 +172,16 @@ func invalidPAXDestinationName(name string) bool {
 }
 
 func invalidPAXLocalDestinationName(name string) bool {
-	if name == "" || strings.IndexByte(name, 0) >= 0 || len(name) > 4096 {
+	return len(name) > 4096 || invalidPAXArchiveName(name)
+}
+
+// invalidPAXArchiveName reports a name no archive member can carry: empty,
+// containing NUL, or with a component beyond {NAME_MAX}. It deliberately has no
+// total-length term: the pax extended header holds any length, and a source
+// tree can legitimately hold a member (or its sibling) longer than the
+// destination's {PATH_MAX}.
+func invalidPAXArchiveName(name string) bool {
+	if name == "" || strings.IndexByte(name, 0) >= 0 {
 		return true
 	}
 	for _, component := range strings.Split(filepath.ToSlash(name), "/") {
