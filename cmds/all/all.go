@@ -75,6 +75,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/locale"
 	_ "github.com/qiangli/coreutils/cmds/logger"
 	_ "github.com/qiangli/coreutils/cmds/logname"
+	_ "github.com/qiangli/coreutils/cmds/lp"
 	_ "github.com/qiangli/coreutils/cmds/ls"
 	_ "github.com/qiangli/coreutils/cmds/mailx"
 	_ "github.com/qiangli/coreutils/cmds/make"

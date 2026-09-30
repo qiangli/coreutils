@@ -70,7 +70,7 @@ func mustLookup(t *testing.T, name string) Entry {
 
 func TestManifestShape(t *testing.T) {
 	names := Names()
-	want := []string{"ar", "ctags", "ex", "localedef", "lp", "m4", "man", "nm", "strip", "vi"}
+	want := []string{"ar", "ctags", "ex", "localedef", "m4", "man", "nm", "strip", "vi"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -83,9 +83,9 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s: incomplete entry %+v", n, e)
 		}
 	}
-	// Unix-only, no windows. CUPS and man-db are POSIX-only upstream, and
-	// neither ships a native windows build path.
-	for _, n := range []string{"man", "lp"} {
+	// Unix-only, no windows. man-db is POSIX-only upstream, and
+	// ships no native windows build path.
+	for _, n := range []string{"man"} {
 		e := mustLookup(t, n)
 		if e.SupportsGOOS("windows") {
 			t.Errorf("%s: manifest now declares windows; update the gating tests", n)
@@ -120,7 +120,7 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 }
 
 func TestGoAppletsHaveNoExternalProviderDefinition(t *testing.T) {
-	for _, name := range []string{"bc", "ed", "mail", "mailx", "make", "patch", "talk"} {
+	for _, name := range []string{"bc", "ed", "lp", "mail", "mailx", "make", "patch", "talk"} {
 		if Has(name) {
 			t.Errorf("%s still has an external-provider definition", name)
 		}
