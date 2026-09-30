@@ -3,11 +3,11 @@ id: 6972ef8ec6cb
 kind: task
 title: Map getconf:12 first divergence before correction
 seq: 15
-status: todo
+status: wontfix
 priority: p0
 created: 2026-08-31T23:33:22.016532Z
 assignee: s88-getconf-hash
-sprint: 100
+closed: 2026-09-30T15:33:55.149347Z
 ---
 
 Investigate getconf:12 using only public-safe metadata, Issue 7 authority,

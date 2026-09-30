@@ -3,11 +3,11 @@ id: 95fcce29a7cc
 kind: task
 title: S88 pax shared blocker cluster causal closure
 seq: 15
-status: todo
+status: wontfix
 priority: p0
 created: 2026-08-31T23:31:56.759938Z
 assignee: s88_pax_cluster
-sprint: 100
+closed: 2026-09-30T15:33:56.72117Z
 ---
 
 Investigate POSIX Profile D pax shared FAIL seats 155,168,185,207,225,245,246,247 plus candidate pax:46 from public-safe metadata and source/history. Identify and implement only a concrete standards-aligned smallest fix with focused native tests; otherwise record the exact redacted evidence tuple and a public reducer plan. No licensed suite or journal bytes.

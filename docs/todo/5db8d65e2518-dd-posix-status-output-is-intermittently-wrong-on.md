@@ -3,10 +3,10 @@ id: 5db8d65e2518
 kind: task
 title: 'dd: POSIX status output is intermittently wrong on the linux runner'
 seq: 23
-status: todo
+status: wontfix
 priority: p2
 created: 2026-09-01T15:04:03.516013Z
-sprint: 100
+closed: 2026-09-30T15:33:53.58095Z
 ---
 
 `dd` is a POSIX-required utility in the certification scope, and this test
