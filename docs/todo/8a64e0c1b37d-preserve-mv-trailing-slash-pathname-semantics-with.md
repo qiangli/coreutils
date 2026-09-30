@@ -59,3 +59,11 @@ story is tracked under the POSIX cert sprint.
 The `-T` half stays a GNU extension and must not be conflated with it — the
 contract above already separates them, and that separation is the reason this
 is delicate rather than a one-line fix.
+
+## Review 2026-09-30 (steward)
+
+- Status: still reproduces - `linux ... cmds/mv TestMvNoTargetDirectoryTrailingSlashOnExistingDir` is still baselined in `test/known-failures.txt` at coreutils dc805500. 091f82aa (2026-09-22, operand rebuilt in the caller's spelling) touched mv's destination arithmetic but did not remove the baseline entry.
+- Outdated: CI run IDs and "golang:1.26" context only; `docs/sprint-49-salvage-reconciliation.md` still exists. Destination arithmetic now goes through the `tool.OperandJoin/OperandDir/OperandClean` helpers (091f82aa).
+- Next step: actionable today, independent of the licensed host. Capture the raw trailing-slash operand before `RunContext.Path` normalizes it (use the new operand helpers), validate "must be a directory" separately from `-T`, write the listed tests red first, fix, delete the known-failures line.
+- Acceptance: all required tests green on Linux CI and darwin; known-failures line removed; mv:* identities no worse in the fresh baseline arm.
+- Depends on: nothing.
