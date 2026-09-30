@@ -138,6 +138,11 @@ func IsMacOSDefaultUTF8(env []string, cat Category) bool {
 // default, so this returns false and the exact certified behavior is kept,
 // byte for byte.
 func IsHostDefaultUTF8(env []string, cat Category) bool {
+	if cat == Collate {
+		if HasCompiledFile(env, Resolve(env, cat)) {
+			return false
+		}
+	}
 	if profile, ok := getEnv(env, "VSC_PROFILE"); ok && profile == "cert" {
 		return false
 	}

@@ -41,7 +41,19 @@ type Keyword struct {
 }
 
 // Compiled is one locale as this repository compiled it.
+type CollatingElement struct {
+	Text    string  `json:"text"`
+	Order   int     `json:"order"`
+	Weights [][]int `json:"weights"`
+}
+
+type Collation struct {
+	Backward []bool             `json:"backward"`
+	Elements []CollatingElement `json:"elements"`
+}
+
 type Compiled struct {
+	Collation *Collation `json:"collation,omitempty"`
 	// Name is the locale name the definition was compiled under.
 	Name string `json:"name"`
 	// Charmap is the public codeset name (charmap / code_set_name).
@@ -308,9 +320,33 @@ func validateCompiled(c *Compiled) error {
 	if c.MbCurMin < 0 || c.MbCurMax < 0 || (c.MbCurMax > 0 && c.MbCurMin > c.MbCurMax) {
 		return fmt.Errorf("invalid compiled charmap width")
 	}
+	if c.Has("LC_COLLATE") != (c.Collation != nil) {
+		return fmt.Errorf("invalid compiled collation category")
+	}
+	if d := c.Collation; d != nil {
+		if len(d.Backward) == 0 || len(d.Elements) == 0 {
+			return fmt.Errorf("invalid compiled collation")
+		}
+		seen := map[string]bool{}
+		orders := map[int]bool{}
+		for _, e := range d.Elements {
+			if e.Text == "" || !utf8.ValidString(e.Text) || seen[e.Text] || e.Order <= 0 || orders[e.Order] || len(e.Weights) != len(d.Backward) {
+				return fmt.Errorf("invalid compiled collating element")
+			}
+			seen[e.Text] = true
+			orders[e.Order] = true
+			for _, level := range e.Weights {
+				for _, w := range level {
+					if w <= 0 {
+						return fmt.Errorf("invalid compiled collation weight")
+					}
+				}
+			}
+		}
+	}
 	for cat, keywords := range c.Categories {
 		switch cat {
-		case "LC_CTYPE", "LC_NUMERIC", "LC_MONETARY", "LC_TIME", "LC_MESSAGES":
+		case "LC_CTYPE", "LC_NUMERIC", "LC_MONETARY", "LC_TIME", "LC_MESSAGES", "LC_COLLATE":
 		default:
 			return fmt.Errorf("invalid compiled category %q", cat)
 		}
@@ -419,4 +455,19 @@ func NumericSeparators(env []string) (decPt, thousSep byte, ok bool) {
 		thousand = sep[0]
 	}
 	return point[0], thousand, true
+}
+
+// HasCompiledFile includes malformed/unreadable artifacts: consumers must not
+// silently substitute a host default when a selected compiled locale is bad.
+func HasCompiledFile(env []string, name string) bool {
+	if !ValidStoreName(name) {
+		return false
+	}
+	for _, dir := range StoreDirs(env) {
+		path, _ := StorePath(dir, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
 }

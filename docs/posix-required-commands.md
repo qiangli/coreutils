@@ -12,15 +12,15 @@ providers. Profiles C/D place Bashy Go coreutils first.
 
 | Disposition | Count |
 | --- | ---: |
-| Registered Bashy Go applet | 93 |
+| Registered Bashy Go applet | 94 |
 | Shell entry point or builtin | 14 |
-| Pinned POSIX external provider | 9 |
+| Pinned POSIX external provider | 8 |
 | External provider gap in assembled C/D | 0 |
 | Required names | 116 |
 
-Coreutils alone therefore covers 93 of 116 same-name required sets and
-is absent for 23 names. 14 of those 23 are supplied by the shell and
-9 by a pinned POSIX external provider that the multicall itself registers
+Coreutils alone therefore covers 94 of 116 same-name required sets and
+is absent for 22 names. 14 of those 22 are supplied by the shell and
+8 by a pinned POSIX external provider that the multicall itself registers
 and resolves from the provider cache (`pkg/posixprovider`), leaving
 0 true external-provider gaps in the assembled C/D environment.
 
@@ -40,8 +40,8 @@ name on PATH for exec-style callers (`env`, `xargs`, `find -exec`).
 
 | Axis | Go applet | Shell | Pinned provider |
 | --- | ---: | ---: | ---: |
-| Availability | 93 | 14 | 9 |
-| Effective selection | 85 | 22 | 9 |
+| Availability | 94 | 14 | 8 |
+| Effective selection | 86 | 22 | 8 |
 
 `posix-gate` pins both splits and verifies the effective selection
 against the staged shell's own `type -t` classification.
@@ -107,7 +107,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `kill` | yes | `cmds/kill` | no | internal Go applet |
 | `ln` | yes | `cmds/ln` | no | internal Go applet |
 | `locale` | yes | `cmds/locale` | no | internal Go applet |
-| `localedef` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
+| `localedef` | yes | `cmds/localedef` | no | internal Go applet |
 | `logger` | yes | `cmds/logger` | no | internal Go applet |
 | `logname` | yes | `cmds/logname` | no | internal Go applet |
 | `lp` | yes | `cmds/lp` | no | internal Go applet |

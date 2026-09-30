@@ -272,7 +272,9 @@ func GetFlagSet(name string) *pflag.FlagSet {
 
 func run(rc *tool.RunContext, args []string) (code int) {
 	return runWithLocale(rc, args,
-		func(name string) (stringCollator, error) { return collate.Open(name) },
+		func(name string) (stringCollator, error) {
+			return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+		},
 		func(name string) (ctypeProvider, error) { return ctype.Open(name) })
 }
 
@@ -561,7 +563,7 @@ func runWithLocale(rc *tool.RunContext, args []string, openCollator collatorOpen
 	// LC_COLLATE owns pathname ordering, including the filename tie-breakers
 	// after -t/-S/-X. Unsorted modes do not consult it.
 	if !opt.unsorted {
-		name := locale.ResolveCarried(rc.Env, locale.Collate)
+		name := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.Collate)
 		if name != "C" && name != "POSIX" {
 			provider, err := openCollator(name)
 			if err != nil {

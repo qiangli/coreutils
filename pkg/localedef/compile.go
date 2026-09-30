@@ -1,12 +1,7 @@
 package localedef
 
-// Compilation turns a parsed POSIX locale source into the Go locale store's
-// compiled form (pkg/locale.Compiled). Only the categories a pure-Go
-// consumer can actually honour are compiled: LC_CTYPE classes and case
-// mappings, and the scalar/list keywords of LC_NUMERIC, LC_MONETARY, LC_TIME
-// and LC_MESSAGES. LC_COLLATE is a set of ordering RULES rather than named
-// values; it is deliberately left out of the store rather than reduced to
-// something a consumer would read as an order it is not.
+// Compilation turns parsed POSIX locale sources into the Go-owned store.
+// Unsupported collation semantics are rejected rather than discarded.
 
 import (
 	"errors"
@@ -62,6 +57,10 @@ func CompileWithCopy(name string, src *Source, cm *Charmap, resolve CopyResolver
 			continue
 		}
 		switch cat {
+		case "LC_COLLATE":
+			if err := compileCollation(c, s, cm); err != nil {
+				return nil, err
+			}
 		case "LC_CTYPE":
 			if err := compileCtype(c, s, cm); err != nil {
 				return nil, err
@@ -71,8 +70,8 @@ func CompileWithCopy(name string, src *Source, cm *Charmap, resolve CopyResolver
 				return nil, err
 			}
 		}
-		// LC_COLLATE and the system-source extension categories are parsed and
-		// validated, but carry nothing this store can serve; they are skipped
+		// System-source extension categories are parsed and validated,
+		// but carry nothing this store can serve; they are skipped
 		// rather than stored empty, so Has() keeps meaning "we have data".
 	}
 	return c, nil
@@ -93,6 +92,9 @@ func copyCategory(c *locale.Compiled, cat string, s *Section, resolve CopyResolv
 	c.EnsureCategory(cat)
 	for name, k := range other.Categories[cat] {
 		c.Set(cat, name, k)
+	}
+	if cat == "LC_COLLATE" {
+		c.Collation = other.Collation
 	}
 	if cat == "LC_CTYPE" {
 		for name, chars := range other.Classes {

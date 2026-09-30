@@ -43,7 +43,9 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	// A failed sed is where a BSD idiom shows up (`sed -i ''` leaves the
 	// real script read as a filename). Hint on the ERROR PATH only.
-	code := runCommandWithLocales(rc, args, openCType, openCollate)
+	code := runCommandWithLocales(rc, args, openCType, func(name string) (collateProvider, error) {
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+	})
 	if code != 0 {
 		nudge.OnFailure(rc.Err, append([]string{cmd.Name}, args...), rc.Env)
 	}
@@ -51,7 +53,9 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runCommand(rc *tool.RunContext, args []string) int {
-	return runCommandWithLocales(rc, args, openCType, openCollate)
+	return runCommandWithLocales(rc, args, openCType, func(name string) (collateProvider, error) {
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+	})
 }
 
 type ctypeProvider interface {
@@ -201,7 +205,7 @@ func runCommandWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOp
 		ctypeModel = sedCTypeUTF8
 	}
 	collateModel := resolveSedCollate(lcCollate)
-	if locale.IsMacOSDefaultUTF8(rc.Env, locale.Collate) {
+	if locale.IsMacOSDefaultUTF8(locale.StoreEnvAt(rc.Env, rc.Path), locale.Collate) {
 		// UTF-8's encoded code-point order is byte order, the same bounded
 		// collation used for C.UTF-8 above. No host collation is implied.
 		collateModel = sedCollateC
