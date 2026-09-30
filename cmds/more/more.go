@@ -49,6 +49,7 @@ type options struct {
 	charMode    characterMode
 	ctypeName   string
 	collateName string
+	localeEnv   []string
 
 	// Terminal-mode geometry (unused in the non-interactive path).
 	rows      int
@@ -197,6 +198,7 @@ func run(rc *tool.RunContext, args []string) int {
 		charMode:    charMode,
 		ctypeName:   ctypeName,
 		collateName: collateName,
+		localeEnv:   corelocale.StoreEnvAt(rc.Env, rc.Path),
 	}
 	files := operands
 	if len(files) == 0 && (!terminal || *tag == "") {

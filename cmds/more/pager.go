@@ -1150,7 +1150,7 @@ func compileMoreMatcher(o options, pattern string) (func(string) (bool, error), 
 		return nil, err
 	}
 	if o.collateName != "C" && o.collateName != "POSIX" {
-		provider, openErr := collate.Open(o.collateName)
+		provider, openErr := collate.OpenEnv(o.localeEnv, o.collateName)
 		if openErr != nil {
 			return nil, openErr
 		}

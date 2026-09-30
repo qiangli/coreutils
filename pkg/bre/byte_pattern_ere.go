@@ -75,15 +75,11 @@ func translateLocaleByteERE(pattern []byte, codec byteTokenCodec, tables bytePat
 			}
 			i += 2
 		case '[':
-			class, negated, consumed, err := parseLocaleByteBracket(pattern[i:], tables)
+			atom, consumed, err := localeBracketAtom(pattern[i:], codec, tables, foldCase)
 			if err != nil {
 				return "", err
 			}
-			class = expandFold(class, tables.fold, foldCase)
-			if negated {
-				class = complementByteClass(class)
-			}
-			out.WriteString(byteClassAtom(codec, class))
+			out.WriteString(atom)
 			state = posAtom
 			i += consumed
 		case '.':

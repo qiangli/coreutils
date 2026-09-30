@@ -10,6 +10,7 @@ import (
 // classification and folding data. The compiler copies the class map; callers
 // cannot change a compiled pattern by mutating their tables afterwards.
 type bytePatternTables struct {
+	elements   *elementCollation
 	classes    map[string][256]bool
 	equivalent [256][256]bool
 	equivValid [256]bool
@@ -226,15 +227,11 @@ func translateLocaleByteBRE(pattern []byte, codec byteTokenCodec, tables bytePat
 			}
 			i += 2
 		case '[':
-			class, negated, consumed, err := parseLocaleByteBracket(pattern[i:], tables)
+			atom, consumed, err := localeBracketAtom(pattern[i:], codec, tables, foldCase)
 			if err != nil {
 				return "", err
 			}
-			class = expandFold(class, tables.fold, foldCase)
-			if negated {
-				class = complementByteClass(class)
-			}
-			out.WriteString(byteClassAtom(codec, class))
+			out.WriteString(atom)
 			state = posAtom
 			i += consumed
 		case '.':

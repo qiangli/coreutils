@@ -536,14 +536,36 @@ func (n builtinClassNode) match(ctx *btCtx, st btState) []btState {
 }
 
 type classNode struct {
-	re    *regexp.Regexp
-	cutf8 bool
+	maxElementBytes int
+	re              *regexp.Regexp
+	cutf8           bool
 }
 
 func (n classNode) match(ctx *btCtx, st btState) []btState {
 	ctx.steps++
 	if st.pos >= len(ctx.s) {
 		return nil
+	}
+	if n.maxElementBytes > 0 {
+		var states []btState
+		for end := st.pos; end < len(ctx.s) && end-st.pos < n.maxElementBytes; {
+			_, size := utf8.DecodeRuneInString(ctx.s[end:])
+			end += size
+			ctx.steps++
+			if ctx.steps > ctx.limit {
+				return nil
+			}
+			if n.re.MatchString(ctx.s[st.pos:end]) {
+				next := st
+				next.pos = end
+				states = append(states, next)
+			}
+		}
+		// Greedy preference among full-element alternatives.
+		for i, j := 0, len(states)-1; i < j; i, j = i+1, j-1 {
+			states[i], states[j] = states[j], states[i]
+		}
+		return states
 	}
 	size := 1
 	if n.cutf8 {
@@ -858,7 +880,16 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 			return nil, state, false, err
 		}
 		p.i += n
-		return classNode{re: re, cutf8: p.cutf8}, posAtom, true, nil
+		maxBytes := 0
+		if p.localeTables != nil && p.localeTables.tables.elements != nil {
+			maxBytes = utf8.UTFMax
+			for _, e := range p.localeTables.tables.elements.elements {
+				if len(e.Text) > maxBytes {
+					maxBytes = len(e.Text)
+				}
+			}
+		}
+		return classNode{re: re, cutf8: p.cutf8, maxElementBytes: maxBytes}, posAtom, true, nil
 	case '*':
 		p.i++
 		return literalNode{lit: "*", ignoreCase: p.ignoreCase}, posAtom, true, nil

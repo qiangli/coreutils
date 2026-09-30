@@ -58,7 +58,9 @@ type collateProvider interface {
 type collateOpener func(string) (collateProvider, error)
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) { return collate.Open(name) })
+	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) {
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+	})
 }
 
 func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
@@ -157,8 +159,8 @@ func readLines(rc *tool.RunContext, name string) ([]string, error) {
 }
 
 func localeRegexpTables(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen collateOpener) (*bre.LocaleByteTables, int) {
-	lcCType := locale.ResolveCarried(rc.Env, locale.CType)
-	lcCollate := locale.ResolveCarried(rc.Env, locale.Collate)
+	lcCType := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.CType)
+	lcCollate := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.Collate)
 	var tables *bre.LocaleByteTables
 	if lcCType != "C" && lcCType != "POSIX" && !locale.IsCUTF8(lcCType) {
 		provider, err := ctypeOpen(lcCType)

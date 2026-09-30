@@ -354,6 +354,9 @@ func translateBracket(s string) (string, int, error) {
 }
 
 func translateBracketMode(s string, cutf8 bool, tables *LocaleByteTables) (string, int, error) {
+	if tables != nil && tables.tables.elements != nil {
+		return unicodeElementBracket(s, tables)
+	}
 	var b strings.Builder
 	b.WriteByte('[')
 	i := 1

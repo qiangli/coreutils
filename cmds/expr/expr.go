@@ -68,8 +68,8 @@ type evalError struct{ msg string }
 func (e *evalError) Error() string { return e.msg }
 
 func resolveExprLocale(rc *tool.RunContext, ctypeOpen ctypeOpener, collateOpen collateOpener) (*exprLocale, int) {
-	lcCType := locale.ResolveCarried(rc.Env, locale.CType)
-	lcCollate := locale.ResolveCarried(rc.Env, locale.Collate)
+	lcCType := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.CType)
+	lcCollate := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.Collate)
 	characters, err := resolveCharacterCodec(lcCType)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "expr: %v\n", err)
@@ -208,7 +208,9 @@ func joinCharacterUnits(units [][]byte) string {
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) { return collate.Open(name) })
+	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) {
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+	})
 }
 
 func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, collateOpen collateOpener) int {
@@ -641,11 +643,17 @@ func (r exprRegexp) findAllStringSubmatchIndex(src string, n int) ([][]int, erro
 }
 
 func (p *parser) compileBRE(pattern string) (exprRegexp, bool, error) {
-	if p.locale.tables != nil {
+	if p.locale.tables != nil && p.locale.characters != characterUTF8 {
 		re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), p.locale.tables, bre.ByteRegexpOptions{Syntax: bre.ByteRegexpBRE})
 		return exprRegexp{localeRe: re}, hasBRECapture(pattern), err
 	}
-	re, err := bre.Compile(pattern)
+	var re *bre.Regexp
+	var err error
+	if p.locale.tables != nil {
+		re, err = bre.CompileCUTF8WithFlags(pattern, "", false, p.locale.tables)
+	} else {
+		re, err = bre.Compile(pattern)
+	}
 	if err != nil {
 		return exprRegexp{}, false, err
 	}
