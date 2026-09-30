@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 92 |
+| Availability | Go | 93 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 10 |
-| Effective owner | Go | 84 |
+| Availability | Provider | 9 |
+| Effective owner | Go | 85 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 10 |
+| Effective owner | Provider | 9 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 4 |
-| Evidence | Partial | 102 |
-| Evidence | Missing | 10 |
+| Evidence | Partial | 103 |
+| Evidence | Missing | 9 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 84 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 85 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 106 owned rows (84 Go plus 22 shell) without treating the
-10 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 107 owned rows (85 Go plus 22 shell) without treating the
+9 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -2860,7 +2860,7 @@ logname
 
 ## `lp`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2876,33 +2876,33 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Issue 7 option-argument candidate:** `-d=<dest>; -n=<copies>; -o=<option>; -t=<title>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Accept text-file pathnames for printing; with no file operands, print standard input. Without -c, deferred printing may use different access permissions.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a lone - selects standard input.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read standard input when no file is named or a file operand is -; otherwise leave it unused.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; LPDEST; xsi:NLSPATH; PRINTER; TZ`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Report the unique request ID unless -s suppresses it; POSIX leaves the message format unspecified.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write diagnostic messages only.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Submit input to the selected output destination; printing may finish after lp exits. Keep each printed file uninterrupted by other files. With -c, finish reading input before returning; no output files are specified.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every input file is processed successfully; greater than 0 if no output device is available or another error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#lp`.
+**Implementation:** `cmds/lp`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/lp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/lp/lp_test.go#TestPrintStdinDefaultsAndOptions;cmds/lp/lp_test.go#TestPrinterFallbackAndDestPrecedence;cmds/lp/lp_test.go#TestSilentAndOptionAndFile;cmds/lp/lp_test.go#TestErrors;cmds/lp/lp_test.go#TestCompletionMailSpool;cmds/lp/lp_test.go#TestCompletionDelivery;cmds/lp/lp_test.go#TestMultiFileIsOneRequest;cmds/lp/lp_test.go#TestStdinDashIsOneDocument`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

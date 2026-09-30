@@ -97,11 +97,11 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 6 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 4 | 42 |
-| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 3 | 37 |
+| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 4 | 42 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 35 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 3 | 32 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 2 | 10 |
-| `lp` | `cmds/lp` | — | POSIX/Unix utility | no | yes | 1 | 7 |
+| `lp` | `cmds/lp` | — | POSIX/Unix utility | no | yes | 2 | 18 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 6 | 71 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 35 |
 | `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 4 | 37 |
@@ -152,7 +152,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `shred` | `cmds/shred` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `shuf` | `cmds/shuf` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `sleep` | `cmds/sleep` | — | GNU Coreutils | yes | yes | 2 | 15 |
-| `sort` | `cmds/sort` | — | GNU Coreutils | yes | yes | 5 | 33 |
+| `sort` | `cmds/sort` | — | GNU Coreutils | yes | yes | 6 | 36 |
 | `split` | `cmds/split` | — | GNU Coreutils | yes | yes | 4 | 23 |
 | `stat` | `cmds/stat` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `stdbuf` | `cmds/stdbuf` | — | GNU Coreutils | yes | no | 1 | 5 |

@@ -698,9 +698,9 @@ def validate(
 
     availability = Counter(row["availability"] for row in rows)
     owners = Counter(row["effective_owner"] for row in rows)
-    if availability != Counter({"go": 92, "shell_only": 14, "external_provider": 10}):
+    if availability != Counter({"go": 93, "shell_only": 14, "external_provider": 9}):
         raise ManifestError(f"availability axis drift: {dict(availability)}")
-    if owners != Counter({"go": 84, "shell": 22, "external_provider": 10}):
+    if owners != Counter({"go": 85, "shell": 22, "external_provider": 9}):
         raise ManifestError(f"effective-selection axis drift: {dict(owners)}")
 
 
@@ -728,7 +728,7 @@ def completion_errors(
 def owned_source_errors(rows: list[dict[str, str]], root: Path = ROOT) -> list[str]:
     owned = [row for row in rows if row["effective_owner"] in OWNED_IMPLEMENTATION_OWNERS]
     counts = Counter(row["effective_owner"] for row in owned)
-    if counts != Counter({"go": 84, "shell": 22}):
+    if counts != Counter({"go": 85, "shell": 22}):
         return [f"owned selection drift: {dict(counts)}"]
     errors = []
     for row in owned:
@@ -786,11 +786,11 @@ def render(rows: list[dict[str, str]]) -> str:
         f"| Evidence | Partial | {states['partial']} |",
         f"| Evidence | Missing | {states['missing']} |", "",
         "The pre-integration `--require-owned-source-complete` gate accepts only",
-        "`implemented` or `verified` for the exact 84 Go plus 22 shell owners.",
+        "`implemented` or `verified` for the exact 85 Go plus 22 shell owners.",
         "Final completion is deliberately fail-closed: `scripts/posix_manifest.py",
         "--require-complete` covers all 116 rows, while `--require-owned-complete`",
-        "covers the 106 owned rows (84 Go plus 22 shell) without treating the",
-        "10 external-provider rows as owned implementation evidence. Both final gates accept",
+        "covers the 107 owned rows (85 Go plus 22 shell) without treating the",
+        "9 external-provider rows as owned implementation evidence. Both final gates accept",
         "only `verified`. They intentionally remain red until the proprietary harness adds",
         "a byte-derived integration gate over the authoritative complete run/pair bundle.",
         "The parser scan below is only a conservative",
@@ -882,14 +882,14 @@ def main() -> None:
     parser.add_argument(
         "--require-owned-source-complete", action="store_true",
         help=(
-            "pre-integration gate: require the exact 84 Go-owned and 22 shell-owned "
+            "pre-integration gate: require the exact 85 Go-owned and 22 shell-owned "
             "interfaces to be implemented or verified"
         ),
     )
     parser.add_argument(
         "--require-owned-complete", action="store_true",
         help=(
-            "final deferred gate: require all 84 Go-owned and 22 shell-owned interfaces "
+            "final deferred gate: require all 85 Go-owned and 22 shell-owned interfaces "
             "to be verified by the future proprietary byte-derived integration gate"
         ),
     )
@@ -921,8 +921,8 @@ def main() -> None:
             raise SystemExit("POSIX interface document is stale; run scripts/posix_manifest.py")
         states = Counter(row["evidence_state"] for row in rows)
         print(
-            "posix-manifest: PASS (116 headings; availability 92/14/10; "
-            "selection 84/22/10; evidence "
+            "posix-manifest: PASS (116 headings; availability 93/14/9; "
+            "selection 85/22/9; evidence "
             f"{states['verified']} verified/{states['implemented']} implemented/"
             f"{states['partial']} partial/{states['missing']} missing)"
         )
