@@ -45,3 +45,11 @@ failures rather than noise. The gate re-runs it and reports FLAKY, so it blocks
 nothing while it stays unexplained.
 
 Split from 8ef9961e, which keeps the non-POSIX half (pkg/foreman).
+
+## Review 2026-09-30 (steward)
+
+- Status: unknown. No dd code change since 2026-09-01 and no recorded recurrence found in commit history; the ci-test-gate FLAKY report (output capture since 77d055c2) is where a recurrence would show. Sibling 8ef9961e was closed in Sprint 137 with a separate root cause (pkg/foreman), which does not explain this one.
+- Outdated: nothing structural; Go 1.26 container reference is now Go 1.27.1 for the certification build.
+- Next step: search the coreutils Actions history since 2026-09-01 for `TestDdPOSIXStatusOmitsGNUByteCountExtension` FLAKY; if none, run it `-count=200 -race` on a Linux runner (ordinary user). If it never reproduces, record that with run IDs and close; if it does, fix from the captured diff.
+- Acceptance: either a root-caused fix with a regression test, or a recorded no-reproduction (run IDs + counts) and the dd:* identities PASS in the fresh baseline arm.
+- Priority p2; independent of the licensed host; can run anytime.
