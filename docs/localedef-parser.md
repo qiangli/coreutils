@@ -109,3 +109,37 @@ UTF-8.gz files only when both exist. `TestProviderRejectsInvalidInput` uses the
 provenance-checked external provider with a generated ASCII map and checks that
 both implementations diagnose malformed input at line 2; it skips if that
 provider is unavailable. Production code never executes another program.
+
+## Story163 interrupted-run recovery evidence
+
+The terminal run27 source/tests were preserved in `ac85da9f` with valid
+Sprint340/story163 provenance. Recovery inspected that candidate and ran only
+`./pkg/localedef ./pkg/locale ./pkg/collate ./cmds/localedef`, with
+`GOFLAGS=-p=1`, `GOMAXPROCS=2`, and
+`GOCACHE=/private/tmp/coreutils-issue27-go-cache`:
+
+- `go test ... -count=1`: exit 0, `/tmp/issue27-recovery-normal.log`.
+- `go test -race ... -count=1`: exit 0, `/tmp/issue27-recovery-race.log`.
+
+These are worker checks, not acceptance or integrated gates. Prior red evidence
+remains in `/tmp/issue27-parser-red.log` and `/tmp/issue27-forms-red.log`.
+Interrupted broad attempts `/tmp/issue27-gate.log` and
+`/tmp/issue27-gate-retry.log` remain unsuccessful/interrupted evidence and are
+not claimed as passing. Recovery ran no broad suite, pre-push hook or install.
+
+Tests cover forward/backward position with IGNORE and expanded weights,
+encoded-order ellipses with boundary validation and aliases, leading/middle/
+trailing empty weights, and explicit/implicit UNDEFINED defaults. The compiled
+consumer fixture now uses `-c` and accepts warning status 1 only for omitted
+coded characters: those partial-repertoire fixtures legitimately warn under
+the required semantics. Its out-of-repertoire test uses a character absent
+from the ASCII charmap; omitted ASCII characters now correctly acquire an
+appended order. The private-path consumer fixture declares UNDEFINED to retain
+its warning-free contract. Dedicated omission tests separately require exit 4
+and no new output without -c, exit 1 and readable output with -c, and byte-for-
+byte preservation of existing output after a forced compilation error.
+
+Bracket/BRE/ctype/grep/sed implementation is untouched in this correction.
+The later codeset scalar correction is not merged here; the parent combines
+candidates and performs independent integration checks. No full-base conformance
+claim is made; documented unsupported forms remain explicit.
