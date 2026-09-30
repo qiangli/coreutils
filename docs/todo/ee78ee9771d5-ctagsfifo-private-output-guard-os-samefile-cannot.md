@@ -37,3 +37,11 @@ Confirm the mechanism first: log st_dev/st_ino/st_ctim of original vs current on
 a Linux runner before changing the guard.
 
 Verify with: go test ./cmds/posixproviders/internal/ctagsfifo -run TestPrivateOutput -count=5
+
+## Review 2026-09-30 (steward)
+
+- Status: still open - `fifo_unix.go` and `fifo_other.go` still compare with `os.SameFile` (dev+ino only), and `linux ... ctagsfifo TestPrivateOutputIdentityChangeIsRejected` is still baselined in `test/known-failures.txt` at coreutils dc805500.
+- Outdated: nothing material; container reference `golang:1.26` should now be go1.27.1.
+- Next step: actionable today, independent of the licensed host. Confirm the inode-reuse mechanism on a Linux runner (log dev/ino/ctime of original vs current), then hold the original fd across the provider run or compare (dev, ino, ctime) via Fstat on the retained descriptor; delete the known-failures line.
+- Acceptance: `go test ./cmds/posixproviders/internal/ctagsfifo -run TestPrivateOutput -count=50` green on Linux CI and darwin; baseline entry removed; substitution rejected with "private output changed", not by FIFO timeout.
+- Depends on: nothing.
