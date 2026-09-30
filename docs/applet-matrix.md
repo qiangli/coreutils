@@ -24,7 +24,7 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 142 |
+| Shipped Go command packages | 143 |
 | Advertised applet names | 153 |
 | Alias applet names | 2 |
 | GNU Coreutils names | 106 |
@@ -103,7 +103,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 2 | 10 |
 | `lp` | `cmds/lp` | — | POSIX/Unix utility | no | yes | 1 | 7 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 6 | 71 |
-| `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 35 |
+| `m4` | `cmds/m4` | — | POSIX/Unix utility | no | yes | 2 | 27 |
 | `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 4 | 37 |
 | `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 4 | 37 |
 | `make` | `cmds/make` | — | POSIX/Unix utility | no | yes | 4 | 35 |

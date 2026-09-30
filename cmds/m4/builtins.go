@@ -1,6 +1,10 @@
 package m4cmd
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -112,6 +116,137 @@ func init() {
 		return p.addTo(name, args, -1), nil
 	})
 	builtin("eval", true, biEval)
+
+	builtin("divert", true, func(p *processor, name string, args []argument) (string, *macro) {
+		if len(args) == 0 || args[0].text == "" {
+			p.divnum = 0
+			return "", nil
+		}
+		n, ok := p.number(name, args[0].text)
+		if !ok {
+			return "", nil
+		}
+		p.divnum = int(n)
+		return "", nil
+	})
+	builtin("divnum", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.divnum), nil })
+	builtin("undivert", true, func(p *processor, name string, args []argument) (string, *macro) {
+		old := p.divnum
+		p.divnum = 0
+		defer func() { p.divnum = old }()
+		undiv := func(n int) {
+			if n > 0 && n < len(p.diversions) {
+				s := p.diversions[n].String()
+				p.diversions[n].Reset()
+				p.emit(s)
+			}
+		}
+		if len(args) == 0 {
+			for i := 1; i < len(p.diversions); i++ {
+				undiv(i)
+			}
+			return "", nil
+		}
+		for _, a := range args {
+			n, ok := p.number(name, a.text)
+			if ok {
+				undiv(int(n))
+			}
+		}
+		return "", nil
+	})
+	builtin("include", true, func(p *processor, name string, args []argument) (string, *macro) {
+		if !p.atLeast(name, args, 1) {
+			return "", nil
+		}
+		s, err := p.readNamedFile(args[0].text)
+		if err != nil {
+			p.fatalf("%s: %v", args[0].text, err)
+		}
+		return s, nil
+	})
+	builtin("sinclude", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) == 0 {
+			return "", nil
+		}
+		s, err := p.readNamedFile(args[0].text)
+		if err != nil {
+			return "", nil
+		}
+		return s, nil
+	})
+	builtin("syscmd", true, func(p *processor, name string, args []argument) (string, *macro) {
+		if !p.atLeast(name, args, 1) {
+			return "", nil
+		}
+		cmd := exec.CommandContext(p.rc.Ctx, "/bin/sh", "-c", args[0].text)
+		cmd.Stdin = nil
+		cmd.Stdout = p.rc.Out
+		cmd.Stderr = p.rc.Err
+		if err := cmd.Run(); err != nil {
+			if ee, ok := err.(*exec.ExitError); ok {
+				p.sysval = ee.ExitCode()
+			} else {
+				p.sysval = 127
+			}
+		} else {
+			p.sysval = 0
+		}
+		return "", nil
+	})
+	builtin("sysval", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.sysval), nil })
+	builtin("maketemp", true, biMaketemp)
+	builtin("mkstemp", true, biMaketemp)
+	builtin("m4exit", true, func(p *processor, name string, args []argument) (string, *macro) {
+		code := int32(0)
+		var ok bool = true
+		if len(args) > 0 {
+			code, ok = p.number(name, args[0].text)
+		}
+		if ok {
+			p.exitSet = true
+			p.exitCode = int(code)
+			if code != 0 {
+				p.failed = true
+			}
+		}
+		p.flushDiversions()
+		panic(fatal{})
+	})
+	builtin("m4wrap", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) > 0 {
+			p.wraps = append(p.wraps, args[0].text)
+		}
+		return "", nil
+	})
+	builtin("errprint", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		for _, a := range args {
+			fmt.Fprint(p.rc.Err, a.text)
+		}
+		return "", nil
+	})
+	builtin("dumpdef", true, biDumpdef)
+	builtin("traceon", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) == 0 {
+			p.traceAll = true
+		} else {
+			for _, a := range args {
+				p.trace[a.text] = true
+			}
+		}
+		return "", nil
+	})
+	builtin("traceoff", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) == 0 {
+			p.traceAll = false
+			p.trace = map[string]bool{}
+		} else {
+			for _, a := range args {
+				delete(p.trace, a.text)
+			}
+		}
+		return "", nil
+	})
 }
 
 // atLeast warns and reports false when a built-in has too few arguments.
@@ -344,4 +479,47 @@ func biEval(p *processor, name string, args []argument) (string, *macro) {
 		digits = strings.Repeat("0", pad) + digits
 	}
 	return sign + digits, nil
+}
+
+func biMaketemp(p *processor, name string, args []argument) (string, *macro) {
+	if !p.atLeast(name, args, 1) {
+		return "", nil
+	}
+	tmpl := args[0].text
+	dir, base := filepath.Split(tmpl)
+	if dir == "" {
+		dir = "."
+	}
+	dir = p.rc.Path(dir)
+	pattern := strings.Replace(base, "XXXXXX", "*", 1)
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		p.warnf("%s: %v", name, err)
+		return "", nil
+	}
+	path := f.Name()
+	f.Close()
+	if name == "maketemp" {
+		os.Remove(path)
+	}
+	return path, nil
+}
+
+func biDumpdef(p *processor, _ string, args []argument) (string, *macro) {
+	names := args
+	if len(names) == 0 {
+		for n := range p.macros {
+			names = append(names, argument{text: n})
+		}
+	}
+	for _, a := range names {
+		if m := p.lookup(a.text); m != nil {
+			if m.fn != nil {
+				fmt.Fprintf(p.rc.Err, "%s:\t<%s>\n", a.text, m.name)
+			} else {
+				fmt.Fprintf(p.rc.Err, "%s:\t%s\n", a.text, m.text)
+			}
+		}
+	}
+	return "", nil
 }

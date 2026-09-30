@@ -77,6 +77,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/logname"
 	_ "github.com/qiangli/coreutils/cmds/lp"
 	_ "github.com/qiangli/coreutils/cmds/ls"
+	_ "github.com/qiangli/coreutils/cmds/m4"
 	_ "github.com/qiangli/coreutils/cmds/mailx"
 	_ "github.com/qiangli/coreutils/cmds/make"
 	_ "github.com/qiangli/coreutils/cmds/md5sum"

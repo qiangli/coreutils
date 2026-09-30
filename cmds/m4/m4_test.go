@@ -314,11 +314,61 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
-func TestStory2BuiltinsAreNotDefined(t *testing.T) {
-	in := "divert divnum include(x) syscmd(true) m4exit errprint(x)\n"
-	out, errOut, code := runM4(t, in)
-	if code != 0 || out != in || errOut != "" {
+func TestDiversions(t *testing.T) {
+	runTable(t, []m4Case{
+		{"ordered at eof", "a divert(2)two\ndivert(1)one\ndivert(0)b\n", "a b\none\ntwo\n"},
+		{"undivert", "divert(1)x\ndivert(0)[undivert(1)]\n", "[x\n]\n"},
+		{"negative discards", "a divert(-1)no divert(0)b divnum()\n", "a b 0\n"},
+	})
+}
+
+func TestIncludeAndSinclude(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "in.m4")
+	if err := os.WriteFile(f, []byte("define(`x', `OK')x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runM4(t, "include(`"+f+"')sinclude(`"+filepath.Join(dir, "missing")+"')")
+	if code != 0 || out != "OK\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestSyscmdSysvalErrprintDumpdefTrace(t *testing.T) {
+	out, errOut, code := runM4(t, "syscmd(`printf hi') sysval() errprint(`ERR') define(`x', `y')dumpdef(`x') traceon(`eval')eval(`1') traceoff(`eval')eval(`1')\n")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	if out != "hi 0   1 1\n" {
+		t.Fatalf("stdout=%q stderr=%q", out, errOut)
+	}
+	for _, want := range []string{"ERR", "x:\ty", "m4trace:"} {
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("stderr=%q missing %q", errOut, want)
+		}
+	}
+}
+
+func TestMaketempMkstempWrapExit(t *testing.T) {
+	dir := t.TempDir()
+	out, errOut, code := runM4(t, "m4wrap(`wrapped')maketemp(`"+filepath.Join(dir, "aXXXXXX")+"')\n")
+	if code != 0 || !strings.HasSuffix(out, "\nwrapped") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	name := strings.TrimSuffix(out, "\nwrapped")
+	if _, err := os.Stat(name); !os.IsNotExist(err) {
+		t.Fatalf("maketemp left file %q err=%v", name, err)
+	}
+	out, errOut, code = runM4(t, "mkstemp(`"+filepath.Join(dir, "bXXXXXX")+"')")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("mkstemp did not create %q: %v", out, err)
+	}
+	_, _, code = runM4(t, "before m4exit(`7') after")
+	if code != 7 {
+		t.Fatalf("m4exit code=%d", code)
 	}
 }
 

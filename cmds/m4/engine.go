@@ -75,6 +75,15 @@ type processor struct {
 	ticks   int
 	failed  bool
 	stdin   bool // standard input has been consumed
+
+	divnum     int
+	diversions [10]strings.Builder
+	wraps      []string
+	traceAll   bool
+	trace      map[string]bool
+	sysval     int
+	exitSet    bool
+	exitCode   int
 }
 
 func newProcessor(rc *tool.RunContext, files []string, sync bool) *processor {
@@ -82,6 +91,7 @@ func newProcessor(rc *tool.RunContext, files []string, sync bool) *processor {
 		rc:     rc,
 		out:    bufio.NewWriter(rc.Out),
 		macros: map[string][]*macro{},
+		trace:  map[string]bool{},
 		lquote: "`", rquote: "'",
 		bcomm: "#", ecomm: "\n",
 		files: files,
@@ -101,6 +111,9 @@ func (p *processor) process() (code int) {
 				panic(r)
 			}
 			code = 1
+			if p.exitSet {
+				code = p.exitCode
+			}
 		}
 		if err := p.out.Flush(); err != nil && code == 0 {
 			fmt.Fprintf(p.rc.Err, "m4: write error: %v\n", err)
@@ -111,6 +124,13 @@ func (p *processor) process() (code int) {
 		kind, s := p.token()
 		switch kind {
 		case tokEOF:
+			if len(p.wraps) > 0 {
+				w := strings.Join(p.wraps, "")
+				p.wraps = nil
+				p.pushback(w)
+				continue
+			}
+			p.flushDiversions()
 			if p.failed {
 				return 1
 			}
@@ -369,6 +389,9 @@ func (p *processor) expand(name string) (handled bool, fn *macro) {
 		args = p.collect()
 	}
 	if m.fn != nil {
+		if p.traceAll || p.trace[name] || p.trace[m.name] {
+			fmt.Fprintf(p.rc.Err, "m4trace:%s:%d: -%s(%s)\n", p.file, p.line, name, joinArgs(args, "`", "'"))
+		}
 		text, fn := m.fn(p, m.name, args)
 		p.pushback(text)
 		return true, fn
@@ -489,6 +512,15 @@ func joinArgs(args []argument, lq, rq string) string {
 // written at the start of any output line whose position no longer
 // matches the input line (or file) being read.
 func (p *processor) emit(s string) {
+	if p.divnum < 0 {
+		return
+	}
+	if p.divnum > 0 {
+		if p.divnum < len(p.diversions) {
+			p.diversions[p.divnum].WriteString(s)
+		}
+		return
+	}
 	if !p.sync {
 		p.out.WriteString(s)
 		return
@@ -511,4 +543,31 @@ func (p *processor) emit(s string) {
 			p.bol = true
 		}
 	}
+}
+
+func (p *processor) flushDiversions() {
+	old := p.divnum
+	p.divnum = 0
+	for i := 1; i < len(p.diversions); i++ {
+		if p.diversions[i].Len() == 0 {
+			continue
+		}
+		s := p.diversions[i].String()
+		p.diversions[i].Reset()
+		p.emit(s)
+	}
+	p.divnum = old
+}
+
+func (p *processor) readNamedFile(name string) (string, error) {
+	f, err := p.rc.FS.Open(p.rc.Path(name))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
