@@ -187,21 +187,20 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 		dest = operands[len(operands)-1]
 		srcs = operands[:len(operands)-1]
 	}
-	di, err := os.Stat(rc.Path(dest))
+	// Capture pathname syntax independently of GNU target-directory selection.
+	// RawPath also preserves components such as missing/.. for validation.
+	mustBeDir := len(dest) > 0 && os.IsPathSeparator(dest[len(dest)-1])
+	destPath := rc.Path(dest)
+	if mustBeDir {
+		destPath = rc.RawPath(dest)
+	}
+	di, err := os.Stat(destPath)
 	todir := !*noTargetDir && err == nil && di.IsDir()
-	if *targetDir != "" && !todir {
-		fmt.Fprintf(rc.Err, "mv: target directory '%s' is not a directory\n", dest)
-		return 1
-	}
-	if len(srcs) > 1 && !todir {
-		fmt.Fprintf(rc.Err, "mv: target '%s' is not a directory\n", dest)
-		return 1
-	}
 	// Validate the source before rejecting a slash-suffixed destination.
 	// GNU mv diagnoses a missing source first. It also accepts a trailing
 	// slash on a missing destination when the source is a directory, naming
 	// the newly created directory without the slash.
-	if len(dest) > 0 && os.IsPathSeparator(dest[len(dest)-1]) && !(err == nil && di.IsDir()) {
+	if mustBeDir && !(err == nil && di.IsDir()) {
 		normalizedDirDestination := false
 		if len(srcs) == 1 {
 			si, serr := os.Lstat(rc.Path(srcs[0]))
@@ -213,7 +212,7 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 			for len(trimmed) > 1 && os.IsPathSeparator(trimmed[len(trimmed)-1]) {
 				trimmed = trimmed[:len(trimmed)-1]
 			}
-			if _, trimmedErr := os.Lstat(rc.Path(trimmed)); os.IsNotExist(trimmedErr) && si.IsDir() {
+			if _, trimmedErr := os.Lstat(rc.RawPath(trimmed)); os.IsNotExist(trimmedErr) && si.IsDir() {
 				dest = trimmed
 				normalizedDirDestination = true
 			}
@@ -226,6 +225,14 @@ func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 			fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': Not a directory\n", srcs[0], dest)
 			return 1
 		}
+	}
+	if *targetDir != "" && !todir {
+		fmt.Fprintf(rc.Err, "mv: target directory '%s' is not a directory\n", dest)
+		return 1
+	}
+	if len(srcs) > 1 && !todir {
+		fmt.Fprintf(rc.Err, "mv: target '%s' is not a directory\n", dest)
+		return 1
 	}
 	for _, src := range srcs {
 		dst := dest
@@ -311,6 +318,15 @@ func (m *mover) move(src, dst string) {
 		if sameEntry {
 			m.errf("'%s' and '%s' are the same file", src, dst)
 			return
+		}
+		// Linux rename(file, directory/) reports ENOTDIR even though the
+		// destination resolved to a directory. Diagnose the type conflict
+		// explicitly, after overwrite policy but before backups or mutation.
+		if si, serr := os.Lstat(sp); serr == nil && !si.IsDir() {
+			if di, derr := os.Lstat(dp); derr == nil && di.IsDir() {
+				m.errf("cannot move '%s' to '%s': Is a directory", src, dst)
+				return
+			}
 		}
 		if m.backup && !m.backupDest(dst) {
 			return
