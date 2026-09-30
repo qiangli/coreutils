@@ -216,12 +216,19 @@ func runWithProviders(rc *tool.RunContext, args []string, openCollator collatorO
 	}
 	if usesNumeric {
 		if name := locale.Resolve(rc.Env, locale.Numeric); name != "C" && name != "POSIX" && !locale.IsMacOSDefaultUTF8(rc.Env, locale.Numeric) {
-			switch strings.ToLower(name) {
-			case "de_de.iso-8859-1", "de_de.iso88591":
-				s.decPt, s.thousSep = ',', '.'
-			default:
-				fmt.Fprintf(rc.Err, "sort: LC_NUMERIC=%s: not supported\n", name)
-				return 2
+			// A locale compiled by our own localedef(1) is authoritative: it is
+			// data this installation produced, so it is consulted before the
+			// carried tables. Locales we did not compile are unaffected.
+			if decPt, thousSep, ok := locale.NumericSeparators(rc.Env); ok {
+				s.decPt, s.thousSep = decPt, thousSep
+			} else {
+				switch strings.ToLower(name) {
+				case "de_de.iso-8859-1", "de_de.iso88591":
+					s.decPt, s.thousSep = ',', '.'
+				default:
+					fmt.Fprintf(rc.Err, "sort: LC_NUMERIC=%s: not supported\n", name)
+					return 2
+				}
 			}
 		}
 	}
