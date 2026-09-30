@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 93 |
+| Availability | Go | 94 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 9 |
-| Effective owner | Go | 85 |
+| Availability | Provider | 8 |
+| Effective owner | Go | 86 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 9 |
+| Effective owner | Provider | 8 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 4 |
-| Evidence | Partial | 103 |
-| Evidence | Missing | 9 |
+| Evidence | Partial | 104 |
+| Evidence | Missing | 8 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 85 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 86 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 107 owned rows (85 Go plus 22 shell) without treating the
-9 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 108 owned rows (86 Go plus 22 shell) without treating the
+8 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -2960,14 +2960,14 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 ## `m4`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
 **Issue 7 synopsis candidate:**
 
 ```text
-m4 [-s] [-D name[=val]]... [-U name]... file...
+m4 [-s] [-D name[=val]]... [-U name]... [file...]
 ```
 
 **Issue 7 required-option candidate:** `-s; -D; -U`.
@@ -2976,33 +2976,33 @@ m4 [-s] [-D name[=val]]... [-U name]... file...
 
 **Issue 7 option-argument candidate:** `-D=<name[=val]>; -U=<name>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. Apply -D and -U operations in command-line order, then process each file operand in order with one shared macro state; with no operands process standard input. Includes resolve through the invocation directory and preserve included-file diagnostics and syncline identity.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; - names standard input. Diversions are emitted in numeric order at normal end of input; undivert transfers into the current diversion, including discard and self cases. m4wrap input runs in registration order before diversions; m4exit skips wraps and pending diversions.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when no file operands are supplied or for the first - operand.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write processed text, syscmd standard output in source order, and optional -s line directives.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write macro diagnostics, errprint output, dumpdef output, trace output, included-file failures, and syscmd diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read named operands and included files; maketemp substitutes its trailing X characters with the process ID without creating a file; mkstemp creates and closes a unique file; syscmd executes text through the embedded pure-Go POSIX shell with the invocation directory and environment.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 after successful processing; greater than 0 after processing errors; m4exit returns its requested status.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`flagset`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#m4`.
+**Implementation:** `cmds/m4`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/m4`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/m4/m4_test.go#TestOptionsDefineUndefine;cmds/m4/m4_test.go#TestFileOperands;cmds/m4/m4_test.go#TestSyncLines;cmds/m4/m4_test.go#TestDiversions;cmds/m4/m4_test.go#TestIncludeAndSinclude;cmds/m4/m4_test.go#TestIncludeTracksDiagnosticAndSynclineIdentity;cmds/m4/m4_test.go#TestSyscmdUsesRunContextAndPreservesOutputOrder;cmds/m4/m4_test.go#TestMaketempMkstempWrapExit;cmds/m4/m4_test.go#TestWrapIsFIFOAndExitSkipsWrapsAndDiversions;cmds/m4/differential_test.go#TestDifferentialCorpus;cmds/m4/differential_test.go#TestDifferentialIncludeDiagnosticAndSynclineIdentity;cmds/m4/differential_test.go#TestDifferentialDiagnosticBuiltins;cmds/m4/differential_test.go#TestDifferentialDocumentsPOSIXWrapOrder;cmds/m4/differential_test.go#TestDifferentialM4exitSkipsWrapsAndDiversions`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

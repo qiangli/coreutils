@@ -7,8 +7,8 @@
 // # What this fixes
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Ten POSIX-required commands are not implemented in Go
-// (m4, man, ctags, ar, nm, strip, ex, vi, lp, localedef), and until
+// coreutils". Eight POSIX-required commands are not implemented in Go
+// (man, ctags, ar, nm, strip, ex, vi), and until
 // this package existed they were absent from
 // tool.Names() — so the shell adapter fell through to $PATH and the arm measured
 // Ubuntu's binaries while reporting itself as bashy-only. Registering them here
@@ -122,9 +122,6 @@ func runProvider(e posixprovider.Entry, rc *tool.RunContext, args []string) int 
 	if e.Command == "localedef" {
 		providerArgs = localedefProviderArgs(args)
 	}
-	if e.Command == "m4" {
-		providerArgs = m4ProviderArgs(args)
-	}
 
 	r, err := resolverFor(rc)
 	if err != nil {
@@ -206,22 +203,6 @@ func manProviderEnv(env []string, providerPath string) []string {
 		}
 	}
 	return append(out, key+value)
-}
-
-// m4ProviderArgs selects the standards dialect of the pinned GNU provider.
-// GNU m4 defaults to extensions whose observable behavior differs from POSIX,
-// including defn rescanning and the order of repeated m4wrap calls. -G is GNU
-// m4's documented traditional mode. -E makes diagnostics affect the final
-// status: POSIX requires a non-zero status after an error even when m4
-// continues processing input (for example, a failed mkstemp call).
-//
-// Keep these controls before the caller's arguments. In a POSIX environment,
-// option processing stops at the first operand, so appending them could leave
-// the provider in its extension dialect for the common `m4 file` form.
-func m4ProviderArgs(args []string) []string {
-	out := make([]string, 0, len(args)+2)
-	out = append(out, "--traditional", "--fatal-warnings")
-	return append(out, args...)
 }
 
 // localedefProviderArgs adapts the pinned GNU provider to the POSIX pathname
@@ -373,10 +354,10 @@ fusing them would put network and toolchain variance inside measured evidence.
 
 Active external providers (%d): %s
 
-Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk.
+Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef.
 
-Providers are built locally from pinned upstream source; most are copyleft and
-lp is Apache-2.0. Their binaries are never redistributed. Set
+Providers are built locally from pinned upstream source and are copyleft.
+Their binaries are never redistributed. Set
 BASHY_POSIX_PROVIDERS=off to unregister the provider names entirely.`, activeCount, active),
 	}
 	t.Run = runAdmin

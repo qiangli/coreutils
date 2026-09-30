@@ -152,24 +152,24 @@ func TestDispatchPlanThroughBuiltMulticall(t *testing.T) {
 	}
 
 	// A tampered binary no longer matches its provenance: the plan must FAIL
-	// that provider, disclose no row for it, and exit non-zero. m4 is
+	// that provider, disclose no row for it, and exit non-zero. ar is
 	// declared for every platform, so this leg runs everywhere.
-	if !declared["m4"] {
-		t.Fatalf("manifest no longer declares m4 for %s; pick another tamper target", runtime.GOOS)
+	if !declared["ar"] {
+		t.Fatalf("manifest no longer declares ar for %s; pick another tamper target", runtime.GOOS)
 	}
-	e, _ := posixprovider.Lookup("m4")
+	e, _ := posixprovider.Lookup("ar")
 	tampered := filepath.Join(root, e.Command, e.Version, e.Command)
 	if err := os.WriteFile(tampered, []byte("#!/bin/sh\n# tampered\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	code, stdout, stderr = runDispatchPlanSubprocess(t, bin, root)
-	if code != 1 || !strings.Contains(stderr, "FAIL m4") ||
+	if code != 1 || !strings.Contains(stderr, "FAIL ar") ||
 		!strings.Contains(stderr, "no verifiable dispatch target") {
-		t.Errorf("tampered m4: exit = %d, stderr = %q", code, stderr)
+		t.Errorf("tampered ar: exit = %d, stderr = %q", code, stderr)
 	}
 	for _, line := range strings.Split(stdout, "\n") {
-		if strings.HasPrefix(line, "m4\t") {
-			t.Errorf("tampered m4 still disclosed as a dispatch target: %q", line)
+		if strings.HasPrefix(line, "ar\t") {
+			t.Errorf("tampered ar still disclosed as a dispatch target: %q", line)
 		}
 	}
 

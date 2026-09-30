@@ -70,7 +70,7 @@ func mustLookup(t *testing.T, name string) Entry {
 
 func TestManifestShape(t *testing.T) {
 	names := Names()
-	want := []string{"ar", "ctags", "ex", "m4", "man", "nm", "strip", "vi"}
+	want := []string{"ar", "ctags", "ex", "man", "nm", "strip", "vi"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -94,8 +94,8 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s: manifest no longer declares linux+darwin: %v", n, e.Platforms)
 		}
 	}
-	if !mustLookup(t, "m4").SupportsGOOS("windows") {
-		t.Error("m4: expected windows to be declared")
+	if !mustLookup(t, "ar").SupportsGOOS("windows") {
+		t.Error("ar: expected windows to be declared")
 	}
 }
 
@@ -104,13 +104,13 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 	if !strings.Contains(text, "LICENSE POSTURE") {
 		t.Error("ManifestText lost the licence-posture header; the recipe reads this file")
 	}
-	if !strings.Contains(text, "\nm4\t1.4.19\t") {
-		t.Error("ManifestText does not carry the m4 row")
+	if !strings.Contains(text, "\nar\t2.42\t") {
+		t.Error("ManifestText does not carry the ar row")
 	}
 }
 
 func TestGoAppletsHaveNoExternalProviderDefinition(t *testing.T) {
-	for _, name := range []string{"bc", "ed", "lp", "mail", "mailx", "make", "patch", "talk"} {
+	for _, name := range []string{"bc", "ed", "localedef", "lp", "m4", "mail", "mailx", "make", "patch", "talk"} {
 		if Has(name) {
 			t.Errorf("%s still has an external-provider definition", name)
 		}
@@ -145,11 +145,11 @@ func TestParseManifestRefusesBadRows(t *testing.T) {
 
 func TestResolveCacheHit(t *testing.T) {
 	root := t.TempDir()
-	e := mustLookup(t, "m4")
+	e := mustLookup(t, "ar")
 	want := provision(t, root, e, []byte("#!/bin/sh\nexit 0\n"))
 
 	r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-	got, err := r.Resolve("m4")
+	got, err := r.Resolve("ar")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestResolveCacheMissNamesTheProvisioningCommand(t *testing.T) {
 	root := t.TempDir()
 	r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
 
-	_, err := r.Resolve("m4")
+	_, err := r.Resolve("ar")
 	if err == nil {
 		t.Fatal("Resolve succeeded against an empty cache")
 	}
@@ -270,7 +270,7 @@ func TestResolveCacheMissNamesTheProvisioningCommand(t *testing.T) {
 	msg := err.Error()
 	// The whole point of the miss path: it must tell the operator the exact
 	// command that fixes it, because Resolve itself will never fix it.
-	if !strings.Contains(msg, "bashy posix-providers build m4") {
+	if !strings.Contains(msg, "bashy posix-providers build ar") {
 		t.Errorf("miss error does not name the provisioning command: %s", msg)
 	}
 	if !strings.Contains(msg, "never downloads or compiles") {
@@ -310,7 +310,7 @@ func TestResolveRejectsUnknownName(t *testing.T) {
 }
 
 func TestResolveRejectsProvenanceMismatch(t *testing.T) {
-	e := mustLookup(t, "m4")
+	e := mustLookup(t, "ar")
 
 	t.Run("binary does not match built_sha256", func(t *testing.T) {
 		root := t.TempDir()
@@ -321,7 +321,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		_, err := r.Resolve("m4")
+		_, err := r.Resolve("ar")
 		if !errors.Is(err, ErrProvenance) {
 			t.Fatalf("error is not ErrProvenance: %v", err)
 		}
@@ -335,7 +335,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			"source_sha256": e.SHA256, "built_sha256": strings.Repeat("b", 64),
 		})
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		_, err := r.Resolve("m4")
+		_, err := r.Resolve("ar")
 		if !errors.Is(err, ErrProvenance) {
 			t.Fatalf("error is not ErrProvenance: %v", err)
 		}
@@ -354,7 +354,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			"built_sha256":  hex.EncodeToString(sum[:]),
 		})
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		if _, err := r.Resolve("m4"); !errors.Is(err, ErrProvenance) {
+		if _, err := r.Resolve("ar"); !errors.Is(err, ErrProvenance) {
 			t.Fatalf("error is not ErrProvenance: %v", err)
 		}
 	})
@@ -366,7 +366,7 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := Resolver{CacheRoot: root, GOOS: runtime.GOOS}
-		_, err := r.Resolve("m4")
+		_, err := r.Resolve("ar")
 		if !errors.Is(err, ErrProvenance) {
 			t.Fatalf("an unattributable binary must be an error, not a warning: %v", err)
 		}
@@ -532,17 +532,17 @@ func TestEnabledIn(t *testing.T) {
 // a VerifiedIdentity failure mode; a tampered binary yields no identity.
 func TestVerifiedIdentity(t *testing.T) {
 	root := t.TempDir()
-	e := mustLookup(t, "m4")
-	body := []byte("#!/bin/sh\n# fake m4\nexit 0\n")
+	e := mustLookup(t, "ar")
+	body := []byte("#!/bin/sh\n# fake ar\nexit 0\n")
 	bin := provision(t, root, e, body)
 	r := Resolver{CacheRoot: root, GOOS: "linux"}
 
-	id, err := r.VerifiedIdentity("m4")
+	id, err := r.VerifiedIdentity("ar")
 	if err != nil {
-		t.Fatalf("VerifiedIdentity(m4) = %v", err)
+		t.Fatalf("VerifiedIdentity(ar) = %v", err)
 	}
 	sum := sha256.Sum256(body)
-	if id.Command != "m4" || id.Version != e.Version || id.Path != bin ||
+	if id.Command != "ar" || id.Version != e.Version || id.Path != bin ||
 		id.BuiltSHA256 != hex.EncodeToString(sum[:]) {
 		t.Errorf("identity = %+v, want %s %s at %s with built sha %s",
 			id, e.Command, e.Version, bin, hex.EncodeToString(sum[:]))
@@ -552,7 +552,7 @@ func TestVerifiedIdentity(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("tampered"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.VerifiedIdentity("m4"); !errors.Is(err, ErrProvenance) {
+	if _, err := r.VerifiedIdentity("ar"); !errors.Is(err, ErrProvenance) {
 		t.Errorf("tampered binary: err = %v, want ErrProvenance", err)
 	}
 

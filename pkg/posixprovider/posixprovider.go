@@ -3,7 +3,7 @@
 
 // Package posixprovider is the READ half of the POSIX external provider
 // mechanism: pinned upstream controls built locally from source and resolved
-// from the binmgr cache. Twelve currently dispatch so the multicall owns their
+// from the binmgr cache. Eight currently dispatch so the multicall owns their
 // names.
 //
 // # Why the name must be owned
@@ -27,8 +27,8 @@
 //
 // # Licence posture
 //
-// Most providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence); lp is
-// Apache-2.0. We ship the manifest and the recipe, never the binaries — see the
+// The providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence). We ship
+// the manifest and the recipe, never the binaries — see the
 // header of manifest.tsv and ../../docs/posix-provider-distribution-policy.md
 // in the umbrella.
 package posixprovider
@@ -58,7 +58,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the ten active names are simply not ours and normal
+// provider cache: with it set, the seven active names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"
