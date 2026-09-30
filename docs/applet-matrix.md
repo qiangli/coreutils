@@ -127,7 +127,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 3 | 19 |
 | `patch` | `cmds/patch` | — | POSIX/Unix utility | no | yes | 3 | 65 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 25 |
-| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 17 | 201 |
+| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 17 | 203 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 4 | 34 |
 | `posixgate` | `cmds/posixgate` | — | Bashy/other extension | no | no | 1 | 33 |
