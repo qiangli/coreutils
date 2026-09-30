@@ -1,5 +1,10 @@
-// Package localedefcmd provides the parse/validate stage of POSIX localedef.
-// Locale-store compilation is deliberately deferred to the next story.
+// Package localedefcmd implements POSIX localedef: it parses and validates a
+// locale definition and compiles it into the Go-owned locale store, where
+// pkg/locale, locale(1) and the consuming utilities read it back.
+//
+// The store is LOCPATH-style: $LOCPATH when set, else $HOME/.bashy/locale.
+// Nothing outside that directory is touched — a pure-Go localedef has no
+// business writing into a libc locale archive it cannot describe.
 package localedefcmd
 
 import (
@@ -8,20 +13,21 @@ import (
 	"io"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/localedef"
 	"github.com/qiangli/coreutils/tool"
 )
 
 var cmd = &tool.Tool{
 	Name:     "localedef",
-	Synopsis: "Parse and validate locale definitions (no locale output yet).",
+	Synopsis: "Compile a locale definition into the locale store.",
 	Usage:    "localedef [-c] [-f charmap] [-i sourcefile] [-u codeset] name",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// Options are retained separately for the subsequent compilation stage. In
-// this parse-only stage Force and CodeSet do not cause output or transcoding.
+// Options carry the parsed command line. CodeSet is parsed so unsupported
+// -u conversion is diagnosed explicitly rather than silently relabeling bytes.
 type Options struct {
 	Force                          bool
 	Charmap, Source, CodeSet, Name string
@@ -78,7 +84,7 @@ func parseOptions(args []string) (Options, error) {
 }
 func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 1 && args[0] == "--help" {
-		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n-c  continue despite warnings\n-f  character map file\n-i  locale source file (default: stdin)\n-u  target codeset (retained for compilation)\n", cmd.Usage, cmd.Synopsis)
+		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n-c  continue despite warnings\n-f  character map file\n-i  locale source file (default: stdin)\n-u  target codeset conversion (not supported)\n", cmd.Usage, cmd.Synopsis)
 		return 0
 	}
 	fail := func(err error) int { fmt.Fprintf(rc.Err, "localedef: %v\n", err); return 4 }
@@ -86,6 +92,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	if o.CodeSet != "" {
+		fmt.Fprintf(rc.Err, "localedef: -u %s: codeset conversion not supported\n", o.CodeSet)
+		return 2
+	}
+	storeEnv := locale.StoreEnvAt(rc.Env, rc.Path)
 	if rc.FS == nil {
 		rc.FS = tool.NewLocalFS()
 	}
@@ -137,6 +148,26 @@ func run(rc *tool.RunContext, args []string) int {
 			code = 4
 		}
 		fmt.Fprintf(rc.Err, "localedef: %s: %s: %s\n", label, severity, d.Error())
+	}
+	// POSIX.1-2017: errors never create permanent output. Warnings
+	// create output with -c; without it this implementation refuses output.
+	if code == 4 || (code == 1 && !o.Force) {
+		return 4
+	}
+	// A "copy" directive is resolved against the store: the only locale we can
+	// honour a copy of is one we compiled ourselves.
+	resolve := func(name string) (*locale.Compiled, bool) { return locale.LookupCompiled(storeEnv, name) }
+	compiled, err := localedef.CompileWithCopy(o.Name, src, cm, resolve)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "localedef: %s: %v\n", label, err)
+		return 4
+	}
+	dir, err := locale.DefaultStoreDir(storeEnv)
+	if err != nil {
+		return fail(err)
+	}
+	if err := locale.Save(dir, compiled); err != nil {
+		return fail(err)
 	}
 	return code
 }

@@ -27,7 +27,7 @@ import (
 // Category identifies a POSIX locale category.
 type Category string
 
-// The five POSIX locale categories that sort, sed, tr, and awk may consult.
+// The POSIX locale categories supported by the shared resolver.
 // Each corresponds to an LC_* environment variable of the same name.
 const (
 	// Collate is LC_COLLATE (string collation order: sort, sed, tr).
@@ -39,6 +39,8 @@ const (
 	// Messages is LC_MESSAGES (affirmative/negative response format: awk
 	// on some systems; also used by tools that emit translated diagnostics).
 	Messages Category = "LC_MESSAGES"
+	// Monetary is LC_MONETARY (currency formats).
+	Monetary Category = "LC_MONETARY"
 	// Time is LC_TIME (date and time formats: date, awk).
 	Time Category = "LC_TIME"
 )
@@ -64,6 +66,8 @@ type Categories struct {
 	Numeric string
 	// Messages is the effective LC_MESSAGES.
 	Messages string
+	// Monetary is the effective LC_MONETARY.
+	Monetary string
 	// Time is the effective LC_TIME.
 	Time string
 }
@@ -185,6 +189,7 @@ func ResolveAll(env []string) Categories {
 		CType:    Resolve(env, CType),
 		Numeric:  Resolve(env, Numeric),
 		Messages: Resolve(env, Messages),
+		Monetary: Resolve(env, Monetary),
 		Time:     Resolve(env, Time),
 	}
 }
@@ -276,6 +281,13 @@ func CompileMessageMatcher(yesExpr string) (MessageMatcher, error) {
 // expression.
 func MessagesMatcher(env []string) (MessageMatcher, error) {
 	name := Resolve(env, Messages)
+	if compiled, ok := CompiledCategory(env, Messages); ok {
+		data, valid := compiled.MessagesData()
+		if !valid {
+			return MessageMatcher{}, fmt.Errorf("%w %q: no yesexpr", ErrUnsupportedMessagesLocale, name)
+		}
+		return CompileMessageMatcher(data.YesExpr)
+	}
 	data, ok := LookupMessages(name)
 	if !ok {
 		return MessageMatcher{}, fmt.Errorf("%w %q", ErrUnsupportedMessagesLocale, name)
