@@ -435,10 +435,11 @@ func (p *processor) expand(name string) (handled bool, fn *macro) {
 		p.next()
 		args = p.collect()
 	}
+	traced, explicit := p.trace[name]
+	if traced || (!explicit && p.traceAll) {
+		fmt.Fprintf(p.rc.Err, "m4trace:%s:%d: -%s(%s)\n", p.file, p.line, name, joinArgs(args, "`", "'"))
+	}
 	if m.fn != nil {
-		if p.traceAll || p.trace[name] || p.trace[m.name] {
-			fmt.Fprintf(p.rc.Err, "m4trace:%s:%d: -%s(%s)\n", p.file, p.line, name, joinArgs(args, "`", "'"))
-		}
 		text, fn := m.fn(p, m.name, args)
 		p.pushback(text)
 		return true, fn
@@ -555,41 +556,47 @@ func joinArgs(args []argument, lq, rq string) string {
 
 // ---- output ----
 
+// writeOutput transfers already formatted bytes without rescanning or generating
+// new line directives. Diversion buffers already contain their source directives.
+func (p *processor) writeOutput(s string) {
+	if p.divnum == 0 {
+		p.out.WriteString(s)
+	} else if p.divnum > 0 && p.divnum < len(p.diversions) {
+		p.diversions[p.divnum].WriteString(s)
+	}
+}
+
 // emit writes text to standard output. With -s, a #line directive is
 // written at the start of any output line whose position no longer
 // matches the input line (or file) being read.
 func (p *processor) emit(s string) {
-	if p.divnum < 0 {
-		return
-	}
-	if p.divnum > 0 {
-		if p.divnum < len(p.diversions) {
-			p.diversions[p.divnum].WriteString(s)
-		}
+	if p.divnum < 0 || p.divnum >= len(p.diversions) {
 		return
 	}
 	if !p.sync {
-		p.out.WriteString(s)
+		p.writeOutput(s)
 		return
 	}
+	var output strings.Builder
 	for i := 0; i < len(s); i++ {
 		if p.bol {
 			p.bol = false
 			if p.outSeq != p.fileSeq || p.outLine != p.line {
-				fmt.Fprintf(p.out, "#line %d", p.line)
+				fmt.Fprintf(&output, "#line %d", p.line)
 				if p.outSeq != p.fileSeq {
-					fmt.Fprintf(p.out, " \"%s\"", p.file)
+					fmt.Fprintf(&output, " \"%s\"", p.file)
 				}
-				p.out.WriteByte('\n')
+				output.WriteByte('\n')
 				p.outSeq, p.outLine = p.fileSeq, p.line
 			}
 		}
-		p.out.WriteByte(s[i])
+		output.WriteByte(s[i])
 		if s[i] == '\n' {
 			p.outLine++
 			p.bol = true
 		}
 	}
+	p.writeOutput(output.String())
 }
 
 func (p *processor) flushDiversions() {
@@ -601,7 +608,7 @@ func (p *processor) flushDiversions() {
 		}
 		s := p.diversions[i].String()
 		p.diversions[i].Reset()
-		p.emit(s)
+		p.writeOutput(s)
 	}
 	p.divnum = old
 }

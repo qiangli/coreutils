@@ -116,25 +116,28 @@ func init() {
 	})
 	builtin("eval", true, biEval)
 
-	builtin("divert", true, func(p *processor, name string, args []argument) (string, *macro) {
-		if len(args) == 0 || args[0].text == "" {
-			p.divnum = 0
-			return "", nil
+	builtin("divert", false, func(p *processor, name string, args []argument) (string, *macro) {
+		n := int32(0)
+		ok := true
+		if len(args) > 0 && args[0].text != "" {
+			n, ok = p.number(name, args[0].text)
 		}
-		n, ok := p.number(name, args[0].text)
 		if !ok {
 			return "", nil
+		}
+		if p.divnum != int(n) {
+			p.outLine, p.outSeq = -1, 0
 		}
 		p.divnum = int(n)
 		return "", nil
 	})
-	builtin("divnum", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.divnum), nil })
-	builtin("undivert", true, func(p *processor, name string, args []argument) (string, *macro) {
+	builtin("divnum", false, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.divnum), nil })
+	builtin("undivert", false, func(p *processor, name string, args []argument) (string, *macro) {
 		undiv := func(n int) {
 			if n > 0 && n < len(p.diversions) {
 				s := p.diversions[n].String()
 				p.diversions[n].Reset()
-				p.emit(s)
+				p.writeOutput(s)
 			}
 		}
 		if len(args) == 0 {
@@ -185,10 +188,10 @@ func init() {
 		p.sysval = p.runSystem(args[0].text)
 		return "", nil
 	})
-	builtin("sysval", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.sysval), nil })
+	builtin("sysval", false, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.sysval), nil })
 	builtin("maketemp", true, biMaketemp)
 	builtin("mkstemp", true, biMkstemp)
-	builtin("m4exit", true, func(p *processor, name string, args []argument) (string, *macro) {
+	builtin("m4exit", false, func(p *processor, name string, args []argument) (string, *macro) {
 		code := int32(0)
 		var ok bool = true
 		if len(args) > 0 {
@@ -215,10 +218,11 @@ func init() {
 		}
 		return "", nil
 	})
-	builtin("dumpdef", true, biDumpdef)
-	builtin("traceon", true, func(p *processor, _ string, args []argument) (string, *macro) {
+	builtin("dumpdef", false, biDumpdef)
+	builtin("traceon", false, func(p *processor, _ string, args []argument) (string, *macro) {
 		if len(args) == 0 {
 			p.traceAll = true
+			p.trace = map[string]bool{}
 		} else {
 			for _, a := range args {
 				p.trace[a.text] = true
@@ -226,13 +230,13 @@ func init() {
 		}
 		return "", nil
 	})
-	builtin("traceoff", true, func(p *processor, _ string, args []argument) (string, *macro) {
+	builtin("traceoff", false, func(p *processor, _ string, args []argument) (string, *macro) {
 		if len(args) == 0 {
 			p.traceAll = false
 			p.trace = map[string]bool{}
 		} else {
 			for _, a := range args {
-				delete(p.trace, a.text)
+				p.trace[a.text] = false
 			}
 		}
 		return "", nil

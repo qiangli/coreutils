@@ -450,3 +450,50 @@ func TestRegistered(t *testing.T) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
 	}
 }
+
+// POSIX leaves trace formatting unspecified; assert which macro calls appear.
+func TestTraceSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, output string
+		x, y, alias         int
+	}{
+		{"user macro", "define(`x', `VALUE')traceon(`x')x traceoff(`x')x", "VALUE VALUE", 1, 0, 0},
+		{"named off under global", "define(`x', `X')define(`y', `Y')traceon`'traceoff(`x')x y", "X Y", 0, 1, 0},
+		{"global on resets exclusions", "define(`x', `X')traceon`'traceoff(`x')traceon`'x", "X", 1, 0, 0},
+		{"global off clears selection", "define(`x', `X')traceon(`x')traceoff`'x", "X", 0, 0, 0},
+		{"builtin alias has own selection", "define(`alias', defn(`eval'))traceon(`eval')alias(`2')traceon(`alias')alias(`3')", "23", 0, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, diagnostics, code := runM4(t, tc.input)
+			if code != 0 || out != tc.output {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, out, diagnostics)
+			}
+			for name, want := range map[string]int{"x": tc.x, "y": tc.y, "alias": tc.alias} {
+				if got := strings.Count(diagnostics, "-"+name+"("); got != want {
+					t.Errorf("%s traced %d times, want %d: %q", name, got, want, diagnostics)
+				}
+			}
+		})
+	}
+}
+
+func TestNoArgumentOutputBuiltins(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"divert resumes stdout", "divert(1)BUFFER divert`'MAIN", "MAINBUFFER "},
+		{"divnum without parentheses", "divnum", "0"},
+		{"undivert without parentheses", "divert(1)BUFFER divert`'undivert`'MAIN", "BUFFER MAIN"},
+		{"sysval without parentheses", "sysval", "0"},
+		{"exit without parentheses", "BEFORE m4exit AFTER", "BEFORE "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, diagnostics, code := runM4(t, tc.input)
+			if code != 0 || out != tc.want || diagnostics != "" {
+				t.Fatalf("code=%d stdout=%q stderr=%q; want stdout=%q", code, out, diagnostics, tc.want)
+			}
+		})
+	}
+	out, diagnostics, code := runM4(t, "define(`unique_probe', `VALUE')dumpdef")
+	if code != 0 || out != "" || !strings.Contains(diagnostics, "unique_probe:\tVALUE") {
+		t.Fatalf("dumpdef: code=%d stdout=%q stderr=%q", code, out, diagnostics)
+	}
+}
