@@ -36,10 +36,7 @@
 #
 # Blank lines and #-comments ignored. Keep sorted.
 
-# 8a64e0c1b37d — mv trailing-slash pathname semantics. RED BY DESIGN: the
-# story's own contract says "prove the behavioral tests red on the current
-# base". Linux only; it passes on darwin.
-#
+# Root containers invert permission tests (lesson kept from 8a64e0c1b37d, fixed 2026-09-30):
 # TestMvCopyFallbackFailures was briefly baselined here too and this gate
 # removed it on its first run. It does NOT fail on linux — it fails as ROOT.
 # The test chmods a source to 0o000 and expects the copy to fail; root ignores
@@ -47,6 +44,3 @@
 # a golang:1.26 container running as root, while the GitHub runner is an
 # ordinary user. Reproducing "on linux" in a root container silently inverts
 # every permission-based test — use --user, or believe the runner.
-
-# 95fcce29a7cc — sprint 100 pax cluster. Linux only: PATH_MAX is 4096 there
-# against 1024 on darwin, so the near-limit tree lands in a different regime.
