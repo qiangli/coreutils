@@ -2978,7 +2978,7 @@ m4 [-s] [-D name[=val]]... [-U name]... [file...]
 
 **Operands:** `file`. Apply -D and -U operations in command-line order, then process each file operand in order with one shared macro state; with no operands process standard input. Includes resolve through the invocation directory and preserve included-file diagnostics and syncline identity.
 
-**Special tokens:** -- ends option parsing; - names standard input. Diversions are emitted in numeric order at normal end of input; undivert transfers into the current diversion, including discard and self cases. m4wrap input runs last-in-first-out before diversions; m4exit skips wraps and pending diversions.
+**Special tokens:** -- ends option parsing; - names standard input. Diversions are emitted in numeric order at normal end of input; undivert transfers into the current diversion, including discard and self cases. m4wrap input runs in registration order before diversions; m4exit skips wraps and pending diversions.
 
 **Standard input:** Read when no file operands are supplied or for the first - operand.
 
@@ -2988,7 +2988,7 @@ m4 [-s] [-D name[=val]]... [-U name]... [file...]
 
 **Standard error:** Write macro diagnostics, errprint output, dumpdef output, trace output, included-file failures, and syscmd diagnostics.
 
-**Effects:** `Read named operands and included files; maketemp and mkstemp create unique paths with maketemp removing its file; syscmd executes text through the embedded pure-Go POSIX shell with the invocation directory and environment.`.
+**Effects:** `Read named operands and included files; maketemp substitutes its trailing X characters with the process ID without creating a file; mkstemp creates and closes a unique file; syscmd executes text through the embedded pure-Go POSIX shell with the invocation directory and environment.`.
 
 **Exit status:** 0 after successful processing; greater than 0 after processing errors; m4exit returns its requested status.
 
@@ -3002,7 +3002,7 @@ m4 [-s] [-D name[=val]]... [-U name]... [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/m4`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/m4/m4_test.go#TestOptionsDefineUndefine;cmds/m4/m4_test.go#TestFileOperands;cmds/m4/m4_test.go#TestSyncLines;cmds/m4/m4_test.go#TestDiversions;cmds/m4/m4_test.go#TestIncludeAndSinclude;cmds/m4/m4_test.go#TestIncludeTracksDiagnosticAndSynclineIdentity;cmds/m4/m4_test.go#TestSyscmdUsesRunContextAndPreservesOutputOrder;cmds/m4/m4_test.go#TestMaketempMkstempWrapExit;cmds/m4/m4_test.go#TestWrapIsLIFOAndExitSkipsWrapsAndDiversions;cmds/m4/differential_test.go#TestDifferentialCorpus`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/m4/m4_test.go#TestOptionsDefineUndefine;cmds/m4/m4_test.go#TestFileOperands;cmds/m4/m4_test.go#TestSyncLines;cmds/m4/m4_test.go#TestDiversions;cmds/m4/m4_test.go#TestIncludeAndSinclude;cmds/m4/m4_test.go#TestIncludeTracksDiagnosticAndSynclineIdentity;cmds/m4/m4_test.go#TestSyscmdUsesRunContextAndPreservesOutputOrder;cmds/m4/m4_test.go#TestMaketempMkstempWrapExit;cmds/m4/m4_test.go#TestWrapIsFIFOAndExitSkipsWrapsAndDiversions;cmds/m4/differential_test.go#TestDifferentialCorpus;cmds/m4/differential_test.go#TestDifferentialIncludeDiagnosticAndSynclineIdentity;cmds/m4/differential_test.go#TestDifferentialDiagnosticBuiltins;cmds/m4/differential_test.go#TestDifferentialDocumentsPOSIXWrapOrder;cmds/m4/differential_test.go#TestDifferentialM4exitSkipsWrapsAndDiversions`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:m4:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

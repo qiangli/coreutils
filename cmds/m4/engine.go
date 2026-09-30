@@ -141,9 +141,8 @@ func (p *processor) process() (code int) {
 		switch kind {
 		case tokEOF:
 			if len(p.wraps) > 0 {
-				n := len(p.wraps) - 1
-				w := p.wraps[n]
-				p.wraps = p.wraps[:n]
+				w := p.wraps[0]
+				p.wraps = p.wraps[1:]
 				// Wrapped input is evaluated after the source is exhausted;
 				// GNU-compatible synclines identify that synthetic input as line 0.
 				p.line = 0

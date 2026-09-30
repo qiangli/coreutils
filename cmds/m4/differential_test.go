@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -53,10 +54,15 @@ func runExternalM4(t *testing.T, bin, input string, args ...string) (string, err
 }
 
 func runExternalM4Result(t *testing.T, bin, input string, args ...string) (string, string, int) {
+	return runExternalM4ContextResult(t, bin, "", input, args...)
+}
+
+func runExternalM4ContextResult(t *testing.T, bin, dir, input string, args ...string) (string, string, int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), externalTimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
+	c.Dir = dir
 	c.Stdin = strings.NewReader(input)
 	out := &cappedBuffer{limit: externalOutputLimit}
 	errOut := &cappedBuffer{limit: externalOutputLimit}
@@ -84,11 +90,15 @@ var cmdlineMacros = []string{"-Dcmdline_macro=set by -D", "-Dcmdline_empty", "-D
 
 // runM4Deadline is runM4 under the same deadline as the external m4.
 func runM4Deadline(t *testing.T, input string, args ...string) (string, string, int) {
+	return runM4DeadlineContext(t, "", nil, input, args...)
+}
+
+func runM4DeadlineContext(t *testing.T, dir string, env []string, input string, args ...string) (string, string, int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), externalTimeout)
 	defer cancel()
 	var out, errb bytes.Buffer
-	rc := &tool.RunContext{Ctx: ctx, Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb}, FS: tool.NewLocalFS()}
+	rc := &tool.RunContext{Ctx: ctx, Dir: dir, Env: env, Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb}, FS: tool.NewLocalFS()}
 	code := run(rc, args)
 	return out.String(), errb.String(), code
 }
@@ -143,5 +153,60 @@ func TestDifferentialM4exitSkipsWrapsAndDiversions(t *testing.T) {
 	if gotOut != wantOut || gotErr != wantErr || gotCode != wantCode {
 		t.Fatalf("m4exit differs from %s\n got: code=%d stdout=%q stderr=%q\nwant: code=%d stdout=%q stderr=%q",
 			bin, gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
+	}
+}
+
+func TestDifferentialIncludeDiagnosticAndSynclineIdentity(t *testing.T) {
+	bin := externalM4(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "inc.m4"), []byte("inside\n[eval(`bad')]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := "before\ninclude(`inc.m4')after\n"
+	wantOut, wantErr, wantCode := runExternalM4ContextResult(t, bin, dir, input, "-s")
+	gotOut, gotErr, gotCode := runM4DeadlineContext(t, dir, nil, input, "-s")
+	if gotCode != wantCode || gotOut != wantOut {
+		t.Fatalf("include synclines differ from %s\n got: code=%d stdout=%q stderr=%q\nwant: code=%d stdout=%q stderr=%q",
+			bin, gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
+	}
+	for label, stderr := range map[string]string{"m4": gotErr, "reference": wantErr} {
+		if !strings.Contains(stderr, "inc.m4:2:") {
+			t.Errorf("%s stderr does not retain included-file identity: %q", label, stderr)
+		}
+	}
+}
+
+func TestDifferentialDiagnosticBuiltins(t *testing.T) {
+	bin := externalM4(t)
+	input := "define(`x', `y')dumpdef(`x')errprint(`ERR')ok\n"
+	wantOut, wantErr, wantCode := runExternalM4Result(t, bin, input)
+	gotOut, gotErr, gotCode := runM4Deadline(t, input)
+	if gotCode != wantCode || gotOut != wantOut || gotErr != wantErr {
+		t.Fatalf("diagnostic builtins differ from %s\n got: code=%d stdout=%q stderr=%q\nwant: code=%d stdout=%q stderr=%q",
+			bin, gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
+	}
+
+	input = "traceon(`eval')eval(`1')traceoff(`eval')[eval(`1')]\n"
+	wantOut, wantErr, wantCode = runExternalM4Result(t, bin, input)
+	gotOut, gotErr, gotCode = runM4Deadline(t, input)
+	if gotCode != wantCode || gotOut != wantOut || strings.Count(gotErr, "m4trace:") != strings.Count(wantErr, "m4trace:") {
+		t.Fatalf("trace enable/disable differs from %s\n got: code=%d stdout=%q stderr=%q\nwant: code=%d stdout=%q stderr=%q",
+			bin, gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
+	}
+}
+
+func TestDifferentialDocumentsPOSIXWrapOrder(t *testing.T) {
+	bin := externalM4(t)
+	input := "m4wrap(`W1')m4wrap(`W2')"
+	wantOut, wantErr, wantCode := runExternalM4Result(t, bin, input)
+	gotOut, gotErr, gotCode := runM4Deadline(t, input)
+	// POSIX requires registration order. GNU m4 deliberately emits multiple
+	// wraps in reverse order, so keep this known differential explicit instead
+	// of weakening the certified behavior to make the general corpus green.
+	if gotCode != 0 || gotOut != "W1W2" || gotErr != "" {
+		t.Fatalf("POSIX wrap order: code=%d stdout=%q stderr=%q", gotCode, gotOut, gotErr)
+	}
+	if wantCode != 0 || wantOut != "W2W1" || wantErr != "" {
+		t.Fatalf("GNU wrap-order reference changed: %s code=%d stdout=%q stderr=%q", bin, wantCode, wantOut, wantErr)
 	}
 }

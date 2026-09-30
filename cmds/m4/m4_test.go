@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -394,13 +395,14 @@ func TestSyscmdUsesRunContextAndPreservesOutputOrder(t *testing.T) {
 
 func TestMaketempMkstempWrapExit(t *testing.T) {
 	dir := t.TempDir()
-	out, errOut, code := runM4(t, "m4wrap(`wrapped')maketemp(`"+filepath.Join(dir, "aXXXXXX")+"')\n")
-	if code != 0 || !strings.HasSuffix(out, "\nwrapped") {
+	tmpl := filepath.Join(dir, "aXXXXXX")
+	out, errOut, code := runM4(t, "m4wrap(`wrapped')maketemp(`"+tmpl+"')\n")
+	wantName := strings.TrimSuffix(tmpl, "XXXXXX") + strconv.Itoa(os.Getpid())
+	if code != 0 || out != wantName+"\nwrapped" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
-	name := strings.TrimSuffix(out, "\nwrapped")
-	if _, err := os.Stat(name); !os.IsNotExist(err) {
-		t.Fatalf("maketemp left file %q err=%v", name, err)
+	if _, err := os.Stat(wantName); !os.IsNotExist(err) {
+		t.Fatalf("maketemp created file %q err=%v", wantName, err)
 	}
 	out, errOut, code = runM4(t, "mkstemp(`"+filepath.Join(dir, "bXXXXXX")+"')")
 	if code != 0 {
@@ -409,15 +411,26 @@ func TestMaketempMkstempWrapExit(t *testing.T) {
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("mkstemp did not create %q: %v", out, err)
 	}
+	out, errOut, code = runM4Context(t, dir, nil, "mkstemp(`relativeXXXXXX')")
+	if code != 0 || filepath.IsAbs(out) {
+		t.Fatalf("relative mkstemp: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, out)); err != nil {
+		t.Fatalf("relative mkstemp did not create %q: %v", out, err)
+	}
+	out, errOut, code = runM4Context(t, dir, nil, "[mkstemp(`bad-template')]")
+	if code != 1 || out != "[]" || !strings.Contains(errOut, "template must end in XXXXXX") {
+		t.Fatalf("invalid mkstemp: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
 	_, _, code = runM4(t, "before m4exit(`7') after")
 	if code != 7 {
 		t.Fatalf("m4exit code=%d", code)
 	}
 }
 
-func TestWrapIsLIFOAndExitSkipsWrapsAndDiversions(t *testing.T) {
+func TestWrapIsFIFOAndExitSkipsWrapsAndDiversions(t *testing.T) {
 	out, errOut, code := runM4(t, "A m4wrap(`W1')m4wrap(`W2') Z\n")
-	if code != 0 || out != "A  Z\nW2W1" || errOut != "" {
+	if code != 0 || out != "A  Z\nW1W2" || errOut != "" {
 		t.Fatalf("wrap: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	out, errOut, code = runM4(t, "before divert(1)DIV m4wrap(`WRAP')m4exit(`7') after")

@@ -187,7 +187,7 @@ func init() {
 	})
 	builtin("sysval", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.sysval), nil })
 	builtin("maketemp", true, biMaketemp)
-	builtin("mkstemp", true, biMaketemp)
+	builtin("mkstemp", true, biMkstemp)
 	builtin("m4exit", true, func(p *processor, name string, args []argument) (string, *macro) {
 		code := int32(0)
 		var ok bool = true
@@ -476,23 +476,48 @@ func biMaketemp(p *processor, name string, args []argument) (string, *macro) {
 		return "", nil
 	}
 	tmpl := args[0].text
-	dir, base := filepath.Split(tmpl)
-	if dir == "" {
-		dir = "."
+	last := len(tmpl)
+	first := last
+	for first > 0 && tmpl[first-1] == 'X' {
+		first--
 	}
-	dir = p.rc.Path(dir)
-	pattern := strings.Replace(base, "XXXXXX", "*", 1)
-	f, err := os.CreateTemp(dir, pattern)
-	if err != nil {
-		p.warnf("%s: %v", name, err)
+	if first == last {
+		return tmpl, nil
+	}
+	return tmpl[:first] + strconv.Itoa(os.Getpid()), nil
+}
+
+func biMkstemp(p *processor, name string, args []argument) (string, *macro) {
+	if !p.atLeast(name, args, 1) {
 		return "", nil
 	}
-	path := f.Name()
-	f.Close()
-	if name == "maketemp" {
-		os.Remove(path)
+	tmpl := args[0].text
+	if !strings.HasSuffix(tmpl, "XXXXXX") {
+		p.warnf("%s: template must end in XXXXXX", name)
+		p.failed = true
+		return "", nil
 	}
-	return path, nil
+	dir, base := filepath.Split(tmpl)
+	createDir := dir
+	if createDir == "" {
+		createDir = "."
+	}
+	createDir = p.rc.Path(createDir)
+	pattern := strings.TrimSuffix(base, "XXXXXX") + "*"
+	f, err := os.CreateTemp(createDir, pattern)
+	if err != nil {
+		p.warnf("%s: %v", name, err)
+		p.failed = true
+		return "", nil
+	}
+	if err := f.Close(); err != nil {
+		p.warnf("%s: %v", name, err)
+		p.failed = true
+		return "", nil
+	}
+	// mkstemp mutates its template in place, so preserve the caller's relative
+	// directory spelling in the expansion even though creation used rc.Path.
+	return dir + filepath.Base(f.Name()), nil
 }
 
 func biDumpdef(p *processor, _ string, args []argument) (string, *macro) {
