@@ -171,6 +171,11 @@ func ParseCharmapTarget(in io.Reader, target string) (*Charmap, error) {
 			}
 			if target != "" {
 				valid := utf8.Valid(b)
+				if target == "UTF-8" {
+					// One charmap symbol encodes one character, not a string
+					// of individually valid UTF-8 characters.
+					valid = valid && utf8.RuneCount(b) == 1
+				}
 				if target == "ASCII" {
 					for _, ch := range b {
 						valid = valid && ch < 128
