@@ -2902,7 +2902,7 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/lp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/lp/lp_test.go#TestPrintStdinDefaultsAndOptions;cmds/lp/lp_test.go#TestPrinterFallbackAndDestPrecedence;cmds/lp/lp_test.go#TestSilentAndOptionAndFile;cmds/lp/lp_test.go#TestErrors;cmds/lp/lp_test.go#TestMailSubscription;cmds/lp/lp_test.go#TestWriteSubscription;cmds/lp/lp_test.go#TestMultiFileIsOneRequest;cmds/lp/lp_test.go#TestStdinDashIsOneDocument`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/lp/lp_test.go#TestPrintStdinDefaultsAndOptions;cmds/lp/lp_test.go#TestPrinterFallbackAndDestPrecedence;cmds/lp/lp_test.go#TestSilentAndOptionAndFile;cmds/lp/lp_test.go#TestErrors;cmds/lp/lp_test.go#TestCompletionMailSpool;cmds/lp/lp_test.go#TestCompletionDelivery;cmds/lp/lp_test.go#TestMultiFileIsOneRequest;cmds/lp/lp_test.go#TestStdinDashIsOneDocument`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 

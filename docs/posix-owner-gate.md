@@ -3,9 +3,9 @@
 The assembled Profile C/D runtime makes a precise claim: every one of the 116
 POSIX-required utility names is supplied by exactly one **intended owner** —
 
-- a registered **Bashy Go applet** (92 names),
+- a registered **Bashy Go applet** (93 names),
 - the **shell** (14 names: the `sh` entry point plus builtins), or
-- one of the ten **active pinned POSIX external providers** the multicall
+- one of the nine **active pinned POSIX external providers** the multicall
   registers and dispatches (see
   [posix-external-providers.md](posix-external-providers.md)).
 
@@ -42,7 +42,7 @@ compares row by row.
 | broken build manifest | the externally supplied build/run manifest (`--manifest`) unreadable, missing a required pin (`profile`, `shell_sha256`, `multicall_sha256`), carrying a malformed digest (a digest is exactly 64 hexadecimal characters), a duplicate pin, or an unknown profile — with no root of trust, nothing else is verified |
 | profile mismatch | the gate invoked for one profile with a manifest approved for the other: approved builds do not transfer between profiles |
 | unbound provider cache | the staged environment does not name `BASHY_BIN_CACHE`, so provenance cannot be bound to the cache the staged wrapper will actually dispatch from |
-| unbound provider dispatch | the approved multicall's own dispatch plan (`posix-providers dispatch-plan`, run with the staged environment) failing, not accounting for exactly the ten active providers, or disclosing a resolved executable/version/built digest that differs from the gate's independently verified cache identity — a valid cache the wrapper does not actually dispatch from fails here |
+| unbound provider dispatch | the approved multicall's own dispatch plan (`posix-providers dispatch-plan`, run with the staged environment) failing, not accounting for exactly the nine active providers, or disclosing a resolved executable/version/built digest that differs from the gate's independently verified cache identity — a valid cache the wrapper does not actually dispatch from fails here |
 | host PATH fallback | a staged runtime in which a multicall-owned name resolves outside the staged tool directory (or not at all) |
 | unapproved executable identity | a staged entry — even one inside the tool directory — whose resolved target does not hash to the manifest's approved multicall digest: a staged symlink to an arbitrary host `/bin` tool fails here |
 | host PATH shell / unapproved shell build | the interrogated shell resolving outside the staged directory, or its bytes not hashing to the manifest's approved `shell_sha256` — a forgeable `--version` line or target triplet is never accepted as a build identity |
@@ -74,7 +74,7 @@ certification arm measures it.
 
 `providers` deliberately differs from `posix-providers check` in one respect:
 a platform the manifest does not declare is a **failure** here, not a skip. A
-staged certification runtime that cannot supply all ten active names is not the
+staged certification runtime that cannot supply all nine active names is not the
 runtime it claims to be; `posix-providers check` keeps its softer per-host
 semantics for ordinary provisioning work.
 
@@ -117,7 +117,7 @@ It verifies, in order:
    `multicall_sha256`. Identity is **mandatory**: there is no
    membership-in-a-directory shortcut and no self-derived digest.
 3. **PATH ownership + identity of every multicall-owned name** — every
-   multicall-owned name (92 applets + 10 providers) and `sh` itself must
+   multicall-owned name (93 applets + 9 providers) and `sh` itself must
    resolve, through the environment's own PATH, to an entry inside
    `--bindir`, **and** each multicall-owned entry's resolved target must hash
    to the approved multicall's digest. Staged entries are routinely symlinks

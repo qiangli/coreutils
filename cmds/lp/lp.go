@@ -10,10 +10,8 @@
 //
 // -o name[=value] is sent as a keyword job attribute (value defaults
 // to "true"). -c is accepted (files are always read before sending).
-// -m asks the server to mail the requesting user on completion, via an
-// RFC 3995 subscription group (notify-recipient-uri mailto:USER@localhost,
-// notify-events job-completed). -w instead waits for a job-completed state and
-// writes its own terminal message; RFC 3995 notify-user-data is opaque.
+// -m and -w wait for job completion. Mail uses the local mailx spool; -w
+// writes to a live login terminal, or mails when the user is not logged in.
 // One invocation is one request: a single
 // file is a Print-Job; several files are a Create-Job followed by one
 // Send-Document per file (last-document set on the final one).
@@ -21,14 +19,22 @@ package lpcmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
+	"github.com/qiangli/coreutils/cmds/internal/session"
+	"github.com/qiangli/coreutils/pkg/mailx"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -109,11 +115,15 @@ func run(rc *tool.RunContext, args []string) int {
 	var id uint32
 	var err error
 	if len(docs) == 1 {
-		id, err = send(rc, uri, encode(opPrintJob, uri, user, job, *copies, opts, *mail, 0, false, docs[0]), *mail)
+		id, err = send(rc.Ctx, uri, encode(opPrintJob, uri, user, job, *copies, opts, 0, false, docs[0]))
 	} else {
-		id, err = send(rc, uri, encode(opCreateJob, uri, user, job, *copies, opts, *mail, 0, false, nil), *mail)
+		id, err = send(rc.Ctx, uri, encode(opCreateJob, uri, user, job, *copies, opts, 0, false, nil))
 		for i := 0; err == nil && i < len(docs); i++ {
-			_, err = send(rc, uri, encode(opSendDocument, uri, user, job, 0, nil, false, id, i == len(docs)-1, docs[i]), false)
+			var returned uint32
+			returned, err = send(rc.Ctx, uri, encode(opSendDocument, uri, user, job, 0, nil, id, i == len(docs)-1, docs[i]))
+			if err == nil && returned != id {
+				err = fmt.Errorf("Send-Document returned job-id %d, expected %d", returned, id)
+			}
 		}
 	}
 	if err != nil {
@@ -121,14 +131,20 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	if !*silent {
-		fmt.Fprintf(rc.Out, "request id is %s-%d (%d file(s))\n", d, id, len(files))
-	}
-	if *write {
-		if err := waitCompleted(rc, uri, user, id); err != nil {
-			fmt.Fprintf(rc.Err, "lp: terminal completion notification unavailable: %v\n", err)
+		if _, err := fmt.Fprintf(rc.Out, "request id is %s-%d (%d file(s))\n", d, id, len(files)); err != nil {
+			fmt.Fprintf(rc.Err, "lp: write request id: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(rc.Out, "request %s-%d completed\n", d, id)
+	}
+	if *write || *mail {
+		if err := waitCompleted(rc, uri, user, id); err != nil {
+			fmt.Fprintf(rc.Err, "lp: completion notification unavailable: %v\n", err)
+			return 1
+		}
+		if err := notifyCompletion(rc, user, d, id, *mail, *write); err != nil {
+			fmt.Fprintf(rc.Err, "lp: completion notification unavailable: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
@@ -161,9 +177,8 @@ const (
 )
 
 // encode builds an IPP/1.1 request, request-id 1. Print-Job and
-// Create-Job carry the job attributes (and, with mail or write, a subscription
-// group); Send-Document names the job by id and carries last-document.
-func encode(op uint16, uri, user, job string, copies int, opts []string, mail bool, jobID uint32, last bool, doc []byte) []byte {
+// Create-Job carry job attributes; Send-Document names the job by id.
+func encode(op uint16, uri, user, job string, copies int, opts []string, jobID uint32, last bool, doc []byte) []byte {
 	var b bytes.Buffer
 	b.Write([]byte{1, 1, byte(op >> 8), byte(op), 0, 0, 0, 1, 0x01})
 	attr(&b, 0x47, "attributes-charset", []byte("utf-8"))
@@ -200,118 +215,163 @@ func encode(op uint16, uri, user, job string, copies int, opts []string, mail bo
 			}
 			attr(&b, 0x44, k, []byte(v))
 		}
-		if mail {
-			b.WriteByte(0x06)
-			attr(&b, 0x45, "notify-recipient-uri", []byte("mailto:"+user+"@localhost"))
-			attr(&b, 0x44, "notify-events", []byte("job-completed"))
-		}
 	}
 	b.WriteByte(0x03)
 	b.Write(doc)
 	return b.Bytes()
 }
 
-func send(rc *tool.RunContext, uri string, body []byte, requiredNotification bool) (uint32, error) {
-	u := uri
-	switch {
-	case strings.HasPrefix(u, "ipps://"):
-		u = "https://" + u[7:]
-	case strings.HasPrefix(u, "ipp://"):
-		u = "http://" + u[6:]
-	}
-	if strings.HasPrefix(u, "http://") && !strings.Contains(u[7:strings.IndexAny(u[7:]+"/", "/")+7], ":") &&
-		strings.HasPrefix(uri, "ipp://") {
-		host := u[7 : strings.IndexAny(u[7:]+"/", "/")+7]
-		u = "http://" + host + ":631" + u[7+len(host):]
-	}
-	req, err := http.NewRequestWithContext(rc.Ctx, http.MethodPost, u, bytes.NewReader(body))
+// ippHTTP maps the IPP URI to its HTTP transport URI.
+func ippHTTP(uri string) string {
+	u, err := url.Parse(uri)
 	if err != nil {
-		return 0, err
+		return uri // NewRequestWithContext will report the invalid URI.
+	}
+	if u.Scheme == "ipp" || u.Scheme == "ipps" {
+		if u.Scheme == "ipp" {
+			u.Scheme = "http"
+		} else {
+			u.Scheme = "https"
+		}
+		if u.Port() == "" {
+			u.Host = net.JoinHostPort(u.Hostname(), "631")
+		}
+	}
+	return u.String()
+}
+
+func exchange(ctx context.Context, uri string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ippHTTP(uri), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/ipp")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("HTTP %s", resp.Status)
+		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	b, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 1<<20 {
+		return nil, fmt.Errorf("IPP response exceeds 1 MiB")
+	}
+	return data, nil
+}
+
+type ippAttribute struct {
+	group, tag byte
+	name       string
+	value      []byte
+}
+
+// parseIPP checks the entire attribute stream before any caller accepts a
+// value. IPP responses to these operations have no document data.
+func parseIPP(data []byte) ([]ippAttribute, error) {
+	if len(data) < 9 || data[0] != 1 || data[1] != 1 || binary.BigEndian.Uint32(data[4:8]) != 1 {
+		return nil, fmt.Errorf("invalid IPP response header")
+	}
+	if st := binary.BigEndian.Uint16(data[2:4]); st >= 0x0100 {
+		return nil, fmt.Errorf("IPP error status 0x%04x", st)
+	}
+	var attrs []ippAttribute
+	var group byte
+	for p := 8; p < len(data); {
+		tag := data[p]
+		p++
+		if tag == 0x03 {
+			if p != len(data) {
+				return nil, fmt.Errorf("trailing IPP response bytes")
+			}
+			return attrs, nil
+		}
+		if tag >= 0x01 && tag <= 0x07 {
+			if tag == 0x07 { // event-notification group is not a job response
+				return nil, fmt.Errorf("unexpected IPP group 0x%02x", tag)
+			}
+			group = tag
+			continue
+		}
+		if tag < 0x10 || group == 0 || p+2 > len(data) {
+			return nil, fmt.Errorf("truncated IPP attribute")
+		}
+		nl := int(binary.BigEndian.Uint16(data[p:]))
+		p += 2
+		if p+nl+2 > len(data) {
+			return nil, fmt.Errorf("truncated IPP attribute name")
+		}
+		name := string(data[p : p+nl])
+		p += nl
+		vl := int(binary.BigEndian.Uint16(data[p:]))
+		p += 2
+		if p+vl > len(data) {
+			return nil, fmt.Errorf("truncated IPP attribute value")
+		}
+		attrs = append(attrs, ippAttribute{group, tag, name, data[p : p+vl]})
+		p += vl
+	}
+	return nil, fmt.Errorf("IPP response omitted end-of-attributes tag")
+}
+
+func positiveID(attrs []ippAttribute) (uint32, error) {
+	for _, a := range attrs {
+		if a.group == 0x02 && a.name == "job-id" {
+			if a.tag != 0x21 || len(a.value) != 4 {
+				return 0, fmt.Errorf("invalid IPP job-id")
+			}
+			id := int32(binary.BigEndian.Uint32(a.value))
+			if id <= 0 {
+				return 0, fmt.Errorf("nonpositive IPP job-id")
+			}
+			return uint32(id), nil
+		}
+	}
+	return 0, fmt.Errorf("IPP response omitted job-id")
+}
+
+func send(ctx context.Context, uri string, body []byte) (uint32, error) {
+	data, err := exchange(ctx, uri, body)
 	if err != nil {
 		return 0, err
 	}
-	if len(b) < 9 {
-		return 0, fmt.Errorf("short IPP response")
+	attrs, err := parseIPP(data)
+	if err != nil {
+		return 0, err
 	}
-	if st := binary.BigEndian.Uint16(b[2:]); st >= 0x0100 {
-		return 0, fmt.Errorf("IPP error status 0x%04x", st)
-	}
-	var id uint32
-	group := byte(0)
-	rejected := false
-	p := 8
-	for p < len(b) && b[p] != 0x03 {
-		if b[p] <= 0x06 {
-			group = b[p]
-			rejected = rejected || group == 0x05
-			p++
-			continue
-		}
-		if p+3 > len(b) {
-			return 0, fmt.Errorf("truncated IPP attribute")
-		}
-		tag := b[p]
-		nl := int(binary.BigEndian.Uint16(b[p+1:]))
-		if p+5+nl > len(b) {
-			return 0, fmt.Errorf("truncated IPP attribute name")
-		}
-		name := string(b[p+3 : p+3+nl])
-		p += 3 + nl
-		vl := int(binary.BigEndian.Uint16(b[p:]))
-		if p+2+vl > len(b) {
-			return 0, fmt.Errorf("truncated IPP attribute value")
-		}
-		if tag == 0x21 && name == "job-id" && vl == 4 {
-			id = binary.BigEndian.Uint32(b[p+2:])
-		}
-		p += 2 + vl
-	}
-	if id == 0 {
-		return 0, fmt.Errorf("IPP response omitted job-id")
-	}
-	if requiredNotification && (binary.BigEndian.Uint16(b[2:]) != 0 || rejected) {
-		return 0, fmt.Errorf("IPP server rejected completion mail notification")
-	}
-	return id, nil
+	return positiveID(attrs)
 }
 
-// -w is synchronous and bounded: a process cannot promise terminal delivery
-// after it exits.  A caller that needs durable asynchronous notification must
-// use the printer's own notification service; lp reports that limitation by
-// failing rather than pretending an opaque RFC 3995 datum reaches a terminal.
+// A deadline on the context covers the HTTP headers, response body and polling.
 func waitCompleted(rc *tool.RunContext, uri, user string, id uint32) error {
-	deadline := time.NewTimer(30 * time.Second)
-	defer deadline.Stop()
+	ctx, cancel := context.WithTimeout(rc.Ctx, 30*time.Second)
+	defer cancel()
 	for {
-		state, err := jobState(rc, uri, user, id)
+		state, err := jobState(ctx, uri, user, id)
 		if err != nil {
 			return err
 		}
-		if state == 9 {
+		switch state {
+		case 9:
 			return nil
+		case 7:
+			return fmt.Errorf("job %d was canceled", id)
+		case 8:
+			return fmt.Errorf("job %d was aborted", id)
 		}
 		select {
-		case <-rc.Ctx.Done():
-			return rc.Ctx.Err()
-		case <-deadline.C:
-			return fmt.Errorf("job did not complete within 30 seconds")
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
 
-func jobState(rc *tool.RunContext, uri, user string, id uint32) (uint32, error) {
+func jobState(ctx context.Context, uri, user string, id uint32) (uint32, error) {
 	var b bytes.Buffer
 	b.Write([]byte{1, 1, 0, opGetJobAttrs, 0, 0, 0, 1, 0x01})
 	attr(&b, 0x47, "attributes-charset", []byte("utf-8"))
@@ -322,55 +382,105 @@ func jobState(rc *tool.RunContext, uri, user string, id uint32) (uint32, error) 
 	attr(&b, 0x21, "job-id", n)
 	attr(&b, 0x42, "requesting-user-name", []byte(user))
 	b.WriteByte(0x03)
-	u := uri
-	if strings.HasPrefix(u, "ipps://") {
-		u = "https://" + u[7:]
-	} else if strings.HasPrefix(u, "ipp://") {
-		u = "http://" + u[6:]
-		host := u[7 : strings.IndexAny(u[7:]+"/", "/")+7]
-		if !strings.Contains(host, ":") {
-			u = "http://" + host + ":631" + u[7+len(host):]
-		}
-	}
-	req, err := http.NewRequestWithContext(rc.Ctx, http.MethodPost, u, bytes.NewReader(b.Bytes()))
+	data, err := exchange(ctx, uri, b.Bytes())
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("Content-Type", "application/ipp")
-	resp, err := http.DefaultClient.Do(req)
+	attrs, err := parseIPP(data)
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-	if resp.StatusCode != http.StatusOK || len(data) < 9 || binary.BigEndian.Uint16(data[2:]) >= 0x0100 {
-		return 0, fmt.Errorf("IPP completion query failed")
-	}
-	for p := 8; p < len(data) && data[p] != 0x03; {
-		if data[p] <= 0x06 {
-			p++
-			continue
+	for _, a := range attrs {
+		if a.group == 0x02 && a.name == "job-state" {
+			if a.tag != 0x23 || len(a.value) != 4 {
+				return 0, fmt.Errorf("invalid IPP job-state")
+			}
+			state := binary.BigEndian.Uint32(a.value)
+			if state < 3 || state > 9 {
+				return 0, fmt.Errorf("invalid IPP job-state %d", state)
+			}
+			return state, nil
 		}
-		if p+3 > len(data) {
-			return 0, fmt.Errorf("truncated IPP completion response")
-		}
-		tag, nl := data[p], int(binary.BigEndian.Uint16(data[p+1:]))
-		nameStart := p + 3
-		p = nameStart + nl
-		if p+2 > len(data) {
-			return 0, fmt.Errorf("truncated IPP completion response")
-		}
-		vl := int(binary.BigEndian.Uint16(data[p:]))
-		if p+2+vl > len(data) {
-			return 0, fmt.Errorf("truncated IPP completion response")
-		}
-		if tag == 0x23 && string(data[nameStart:p]) == "job-state" && vl == 4 {
-			return binary.BigEndian.Uint32(data[p+2:]), nil
-		}
-		p += 2 + vl
 	}
 	return 0, fmt.Errorf("IPP completion response omitted job-state")
+}
+
+var readSessions = func(env []string) ([]session.Record, error) {
+	path := session.DefaultFileForEnv(env)
+	if path == "" {
+		return nil, fmt.Errorf("login database unavailable")
+	}
+	return session.ReadEnv(path, env) // explicit path keeps lookup failure distinct from absence
+}
+
+var writeTerminal = func(tty, message string) error {
+	path := session.TTYPath(tty)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("%s is not a terminal device", path)
+	}
+	if !term.IsTerminal(int(f.Fd())) {
+		return fmt.Errorf("%s is not a terminal", path)
+	}
+	n, err := io.WriteString(f, message)
+	if err == nil && n != len(message) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+var deliverMail = func(rc *tool.RunContext, user, message string) error {
+	if user == "" || strings.ContainsAny(user, "@!%/:\\\r\n") || user == "." || user == ".." {
+		return fmt.Errorf("invalid local mail recipient %q", user)
+	}
+	path := rc.Getenv("MAIL")
+	if path == "" {
+		if root := rc.Getenv("MAILX_SPOOL"); root != "" {
+			path = filepath.Join(root, user)
+		} else if home := rc.Getenv("HOME"); home != "" {
+			path = filepath.Join(home, ".mailx", "spool", user)
+		} else {
+			return fmt.Errorf("MAIL, MAILX_SPOOL or HOME is required for local mail")
+		}
+	}
+	msg := &mailx.Message{Headers: []mailx.Header{{Name: "To", Value: user}, {Name: "Subject", Value: "lp job completion"}}, Body: []byte(message)}
+	return mailx.LocalMboxTransport{MailboxPath: rc.Path(path), Sender: user}.Deliver(rc.Ctx, msg, []string{user})
+}
+
+func notifyCompletion(rc *tool.RunContext, user, dest string, id uint32, mail, write bool) error {
+	message := fmt.Sprintf("request %s-%d completed\n", dest, id)
+	if mail {
+		if err := deliverMail(rc, user, message); err != nil {
+			return err
+		}
+	}
+	if write {
+		records, err := readSessions(rc.Env)
+		if err != nil {
+			return fmt.Errorf("read login sessions: %w", err)
+		}
+		found := false
+		for _, record := range records {
+			if session.IsUser(record) && record.User == user && record.TTY != "" {
+				found = true
+				if err := writeTerminal(record.TTY, message); err == nil {
+					break
+				} else {
+					return fmt.Errorf("write terminal %s: %w", record.TTY, err)
+				}
+			}
+		}
+		if !found && !mail {
+			return deliverMail(rc, user, message)
+		}
+	}
+	return nil
 }
