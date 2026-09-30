@@ -62,3 +62,35 @@ func TestMixedPositionAndNumericEncodings(t *testing.T) {
 		}
 	}
 }
+
+func TestUTF8TargetNumericEncodingIsOneCharacter(t *testing.T) {
+	for _, tc := range []struct {
+		name, encoding, want string
+		reject               bool
+	}{
+		{"two ASCII characters", `\x41\x42`, "", true},
+		{"base and combining character", `\x65\xcc\x81`, "", true},
+		{"ASCII", `\x41`, "A", false},
+		{"NUL", `\x00`, "\x00", false},
+		{"two-byte scalar", `\xc3\xa9`, "é", false},
+		{"three-byte scalar", `\xe2\x82\xac`, "€", false},
+		{"replacement scalar", `\xef\xbf\xbd`, "\ufffd", false},
+		{"four-byte scalar", `\xf0\x9f\x98\x80`, "\U0001f600", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cm, err := ParseCharmapTarget(strings.NewReader("CHARMAP\n<custom> "+tc.encoding+"\nEND CHARMAP\n"), "UTF-8")
+			if tc.reject {
+				if !errors.Is(err, ErrCodeset) || cm != nil {
+					t.Fatalf("want no charmap and codeset error, got charmap=%+v error=%v", cm, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(cm.Symbols["custom"]); got != tc.want {
+				t.Errorf("encoding=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
