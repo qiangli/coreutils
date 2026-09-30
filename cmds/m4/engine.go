@@ -46,6 +46,16 @@ const (
 // fatal aborts processing; process recovers it and exits 1.
 type fatal struct{}
 
+// sourceLoc is the identity carried by one byte of pushed-back input. Macro
+// expansions inherit the call site; included bytes carry their own file and
+// line so diagnostics and -s output follow the included source and then return
+// to the caller accurately.
+type sourceLoc struct {
+	file string
+	line int
+	seq  int
+}
+
 type processor struct {
 	rc     *tool.RunContext
 	out    *bufio.Writer
@@ -56,15 +66,21 @@ type processor struct {
 
 	// Input is the pushback stack (stored reversed, so pushing an
 	// expansion is an append) in front of the current file's bytes.
-	pushed []byte
-	src    []byte
-	pos    int
-	files  []string
+	pushed    []byte
+	pushedLoc []sourceLoc
+	src       []byte
+	pos       int
+	files     []string
 
 	file    string
 	line    int
-	pendNL  bool // a newline was read; line advances with the next byte
 	fileSeq int
+
+	srcFile   string
+	srcLine   int
+	srcPendNL bool // a source newline was read; its line advances with the next source byte
+	srcSeq    int
+	nextSeq   int
 
 	sync    bool
 	bol     bool
@@ -125,8 +141,9 @@ func (p *processor) process() (code int) {
 		switch kind {
 		case tokEOF:
 			if len(p.wraps) > 0 {
-				w := strings.Join(p.wraps, "")
-				p.wraps = nil
+				n := len(p.wraps) - 1
+				w := p.wraps[n]
+				p.wraps = p.wraps[:n]
 				// Wrapped input is evaluated after the source is exhausted;
 				// GNU-compatible synclines identify that synthetic input as line 0.
 				p.line = 0
@@ -192,8 +209,9 @@ func (p *processor) nextFile() bool {
 			continue
 		}
 		p.src, p.pos = data, 0
-		p.file, p.line, p.pendNL = display, 1, false
-		p.fileSeq++
+		p.nextSeq++
+		p.srcFile, p.srcLine, p.srcPendNL, p.srcSeq = display, 1, false, p.nextSeq
+		p.file, p.line, p.fileSeq = p.srcFile, p.srcLine, p.srcSeq
 		return true
 	}
 	return false
@@ -216,17 +234,21 @@ func (p *processor) next() (byte, bool) {
 	}
 	if n := len(p.pushed); n > 0 {
 		c := p.pushed[n-1]
+		loc := p.pushedLoc[n-1]
 		p.pushed = p.pushed[:n-1]
+		p.pushedLoc = p.pushedLoc[:n-1]
+		p.file, p.line, p.fileSeq = loc.file, loc.line, loc.seq
 		return c, true
 	}
-	if p.pendNL {
-		p.line++
-		p.pendNL = false
+	if p.srcPendNL {
+		p.srcLine++
+		p.srcPendNL = false
 	}
 	c := p.src[p.pos]
 	p.pos++
+	p.file, p.line, p.fileSeq = p.srcFile, p.srcLine, p.srcSeq
 	if c == '\n' {
-		p.pendNL = true
+		p.srcPendNL = true
 	}
 	return c, true
 }
@@ -261,8 +283,31 @@ func (p *processor) skip(n int) {
 
 // pushback makes s the next input to be scanned.
 func (p *processor) pushback(s string) {
+	loc := sourceLoc{file: p.file, line: p.line, seq: p.fileSeq}
 	for i := len(s) - 1; i >= 0; i-- {
 		p.pushed = append(p.pushed, s[i])
+		p.pushedLoc = append(p.pushedLoc, loc)
+	}
+}
+
+// pushIncluded puts a named file ahead of all remaining input. Unlike an
+// ordinary macro expansion, every byte carries the included file's advancing
+// line identity. The already-pushed caller bytes retain their original
+// identity, which restores diagnostics and synclines after the include ends.
+func (p *processor) pushIncluded(name string, data []byte) {
+	p.nextSeq++
+	seq := p.nextSeq
+	locs := make([]sourceLoc, len(data))
+	line := 1
+	for i, c := range data {
+		locs[i] = sourceLoc{file: name, line: line, seq: seq}
+		if c == '\n' {
+			line++
+		}
+	}
+	for i := len(data) - 1; i >= 0; i-- {
+		p.pushed = append(p.pushed, data[i])
+		p.pushedLoc = append(p.pushedLoc, locs[i])
 	}
 }
 
@@ -562,15 +607,15 @@ func (p *processor) flushDiversions() {
 	p.divnum = old
 }
 
-func (p *processor) readNamedFile(name string) (string, error) {
+func (p *processor) readNamedFile(name string) ([]byte, error) {
 	f, err := p.rc.FS.Open(p.rc.Path(name))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer f.Close()
 	b, err := io.ReadAll(f)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(b), nil
+	return b, nil
 }

@@ -9,9 +9,9 @@
 // The assembled Profile C/D runtime claims that every one of the 116 required
 // names is supplied by exactly one INTENDED owner: a registered Bashy Go
 // applet, the shell (entry point, builtin, or the `time` keyword), or one of
-// the nine active POSIX external providers whose NAME the multicall
+// the eight active POSIX external providers whose NAME the multicall
 // dispatches to a pinned upstream copy. The Go applets exclusively own `ed`,
-// `patch`, `mail`/`mailx`, and `talk`; those names have no provider pins.
+// `patch`, `mail`/`mailx`, `talk`, `lp`, and `m4`; those names have no provider pins.
 // `posix-gate` turns the ownership claim into a checkable verdict, and every
 // check is fail-closed: the gate proves the intended owner is selected, or it
 // fails naming the name and the cause. There is no "probably fine" state — an

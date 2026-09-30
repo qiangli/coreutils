@@ -479,7 +479,7 @@ func TestVerifyProviders(t *testing.T) {
 	}
 
 	// A platform a manifest row does not declare is a FAILURE, not a skip: a
-	// runtime that cannot supply all nine active names is not the claimed runtime.
+	// runtime that cannot supply all eight active names is not the claimed runtime.
 	fs := VerifyProviders(posixprovider.Resolver{CacheRoot: root, GOOS: "windows"})
 	if !findingsHave(fs, "provider", "man", "not declared for windows") {
 		t.Errorf("undeclared platform not rejected: %v", fs)
@@ -1210,7 +1210,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return append(l, "cpio\t2.15\t/x/cpio\t"+strings.Repeat("a", 64))
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the nine active providers") {
+		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the eight active providers") {
 			t.Errorf("extra dispatch row not rejected: %v", fs)
 		}
 	})

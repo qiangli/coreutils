@@ -52,6 +52,31 @@ func runExternalM4(t *testing.T, bin, input string, args ...string) (string, err
 	return out.String(), err
 }
 
+func runExternalM4Result(t *testing.T, bin, input string, args ...string) (string, string, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), externalTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, bin, args...)
+	c.Stdin = strings.NewReader(input)
+	out := &cappedBuffer{limit: externalOutputLimit}
+	errOut := &cappedBuffer{limit: externalOutputLimit}
+	c.Stdout, c.Stderr = out, errOut
+	c.WaitDelay = time.Second
+	err := c.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("external m4 %v exceeded %v", args, externalTimeout)
+	}
+	if err == nil {
+		return out.String(), errOut.String(), 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return out.String(), errOut.String(), exitErr.ExitCode()
+	}
+	t.Fatalf("external m4 %v could not run: %v", args, err)
+	return "", "", 127
+}
+
 // cmdlineMacros are the -D/-U options of the third differential run;
 // testdata/cmdline.m4 is the file that looks at them. They name nothing
 // the rest of the corpus uses, so no other file changes meaning.
@@ -107,5 +132,16 @@ func TestDifferentialCorpus(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestDifferentialM4exitSkipsWrapsAndDiversions(t *testing.T) {
+	bin := externalM4(t)
+	input := "before divert(1)DIV m4wrap(`WRAP')m4exit(`7') after"
+	wantOut, wantErr, wantCode := runExternalM4Result(t, bin, input)
+	gotOut, gotErr, gotCode := runM4Deadline(t, input)
+	if gotOut != wantOut || gotErr != wantErr || gotCode != wantCode {
+		t.Fatalf("m4exit differs from %s\n got: code=%d stdout=%q stderr=%q\nwant: code=%d stdout=%q stderr=%q",
+			bin, gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
 	}
 }

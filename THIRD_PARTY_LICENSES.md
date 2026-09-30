@@ -4,10 +4,7 @@ Code in this repository that was copied or adapted from another project
 is listed here, with its upstream license. Every adapted file also
 carries a provenance header naming its source and stating changes. Go code
 copied into the multicall implementation uses permissive upstream licenses
-(MIT / BSD-3-Clause / Apache-2.0). The separately built GNU m4 provider has
-one explicit exception: a tracked GPL-3.0-or-later source patch is applied to
-the pinned upstream source during the local external-provider build. Neither
-that patch nor GNU m4 source is linked into the Go multicall binary.
+(MIT / BSD-3-Clause / Apache-2.0).
 
 | Source | License | Used in |
 |---|---|---|
@@ -20,7 +17,6 @@ that patch nor GNU m4 source is linked into the Go multicall binary.
 | [lukechampine/blake3](https://lukechampine.com/blake3) | MIT | cmds/cksum (`--algorithm=blake3`) |
 | [tklauser/ps](https://github.com/tklauser/ps) | BSD-3-Clause | cmds/ps process discovery |
 | [freebsd/freebsd-src](https://cgit.freebsd.org/src/tree/bin/dd/conv_tab.c?id=e043f37205ffbde5627ff299ad25cd532f2956f0) | BSD-3-Clause | cmds/dd (conv=ascii/ebcdic/ibm POSIX codeset conversion tables, `bin/dd/conv_tab.c` @ `e043f37205ffbde5627ff299ad25cd532f2956f0`) |
-| [GNU m4 1.4.19](https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz) | GPL-3.0-or-later | `tools/posix-providers/patches/m4-1.4.19-posix-semantics.patch` (source-derived POSIX corrections applied only while locally building the separate external provider) |
 | [pranshuparmar/witr](https://github.com/pranshuparmar/witr) | Apache-2.0 | cmds/why (managed external v0.3.3) |
 | [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.1 in normal Linux builds; excluded by `bashy_scratch`; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
 

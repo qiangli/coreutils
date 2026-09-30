@@ -1,16 +1,16 @@
 # POSIX external providers
 
-Ten POSIX-required commands are deliberately not implemented in Go:
+Eight POSIX-required commands are deliberately not implemented in Go:
 
 ```
-m4  man  ctags  ar  nm  strip  ex  vi  lp  localedef
+man  ctags  ar  nm  strip  ex  vi  localedef
 ```
 
 They are **external providers**: the multicall owns the name and dispatches to
 a copy of the upstream program, built locally from a sha256-pinned source
 tarball and checked against its recorded provenance before it runs.
 
-`make`, `bc`, `ed`, `patch`, `mail`/`mailx`, and `talk` are exclusively pure-Go applets. They
+`make`, `bc`, `ed`, `patch`, `mail`/`mailx`, `talk`, `lp`, and `m4` are exclusively pure-Go applets. They
 have no provider rows, provider build recipes, provider-cache expectations, or
 provider fallback.
 
@@ -79,7 +79,7 @@ dispatches directly to the verified `apropos` companion.
 ```sh
 bashy posix-providers list          # what is pinned, and what is provisioned
 bashy posix-providers check         # verify provisioning + provenance (non-zero if any is unusable)
-bashy posix-providers build m4      # fetch pinned SOURCE, verify sha256, build locally
+bashy posix-providers build ar      # fetch pinned SOURCE, verify sha256, build locally
 bashy posix-providers build all
 ```
 
@@ -152,7 +152,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all ten provider names, so plain bashy stays standalone-graceful
+unregisters all eight provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -160,8 +160,8 @@ names and fail loudly. The `posix-providers` applet itself is always registered
 
 ## Licence posture
 
-Most active providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence), and
-`lp` is Apache-2.0. Download and build remain deliberately separated under one policy:
+The active providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence).
+Download and build remain deliberately separated under one policy:
 
 - **download** — upstream SOURCE only, pinned by sha256. Upstream is the
   distributor; its obligations are already discharged.
@@ -172,12 +172,6 @@ Most active providers are copyleft (GPL-2.0, GPL-3.0, or the Vim licence), and
 Never mirror or republish the built binaries. The full posture is in the header
 of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 `docs/posix-provider-distribution-policy.md`.
-
-The pinned CUPS 2.4.7 `lp` build carries one repository-pinned Apache-2.0
-source correction: libcups must not replace the inherited SIGPIPE disposition
-with `SIG_IGN`, because POSIX specifies the utility's asynchronous-event
-behavior as Default. The recipe verifies and records the correction's digest,
-and its manifest recipe revision prevents reuse of an older uncorrected cache.
 
 The pinned glibc 2.39 `localedef` build likewise carries one narrowly scoped
 source correction. Upstream turns `POSIXLY_CORRECT` into global `--verbose`,
@@ -190,29 +184,13 @@ Explicit `--verbose` is unchanged. The dispatcher also maps option-arguments
 as pathnames while glibc reserves `-` as an input sentinel. The patch digest is
 recorded in provenance and the recipe revision invalidates older cached builds.
 
-The pinned GNU m4 1.4.19 provider is invoked in its documented traditional
-dialect, with warnings reflected in final status because POSIX requires a
-non-zero status after a continued error such as failed `mkstemp`. Its local
-source build carries a digest-pinned correction for the remaining upstream
-differences: uppercase `eval` digits above nine, FIFO processing of repeated
-`m4wrap` calls, `changequote()` default restoration, POSIX macro-name
-validation for `-D`/`-U`, and default signal actions without replacing
-inherited `SIG_IGN`. It explicitly preserves the upstream provider's effective
-unlimited nesting setting while removing only the conflicting fault handlers.
-The binary remains a locally built GPL external provider; no upstream source
-is linked into the Go multicall. The build verifies the patch digest before
-applying it, executes a public semantic gate against the uninstalled candidate,
-and records the patch identity in provenance. At runtime the resolver enforces
-the recipe revision and built-binary digest, so an older uncorrected cache is
-rejected; it does not re-hash the repository patch on every invocation.
-
 ## Files
 
 | Path | Role |
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the ten registered provider tools + the `posix-providers` applet |
+| `cmds/posixproviders/` | the eight registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `tools/posix-providers/man-relocation-test.sh` | explicit source-build probe for the relocated provider's own `man(1)` page |
 | `tools/posix-providers/patches/` | pinned, digest-verified provider source corrections recorded in provenance |

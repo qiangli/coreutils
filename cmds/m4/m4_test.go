@@ -19,6 +19,17 @@ func runM4(t *testing.T, input string, args ...string) (string, string, int) {
 	return out.String(), err.String(), code
 }
 
+func runM4Context(t *testing.T, dir string, env []string, input string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, err bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: env,
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err}, FS: tool.NewLocalFS(),
+	}
+	code := run(rc, args)
+	return out.String(), err.String(), code
+}
+
 type m4Case struct {
 	name string
 	in   string
@@ -318,6 +329,9 @@ func TestDiversions(t *testing.T) {
 	runTable(t, []m4Case{
 		{"ordered at eof", "a divert(2)two\ndivert(1)one\ndivert(0)b\n", "a b\none\ntwo\n"},
 		{"undivert", "divert(1)x\ndivert(0)[undivert(1)]\n", "[x\n]\n"},
+		{"undivert into current", "divert(1)ONE divert(2)TWO undivert(1) END divert(0)", "TWO ONE  END "},
+		{"undivert self", "divert(1)SELF undivert(1) END divert(0)", "SELF  END "},
+		{"undivert into discard consumes source", "divert(1)ONE divert(-1)undivert(1)divert(0) END\n", " END\n"},
 		{"negative discards", "a divert(-1)no divert(0)b divnum()\n", "a b 0\n"},
 	})
 }
@@ -334,6 +348,25 @@ func TestIncludeAndSinclude(t *testing.T) {
 	}
 }
 
+func TestIncludeTracksDiagnosticAndSynclineIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "inc.m4"), []byte("inside\n[eval(`bad')]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runM4Context(t, dir, nil, "before\ninclude(`inc.m4')after\n", "-s")
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	for _, want := range []string{`#line 1 "inc.m4"`, `#line 2 "stdin"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout=%q missing %q", out, want)
+		}
+	}
+	if !strings.Contains(errOut, "m4:inc.m4:2:") {
+		t.Fatalf("stderr=%q does not identify included file and line", errOut)
+	}
+}
+
 func TestSyscmdSysvalErrprintDumpdefTrace(t *testing.T) {
 	out, errOut, code := runM4(t, "syscmd(`printf hi') sysval() errprint(`ERR') define(`x', `y')dumpdef(`x') traceon(`eval')eval(`1') traceoff(`eval')eval(`1')\n")
 	if code != 0 {
@@ -346,6 +379,16 @@ func TestSyscmdSysvalErrprintDumpdefTrace(t *testing.T) {
 		if !strings.Contains(errOut, want) {
 			t.Fatalf("stderr=%q missing %q", errOut, want)
 		}
+	}
+}
+
+func TestSyscmdUsesRunContextAndPreservesOutputOrder(t *testing.T) {
+	dir := t.TempDir()
+	out, errOut, code := runM4Context(t, dir, []string{"M4_MARK=carried", "PATH="},
+		"before-syscmd(`printf %s \"$M4_MARK\"; printf :; pwd')after")
+	want := "before-carried:" + dir + "\nafter"
+	if code != 0 || out != want || errOut != "" {
+		t.Fatalf("code=%d stdout=%q want=%q stderr=%q", code, out, want, errOut)
 	}
 }
 
@@ -369,6 +412,17 @@ func TestMaketempMkstempWrapExit(t *testing.T) {
 	_, _, code = runM4(t, "before m4exit(`7') after")
 	if code != 7 {
 		t.Fatalf("m4exit code=%d", code)
+	}
+}
+
+func TestWrapIsLIFOAndExitSkipsWrapsAndDiversions(t *testing.T) {
+	out, errOut, code := runM4(t, "A m4wrap(`W1')m4wrap(`W2') Z\n")
+	if code != 0 || out != "A  Z\nW2W1" || errOut != "" {
+		t.Fatalf("wrap: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runM4(t, "before divert(1)DIV m4wrap(`WRAP')m4exit(`7') after")
+	if code != 7 || out != "before " || errOut != "" {
+		t.Fatalf("exit: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
 

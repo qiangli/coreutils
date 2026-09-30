@@ -6,11 +6,6 @@
 # and trigger GPLv3 s6 / GPLv2 s3: convey corresponding source, build scripts
 # and installation information, for every artifact, indefinitely.
 #
-# One row is permissive: lp (CUPS, Apache-2.0). Hosting that binary would
-# trigger no source-conveyance duty. It is nevertheless fetched as source and
-# built locally exactly like every other row. One policy for the whole table is
-# auditable; two policies are a footgun that eventually mirrors the wrong row.
-#
 # So build and download are deliberately SEPARATED:
 #   download -> UPSTREAM source only, pinned by sha256. Upstream is the
 #               distributor; its obligations are already discharged.

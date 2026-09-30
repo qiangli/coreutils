@@ -3,7 +3,6 @@ package m4cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -131,9 +130,6 @@ func init() {
 	})
 	builtin("divnum", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.divnum), nil })
 	builtin("undivert", true, func(p *processor, name string, args []argument) (string, *macro) {
-		old := p.divnum
-		p.divnum = 0
-		defer func() { p.divnum = old }()
 		undiv := func(n int) {
 			if n > 0 && n < len(p.diversions) {
 				s := p.diversions[n].String()
@@ -159,39 +155,34 @@ func init() {
 		if !p.atLeast(name, args, 1) {
 			return "", nil
 		}
-		s, err := p.readNamedFile(args[0].text)
+		data, err := p.readNamedFile(args[0].text)
 		if err != nil {
 			p.fatalf("%s: %v", args[0].text, err)
 		}
-		return s, nil
+		p.pushIncluded(args[0].text, data)
+		return "", nil
 	})
 	builtin("sinclude", true, func(p *processor, _ string, args []argument) (string, *macro) {
 		if len(args) == 0 {
 			return "", nil
 		}
-		s, err := p.readNamedFile(args[0].text)
+		data, err := p.readNamedFile(args[0].text)
 		if err != nil {
 			return "", nil
 		}
-		return s, nil
+		p.pushIncluded(args[0].text, data)
+		return "", nil
 	})
 	builtin("syscmd", true, func(p *processor, name string, args []argument) (string, *macro) {
 		if !p.atLeast(name, args, 1) {
 			return "", nil
 		}
-		cmd := exec.CommandContext(p.rc.Ctx, "/bin/sh", "-c", args[0].text)
-		cmd.Stdin = nil
-		cmd.Stdout = p.rc.Out
-		cmd.Stderr = p.rc.Err
-		if err := cmd.Run(); err != nil {
-			if ee, ok := err.(*exec.ExitError); ok {
-				p.sysval = ee.ExitCode()
-			} else {
-				p.sysval = 127
-			}
-		} else {
-			p.sysval = 0
+		// syscmd writes directly to the invocation stream. Flush m4's buffered
+		// prefix first so observable output remains in source order.
+		if err := p.out.Flush(); err != nil {
+			p.fatalf("write error: %v", err)
 		}
+		p.sysval = p.runSystem(args[0].text)
 		return "", nil
 	})
 	builtin("sysval", true, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.sysval), nil })
@@ -210,7 +201,6 @@ func init() {
 				p.failed = true
 			}
 		}
-		p.flushDiversions()
 		panic(fatal{})
 	})
 	builtin("m4wrap", true, func(p *processor, _ string, args []argument) (string, *macro) {

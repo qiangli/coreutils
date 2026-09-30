@@ -89,18 +89,6 @@ func TestArgvPassthrough(t *testing.T) {
 	}
 }
 
-func TestM4ProviderArgsDoNotMutateCaller(t *testing.T) {
-	in := []string{"-s", "input.m4"}
-	got := m4ProviderArgs(in)
-	want := []string{"--traditional", "--fatal-warnings", "-s", "input.m4"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("m4ProviderArgs(%q) = %q, want %q", in, got, want)
-	}
-	if !slices.Equal(in, []string{"-s", "input.m4"}) {
-		t.Fatalf("m4ProviderArgs mutated caller argv: %q", in)
-	}
-}
-
 func TestLocaledefDashCharmapIsLiteralPathname(t *testing.T) {
 	for _, tc := range []struct {
 		name string
