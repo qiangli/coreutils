@@ -32,6 +32,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/collate"
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -83,7 +84,9 @@ type options struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithProviders(rc, args, openCollator, openCType)
+	return runWithProviders(rc, args, func(name string) (stringCollator, error) {
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+	}, openCType)
 }
 
 // runWithCollator keeps LC_COLLATE provider setup invocation-local. Tests that
@@ -206,7 +209,7 @@ func runWithProviders(rc *tool.RunContext, args []string, open collatorOpener, o
 	// stays on the byte path exactly as GNU join does (keycmp uses memcasecmp,
 	// not xmemcoll, when ignore_case is set).
 	if !opt.ignoreCase {
-		if name := locale.ResolveCarried(rc.Env, locale.Collate); name != "C" && name != locale.Default {
+		if name := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.Collate); name != "C" && name != locale.Default {
 			provider, err := open(name)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "join: LC_COLLATE=%s: %v\n", name, err)

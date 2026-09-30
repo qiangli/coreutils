@@ -73,6 +73,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/link"
 	_ "github.com/qiangli/coreutils/cmds/ln"
 	_ "github.com/qiangli/coreutils/cmds/locale"
+	_ "github.com/qiangli/coreutils/cmds/localedef"
 	_ "github.com/qiangli/coreutils/cmds/logger"
 	_ "github.com/qiangli/coreutils/cmds/logname"
 	_ "github.com/qiangli/coreutils/cmds/lp"

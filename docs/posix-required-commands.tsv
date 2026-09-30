@@ -51,7 +51,7 @@ join	yes	cmds/join	no	go_applet
 kill	yes	cmds/kill	no	go_applet
 ln	yes	cmds/ln	no	go_applet
 locale	yes	cmds/locale	no	go_applet
-localedef	no	cmds/posixproviders	no	external_provider
+localedef	yes	cmds/localedef	no	go_applet
 logger	yes	cmds/logger	no	go_applet
 logname	yes	cmds/logname	no	go_applet
 lp	yes	cmds/lp	no	go_applet

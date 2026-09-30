@@ -3,6 +3,8 @@ package localedef
 import (
 	"io"
 	"strings"
+
+	"github.com/qiangli/coreutils/pkg/locale"
 )
 
 // ParseSource reads category syntax without resolving copy references or
@@ -157,6 +159,14 @@ func Validate(src *Source, cm *Charmap) []Diagnostic {
 	}
 	for _, name := range src.Order {
 		section := src.Sections[name]
+		if name == "LC_COLLATE" && section.Copy == "" {
+			// Semantic errors remain the compiler's responsibility. Collect
+			// omission warnings here so the CLI applies its normal -c policy.
+			var warnings []Diagnostic
+			if compileCollation(&locale.Compiled{}, section, cm, &warnings) == nil {
+				ds = append(ds, warnings...)
+			}
+		}
 		defined := map[string]bool{}
 		if name == "LC_COLLATE" {
 			for _, e := range section.Entries {

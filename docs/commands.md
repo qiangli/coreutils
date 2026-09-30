@@ -215,17 +215,17 @@ implementation.
 
 The generated [POSIX required-command coverage
 map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
-contract: 116 configured names, with availability of 94 Go applets, 14
-shell-only names, and 8 active pinned providers. Expanded interface claims live in a
+contract: 116 configured names, with availability of 95 Go applets, 14
+shell-only names, and 7 active pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
-Profile C/D ownership of 86 Go-selected, 22 shell-selected, and 8 provider
+Profile C/D ownership of 87 Go-selected, 22 shell-selected, and 7 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
 missing, partial, implemented, and verified states rather than treating
 placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the provider names (`man`,
-`ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `localedef`) and
+`ctags`, `ar`, `nm`, `strip`, `ex`, `vi`) and
 dispatches to a copy of the upstream program built locally from a sha256-pinned
 source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
 silently measuring the host's `$PATH`, which is what happened while these names

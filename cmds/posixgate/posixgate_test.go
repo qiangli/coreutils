@@ -97,8 +97,8 @@ func TestSpecMatchesCanonicalManifest(t *testing.T) {
 	}
 }
 
-// TestSpecPinnedCounts pins BOTH axes: availability 94/14/8 and effective
-// selection 86/22/8.
+// TestSpecPinnedCounts pins BOTH axes: availability 95/14/7 and effective
+// selection 87/22/7.
 func TestSpecPinnedCounts(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
@@ -117,15 +117,15 @@ func TestSpecPinnedCounts(t *testing.T) {
 			effProv++
 		}
 	}
-	if len(spec) != 116 || avail[OwnerGoApplet] != 94 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 8 {
-		t.Errorf("availability = %d total %v, want 116 split 94/14/8", len(spec), avail)
+	if len(spec) != 116 || avail[OwnerGoApplet] != 95 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 7 {
+		t.Errorf("availability = %d total %v, want 116 split 95/14/7", len(spec), avail)
 	}
-	if effGo != 86 || effShell != 22 || effProv != 8 {
-		t.Errorf("effective selection = %d/%d/%d, want 86/22/8", effGo, effShell, effProv)
+	if effGo != 87 || effShell != 22 || effProv != 7 {
+		t.Errorf("effective selection = %d/%d/%d, want 87/22/7", effGo, effShell, effProv)
 	}
-	if pinTotal != 116 || pinAvailGoApplets != 94 || pinAvailShell != 14 || pinProviders != 8 ||
-		pinEffectiveGoApplets != 86 || pinEffectiveShell != 22 || pinManifestProviders != 8 {
-		t.Error("pin constants drifted from the documented 116 = 94/14/8 availability, 86/22/8 effective, 8 manifest-pinned")
+	if pinTotal != 116 || pinAvailGoApplets != 95 || pinAvailShell != 14 || pinProviders != 7 ||
+		pinEffectiveGoApplets != 87 || pinEffectiveShell != 22 || pinManifestProviders != 7 {
+		t.Error("pin constants drifted from the documented 116 = 95/14/7 availability, 87/22/7 effective, 7 manifest-pinned")
 	}
 }
 
@@ -260,7 +260,7 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 		t.Errorf("dropped name produced no count-drift finding: %v", fs)
 	}
 	// Effective drift with availability intact: an applet-owned name whose
-	// selector flips to shell_builtin keeps 94/14/8 but breaks 85/23 — the
+	// selector flips to shell_builtin keeps 95/14/7 but breaks 86/23 — the
 	// effective pins must catch it on their own.
 	shifted := make([]specRow, len(spec))
 	copy(shifted, spec)
@@ -271,7 +271,7 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 		}
 	}
 	fs = verifyInventory(shifted, posixprovider.DispatchNames())
-	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 85") ||
+	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 86") ||
 		!findingsHave(fs, "count-drift", "", "effective shell count is 23") {
 		t.Errorf("effective-selection drift not rejected: %v", fs)
 	}
@@ -479,7 +479,7 @@ func TestVerifyProviders(t *testing.T) {
 	}
 
 	// A platform a manifest row does not declare is a FAILURE, not a skip: a
-	// runtime that cannot supply all eight active names is not the claimed runtime.
+	// runtime that cannot supply all seven active names is not the claimed runtime.
 	fs := VerifyProviders(posixprovider.Resolver{CacheRoot: root, GOOS: "windows"})
 	if !findingsHave(fs, "provider", "man", "not declared for windows") {
 		t.Errorf("undeclared platform not rejected: %v", fs)
@@ -1188,7 +1188,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
 		if !findingsHave(fs, "provider-dispatch", dropped, "no dispatch-plan row") ||
-			!findingsHave(fs, "provider-dispatch", "", "accounts for 7 active providers, want exactly 8") {
+			!findingsHave(fs, "provider-dispatch", "", "accounts for 6 active providers, want exactly 7") {
 			t.Errorf("missing dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1210,7 +1210,7 @@ func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
 			return append(l, "cpio\t2.15\t/x/cpio\t"+strings.Repeat("a", 64))
 		}), nil)
 		fs := verifyRuntime(rc, spec, cfg)
-		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the eight active providers") {
+		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the seven active providers") {
 			t.Errorf("extra dispatch row not rejected: %v", fs)
 		}
 	})
@@ -1315,10 +1315,10 @@ func TestGateSpecSubcommand(t *testing.T) {
 	if len(lines) != pinTotal+2 {
 		t.Errorf("spec printed %d lines, want %d names + 2 summary lines", len(lines), pinTotal)
 	}
-	if !strings.Contains(stdout, "availability 94 go_applet, 14 shell, 8 external_provider") {
+	if !strings.Contains(stdout, "availability 95 go_applet, 14 shell, 7 external_provider") {
 		t.Errorf("availability summary missing from %q", stdout)
 	}
-	if !strings.Contains(stdout, "effective selection: 86 go_applet, 22 shell, 8 external_provider") {
+	if !strings.Contains(stdout, "effective selection: 87 go_applet, 22 shell, 7 external_provider") {
 		t.Errorf("effective-selection summary missing from %q", stdout)
 	}
 }
@@ -1342,7 +1342,7 @@ func TestGateProvidersSubcommand(t *testing.T) {
 	provisionAll(t, root)
 	rc := runtimeRC(t, "BASHY_BIN_CACHE="+root)
 	code, stdout, stderr := runGateCmd(t, rc, "providers")
-	if code != 0 || !strings.Contains(stdout, "posix-gate providers: PASS (8 active providers provisioned") ||
+	if code != 0 || !strings.Contains(stdout, "posix-gate providers: PASS (7 active providers provisioned") ||
 		strings.Contains(stdout, "16 providers provisioned") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}

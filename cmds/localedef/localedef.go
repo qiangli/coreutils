@@ -3,12 +3,12 @@
 // pkg/locale, locale(1) and the consuming utilities read it back.
 //
 // The store is LOCPATH-style: $LOCPATH when set, else $HOME/.bashy/locale.
-// Nothing outside that directory is touched — a pure-Go localedef has no
-// business writing into a libc locale archive it cannot describe.
+// An operand containing a slash instead selects an explicit private pathname.
 package localedefcmd
 
 import (
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -26,8 +26,7 @@ var cmd = &tool.Tool{
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// Options carry the parsed command line. CodeSet is parsed so unsupported
-// -u conversion is diagnosed explicitly rather than silently relabeling bytes.
+// Options carry the parsed command line.
 type Options struct {
 	Force                          bool
 	Charmap, Source, CodeSet, Name string
@@ -47,7 +46,8 @@ func parseOptions(args []string) (Options, error) {
 		}
 		for i := 1; i < len(a); i++ {
 			flag := a[i]
-			if flag == 'c' {
+			switch flag {
+			case 'c':
 				o.Force = true
 				continue
 			}
@@ -84,23 +84,32 @@ func parseOptions(args []string) (Options, error) {
 }
 func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 1 && args[0] == "--help" {
-		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n-c  continue despite warnings\n-f  character map file\n-i  locale source file (default: stdin)\n-u  target codeset conversion (not supported)\n", cmd.Usage, cmd.Synopsis)
+		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n-c  continue despite warnings\n-f  character map file\n-i  locale source file (default: stdin)\n-u  target codeset (UTF-8 or ASCII)\n", cmd.Usage, cmd.Synopsis)
 		return 0
 	}
-	fail := func(err error) int { fmt.Fprintf(rc.Err, "localedef: %v\n", err); return 4 }
+	fail := func(err error) int {
+		fmt.Fprintf(rc.Err, "localedef: %v\n", err)
+		if errors.Is(err, localedef.ErrCodeset) {
+			return 2
+		}
+		return 4
+	}
 	o, err := parseOptions(args)
 	if err != nil {
 		return fail(err)
 	}
-	if o.CodeSet != "" {
-		fmt.Fprintf(rc.Err, "localedef: -u %s: codeset conversion not supported\n", o.CodeSet)
-		return 2
+	target, maxBytes, err := localedef.TargetCodeset(o.CodeSet)
+	if err != nil {
+		return fail(err)
 	}
 	storeEnv := locale.StoreEnvAt(rc.Env, rc.Path)
 	if rc.FS == nil {
 		rc.FS = tool.NewLocalFS()
 	}
 	cm := localedef.DefaultCharmap()
+	if target != "" {
+		cm.CodeSet, cm.MinBytes, cm.MaxBytes = target, 1, maxBytes
+	}
 	if o.Charmap != "" {
 		f, err := rc.FS.Open(rc.Path(o.Charmap))
 		if err != nil {
@@ -116,7 +125,7 @@ func run(rc *tool.RunContext, args []string) int {
 			defer z.Close()
 			input = z
 		}
-		cm, err = localedef.ParseCharmap(input)
+		cm, err = localedef.ParseCharmapTarget(input, target)
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", o.Charmap, err))
 		}
@@ -162,12 +171,23 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "localedef: %s: %v\n", label, err)
 		return 4
 	}
-	dir, err := locale.DefaultStoreDir(storeEnv)
+	if err := localedef.CheckTarget(compiled, target); err != nil {
+		return fail(err)
+	}
+	if locale.IsLocalePath(o.Name) {
+		err = locale.SavePath(rc.Path(o.Name), compiled)
+	} else {
+		var dir string
+		dir, err = locale.DefaultStoreDir(storeEnv)
+		if err == nil {
+			err = locale.Save(dir, compiled)
+		}
+	}
 	if err != nil {
 		return fail(err)
 	}
-	if err := locale.Save(dir, compiled); err != nil {
-		return fail(err)
+	for _, cat := range compiled.CategoryNames() {
+		fmt.Fprintln(rc.Out, cat)
 	}
 	return code
 }

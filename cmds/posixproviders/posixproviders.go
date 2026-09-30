@@ -8,7 +8,7 @@
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
 // coreutils". Eight POSIX-required commands are not implemented in Go
-// (man, ctags, ar, nm, strip, ex, vi, localedef), and until
+// (man, ctags, ar, nm, strip, ex, vi), and until
 // this package existed they were absent from
 // tool.Names() — so the shell adapter fell through to $PATH and the arm measured
 // Ubuntu's binaries while reporting itself as bashy-only. Registering them here
@@ -354,7 +354,7 @@ fusing them would put network and toolchain variance inside measured evidence.
 
 Active external providers (%d): %s
 
-Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4.
+Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef.
 
 Providers are built locally from pinned upstream source and are copyleft.
 Their binaries are never redistributed. Set

@@ -98,8 +98,8 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
         self.assertIn("| Evidence | Verified | 0 |", rendered)
         self.assertIn("| Evidence | Implemented | 4 |", rendered)
-        self.assertIn("| Evidence | Partial | 104 |", rendered)
-        self.assertIn("| Evidence | Missing | 8 |", rendered)
+        self.assertIn("| Evidence | Partial | 105 |", rendered)
+        self.assertIn("| Evidence | Missing | 7 |", rendered)
         self.assertEqual(self.row("nice")["evidence_state"], "implemented")
 
     def test_exact_four_state_vocabulary_is_enforced(self) -> None:
@@ -145,7 +145,7 @@ class ManifestValidationTest(unittest.TestCase):
                 row["effective_owner"] in manifest.OWNED_IMPLEMENTATION_OWNERS
                 for row in self.rows
             ),
-            108,
+            109,
         )
         self.assertFalse(
             any(error.split(":", 1)[0] in provider_names for error in owned_errors)
@@ -575,7 +575,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_owned_source_gate_has_exact_scope_and_accepts_only_ready_states(self) -> None:
         errors = manifest.owned_source_errors(self.rows)
-        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 104)
+        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 105)
         self.assertFalse(any(error.startswith("ar:") for error in errors))
         with (
             mock.patch.object(sys, "argv", [str(SCRIPT), "--require-owned-source-complete"]),
@@ -677,7 +677,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_parser_source_comparison_covers_every_go_selected_row(self) -> None:
         go_rows = [row for row in self.rows if row["effective_owner"] == "go"]
-        self.assertEqual(len(go_rows), 86)
+        self.assertEqual(len(go_rows), 87)
         for row in go_rows:
             with self.subTest(command=row["command"]):
                 recognized = manifest.recognized_go_options(row)

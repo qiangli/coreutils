@@ -3,7 +3,7 @@
 Eight POSIX-required commands are deliberately not implemented in Go:
 
 ```
-man  ctags  ar  nm  strip  ex  vi  localedef
+man  ctags  ar  nm  strip  ex  vi
 ```
 
 They are **external providers**: the multicall owns the name and dispatches to
@@ -152,7 +152,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all eight provider names, so plain bashy stays standalone-graceful
+unregisters all seven provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -173,7 +173,8 @@ Never mirror or republish the built binaries. The full posture is in the header
 of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 `docs/posix-provider-distribution-policy.md`.
 
-The pinned glibc 2.39 `localedef` build likewise carries one narrowly scoped
+Historical build note (localedef is now Go-owned and unpinned): the former
+glibc 2.39 `localedef` build carried one narrowly scoped
 source correction. Upstream turns `POSIXLY_CORRECT` into global `--verbose`,
 although its cited POSIX requirement concerns missing characters in the
 charmap. The correction passes conformance verbosity only to the charmap reader,
@@ -190,7 +191,7 @@ recorded in provenance and the recipe revision invalidates older cached builds.
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the eight registered provider tools + the `posix-providers` applet |
+| `cmds/posixproviders/` | the seven registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `tools/posix-providers/man-relocation-test.sh` | explicit source-build probe for the relocated provider's own `man(1)` page |
 | `tools/posix-providers/patches/` | pinned, digest-verified provider source corrections recorded in provenance |

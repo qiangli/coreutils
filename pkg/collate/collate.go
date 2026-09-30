@@ -1,35 +1,10 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-// Package collate is a provider-only collation engine: it compares strings
-// using glibc's locale-aware strcoll_l, reached over dlopen/dlsym rather than
-// cgo. It exists to give agent tooling a faithful, deterministic ISO-8859-1
-// collation order without linking libc and without shelling out.
-//
-// # Scope, on purpose
-//
-// This package is a LIBRARY. It wires to no applet, registers no verb, and is
-// deliberately narrow: it accepts ONLY the two explicit ISO-8859-1 locale
-// aliases (see [Open]). Everything else — the "C" locale, a bare "de_DE" with
-// no codeset, "de_DE.UTF-8", ISO-8859-15/"Latin-9", and arbitrary names — is
-// rejected up front, before any libc is loaded, with [ErrUnsupportedLocale].
-// The narrow surface is the safety story: the only code path that ever reaches
-// glibc has already been proven to name a single-byte Latin-1 locale.
-//
-// The real provider is built only on linux/amd64 and linux/arm64 when the
-// bashy_scratch build tag is not set (collate_glibc.go). Every other platform,
-// and every bashy_scratch build, gets a stub (collate_stub.go) whose [Open]
-// returns [ErrUnsupportedPlatform] after the same locale validation, so callers
-// get one consistent, honest contract everywhere. The tag is an explicit
-// dependency seam for bare scratch binaries; it does not emulate locale data.
-//
-// # Third-party provenance
-//
-// In normal Linux builds, the dlopen/dlsym FFI is provided by
-// github.com/ebitengine/purego (v0.10.1),
-// upstream https://github.com/ebitengine/purego, Apache-2.0 licensed. purego is
-// used directly — no cgo — via purego.Dlopen/Dlsym/RegisterFunc. See
-// THIRD_PARTY_LICENSES.md.
+// Package collate compares strings using compiled Go locale data (OpenEnv),
+// or the bounded host ISO-8859-1 provider (Open). Compiled providers are pure
+// Go on every platform and carry explicit order and multi-level weights.
+// The host provider uses purego (Apache-2.0) on Linux; see THIRD_PARTY_LICENSES.md.
 package collate
 
 import (

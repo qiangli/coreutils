@@ -40,7 +40,7 @@ infer the coreutils gap from the smaller assembled-Bashy number.
 
 A provider is **not** a Go applet, and the matrix counts them separately so
 they can never be read as Go coverage: the multicall owns the NAME
-(`man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `localedef`)
+(`man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`)
 and dispatches to a copy of the upstream program built locally
 from a sha256-pinned source tarball. The pure-Go applets exclusively own `ed`,
 `patch`, `mail`/`mailx`, `talk`, `make`, and `bc`; there are no external-provider definitions
@@ -50,9 +50,10 @@ measured the distro's binaries. There is no fallback: an unprovisioned provider
 exits 127 with the command that fixes it. See
 [POSIX external providers](docs/posix-external-providers.md).
 
-The staged pure-Go [`cmds/localedef` parser](docs/localedef-parser.md) validates
-locale sources for embedded callers; locale compilation and multicall migration
-are separate follow-up work.
+The pure-Go [`cmds/localedef` applet](docs/localedef-parser.md) compiles locale
+sources into the Go store, including supported explicit collation orders.
+Unsupported forms fail explicitly; required codeset mapping, pathname outputs
+and successful-category reporting remain tracked work, not conformance claims.
 
 Profile B deliberately uses Bashy with pinned GNU/system utilities and excludes
 these Go applets. Profiles C/D place the Go multicall provider first. Any
@@ -109,7 +110,7 @@ Every tool in this repo follows the same rules:
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
   against its recorded provenance and **never** downloads or compiles, the
-  eight registered provider tools, and
+  seven registered provider tools, and
   `posix-providers build|list|check|dispatch-plan` —
   `build` is the only path allowed to fetch and compile, and `dispatch-plan`
   is the introspection surface disclosing the exact verified binary each
@@ -129,7 +130,7 @@ Every tool in this repo follows the same rules:
   [the POSIX owner gate](docs/posix-owner-gate.md).
 
 - `cmds/` — the required set: 143 registered Go command packages (see the
-  generated [applet matrix](docs/applet-matrix.md); eight names are external
+  generated [applet matrix](docs/applet-matrix.md); seven names are external
   providers rather than Go implementations),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),

@@ -70,7 +70,7 @@ func mustLookup(t *testing.T, name string) Entry {
 
 func TestManifestShape(t *testing.T) {
 	names := Names()
-	want := []string{"ar", "ctags", "ex", "localedef", "man", "nm", "strip", "vi"}
+	want := []string{"ar", "ctags", "ex", "man", "nm", "strip", "vi"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -94,16 +94,6 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s: manifest no longer declares linux+darwin: %v", n, e.Platforms)
 		}
 	}
-	// linux ONLY: localedef compiles glibc's own sources against glibc.
-	for _, n := range []string{"localedef"} {
-		e := mustLookup(t, n)
-		if !e.SupportsGOOS("linux") {
-			t.Errorf("%s: manifest no longer declares linux: %v", n, e.Platforms)
-		}
-		if e.SupportsGOOS("darwin") || e.SupportsGOOS("windows") {
-			t.Errorf("%s: declared beyond linux (%v) without a build to back it", n, e.Platforms)
-		}
-	}
 	if !mustLookup(t, "ar").SupportsGOOS("windows") {
 		t.Error("ar: expected windows to be declared")
 	}
@@ -120,7 +110,7 @@ func TestManifestTextIsTheEmbeddedFile(t *testing.T) {
 }
 
 func TestGoAppletsHaveNoExternalProviderDefinition(t *testing.T) {
-	for _, name := range []string{"bc", "ed", "lp", "m4", "mail", "mailx", "make", "patch", "talk"} {
+	for _, name := range []string{"bc", "ed", "localedef", "lp", "m4", "mail", "mailx", "make", "patch", "talk"} {
 		if Has(name) {
 			t.Errorf("%s still has an external-provider definition", name)
 		}
@@ -383,22 +373,9 @@ func TestResolveRejectsProvenanceMismatch(t *testing.T) {
 	})
 }
 
-func TestResolveRejectsStaleLocaledefRecipe(t *testing.T) {
-	e := mustLookup(t, "localedef")
-	if e.RecipeRevision == "" {
-		t.Fatal("localedef has no build recipe revision")
-	}
-	root := t.TempDir()
-	bin := provision(t, root, e, []byte("original"))
-	rec, err := readProvenance(filepath.Join(filepath.Dir(bin), "provenance.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	delete(rec, "recipe_revision")
-	writeProvenance(t, filepath.Dir(bin), rec)
-	r := Resolver{CacheRoot: root, GOOS: "linux"}
-	if _, err := r.Resolve("localedef"); !errors.Is(err, ErrProvenance) {
-		t.Fatalf("stale localedef recipe error = %v, want ErrProvenance", err)
+func TestLocaledefIsNotExternalProvider(t *testing.T) {
+	if _, ok := Lookup("localedef"); ok {
+		t.Fatal("localedef must be owned by its Go applet")
 	}
 }
 

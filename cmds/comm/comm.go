@@ -50,7 +50,7 @@ type collatorOpener func(string) (stringCollator, error)
 
 func run(rc *tool.RunContext, args []string) int {
 	return runWithCollator(rc, args, func(name string) (stringCollator, error) {
-		return collate.Open(name)
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
 	})
 }
 
@@ -136,7 +136,7 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 	}
 
 	compare := func(a, b string) (int, error) { return strings.Compare(a, b), nil }
-	if name := locale.ResolveCarried(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
+	if name := locale.ResolveCarried(locale.StoreEnvAt(rc.Env, rc.Path), locale.Collate); name != "C" && name != "POSIX" {
 		provider, err := openCollator(name)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "comm: LC_COLLATE=%s: %v\n", name, err)

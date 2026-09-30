@@ -108,3 +108,64 @@ func TestCompiledMessagesMatcher(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivateStorePaths(t *testing.T) {
+	dir := t.TempDir()
+	c := &Compiled{Name: "./original"}
+	c.Set("LC_MESSAGES", "yesexpr", Keyword{Values: []string{"^[oO]"}})
+	path := filepath.Join(dir, "renamed")
+	if err := SavePath(path, c); err != nil {
+		t.Fatal(err)
+	}
+	original := []string{"LANG=./renamed"}
+	env := StoreEnvAt(original, func(p string) string { return filepath.Join(dir, p) })
+	if len(original) != 1 {
+		t.Fatal("mutated environment")
+	}
+	if got, ok := CompiledFor(env, Messages); !ok || got.Name != c.Name {
+		t.Fatalf("private lookup: %+v %v", got, ok)
+	}
+	if !HasCompiledFile(env, "./renamed") {
+		t.Fatal("private file not detected")
+	}
+	if ok, err := MatchAffirmative(env, "oui"); err != nil || !ok {
+		t.Fatalf("private messages: %v %v", ok, err)
+	}
+	if err := os.WriteFile(path, []byte("malformed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := LookupCompiled(env, "./renamed"); ok {
+		t.Fatal("accepted malformed private file")
+	}
+	if !HasCompiledFile(env, "./renamed") {
+		t.Fatal("malformed private file not detected")
+	}
+	if _, ok := LookupCompiled(env, "./absent"); ok {
+		t.Fatal("invented missing private file")
+	}
+	if err := Save(dir, c); err == nil {
+		t.Fatal("public save accepted a path name")
+	}
+}
+
+func TestCollationPositionStore(t *testing.T) {
+	for _, position := range [][]bool{nil, {true}, {false, true}} {
+		c := &Compiled{Name: "position", Collation: &Collation{Backward: []bool{false}, Position: position, Elements: []CollatingElement{{Text: "a", Order: 1, Weights: [][]int{{1}}}}}}
+		c.EnsureCategory("LC_COLLATE")
+		dir := t.TempDir()
+		err := Save(dir, c)
+		if len(position) > 1 {
+			if err == nil {
+				t.Fatal("accepted malformed position levels")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := LookupCompiled([]string{"LOCPATH=" + dir}, "position")
+		if !ok || len(got.Collation.Position) != len(position) {
+			t.Fatal("position store round trip failed")
+		}
+	}
+}

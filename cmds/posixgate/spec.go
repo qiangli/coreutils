@@ -9,7 +9,7 @@
 // The assembled Profile C/D runtime claims that every one of the 116 required
 // names is supplied by exactly one INTENDED owner: a registered Bashy Go
 // applet, the shell (entry point, builtin, or the `time` keyword), or one of
-// the eight active POSIX external providers whose NAME the multicall
+// the seven active POSIX external providers whose NAME the multicall
 // dispatches to a pinned upstream copy. The Go applets exclusively own `ed`,
 // `patch`, `mail`/`mailx`, `talk`, `lp`, and `m4`; those names have no provider pins.
 // `posix-gate` turns the ownership claim into a checkable verdict, and every
@@ -19,8 +19,8 @@
 //
 // # What it rejects
 //
-//   - count drift — availability no longer splits 94/14/8, or effective
-//     selection no longer splits 86/22/8
+//   - count drift — availability no longer splits 95/14/7, or effective
+//     selection no longer splits 87/22/7
 //   - duplicate or ambiguous ownership — a name claimed by two dispositions,
 //     a shell name shadowed by a registered tool, an applet that is also a
 //     pinned provider
@@ -102,17 +102,17 @@ const (
 // reports. scripts/applet-matrix.py pins the same splits.
 const (
 	pinTotal = 116
-	// availability: who supplies each name (94/14/8)
-	pinAvailGoApplets = 94
+	// availability: who supplies each name (95/14/7)
+	pinAvailGoApplets = 95
 	pinAvailShell     = 14
-	pinProviders      = 8
-	// effective selection: what the shell selects (86/22/8); the 22 is the 14
+	pinProviders      = 7
+	// effective selection: what the shell selects (87/22/7); the 22 is the 14
 	// shell-owned names plus the seven builtin overlaps and the time keyword
-	pinEffectiveGoApplets = 86
+	pinEffectiveGoApplets = 87
 	pinEffectiveShell     = 22
 	// pinManifestProviders is the full pkg/posixprovider manifest pin count.
 	// Every manifest row is an active runtime owner.
-	pinManifestProviders = 8
+	pinManifestProviders = 7
 )
 
 // specRow is one required name: its availability owner from the canonical

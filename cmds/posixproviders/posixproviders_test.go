@@ -542,8 +542,8 @@ func TestAdminHelp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"list", "check", "build", "BASHY_POSIX_PROVIDERS=off",
-		"Active external providers (8): " + strings.Join(posixprovider.DispatchNames(), ", "),
-		"Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4.",
+		"Active external providers (7): " + strings.Join(posixprovider.DispatchNames(), ", "),
+		"Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef.",
 		"Providers are built locally from pinned upstream source and are copyleft.",
 	} {
 		if !strings.Contains(stdout, want) {

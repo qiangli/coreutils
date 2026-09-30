@@ -51,7 +51,7 @@ alias bg cd command fc fg getopts hash jobs read sh umask unalias wait
 # find -exec), but a POSIX-mode bash-family shell EFFECTIVELY selects its own
 # builtin (or, for `time`, the reserved word) when they are invoked at shell
 # level. These two sets are the entire difference between the availability
-# split (94/14/8) and the effective-selection split (86/22/8); an eighth
+# split (95/14/7) and the effective-selection split (87/22/7); an eighth
 # builtin overlap appearing anywhere is an ownership violation the gate must
 # reject, so the sets are pinned here, in the one generator that projects the
 # canonical manifest.
@@ -60,8 +60,8 @@ KEYWORD_OVERLAP = {"time"}
 
 # The pinned shape of the required inventory, both axes. cmds/posixgate pins
 # the same numbers as Go constants; changing the inventory must trip both.
-AVAILABILITY_PIN = {"go_applet": 94, "shell": 14, "external_provider": 8}
-EFFECTIVE_PIN = {"go_applet": 86, "shell": 22, "external_provider": 8}
+AVAILABILITY_PIN = {"go_applet": 95, "shell": 14, "external_provider": 7}
+EFFECTIVE_PIN = {"go_applet": 87, "shell": 22, "external_provider": 7}
 
 # Aliases of packages in the REQUIRED set only. gunzip/zcat (gzip), ncal (cal)
 # and sntp (ntp) left with their packages for yoke in Sprint 208; this matrix
@@ -159,9 +159,9 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    # Sprint 340: the required set — 143 packages / 153 advertised names
+    # Sprint 340: the required set — 144 packages / 153 advertised names
     # (160 / 176 before the yoke split).
-    if len(packages) != 143 or len(result) != 153:
+    if len(packages) != 144 or len(result) != 153:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -279,7 +279,7 @@ def render_spec_gen(data: list[dict[str, str]]) -> str:
         "// no independent copy of the inventory — regenerating the matrix rewrites",
         "// this file, and --check (crossvet + pre-push) fails when it is stale.",
         "//",
-        "// Pinned shape: availability 94/14/8, effective selection 86/22/8.",
+        "// Pinned shape: availability 95/14/7, effective selection 87/22/7.",
         "",
         "package posixgatecmd",
         "",

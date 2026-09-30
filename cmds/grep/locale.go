@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/collate"
 	"github.com/qiangli/coreutils/pkg/locale"
 )
 
@@ -12,6 +14,7 @@ import (
 // de_DE ISO-8859-1 locale; keeping its tables in-process makes results
 // independent of whichever locale archive happens to be installed on a host.
 type grepLocale struct {
+	compiled      *bre.LocaleByteTables
 	ctypeGerman   bool
 	collateGerman bool
 }
@@ -30,6 +33,25 @@ func grepLocaleFromEnv(env []string) (grepLocale, error) {
 	ctypeGerman, err := germanLocale(ctypeName)
 	if err != nil {
 		return grepLocale{}, fmt.Errorf("LC_CTYPE=%s: %w", ctypeName, err)
+	}
+	if locale.HasCompiledFile(env, collateName) {
+		if ctypeGerman {
+			return grepLocale{}, fmt.Errorf("compiled collation with non-C LC_CTYPE is unsupported")
+		}
+		p, err := collate.OpenEnv(env, collateName)
+		if err != nil {
+			return grepLocale{}, err
+		}
+		defer p.Close()
+		tables, err := bre.SnapshotLocaleByteCtypeTables(nil)
+		if err != nil {
+			return grepLocale{}, err
+		}
+		tables, err = tables.WithCollation(p)
+		if err != nil {
+			return grepLocale{}, err
+		}
+		return grepLocale{compiled: tables}, nil
 	}
 	collateGerman, err := germanLocale(collateName)
 	if err != nil {

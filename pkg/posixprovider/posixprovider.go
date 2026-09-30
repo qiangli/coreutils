@@ -58,7 +58,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the eight active names are simply not ours and normal
+// provider cache: with it set, the seven active names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"

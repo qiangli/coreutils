@@ -36,6 +36,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/pkg/ignore"
+	localestore "github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -152,7 +153,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Err, "grep: warning: --only-matching is specified, but context options are ignored")
 		before, after = 0, 0
 	}
-	locale, localeErr := grepLocaleFromEnv(rc.Env)
+	locale, localeErr := grepLocaleFromEnv(localestore.StoreEnvAt(rc.Env, rc.Path))
 	if localeErr != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, localeErr)
 		return 2
@@ -219,6 +220,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	var re grepMatcher
+	if locale.compiled != nil && patternsNeedPackageMatcher(split, *extended) {
+		fmt.Fprintln(rc.Err, "grep: pattern syntax unsupported with compiled collation")
+		return 2
+	}
 	if !locale.latin1Bytes() && !patternsNeedPackageMatcher(split, *extended) {
 		// C and POSIX are single-byte locales. Match every ordinary pattern on
 		// the byte-regexp substrate, rather than only patterns which themselves
@@ -228,7 +233,7 @@ func run(rc *tool.RunContext, args []string) int {
 		// Unicode rune instead of one locale character/byte. POSIX C has neither
 		// behavior. GNU-only word-edge syntax, backreferences, and intervals
 		// beyond RE2's repeat limit retain the bounded matcher path below.
-		re, err = compileCBytePattern(split, *fixed, *extended, *lineRe, *ignoreCase)
+		re, err = compileCBytePattern(split, *fixed, *extended, *lineRe, *ignoreCase, locale.compiled)
 	} else {
 		re, err = compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word || *onlyMatching)
 	}
@@ -479,13 +484,16 @@ func patternsNeedPackageMatcher(patterns []string, extended bool) bool {
 	return false
 }
 
-func compileCBytePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (grepMatcher, error) {
+func compileCBytePattern(pats []string, fixed, extended, lineRe, ignoreCase bool, compiled ...*bre.LocaleByteTables) (grepMatcher, error) {
 	if len(pats) == 0 {
 		return noMatcher{}, nil
 	}
 	tables, err := bre.SnapshotLocaleByteCtypeTables(nil)
 	if err != nil {
 		return nil, err
+	}
+	if len(compiled) > 0 && compiled[0] != nil {
+		tables = compiled[0]
 	}
 	options := bre.ByteRegexpOptions{FoldCase: ignoreCase}
 	if extended {
