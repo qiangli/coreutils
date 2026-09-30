@@ -233,7 +233,7 @@ were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory (availability 92/14/10, effective selection 84/22/10): it
+116-name inventory (availability 93/14/9, effective selection 85/22/9): it
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH

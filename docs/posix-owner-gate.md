@@ -9,10 +9,10 @@ POSIX-required utility names is supplied by exactly one **intended owner** —
   registers and dispatches (see
   [posix-external-providers.md](posix-external-providers.md)).
 
-That is the **availability** split, 92/14/10. What a POSIX-mode shell
+That is the **availability** split, 93/14/9. What a POSIX-mode shell
 actually **selects** differs for exactly eight names (the seven builtin
 overlaps plus the `time` keyword), giving the **effective selection** split
-84/22/10. The gate pins both, explicitly, and verifies the effective split
+85/22/9. The gate pins both, explicitly, and verifies the effective split
 against the staged shell's own answers.
 
 `posix-gate` turns the claim into a checkable verdict. Every check is
@@ -35,7 +35,7 @@ compares row by row.
 
 | Rejection | Meaning |
 | --- | --- |
-| count drift | availability no longer splits 116 = 92/14/10, **or** effective selection no longer splits 84/22/10; both axes are hard pins that must be changed deliberately, in one reviewed place |
+| count drift | availability no longer splits 116 = 93/14/9, **or** effective selection no longer splits 85/22/9; both axes are hard pins that must be changed deliberately, in one reviewed place |
 | duplicate / ambiguous ownership | a name claimed twice: a shell-owned name that also has a registered tool, an applet that is also pinned as a provider, inventory/manifest provider sets that disagree |
 | missing provider pin | a provider row without a full sha256 source pin, version, platform list, or upstream URL |
 | missing / broken provenance | a provider whose cached binary is absent, or does not hash to what its `provenance.tsv` records — an unattributable binary is worse than a missing one, because it still produces numbers |
@@ -188,7 +188,7 @@ on PATH for exec-style callers (`env`, `xargs`, `find -exec`). Both facts are
 intended, and the gate verifies **both**: the classification probe requires
 `builtin`/`keyword` for exactly these names, and the PATH probe still
 requires the staged file with the approved digest. These eight names are the
-entire 92/14/10 → 84/22/10 difference; the effective pins mean an eighth
+entire 93/14/9 → 85/22/9 difference; the effective pins mean an eighth
 builtin overlap (or a lost one) is count drift, not a curiosity.
 
 The 14 shell-owned names split the same way: `sh` must classify as `file`

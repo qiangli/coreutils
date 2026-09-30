@@ -64,6 +64,11 @@ func stub(t *testing.T, status uint16, jobID uint32) (*httptest.Server, *[]ippRe
 		o.Write([]byte{0x21, 0, 6})
 		o.WriteString("job-id")
 		o.Write([]byte{0, 4, byte(jobID >> 24), byte(jobID >> 16), byte(jobID >> 8), byte(jobID)})
+		if req.op == opGetJobAttrs {
+			o.Write([]byte{0x23, 0, 9})
+			o.WriteString("job-state")
+			o.Write([]byte{0, 4, 0, 0, 0, 9})
+		}
 		o.WriteByte(0x03)
 		w.Header().Set("Content-Type", "application/ipp")
 		w.Write(o.Bytes())
@@ -163,34 +168,48 @@ func TestMailSubscription(t *testing.T) {
 
 func TestWriteSubscription(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		status uint16
-		args   []string
+		name string
+		args []string
 	}{
-		{"accepted", 0, []string{"-w"}},
-		{"ignored-attributes", 1, []string{"-w"}},
-		{"ignored-subscriptions", 3, []string{"-w"}},
-		{"mail-and-write", 0, []string{"-mw"}},
-		{"multiple-documents", 0, []string{"-w", "-", "-"}},
+		{"completed", []string{"-w"}}, {"mail-and-write", []string{"-mw"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, got := stub(t, tc.status, 5)
+			srv, got := stub(t, 0, 5)
 			env := []string{"LP_IPP_URI=" + srv.URL, "LPDEST=d", "USER=bob"}
 			out, e, c := runLP(t, env, "x", tc.args...)
-			if c != 0 || e != "" || !strings.HasPrefix(out, "request id is d-5 ") {
+			if c != 0 || e != "" || out != "request id is d-5 (1 file(s))\nrequest d-5 completed\n" {
 				t.Fatalf("code %d stdout %q stderr %q", c, out, e)
 			}
 			s := (*got)[0].sub
-			if string(s["notify-recipient-uri"]) != "mailto:bob@localhost" ||
-				string(s["notify-events"]) != "job-completed" || string(s["notify-user-data"]) != "write" {
-				t.Fatalf("bad write subscription %v", s)
+			if tc.name == "completed" && len(s) != 0 {
+				t.Fatalf("-w must not invent subscription delivery: %v", s)
 			}
-			for _, r := range (*got)[1:] {
-				if len(r.sub) != 0 {
-					t.Fatalf("subscription repeated on Send-Document: %v", r.sub)
-				}
+			if tc.name == "mail-and-write" && string(s["notify-events"]) != "job-completed" {
+				t.Fatalf("bad mail subscription %v", s)
+			}
+			if len(*got) != 2 || (*got)[1].op != opGetJobAttrs {
+				t.Fatalf("-w did not wait for completion: %+v", *got)
 			}
 		})
+	}
+}
+
+func TestMissingAndTruncatedJobIDFail(t *testing.T) {
+	for _, body := range [][]byte{{1, 1, 0, 0, 0, 0, 0, 1, 3}, {1, 1, 0, 0, 0, 0, 0, 1, 2, 0x21}} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+		_, _, code := runLP(t, []string{"LP_IPP_URI=" + srv.URL, "LPDEST=d"}, "x")
+		srv.Close()
+		if code == 0 {
+			t.Fatal("accepted malformed response")
+		}
+	}
+}
+
+func TestMailNotificationRejectionFails(t *testing.T) {
+	srv, _ := stub(t, 1, 5) // successful-ok-ignored-or-substituted-attributes
+	_, _, code := runLP(t, []string{"LP_IPP_URI=" + srv.URL, "LPDEST=d", "USER=bob"}, "x", "-m")
+	if code == 0 {
+		t.Fatal("accepted an ignored required mail notification")
 	}
 }
 
