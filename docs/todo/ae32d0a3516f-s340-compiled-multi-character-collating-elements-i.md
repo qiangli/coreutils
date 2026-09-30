@@ -6,7 +6,6 @@ seq: 164
 status: done
 priority: p1
 created: 2026-09-30T21:38:10.021917Z
-weave: 28
 assignee: s340-bracket-astra
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f

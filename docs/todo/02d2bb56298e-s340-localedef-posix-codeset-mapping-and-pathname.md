@@ -6,7 +6,6 @@ seq: 162
 status: done
 priority: p1
 created: 2026-09-30T21:06:53.540307Z
-weave: 26
 assignee: s340-codeset-astra
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f

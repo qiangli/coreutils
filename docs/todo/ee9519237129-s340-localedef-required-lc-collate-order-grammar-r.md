@@ -6,7 +6,6 @@ seq: 163
 status: done
 priority: p1
 created: 2026-09-30T21:38:09.933169Z
-weave: 27
 assignee: s340-collate-grammar-astra
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f

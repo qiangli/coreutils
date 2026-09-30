@@ -8,7 +8,6 @@ priority: p1
 labels:
     - posix-cert
 created: 2026-09-30T15:34:42.775348Z
-weave: 25
 assignee: s340-localedef-astra
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f
