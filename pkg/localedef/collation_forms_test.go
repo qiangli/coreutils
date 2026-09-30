@@ -125,3 +125,75 @@ func TestCollationEmptyMiddleAndRangeAlias(t *testing.T) {
 		}
 	}
 }
+
+func TestCollationLiteralForms(t *testing.T) {
+	forms := []string{
+		"<a>\n<b>\n<x> \"<a><b>\"",
+		"a\nb\nx \"ab\"",
+		"\\x61\n\\d098\n\\170 \"a<b>\"",
+		"a a\nb \\x62\nx \"<a>b\"",
+	}
+	var want interface{}
+	for _, body := range forms {
+		src, err := ParseSource(strings.NewReader("LC_COLLATE\norder_start forward\n" + body + "\nUNDEFINED IGNORE\norder_end\nEND LC_COLLATE\n"))
+		if err != nil {
+			t.Errorf("%q parse: %v", body, err)
+			continue
+		}
+		c, err := Compile("literal", src, nil)
+		if err != nil {
+			t.Errorf("%q compile: %v", body, err)
+			continue
+		}
+		if want == nil {
+			want = c.Collation
+		} else if !reflect.DeepEqual(c.Collation, want) {
+			t.Errorf("literal form differs: %q", body)
+		}
+	}
+}
+
+func TestCollationLiteralWeightLongestElement(t *testing.T) {
+	src, err := ParseSource(strings.NewReader("LC_COLLATE\ncollating-element <digraph> from \"ch\"\norder_start forward\n<c>\n<h>\n<digraph>\n<x> \"ch\"\n<y> \"<digraph>\"\nUNDEFINED IGNORE\norder_end\nEND LC_COLLATE\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Compile("literal", src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(c.Collation.Elements[3].Weights, c.Collation.Elements[4].Weights) {
+		t.Fatalf("literal digraph did not match named element: %v", c.Collation.Elements)
+	}
+}
+
+func TestCollationUnknownLiteralWeight(t *testing.T) {
+	for _, weight := range []string{"é", `"aé"`, `"a<missing>"`} {
+		src, err := ParseSource(strings.NewReader("LC_COLLATE\norder_start forward\n<a> " + weight + "\nUNDEFINED\norder_end\nEND LC_COLLATE\n"))
+		if err == nil {
+			_, err = Compile("bad", src, nil)
+		}
+		if err == nil {
+			t.Errorf("accepted unknown weight %s", weight)
+		}
+	}
+}
+
+func TestCollationNumericCharacterForms(t *testing.T) {
+	var want interface{}
+	for _, body := range []string{"<one>\n<two>\n<three> \"<one><two>\"", "1\n2\n3 \"12\"", "\\061\n\\d050\n\\x33 \"1<two>\""} {
+		src, err := ParseSource(strings.NewReader("LC_COLLATE\norder_start forward\n" + body + "\nUNDEFINED IGNORE\norder_end\nEND LC_COLLATE\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := Compile("numeric", src, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want == nil {
+			want = c.Collation
+		} else if !reflect.DeepEqual(want, c.Collation) {
+			t.Errorf("numeric character spelling differs: %q", body)
+		}
+	}
+}

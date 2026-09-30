@@ -46,9 +46,16 @@ remaining locale grammar work. The behavioral source is the
 especially OPTIONS, OPERANDS, STDOUT and EXTENDED DESCRIPTION.
 
 Compiled collation supports explicit character orders, collating elements and
-symbols, forward/backward levels, IGNORE weights, symbolic weight strings,
-UNDEFINED expansion and category copy. Sort, ls, comm, join and byte bracket
-consumers in grep/sed read compiled collation before host fallback.
+symbols, forward/backward levels, IGNORE weights, literal and symbolic weights,
+UNDEFINED expansion and category copy. Character identifiers accept literal
+characters and hexadecimal, decimal or octal byte spellings as well as symbolic
+names. Quoted one-to-many weights accept literal characters, symbolic names,
+and mixtures. Literal segments resolve by encoded text, matching declared
+collating elements longest first; symbolic references retain their named rank.
+Sort, ls, comm, join and bracket consumers read compiled collation before host
+fallback. The integrated bracket backend supports UTF-8 and multi-character
+elements, range order and primary-weight equivalence. For a declaration named
+<ch-digraph> with text ch, the bracket spelling is [[.ch.]].
 
 Order ellipses expand the supplied charmap in encoded order, with checked
 character endpoints. Empty weight operands use the element's own order.
@@ -62,10 +69,10 @@ prevent output even with `-c`. Multi-level UNDEFINED defaults share the primary
 weight and retain character order at subsequent levels.
 Source: [POSIX.1-2017 XBD 7.3.2](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/V1_chap07.html?view=full).
 
-Additional unsupported forms fail explicitly:
-non-UTF-8 element encodings, literal rather than ordered-symbol weight strings,
-missing weight references, and byte brackets over multibyte or multi-character
-collating elements. Inputs outside the compiled element set are errors; there
+Encoding limits remain explicit: non-UTF-8 element encodings are unsupported.
+Missing character or symbolic weight references fail. Legacy byte-table APIs
+still reject multibyte/multi-character elements instead of truncating them;
+the integrated full-element bracket path handles those elements. Inputs outside the compiled element set are errors; there
 is no invented fallback order. Malformed compiled stores do not fall back to
 the host. These limits remain visible even though ownership is now Go-only.
 
@@ -143,3 +150,19 @@ Bracket/BRE/ctype/grep/sed implementation is untouched in this correction.
 The later codeset scalar correction is not merged here; the parent combines
 candidates and performs independent integration checks. No full-base conformance
 claim is made; documented unsupported forms remain explicit.
+
+
+## Story163 literal-form follow-up
+
+The worker fast-forwarded to integrated `854b4678` before this correction,
+retaining scalar-mapping and bracket work without editing bracket code.
+Literal and numeric-character spellings now compile to the same order/weights
+as symbolic spellings. Tests compare a/b/x and 1/2/3 against named equivalents,
+including hexadecimal/decimal/octal bytes, scalar weights, quoted strings,
+mixed literal/symbol strings, longest collating elements and missing references.
+The red run is `/tmp/issue27-literal-red.log`. Final normal and race runs of
+only pkg/localedef, pkg/collate and cmds/localedef completed with exit 0 in
+`/tmp/issue27-literal-final-normal.log` and
+`/tmp/issue27-literal-final-race.log`, with GOFLAGS=-p=1, GOMAXPROCS=2 and the
+assigned issue27 cache. These are worker evidence; independent acceptance and
+combined metadata generation remain the parent's responsibility.

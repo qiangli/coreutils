@@ -20,6 +20,19 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap, warnings *[]D
 	var rows []Entry
 	started, ended := false, false
 	for _, e := range s.Entries {
+		if strings.HasPrefix(e.Keyword, "\x00character:") {
+			text := strings.TrimPrefix(e.Keyword, "\x00character:")
+			found := false
+			for _, b := range cm.Symbols {
+				found = found || string(b) == text
+			}
+			if !found {
+				return problem(e.Line, "LC_COLLATE: character %q is outside the charmap", text)
+			}
+			name := "\x00literal:" + text
+			names[name] = text
+			e.Keyword = "<" + name + ">"
+		}
 		fail := func() error { return problem(e.Line, "LC_COLLATE: unsupported or misplaced %s", e.Keyword) }
 		switch e.Keyword {
 		case "collating-element", "collating-symbol":
@@ -184,6 +197,36 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap, warnings *[]D
 			rank[name] = textRank[text]
 		}
 	}
+	// Literal weights denote encoded text, not symbolic-name spelling. Match
+	// declared collating elements longest first, as for runtime collation.
+	var orderedText []string
+	for text := range textRank {
+		orderedText = append(orderedText, text)
+	}
+	sort.Slice(orderedText, func(i, j int) bool {
+		if len(orderedText[i]) != len(orderedText[j]) {
+			return len(orderedText[i]) > len(orderedText[j])
+		}
+		return orderedText[i] < orderedText[j]
+	})
+	literalWeights := func(text string) ([]int, error) {
+		var weights []int
+		for text != "" {
+			matched := false
+			for _, element := range orderedText {
+				if strings.HasPrefix(text, element) {
+					weights = append(weights, textRank[element])
+					text = text[len(element):]
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, fmt.Errorf("LC_COLLATE: weight character has no order at %q", text)
+			}
+		}
+		return weights, nil
+	}
 	seen := map[string]bool{}
 	for _, e := range rows {
 		name := strings.TrimSuffix(e.Keyword[1:], ">")
@@ -219,13 +262,27 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap, warnings *[]D
 						return problem(e.Line, "LC_COLLATE: weight <%s> has no order", v.Text)
 					}
 					weights = []int{rank[v.Text]}
+				case v.Kind == Word || v.Kind == Number || v.Kind == Bytes:
+					var err error
+					weights, err = literalWeights(v.Text)
+					if err != nil {
+						return atLine(e.Line, err)
+					}
 				case v.Kind == String:
 					weights = nil
 					for _, p := range v.Parts {
-						if p.Kind != Symbol || rank[p.Text] == 0 {
-							return problem(e.Line, "LC_COLLATE: weight strings require ordered symbolic names")
+						if p.Kind == Symbol {
+							if rank[p.Text] == 0 {
+								return problem(e.Line, "LC_COLLATE: weight <%s> has no order", p.Text)
+							}
+							weights = append(weights, rank[p.Text])
+						} else {
+							part, err := literalWeights(p.Text)
+							if err != nil {
+								return atLine(e.Line, err)
+							}
+							weights = append(weights, part...)
 						}
-						weights = append(weights, rank[p.Text])
 					}
 				default:
 					return problem(e.Line, "LC_COLLATE: unsupported weight %q", v.Text)
