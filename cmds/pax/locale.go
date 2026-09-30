@@ -34,10 +34,10 @@ func paxLocaleTables(env []string) (*bre.LocaleByteTables, error) {
 	}
 
 	collateName := locale.Resolve(env, locale.Collate)
-	if paxCLocale(collateName) || paxUTF8Locale(collateName) {
+	if !locale.HasCompiledFile(env, collateName) && (paxCLocale(collateName) || paxUTF8Locale(collateName)) {
 		return tables, nil
 	}
-	provider, err := collate.Open(collateName)
+	provider, err := collate.OpenEnv(env, collateName)
 	if err != nil {
 		return nil, fmt.Errorf("LC_COLLATE %q: %v", collateName, err)
 	}

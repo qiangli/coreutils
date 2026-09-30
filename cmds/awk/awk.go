@@ -38,7 +38,9 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
-	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) { return collate.Open(name) })
+	return runWithLocales(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) }, func(name string) (collateProvider, error) {
+		return collate.OpenEnv(locale.StoreEnvAt(rc.Env, rc.Path), name)
+	})
 }
 
 type ctypeProvider interface {
@@ -173,6 +175,9 @@ func runWithLocales(rc *tool.RunContext, args []string, ctypeOpen ctypeOpener, c
 	}
 	var stringCompare interp.StringCompareFunc
 	collateTag, collateUTF8 := awkUTF8Tag(lcCollate)
+	if locale.HasCompiledFile(locale.StoreEnvAt(rc.Env, rc.Path), lcCollate) {
+		collateUTF8 = false
+	}
 	if collateUTF8 && !awkCUTF8Locale(lcCollate) {
 		collator := textcollate.New(collateTag)
 		stringCompare = func(a, b string) (int, error) { return collator.CompareString(a, b), nil }
@@ -375,7 +380,7 @@ type awkERECompiler struct {
 }
 
 func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
-	if c.tables != nil {
+	if c.tables != nil && !c.utf8 {
 		re, err := bre.CompileLocaleByteRegexpTables([]byte(source), c.tables, bre.ByteRegexpOptions{
 			Syntax: bre.ByteRegexpERE, DotAll: true,
 		})
@@ -385,7 +390,7 @@ func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
 		return &awkLocaleERERegexp{source: source, re: re}, nil
 	}
 	if c.utf8 {
-		re, err := bre.CompileCUTF8WithFlags(source, "(?s)", true, nil)
+		re, err := bre.CompileCUTF8WithFlags(source, "(?s)", true, c.tables)
 		if err != nil {
 			return nil, err
 		}

@@ -210,7 +210,7 @@ func runCore(rc *tool.RunContext, args []string) int {
 }
 
 func localeTables(rc *tool.RunContext, lcCType, lcCollate string, byteLocale bool) (*bre.LocaleByteTables, int) {
-	if !byteLocale && (lcCollate == "C" || lcCollate == "POSIX" || isUTF8Locale(lcCollate)) {
+	if !corelocale.HasCompiledFile(corelocale.StoreEnvAt(rc.Env, rc.Path), lcCollate) && !byteLocale && (lcCollate == "C" || lcCollate == "POSIX" || isUTF8Locale(lcCollate)) {
 		return nil, 0
 	}
 	var tables *bre.LocaleByteTables
@@ -240,7 +240,7 @@ func localeTables(rc *tool.RunContext, lcCType, lcCollate string, byteLocale boo
 		}
 	}
 	if lcCollate != "C" && lcCollate != "POSIX" {
-		provider, err := collate.Open(lcCollate)
+		provider, err := collate.OpenEnv(corelocale.StoreEnvAt(rc.Env, rc.Path), lcCollate)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "ed: LC_COLLATE %q: %v\n", lcCollate, err)
 			return nil, 2

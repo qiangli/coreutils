@@ -1206,14 +1206,20 @@ func (m goMatcher) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) 
 // compileRE compiles a POSIX BRE for the selected LC_CTYPE model. The match
 // extent follows the leftmost-longest rule in both models.
 func (e *Engine) compileRE(pattern string) (matcher, error) {
-	if e.Tables != nil {
+	if e.Tables != nil && e.ByteLocale {
 		re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), e.Tables, bre.ByteRegexpOptions{})
 		if err != nil {
 			return nil, err
 		}
 		return re, nil
 	}
-	re, err := bre.Compile(pattern)
+	var re *bre.Regexp
+	var err error
+	if e.Tables != nil {
+		re, err = bre.CompileCUTF8WithFlags(pattern, "", false, e.Tables)
+	} else {
+		re, err = bre.Compile(pattern)
+	}
 	if err != nil {
 		return nil, err
 	}

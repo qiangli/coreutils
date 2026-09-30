@@ -1,6 +1,10 @@
 package bre
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/qiangli/coreutils/pkg/locale"
+)
 
 // ByteCtype is the locale byte-classification surface required by
 // CompileLocaleByteRegexp. It is intentionally identical to pkg/ctype's
@@ -113,7 +117,21 @@ func (t *LocaleByteTables) WithCollation(provider any) (*LocaleByteTables, error
 	}
 	tables := t.tables.snapshot()
 	seedCCollation(&tables)
+	tables.elements = nil
 	if provider == nil {
+		return &LocaleByteTables{tables: tables}, nil
+	}
+	if full, ok := provider.(interface {
+		BracketElements() ([]locale.CollatingElement, error)
+	}); ok {
+		elements, err := full.BracketElements()
+		if err != nil {
+			return nil, err
+		}
+		tables.elements, err = snapshotBracketElements(elements)
+		if err != nil {
+			return nil, err
+		}
 		return &LocaleByteTables{tables: tables}, nil
 	}
 	equivalence, okEq := provider.(ByteEquivalence)

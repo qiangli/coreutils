@@ -218,7 +218,7 @@ func run(rc *tool.RunContext, args []string) int {
 	patternTables, _ := bre.SnapshotLocaleByteCtypeTables(nil)
 	if len(*subst) != 0 || (isList || isRead) && len(operands) != 0 {
 		var err error
-		patternTables, err = paxLocaleTables(rc.Env)
+		patternTables, err = paxLocaleTables(locale.StoreEnvAt(rc.Env, rc.Path))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
