@@ -44,3 +44,11 @@ tests elsewhere in this suite):
 
 Baselined in test/known-failures.txt (linux) so it does not mask a NEW break;
 delete that line when this lands.
+
+## Review 2026-09-30 (steward)
+
+- Status: still open - `linux ... cmds/pax TestFollowedSymlinkBelowOperandNearPathMaxIsArchived` is still baselined in `test/known-failures.txt` at coreutils dc805500, and no cmds/pax commit has landed since 2026-09-01.
+- Outdated: `golang:1.26` in the repro; use the certification toolchain go1.27.1 (`golang:1.27`), still as an ordinary user.
+- Next step: actionable today, independent of the licensed host. Reproduce in a Linux container as a non-root user; trace why a pure-ASCII near-PATH_MAX referent is classified as a UTF-8 encoding failure (likely a length condition in the extended-header path); fix the classification and the bypass; delete the known-failures line.
+- Acceptance: the test passes on the Linux CI leg and in the container; known-failures line removed in the same commit; `go test ./cmds/pax` green on darwin and Linux.
+- Depends on: nothing. Feeds 95fcce29a7cc (pax cluster) - do this first.
