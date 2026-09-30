@@ -232,6 +232,15 @@ silently measuring the host's `$PATH`, which is what happened while these names
 were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
+The Go `lp` client submits through IPP. With `-m` or `-w` it polls the job for up to
+30 seconds before delivering a local completion notice. `-m` writes to the
+requesting user's mailx spool; `-w` writes to a live login terminal, or mails
+when no login exists. A canceled or aborted job, unavailable login database,
+delivery error, or deadline returns nonzero after submission. Jobs that finish
+after the deadline cannot receive a notice from this invocation; durable
+asynchronous delivery would require either a persistent local notifier or a
+server subscription whose delivery outcome is verified.
+
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
 116-name inventory (availability 94/14/8, effective selection 86/22/8): it
 proves the assembled runtime selects each name's intended owner — Go applet,

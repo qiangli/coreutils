@@ -2876,21 +2876,21 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Issue 7 option-argument candidate:** `-d=<dest>; -n=<copies>; -o=<option>; -t=<title>`.
 
-**Operands:** `file`. With no file operand, submit standard input as one document; otherwise read each file operand in order and submit all documents as one job. -d overrides LPDEST, which overrides PRINTER; -n must be positive; repeated -o attributes are preserved.
+**Operands:** `file`. Accept text-file pathnames for printing; with no file operands, print standard input. Without -c, deferred printing may use different access permissions.
 
-**Special tokens:** -- ends option parsing; - names standard input. -c is accepted because this client always copies input before submission. -s suppresses the request-id line. -w remains an explicit implementation residual.
+**Special tokens:** -- ends option parsing; a lone - selects standard input.
 
-**Standard input:** Read as the document when there are no file operands or when a file operand is -.
+**Standard input:** Read standard input when no file is named or a file operand is -; otherwise leave it unused.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; LPDEST; xsi:NLSPATH; PRINTER; TZ; USER; LOGNAME; LP_IPP_URI`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_TIME; LPDEST; xsi:NLSPATH; PRINTER; TZ`.
 
-**Standard output:** Write one request-id line after successful submission unless -s is specified.
+**Standard output:** Report the unique request ID unless -s suppresses it; POSIX leaves the message format unspecified.
 
-**Standard error:** Write option, destination, input, transport, HTTP, IPP, and response diagnostics.
+**Standard error:** Write diagnostic messages only.
 
-**Effects:** `Read each selected document and submit it through IPP; -m requests a completion notification subscription. No host command is spawned.`.
+**Effects:** `Submit input to the selected output destination; printing may finish after lp exits. Keep each printed file uninterrupted by other files. With -c, finish reading input before returning; no output files are specified.`.
 
-**Exit status:** 0 after a successful submission; greater than 0 for usage, input, destination, transport, or server errors.
+**Exit status:** 0 when every input file is processed successfully; greater than 0 if no output device is available or another error occurs.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2900,9 +2900,9 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Implementation:** `cmds/lp`.
 
-**Conservative source-token audit:** token gaps: options=-w; argument-form gaps=none; source `cmds/lp`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/lp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/lp/lp_test.go#TestPrintStdinDefaultsAndOptions;cmds/lp/lp_test.go#TestPrinterFallbackAndDestPrecedence;cmds/lp/lp_test.go#TestSilentAndOptionAndFile;cmds/lp/lp_test.go#TestErrors;cmds/lp/lp_test.go#TestMailSubscription;cmds/lp/lp_test.go#TestMultiFileIsOneRequest;cmds/lp/lp_test.go#TestStdinDashIsOneDocument`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/lp/lp_test.go#TestPrintStdinDefaultsAndOptions;cmds/lp/lp_test.go#TestPrinterFallbackAndDestPrecedence;cmds/lp/lp_test.go#TestSilentAndOptionAndFile;cmds/lp/lp_test.go#TestErrors;cmds/lp/lp_test.go#TestCompletionMailSpool;cmds/lp/lp_test.go#TestCompletionDelivery;cmds/lp/lp_test.go#TestMultiFileIsOneRequest;cmds/lp/lp_test.go#TestStdinDashIsOneDocument`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:lp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
