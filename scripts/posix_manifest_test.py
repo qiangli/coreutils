@@ -575,7 +575,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_owned_source_gate_has_exact_scope_and_accepts_only_ready_states(self) -> None:
         errors = manifest.owned_source_errors(self.rows)
-        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 102)
+        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 103)
         self.assertFalse(any(error.startswith("ar:") for error in errors))
         with (
             mock.patch.object(sys, "argv", [str(SCRIPT), "--require-owned-source-complete"]),
