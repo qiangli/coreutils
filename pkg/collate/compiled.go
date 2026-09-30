@@ -26,24 +26,21 @@ type Engine interface {
 // OpenEnv gives compiled locales precedence and never hides malformed stores.
 // env must carry invocation-resolved store paths (locale.StoreEnvAt).
 func OpenEnv(env []string, name string) (Engine, error) {
-	if locale.ValidStoreName(name) {
-		for _, dir := range locale.StoreDirs(env) {
-			path, _ := locale.StorePath(dir, name)
-			c, err := locale.Load(path)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			if c.Collation == nil {
-				return nil, fmt.Errorf("collate: compiled locale %q has no LC_COLLATE", name)
-			}
-			p := &compiledProvider{data: c.Collation}
-			p.elements = append([]locale.CollatingElement(nil), c.Collation.Elements...)
-			slices.SortFunc(p.elements, func(a, b locale.CollatingElement) int { return len(b.Text) - len(a.Text) })
-			return p, nil
+	for _, path := range locale.CompiledPaths(env, name) {
+		c, err := locale.LoadSelected(path, name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
+		if err != nil {
+			return nil, err
+		}
+		if c.Collation == nil {
+			return nil, fmt.Errorf("collate: compiled locale %q has no LC_COLLATE", name)
+		}
+		p := &compiledProvider{data: c.Collation}
+		p.elements = append([]locale.CollatingElement(nil), c.Collation.Elements...)
+		slices.SortFunc(p.elements, func(a, b locale.CollatingElement) int { return len(b.Text) - len(a.Text) })
+		return p, nil
 	}
 	return Open(name)
 }

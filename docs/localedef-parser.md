@@ -15,9 +15,35 @@ Input defaults to invocation stdin; file and relative store paths honor
 RunContext.Dir. Charmaps may be plain text or gzip; the default is ASCII.
 Errors never create permanent output, including with -c. Warnings require -c
 to create output (status 1); without it they return 4 without changing output.
-Required -u conversion currently fails explicitly with status 2. Codeset
-mapping, pathname name operands and successful-category stdout reporting remain
-tracked by story 162 (02d2bb56298e).
+Successful creation reports the compiled category names on stdout, one per line
+in lexical order (including creation with warnings under `-c`).
+
+`-u` supports case-insensitive `UTF-8` / `UTF8` and `ASCII` / `US-ASCII` /
+`ANSI_X3.4-1968` / `ISO646-US`. UCS positions in the charmap encoding column use
+`<Uhhhh>` or `<Uhhhhhhhh>` (four or eight hexadecimal digits); the same notation
+without brackets is also accepted. For example, `<letter> <U00E9>` maps to the
+two UTF-8 bytes C3 A9 under `-u UTF-8` and fails under `-u ASCII`. Positions in
+ranges increment as UCS values before encoding, including across UTF-8 byte
+length boundaries. Surrogates and positions above U+10FFFF fail with status 2.
+Decimal, octal and hexadecimal byte escapes remain literal target bytes and
+are validated against the chosen encoding. No source encoding is guessed.
+The target supplies canonical codeset and width metadata (UTF-8: 1..4;
+ASCII: 1..1), overriding conflicting charmap headers. Literal and copied
+category data must also fit the explicit target. Unsupported targets and
+unrepresentable data return 2 without creating or replacing an artifact.
+
+A name containing `/` writes the JSON locale at exactly that pathname, without
+adding `.json`; Windows also accepts its native separator. Relative paths use
+RunContext.Dir, and private output needs neither HOME nor LOCPATH. Select the
+pathname with LANG or LC_* to read it through `locale` and consuming utilities;
+relative selection and category copy use the invocation directory too. Public
+names retain the existing LOCPATH/default store and `.json` suffix. Private
+files can be moved and selected by their new path. Absent compiled locales
+retain existing host fallback; collation rejects malformed selected artifacts.
+This closes the bounded interface work in story 162 (02d2bb56298e), not the
+remaining locale grammar work. The behavioral source is the
+[POSIX.1-2017 localedef specification](https://man7.org/linux/man-pages/man1/localedef.1p.html),
+especially OPTIONS, OPERANDS, STDOUT and EXTENDED DESCRIPTION.
 
 Compiled collation supports explicit character orders, collating elements and
 symbols, forward/backward levels, IGNORE weights, symbolic weight strings,

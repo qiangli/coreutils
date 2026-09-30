@@ -44,7 +44,7 @@ func CompileWithCopy(name string, src *Source, cm *Charmap, resolve CopyResolver
 	if cm == nil {
 		cm = DefaultCharmap()
 	}
-	if !locale.ValidStoreName(name) {
+	if !locale.ValidLocaleName(name) {
 		return nil, fmt.Errorf("invalid locale name %q", name)
 	}
 	c := &locale.Compiled{Name: name, Charmap: cm.CodeSet, MbCurMin: cm.MinBytes, MbCurMax: cm.MaxBytes}
@@ -323,4 +323,52 @@ func resolveValue(v Value, cm *Charmap) (string, bool, error) {
 		return b.String(), false, nil
 	}
 	return "", false, problem(0, "unexpected value %q", v.Text)
+}
+
+// CheckTarget rejects literal or copied data outside an explicit target's
+// repertoire. Symbol mapping alone cannot check these paths through a source.
+func CheckTarget(c *locale.Compiled, target string) error {
+	if target == "" {
+		return nil
+	}
+	check := func(s string) error {
+		if !utf8.ValidString(s) {
+			return fmt.Errorf("%w: invalid UTF-8 data", ErrCodeset)
+		}
+		if target == "ASCII" {
+			for _, ch := range s {
+				if ch > 127 {
+					return fmt.Errorf("%w: U%04X is outside ASCII", ErrCodeset, ch)
+				}
+			}
+		}
+		return nil
+	}
+	for _, keywords := range c.Categories {
+		for _, keyword := range keywords {
+			for _, value := range keyword.Values {
+				if err := check(value); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, chars := range c.Classes {
+		if err := check(chars); err != nil {
+			return err
+		}
+	}
+	for _, chars := range []string{c.ToUpperFrom, c.ToUpperTo, c.ToLowerFrom, c.ToLowerTo} {
+		if err := check(chars); err != nil {
+			return err
+		}
+	}
+	if c.Collation != nil {
+		for _, e := range c.Collation.Elements {
+			if err := check(e.Text); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

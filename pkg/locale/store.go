@@ -203,6 +203,7 @@ func StoreDirs(env []string) []string {
 // environment untouched. Command callers pass rc.Path so relative LOCPATH and
 // relative home directories have the same meaning for writers and readers.
 func StoreEnvAt(env []string, resolve func(string) string) []string {
+	env = append(append([]string(nil), env...), "_BASHY_LOCALE_BASE="+resolve("."))
 	dirs := StoreDirs(env)
 	if len(dirs) == 0 {
 		return env
@@ -227,7 +228,8 @@ func DefaultStoreDir(env []string) (string, error) {
 // ValidStoreName reports whether name may address a file in the store. A
 // locale name is one path component: anything with a separator, a parent
 // reference or a leading dot is refused so a locale name from the environment
-// can never reach outside the store.
+// cannot accidentally be treated as a public name. Explicit locale paths use
+// CompiledPaths instead.
 func ValidStoreName(name string) bool {
 	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, ".") {
 		return false
@@ -239,6 +241,47 @@ func ValidStoreName(name string) bool {
 		return false
 	}
 	return name == filepath.Clean(name)
+}
+
+// IsLocalePath distinguishes explicit pathname operands from public names.
+// Native Windows separators are accepted in addition to POSIX slash.
+func IsLocalePath(name string) bool {
+	return strings.ContainsRune(name, '/') || strings.ContainsRune(name, filepath.Separator)
+}
+
+// ValidLocaleName accepts public names and explicit paths. StorePath remains
+// restricted to a single public name, so paths never traverse a store root.
+func ValidLocaleName(name string) bool {
+	return ValidStoreName(name) || (IsLocalePath(name) && !strings.ContainsRune(name, 0))
+}
+
+// CompiledPaths returns the exact pathname for a private locale, or the public
+// store search sequence. StoreEnvAt supplies the invocation directory even if
+// there is no LOCPATH or HOME. Without that context paths use the process cwd.
+func CompiledPaths(env []string, name string) []string {
+	if IsLocalePath(name) && ValidLocaleName(name) {
+		if !filepath.IsAbs(name) {
+			if base, ok := getEnv(env, "_BASHY_LOCALE_BASE"); ok {
+				name = filepath.Join(base, name)
+			}
+		}
+		return []string{name}
+	}
+	if !ValidStoreName(name) {
+		return nil
+	}
+	var paths []string
+	for _, dir := range StoreDirs(env) {
+		path, _ := StorePath(dir, name)
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// LoadSelected retains strict public-store name validation while allowing a
+// private locale file to live at any explicitly selected pathname.
+func LoadSelected(path, name string) (*Compiled, error) {
+	return loadCompiled(path, !IsLocalePath(name))
 }
 
 // StorePath is the file one compiled locale occupies inside dir.
@@ -260,6 +303,15 @@ func Save(dir string, c *Compiled) error {
 	if err != nil {
 		return err
 	}
+	return SavePath(path, c)
+}
+
+// SavePath atomically writes a private locale at path, without adding a suffix.
+func SavePath(path string, c *Compiled) error {
+	if err := validateCompiled(c); err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return err
 	}
@@ -268,7 +320,7 @@ func Save(dir string, c *Compiled) error {
 		return err
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(dir, "."+c.Name+"-*")
+	tmp, err := os.CreateTemp(dir, ".localedef-*")
 	if err != nil {
 		return err
 	}
@@ -289,8 +341,12 @@ func Save(dir string, c *Compiled) error {
 	return nil
 }
 
-// Load reads one compiled locale from an explicit path.
+// Load reads a public store artifact, checking its name against the filename.
 func Load(path string) (*Compiled, error) {
+	return loadCompiled(path, true)
+}
+
+func loadCompiled(path string, public bool) (*Compiled, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -307,14 +363,14 @@ func Load(path string) (*Compiled, error) {
 	if err := validateCompiled(&c); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if filepath.Base(path) != c.Name+StoreFileExt {
+	if public && filepath.Base(path) != c.Name+StoreFileExt {
 		return nil, fmt.Errorf("%s: compiled locale name does not match file", path)
 	}
 	return &c, nil
 }
 
 func validateCompiled(c *Compiled) error {
-	if c == nil || !ValidStoreName(c.Name) {
+	if c == nil || !ValidLocaleName(c.Name) {
 		return fmt.Errorf("invalid compiled locale name")
 	}
 	if c.MbCurMin < 0 || c.MbCurMax < 0 || (c.MbCurMax > 0 && c.MbCurMin > c.MbCurMax) {
@@ -370,15 +426,8 @@ func validateCompiled(c *Compiled) error {
 // directories in order. An absent or malformed file is simply not found: the
 // caller then keeps its existing host behaviour.
 func LookupCompiled(env []string, name string) (*Compiled, bool) {
-	if !ValidStoreName(name) {
-		return nil, false
-	}
-	for _, dir := range StoreDirs(env) {
-		path, err := StorePath(dir, name)
-		if err != nil {
-			continue
-		}
-		c, err := Load(path)
+	for _, path := range CompiledPaths(env, name) {
+		c, err := LoadSelected(path, name)
 		if err != nil {
 			continue
 		}
@@ -460,11 +509,7 @@ func NumericSeparators(env []string) (decPt, thousSep byte, ok bool) {
 // HasCompiledFile includes malformed/unreadable artifacts: consumers must not
 // silently substitute a host default when a selected compiled locale is bad.
 func HasCompiledFile(env []string, name string) bool {
-	if !ValidStoreName(name) {
-		return false
-	}
-	for _, dir := range StoreDirs(env) {
-		path, _ := StorePath(dir, name)
+	for _, path := range CompiledPaths(env, name) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			return true
 		}

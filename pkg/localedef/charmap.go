@@ -1,15 +1,48 @@
 package localedef
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ParseCharmap expands decimal symbolic-name ranges (and the common two-dot
 // hexadecimal extension). WIDTH sections are deliberately ignored.
 func ParseCharmap(in io.Reader) (*Charmap, error) {
+	return ParseCharmapTarget(in, "")
+}
+
+// ErrCodeset marks unsupported encodings and positions outside the target
+// repertoire. localedef reports these implementation limits with status 2.
+var ErrCodeset = errors.New("unsupported codeset or character encoding")
+
+// TargetCodeset returns the canonical name and maximum encoded character size.
+// Aliases are case-insensitive. An empty name leaves the charmap unchanged.
+func TargetCodeset(name string) (string, int, error) {
+	switch strings.ToUpper(name) {
+	case "":
+		return "", 0, nil
+	case "UTF-8", "UTF8":
+		return "UTF-8", 4, nil
+	case "ASCII", "US-ASCII", "ANSI_X3.4-1968", "ISO646-US":
+		return "ASCII", 1, nil
+	default:
+		return "", 0, fmt.Errorf("%w: %q", ErrCodeset, name)
+	}
+}
+
+// ParseCharmapTarget maps UCS position constants (<Uhhhh> or <Uhhhhhhhh>,
+// also accepted without brackets) into target. Numeric byte encodings remain
+// literal target bytes; they are checked, never reinterpreted as UCS positions.
+func ParseCharmapTarget(in io.Reader, target string) (*Charmap, error) {
+	target, maxBytes, err := TargetCodeset(target)
+	if err != nil {
+		return nil, err
+	}
+
 	m := &Charmap{MinBytes: 1, MaxBytes: 1, Symbols: map[string][]byte{}}
 	r := newLines(in)
 	state := "header"
@@ -107,20 +140,50 @@ func ParseCharmap(in io.Reader) (*Charmap, error) {
 			}
 			idx = 3
 		}
-		if vs[idx].Kind != Bytes {
-			return nil, problem(line, "expected numeric byte encoding")
+		v := vs[idx]
+		ucs := (v.Kind == Symbol || v.Kind == Word) && strings.HasPrefix(v.Text, "U")
+		var position uint64
+		if ucs {
+			if target == "" {
+				return nil, fmt.Errorf("%w: UCS position requires -u", ErrCodeset)
+			}
+			if len(v.Text) != 5 && len(v.Text) != 9 {
+				return nil, problem(line, "invalid UCS position constant %q", v.Text)
+			}
+			position, err = strconv.ParseUint(v.Text[1:], 16, 32)
+			if err != nil {
+				return nil, problem(line, "invalid UCS position constant %q", v.Text)
+			}
+		} else if v.Kind != Bytes {
+			return nil, problem(line, "expected numeric byte encoding or UCS position constant")
 		}
-		// POSIX permits an unmarked descriptive comment after the encoding.
-		b := []byte(vs[idx].Text)
-		if len(b) < m.MinBytes || len(b) > m.MaxBytes {
-			return nil, problem(line, "encoding length outside mb_cur_min/mb_cur_max")
-		}
+		b := []byte(v.Text)
 		for n, name := range names {
 			if _, ok := m.Symbols[name]; ok {
 				return nil, problem(line, "duplicate symbol <%s>", name)
 			}
+			if ucs {
+				pos := position + uint64(n)
+				if pos > utf8.MaxRune || !utf8.ValidRune(rune(pos)) || (target == "ASCII" && pos > 127) {
+					return nil, fmt.Errorf("%w: line %d: U%08X is outside %s", ErrCodeset, line, pos, target)
+				}
+				b = []byte(string(rune(pos)))
+			}
+			if target != "" {
+				valid := utf8.Valid(b)
+				if target == "ASCII" {
+					for _, ch := range b {
+						valid = valid && ch < 128
+					}
+				}
+				if !valid || len(b) == 0 || len(b) > maxBytes {
+					return nil, fmt.Errorf("%w: line %d: invalid %s bytes", ErrCodeset, line, target)
+				}
+			} else if len(b) < m.MinBytes || len(b) > m.MaxBytes {
+				return nil, problem(line, "encoding length outside mb_cur_min/mb_cur_max")
+			}
 			m.Symbols[name] = append([]byte(nil), b...)
-			if n+1 < len(names) {
+			if !ucs && n+1 < len(names) {
 				carry := true
 				for j := len(b) - 1; j >= 0; j-- {
 					b[j]++
@@ -137,6 +200,9 @@ func ParseCharmap(in io.Reader) (*Charmap, error) {
 	}
 	if !seen || state == "map" || state == "width" {
 		return nil, problem(start, "missing CHARMAP or END %s", strings.ToUpper(state))
+	}
+	if target != "" {
+		m.CodeSet, m.MinBytes, m.MaxBytes = target, 1, maxBytes
 	}
 	if m.MinBytes > m.MaxBytes {
 		return nil, problem(1, "mb_cur_min exceeds mb_cur_max")

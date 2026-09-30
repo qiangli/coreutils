@@ -73,8 +73,11 @@ func TestCommand(t *testing.T) {
 			if tc.code == 0 && errout.Len() != 0 {
 				t.Fatalf("unexpected stderr: %s", &errout)
 			}
-			if tc.name != "help" && out.Len() != 0 {
+			if tc.code > 1 && out.Len() != 0 {
 				t.Fatalf("unexpected stdout: %s", &out)
+			}
+			if tc.code <= 1 && tc.name != "help" && !strings.HasPrefix(out.String(), "LC_") {
+				t.Fatalf("missing processed categories: %q", &out)
 			}
 			// The locale goes into the store, never into the working directory.
 			if _, err := os.Stat(filepath.Join(dir, "test")); !os.IsNotExist(err) {
