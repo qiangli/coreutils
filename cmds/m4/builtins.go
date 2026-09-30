@@ -1,6 +1,9 @@
 package m4cmd
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -112,6 +115,132 @@ func init() {
 		return p.addTo(name, args, -1), nil
 	})
 	builtin("eval", true, biEval)
+
+	builtin("divert", false, func(p *processor, name string, args []argument) (string, *macro) {
+		n := int32(0)
+		ok := true
+		if len(args) > 0 && args[0].text != "" {
+			n, ok = p.number(name, args[0].text)
+		}
+		if !ok {
+			return "", nil
+		}
+		if p.divnum != int(n) {
+			p.outLine, p.outSeq = -1, 0
+		}
+		p.divnum = int(n)
+		return "", nil
+	})
+	builtin("divnum", false, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.divnum), nil })
+	builtin("undivert", false, func(p *processor, name string, args []argument) (string, *macro) {
+		undiv := func(n int) {
+			if n > 0 && n < len(p.diversions) {
+				s := p.diversions[n].String()
+				p.diversions[n].Reset()
+				p.writeOutput(s)
+			}
+		}
+		if len(args) == 0 {
+			for i := 1; i < len(p.diversions); i++ {
+				undiv(i)
+			}
+			return "", nil
+		}
+		for _, a := range args {
+			n, ok := p.number(name, a.text)
+			if ok {
+				undiv(int(n))
+			}
+		}
+		return "", nil
+	})
+	builtin("include", true, func(p *processor, name string, args []argument) (string, *macro) {
+		if !p.atLeast(name, args, 1) {
+			return "", nil
+		}
+		data, err := p.readNamedFile(args[0].text)
+		if err != nil {
+			p.fatalf("%s: %v", args[0].text, err)
+		}
+		p.pushIncluded(args[0].text, data)
+		return "", nil
+	})
+	builtin("sinclude", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) == 0 {
+			return "", nil
+		}
+		data, err := p.readNamedFile(args[0].text)
+		if err != nil {
+			return "", nil
+		}
+		p.pushIncluded(args[0].text, data)
+		return "", nil
+	})
+	builtin("syscmd", true, func(p *processor, name string, args []argument) (string, *macro) {
+		if !p.atLeast(name, args, 1) {
+			return "", nil
+		}
+		// syscmd writes directly to the invocation stream. Flush m4's buffered
+		// prefix first so observable output remains in source order.
+		if err := p.out.Flush(); err != nil {
+			p.fatalf("write error: %v", err)
+		}
+		p.sysval = p.runSystem(args[0].text)
+		return "", nil
+	})
+	builtin("sysval", false, func(p *processor, _ string, _ []argument) (string, *macro) { return strconv.Itoa(p.sysval), nil })
+	builtin("maketemp", true, biMaketemp)
+	builtin("mkstemp", true, biMkstemp)
+	builtin("m4exit", false, func(p *processor, name string, args []argument) (string, *macro) {
+		code := int32(0)
+		var ok bool = true
+		if len(args) > 0 {
+			code, ok = p.number(name, args[0].text)
+		}
+		if ok {
+			p.exitSet = true
+			p.exitCode = int(code)
+			if code != 0 {
+				p.failed = true
+			}
+		}
+		panic(fatal{})
+	})
+	builtin("m4wrap", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) > 0 {
+			p.wraps = append(p.wraps, args[0].text)
+		}
+		return "", nil
+	})
+	builtin("errprint", true, func(p *processor, _ string, args []argument) (string, *macro) {
+		for _, a := range args {
+			fmt.Fprint(p.rc.Err, a.text)
+		}
+		return "", nil
+	})
+	builtin("dumpdef", false, biDumpdef)
+	builtin("traceon", false, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) == 0 {
+			p.traceAll = true
+			p.trace = map[string]bool{}
+		} else {
+			for _, a := range args {
+				p.trace[a.text] = true
+			}
+		}
+		return "", nil
+	})
+	builtin("traceoff", false, func(p *processor, _ string, args []argument) (string, *macro) {
+		if len(args) == 0 {
+			p.traceAll = false
+			p.trace = map[string]bool{}
+		} else {
+			for _, a := range args {
+				p.trace[a.text] = false
+			}
+		}
+		return "", nil
+	})
 }
 
 // atLeast warns and reports false when a built-in has too few arguments.
@@ -344,4 +473,72 @@ func biEval(p *processor, name string, args []argument) (string, *macro) {
 		digits = strings.Repeat("0", pad) + digits
 	}
 	return sign + digits, nil
+}
+
+func biMaketemp(p *processor, name string, args []argument) (string, *macro) {
+	if !p.atLeast(name, args, 1) {
+		return "", nil
+	}
+	tmpl := args[0].text
+	last := len(tmpl)
+	first := last
+	for first > 0 && tmpl[first-1] == 'X' {
+		first--
+	}
+	if first == last {
+		return tmpl, nil
+	}
+	return tmpl[:first] + strconv.Itoa(os.Getpid()), nil
+}
+
+func biMkstemp(p *processor, name string, args []argument) (string, *macro) {
+	if !p.atLeast(name, args, 1) {
+		return "", nil
+	}
+	tmpl := args[0].text
+	if !strings.HasSuffix(tmpl, "XXXXXX") {
+		p.warnf("%s: template must end in XXXXXX", name)
+		p.failed = true
+		return "", nil
+	}
+	dir, base := filepath.Split(tmpl)
+	createDir := dir
+	if createDir == "" {
+		createDir = "."
+	}
+	createDir = p.rc.Path(createDir)
+	pattern := strings.TrimSuffix(base, "XXXXXX") + "*"
+	f, err := os.CreateTemp(createDir, pattern)
+	if err != nil {
+		p.warnf("%s: %v", name, err)
+		p.failed = true
+		return "", nil
+	}
+	if err := f.Close(); err != nil {
+		p.warnf("%s: %v", name, err)
+		p.failed = true
+		return "", nil
+	}
+	// mkstemp mutates its template in place, so preserve the caller's relative
+	// directory spelling in the expansion even though creation used rc.Path.
+	return dir + filepath.Base(f.Name()), nil
+}
+
+func biDumpdef(p *processor, _ string, args []argument) (string, *macro) {
+	names := args
+	if len(names) == 0 {
+		for n := range p.macros {
+			names = append(names, argument{text: n})
+		}
+	}
+	for _, a := range names {
+		if m := p.lookup(a.text); m != nil {
+			if m.fn != nil {
+				fmt.Fprintf(p.rc.Err, "%s:\t<%s>\n", a.text, m.name)
+			} else {
+				fmt.Fprintf(p.rc.Err, "%s:\t%s\n", a.text, m.text)
+			}
+		}
+	}
+	return "", nil
 }

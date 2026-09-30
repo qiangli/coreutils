@@ -6,11 +6,10 @@
 // expansion loop, builtins.go the built-in macros, eval.go the integer
 // expression evaluator behind eval.
 //
-// Scope: the macro processor core — define undefine defn pushdef popdef
-// ifdef ifelse shift dnl len index substr translit incr decr eval
-// changequote changecom, and the -s, -D and -U options. The diversion,
-// file-inclusion, system and diagnostic built-ins are not defined, so
-// their names pass through as ordinary text.
+// Scope: the POSIX macro processor built-ins, including definitions,
+// conditionals, arithmetic/string operations, diversions, file inclusion,
+// system commands, temporary files, diagnostics, tracing, m4wrap and m4exit,
+// plus the -s, -D and -U options.
 package m4cmd
 
 import (

@@ -152,11 +152,11 @@ func TestSignalDeathPropagation(t *testing.T) {
 // a filter such as `bc` reads the caller's input, not the process's.
 func TestStdinReachesTheProvider(t *testing.T) {
 	root := t.TempDir()
-	provision(t, root, "m4", "#!/bin/sh\nwhile IFS= read -r l; do printf 'in:%s\\n' \"$l\"; done\n")
+	provision(t, root, "ar", "#!/bin/sh\nwhile IFS= read -r l; do printf 'in:%s\\n' \"$l\"; done\n")
 
 	rc, out, errb := newRC(t, root)
 	rc.In = strings.NewReader("one\ntwo\n")
-	code, stdout, stderr := run(t, "m4", rc, out, errb)
+	code, stdout, stderr := run(t, "ar", rc, out, errb)
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}

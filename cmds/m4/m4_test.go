@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,17 @@ func runM4(t *testing.T, input string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, err bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err}, FS: tool.NewLocalFS()}
+	code := run(rc, args)
+	return out.String(), err.String(), code
+}
+
+func runM4Context(t *testing.T, dir string, env []string, input string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, err bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir, Env: env,
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err}, FS: tool.NewLocalFS(),
+	}
 	code := run(rc, args)
 	return out.String(), err.String(), code
 }
@@ -314,11 +326,116 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
-func TestStory2BuiltinsAreNotDefined(t *testing.T) {
-	in := "divert divnum include(x) syscmd(true) m4exit errprint(x)\n"
-	out, errOut, code := runM4(t, in)
-	if code != 0 || out != in || errOut != "" {
+func TestDiversions(t *testing.T) {
+	runTable(t, []m4Case{
+		{"ordered at eof", "a divert(2)two\ndivert(1)one\ndivert(0)b\n", "a b\none\ntwo\n"},
+		{"undivert", "divert(1)x\ndivert(0)[undivert(1)]\n", "[x\n]\n"},
+		{"undivert into current", "divert(1)ONE divert(2)TWO undivert(1) END divert(0)", "TWO ONE  END "},
+		{"undivert self", "divert(1)SELF undivert(1) END divert(0)", "SELF  END "},
+		{"undivert into discard consumes source", "divert(1)ONE divert(-1)undivert(1)divert(0) END\n", " END\n"},
+		{"negative discards", "a divert(-1)no divert(0)b divnum()\n", "a b 0\n"},
+	})
+}
+
+func TestIncludeAndSinclude(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "in.m4")
+	if err := os.WriteFile(f, []byte("define(`x', `OK')x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runM4(t, "include(`"+f+"')sinclude(`"+filepath.Join(dir, "missing")+"')")
+	if code != 0 || out != "OK\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestIncludeTracksDiagnosticAndSynclineIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "inc.m4"), []byte("inside\n[eval(`bad')]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runM4Context(t, dir, nil, "before\ninclude(`inc.m4')after\n", "-s")
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	for _, want := range []string{`#line 1 "inc.m4"`, `#line 2 "stdin"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout=%q missing %q", out, want)
+		}
+	}
+	if !strings.Contains(errOut, "m4:inc.m4:2:") {
+		t.Fatalf("stderr=%q does not identify included file and line", errOut)
+	}
+}
+
+func TestSyscmdSysvalErrprintDumpdefTrace(t *testing.T) {
+	out, errOut, code := runM4(t, "syscmd(`printf hi') sysval() errprint(`ERR') define(`x', `y')dumpdef(`x') traceon(`eval')eval(`1') traceoff(`eval')eval(`1')\n")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	if out != "hi 0   1 1\n" {
+		t.Fatalf("stdout=%q stderr=%q", out, errOut)
+	}
+	for _, want := range []string{"ERR", "x:\ty", "m4trace:"} {
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("stderr=%q missing %q", errOut, want)
+		}
+	}
+}
+
+func TestSyscmdUsesRunContextAndPreservesOutputOrder(t *testing.T) {
+	dir := t.TempDir()
+	out, errOut, code := runM4Context(t, dir, []string{"M4_MARK=carried", "PATH="},
+		"before-syscmd(`printf %s \"$M4_MARK\"; printf :; pwd')after")
+	want := "before-carried:" + dir + "\nafter"
+	if code != 0 || out != want || errOut != "" {
+		t.Fatalf("code=%d stdout=%q want=%q stderr=%q", code, out, want, errOut)
+	}
+}
+
+func TestMaketempMkstempWrapExit(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := filepath.Join(dir, "aXXXXXX")
+	out, errOut, code := runM4(t, "m4wrap(`wrapped')maketemp(`"+tmpl+"')\n")
+	wantName := strings.TrimSuffix(tmpl, "XXXXXX") + strconv.Itoa(os.Getpid())
+	if code != 0 || out != wantName+"\nwrapped" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(wantName); !os.IsNotExist(err) {
+		t.Fatalf("maketemp created file %q err=%v", wantName, err)
+	}
+	out, errOut, code = runM4(t, "mkstemp(`"+filepath.Join(dir, "bXXXXXX")+"')")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("mkstemp did not create %q: %v", out, err)
+	}
+	out, errOut, code = runM4Context(t, dir, nil, "mkstemp(`relativeXXXXXX')")
+	if code != 0 || filepath.IsAbs(out) {
+		t.Fatalf("relative mkstemp: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, out)); err != nil {
+		t.Fatalf("relative mkstemp did not create %q: %v", out, err)
+	}
+	out, errOut, code = runM4Context(t, dir, nil, "[mkstemp(`bad-template')]")
+	if code != 1 || out != "[]" || !strings.Contains(errOut, "template must end in XXXXXX") {
+		t.Fatalf("invalid mkstemp: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	_, _, code = runM4(t, "before m4exit(`7') after")
+	if code != 7 {
+		t.Fatalf("m4exit code=%d", code)
+	}
+}
+
+func TestWrapIsFIFOAndExitSkipsWrapsAndDiversions(t *testing.T) {
+	out, errOut, code := runM4(t, "A m4wrap(`W1')m4wrap(`W2') Z\n")
+	if code != 0 || out != "A  Z\nW1W2" || errOut != "" {
+		t.Fatalf("wrap: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runM4(t, "before divert(1)DIV m4wrap(`WRAP')m4exit(`7') after")
+	if code != 7 || out != "before " || errOut != "" {
+		t.Fatalf("exit: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
 
@@ -331,5 +448,52 @@ func TestRegistered(t *testing.T) {
 	}
 	if code := registered.Run(rc, nil); code != 0 || out.String() != "ok\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+}
+
+// POSIX leaves trace formatting unspecified; assert which macro calls appear.
+func TestTraceSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, output string
+		x, y, alias         int
+	}{
+		{"user macro", "define(`x', `VALUE')traceon(`x')x traceoff(`x')x", "VALUE VALUE", 1, 0, 0},
+		{"named off under global", "define(`x', `X')define(`y', `Y')traceon`'traceoff(`x')x y", "X Y", 0, 1, 0},
+		{"global on resets exclusions", "define(`x', `X')traceon`'traceoff(`x')traceon`'x", "X", 1, 0, 0},
+		{"global off clears selection", "define(`x', `X')traceon(`x')traceoff`'x", "X", 0, 0, 0},
+		{"builtin alias has own selection", "define(`alias', defn(`eval'))traceon(`eval')alias(`2')traceon(`alias')alias(`3')", "23", 0, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, diagnostics, code := runM4(t, tc.input)
+			if code != 0 || out != tc.output {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, out, diagnostics)
+			}
+			for name, want := range map[string]int{"x": tc.x, "y": tc.y, "alias": tc.alias} {
+				if got := strings.Count(diagnostics, "-"+name+"("); got != want {
+					t.Errorf("%s traced %d times, want %d: %q", name, got, want, diagnostics)
+				}
+			}
+		})
+	}
+}
+
+func TestNoArgumentOutputBuiltins(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"divert resumes stdout", "divert(1)BUFFER divert`'MAIN", "MAINBUFFER "},
+		{"divnum without parentheses", "divnum", "0"},
+		{"undivert without parentheses", "divert(1)BUFFER divert`'undivert`'MAIN", "BUFFER MAIN"},
+		{"sysval without parentheses", "sysval", "0"},
+		{"exit without parentheses", "BEFORE m4exit AFTER", "BEFORE "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, diagnostics, code := runM4(t, tc.input)
+			if code != 0 || out != tc.want || diagnostics != "" {
+				t.Fatalf("code=%d stdout=%q stderr=%q; want stdout=%q", code, out, diagnostics, tc.want)
+			}
+		})
+	}
+	out, diagnostics, code := runM4(t, "define(`unique_probe', `VALUE')dumpdef")
+	if code != 0 || out != "" || !strings.Contains(diagnostics, "unique_probe:\tVALUE") {
+		t.Fatalf("dumpdef: code=%d stdout=%q stderr=%q", code, out, diagnostics)
 	}
 }

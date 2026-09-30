@@ -56,7 +56,7 @@ logger	yes	cmds/logger	no	go_applet
 logname	yes	cmds/logname	no	go_applet
 lp	yes	cmds/lp	no	go_applet
 ls	yes	cmds/ls	no	go_applet
-m4	no	cmds/posixproviders	no	external_provider
+m4	yes	cmds/m4	no	go_applet
 mailx	yes	cmds/mailx	no	go_applet
 make	yes	cmds/make	no	go_applet
 man	no	cmds/posixproviders	no	external_provider

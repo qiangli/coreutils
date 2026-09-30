@@ -40,7 +40,7 @@ infer the coreutils gap from the smaller assembled-Bashy number.
 
 A provider is **not** a Go applet, and the matrix counts them separately so
 they can never be read as Go coverage: the multicall owns the NAME
-(`m4`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`, `localedef`)
+(`man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `localedef`)
 and dispatches to a copy of the upstream program built locally
 from a sha256-pinned source tarball. The pure-Go applets exclusively own `ed`,
 `patch`, `mail`/`mailx`, `talk`, `make`, and `bc`; there are no external-provider definitions
@@ -109,7 +109,7 @@ Every tool in this repo follows the same rules:
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
   against its recorded provenance and **never** downloads or compiles, the
-  ten registered provider tools, and
+  eight registered provider tools, and
   `posix-providers build|list|check|dispatch-plan` —
   `build` is the only path allowed to fetch and compile, and `dispatch-plan`
   is the introspection surface disclosing the exact verified binary each
@@ -117,8 +117,8 @@ Every tool in this repo follows the same rules:
   unregisters the provider names. See
   [POSIX external providers](docs/posix-external-providers.md).
   `cmds/posixgate` ships `posix-gate`, the fail-closed effective-owner gate
-  over the 116 POSIX-required names (availability 92/14/10, effective
-  selection 84/22/10): it proves the assembled runtime selects each name's
+  over the 116 POSIX-required names (availability 94/14/8, effective
+  selection 86/22/8): it proves the assembled runtime selects each name's
   intended owner (Go applet, shell builtin/keyword/entry, or pinned provider)
   and rejects count drift on either axis, ambiguous ownership, missing
   provider pins/provenance, host PATH fallback, a provider cache the staged
@@ -128,8 +128,8 @@ Every tool in this repo follows the same rules:
   Profile D: Bashy 5.3). See
   [the POSIX owner gate](docs/posix-owner-gate.md).
 
-- `cmds/` — the required set: 141 registered Go command packages (see the
-  generated [applet matrix](docs/applet-matrix.md); ten names are external
+- `cmds/` — the required set: 143 registered Go command packages (see the
+  generated [applet matrix](docs/applet-matrix.md); eight names are external
   providers rather than Go implementations),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),

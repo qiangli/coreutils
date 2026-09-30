@@ -215,16 +215,16 @@ implementation.
 
 The generated [POSIX required-command coverage
 map](posix-required-commands.md) remains the exact five-column A/B/C/D harness
-contract: 116 configured names, with availability of 93 Go applets, 14
-shell-only names, and 9 active pinned providers. Expanded interface claims live in a
+contract: 116 configured names, with availability of 94 Go applets, 14
+shell-only names, and 8 active pinned providers. Expanded interface claims live in a
 separate [evidence ledger](posix-required-command-interfaces.md), with effective
-Profile C/D ownership of 85 Go-selected, 22 shell-selected, and 9 provider
+Profile C/D ownership of 86 Go-selected, 22 shell-selected, and 8 provider
 commands. The ledger is explicitly incomplete and non-normative; it exposes
 missing, partial, implemented, and verified states rather than treating
 placeholders as conformance evidence.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
-never be read as Go coverage.** The multicall owns the name (`m4`, `man`,
+never be read as Go coverage.** The multicall owns the provider names (`man`,
 `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `localedef`) and
 dispatches to a copy of the upstream program built locally from a sha256-pinned
 source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
@@ -242,7 +242,7 @@ asynchronous delivery would require either a persistent local notifier or a
 server subscription whose delivery outcome is verified.
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory (availability 93/14/9, effective selection 85/22/9): it
+116-name inventory (availability 94/14/8, effective selection 86/22/8): it
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH
