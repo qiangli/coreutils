@@ -3,6 +3,7 @@ package localedef
 import (
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/pkg/locale"
 )
@@ -72,7 +73,10 @@ func ParseSource(in io.Reader) (*Source, error) {
 				return nil, problem(line, "copy cannot be combined with other entries")
 			}
 			allowed := strings.Contains(" "+keywords[section.Name]+" ", " "+key+" ")
-			if !allowed && !(section.Name == "LC_CTYPE" && classes[key]) && !(section.Name == "LC_COLLATE" && (vs[0].Kind == Symbol || vs[0].Kind == Ellipsis || key == "UNDEFINED")) {
+			literalOrder := section.Name == "LC_COLLATE" && !allowed &&
+				(vs[0].Kind == Word || vs[0].Kind == Number || vs[0].Kind == Bytes || vs[0].Kind == String) &&
+				utf8.ValidString(key) && utf8.RuneCountInString(key) == 1
+			if !allowed && !literalOrder && !(section.Name == "LC_CTYPE" && classes[key]) && !(section.Name == "LC_COLLATE" && (vs[0].Kind == Symbol || vs[0].Kind == Ellipsis || key == "UNDEFINED")) {
 				return nil, problem(line, "unknown %s keyword %q", section.Name, key)
 			}
 			if key == "charclass" {
@@ -88,7 +92,9 @@ func ParseSource(in io.Reader) (*Source, error) {
 			if err := entrySyntax(section.Name, key, vs[1:]); err != nil {
 				return nil, atLine(line, err)
 			}
-			if vs[0].Kind == Symbol {
+			if literalOrder {
+				key = "\x00character:" + key
+			} else if vs[0].Kind == Symbol {
 				key = "<" + key + ">"
 			}
 		}
