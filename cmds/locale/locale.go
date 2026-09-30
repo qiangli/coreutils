@@ -279,7 +279,7 @@ func localeData(rc *tool.RunContext, cat string) (data, error) {
 	name := locale.Resolve(rc.Env, locale.Category(cat))
 	// A locale compiled by our own localedef(1) wins over every other source:
 	// it is data this installation produced and can describe exactly.
-	if compiled, ok := locale.LookupCompiled(rc.Env, name); ok {
+	if compiled, ok := locale.LookupCompiled(locale.StoreEnvAt(rc.Env, rc.Path), name); ok {
 		if keywords, ok := compiledData(compiled, cat); ok {
 			return data{name: name, keywords: keywords}, nil
 		}

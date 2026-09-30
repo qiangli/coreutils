@@ -34,7 +34,7 @@ func availableLocales(rc *tool.RunContext) []string {
 	} else {
 		names = availableLocalesCached(provider, rc.Getenv(hostLocaleCacheEnv), rc.Getenv(hostLocalePathEnv))
 	}
-	return withCompiledLocales(names, locale.CompiledNames(rc.Env))
+	return withCompiledLocales(names, locale.CompiledNames(locale.StoreEnvAt(rc.Env, rc.Path)))
 }
 
 // withCompiledLocales adds the locales our own localedef(1) compiled. They are

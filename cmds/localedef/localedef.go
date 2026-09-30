@@ -26,10 +26,8 @@ var cmd = &tool.Tool{
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// Options carry the parsed command line. CodeSet (-u) selects the charmap by
-// name only when no -f charmap was given; no transcoding is performed, so a
-// definition whose bytes do not belong to the named codeset is refused rather
-// than silently reinterpreted.
+// Options carry the parsed command line. CodeSet is parsed so unsupported
+// -u conversion is diagnosed explicitly rather than silently relabeling bytes.
 type Options struct {
 	Force                          bool
 	Charmap, Source, CodeSet, Name string
@@ -86,7 +84,7 @@ func parseOptions(args []string) (Options, error) {
 }
 func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 1 && args[0] == "--help" {
-		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n-c  continue despite warnings\n-f  character map file\n-i  locale source file (default: stdin)\n-u  target codeset (retained for compilation)\n", cmd.Usage, cmd.Synopsis)
+		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n-c  continue despite warnings\n-f  character map file\n-i  locale source file (default: stdin)\n-u  target codeset conversion (not supported)\n", cmd.Usage, cmd.Synopsis)
 		return 0
 	}
 	fail := func(err error) int { fmt.Fprintf(rc.Err, "localedef: %v\n", err); return 4 }
@@ -94,6 +92,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	if o.CodeSet != "" {
+		fmt.Fprintf(rc.Err, "localedef: -u %s: codeset conversion not supported\n", o.CodeSet)
+		return 2
+	}
+	storeEnv := locale.StoreEnvAt(rc.Env, rc.Path)
 	if rc.FS == nil {
 		rc.FS = tool.NewLocalFS()
 	}
@@ -146,24 +149,20 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		fmt.Fprintf(rc.Err, "localedef: %s: %s: %s\n", label, severity, d.Error())
 	}
-	// POSIX: warnings alone do not prevent the locale from being created, and
-	// -c creates it even so. An error does prevent it: writing a locale whose
-	// definition did not compile would publish data nobody defined.
-	if code == 4 && !o.Force {
-		return code
+	// POSIX.1-2017: errors never create permanent output. Warnings
+	// create output with -c; without it this implementation refuses output.
+	if code == 4 || (code == 1 && !o.Force) {
+		return 4
 	}
 	// A "copy" directive is resolved against the store: the only locale we can
 	// honour a copy of is one we compiled ourselves.
-	resolve := func(name string) (*locale.Compiled, bool) { return locale.LookupCompiled(rc.Env, name) }
+	resolve := func(name string) (*locale.Compiled, bool) { return locale.LookupCompiled(storeEnv, name) }
 	compiled, err := localedef.CompileWithCopy(o.Name, src, cm, resolve)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "localedef: %s: %v\n", label, err)
 		return 4
 	}
-	if o.CodeSet != "" {
-		compiled.Charmap = o.CodeSet
-	}
-	dir, err := locale.DefaultStoreDir(rc.Env)
+	dir, err := locale.DefaultStoreDir(storeEnv)
 	if err != nil {
 		return fail(err)
 	}

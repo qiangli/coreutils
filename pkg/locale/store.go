@@ -186,6 +186,21 @@ func StoreDirs(env []string) []string {
 	return nil
 }
 
+// StoreEnvAt resolves the store search path through the caller's filesystem path
+// resolver. It returns an independent environment, leaving the invocation's
+// environment untouched. Command callers pass rc.Path so relative LOCPATH and
+// relative home directories have the same meaning for writers and readers.
+func StoreEnvAt(env []string, resolve func(string) string) []string {
+	dirs := StoreDirs(env)
+	if len(dirs) == 0 {
+		return env
+	}
+	for i, dir := range dirs {
+		dirs[i] = resolve(dir)
+	}
+	return append(append([]string(nil), env...), StoreEnv+"="+strings.Join(dirs, string(filepath.ListSeparator)))
+}
+
 // DefaultStoreDir is the directory localedef writes to: the first entry of
 // StoreDirs. It reports an error when the invocation names none, so the
 // failure is a diagnostic rather than a file in an unexpected place.
