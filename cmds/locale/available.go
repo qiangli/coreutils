@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -27,10 +28,35 @@ var (
 // which is the opposite of the truth.
 func availableLocales(rc *tool.RunContext) []string {
 	provider := defaultHostLocaleProvider(rc)
+	var names []string
 	if provider == nil {
-		return availableLocalesFromProvider(nil)
+		names = availableLocalesFromProvider(nil)
+	} else {
+		names = availableLocalesCached(provider, rc.Getenv(hostLocaleCacheEnv), rc.Getenv(hostLocalePathEnv))
 	}
-	return availableLocalesCached(provider, rc.Getenv(hostLocaleCacheEnv), rc.Getenv(hostLocalePathEnv))
+	return withCompiledLocales(names, locale.CompiledNames(rc.Env))
+}
+
+// withCompiledLocales adds the locales our own localedef(1) compiled. They are
+// genuinely available on this host — we can answer every category they carry —
+// so omitting them would under-report what a conforming program can select.
+func withCompiledLocales(names, compiled []string) []string {
+	if len(compiled) == 0 {
+		return names
+	}
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		seen[n] = true
+	}
+	var extra []string
+	for _, n := range compiled {
+		if !seen[n] {
+			seen[n] = true
+			extra = append(extra, n)
+		}
+	}
+	sort.Strings(extra)
+	return append(names, extra...)
 }
 
 func availableLocalesFromProvider(provider *hostLocaleProvider) []string {
