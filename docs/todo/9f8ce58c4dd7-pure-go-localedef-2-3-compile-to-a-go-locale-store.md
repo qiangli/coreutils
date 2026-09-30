@@ -3,11 +3,12 @@ id: 9f8ce58c4dd7
 kind: feature
 title: 'pure-Go localedef (2/3): compile to a Go locale store read by pkg/locale and the locale applet'
 seq: 156
-status: todo
+status: assigned
 priority: p1
 labels:
     - posix-cert
 created: 2026-09-30T15:34:41.569637Z
+assignee: s340-localedef-sol
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f
 sprint_title: Pure-Go m4, localedef and lp; listing view for the optional external POSIX tools
