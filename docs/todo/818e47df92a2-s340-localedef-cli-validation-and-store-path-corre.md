@@ -7,7 +7,7 @@ status: assigned
 priority: p1
 created: 2026-09-30T20:58:24.427841Z
 weave: 24
-assignee: codex-gpt6-luna
+assignee: s340-localedef-astra
 sprint: 340
 sprint_id: 07abaf0d-4c54-57e7-b324-8c926b4c300f
 sprint_title: Pure-Go m4, localedef and lp; listing view for the optional external POSIX tools
