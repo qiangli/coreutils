@@ -10,8 +10,11 @@
 //
 // -o name[=value] is sent as a keyword job attribute (value defaults
 // to "true"). -c is accepted (files are always read before sending).
-// -m (mail) is not supported. One Print-Job is sent per file operand;
-// the reported request id is that of the last job.
+// -m asks the server to mail the requesting user on completion, via an
+// RFC 3995 subscription group (notify-recipient-uri mailto:USER@localhost,
+// notify-events job-completed). One invocation is one request: a single
+// file is a Print-Job; several files are a Create-Job followed by one
+// Send-Document per file (last-document set on the final one).
 package lpcmd
 
 import (
@@ -42,7 +45,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.SetInterspersed(false)
 	_ = fs.BoolP("c", "c", false, "copy files before printing (always done)")
 	dest := fs.StringP("d", "d", "", "destination printer")
-	mail := fs.BoolP("m", "m", false, "send mail after printing (not supported)")
+	mail := fs.BoolP("m", "m", false, "send mail after printing")
 	copies := fs.IntP("n", "n", 1, "number of copies")
 	var opts []string
 	fs.StringArrayVarP(&opts, "o", "o", nil, "printer-specific option")
@@ -51,9 +54,6 @@ func run(rc *tool.RunContext, args []string) int {
 	files, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
-	}
-	if *mail {
-		return tool.NotSupported(rc, cmd, "-m")
 	}
 	if *copies < 1 {
 		return tool.UsageError(rc, cmd, "invalid copies %d", *copies)
@@ -73,13 +73,18 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(files) == 0 {
 		files = []string{"-"}
 	}
-	id := uint32(0)
+	user := rc.Getenv("USER")
+	if user == "" {
+		user = rc.Getenv("LOGNAME")
+	}
+	if user == "" {
+		user = "anonymous"
+	}
+	var docs [][]byte
 	for _, f := range files {
 		var data []byte
 		var err error
-		name := f
 		if f == "-" {
-			name = "stdin"
 			data, err = io.ReadAll(rc.In)
 		} else {
 			data, err = os.ReadFile(rc.Path(f))
@@ -88,23 +93,28 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "lp: %s: %v\n", f, err)
 			return 1
 		}
-		job := *title
-		if job == "" {
-			job = name
+		docs = append(docs, data)
+	}
+	job := *title
+	if job == "" {
+		job = files[0]
+		if job == "-" {
+			job = "stdin"
 		}
-		user := rc.Getenv("USER")
-		if user == "" {
-			user = rc.Getenv("LOGNAME")
+	}
+	var id uint32
+	var err error
+	if len(docs) == 1 {
+		id, err = send(rc, uri, encode(opPrintJob, uri, user, job, *copies, opts, *mail, 0, false, docs[0]))
+	} else {
+		id, err = send(rc, uri, encode(opCreateJob, uri, user, job, *copies, opts, *mail, 0, false, nil))
+		for i := 0; err == nil && i < len(docs); i++ {
+			_, err = send(rc, uri, encode(opSendDocument, uri, user, job, 0, nil, false, id, i == len(docs)-1, docs[i]))
 		}
-		if user == "" {
-			user = "anonymous"
-		}
-		req := encode(uri, user, job, *copies, opts, data)
-		id, err = send(rc, uri, req)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "lp: %v\n", err)
-			return 1
-		}
+	}
+	if err != nil {
+		fmt.Fprintf(rc.Err, "lp: %v\n", err)
+		return 1
 	}
 	if !*silent {
 		fmt.Fprintf(rc.Out, "request id is %s-%d (%d file(s))\n", d, id, len(files))
@@ -132,26 +142,57 @@ func attr(b *bytes.Buffer, tag byte, name string, val []byte) {
 	b.Write(val)
 }
 
-// encode builds an IPP/1.1 Print-Job (0x0002) request, request-id 1.
-func encode(uri, user, job string, copies int, opts []string, doc []byte) []byte {
+const (
+	opPrintJob     = 0x0002
+	opCreateJob    = 0x0005
+	opSendDocument = 0x0006
+)
+
+// encode builds an IPP/1.1 request, request-id 1. Print-Job and
+// Create-Job carry the job attributes (and, with mail, a subscription
+// group); Send-Document names the job by id and carries last-document.
+func encode(op uint16, uri, user, job string, copies int, opts []string, mail bool, jobID uint32, last bool, doc []byte) []byte {
 	var b bytes.Buffer
-	b.Write([]byte{1, 1, 0, 2, 0, 0, 0, 1, 0x01})
+	b.Write([]byte{1, 1, byte(op >> 8), byte(op), 0, 0, 0, 1, 0x01})
 	attr(&b, 0x47, "attributes-charset", []byte("utf-8"))
 	attr(&b, 0x48, "attributes-natural-language", []byte("en"))
 	attr(&b, 0x45, "printer-uri", []byte(uri))
+	if op == opSendDocument {
+		n := make([]byte, 4)
+		binary.BigEndian.PutUint32(n, jobID)
+		attr(&b, 0x21, "job-id", n)
+	}
 	attr(&b, 0x42, "requesting-user-name", []byte(user))
-	attr(&b, 0x42, "job-name", []byte(job))
-	attr(&b, 0x49, "document-format", []byte("application/octet-stream"))
-	b.WriteByte(0x02)
-	n := make([]byte, 4)
-	binary.BigEndian.PutUint32(n, uint32(copies))
-	attr(&b, 0x21, "copies", n)
-	for _, o := range opts {
-		k, v, ok := strings.Cut(o, "=")
-		if !ok {
-			v = "true"
+	if op != opSendDocument {
+		attr(&b, 0x42, "job-name", []byte(job))
+	}
+	if op != opCreateJob {
+		attr(&b, 0x49, "document-format", []byte("application/octet-stream"))
+	}
+	if op == opSendDocument {
+		v := byte(0)
+		if last {
+			v = 1
 		}
-		attr(&b, 0x44, k, []byte(v))
+		attr(&b, 0x22, "last-document", []byte{v})
+	}
+	if op != opSendDocument {
+		b.WriteByte(0x02)
+		n := make([]byte, 4)
+		binary.BigEndian.PutUint32(n, uint32(copies))
+		attr(&b, 0x21, "copies", n)
+		for _, o := range opts {
+			k, v, ok := strings.Cut(o, "=")
+			if !ok {
+				v = "true"
+			}
+			attr(&b, 0x44, k, []byte(v))
+		}
+		if mail {
+			b.WriteByte(0x06)
+			attr(&b, 0x45, "notify-recipient-uri", []byte("mailto:"+user+"@localhost"))
+			attr(&b, 0x44, "notify-events", []byte("job-completed"))
+		}
 	}
 	b.WriteByte(0x03)
 	b.Write(doc)
