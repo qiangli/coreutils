@@ -50,9 +50,3 @@
 
 # 95fcce29a7cc — sprint 100 pax cluster. Linux only: PATH_MAX is 4096 there
 # against 1024 on darwin, so the near-limit tree lands in a different regime.
-
-# ee78ee9771d5 — ctagsfifo's private-output guard compares os.SameFile (dev+ino
-# only), so a substitution reusing the freed inode passes it; the run then
-# blocks on the reader-less FIFO and reports that timeout instead. Consistent on
-# the linux runner, passes 5/5 in a golang:1.26 container.
-linux github.com/qiangli/coreutils/cmds/posixproviders/internal/ctagsfifo TestPrivateOutputIdentityChangeIsRejected

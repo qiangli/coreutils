@@ -13,12 +13,20 @@ func openFIFO(context.Context, string, os.FileInfo, bool) (*os.File, error) {
 	return nil, fmt.Errorf("FIFO output is unsupported on this platform")
 }
 
-func openPrivateOutput(path string, original os.FileInfo) (*os.File, error) {
+// openPrivateOutput reopens the provider's output pathname and requires it to
+// still name the file the adapter created. held is that file's descriptor, kept
+// open across the provider run so its identity cannot be reissued to a
+// substitute in the meantime.
+func openPrivateOutput(path string, held *os.File) (*os.File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	current, statErr := f.Stat()
+	original, statErr := held.Stat()
+	var current os.FileInfo
+	if statErr == nil {
+		current, statErr = f.Stat()
+	}
 	if statErr != nil || !current.Mode().IsRegular() || !os.SameFile(original, current) {
 		_ = f.Close()
 		if statErr != nil {

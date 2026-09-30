@@ -55,19 +55,13 @@ func Run(rc *tool.RunContext, name, path string, args []string, exec ExecFunc) i
 		return 1
 	}
 	tmpPath := tmp.Name()
-	tmpInfo, statErr := tmp.Stat()
-	if statErr != nil {
+	// tmp stays open until Run returns. A live descriptor pins the inode, so its
+	// number cannot be handed to a file substituted at tmpPath while the provider
+	// runs; a saved (device, inode) pair alone cannot tell such a reuse apart.
+	defer func() {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		fmt.Fprintf(rc.Err, "%s: create private output: %v\n", name, statErr)
-		return 1
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		fmt.Fprintf(rc.Err, "%s: create private output: %v\n", name, err)
-		return 1
-	}
-	defer os.Remove(tmpPath)
+	}()
 
 	rewritten := plan.rewrite(args, tmpPath)
 	status := exec(rc, name, path, rewritten)
@@ -82,7 +76,7 @@ func Run(rc *tool.RunContext, name, path string, args []string, exec ExecFunc) i
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := copyToFIFO(ctx, tmpPath, tmpInfo, outputPath, info); err != nil {
+	if err := copyToFIFO(ctx, tmpPath, tmp, outputPath, info); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %s: %v\n", name, plan.output, err)
 		return 1
 	}
@@ -174,8 +168,8 @@ func (p argPlan) rewrite(args []string, output string) []string {
 	return result
 }
 
-func copyToFIFO(ctx context.Context, source string, sourceOriginal os.FileInfo, target string, original os.FileInfo) error {
-	in, err := openPrivateOutput(source, sourceOriginal)
+func copyToFIFO(ctx context.Context, source string, sourceHeld *os.File, target string, original os.FileInfo) error {
+	in, err := openPrivateOutput(source, sourceHeld)
 	if err != nil {
 		return err
 	}

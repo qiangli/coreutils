@@ -39,21 +39,53 @@ func openFIFO(ctx context.Context, path string, original os.FileInfo, wait bool)
 	}
 }
 
-func openPrivateOutput(path string, original os.FileInfo) (*os.File, error) {
+// fstatPrivateOutput is the identity seam for the private output: tests forge
+// what a substituted file presents.
+var fstatPrivateOutput = func(fd int, st *unix.Stat_t) error {
+	for {
+		if err := unix.Fstat(fd, st); !errors.Is(err, unix.EINTR) {
+			return err
+		}
+	}
+}
+
+// openPrivateOutput reopens the provider's output pathname and requires it to
+// still name the file the adapter created. held is that file's descriptor, kept
+// open across the provider run: ext4 hands a freed inode number straight to the
+// next create, so only a live descriptor makes (device, inode) an identity.
+func openPrivateOutput(path string, held *os.File) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("private output changed during ctags execution: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), path)
-	current, statErr := f.Stat()
-	if statErr != nil || !current.Mode().IsRegular() || !os.SameFile(original, current) {
+	same, err := samePrivateOutput(held, f)
+	if err != nil || !same {
 		_ = f.Close()
-		if statErr != nil {
-			return nil, statErr
+		if err != nil {
+			return nil, err
 		}
 		return nil, fmt.Errorf("private output changed during ctags execution")
 	}
 	return f, nil
+}
+
+// samePrivateOutput reports whether current is the regular file held refers to.
+// Both descriptors are examined now, after the provider has exited, so one
+// inode must agree with itself on every field. Link count and ctime are
+// compared beyond (device, inode) so that even a replacement presenting the
+// held file's numbers is refused: the original it unlinked reports no links.
+func samePrivateOutput(held, current *os.File) (bool, error) {
+	var want, got unix.Stat_t
+	if err := fstatPrivateOutput(int(held.Fd()), &want); err != nil {
+		return false, err
+	}
+	if err := fstatPrivateOutput(int(current.Fd()), &got); err != nil {
+		return false, err
+	}
+	return got.Mode&unix.S_IFMT == unix.S_IFREG &&
+		got.Dev == want.Dev && got.Ino == want.Ino &&
+		got.Nlink == want.Nlink && got.Ctim == want.Ctim, nil
 }
 
 // copyPrivateOutput keeps the FIFO descriptor nonblocking and waits in short
