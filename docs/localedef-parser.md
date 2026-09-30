@@ -24,7 +24,14 @@ symbols, forward/backward levels, IGNORE weights, symbolic weight strings,
 UNDEFINED expansion and category copy. Sort, ls, comm, join and byte bracket
 consumers in grep/sed read compiled collation before host fallback.
 
-Unsupported forms fail explicitly: general order ellipsis, position rules,
+Required LC_COLLATE grammar still has residuals: general order ellipsis,
+position rules and empty weight operands are not fully implemented. Explicit
+UNDEFINED has tested IGNORE/ellipsis-weight expansion, but absent UNDEFINED
+does not yet warn and append omitted characters; comparison currently errors
+on those characters. Parent review tracks these as required behavior gaps, not
+optional extensions. Source: [POSIX.1-2017 locale definitions](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/V1_chap07.html).
+
+Additional unsupported forms fail explicitly:
 non-UTF-8 element encodings, literal rather than ordered-symbol weight strings,
 missing weight references, and byte brackets over multibyte or multi-character
 collating elements. Inputs outside the compiled element set are errors; there
