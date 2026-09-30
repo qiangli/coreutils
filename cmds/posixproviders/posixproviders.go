@@ -47,9 +47,9 @@ package posixproviderscmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"mvdan.cc/sh/v3/pathconv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +60,7 @@ import (
 	"github.com/qiangli/coreutils/cmds/posixproviders/internal/ctagsfifo"
 	"github.com/qiangli/coreutils/pkg/posixprovider"
 	"github.com/qiangli/coreutils/tool"
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // BuildScriptEnv names an explicit path to the build recipe, for a deployment
@@ -358,7 +359,7 @@ func adminTool() *tool.Tool {
 		Synopsis: fmt.Sprintf("Provision and inspect the %d pinned POSIX external providers.", activeCount),
 		Usage: fmt.Sprintf(`posix-providers <subcommand>
 
-  list                 show every pinned provider and whether it is provisioned
+  list [--json]        show optional UP/SD providers and whether they are provisioned
   check [all|<cmd>]    verify provisioning + provenance; non-zero if any is unusable
   dispatch-plan        print, one TSV row per active provider, the exact binary
                        THIS invocation would dispatch to: command, version,
@@ -446,8 +447,9 @@ func runDispatchPlan(rc *tool.RunContext, args []string) int {
 }
 
 func runList(rc *tool.RunContext, args []string) int {
-	if len(args) != 0 {
-		fmt.Fprintln(rc.Err, "posix-providers list: takes no arguments")
+	jsonOutput := len(args) == 1 && args[0] == "--json"
+	if len(args) != 0 && !jsonOutput {
+		fmt.Fprintln(rc.Err, "posix-providers list: usage: posix-providers list [--json]")
 		return 2
 	}
 	r, err := resolverFor(rc)
@@ -455,20 +457,65 @@ func runList(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "posix-providers: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(rc.Out, "%-8s %-10s %-9s %-24s %s\n", "COMMAND", "VERSION", "LICENSE", "PLATFORMS", "STATE")
+	rows := make([]optionalProviderRow, 0, len(optionalProviderGroups))
 	for _, e := range posixprovider.Entries() {
-		st := r.Status(e.Command)
-		state := "provisioned"
-		switch {
-		case !st.Supported:
-			state = "unsupported on " + r.GOOS
-		case st.Err != nil:
-			state = shortReason(st.Err)
+		group, optional := optionalProviderGroups[e.Command]
+		if !optional {
+			continue
 		}
-		fmt.Fprintf(rc.Out, "%-8s %-10s %-9s %-24s %s\n",
-			e.Command, e.Version, e.License, strings.Join(e.Platforms, ","), state)
+		st := r.Status(e.Command)
+		rows = append(rows, optionalProviderRow{
+			Name:          e.Command,
+			OptionGroup:   group,
+			Upstream:      e.URL,
+			PinnedVersion: e.Version,
+			License:       e.License,
+			Platforms:     e.Platforms,
+			Provisioned:   st.Supported && st.Err == nil,
+			Note:          optionalProviderNote,
+		})
+	}
+	if jsonOutput {
+		if err := json.NewEncoder(rc.Out).Encode(rows); err != nil {
+			fmt.Fprintf(rc.Err, "posix-providers list: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintln(rc.Out, "NAME\tGROUP\tUPSTREAM\tPINNED VERSION\tLICENSE\tPLATFORMS\tPROVISIONED\tNOTE")
+	for _, row := range rows {
+		state := "not provisioned"
+		if row.Provisioned {
+			state = "provisioned"
+		}
+		fmt.Fprintf(rc.Out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.Name, row.OptionGroup, row.Upstream, row.PinnedVersion, row.License,
+			strings.Join(row.Platforms, ","), state, row.Note)
 	}
 	return 0
+}
+
+const optionalProviderNote = "optional - not in the base certification claim"
+
+var optionalProviderGroups = map[string]string{
+	"ex":    "UP",
+	"vi":    "UP",
+	"man":   "UP",
+	"ctags": "SD",
+	"nm":    "SD",
+	"ar":    "SD",
+	"strip": "SD",
+}
+
+type optionalProviderRow struct {
+	Name          string   `json:"name"`
+	OptionGroup   string   `json:"option_group"`
+	Upstream      string   `json:"upstream"`
+	PinnedVersion string   `json:"pinned_version"`
+	License       string   `json:"license"`
+	Platforms     []string `json:"platforms"`
+	Provisioned   bool     `json:"provisioned"`
+	Note          string   `json:"note"`
 }
 
 func shortReason(err error) string {
