@@ -319,6 +319,8 @@ func parseIPP(data []byte) ([]ippAttribute, error) {
 }
 
 func positiveID(attrs []ippAttribute) (uint32, error) {
+	var found bool
+	var jobID uint32
 	for _, a := range attrs {
 		if a.group == 0x02 && a.name == "job-id" {
 			if a.tag != 0x21 || len(a.value) != 4 {
@@ -328,10 +330,16 @@ func positiveID(attrs []ippAttribute) (uint32, error) {
 			if id <= 0 {
 				return 0, fmt.Errorf("nonpositive IPP job-id")
 			}
-			return uint32(id), nil
+			if found {
+				return 0, fmt.Errorf("duplicate IPP job-id")
+			}
+			found, jobID = true, uint32(id)
 		}
 	}
-	return 0, fmt.Errorf("IPP response omitted job-id")
+	if !found {
+		return 0, fmt.Errorf("IPP response omitted job-id")
+	}
+	return jobID, nil
 }
 
 func send(ctx context.Context, uri string, body []byte) (uint32, error) {
@@ -390,19 +398,27 @@ func jobState(ctx context.Context, uri, user string, id uint32) (uint32, error) 
 	if err != nil {
 		return 0, err
 	}
+	var state uint32
+	var found bool
 	for _, a := range attrs {
 		if a.group == 0x02 && a.name == "job-state" {
 			if a.tag != 0x23 || len(a.value) != 4 {
 				return 0, fmt.Errorf("invalid IPP job-state")
 			}
-			state := binary.BigEndian.Uint32(a.value)
+			state = binary.BigEndian.Uint32(a.value)
 			if state < 3 || state > 9 {
 				return 0, fmt.Errorf("invalid IPP job-state %d", state)
 			}
-			return state, nil
+			if found {
+				return 0, fmt.Errorf("duplicate IPP job-state")
+			}
+			found = true
 		}
 	}
-	return 0, fmt.Errorf("IPP completion response omitted job-state")
+	if !found {
+		return 0, fmt.Errorf("IPP completion response omitted job-state")
+	}
+	return state, nil
 }
 
 var readSessions = func(env []string) ([]session.Record, error) {

@@ -266,6 +266,74 @@ func TestIPPSubscriptionGroupAndCompleteStateFrame(t *testing.T) {
 	}
 }
 
+func TestDuplicateResponseValuesAreRejected(t *testing.T) {
+	for _, name := range []string{"job-id", "job-state"} {
+		t.Run(name, func(t *testing.T) {
+			var frame bytes.Buffer
+			frame.Write([]byte{1, 1, 0, 0, 0, 0, 0, 1, 0x02})
+			tag := byte(0x21)
+			if name == "job-state" {
+				tag = 0x23
+			}
+			attr(&frame, tag, name, []byte{0, 0, 0, 5})
+			attr(&frame, tag, name, []byte{0, 0, 0, 9})
+			frame.WriteByte(0x03)
+			attrs, err := parseIPP(frame.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "job-id" {
+				if _, err := positiveID(attrs); err == nil {
+					t.Fatal("accepted ambiguous job-id")
+				}
+			} else {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write(frame.Bytes())
+				}))
+				defer srv.Close()
+				if _, err := jobState(context.Background(), srv.URL, "bob", 5); err == nil {
+					t.Fatal("accepted ambiguous job-state")
+				}
+			}
+		})
+	}
+}
+
+func TestCompletionWaitsForActualCompletedState(t *testing.T) {
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var response bytes.Buffer
+		response.Write([]byte{1, 1, 0, 0, 0, 0, 0, 1, 0x01})
+		attr(&response, 0x47, "attributes-charset", []byte("utf-8"))
+		response.WriteByte(0x02)
+		if binary.BigEndian.Uint16(body[2:]) == opGetJobAttrs {
+			state := byte(5) // processing
+			if polls.Add(1) > 1 {
+				state = 9 // completed
+			}
+			attr(&response, 0x23, "job-state", []byte{0, 0, 0, state})
+		} else {
+			attr(&response, 0x21, "job-id", []byte{0, 0, 0, 5})
+		}
+		response.WriteByte(0x03)
+		_, _ = w.Write(response.Bytes())
+	}))
+	defer srv.Close()
+	oldMail := deliverMail
+	t.Cleanup(func() { deliverMail = oldMail })
+	deliverMail = func(_ *tool.RunContext, _, _ string) error {
+		if polls.Load() != 2 {
+			t.Errorf("mail delivered before completed state; polls=%d", polls.Load())
+		}
+		return nil
+	}
+	_, diagnostic, code := runLP(t, []string{"LP_IPP_URI=" + srv.URL, "LPDEST=d", "USER=bob"}, "x", "-m")
+	if code != 0 || diagnostic != "" || polls.Load() != 2 {
+		t.Fatalf("code=%d diagnostic=%q polls=%d", code, diagnostic, polls.Load())
+	}
+}
+
 func TestBlockedCompletionHTTPIsCanceled(t *testing.T) {
 	for _, phase := range []string{"headers", "body"} {
 		t.Run(phase, func(t *testing.T) {

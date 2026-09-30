@@ -27,15 +27,26 @@ func TestTerminalDeviceDelivery(t *testing.T) {
 	if err := writeTerminal(slave.Name(), message); err != nil {
 		t.Fatal(err)
 	}
-	if err := master.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, len(message))
-	_, err = io.ReadFull(master, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(buf) != message {
-		t.Fatalf("terminal received %q", buf)
+	// Darwin PTYs do not support SetReadDeadline. Bound the read in the
+	// test instead; closing master also releases a blocked read on failure.
+	received := make(chan struct {
+		text string
+		err  error
+	}, 1)
+	go func() {
+		buf := make([]byte, len(message))
+		_, err := io.ReadFull(master, buf)
+		received <- struct {
+			text string
+			err  error
+		}{string(buf), err}
+	}()
+	select {
+	case result := <-received:
+		if result.err != nil || result.text != message {
+			t.Fatalf("terminal received %q, error %v", result.text, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal did not receive completion message")
 	}
 }
