@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -413,26 +414,89 @@ func TestProviderWithBadProvenanceFailsLoudly(t *testing.T) {
 
 func TestAdminList(t *testing.T) {
 	root := t.TempDir()
-	provision(t, root, "m4", "#!/bin/sh\nexit 0\n")
+	provision(t, root, "man", "#!/bin/sh\nexit 0\n")
 
 	rc, out, errb := newRC(t, root)
 	code, stdout, stderr := run(t, "posix-providers", rc, out, errb, "list")
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}
-	if !strings.Contains(stdout, "COMMAND") || !strings.Contains(stdout, "LICENSE") {
+	if !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "GROUP") ||
+		!strings.Contains(stdout, "UPSTREAM") || !strings.Contains(stdout, "LICENSE") {
 		t.Errorf("list has no header: %q", stdout)
 	}
-	for _, n := range posixprovider.Names() {
-		if !strings.Contains(stdout, n) {
-			t.Errorf("list omits %q", n)
+	groups := map[string]string{
+		"ex": "UP", "vi": "UP", "man": "UP",
+		"ctags": "SD", "nm": "SD", "ar": "SD", "strip": "SD",
+	}
+	for name, group := range groups {
+		if !strings.Contains(stdout, name+"\t"+group+"\t") {
+			t.Errorf("list omits %s in group %s: %q", name, group, stdout)
 		}
+	}
+	for _, name := range []string{"m4", "localedef", "lp"} {
+		if strings.Contains(stdout, name+"\t") {
+			t.Errorf("list includes base provider %q: %q", name, stdout)
+		}
+	}
+	if got := strings.Count(stdout, "optional - not in the base certification claim"); got != 7 {
+		t.Errorf("optional marker count = %d, want 7: %q", got, stdout)
 	}
 	if !strings.Contains(stdout, "provisioned") {
 		t.Errorf("list never says a provider is provisioned: %q", stdout)
 	}
 	if !strings.Contains(stdout, "not provisioned") {
 		t.Errorf("list never says a provider is missing: %q", stdout)
+	}
+}
+
+func TestAdminListJSON(t *testing.T) {
+	type row struct {
+		Name          string   `json:"name"`
+		OptionGroup   string   `json:"option_group"`
+		Upstream      string   `json:"upstream"`
+		PinnedVersion string   `json:"pinned_version"`
+		License       string   `json:"license"`
+		Platforms     []string `json:"platforms"`
+		Provisioned   bool     `json:"provisioned"`
+		Note          string   `json:"note"`
+	}
+
+	rc, out, errb := newRC(t, t.TempDir())
+	code, stdout, stderr := run(t, "posix-providers", rc, out, errb, "list", "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr)
+	}
+	var rows []row
+	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+		t.Fatalf("list --json is not a JSON array: %v\n%s", err, stdout)
+	}
+	if len(rows) != 7 {
+		t.Fatalf("JSON rows = %d, want 7: %#v", len(rows), rows)
+	}
+	wantGroups := map[string]string{
+		"ex": "UP", "vi": "UP", "man": "UP",
+		"ctags": "SD", "nm": "SD", "ar": "SD", "strip": "SD",
+	}
+	for _, got := range rows {
+		group, ok := wantGroups[got.Name]
+		if !ok {
+			t.Errorf("unexpected provider in JSON list: %q", got.Name)
+			continue
+		}
+		delete(wantGroups, got.Name)
+		if got.OptionGroup != group {
+			t.Errorf("%s option_group = %q, want %q", got.Name, got.OptionGroup, group)
+		}
+		if got.Upstream == "" || got.PinnedVersion == "" || got.License == "" || len(got.Platforms) == 0 {
+			t.Errorf("%s has incomplete manifest metadata: %#v", got.Name, got)
+		}
+		if got.Note != "optional - not in the base certification claim" {
+			t.Errorf("%s note = %q", got.Name, got.Note)
+		}
+	}
+	if len(wantGroups) != 0 {
+		t.Errorf("JSON list omitted providers: %v", wantGroups)
 	}
 }
 
