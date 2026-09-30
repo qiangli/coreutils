@@ -69,3 +69,22 @@ is delicate rather than a one-line fix.
 - Next step: actionable today, independent of the licensed host. Capture the raw trailing-slash operand before `RunContext.Path` normalizes it (use the new operand helpers), validate "must be a directory" separately from `-T`, write the listed tests red first, fix, delete the known-failures line.
 - Acceptance: all required tests green on Linux CI and darwin; known-failures line removed; mv:* identities no worse in the fresh baseline arm.
 - Depends on: nothing.
+
+## Conductor brief 2026-09-30 (Sprint #110 heat)
+
+Toolchain: go1.27.1. You may be on darwin: the failure is LINUX-ONLY ({PATH_MAX} 4096 vs 1024), so do not
+declare victory from a darwin run. If podman works in your environment, the Linux check is
+  /Users/qiangli/.bashy/sprint/110/gate/linux-go-test.sh -count=1 <pkg> [-run X]
+(golang:1.27, ordinary user, pinned ../sh). Otherwise reason from the Linux regime and make the
+regression reproducible on darwin too where you can (a package-level seam, never a sleep).
+Scope: only the files named below plus test/known-failures.txt (delete the story's baseline line in the SAME commit).
+Commit with trailers Sprint: #110 / Story: #<seq> / Story-ID: <id> from this file's front matter.
+
+Gate (graded outside your booth, both must pass):
+  linux-go-test.sh -count=1 ./cmds/mv ; darwin go test -count=1 ./cmds/mv ; the
+  'cmds/mv TestMvNoTargetDirectoryTrailingSlashOnExistingDir' line gone from test/known-failures.txt ;
+  every package still compiles (go test -run '^$' ./...).
+New tests in cmds/mv/*_test.go are expected (the seven cases listed above); never weaken or delete existing tests.
+Unverified hypothesis: the Linux path treats "dir/" differently from darwin at a stat/rename call -- confirm it first, then validate the raw
+trailing-slash operand yourself (tool.OperandJoin/OperandDir/OperandClean) before normalization, and keep -T separate.
+Scope: cmds/mv/** (and pkg/tool operand helpers only if strictly needed).

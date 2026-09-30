@@ -47,3 +47,23 @@ Verify with: go test ./cmds/posixproviders/internal/ctagsfifo -run TestPrivateOu
 - Next step: actionable today, independent of the licensed host. Confirm the inode-reuse mechanism on a Linux runner (log dev/ino/ctime of original vs current), then hold the original fd across the provider run or compare (dev, ino, ctime) via Fstat on the retained descriptor; delete the known-failures line.
 - Acceptance: `go test ./cmds/posixproviders/internal/ctagsfifo -run TestPrivateOutput -count=50` green on Linux CI and darwin; baseline entry removed; substitution rejected with "private output changed", not by FIFO timeout.
 - Depends on: nothing.
+
+## Conductor brief 2026-09-30 (Sprint #110 heat)
+
+Toolchain: go1.27.1. You may be on darwin: the failure is LINUX-ONLY ({PATH_MAX} 4096 vs 1024), so do not
+declare victory from a darwin run. If podman works in your environment, the Linux check is
+  /Users/qiangli/.bashy/sprint/110/gate/linux-go-test.sh -count=1 <pkg> [-run X]
+(golang:1.27, ordinary user, pinned ../sh). Otherwise reason from the Linux regime and make the
+regression reproducible on darwin too where you can (a package-level seam, never a sleep).
+Scope: only the files named below plus test/known-failures.txt (delete the story's baseline line in the SAME commit).
+Commit with trailers Sprint: #110 / Story: #<seq> / Story-ID: <id> from this file's front matter.
+
+Gate (graded outside your booth, both must pass):
+  linux-go-test.sh -count=50 ./cmds/posixproviders/internal/ctagsfifo -run TestPrivateOutput ;
+  darwin go test -count=50 same ; a NEW deterministic test TestPrivateOutputInodeReuseIsRejected
+  passes (it must simulate a replacement that presents the SAME dev+ino, e.g. via a stat/identity seam,
+  and assert rejection with "private output changed", not a FIFO timeout) ; the ctagsfifo
+  TestPrivateOutputIdentityChangeIsRejected line and its comment block gone from test/known-failures.txt.
+Fix direction per the review: hold the original fd across the provider run, or compare (dev, ino, ctime)
+via Fstat on the retained descriptor -- in fifo_unix.go AND fifo_other.go.
+Scope: cmds/posixproviders/internal/ctagsfifo/**.

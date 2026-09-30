@@ -54,3 +54,22 @@ delete that line when this lands.
 - Next step: actionable today, independent of the licensed host. Reproduce in a Linux container as a non-root user; trace why a pure-ASCII near-PATH_MAX referent is classified as a UTF-8 encoding failure (likely a length condition in the extended-header path); fix the classification and the bypass; delete the known-failures line.
 - Acceptance: the test passes on the Linux CI leg and in the container; known-failures line removed in the same commit; `go test ./cmds/pax` green on darwin and Linux.
 - Depends on: nothing. Feeds 95fcce29a7cc (pax cluster) - do this first.
+
+## Conductor brief 2026-09-30 (Sprint #110 heat)
+
+Toolchain: go1.27.1. You may be on darwin: the failure is LINUX-ONLY ({PATH_MAX} 4096 vs 1024), so do not
+declare victory from a darwin run. If podman works in your environment, the Linux check is
+  /Users/qiangli/.bashy/sprint/110/gate/linux-go-test.sh -count=1 <pkg> [-run X]
+(golang:1.27, ordinary user, pinned ../sh). Otherwise reason from the Linux regime and make the
+regression reproducible on darwin too where you can (a package-level seam, never a sleep).
+Scope: only the files named below plus test/known-failures.txt (delete the story's baseline line in the SAME commit).
+Commit with trailers Sprint: #110 / Story: #<seq> / Story-ID: <id> from this file's front matter.
+
+Gate (graded outside your booth, both must pass):
+  linux-go-test.sh -count=1 ./cmds/pax ; darwin go test -count=1 ./cmds/pax ; the
+  'cmds/pax TestFollowedSymlinkBelowOperandNearPathMaxIsArchived' line gone from test/known-failures.txt ;
+  every package still compiles (go test -run '^$' ./...).
+Start at the emitter of "value cannot be encoded as UTF-8" in cmds/pax: an ASCII-only referent is
+being misclassified -- find the length/limit condition that reaches the encoding branch, report the
+real cause (or archive the member, as POSIX requires for a representable name), and never bypass silently.
+Scope: cmds/pax/**.
