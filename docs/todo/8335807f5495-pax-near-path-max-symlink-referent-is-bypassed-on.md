@@ -3,12 +3,15 @@ id: 8335807f5495
 kind: task
 title: 'pax: near-PATH_MAX symlink referent is bypassed on Linux with a wrong ''not UTF-8'' diagnostic'
 seq: 22
-status: todo
+status: done
 priority: p1
 created: 2026-09-01T15:03:01.56994Z
+assignee: claude-opus5.5
 sprint: 110
 sprint_id: 26c12bac-7289-517f-ad46-01e2c117cad7
 sprint_title: Revalidate Go 1.27 GNU and POSIX conformance
+closed: 2026-09-30T11:22:04.177012Z
+closed_by: claude-opus5.5
 ---
 
 `pax` is a POSIX-required utility in the certification scope. This is a

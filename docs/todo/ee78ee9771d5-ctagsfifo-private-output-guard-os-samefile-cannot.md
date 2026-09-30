@@ -3,12 +3,15 @@ id: ee78ee9771d5
 kind: task
 title: 'ctagsfifo private-output guard: os.SameFile cannot see an inode-reuse substitution'
 seq: 18
-status: todo
+status: done
 priority: p1
 created: 2026-09-01T14:02:08.277627Z
+assignee: claude-opus5.5
 sprint: 110
 sprint_id: 26c12bac-7289-517f-ad46-01e2c117cad7
 sprint_title: Revalidate Go 1.27 GNU and POSIX conformance
+closed: 2026-09-30T11:22:09.724122Z
+closed_by: claude-opus5.5
 ---
 
 CI-blocking. Reproduced on ubuntu-latest in GitHub Actions runs 33513814323 and

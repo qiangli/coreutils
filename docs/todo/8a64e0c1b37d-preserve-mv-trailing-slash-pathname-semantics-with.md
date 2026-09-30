@@ -3,12 +3,15 @@ id: 8a64e0c1b37d
 kind: task
 title: Preserve mv trailing-slash pathname semantics without breaking -T
 seq: 3
-status: todo
+status: done
 priority: p2
 created: 2026-08-11T19:00:00Z
+assignee: claude-opus5.5
 sprint: 110
 sprint_id: 26c12bac-7289-517f-ad46-01e2c117cad7
 sprint_title: Revalidate Go 1.27 GNU and POSIX conformance
+closed: 2026-09-30T11:22:06.917244Z
+closed_by: claude-opus5.5
 ---
 
 Fix the `mv` raw-operand/path-normalization gap described in
