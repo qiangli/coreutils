@@ -345,6 +345,52 @@ func TestPrivateOutputIdentityChangeIsRejected(t *testing.T) {
 	}
 }
 
+// A filesystem that hands a freed inode number to the next create (ext4 does,
+// APFS does not) lets a substituted file present the original's device and
+// inode. The stat seam forges exactly that, so every host runs the same regime.
+func TestPrivateOutputInodeReuseIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "tags")
+	makeFIFO(t, fifo)
+
+	var original unix.Stat_t
+	forged := false
+	realFstat := fstatPrivateOutput
+	defer func() { fstatPrivateOutput = realFstat }()
+	fstatPrivateOutput = func(fd int, st *unix.Stat_t) error {
+		if err := realFstat(fd, st); err != nil {
+			return err
+		}
+		if st.Dev != original.Dev || st.Ino != original.Ino {
+			st.Dev, st.Ino = original.Dev, original.Ino
+			forged = true
+		}
+		return nil
+	}
+
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Stdio: tool.Stdio{Err: &errOut, Out: io.Discard}}
+	got := Run(rc, "ctags", "/provider/ctags", []string{"-f", fifo, "source.c"}, func(_ *tool.RunContext, _, _ string, args []string) int {
+		p := inspectArgs(args)
+		if err := unix.Stat(p.output, &original); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(p.output); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p.output, []byte("replacement\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return 0
+	})
+	if !forged {
+		t.Fatal("replacement never presented the original device and inode")
+	}
+	if got == 0 || !strings.Contains(errOut.String(), "private output changed") {
+		t.Fatalf("Run()=%d stderr=%q", got, errOut.String())
+	}
+}
+
 func TestPrivateOutputFIFOReplacementIsRejectedWithoutBlocking(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "tags")
