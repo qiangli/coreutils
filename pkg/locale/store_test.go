@@ -1,6 +1,7 @@
 package locale
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -58,5 +59,51 @@ func TestCompiledMessagesData(t *testing.T) {
 	d, ok := c.MessagesData()
 	if !ok || d.YesExpr != "^[oO]" || d.NoExpr != "^[nN]" {
 		t.Fatalf("MessagesData=%+v ok=%v", d, ok)
+	}
+}
+
+func TestMalformedStoreFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	env := []string{"LOCPATH=" + dir, "LC_MESSAGES=POSIX"}
+	path := filepath.Join(dir, "POSIX.json")
+	for _, contents := range []string{
+		`{`,
+		`{"name":"wrong","categories":{"LC_MESSAGES":{"yesexpr":{"values":["^[oO]"]}}}}`,
+		`{"name":"POSIX","categories":{"LC_MESSAGES":{"yesexpr":{"values":[]}}}}`,
+		`{"name":"POSIX","categories":{"LC_COLLATE":{}}}`,
+		`{"name":"POSIX"} trailing`,
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := LookupCompiled(env, "POSIX"); ok {
+			t.Fatalf("accepted malformed store %q", contents)
+		}
+		if names := CompiledNames(env); len(names) != 0 {
+			t.Fatalf("listed malformed store %q: %v", contents, names)
+		}
+		match, err := MatchAffirmative(env, "yes")
+		if err != nil || !match {
+			t.Fatalf("malformed store did not retain POSIX fallback: %v, %v", match, err)
+		}
+	}
+}
+
+func TestCompiledMessagesMatcher(t *testing.T) {
+	dir := t.TempDir()
+	c := &Compiled{Name: "xx_XX"}
+	c.Set("LC_MESSAGES", "yesexpr", Keyword{Values: []string{"^[oO]"}})
+	if err := Save(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"LOCPATH=" + dir, "LANG=xx_XX"}
+	for _, tc := range []struct {
+		response string
+		want     bool
+	}{{"oui", true}, {"O", true}, {"yes", false}} {
+		got, err := MatchAffirmative(env, tc.response)
+		if err != nil || got != tc.want {
+			t.Fatalf("MatchAffirmative(%q) = %v, %v; want %v", tc.response, got, err, tc.want)
+		}
 	}
 }

@@ -276,6 +276,13 @@ func CompileMessageMatcher(yesExpr string) (MessageMatcher, error) {
 // expression.
 func MessagesMatcher(env []string) (MessageMatcher, error) {
 	name := Resolve(env, Messages)
+	if compiled, ok := CompiledCategory(env, Messages); ok {
+		data, valid := compiled.MessagesData()
+		if !valid {
+			return MessageMatcher{}, fmt.Errorf("%w %q: no yesexpr", ErrUnsupportedMessagesLocale, name)
+		}
+		return CompileMessageMatcher(data.YesExpr)
+	}
 	data, ok := LookupMessages(name)
 	if !ok {
 		return MessageMatcher{}, fmt.Errorf("%w %q", ErrUnsupportedMessagesLocale, name)

@@ -12,12 +12,15 @@ package locale
 // in the store therefore behaves exactly as it did before this store existed.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // StoreEnv is the environment variable that selects the locale store, spelled
@@ -223,6 +226,9 @@ func StorePath(dir, name string) (string, error) {
 // to a temporary file in the same directory and is renamed into place, so a
 // concurrent reader never observes a half-written locale.
 func Save(dir string, c *Compiled) error {
+	if err := validateCompiled(c); err != nil {
+		return err
+	}
 	path, err := StorePath(dir, c.Name)
 	if err != nil {
 		return err
@@ -263,13 +269,47 @@ func Load(path string) (*Compiled, error) {
 		return nil, err
 	}
 	var c Compiled
-	if err := json.Unmarshal(data, &c); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&c); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if c.Name == "" {
-		return nil, fmt.Errorf("%s: compiled locale has no name", path)
+	if decoder.Decode(new(any)) != io.EOF {
+		return nil, fmt.Errorf("%s: trailing data in compiled locale", path)
+	}
+	if err := validateCompiled(&c); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if filepath.Base(path) != c.Name+StoreFileExt {
+		return nil, fmt.Errorf("%s: compiled locale name does not match file", path)
 	}
 	return &c, nil
+}
+
+func validateCompiled(c *Compiled) error {
+	if c == nil || !ValidStoreName(c.Name) {
+		return fmt.Errorf("invalid compiled locale name")
+	}
+	if c.MbCurMin < 0 || c.MbCurMax < 0 || (c.MbCurMax > 0 && c.MbCurMin > c.MbCurMax) {
+		return fmt.Errorf("invalid compiled charmap width")
+	}
+	for cat, keywords := range c.Categories {
+		switch cat {
+		case "LC_CTYPE", "LC_NUMERIC", "LC_MONETARY", "LC_TIME", "LC_MESSAGES":
+		default:
+			return fmt.Errorf("invalid compiled category %q", cat)
+		}
+		for key, value := range keywords {
+			if key == "" || len(value.Values) == 0 {
+				return fmt.Errorf("invalid compiled keyword %q", key)
+			}
+		}
+	}
+	if utf8.RuneCountInString(c.ToUpperFrom) != utf8.RuneCountInString(c.ToUpperTo) ||
+		utf8.RuneCountInString(c.ToLowerFrom) != utf8.RuneCountInString(c.ToLowerTo) {
+		return fmt.Errorf("invalid compiled case mapping")
+	}
+	return nil
 }
 
 // LookupCompiled returns the locale compiled under name, searching the store
@@ -328,8 +368,10 @@ func CompiledNames(env []string) []string {
 			if !ValidStoreName(name) || seen[name] {
 				continue
 			}
-			seen[name] = true
-			names = append(names, name)
+			if _, err := Load(filepath.Join(dir, e.Name())); err == nil {
+				seen[name] = true
+				names = append(names, name)
+			}
 		}
 	}
 	sort.Strings(names)
