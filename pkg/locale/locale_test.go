@@ -155,7 +155,7 @@ func TestResolveAll(t *testing.T) {
 	t.Run("nil env", func(t *testing.T) {
 		c := ResolveAll(nil)
 		if c.All != "POSIX" || c.Collate != "POSIX" || c.CType != "POSIX" ||
-			c.Numeric != "POSIX" || c.Messages != "POSIX" || c.Time != "POSIX" {
+			c.Numeric != "POSIX" || c.Messages != "POSIX" || c.Monetary != "POSIX" || c.Time != "POSIX" {
 			t.Errorf("ResolveAll(nil) = %+v; want all POSIX", c)
 		}
 	})
@@ -164,7 +164,7 @@ func TestResolveAll(t *testing.T) {
 		c := ResolveAll([]string{"LANG=en_US.UTF-8"})
 		want := Categories{
 			All: "POSIX", Collate: "en_US.UTF-8", CType: "en_US.UTF-8",
-			Numeric: "en_US.UTF-8", Messages: "en_US.UTF-8", Time: "en_US.UTF-8",
+			Numeric: "en_US.UTF-8", Messages: "en_US.UTF-8", Monetary: "en_US.UTF-8", Time: "en_US.UTF-8",
 		}
 		if c != want {
 			t.Errorf("ResolveAll = %+v; want %+v", c, want)
@@ -179,7 +179,7 @@ func TestResolveAll(t *testing.T) {
 		if c.All != "C" {
 			t.Errorf("All = %q; want C", c.All)
 		}
-		for _, v := range []string{c.Collate, c.CType, c.Numeric, c.Messages, c.Time} {
+		for _, v := range []string{c.Collate, c.CType, c.Numeric, c.Messages, c.Monetary, c.Time} {
 			if v != "C" {
 				t.Errorf("category = %q; want C (LC_ALL override)", v)
 			}
@@ -191,6 +191,7 @@ func TestResolveAll(t *testing.T) {
 			"LANG=en_US.UTF-8",
 			"LC_COLLATE=de_DE",
 			"LC_NUMERIC=de_DE.UTF-8",
+			"LC_MONETARY=fr_FR",
 		})
 		if c.All != "POSIX" {
 			t.Errorf("All = %q; want POSIX", c.All)
@@ -206,6 +207,9 @@ func TestResolveAll(t *testing.T) {
 		}
 		if c.Messages != "en_US.UTF-8" {
 			t.Errorf("Messages = %q; want en_US.UTF-8 (LANG fallback)", c.Messages)
+		}
+		if c.Monetary != "fr_FR" {
+			t.Errorf("Monetary = %q; want fr_FR", c.Monetary)
 		}
 		if c.Time != "en_US.UTF-8" {
 			t.Errorf("Time = %q; want en_US.UTF-8 (LANG fallback)", c.Time)
@@ -252,9 +256,10 @@ func TestResolveRace(t *testing.T) {
 		"LC_CTYPE=ja_JP.UTF-8",
 		"LC_NUMERIC=es_ES",
 		"LC_MESSAGES=zh_CN",
+		"LC_MONETARY=it_IT",
 		"LC_TIME=ru_RU",
 	}
-	cats := []Category{Collate, CType, Numeric, Messages, Time}
+	cats := []Category{Collate, CType, Numeric, Messages, Monetary, Time}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 200; i++ {
@@ -293,6 +298,7 @@ func TestResolveConsistency(t *testing.T) {
 		{c.CType, Resolve(env, CType), "CType"},
 		{c.Numeric, Resolve(env, Numeric), "Numeric"},
 		{c.Messages, Resolve(env, Messages), "Messages"},
+		{c.Monetary, Resolve(env, Monetary), "Monetary"},
 		{c.Time, Resolve(env, Time), "Time"},
 	}
 	for _, ch := range checks {

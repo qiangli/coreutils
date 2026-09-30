@@ -215,7 +215,11 @@ func runWithProviders(rc *tool.RunContext, args []string, openCollator collatorO
 		usesNumeric = usesNumeric || k.opts.numeric
 	}
 	if usesNumeric {
-		if name := locale.Resolve(rc.Env, locale.Numeric); name != "C" && name != "POSIX" && !locale.IsMacOSDefaultUTF8(rc.Env, locale.Numeric) {
+		// A compiled locale takes precedence over the generic UTF-8 fallback,
+		// including when its name has a .UTF-8 codeset suffix.
+		if decPt, thousSep, ok := locale.NumericSeparators(locale.StoreEnvAt(rc.Env, rc.Path)); ok {
+			s.decPt, s.thousSep = decPt, thousSep
+		} else if name := locale.Resolve(rc.Env, locale.Numeric); name != "C" && name != "POSIX" && !locale.IsMacOSDefaultUTF8(rc.Env, locale.Numeric) {
 			switch strings.ToLower(name) {
 			case "de_de.iso-8859-1", "de_de.iso88591":
 				s.decPt, s.thousSep = ',', '.'
