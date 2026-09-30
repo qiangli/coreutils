@@ -1,5 +1,10 @@
-// Package localedefcmd provides the parse/validate stage of POSIX localedef.
-// Locale-store compilation is deliberately deferred to the next story.
+// Package localedefcmd implements POSIX localedef: it parses and validates a
+// locale definition and compiles it into the Go-owned locale store, where
+// pkg/locale, locale(1) and the consuming utilities read it back.
+//
+// The store is LOCPATH-style: $LOCPATH when set, else $HOME/.bashy/locale.
+// Nothing outside that directory is touched — a pure-Go localedef has no
+// business writing into a libc locale archive it cannot describe.
 package localedefcmd
 
 import (
@@ -8,20 +13,23 @@ import (
 	"io"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/localedef"
 	"github.com/qiangli/coreutils/tool"
 )
 
 var cmd = &tool.Tool{
 	Name:     "localedef",
-	Synopsis: "Parse and validate locale definitions (no locale output yet).",
+	Synopsis: "Compile a locale definition into the locale store.",
 	Usage:    "localedef [-c] [-f charmap] [-i sourcefile] [-u codeset] name",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// Options are retained separately for the subsequent compilation stage. In
-// this parse-only stage Force and CodeSet do not cause output or transcoding.
+// Options carry the parsed command line. CodeSet (-u) selects the charmap by
+// name only when no -f charmap was given; no transcoding is performed, so a
+// definition whose bytes do not belong to the named codeset is refused rather
+// than silently reinterpreted.
 type Options struct {
 	Force                          bool
 	Charmap, Source, CodeSet, Name string
@@ -137,6 +145,30 @@ func run(rc *tool.RunContext, args []string) int {
 			code = 4
 		}
 		fmt.Fprintf(rc.Err, "localedef: %s: %s: %s\n", label, severity, d.Error())
+	}
+	// POSIX: warnings alone do not prevent the locale from being created, and
+	// -c creates it even so. An error does prevent it: writing a locale whose
+	// definition did not compile would publish data nobody defined.
+	if code == 4 && !o.Force {
+		return code
+	}
+	// A "copy" directive is resolved against the store: the only locale we can
+	// honour a copy of is one we compiled ourselves.
+	resolve := func(name string) (*locale.Compiled, bool) { return locale.LookupCompiled(rc.Env, name) }
+	compiled, err := localedef.CompileWithCopy(o.Name, src, cm, resolve)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "localedef: %s: %v\n", label, err)
+		return 4
+	}
+	if o.CodeSet != "" {
+		compiled.Charmap = o.CodeSet
+	}
+	dir, err := locale.DefaultStoreDir(rc.Env)
+	if err != nil {
+		return fail(err)
+	}
+	if err := locale.Save(dir, compiled); err != nil {
+		return fail(err)
 	}
 	return code
 }

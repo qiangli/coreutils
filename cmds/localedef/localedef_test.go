@@ -12,10 +12,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/localedef"
 	"github.com/qiangli/coreutils/pkg/posixprovider"
 	"github.com/qiangli/coreutils/tool"
 )
+
+// Every invocation gets its own LOCPATH so a test never reads or writes the
+// developer's real locale store.
+func storeEnv(dir string) []string { return []string{"LOCPATH=" + filepath.Join(dir, "store")} }
 
 func TestCommand(t *testing.T) {
 	for _, tc := range []struct {
@@ -49,8 +54,16 @@ func TestCommand(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "source"), []byte("LC_NUMERIC\ndecimal_point \"<period>\"\nEND LC_NUMERIC\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
+			// A compiled "base" locale so a copy directive has something real
+			// to resolve against: only a locale we compiled can be copied.
+			base := &locale.Compiled{Name: "base", Charmap: "ASCII", MbCurMin: 1, MbCurMax: 1}
+			base.Set("LC_TIME", "d_fmt", locale.Keyword{Values: []string{"%d.%m.%Y"}})
+			env := storeEnv(dir)
+			if err := locale.Save(filepath.Join(dir, "store"), base); err != nil {
+				t.Fatal(err)
+			}
 			var out, errout bytes.Buffer
-			rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(tc.input), Out: &out, Err: &errout}}
+			rc := &tool.RunContext{Dir: dir, Env: env, Stdio: tool.Stdio{In: strings.NewReader(tc.input), Out: &out, Err: &errout}}
 			code := run(rc, tc.args)
 			if code != tc.code || !strings.Contains(errout.String(), tc.diag) {
 				t.Fatalf("code=%d stderr=%q want %d / %q", code, errout.String(), tc.code, tc.diag)
@@ -61,8 +74,15 @@ func TestCommand(t *testing.T) {
 			if tc.name != "help" && out.Len() != 0 {
 				t.Fatalf("unexpected stdout: %s", &out)
 			}
+			// The locale goes into the store, never into the working directory.
 			if _, err := os.Stat(filepath.Join(dir, "test")); !os.IsNotExist(err) {
-				t.Fatalf("parse-only command wrote output: %v", err)
+				t.Fatalf("command wrote into the working directory: %v", err)
+			}
+			// --help writes usage and compiles nothing; every other successful
+			// invocation (warnings included, per POSIX) publishes the locale.
+			_, compiled := locale.LookupCompiled(env, "test")
+			if want := tc.code < 4 && tc.name != "help"; compiled != want {
+				t.Fatalf("compiled=%v want %v (code %d)", compiled, want, code)
 			}
 		})
 	}
@@ -109,7 +129,7 @@ func TestProviderRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("provider did not diagnose malformed source line 2: %v %s", err, output)
 	}
 	var out, diag bytes.Buffer
-	rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &diag}}
+	rc := &tool.RunContext{Dir: dir, Env: storeEnv(dir), Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &diag}}
 	if code := run(rc, []string{"-f", "map", "-i", "source", "test"}); code <= 3 || !strings.Contains(diag.String(), "line 2") {
 		t.Fatalf("Go command accepted malformed source: %d %s", code, &diag)
 	}
@@ -129,7 +149,7 @@ func TestDefaultCharmap(t *testing.T) {
 	}{{"period", 0}, {"A", 0}, {"newline", 0}, {"missing", 4}} {
 		t.Run(tc.symbol, func(t *testing.T) {
 			var out, diag bytes.Buffer
-			rc := &tool.RunContext{Stdio: tool.Stdio{In: strings.NewReader("LC_NUMERIC\ndecimal_point \"<" + tc.symbol + ">\"\nEND LC_NUMERIC\n"), Out: &out, Err: &diag}}
+			rc := &tool.RunContext{Env: storeEnv(t.TempDir()), Stdio: tool.Stdio{In: strings.NewReader("LC_NUMERIC\ndecimal_point \"<" + tc.symbol + ">\"\nEND LC_NUMERIC\n"), Out: &out, Err: &diag}}
 			if code := run(rc, []string{"test"}); code != tc.code {
 				t.Fatalf("code=%d want %d stderr=%s", code, tc.code, &diag)
 			}
