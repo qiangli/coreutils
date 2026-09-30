@@ -98,8 +98,8 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
         self.assertIn("| Evidence | Verified | 0 |", rendered)
         self.assertIn("| Evidence | Implemented | 4 |", rendered)
-        self.assertIn("| Evidence | Partial | 104 |", rendered)
-        self.assertIn("| Evidence | Missing | 8 |", rendered)
+        self.assertIn("| Evidence | Partial | 105 |", rendered)
+        self.assertIn("| Evidence | Missing | 7 |", rendered)
         self.assertEqual(self.row("nice")["evidence_state"], "implemented")
 
     def test_exact_four_state_vocabulary_is_enforced(self) -> None:
@@ -575,7 +575,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_owned_source_gate_has_exact_scope_and_accepts_only_ready_states(self) -> None:
         errors = manifest.owned_source_errors(self.rows)
-        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 104)
+        self.assertEqual(sum(error.endswith("state=partial") for error in errors), 105)
         self.assertFalse(any(error.startswith("ar:") for error in errors))
         with (
             mock.patch.object(sys, "argv", [str(SCRIPT), "--require-owned-source-complete"]),

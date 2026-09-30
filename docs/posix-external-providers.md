@@ -173,7 +173,8 @@ Never mirror or republish the built binaries. The full posture is in the header
 of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 `docs/posix-provider-distribution-policy.md`.
 
-The pinned glibc 2.39 `localedef` build likewise carries one narrowly scoped
+Historical build note (localedef is now Go-owned and unpinned): the former
+glibc 2.39 `localedef` build carried one narrowly scoped
 source correction. Upstream turns `POSIXLY_CORRECT` into global `--verbose`,
 although its cited POSIX requirement concerns missing characters in the
 charmap. The correction passes conformance verbosity only to the charmap reader,

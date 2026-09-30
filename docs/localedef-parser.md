@@ -1,31 +1,53 @@
-# Pure-Go localedef parser (story 155)
+# Pure-Go localedef parser, store and collation
 
-`cmds/localedef` is an embeddable parse/validate command. Importing it registers
-`localedef` with `tool`; it is not yet imported by the multicall. The existing
-external-provider routing and the applet inventory remain unchanged.
+`cmds/localedef` is registered by the multicall. It compiles supported locale
+sources into the Go-owned LOCPATH store; it no longer dispatches to an external
+localedef provider. This is partial POSIX support, not full conformance.
 
-The implementation is clean-room Go based on POSIX.1-2017
-[XCU localedef](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/utilities/localedef.html)
-and [XBD locale definitions](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/V1_chap07.html).
-No upstream implementation or locale data is included.
+The implementation is clean-room Go based on POSIX.1-2017 specifications and
+black-box behavior, without copied or translated GNU/glibc/CUPS source.
 
 ```
 localedef [-c] [-f charmap] [-i sourcefile] [-u codeset] name
 ```
 
-Source input defaults to invocation stdin. Files resolve against `RunContext.Dir`.
-An explicit charmap can be plain text or gzip; without `-f`, the portable
-character names use ASCII. Successful validation is silent. Status is 0 for
-valid input, 1 for warnings, and 4 for errors; diagnostics go to stderr and
-include the input filename and source line when available.
+Input defaults to invocation stdin; file and relative store paths honor
+RunContext.Dir. Charmaps may be plain text or gzip; the default is ASCII.
+Errors never create permanent output, including with -c. Warnings require -c
+to create output (status 1); without it they return 4 without changing output.
+Required -u conversion currently fails explicitly with status 2. Codeset
+mapping, pathname name operands and successful-category stdout reporting remain
+tracked by story 162 (02d2bb56298e).
 
-This is the first of three delivery stories, not a locale compiler. No output
-files are created. `-c`, `-u`, and the locale name are parsed into `Options` for
-the next compilation stage; `-u` does not yet transcode encodings. The warning
-status is 1 with or without `-c` during this parse-only stage. Copy targets are
-retained without being opened or resolved. Category completeness, character
-class semantics, locale-store output, and compiled collation belong to the
-following stories.
+Compiled collation supports explicit character orders, collating elements and
+symbols, forward/backward levels, IGNORE weights, symbolic weight strings,
+UNDEFINED expansion and category copy. Sort, ls, comm, join and byte bracket
+consumers in grep/sed read compiled collation before host fallback.
+
+Unsupported forms fail explicitly: general order ellipsis, position rules,
+non-UTF-8 element encodings, literal rather than ordered-symbol weight strings,
+missing weight references, and byte brackets over multibyte or multi-character
+collating elements. Inputs outside the compiled element set are errors; there
+is no invented fallback order. Malformed compiled stores do not fall back to
+the host. These limits remain visible even though ownership is now Go-only.
+
+## Part3 recovery worker evidence
+
+Interrupted run25 work was preserved in f1fed90a, then merged normally with
+accepted integration base db0bb5eb in a64a0bd3. Both histories remain intact.
+Fresh scoped terminal logs:
+
+- /tmp/s340-recovery25-final-focused.log: 13 affected packages passed normal tests.
+- /tmp/s340-recovery25-race.log: pkg/localedef, pkg/locale and pkg/collate passed race tests.
+- /tmp/s340-recovery25-parser-final.log: localedef and collate passed after parser-audit syntax adjustment.
+- /tmp/s340-recovery25-metadata-final2.log: all 58 interface metadata tests passed.
+
+The applet matrix and interface generator checks passed with combined ownership
+95/14/7 (availability), 87/22/7 (effective). The localedef interface ledger is
+partial. Earlier /tmp/s340-red.log, focused/race logs and gate-final.log remain
+historical evidence, including full-suite failures; no fresh full-suite or
+whole-tree cross-platform claim is made. The parent independently gates this
+candidate. Worker recovery did not merge canonical/main, push, publish or install.
 
 `pkg/localedef` exposes `ParseCharmap`, `ParseSource`, `DefaultCharmap`, and
 `Validate`. `Charmap.Symbols` maps names without angle brackets to encoded bytes.

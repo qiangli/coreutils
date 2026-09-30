@@ -47,7 +47,8 @@ func parseOptions(args []string) (Options, error) {
 		}
 		for i := 1; i < len(a); i++ {
 			flag := a[i]
-			if flag == 'c' {
+			switch flag {
+			case 'c':
 				o.Force = true
 				continue
 			}

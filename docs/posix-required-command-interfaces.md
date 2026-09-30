@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 94 |
+| Availability | Go | 95 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 8 |
-| Effective owner | Go | 86 |
+| Availability | Provider | 7 |
+| Effective owner | Go | 87 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 8 |
+| Effective owner | Provider | 7 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 4 |
-| Evidence | Partial | 104 |
-| Evidence | Missing | 8 |
+| Evidence | Partial | 105 |
+| Evidence | Missing | 7 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 86 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 87 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 108 owned rows (86 Go plus 22 shell) without treating the
-8 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 109 owned rows (87 Go plus 22 shell) without treating the
+7 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -2710,7 +2710,7 @@ locale [-ck] name...
 
 ## `localedef`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2726,33 +2726,33 @@ localedef [-c] [-f charmap] [-i sourcefile] [-u code_set_name] name
 
 **Issue 7 option-argument candidate:** `-f=<charmap>; -i=<inputfile>; -u=<code_set_name>`.
 
-**Operands:** `name`. UNVERIFIED
+**Operands:** `name`. name identifies one locale; slash-containing names designate an output pathname
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option processing; source uses category sections terminated by END category
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read locale source definitions when -i is absent
 
 **Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Report successfully processed categories in unspecified format
 
-**Standard error:** UNVERIFIED
+**Standard error:** Diagnostic messages
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Create compiled locale definitions; errors produce no permanent output; -c permits output after warnings`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 success;1 warnings with created output;2 limits or unsupported codeset;3 creation unsupported;greater than3 warnings or errors without output
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`manual`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#localedef`.
+**Implementation:** `cmds/localedef`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/localedef`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:localedef:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/localedef/localedef_test.go#TestRelativeStoreCompilerAndConsumers`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:localedef:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
