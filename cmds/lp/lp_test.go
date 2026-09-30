@@ -161,6 +161,39 @@ func TestMailSubscription(t *testing.T) {
 	}
 }
 
+func TestWriteSubscription(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status uint16
+		args   []string
+	}{
+		{"accepted", 0, []string{"-w"}},
+		{"ignored-attributes", 1, []string{"-w"}},
+		{"ignored-subscriptions", 3, []string{"-w"}},
+		{"mail-and-write", 0, []string{"-mw"}},
+		{"multiple-documents", 0, []string{"-w", "-", "-"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, got := stub(t, tc.status, 5)
+			env := []string{"LP_IPP_URI=" + srv.URL, "LPDEST=d", "USER=bob"}
+			out, e, c := runLP(t, env, "x", tc.args...)
+			if c != 0 || e != "" || !strings.HasPrefix(out, "request id is d-5 ") {
+				t.Fatalf("code %d stdout %q stderr %q", c, out, e)
+			}
+			s := (*got)[0].sub
+			if string(s["notify-recipient-uri"]) != "mailto:bob@localhost" ||
+				string(s["notify-events"]) != "job-completed" || string(s["notify-user-data"]) != "write" {
+				t.Fatalf("bad write subscription %v", s)
+			}
+			for _, r := range (*got)[1:] {
+				if len(r.sub) != 0 {
+					t.Fatalf("subscription repeated on Send-Document: %v", r.sub)
+				}
+			}
+		})
+	}
+}
+
 func TestMultiFileIsOneRequest(t *testing.T) {
 	srv, got := stub(t, 0, 77)
 	env := []string{"LP_IPP_URI=" + srv.URL, "LPDEST=d"}

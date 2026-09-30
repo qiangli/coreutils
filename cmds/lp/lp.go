@@ -12,7 +12,10 @@
 // to "true"). -c is accepted (files are always read before sending).
 // -m asks the server to mail the requesting user on completion, via an
 // RFC 3995 subscription group (notify-recipient-uri mailto:USER@localhost,
-// notify-events job-completed). One invocation is one request: a single
+// notify-events job-completed). -w requests the same best-effort subscription
+// with notify-user-data set to "write" for terminal notification. Delivery
+// is delegated to the server; ignored subscriptions do not fail the job.
+// One invocation is one request: a single
 // file is a Print-Job; several files are a Create-Job followed by one
 // Send-Document per file (last-document set on the final one).
 package lpcmd
@@ -32,7 +35,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "lp",
 	Synopsis: "Submit files to a printer over IPP.",
-	Usage: "lp [-c] [-d dest] [-n copies] [-o option]... [-s] [-t title] [file...]\n" +
+	Usage: "lp [-c] [-d dest] [-n copies] [-o option]... [-msw] [-t title] [file...]\n" +
 		"Destination: -d, else $LPDEST, else $PRINTER. Bare names map to\n" +
 		"ipp://localhost:631/printers/NAME; $LP_IPP_URI overrides the URI.",
 }
@@ -46,6 +49,7 @@ func run(rc *tool.RunContext, args []string) int {
 	_ = fs.BoolP("c", "c", false, "copy files before printing (always done)")
 	dest := fs.StringP("d", "d", "", "destination printer")
 	mail := fs.BoolP("m", "m", false, "send mail after printing")
+	write := fs.BoolP("w", "w", false, "request a terminal message after printing")
 	copies := fs.IntP("n", "n", 1, "number of copies")
 	var opts []string
 	fs.StringArrayVarP(&opts, "o", "o", nil, "printer-specific option")
@@ -105,11 +109,11 @@ func run(rc *tool.RunContext, args []string) int {
 	var id uint32
 	var err error
 	if len(docs) == 1 {
-		id, err = send(rc, uri, encode(opPrintJob, uri, user, job, *copies, opts, *mail, 0, false, docs[0]))
+		id, err = send(rc, uri, encode(opPrintJob, uri, user, job, *copies, opts, *mail, *write, 0, false, docs[0]))
 	} else {
-		id, err = send(rc, uri, encode(opCreateJob, uri, user, job, *copies, opts, *mail, 0, false, nil))
+		id, err = send(rc, uri, encode(opCreateJob, uri, user, job, *copies, opts, *mail, *write, 0, false, nil))
 		for i := 0; err == nil && i < len(docs); i++ {
-			_, err = send(rc, uri, encode(opSendDocument, uri, user, job, 0, nil, false, id, i == len(docs)-1, docs[i]))
+			_, err = send(rc, uri, encode(opSendDocument, uri, user, job, 0, nil, false, false, id, i == len(docs)-1, docs[i]))
 		}
 	}
 	if err != nil {
@@ -149,9 +153,9 @@ const (
 )
 
 // encode builds an IPP/1.1 request, request-id 1. Print-Job and
-// Create-Job carry the job attributes (and, with mail, a subscription
+// Create-Job carry the job attributes (and, with mail or write, a subscription
 // group); Send-Document names the job by id and carries last-document.
-func encode(op uint16, uri, user, job string, copies int, opts []string, mail bool, jobID uint32, last bool, doc []byte) []byte {
+func encode(op uint16, uri, user, job string, copies int, opts []string, mail, write bool, jobID uint32, last bool, doc []byte) []byte {
 	var b bytes.Buffer
 	b.Write([]byte{1, 1, byte(op >> 8), byte(op), 0, 0, 0, 1, 0x01})
 	attr(&b, 0x47, "attributes-charset", []byte("utf-8"))
@@ -188,10 +192,13 @@ func encode(op uint16, uri, user, job string, copies int, opts []string, mail bo
 			}
 			attr(&b, 0x44, k, []byte(v))
 		}
-		if mail {
+		if mail || write {
 			b.WriteByte(0x06)
 			attr(&b, 0x45, "notify-recipient-uri", []byte("mailto:"+user+"@localhost"))
 			attr(&b, 0x44, "notify-events", []byte("job-completed"))
+			if write {
+				attr(&b, 0x30, "notify-user-data", []byte("write"))
+			}
 		}
 	}
 	b.WriteByte(0x03)

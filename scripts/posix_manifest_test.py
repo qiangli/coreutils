@@ -98,8 +98,8 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
         self.assertIn("| Evidence | Verified | 0 |", rendered)
         self.assertIn("| Evidence | Implemented | 4 |", rendered)
-        self.assertIn("| Evidence | Partial | 102 |", rendered)
-        self.assertIn("| Evidence | Missing | 10 |", rendered)
+        self.assertIn("| Evidence | Partial | 103 |", rendered)
+        self.assertIn("| Evidence | Missing | 9 |", rendered)
         self.assertEqual(self.row("nice")["evidence_state"], "implemented")
 
     def test_exact_four_state_vocabulary_is_enforced(self) -> None:
@@ -132,7 +132,7 @@ class ManifestValidationTest(unittest.TestCase):
         ):
             manifest.main()
 
-    def test_owned_completion_gate_has_exact_84_plus_22_scope(self) -> None:
+    def test_owned_completion_gate_has_exact_85_plus_22_scope(self) -> None:
         owned_errors = manifest.completion_errors(
             self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
         )
@@ -145,7 +145,7 @@ class ManifestValidationTest(unittest.TestCase):
                 row["effective_owner"] in manifest.OWNED_IMPLEMENTATION_OWNERS
                 for row in self.rows
             ),
-            106,
+            107,
         )
         self.assertFalse(
             any(error.split(":", 1)[0] in provider_names for error in owned_errors)
@@ -667,7 +667,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_parser_source_comparison_covers_every_go_selected_row(self) -> None:
         go_rows = [row for row in self.rows if row["effective_owner"] == "go"]
-        self.assertEqual(len(go_rows), 84)
+        self.assertEqual(len(go_rows), 85)
         for row in go_rows:
             with self.subTest(command=row["command"]):
                 recognized = manifest.recognized_go_options(row)

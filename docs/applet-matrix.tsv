@@ -61,7 +61,7 @@ locale	cmds/locale		POSIX/Unix utility	no	yes	3	37
 localedef	cmds/posixproviders		POSIX external provider	no	yes	4	35
 logger	cmds/logger		POSIX/Unix utility	no	yes	3	32
 logname	cmds/logname		GNU Coreutils	yes	yes	2	10
-lp	cmds/lp		POSIX/Unix utility	no	yes	1	7
+lp	cmds/lp		POSIX/Unix utility	no	yes	1	8
 ls	cmds/ls		GNU Coreutils	yes	yes	6	71
 m4	cmds/posixproviders		POSIX external provider	no	yes	4	35
 mail	cmds/mailx	mailx	Bashy/other extension	no	no	4	37
