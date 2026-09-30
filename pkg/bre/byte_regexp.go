@@ -2,6 +2,7 @@ package bre
 
 import (
 	"fmt"
+
 	"github.com/qiangli/coreutils/pkg/locale"
 )
 

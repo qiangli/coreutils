@@ -15,6 +15,7 @@ import (
 // independent of whichever locale archive happens to be installed on a host.
 type grepLocale struct {
 	compiled      *bre.LocaleByteTables
+	compiledUTF8  bool
 	ctypeGerman   bool
 	collateGerman bool
 }
@@ -24,13 +25,19 @@ func (l grepLocale) latin1Bytes() bool { return l.ctypeGerman || l.collateGerman
 func grepLocaleFromEnv(env []string) (grepLocale, error) {
 	ctypeName := localeCategory(env, "LC_CTYPE")
 	collateName := localeCategory(env, "LC_COLLATE")
-	if locale.IsMacOSDefaultUTF8(env, locale.CType) {
+	compiledUTF8 := locale.HasCompiledFile(env, collateName) &&
+		(locale.IsCUTF8(ctypeName) || locale.IsHostDefaultUTF8(env, locale.CType))
+	if !compiledUTF8 && locale.IsMacOSDefaultUTF8(env, locale.CType) {
 		ctypeName = "POSIX"
 	}
 	if locale.IsMacOSDefaultUTF8(env, locale.Collate) {
 		collateName = "POSIX"
 	}
-	ctypeGerman, err := germanLocale(ctypeName)
+	ctypeLookup := ctypeName
+	if compiledUTF8 {
+		ctypeLookup = "C"
+	}
+	ctypeGerman, err := germanLocale(ctypeLookup)
 	if err != nil {
 		return grepLocale{}, fmt.Errorf("LC_CTYPE=%s: %w", ctypeName, err)
 	}
@@ -51,7 +58,7 @@ func grepLocaleFromEnv(env []string) (grepLocale, error) {
 		if err != nil {
 			return grepLocale{}, err
 		}
-		return grepLocale{compiled: tables}, nil
+		return grepLocale{compiled: tables, compiledUTF8: compiledUTF8}, nil
 	}
 	collateGerman, err := germanLocale(collateName)
 	if err != nil {

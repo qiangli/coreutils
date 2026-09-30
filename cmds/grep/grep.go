@@ -220,11 +220,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	var re grepMatcher
-	if locale.compiled != nil && patternsNeedPackageMatcher(split, *extended) {
-		fmt.Fprintln(rc.Err, "grep: pattern syntax unsupported with compiled collation")
-		return 2
-	}
-	if !locale.latin1Bytes() && !patternsNeedPackageMatcher(split, *extended) {
+	if locale.compiledUTF8 {
+		re, err = compileCompiledUTF8Patterns(split, *fixed, *extended, *lineRe, *ignoreCase, locale.compiled)
+	} else if locale.compiled != nil || (!locale.latin1Bytes() && !patternsNeedPackageMatcher(split, *extended)) {
 		// C and POSIX are single-byte locales. Match every ordinary pattern on
 		// the byte-regexp substrate, rather than only patterns which themselves
 		// contain a high byte. Go regexp otherwise treats UTF-8 input as Unicode:
