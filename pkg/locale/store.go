@@ -299,6 +299,9 @@ func validateCompiled(c *Compiled) error {
 		default:
 			return fmt.Errorf("invalid compiled category %q", cat)
 		}
+		if keywords == nil {
+			return fmt.Errorf("invalid compiled category %q: null keyword set", cat)
+		}
 		for key, value := range keywords {
 			if key == "" || len(value.Values) == 0 {
 				return fmt.Errorf("invalid compiled keyword %q", key)

@@ -52,3 +52,17 @@ func TestNumericSortRefusesLocaleWithoutNumeric(t *testing.T) {
 		t.Fatalf("sort accepted a locale with no LC_NUMERIC: %d %q", code, errb)
 	}
 }
+
+func TestNumericSortCompiledUTF8OverridesCarriedDefault(t *testing.T) {
+	store := t.TempDir()
+	c := &locale.Compiled{Name: "xx_XX.UTF-8", Charmap: "UTF-8", MbCurMin: 1, MbCurMax: 4}
+	c.Set("LC_NUMERIC", "decimal_point", locale.Keyword{Values: []string{"!"}})
+	if err := locale.Save(store, c); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"LOCPATH=" + store, "LC_NUMERIC=xx_XX.UTF-8", "LC_COLLATE=C"}
+	out, errb, code := runToolEnv(t, t.TempDir(), env, "1!9\n1!20\n", "-n")
+	if code != 0 || out != "1!9\n1!20\n" {
+		t.Fatalf("sort -n = %q (%d) %q; want compiled radix ordering", out, code, errb)
+	}
+}

@@ -71,6 +71,7 @@ func TestMalformedStoreFallsBack(t *testing.T) {
 		`{"name":"wrong","categories":{"LC_MESSAGES":{"yesexpr":{"values":["^[oO]"]}}}}`,
 		`{"name":"POSIX","categories":{"LC_MESSAGES":{"yesexpr":{"values":[]}}}}`,
 		`{"name":"POSIX","categories":{"LC_COLLATE":{}}}`,
+		`{"name":"POSIX","categories":{"LC_NUMERIC":null}}`,
 		`{"name":"POSIX"} trailing`,
 	} {
 		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
