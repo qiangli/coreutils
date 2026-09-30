@@ -1235,7 +1235,8 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			var outEncodingErr, linkEncodingErr error
 			archiveOut, outEncodingErr = localTextToArchive(rc, out)
 			archiveLink, linkEncodingErr = localTextToArchive(rc, link)
-			invalidValue := outEncodingErr != nil || linkEncodingErr != nil || invalidPAXLocalDestinationName(out) || link != "" && invalidPAXLocalDestinationName(link)
+			invalidName := invalidPAXArchiveName(out) || link != "" && invalidPAXArchiveName(link)
+			invalidValue := outEncodingErr != nil || linkEncodingErr != nil || invalidName
 			// POSIX's default must preserve a pathname that is valid in the
 			// invocation locale even when it has no UTF-8 translation.  Such a
 			// name fits in the physical ustar header and is identified as binary
@@ -1244,10 +1245,13 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			// (NUL/overlong components) are never smuggled through this fallback.
 			implicitBinary = !o.paxOptions.invalidSet &&
 				(outEncodingErr != nil || linkEncodingErr != nil) &&
-				!invalidPAXLocalDestinationName(out) &&
-				(link == "" || !invalidPAXLocalDestinationName(link))
+				!invalidName
 			if invalidValue && o.paxOptions.invalid == "bypass" && !implicitBinary {
-				fmt.Fprintf(rc.Err, "pax: %s: value cannot be encoded as UTF-8; bypassed\n", out)
+				reason := "value cannot be encoded as UTF-8"
+				if invalidName {
+					reason = "pathname is empty, contains NUL, or has a component longer than {NAME_MAX}"
+				}
+				fmt.Fprintf(rc.Err, "pax: %s: %s; bypassed\n", out, reason)
 				return nil
 			}
 			if outEncodingErr != nil {

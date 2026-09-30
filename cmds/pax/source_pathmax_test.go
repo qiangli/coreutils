@@ -269,3 +269,63 @@ func TestFollowedSymlinkBelowOperandNearPathMaxIsArchived(t *testing.T) {
 		t.Fatalf("archive is missing the deep sibling %q", sibling)
 	}
 }
+
+// A source member longer than the fixed 4096 destination ceiling is still a
+// legal thing to archive: the pax extended header carries any length. The
+// Linux-only failure came from a sibling ("referent" beside a one-byte link
+// name) landing at 4102 bytes; building that length directly reproduces it on
+// hosts whose {PATH_MAX} is smaller.
+func TestWriteSourceMemberBeyondFixedCeilingIsArchived(t *testing.T) {
+	d := t.TempDir()
+	comps := nearLimitComponents(4102 - len("/x"))
+	member := path.Join(append(append([]string{}, comps...), "x")...)
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Skipf("root-relative directory handles unavailable: %v", err)
+	}
+	defer root.Close()
+	current := root
+	for _, c := range comps {
+		if err := current.Mkdir(c, 0o700); err != nil {
+			t.Skipf("host cannot create a %d-byte fixture component: %v", len(c), err)
+		}
+		next, err := current.OpenRoot(c)
+		if err != nil {
+			t.Skipf("host cannot descend into the fixture: %v", err)
+		}
+		if current != root {
+			current.Close()
+		}
+		current = next
+	}
+	err = regularLeaf(current)
+	current.Close()
+	if err != nil {
+		t.Skipf("host cannot create the fixture leaf: %v", err)
+	}
+	if len(member) <= 4096 {
+		t.Fatalf("fixture member length = %d, want > 4096", len(member))
+	}
+	if _, errOut, code := exec(t, d, "", "-w", "-f", "archive.pax", comps[0]); code != 0 || errOut != "" {
+		t.Fatalf("write over-4096 source member = (%d, %q), want (0, \"\")", code, errOut)
+	}
+	h, body := archivedMember(t, filepath.Join(d, "archive.pax"), member)
+	if h == nil || body != "deep" {
+		t.Fatalf("over-4096 member = (%v, %q), want a regular file holding \"deep\"", h, body)
+	}
+}
+
+func TestInvalidArchiveNameIgnoresTotalLength(t *testing.T) {
+	long := strings.Repeat(strings.Repeat("p", 200)+"/", 25) + "x"
+	if invalidPAXArchiveName(long) {
+		t.Fatalf("a %d-byte name with short components is a valid archive name", len(long))
+	}
+	if !invalidPAXLocalDestinationName(strings.Repeat(strings.Repeat("p", 200)+"/", 21) + "x") {
+		t.Fatal("destination check must still reject names beyond 4096")
+	}
+	for _, bad := range []string{"", "a\x00b", strings.Repeat("p", 256)} {
+		if !invalidPAXArchiveName(bad) {
+			t.Fatalf("invalidPAXArchiveName(%q) = false, want true", bad)
+		}
+	}
+}
