@@ -588,7 +588,17 @@ class ManifestValidationTest(unittest.TestCase):
         for row in rows:
             if row["effective_owner"] in manifest.OWNED_IMPLEMENTATION_OWNERS:
                 row["evidence_state"] = "implemented"
-        self.assertEqual(manifest.owned_source_errors(rows), ["lp: parser gaps=-w"])
+        self.assertEqual(manifest.owned_source_errors(rows), [])
+        # lp now implements -w. Remove it from the parser audit result to
+        # retain the regression that a missing required option blocks readiness.
+        recognize = manifest.recognized_go_options
+
+        def without_lp_write(row, root=manifest.ROOT):
+            options = recognize(row, root)
+            return options - {"-w"} if row["command"] == "lp" else options
+
+        with mock.patch.object(manifest, "recognized_go_options", side_effect=without_lp_write):
+            self.assertEqual(manifest.owned_source_errors(rows), ["lp: parser gaps=-w"])
         next(row for row in rows if row["command"] == "nice")["evidence_state"] = "missing"
         self.assertIn("nice: state=missing", manifest.owned_source_errors(rows))
 
