@@ -9,9 +9,8 @@ import (
 	"github.com/qiangli/coreutils/pkg/locale"
 )
 
-// compileCollation implements explicit POSIX orders. Ellipsis and position
-// are refused until their semantics can be represented without approximation.
-func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
+// compileCollation implements the POSIX character order and weight levels.
+func compileCollation(c *locale.Compiled, s *Section, cm *Charmap, warnings *[]Diagnostic) error {
 	data := &locale.Collation{}
 	names := map[string]string{}
 	symbols := map[string]bool{}
@@ -48,18 +47,18 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 				return fail()
 			}
 			started = true
-			groups, err := splitGroups(e.Values)
-			if err != nil {
-				return err
-			}
+			groups := collationWeights(e.Values)
 			if len(groups) == 0 {
 				data.Backward = append(data.Backward, false)
+				data.Position = append(data.Position, false)
 			}
 			for _, g := range groups {
-				if len(g) != 1 || (g[0].Text != "forward" && g[0].Text != "backward") {
-					return fail()
+				backward, position, err := collationDirectives(g)
+				if err != nil {
+					return atLine(e.Line, err)
 				}
-				data.Backward = append(data.Backward, g[0].Text == "backward")
+				data.Backward = append(data.Backward, backward)
+				data.Position = append(data.Position, position)
 			}
 		case "order_end":
 			if !started || ended {
@@ -67,7 +66,7 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 			}
 			ended = true
 		default:
-			if !started || ended || (!strings.HasPrefix(e.Keyword, "<") && e.Keyword != "UNDEFINED") {
+			if !started || ended || (!strings.HasPrefix(e.Keyword, "<") && e.Keyword != "UNDEFINED" && e.Keyword != "...") {
 				return fail()
 			}
 			rows = append(rows, e)
@@ -75,6 +74,11 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 	}
 	if !started || !ended {
 		return fmt.Errorf("LC_COLLATE: order_start and order_end required")
+	}
+	var err error
+	rows, err = expandCollationEllipses(rows, names, cm)
+	if err != nil {
+		return err
 	}
 	// Expand UNDEFINED from the charmap, in encoding order, at its declared
 	// position. Aliases of a character do not create duplicate elements.
@@ -95,6 +99,16 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 		missing = append(missing, text)
 	}
 	sort.Strings(missing)
+	undefinedPresent := false
+	for _, e := range rows {
+		undefinedPresent = undefinedPresent || e.Keyword == "UNDEFINED"
+	}
+	if !undefinedPresent && len(missing) > 0 {
+		if warnings != nil {
+			*warnings = append(*warnings, Diagnostic{Line: s.Line, Warning: true, Message: fmt.Sprintf("LC_COLLATE: %d omitted coded characters appended to the order", len(missing))})
+		}
+		rows = append(rows, Entry{Keyword: "UNDEFINED", Line: s.Line})
+	}
 	var expanded []Entry
 	undefinedSeen := false
 	for _, e := range rows {
@@ -117,8 +131,26 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 				firstName = name
 			}
 			values := append([]Value(nil), e.Values...)
-			if len(values) == 0 {
-				values = []Value{{Kind: Symbol, Text: firstName}}
+			// Unspecified primary weights share a rank for multi-level
+			// UNDEFINED orders. Subsequent defaults retain character order.
+			groups := collationWeights(values)
+			values = nil
+			for level := range data.Backward {
+				if level > 0 {
+					values = append(values, Value{Kind: Separator, Text: ";"})
+				}
+				if level < len(groups) && len(groups[level]) > 0 {
+					values = append(values, groups[level]...)
+				} else {
+					weightName := name
+					if level == 0 && len(data.Backward) > 1 {
+						weightName = firstName
+					}
+					values = append(values, Value{Kind: Symbol, Text: weightName})
+				}
+			}
+			if len(groups) > len(data.Backward) {
+				return problem(e.Line, "LC_COLLATE: too many weights")
 			}
 			for j, v := range values {
 				if v.Kind == Ellipsis {
@@ -140,6 +172,18 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 		}
 		rank[name] = i + 1
 	}
+	// Weight references may use any charmap alias of a ranged character.
+	textRank := map[string]int{}
+	for name, r := range rank {
+		if text, ok := names[name]; ok {
+			textRank[text] = r
+		}
+	}
+	for name, text := range names {
+		if rank[name] == 0 {
+			rank[name] = textRank[text]
+		}
+	}
 	seen := map[string]bool{}
 	for _, e := range rows {
 		name := strings.TrimSuffix(e.Keyword[1:], ">")
@@ -155,16 +199,13 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 		}
 		seen[text] = true
 		el := locale.CollatingElement{Text: text, Order: rank[name]}
-		groups, err := splitGroups(e.Values)
-		if err != nil {
-			return err
-		}
+		groups := collationWeights(e.Values)
 		if len(groups) > len(data.Backward) {
 			return problem(e.Line, "LC_COLLATE: too many weights")
 		}
 		for level := 0; level < len(data.Backward); level++ {
 			weights := []int{rank[name]}
-			if level < len(groups) {
+			if level < len(groups) && len(groups[level]) > 0 {
 				g := groups[level]
 				if len(g) != 1 {
 					return problem(e.Line, "LC_COLLATE: unsupported weight list")
@@ -200,4 +241,104 @@ func compileCollation(c *locale.Compiled, s *Section, cm *Charmap) error {
 	c.Collation = data
 	c.EnsureCategory("LC_COLLATE")
 	return nil
+}
+
+// Empty operands are self weights, including leading and trailing operands.
+func collationWeights(values []Value) [][]Value {
+	if len(values) == 0 {
+		return nil
+	}
+	groups := [][]Value{nil}
+	for _, v := range values {
+		if v.Kind == Separator && v.Text == ";" {
+			groups = append(groups, nil)
+		} else {
+			groups[len(groups)-1] = append(groups[len(groups)-1], v)
+		}
+	}
+	return groups
+}
+
+func collationDirectives(values []Value) (backward, position bool, err error) {
+	seen := map[string]bool{}
+	for i, v := range values {
+		if i%2 == 1 {
+			if v.Kind != Separator || v.Text != "," {
+				return false, false, fmt.Errorf("LC_COLLATE: expected comma between directives")
+			}
+			continue
+		}
+		if v.Kind != Word || seen[v.Text] || (v.Text != "forward" && v.Text != "backward" && v.Text != "position") {
+			return false, false, fmt.Errorf("LC_COLLATE: invalid directive %q", v.Text)
+		}
+		seen[v.Text] = true
+	}
+	if len(values)%2 == 0 || (seen["forward"] && seen["backward"]) {
+		return false, false, fmt.Errorf("LC_COLLATE: invalid ordering directives")
+	}
+	return seen["backward"], seen["position"], nil
+}
+
+// Expand only actual characters in the supplied repertoire; symbol spelling
+// does not define encoded order. Synthetic names let aliases share the range.
+func expandCollationEllipses(rows []Entry, names map[string]string, cm *Charmap) ([]Entry, error) {
+	chars := map[string]bool{}
+	for _, b := range cm.Symbols {
+		chars[string(b)] = true
+	}
+	var ordered []string
+	for ch := range chars {
+		ordered = append(ordered, ch)
+	}
+	sort.Strings(ordered)
+	endpoint := func(e Entry) (string, error) {
+		name := strings.TrimSuffix(strings.TrimPrefix(e.Keyword, "<"), ">")
+		ch, ok := names[name]
+		if !ok || !chars[ch] || utf8.RuneCountInString(ch) != 1 {
+			return "", problem(e.Line, "LC_COLLATE: ellipsis endpoint must be a coded character")
+		}
+		return ch, nil
+	}
+	var out []Entry
+	for i, e := range rows {
+		if e.Keyword != "..." {
+			out = append(out, e)
+			continue
+		}
+		low, high := "\x00", ""
+		if len(ordered) > 0 {
+			high = ordered[len(ordered)-1]
+		}
+		var err error
+		if i > 0 {
+			low, err = endpoint(rows[i-1])
+			if err != nil {
+				return nil, err
+			}
+		}
+		if i+1 < len(rows) {
+			high, err = endpoint(rows[i+1])
+			if err != nil {
+				return nil, err
+			}
+		}
+		if low >= high {
+			return nil, problem(e.Line, "LC_COLLATE: ellipsis endpoints must increase")
+		}
+		for j, ch := range ordered {
+			if ch <= low || ch >= high {
+				continue
+			}
+			name := fmt.Sprintf("\x00ellipsis%d_%d", i, j)
+			names[name] = ch
+			values := append([]Value(nil), e.Values...)
+			for k, v := range values {
+				if v.Kind == Ellipsis {
+					values[k] = Value{Kind: Symbol, Text: name}
+				}
+			}
+			out = append(out, Entry{Keyword: "<" + name + ">", Values: values, Line: e.Line})
+		}
+	}
+	return out, nil
 }

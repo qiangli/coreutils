@@ -48,6 +48,7 @@ type CollatingElement struct {
 }
 
 type Collation struct {
+	Position []bool             `json:"position,omitempty"`
 	Backward []bool             `json:"backward"`
 	Elements []CollatingElement `json:"elements"`
 }
@@ -380,7 +381,7 @@ func validateCompiled(c *Compiled) error {
 		return fmt.Errorf("invalid compiled collation category")
 	}
 	if d := c.Collation; d != nil {
-		if len(d.Backward) == 0 || len(d.Elements) == 0 {
+		if len(d.Backward) == 0 || len(d.Elements) == 0 || (len(d.Position) != 0 && len(d.Position) != len(d.Backward)) {
 			return fmt.Errorf("invalid compiled collation")
 		}
 		seen := map[string]bool{}

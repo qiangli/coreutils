@@ -58,7 +58,7 @@ func CompileWithCopy(name string, src *Source, cm *Charmap, resolve CopyResolver
 		}
 		switch cat {
 		case "LC_COLLATE":
-			if err := compileCollation(c, s, cm); err != nil {
+			if err := compileCollation(c, s, cm, nil); err != nil {
 				return nil, err
 			}
 		case "LC_CTYPE":

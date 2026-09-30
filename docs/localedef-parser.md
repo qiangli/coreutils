@@ -50,12 +50,17 @@ symbols, forward/backward levels, IGNORE weights, symbolic weight strings,
 UNDEFINED expansion and category copy. Sort, ls, comm, join and byte bracket
 consumers in grep/sed read compiled collation before host fallback.
 
-Required LC_COLLATE grammar still has residuals: general order ellipsis,
-position rules and empty weight operands are not fully implemented. Explicit
-UNDEFINED has tested IGNORE/ellipsis-weight expansion, but absent UNDEFINED
-does not yet warn and append omitted characters; comparison currently errors
-on those characters. Parent review tracks these as required behavior gaps, not
-optional extensions. Source: [POSIX.1-2017 locale definitions](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/V1_chap07.html).
+Order ellipses expand the supplied charmap in encoded order, with checked
+character endpoints. Empty weight operands use the element's own order.
+Forward/backward levels accept `position`, preserving the number of ignored
+elements encountered from the comparison direction. Explicit `UNDEFINED`
+retains IGNORE, selected symbolic weights and ellipsis weights. Without an
+explicit `UNDEFINED`, omitted coded characters produce a warning and are
+appended in encoded order. The CLI requires `-c` to write a warned definition
+(status 1); without `-c` it returns 4 and leaves output unchanged. Errors still
+prevent output even with `-c`. Multi-level UNDEFINED defaults share the primary
+weight and retain character order at subsequent levels.
+Source: [POSIX.1-2017 XBD 7.3.2](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/V1_chap07.html?view=full).
 
 Additional unsupported forms fail explicitly:
 non-UTF-8 element encodings, literal rather than ordered-symbol weight strings,

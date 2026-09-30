@@ -147,3 +147,25 @@ func TestPrivateStorePaths(t *testing.T) {
 		t.Fatal("public save accepted a path name")
 	}
 }
+
+func TestCollationPositionStore(t *testing.T) {
+	for _, position := range [][]bool{nil, {true}, {false, true}} {
+		c := &Compiled{Name: "position", Collation: &Collation{Backward: []bool{false}, Position: position, Elements: []CollatingElement{{Text: "a", Order: 1, Weights: [][]int{{1}}}}}}
+		c.EnsureCategory("LC_COLLATE")
+		dir := t.TempDir()
+		err := Save(dir, c)
+		if len(position) > 1 {
+			if err == nil {
+				t.Fatal("accepted malformed position levels")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := LookupCompiled([]string{"LOCPATH=" + dir}, "position")
+		if !ok || len(got.Collation.Position) != len(position) {
+			t.Fatal("position store round trip failed")
+		}
+	}
+}

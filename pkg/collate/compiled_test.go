@@ -31,8 +31,8 @@ func store(t *testing.T, body string) (string, []string) {
 	t.Helper()
 	dir := t.TempDir()
 	env := []string{"LC_CTYPE=C", "LC_COLLATE=custom.UTF-8", "LOCPATH=store"}
-	out, err, code := invoke(t, dir, env, "localedef", "LC_COLLATE\n"+body+"\nEND LC_COLLATE\n", "custom.UTF-8")
-	if code != 0 {
+	out, err, code := invoke(t, dir, env, "localedef", "LC_COLLATE\n"+body+"\nEND LC_COLLATE\n", "-c", "custom.UTF-8")
+	if code != 0 && !(code == 1 && strings.Contains(err, "omitted coded characters")) {
 		t.Fatalf("localedef: %d out=%q err=%q", code, out, err)
 	}
 	return dir, env
@@ -85,7 +85,7 @@ func TestCompiledWeightsAndElements(t *testing.T) {
 	if _, err := p.CollationWeights(); err == nil {
 		t.Fatal("multi-character byte brackets silently approximated")
 	}
-	if _, err := p.Compare("!", "a"); err == nil {
+	if _, err := p.Compare("é", "a"); err == nil {
 		t.Fatal("undefined input silently approximated")
 	}
 	p.Close()
@@ -105,7 +105,7 @@ func TestCompiledEquivalenceAndRangeDiffer(t *testing.T) {
 	}
 }
 func TestCompileUnsupportedCollation(t *testing.T) {
-	for _, body := range []string{"order_start forward,position\n<a>\norder_end", "order_start forward\n<a>\n...\n<z>\norder_end", "order_start forward\n<a> <missing>\norder_end"} {
+	for _, body := range []string{"order_start forward,backward\n<a>\norder_end", "order_start forward\n<z>\n...\n<a>\norder_end", "order_start forward\n<a> <missing>\norder_end"} {
 		src, err := localedef.ParseSource(strings.NewReader("LC_COLLATE\n" + body + "\nEND LC_COLLATE\n"))
 		if err != nil {
 			continue
@@ -162,5 +162,95 @@ func TestCompiledUndefined(t *testing.T) {
 	}
 	if n, err := p.Compare("b", "c"); err != nil || n >= 0 {
 		t.Fatalf("UNDEFINED encoding order: %d %v", n, err)
+	}
+}
+
+func TestCompiledPositionAndIgnore(t *testing.T) {
+	for _, direction := range []string{"forward", "backward"} {
+		t.Run(direction, func(t *testing.T) {
+			dir, env := store(t, "order_start "+direction+",position\n<a>\n<b>\n<x> IGNORE\n<z> \"<a><b>\"\nUNDEFINED IGNORE\norder_end")
+			p, err := collate.OpenEnv(locale.StoreEnvAt(env, func(s string) string { return filepath.Join(dir, s) }), "custom.UTF-8")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			pairs := [][2]string{{"b", "xa"}, {"axxb", "axxxa"}, {"ax", "a"}, {"z", "ab"}, {"xx", ""}}
+			wants := []int{-1, -1, 0, 0, 0}
+			if direction == "backward" {
+				pairs = [][2]string{{"b", "ax"}, {"bxxa", "axxxa"}, {"xa", "a"}, {"z", "ab"}, {"xx", ""}}
+			}
+			for i, pair := range pairs {
+				n, err := p.Compare(pair[0], pair[1])
+				if err != nil || (wants[i] == 0 && n != 0) || (wants[i] < 0 && n >= 0) {
+					t.Errorf("%q=%d,%v", pair, n, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCompiledOmissionForce(t *testing.T) {
+	dir := t.TempDir()
+	env := []string{"LOCPATH=store"}
+	source := "LC_COLLATE\norder_start forward\n<z>\n<a>\norder_end\nEND LC_COLLATE\n"
+	_, diagnostic, code := invoke(t, dir, env, "localedef", source, "omitted")
+	if code != 4 || !strings.Contains(diagnostic, "warning:") || !strings.Contains(diagnostic, "omitted coded characters") {
+		t.Fatalf("%d %s", code, diagnostic)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "store", "omitted.json")); !os.IsNotExist(err) {
+		t.Fatalf("unforced output: %v", err)
+	}
+	_, diagnostic, code = invoke(t, dir, env, "localedef", source, "-c", "omitted")
+	if code != 1 || !strings.Contains(diagnostic, "warning:") {
+		t.Fatalf("%d %s", code, diagnostic)
+	}
+	path := filepath.Join(dir, "store", "omitted.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := collate.OpenEnv(locale.StoreEnvAt(env, func(s string) string { return filepath.Join(dir, s) }), "omitted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	for _, pair := range [][2]string{{"z", "a"}, {"a", "!"}, {"!", "b"}, {"b", "c"}} {
+		n, err := p.Compare(pair[0], pair[1])
+		if err != nil || n >= 0 {
+			t.Errorf("%q=%d,%v", pair, n, err)
+		}
+	}
+	bad := strings.Replace(source, "<z>", "<z> ...", 1)
+	if _, _, code = invoke(t, dir, env, "localedef", bad, "-c", "omitted"); code != 4 {
+		t.Fatalf("forced error=%d", code)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("failed compilation changed output")
+	}
+}
+
+func TestCompiledRangeAndEmptyWeightOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		pairs      [][2]string
+	}{
+		{"range", "order_start forward\n<z>\n<a>\n...\n<d>\nUNDEFINED IGNORE\norder_end", [][2]string{{"z", "a"}, {"a", "b"}, {"b", "c"}, {"c", "d"}}},
+		{"empty", "order_start forward;backward\n<a> <a>;\n<b> <a>;\n<c> ;<a>\nUNDEFINED IGNORE;IGNORE\norder_end", [][2]string{{"a", "b"}, {"ba", "ab"}, {"b", "c"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, env := store(t, tc.body)
+			p, err := collate.OpenEnv(locale.StoreEnvAt(env, func(s string) string { return filepath.Join(dir, s) }), "custom.UTF-8")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			for _, pair := range tc.pairs {
+				n, err := p.Compare(pair[0], pair[1])
+				if err != nil || n >= 0 {
+					t.Errorf("%q=%d,%v", pair, n, err)
+				}
+			}
+		})
 	}
 }

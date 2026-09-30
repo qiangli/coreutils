@@ -60,13 +60,12 @@ func (p *compiledProvider) Close() error {
 }
 func (p *compiledProvider) sequence(s string) ([][]int, error) {
 	result := make([][]int, len(p.data.Backward))
+	var elements []locale.CollatingElement
 	for len(s) > 0 {
 		found := false
 		for _, e := range p.elements {
 			if strings.HasPrefix(s, e.Text) {
-				for i, w := range e.Weights {
-					result[i] = append(result[i], w...)
-				}
+				elements = append(elements, e)
 				s = s[len(e.Text):]
 				found = true
 				break
@@ -76,9 +75,30 @@ func (p *compiledProvider) sequence(s string) ([][]int, error) {
 			return nil, fmt.Errorf("collate: input contains an undefined collating element at %q", s)
 		}
 	}
-	for i, backward := range p.data.Backward {
-		if backward {
-			slices.Reverse(result[i])
+	for level, backward := range p.data.Backward {
+		position := len(p.data.Position) > 0 && p.data.Position[level]
+		ignored := 0
+		for offset := range elements {
+			index := offset
+			if backward {
+				index = len(elements) - 1 - offset
+			}
+			weights := elements[index].Weights[level]
+			if len(weights) == 0 {
+				ignored++
+				continue
+			}
+			for j := range weights {
+				k := j
+				if backward {
+					k = len(weights) - 1 - j
+				}
+				if position {
+					result[level] = append(result[level], ignored)
+				}
+				result[level] = append(result[level], weights[k])
+				ignored = 0
+			}
 		}
 	}
 	return result, nil

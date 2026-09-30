@@ -96,7 +96,7 @@ func TestPathnameCompilerAndConsumers(t *testing.T) {
 			invoke("localedef", "LC_NUMERIC\ncopy \""+filepath.ToSlash(name)+"\"\nEND LC_NUMERIC\n", "./copied")
 			// Collation takes a separate reader path; it must resolve rc.Dir too.
 			env = []string{"LC_COLLATE=" + name, "LC_CTYPE=C", "LC_NUMERIC=C"}
-			invoke("localedef", "LC_COLLATE\norder_start forward\n<b>\n<a>\norder_end\nEND LC_COLLATE\n", name)
+			invoke("localedef", "LC_COLLATE\norder_start forward\n<b>\n<a>\nUNDEFINED\norder_end\nEND LC_COLLATE\n", name)
 			if got := invoke("sort", "a\nb\n"); got != "b\na\n" {
 				t.Errorf("collation sort=%q", got)
 			}
