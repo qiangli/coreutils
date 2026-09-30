@@ -6,7 +6,9 @@ seq: 18
 status: todo
 priority: p1
 created: 2026-09-01T14:02:08.277627Z
-sprint: 100
+sprint: 110
+sprint_id: 26c12bac-7289-517f-ad46-01e2c117cad7
+sprint_title: Revalidate Go 1.27 GNU and POSIX conformance
 ---
 
 CI-blocking. Reproduced on ubuntu-latest in GitHub Actions runs 33513814323 and
