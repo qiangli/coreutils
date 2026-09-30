@@ -414,6 +414,7 @@ func TestMvUsageErrors(t *testing.T) {
 }
 
 func TestMvTrailingSlashOnRegularFile(t *testing.T) {
+	t.Run("raw destination operands", testMvRawDestinationSlash)
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "NEWCONTENT")
 	write(t, filepath.Join(dir, "targetfile"), "ORIGINAL")
@@ -434,6 +435,8 @@ func TestMvTrailingSlashOnRegularFile(t *testing.T) {
 }
 
 func TestMvNoTargetDirectoryTrailingSlashOnExistingDir(t *testing.T) {
+	t.Run("Linux rename semantics", testMvNoTargetDirectoryLinuxRenameSlash)
+	t.Run("directory source", testMvNoTargetDirectoryDirectorySource)
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "NEWCONTENT")
 	if err := os.Mkdir(filepath.Join(dir, "somedir"), 0o755); err != nil {
@@ -1023,4 +1026,131 @@ func exdevDeps() moverDeps {
 		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
 	}
 	return deps
+}
+
+func testMvRawDestinationSlash(t *testing.T) {
+	for _, tc := range []struct {
+		name, dest, diagnostic           string
+		directory, link, multiple, strip bool
+	}{
+		{name: "regular", dest: "target/", diagnostic: "Not a directory"},
+		{name: "missing", dest: "missing/", diagnostic: "No such file or directory"},
+		{name: "unclean missing component", dest: "missing/../target/", diagnostic: "No such file or directory"},
+		{name: "missing component", dest: "missing/child/", diagnostic: "No such file or directory"},
+		{name: "directory", dest: "target/", directory: true},
+		{name: "directory link", dest: "link/", directory: true, link: true},
+		{name: "multiple missing", dest: "missing/", multiple: true, diagnostic: "No such file or directory"},
+		{name: "multiple regular", dest: "target/", multiple: true, diagnostic: "Not a directory"},
+		{name: "multiple directory", dest: "target/", directory: true, multiple: true},
+		{name: "explicit strip", dest: "target/", strip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.directory {
+				if err := os.Mkdir(filepath.Join(dir, "target"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				write(t, filepath.Join(dir, "target"), "original")
+			}
+			if tc.link {
+				if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+					t.Skip(err)
+				}
+			}
+			srcs := []string{"one"}
+			if tc.multiple {
+				srcs = append(srcs, "two")
+			}
+			args := []string{}
+			if tc.strip {
+				args = append(args, "--strip-trailing-slashes")
+			}
+			for _, src := range srcs {
+				write(t, filepath.Join(dir, src), src)
+				args = append(args, src)
+			}
+			args = append(args, tc.dest)
+			_, stderr, code := runTool(t, dir, args...)
+			if tc.diagnostic != "" {
+				if code != 1 || !strings.Contains(stderr, tc.diagnostic) {
+					t.Errorf("code=%d stderr=%q, want %q", code, stderr, tc.diagnostic)
+				}
+				for _, src := range srcs {
+					if got := read(t, filepath.Join(dir, src)); got != src {
+						t.Errorf("source changed: %q", got)
+					}
+				}
+				if !tc.directory && read(t, filepath.Join(dir, "target")) != "original" {
+					t.Error("destination changed")
+				}
+			} else {
+				if code != 0 || stderr != "" {
+					t.Fatalf("code=%d stderr=%q", code, stderr)
+				}
+				for _, src := range srcs {
+					dst := filepath.Join(dir, "target")
+					if tc.directory {
+						dst = filepath.Join(dst, src)
+					}
+					if read(t, dst) != src {
+						t.Error("wrong destination content")
+					}
+					if _, err := os.Lstat(filepath.Join(dir, src)); !os.IsNotExist(err) {
+						t.Errorf("source remains: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func testMvNoTargetDirectoryLinuxRenameSlash(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "keep")
+	if err := os.Mkdir(filepath.Join(dir, "target"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	deps := defaultMoverDeps()
+	// Linux rename(file, directory/) returns ENOTDIR, whereas the same
+	// directory without the slash returns EISDIR. Model it on every host.
+	deps.rename = func(src, dst string) error {
+		err := syscall.EISDIR
+		if strings.HasSuffix(dst, "/") {
+			err = syscall.ENOTDIR
+		}
+		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: err}
+	}
+	_, stderr, code := runToolInputDeps(t, dir, "", deps, "-T", "src", "target/")
+	if code != 1 || strings.Contains(stderr, "Not a directory") {
+		t.Errorf("code=%d stderr=%q", code, stderr)
+	}
+	if read(t, filepath.Join(dir, "src")) != "keep" {
+		t.Error("source changed")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "target")); err != nil || !fi.IsDir() {
+		t.Errorf("destination changed: %v", err)
+	}
+}
+
+// A validated slash does not enable target-directory placement under -T.
+func testMvNoTargetDirectoryDirectorySource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("MoveFileEx cannot replace an existing directory")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "source", "child"), "payload")
+	if err := os.Mkdir(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runTool(t, dir, "-T", "source", "target/")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if read(t, filepath.Join(dir, "target", "child")) != "payload" {
+		t.Fatal("directory was not replaced")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "source")); !os.IsNotExist(err) {
+		t.Fatalf("source remains: %v", err)
+	}
 }
