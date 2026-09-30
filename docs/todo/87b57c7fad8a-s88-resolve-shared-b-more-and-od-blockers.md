@@ -70,3 +70,11 @@ classes. For `more`, the sufficient fixed vocabulary is `eof`, `last_file`,
 `terminal`, `command`, `exit`, `stderr`, and `expected`, plus GNU-control
 result classes. No raw output, expected bytes, suite source, journal text,
 private path, hostname, or credential is required.
+
+## Review 2026-09-30 (steward)
+
+- Status: disposition work done (2026-08-31: more:130/132/133/134 shared with the GNU control, no product patch; od:5/16 unmapped). cmds/more and cmds/od have no commits since. What remains is the od category tuple, which only a licensed run can supply.
+- Outdated: "shared-B", "sealed current replay" and the c747cabf droplet base all refer to Sprint 88 evidence; assignee seat s88-more-od is gone.
+- Next step: no code work. Read more:* and od:5/16 from the fresh baseline full arm + GNU control at the frozen candidate (Sprint 110 f093f2d6bba7); if od:5/16 are still non-PASS, extract the fixed-vocabulary tuple above from that run.
+- Acceptance: each identity is PASS, or disposed as shared-with-control with evidence at the candidate digest, or has a mapped cause + focused test.
+- Depends on: Sprint 110 baseline arm.
