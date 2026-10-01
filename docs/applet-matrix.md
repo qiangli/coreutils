@@ -177,7 +177,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `tsort` | `cmds/tsort` | — | GNU Coreutils | yes | yes | 1 | 13 |
 | `tty` | `cmds/tty` | — | GNU Coreutils | yes | yes | 3 | 14 |
-| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 14 |
+| `uname` | `cmds/uname` | — | GNU Coreutils | yes | yes | 3 | 15 |
 | `unexpand` | `cmds/unexpand` | — | GNU Coreutils | yes | yes | 2 | 27 |
 | `uniq` | `cmds/uniq` | — | GNU Coreutils | yes | yes | 3 | 15 |
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
