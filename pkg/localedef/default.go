@@ -1,12 +1,18 @@
 package localedef
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // DefaultCharmap returns a fresh ASCII mapping for the POSIX portable
 // character names. Explicit -f maps replace this implementation default.
 func DefaultCharmap() *Charmap {
 	m := &Charmap{CodeSet: "ASCII", MinBytes: 1, MaxBytes: 1, Symbols: make(map[string][]byte)}
 	add := func(name string, b byte) { m.Symbols[name] = []byte{b} }
+	for b := 0; b < 128; b++ {
+		add(fmt.Sprintf("U%04X", b), byte(b))
+	}
 	for b := byte('A'); b <= 'Z'; b++ {
 		add(string(b), b)
 	}

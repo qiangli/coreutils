@@ -151,7 +151,7 @@ func TestDefaultCharmap(t *testing.T) {
 	for _, tc := range []struct {
 		symbol string
 		code   int
-	}{{"period", 0}, {"A", 0}, {"newline", 0}, {"missing", 4}} {
+	}{{"period", 0}, {"A", 0}, {"newline", 0}, {"U0041", 0}, {"U007F", 0}, {"U0080", 4}, {"missing", 4}} {
 		t.Run(tc.symbol, func(t *testing.T) {
 			var out, diag bytes.Buffer
 			rc := &tool.RunContext{Env: storeEnv(t.TempDir()), Stdio: tool.Stdio{In: strings.NewReader("LC_NUMERIC\ndecimal_point \"<" + tc.symbol + ">\"\nEND LC_NUMERIC\n"), Out: &out, Err: &diag}}
