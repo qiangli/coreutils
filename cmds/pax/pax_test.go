@@ -63,6 +63,26 @@ func TestWriteThenListThenExtractRoundTrips(t *testing.T) {
 	}
 }
 
+func TestGlobalIdentityRecordsSurviveReadRewrite(t *testing.T) {
+	d := t.TempDir()
+	archive := filepath.Join(d, "global.pax")
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, diag, code := exec(t, d, "", "-w", "-x", "pax", "-o", "gname=first,uname=owner", "-o", "gname=second", "-f", archive, "file"); code != 0 || diag != "" {
+		t.Fatalf("write=(%d,%q)", code, diag)
+	}
+	if err := os.Remove(filepath.Join(d, "file")); err != nil {
+		t.Fatal(err)
+	}
+	if _, diag, code := exec(t, d, "", "-r", "-f", archive, "file"); code != 0 || diag != "" {
+		t.Fatalf("read=(%d,%q)", code, diag)
+	}
+	if got, err := os.ReadFile(filepath.Join(d, "file")); err != nil || string(got) != "payload" {
+		t.Fatalf("extracted=(%q,%v)", got, err)
+	}
+}
+
 func TestCopyVerboseReportsEachMemberOnce(t *testing.T) {
 	d := t.TempDir()
 	if err := os.WriteFile(filepath.Join(d, "source"), []byte("x"), 0o600); err != nil {

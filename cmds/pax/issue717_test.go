@@ -111,7 +111,7 @@ func TestPAXWriteGlobalLocalTimesAndHeaderNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Name != "file" || h.PAXRecords["comment"] != "local" || h.PAXRecords["atime"] == "" {
+	if h.Name != "file" || h.PAXRecords["comment"] != "local" || h.PAXRecords["atime"] == "" || h.PAXRecords["mtime"] == "" {
 		t.Fatalf("member=%+v records=%v", h, h.PAXRecords)
 	}
 	if got := firstRawHeaderNameByType(t, []byte(out), tar.TypeXHeader); got != "meta/file" {

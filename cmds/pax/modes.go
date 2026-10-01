@@ -255,7 +255,10 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) (status int) {
 		if linkName, ok := linkRenames[index]; ok {
 			h.Linkname = linkName
 		}
-		if o.paxOptions.needsPAX {
+		// A global extended header can supply records to a member whose
+		// physical header was USTAR. The option reader has merged those records
+		// into h, so the rewritten member must use a PAX-capable format.
+		if o.paxOptions.needsPAX || len(h.PAXRecords) != 0 {
 			h.Format = tar.FormatPAX
 		}
 		if err := tw.WriteHeader(h); err != nil {
@@ -1303,6 +1306,13 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 		if h.Format == tar.FormatPAX {
 			if h.PAXRecords == nil {
 				h.PAXRecords = make(map[string]string)
+			}
+			if o.paxOptions.times {
+				// -o times requires an extended mtime record even when its
+				// value fits the one-second USTAR field. Keep the source's
+				// nanoseconds; headerFor truncates only for basic headers.
+				h.ModTime = fi.ModTime()
+				h.PAXRecords["mtime"] = formatPAXUnixTime(h.ModTime)
 			}
 			// A basic pax member with no extended attributes is intentionally
 			// byte-for-byte ustar.  Do not invent a private record merely to make

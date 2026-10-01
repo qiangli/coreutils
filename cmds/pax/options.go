@@ -717,3 +717,24 @@ func parsePAXTime(value string) (time.Time, error) {
 	}
 	return time.Unix(seconds, nanos), nil
 }
+
+func formatPAXUnixTime(t time.Time) string {
+	seconds, nanos := t.Unix(), t.Nanosecond()
+	negative := seconds < 0
+	if negative {
+		if nanos != 0 {
+			seconds = -seconds - 1
+			nanos = 1_000_000_000 - nanos
+		} else {
+			seconds = -seconds
+		}
+	}
+	value := strconv.FormatInt(seconds, 10)
+	if negative {
+		value = "-" + value
+	}
+	if nanos != 0 {
+		value += "." + strings.TrimRight(fmt.Sprintf("%09d", nanos), "0")
+	}
+	return value
+}
