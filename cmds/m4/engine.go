@@ -425,6 +425,7 @@ func (p *processor) expand(name string) (handled bool, fn *macro) {
 	if m == nil {
 		return false, nil
 	}
+	callLoc := sourceLoc{file: p.file, line: p.line, seq: p.fileSeq}
 	c, ok := p.peekAt(0)
 	called := ok && c == '('
 	if !called && m.blind {
@@ -444,7 +445,9 @@ func (p *processor) expand(name string) (handled bool, fn *macro) {
 		p.pushback(text)
 		return true, fn
 	}
-	p.pushback(p.substitute(name, m.text, args))
+	text := p.substitute(name, m.text, args)
+	p.file, p.line, p.fileSeq = callLoc.file, callLoc.line, callLoc.seq
+	p.pushback(text)
 	return true, nil
 }
 

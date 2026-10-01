@@ -152,6 +152,20 @@ func TestSystemSource(t *testing.T) {
 	}
 }
 
+func TestCopiedCTypeAcceptsGlibcTransliterationExtension(t *testing.T) {
+	source := "LC_CTYPE\ncopy \"i18n\"\ntranslit_start\ninclude \"translit_combining\";\"\"\ntranslit_end\nEND LC_CTYPE\n"
+	m, err := ParseSource(strings.NewReader(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Sections["LC_CTYPE"].Copy; got != "i18n" {
+		t.Fatalf("LC_CTYPE copy = %q, want i18n", got)
+	}
+	if _, err := ParseSource(strings.NewReader("LC_CTYPE\ncopy \"i18n\"\ntranslit_start\nEND LC_CTYPE\n")); err == nil {
+		t.Fatal("accepted unterminated transliteration block")
+	}
+}
+
 func TestSyntaxEdges(t *testing.T) {
 	for _, tc := range []struct {
 		name, input    string

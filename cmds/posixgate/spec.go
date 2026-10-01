@@ -103,16 +103,16 @@ const (
 const (
 	pinTotal = 116
 	// availability: who supplies each name (95/14/7)
-	pinAvailGoApplets = 95
+	pinAvailGoApplets = 96
 	pinAvailShell     = 14
-	pinProviders      = 7
+	pinProviders      = 6
 	// effective selection: what the shell selects (87/22/7); the 22 is the 14
 	// shell-owned names plus the seven builtin overlaps and the time keyword
-	pinEffectiveGoApplets = 87
+	pinEffectiveGoApplets = 88
 	pinEffectiveShell     = 22
 	// pinManifestProviders is the full pkg/posixprovider manifest pin count.
 	// Every manifest row is an active runtime owner.
-	pinManifestProviders = 7
+	pinManifestProviders = 6
 )
 
 // specRow is one required name: its availability owner from the canonical

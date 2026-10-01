@@ -24,11 +24,11 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 144 |
-| Advertised applet names | 153 |
+| Shipped Go command packages | 146 |
+| Advertised applet names | 154 |
 | Alias applet names | 2 |
 | GNU Coreutils names | 106 |
-| POSIX-cert-required names | 102 |
+| POSIX-cert-required names | 103 |
 | Shipped names without a same-name required test set | 51 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
@@ -40,7 +40,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | Applet | Go package | Alias of | Family | GNU | POSIX cert required | Test files | Test functions |
 |---|---|---|---|:---:|:---:|---:|---:|
 | `[` | `cmds/test` | test | GNU Coreutils | yes | no | 3 | 32 |
-| `ar` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `ar` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 27 |
 | `arch` | `cmds/arch` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 8 | 39 |
 | `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 49 |
@@ -62,7 +62,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 9 | 67 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 4 | 28 |
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 25 |
-| `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 27 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 4 | 24 |
 | `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 2 | 18 |
 | `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 6 | 80 |
@@ -75,7 +75,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 4 |
 | `ed` | `cmds/ed` | — | POSIX/Unix utility | no | yes | 4 | 48 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 6 | 38 |
-| `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `ex` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 27 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 2 | 29 |
 | `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 2 | 19 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
@@ -84,6 +84,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 12 | 84 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 30 |
+| `gencat` | `cmds/gencat` | — | POSIX/Unix utility | no | yes | 2 | 2 |
 | `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 6 | 40 |
 | `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 4 | 49 |
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
@@ -107,7 +108,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `mail` | `cmds/mailx` | mailx | Bashy/other extension | no | no | 4 | 37 |
 | `mailx` | `cmds/mailx` | — | POSIX/Unix utility | no | yes | 4 | 37 |
 | `make` | `cmds/make` | — | POSIX/Unix utility | no | yes | 4 | 35 |
-| `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `man` | `cmds/man` | — | POSIX/Unix utility | no | yes | 1 | 2 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
 | `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 10 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 4 | 41 |
@@ -119,7 +120,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 57 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 6 | 25 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 13 |
-| `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 27 |
 | `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 4 | 28 |
 | `nproc` | `cmds/nproc` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `numfmt` | `cmds/numfmt` | — | GNU Coreutils | yes | no | 1 | 14 |
@@ -129,7 +130,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 5 | 25 |
 | `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 17 | 203 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
-| `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 4 | 33 |
+| `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 4 | 27 |
 | `posixgate` | `cmds/posixgate` | — | Bashy/other extension | no | no | 1 | 33 |
 | `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 58 |
 | `printenv` | `cmds/printenv` | — | GNU Coreutils | yes | no | 1 | 4 |
@@ -157,7 +158,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `stat` | `cmds/stat` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `stdbuf` | `cmds/stdbuf` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `strings` | `cmds/strings` | — | POSIX/Unix utility | no | yes | 2 | 13 |
-| `strip` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `strip` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 27 |
 | `stty` | `cmds/stty` | — | GNU Coreutils | yes | yes | 3 | 15 |
 | `sum` | `cmds/sum` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
@@ -185,7 +186,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `uudecode` | `cmds/uudecode` | — | POSIX/Unix utility | no | yes | 2 | 21 |
 | `uuencode` | `cmds/uuencode` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `vdir` | `cmds/vdir` | — | GNU Coreutils | yes | no | 1 | 4 |
-| `vi` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 33 |
+| `vi` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 4 | 27 |
 | `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 4 | 33 |
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 4 | 32 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |

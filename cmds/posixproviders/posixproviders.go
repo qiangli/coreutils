@@ -354,7 +354,7 @@ fusing them would put network and toolchain variance inside measured evidence.
 
 Active external providers (%d): %s
 
-Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef.
+Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef, man, gencat.
 
 Providers are built locally from pinned upstream source and are copyleft.
 Their binaries are never redistributed. Set

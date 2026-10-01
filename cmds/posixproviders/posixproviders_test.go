@@ -192,16 +192,6 @@ func provision(t *testing.T, root, name, body string) string {
 	return bin
 }
 
-func TestManRejectsNonPOSIXOptionBeforeDispatch(t *testing.T) {
-	root := t.TempDir()
-	provisionSelf(t, root, "man")
-	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "man", rc, out, errb, "-h", "ls")
-	if code == 0 || stdout != "" || !strings.Contains(stderr, "unknown option -h") {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-}
-
 func TestManProviderEnvPublishesRelocatableSelfManual(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	provider := filepath.Join(t.TempDir(), "relocated", "man")
@@ -241,67 +231,6 @@ func TestManProviderEnvPublishesRelocatableSelfManual(t *testing.T) {
 	}
 }
 
-func TestManTreatsPostOperandOptionsAsOperands(t *testing.T) {
-	requireManSupported(t)
-	root := t.TempDir()
-	provisionSelf(t, root, "man")
-	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "man", rc, out, errb, "ls", "-h", "-k")
-	if code != 0 || stderr != "" {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
-	}
-	if stdout != "argv0:man\narg:--\narg:ls\narg:-h\narg:-k\n" {
-		t.Fatalf("stdout=%q", stdout)
-	}
-}
-
-func TestManAllowsPOSIXKeywordOption(t *testing.T) {
-	requireManSupported(t)
-	root := t.TempDir()
-	provisionSelf(t, root, "man")
-	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "man", rc, out, errb, "-k", "ls")
-	if code != 0 || stderr != "" {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
-	}
-	if stdout != "argv0:apropos\narg:--\narg:ls\n" {
-		t.Fatalf("stdout=%q", stdout)
-	}
-}
-
-func TestManKeywordTreatsPostOperandOptionAsKeywordOperand(t *testing.T) {
-	requireManSupported(t)
-	root := t.TempDir()
-	provisionSelf(t, root, "man")
-	rc, out, errb := newRC(t, root, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "man", rc, out, errb, "-k", "name", "-h")
-	if code != 0 || stderr != "" {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
-	}
-	if stdout != "argv0:apropos\narg:--\narg:name\narg:-h\n" {
-		t.Fatalf("stdout=%q", stdout)
-	}
-}
-
-func TestManKeywordDispatchSurvivesCacheRelocation(t *testing.T) {
-	requireManSupported(t)
-	parent := t.TempDir()
-	original := filepath.Join(parent, "built-cache")
-	provisionSelf(t, original, "man")
-	moved := filepath.Join(parent, "reused-cache")
-	if err := os.Rename(original, moved); err != nil {
-		t.Fatal(err)
-	}
-	rc, out, errb := newRC(t, moved, fakeProviderEnv+"=1")
-	code, stdout, stderr := run(t, "man", rc, out, errb, "-k", "basename")
-	if code != 0 || stderr != "" {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
-	}
-	if stdout != "argv0:apropos\narg:--\narg:basename\n" {
-		t.Fatalf("stdout=%q", stdout)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // registration — the load-bearing assertion
 // ---------------------------------------------------------------------------
@@ -330,18 +259,6 @@ func TestProviderNamesAreRegistered(t *testing.T) {
 // platform gating happens at RUN time, not at registration time: the multicall
 // owns `man` on Windows too, and refuses loudly there rather than letting the
 // name fall through to whatever $PATH holds.
-func TestProviderNamesAreRegisteredOnEveryPlatform(t *testing.T) {
-	for _, n := range []string{"man"} {
-		e, _ := posixprovider.Lookup(n)
-		if e.SupportsGOOS("windows") {
-			t.Skipf("%s now declares windows; this test no longer distinguishes anything", n)
-		}
-		if tool.Lookup(n) == nil {
-			t.Errorf("%s is not registered; a platform-gated registration would let it fall through to $PATH", n)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // no silent fallback
 // ---------------------------------------------------------------------------
@@ -387,7 +304,7 @@ func TestProviderWithBadProvenanceFailsLoudly(t *testing.T) {
 
 func TestAdminList(t *testing.T) {
 	root := t.TempDir()
-	provision(t, root, "man", "#!/bin/sh\nexit 0\n")
+	provision(t, root, "ar", "#!/bin/sh\nexit 0\n")
 
 	rc, out, errb := newRC(t, root)
 	code, stdout, stderr := run(t, "posix-providers", rc, out, errb, "list")
@@ -399,7 +316,7 @@ func TestAdminList(t *testing.T) {
 		t.Errorf("list has no header: %q", stdout)
 	}
 	groups := map[string]string{
-		"ex": "UP", "vi": "UP", "man": "UP",
+		"ex": "UP", "vi": "UP",
 		"ctags": "SD", "nm": "SD", "ar": "SD", "strip": "SD",
 	}
 	for name, group := range groups {
@@ -412,8 +329,8 @@ func TestAdminList(t *testing.T) {
 			t.Errorf("list includes base provider %q: %q", name, stdout)
 		}
 	}
-	if got := strings.Count(stdout, "optional - not in the base certification claim"); got != 7 {
-		t.Errorf("optional marker count = %d, want 7: %q", got, stdout)
+	if got := strings.Count(stdout, "optional - not in the base certification claim"); got != 6 {
+		t.Errorf("optional marker count = %d, want 6: %q", got, stdout)
 	}
 	if !strings.Contains(stdout, "provisioned") {
 		t.Errorf("list never says a provider is provisioned: %q", stdout)
@@ -444,11 +361,11 @@ func TestAdminListJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
 		t.Fatalf("list --json is not a JSON array: %v\n%s", err, stdout)
 	}
-	if len(rows) != 7 {
-		t.Fatalf("JSON rows = %d, want 7: %#v", len(rows), rows)
+	if len(rows) != 6 {
+		t.Fatalf("JSON rows = %d, want 6: %#v", len(rows), rows)
 	}
 	wantGroups := map[string]string{
-		"ex": "UP", "vi": "UP", "man": "UP",
+		"ex": "UP", "vi": "UP",
 		"ctags": "SD", "nm": "SD", "ar": "SD", "strip": "SD",
 	}
 	for _, got := range rows {
@@ -542,8 +459,8 @@ func TestAdminHelp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"list", "check", "build", "BASHY_POSIX_PROVIDERS=off",
-		"Active external providers (7): " + strings.Join(posixprovider.DispatchNames(), ", "),
-		"Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef.",
+		"Active external providers (6): " + strings.Join(posixprovider.DispatchNames(), ", "),
+		"Go-only replacements, never external providers: bc, ed, make, patch, mail, mailx, talk, lp, m4, localedef, man, gencat.",
 		"Providers are built locally from pinned upstream source and are copyleft.",
 	} {
 		if !strings.Contains(stdout, want) {

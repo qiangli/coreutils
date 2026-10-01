@@ -15,6 +15,7 @@ func ParseSource(in io.Reader) (*Source, error) {
 	m := &Source{Sections: make(map[string]*Section)}
 	r := newLines(in)
 	var section *Section
+	translit := false
 	classes := map[string]bool{}
 	for {
 		s, line, err := r.next()
@@ -54,6 +55,9 @@ func ParseSource(in io.Reader) (*Source, error) {
 			continue
 		}
 		if key == "END" {
+			if translit {
+				return nil, problem(line, "unterminated transliteration block")
+			}
 			if len(vs) != 2 || vs[1].Text != section.Name {
 				return nil, problem(line, "expected END %s", section.Name)
 			}
@@ -62,6 +66,22 @@ func ParseSource(in io.Reader) (*Source, error) {
 		}
 		if strings.HasPrefix(key, "LC_") {
 			return nil, problem(line, "nested category %s", key)
+		}
+		// glibc locale sources place a transliteration extension after a copied
+		// LC_CTYPE category. The POSIX category data is the copy; retain that
+		// data while accepting the extension for source inspection.
+		if section.Name == "LC_CTYPE" && section.Copy != "" {
+			if key == "translit_start" && len(vs) == 1 && !translit {
+				translit = true
+				continue
+			}
+			if key == "translit_end" && len(vs) == 1 && translit {
+				translit = false
+				continue
+			}
+			if translit {
+				continue
+			}
 		}
 		if key == "copy" {
 			if len(section.Entries) != 0 || len(vs) != 2 || vs[1].Kind != String || vs[1].Text == "" {

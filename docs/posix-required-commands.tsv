@@ -59,7 +59,7 @@ ls	yes	cmds/ls	no	go_applet
 m4	yes	cmds/m4	no	go_applet
 mailx	yes	cmds/mailx	no	go_applet
 make	yes	cmds/make	no	go_applet
-man	no	cmds/posixproviders	no	external_provider
+man	yes	cmds/man	no	go_applet
 mesg	yes	cmds/mesg	no	go_applet
 mkdir	yes	cmds/mkdir	no	go_applet
 mkfifo	yes	cmds/mkfifo	no	go_applet

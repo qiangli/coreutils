@@ -70,7 +70,7 @@ func mustLookup(t *testing.T, name string) Entry {
 
 func TestManifestShape(t *testing.T) {
 	names := Names()
-	want := []string{"ar", "ctags", "ex", "man", "nm", "strip", "vi"}
+	want := []string{"ar", "ctags", "ex", "nm", "strip", "vi"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -81,17 +81,6 @@ func TestManifestShape(t *testing.T) {
 		}
 		if e.Version == "" || e.License == "" || e.URL == "" {
 			t.Errorf("%s: incomplete entry %+v", n, e)
-		}
-	}
-	// Unix-only, no windows. man-db is POSIX-only upstream, and
-	// ships no native windows build path.
-	for _, n := range []string{"man"} {
-		e := mustLookup(t, n)
-		if e.SupportsGOOS("windows") {
-			t.Errorf("%s: manifest now declares windows; update the gating tests", n)
-		}
-		if !e.SupportsGOOS("linux") || !e.SupportsGOOS("darwin") {
-			t.Errorf("%s: manifest no longer declares linux+darwin: %v", n, e.Platforms)
 		}
 	}
 	if !mustLookup(t, "ar").SupportsGOOS("windows") {
@@ -278,29 +267,6 @@ func TestResolveCacheMissNamesTheProvisioningCommand(t *testing.T) {
 	}
 }
 
-func TestResolveRefusesUndeclaredPlatform(t *testing.T) {
-	root := t.TempDir()
-	e := mustLookup(t, "man")
-	// Provision it anyway: the platform gate must refuse BEFORE the cache is
-	// consulted, so a stray binary cannot re-enable an undeclared platform.
-	provision(t, root, e, []byte("#!/bin/sh\nexit 0\n"))
-
-	r := Resolver{CacheRoot: root, GOOS: "windows"}
-	_, err := r.Resolve("man")
-	if err == nil {
-		t.Fatal("Resolve succeeded on an undeclared platform")
-	}
-	if !errors.Is(err, ErrUnsupportedPlatform) {
-		t.Errorf("error is not ErrUnsupportedPlatform: %v", err)
-	}
-	if !strings.Contains(err.Error(), "not supported on windows") {
-		t.Errorf("error does not name the platform: %v", err)
-	}
-	if !strings.Contains(err.Error(), "linux,darwin") {
-		t.Errorf("error does not list the declared platforms: %v", err)
-	}
-}
-
 func TestResolveRejectsUnknownName(t *testing.T) {
 	r := Resolver{CacheRoot: t.TempDir(), GOOS: runtime.GOOS}
 	_, err := r.Resolve("definitely-not-pinned")
@@ -379,103 +345,6 @@ func TestLocaledefIsNotExternalProvider(t *testing.T) {
 	}
 }
 
-func TestResolveManRequiresVerifiedAproposCompanion(t *testing.T) {
-	e := mustLookup(t, "man")
-	if !e.SupportsGOOS(runtime.GOOS) {
-		t.Skipf("man provider is intentionally unsupported on %s", runtime.GOOS)
-	}
-	setup := func(t *testing.T) (Resolver, string) {
-		t.Helper()
-		root := t.TempDir()
-		bin := provision(t, root, e, []byte("man"))
-		dir := filepath.Dir(bin)
-		rec, err := readProvenance(filepath.Join(dir, "provenance.tsv"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		companion := filepath.Join(dir, "apropos")
-		body := []byte("apropos")
-		if err := os.WriteFile(companion, body, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256(body)
-		rec["companion_apropos_sha256"] = hex.EncodeToString(sum[:])
-		manual := filepath.Join(dir, "share", "man", "man1", "man.1")
-		if err := os.MkdirAll(filepath.Dir(manual), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		manualBody := []byte(".TH MAN 1\n")
-		if err := os.WriteFile(manual, manualBody, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		manualSum := sha256.Sum256(manualBody)
-		rec["manual_man1_sha256"] = hex.EncodeToString(manualSum[:])
-		writeProvenance(t, dir, rec)
-		return Resolver{CacheRoot: root, GOOS: runtime.GOOS}, companion
-	}
-	t.Run("manual missing", func(t *testing.T) {
-		r, companion := setup(t)
-		manual := filepath.Join(filepath.Dir(companion), "share", "man", "man1", "man.1")
-		if err := os.Remove(manual); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.Resolve("man"); !errors.Is(err, ErrProvenance) {
-			t.Fatalf("missing manual error=%v, want ErrProvenance", err)
-		}
-	})
-	t.Run("manual tamper", func(t *testing.T) {
-		r, companion := setup(t)
-		manual := filepath.Join(filepath.Dir(companion), "share", "man", "man1", "man.1")
-		if err := os.WriteFile(manual, []byte("changed"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.Resolve("man"); !errors.Is(err, ErrProvenance) {
-			t.Fatalf("tampered manual error=%v, want ErrProvenance", err)
-		}
-	})
-	t.Run("valid", func(t *testing.T) {
-		r, _ := setup(t)
-		if _, err := r.Resolve("man"); err != nil {
-			t.Fatalf("verified man provider rejected: %v", err)
-		}
-	})
-	for _, tc := range []struct {
-		name           string
-		unixOnly       bool
-		breakCompanion func(*testing.T, string)
-	}{
-		{"chmod", true, func(t *testing.T, path string) {
-			t.Helper()
-			if err := os.Chmod(path, 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"missing", false, func(t *testing.T, path string) {
-			t.Helper()
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"tamper", false, func(t *testing.T, path string) {
-			t.Helper()
-			if err := os.WriteFile(path, []byte("changed"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.unixOnly && runtime.GOOS == "windows" {
-				t.Skip("executable mode-bit semantics are Unix-specific")
-			}
-			r, companion := setup(t)
-			tc.breakCompanion(t, companion)
-			if _, err := r.Resolve("man"); !errors.Is(err, ErrProvenance) {
-				t.Fatalf("broken companion error=%v, want ErrProvenance", err)
-			}
-		})
-	}
-}
-
 func TestResolveNeverTouchesTheNetwork(t *testing.T) {
 	// A structural assertion, not a behavioural one: the resolve path must not
 	// reach a downloader. binmgr's own Ensure/download live in another package
@@ -506,10 +375,6 @@ func TestStatus(t *testing.T) {
 	}
 	if st := r.Status("strip"); st.Ready() {
 		t.Error("strip reported ready with nothing in the cache")
-	}
-	unsupported := Resolver{CacheRoot: root, GOOS: "windows"}.Status("man")
-	if unsupported.Supported {
-		t.Error("man reported supported on windows")
 	}
 }
 

@@ -26,7 +26,7 @@ func platformValue(name string) (string, bool) {
 		return "2147483647", true
 	case "UINT_MAX":
 		return "4294967295", true
-	case "SYMLOOP_MAX", "_POSIX_VERSION", "_POSIX2_VERSION", "_XOPEN_VERSION":
+	case "SYMLOOP_MAX":
 		return undefined, true
 	case "SIGQUEUE_MAX":
 		return rlimitStr(unix.RLIMIT_SIGPENDING)

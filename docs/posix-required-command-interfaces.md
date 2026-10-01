@@ -19,23 +19,23 @@ GNU compatibility is explicitly out of scope and deferred.
 
 | Axis | Value | Count |
 | --- | --- | ---: |
-| Availability | Go | 95 |
+| Availability | Go | 96 |
 | Availability | Shell-only | 14 |
-| Availability | Provider | 7 |
-| Effective owner | Go | 87 |
+| Availability | Provider | 6 |
+| Effective owner | Go | 88 |
 | Effective owner | Shell | 22 |
-| Effective owner | Provider | 7 |
+| Effective owner | Provider | 6 |
 | Evidence | Verified | 0 |
 | Evidence | Implemented | 4 |
-| Evidence | Partial | 105 |
-| Evidence | Missing | 7 |
+| Evidence | Partial | 106 |
+| Evidence | Missing | 6 |
 
 The pre-integration `--require-owned-source-complete` gate accepts only
-`implemented` or `verified` for the exact 87 Go plus 22 shell owners.
+`implemented` or `verified` for the exact 88 Go plus 22 shell owners.
 Final completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
-covers the 109 owned rows (87 Go plus 22 shell) without treating the
-7 external-provider rows as owned implementation evidence. Both final gates accept
+covers the 110 owned rows (88 Go plus 22 shell) without treating the
+6 external-provider rows as owned implementation evidence. Both final gates accept
 only `verified`. They intentionally remain red until the proprietary harness adds
 a byte-derived integration gate over the authoritative complete run/pair bundle.
 The parser scan below is only a conservative
@@ -3113,7 +3113,7 @@ mailx -f [-HiNn] [-F] [file]
 
 ## `man`
 
-**Evidence state:** `missing`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3129,33 +3129,33 @@ man [-k] name...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `name`. UNVERIFIED
+**Operands:** `name`. For each name, display its command documentation; with -k, search documentation descriptions for each keyword.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** The -k option selects keyword summary search; -- is not supported.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH; PAGER`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write documentation for each named command, or matching name and summary lines with -k.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Write diagnostics for unknown names, invalid options, or output errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No files are changed.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all named documentation is found or keyword search completes; greater than 0 for errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
-**Availability:** `external_provider`.
+**Availability:** `go`.
 
-**Effective owner:** `external_provider` (`external`).
+**Effective owner:** `go` (`manual`).
 
-**Implementation:** `pkg/posixprovider/manifest.tsv#man`.
+**Implementation:** `cmds/man`.
 
-**Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/man`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:man:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/man/man_test.go#TestManDocumentsRegisteredAndShellCommands;cmds/man/man_test.go#TestKeywordSearch`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:man:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Integration/full-profile evidence:** `-`.
 
