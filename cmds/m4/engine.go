@@ -32,6 +32,8 @@ type macro struct {
 type argument struct {
 	text string
 	fn   *macro
+	// present distinguishes an empty quoted argument from empty parentheses.
+	present bool
 }
 
 type tokenKind int
@@ -71,6 +73,8 @@ type processor struct {
 	src       []byte
 	pos       int
 	files     []string
+	options   []cmdlineOp
+	fileIndex int
 
 	file    string
 	line    int
@@ -102,7 +106,7 @@ type processor struct {
 	exitCode   int
 }
 
-func newProcessor(rc *tool.RunContext, files []string, sync bool) *processor {
+func newProcessor(rc *tool.RunContext, files []string, options []cmdlineOp) *processor {
 	p := &processor{
 		rc:     rc,
 		out:    bufio.NewWriter(rc.Out),
@@ -110,9 +114,9 @@ func newProcessor(rc *tool.RunContext, files []string, sync bool) *processor {
 		trace:  map[string]bool{},
 		lquote: "`", rquote: "'",
 		bcomm: "#", ecomm: "\n",
-		files: files,
-		sync:  sync,
-		bol:   true,
+		files:   files,
+		options: options,
+		bol:     true,
 	}
 	for name, b := range builtins {
 		p.macros[name] = []*macro{b}
@@ -181,8 +185,24 @@ func (p *processor) fatalf(format string, a ...any) {
 // nextFile makes the next readable operand the current input.
 func (p *processor) nextFile() bool {
 	for len(p.files) > 0 {
+		for len(p.options) > 0 && p.options[0].beforeFile == p.fileIndex {
+			op := p.options[0]
+			p.options = p.options[1:]
+			switch {
+			case op.syncSet:
+				p.sync = op.sync
+				p.bol = true
+				p.outSeq = 0
+			case op.undefine:
+				delete(p.macros, op.arg)
+			default:
+				name, value, _ := strings.Cut(op.arg, "=")
+				p.define(name, &macro{text: value}, false)
+			}
+		}
 		name := p.files[0]
 		p.files = p.files[1:]
+		p.fileIndex++
 		var data []byte
 		var err error
 		display := name
@@ -474,6 +494,7 @@ func (p *processor) collect() []argument {
 		}
 		var b []byte
 		var argFn *macro
+		present := false
 		parens := 0
 	arg:
 		for {
@@ -482,8 +503,10 @@ func (p *processor) collect() []argument {
 			case tokEOF:
 				p.fatalf("ERROR: end of file in argument list")
 			case tokText:
+				present = true
 				b = append(b, s...)
 			case tokName:
+				present = true
 				handled, fn := p.expand(s)
 				if !handled {
 					b = append(b, s...)
@@ -497,11 +520,12 @@ func (p *processor) collect() []argument {
 				case s == ")" && parens > 0:
 					parens--
 				case s == ")":
-					return append(args, argument{text: string(b), fn: argFn})
+					return append(args, argument{text: string(b), fn: argFn, present: present})
 				case s == "," && parens == 0:
-					args = append(args, argument{text: string(b), fn: argFn})
+					args = append(args, argument{text: string(b), fn: argFn, present: present})
 					break arg
 				}
+				present = true
 				b = append(b, s...)
 			}
 		}

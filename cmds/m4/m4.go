@@ -13,9 +13,12 @@
 package m4cmd
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/spf13/pflag"
 )
 
 var cmd = &tool.Tool{Name: "m4", Synopsis: "Process macros in text.", Usage: "m4 [-s] [-D name[=val]]... [-U name]... [file...]"}
@@ -25,28 +28,63 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 // cmdlineOp is one -D or -U option. POSIX makes their relative order
 // significant, so both flags append to one list.
 type cmdlineOp struct {
-	undefine bool
-	arg      string
+	beforeFile int
+	undefine   bool
+	arg        string
+	syncSet    bool
+	sync       bool
 }
 
 type cmdlineOps struct {
 	ops      *[]cmdlineOp
+	fs       *pflag.FlagSet
 	undefine bool
 }
 
 func (o cmdlineOps) String() string { return "" }
 func (o cmdlineOps) Type() string   { return "name" }
 func (o cmdlineOps) Set(s string) error {
-	*o.ops = append(*o.ops, cmdlineOp{undefine: o.undefine, arg: s})
+	*o.ops = append(*o.ops, cmdlineOp{beforeFile: len(o.fs.Args()), undefine: o.undefine, arg: s})
 	return nil
+}
+
+type cmdlineSync struct {
+	ops *[]cmdlineOp
+	fs  *pflag.FlagSet
+}
+
+func (o cmdlineSync) String() string   { return "false" }
+func (o cmdlineSync) Type() string     { return "bool" }
+func (o cmdlineSync) IsBoolFlag() bool { return true }
+func (o cmdlineSync) Set(s string) error {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
+	}
+	*o.ops = append(*o.ops, cmdlineOp{beforeFile: len(o.fs.Args()), syncSet: true, sync: v})
+	return nil
+}
+
+func validMacroName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	var ops []cmdlineOp
-	synclines := fs.BoolP("synclines", "s", false, "generate #line directives for the C preprocessor")
-	fs.VarP(cmdlineOps{ops: &ops}, "define", "D", "define `name' as `val' (null if omitted) before reading input")
-	fs.VarP(cmdlineOps{ops: &ops, undefine: true}, "undefine", "U", "undefine `name' before reading input")
+	fs.VarPF(cmdlineSync{ops: &ops, fs: fs}, "synclines", "s", "generate #line directives for the C preprocessor").NoOptDefVal = "true"
+	fs.VarP(cmdlineOps{ops: &ops, fs: fs}, "define", "D", "define `name' as `val' (null if omitted) before reading input")
+	fs.VarP(cmdlineOps{ops: &ops, fs: fs, undefine: true}, "undefine", "U", "undefine `name' before reading input")
 	files, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -57,16 +95,19 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(files) == 0 {
 		files = []string{"-"}
 	}
-	p := newProcessor(rc, files, *synclines)
 	for _, op := range ops {
-		if op.undefine {
-			delete(p.macros, op.arg)
+		if op.syncSet {
 			continue
 		}
-		name, val, _ := strings.Cut(op.arg, "=")
-		if name != "" {
-			p.define(name, &macro{text: val}, false)
+		name := op.arg
+		if !op.undefine {
+			name, _, _ = strings.Cut(op.arg, "=")
+		}
+		if !validMacroName(name) {
+			fmt.Fprintf(rc.Err, "m4: invalid macro name: %s\n", name)
+			return 2
 		}
 	}
+	p := newProcessor(rc, files, ops)
 	return p.process()
 }

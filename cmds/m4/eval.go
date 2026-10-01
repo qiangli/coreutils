@@ -51,6 +51,7 @@ var binaryOps = [][]string{
 	{"<<", ">>"},
 	{"+", "-"},
 	{"*", "/", "%"},
+	{"**"},
 }
 
 // operator consumes and returns an operator of the given level if one is
@@ -65,7 +66,7 @@ func (e *evaluator) operator(level int) string {
 		}
 		if len(op) == 1 && len(rest) > 1 {
 			switch two := rest[:2]; two {
-			case "||", "&&", "<<", ">>", "<=", ">=", "==", "!=":
+			case "||", "&&", "<<", ">>", "<=", ">=", "==", "!=", "**":
 				return ""
 			}
 		}
@@ -96,6 +97,14 @@ func (e *evaluator) binary(level int, live bool) int32 {
 		case "&&":
 			r := e.binary(level+1, live && l != 0)
 			l = truth(l != 0 && r != 0)
+			continue
+		case "**":
+			// The extension used by the POSIX08 test profile associates
+			// exponentiation from right to left.
+			r := e.binary(level, live)
+			if e.err == "" {
+				l = power32(l, r)
+			}
 			continue
 		}
 		r := e.binary(level+1, live)
@@ -152,6 +161,30 @@ func truth(b bool) int32 {
 		return 1
 	}
 	return 0
+}
+
+func power32(base, exponent int32) int32 {
+	if exponent < 0 {
+		if base == 1 {
+			return 1
+		}
+		if base == -1 && exponent&1 != 0 {
+			return -1
+		}
+		if base == -1 {
+			return 1
+		}
+		return 0
+	}
+	result := int32(1)
+	for exponent > 0 {
+		if exponent&1 != 0 {
+			result *= base
+		}
+		base *= base
+		exponent >>= 1
+	}
+	return result
 }
 
 func (e *evaluator) unary(live bool) int32 {

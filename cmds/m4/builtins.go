@@ -1,9 +1,9 @@
 package m4cmd
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -77,7 +77,7 @@ func init() {
 		// No arguments restore the defaults; a null start quote turns
 		// quoting off; a missing or null end quote is the default one.
 		p.lquote, p.rquote = "`", "'"
-		if len(args) > 0 {
+		if len(args) > 0 && (len(args) > 1 || args[0].present) {
 			p.lquote = args[0].text
 			if len(args) > 1 && args[1].text != "" {
 				p.rquote = args[1].text
@@ -456,6 +456,7 @@ func biEval(p *processor, name string, args []argument) (string, *macro) {
 	v, err := evalExpr(args[0].text)
 	if err != "" {
 		p.warnf("%s in eval: %s", err, args[0].text)
+		p.failed = true
 		return "", nil
 	}
 	mag := uint64(v)
@@ -467,7 +468,7 @@ func biEval(p *processor, name string, args []argument) (string, *macro) {
 	if radix == 1 {
 		digits = strings.Repeat("1", int(mag))
 	} else {
-		digits = strconv.FormatUint(mag, int(radix))
+		digits = strings.ToUpper(strconv.FormatUint(mag, int(radix)))
 	}
 	if pad := int(width) - len(digits); pad > 0 {
 		digits = strings.Repeat("0", pad) + digits
@@ -496,32 +497,42 @@ func biMkstemp(p *processor, name string, args []argument) (string, *macro) {
 		return "", nil
 	}
 	tmpl := args[0].text
-	if !strings.HasSuffix(tmpl, "XXXXXX") {
+	width := len(tmpl) - len(strings.TrimRight(tmpl, "X"))
+	if width < 6 {
 		p.warnf("%s: template must end in XXXXXX", name)
 		p.failed = true
 		return "", nil
 	}
-	dir, base := filepath.Split(tmpl)
-	createDir := dir
-	if createDir == "" {
-		createDir = "."
-	}
-	createDir = p.rc.Path(createDir)
-	pattern := strings.TrimSuffix(base, "XXXXXX") + "*"
-	f, err := os.CreateTemp(createDir, pattern)
-	if err != nil {
+	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	for attempt := 0; attempt < 100; attempt++ {
+		suffix := make([]byte, width)
+		if _, err := rand.Read(suffix); err != nil {
+			p.warnf("%s: random suffix: %v", name, err)
+			p.failed = true
+			return "", nil
+		}
+		for i := range suffix {
+			suffix[i] = letters[int(suffix[i])%len(letters)]
+		}
+		// Keep the caller's relative directory spelling in the expansion.
+		candidate := tmpl[:len(tmpl)-width] + string(suffix)
+		f, err := os.OpenFile(p.rc.Path(candidate), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err == nil {
+			err = f.Close()
+		}
+		if err == nil {
+			return candidate, nil
+		}
 		p.warnf("%s: %v", name, err)
 		p.failed = true
 		return "", nil
 	}
-	if err := f.Close(); err != nil {
-		p.warnf("%s: %v", name, err)
-		p.failed = true
-		return "", nil
-	}
-	// mkstemp mutates its template in place, so preserve the caller's relative
-	// directory spelling in the expansion even though creation used rc.Path.
-	return dir + filepath.Base(f.Name()), nil
+	p.warnf("%s: cannot create unique file", name)
+	p.failed = true
+	return "", nil
 }
 
 func biDumpdef(p *processor, _ string, args []argument) (string, *macro) {

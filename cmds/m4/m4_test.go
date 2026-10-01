@@ -208,16 +208,17 @@ func TestEval(t *testing.T) {
 		{"logical short circuit", "eval(`0 && 1 / 0') eval(`1 || 1 / 0')\n", "0 1\n"},
 		{"mixed precedence", "eval(`1 | 2 ^ 3 & 4') eval(`1 + 2 << 3') eval(`1 < 2 == 1') eval(`1 || 0 && 0')\n", "3 24 1 1\n"},
 		{"octal and hex constants", "eval(`010') eval(`0x1f') eval(`0X10 + 1')\n", "8 31 17\n"},
-		{"radix", "eval(`255', `16') eval(`8', `8') eval(`5', `2') eval(`-5', `2')\n", "ff 10 101 -101\n"},
+		{"radix", "eval(`255', `16') eval(`8', `8') eval(`5', `2') eval(`-5', `2')\n", "FF 10 101 -101\n"},
 		{"minimum width", "eval(`5', `10', `3') eval(`-5', `2', `8') eval(`123', `10', `2')\n", "005 -00000101 123\n"},
 		{"32-bit wraparound", "eval(`2147483647 + 1')\n", "-2147483648\n"},
+		{"exponent wraps", "eval(`2 ** 31') eval(`2 ** 32') eval(`2 ** 3 ** 2')\n", "-2147483648 0 512\n"},
 		{"arguments are expanded", "define(`n', `6')eval(n * 7)\n", "42\n"},
 		{"bare eval is text", "eval\n", "eval\n"},
 	})
 }
 
 func TestEvalErrors(t *testing.T) {
-	for _, in := range []string{"[eval(`1 / 0')]\n", "[eval(`1 % 0')]\n", "[eval(`1 +')]\n", "[eval(`2 ** 3')]\n", "[eval(`(1')]\n", "[eval(`1 2')]\n", "[eval(`1', `37')]\n", "[incr(`x')]\n"} {
+	for _, in := range []string{"[eval(`1 / 0')]\n", "[eval(`1 % 0')]\n", "[eval(`1 +')]\n", "[eval(`x[0]')]\n", "[eval(`(1')]\n", "[eval(`1 2')]\n", "[eval(`1', `37')]\n", "[incr(`x')]\n"} {
 		out, errOut, _ := runM4(t, in)
 		if out != "[]\n" {
 			t.Errorf("%q: stdout=%q, want empty expansion", in, out)
@@ -228,11 +229,21 @@ func TestEvalErrors(t *testing.T) {
 	}
 }
 
+func TestInvalidEvalExitsWithError(t *testing.T) {
+	for _, expression := range []string{"x[0]", "p->x", "i++", "(char)65"} {
+		_, stderr, code := runM4(t, "eval(`"+expression+"')")
+		if code == 0 || !strings.Contains(stderr, "bad expression") {
+			t.Errorf("%q: code=%d stderr=%q", expression, code, stderr)
+		}
+	}
+}
+
 func TestChangequote(t *testing.T) {
 	runTable(t, []m4Case{
 		{"new delimiters", "changequote([, ])define([x], [y])[x] x `x'\n", "x y `y'\n"},
 		{"multi-character delimiters", "changequote(`<<', `>>')define(<<x>>, <<y>>)<<x>> x <<a<<b>>c>>\n", "x y a<<b>>c\n"},
 		{"no arguments restores the defaults", "changequote([, ])changequote`x' [x]\n", "x [x]\n"},
+		{"empty parentheses restore the defaults", "define(foo,bar)dnl\nchangequote(<,>)dnl\nchangequote()dnl\n`foo' is foo\n", "foo is bar\n"},
 		{"missing end quote defaults", "changequote([)[foo' x\n", "foo x\n"},
 		{"dollar at uses the current quotes", "define(`f', `$@')changequote([, ])define([x], [X])f([x])\n", "x\n"},
 		{"same start and end do not nest", "changequote(`\"', `\"')\"a\" \"\"b\n", "a b\n"},
@@ -279,6 +290,38 @@ func TestOptionsDefineUndefine(t *testing.T) {
 		out, errOut, code := runM4(t, tc.in, tc.args...)
 		if code != 0 || out != tc.want {
 			t.Errorf("%v: code=%d stdout=%q want %q stderr=%q", tc.args, code, out, tc.want, errOut)
+		}
+	}
+}
+
+func TestInterspersedOptionsFollowFileOrder(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.m4")
+	b := filepath.Join(dir, "b.m4")
+	for _, path := range []string{a, b} {
+		if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, errOut, code := runM4(t, "", "-Dx=first", a, "-Dx=second", b)
+	if code != 0 || out != "first\nsecond\n" {
+		t.Fatalf("interspersed -D: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runM4(t, "", "-Dx=first", a, "-Ux", b)
+	if code != 0 || out != "first\nx\n" {
+		t.Fatalf("interspersed -U: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = runM4(t, "", a, "-s", b)
+	if code != 0 || !strings.HasPrefix(out, "x\n#line 1 ") || !strings.HasSuffix(out, "x\n") {
+		t.Fatalf("interspersed -s: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestInvalidCommandLineMacroName(t *testing.T) {
+	for _, name := range []string{"3bad", "bad-name"} {
+		_, errOut, code := runM4(t, "", "-D"+name)
+		if code == 0 || !strings.Contains(errOut, "invalid macro name") {
+			t.Errorf("-D%q: code=%d stderr=%q", name, code, errOut)
 		}
 	}
 }
@@ -355,7 +398,7 @@ func TestIncludeTracksDiagnosticAndSynclineIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, errOut, code := runM4Context(t, dir, nil, "before\ninclude(`inc.m4')after\n", "-s")
-	if code != 0 {
+	if code != 1 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	for _, want := range []string{`#line 1 "inc.m4"`, `#line 2 "stdin"`} {
@@ -410,6 +453,16 @@ func TestMaketempMkstempWrapExit(t *testing.T) {
 	}
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("mkstemp did not create %q: %v", out, err)
+	}
+	if len(out) != len(filepath.Join(dir, "bXXXXXX")) || !strings.HasPrefix(out, filepath.Join(dir, "b")) {
+		t.Fatalf("mkstemp did not replace the six-character template: %q", out)
+	}
+	out, errOut, code = runM4(t, "mkstemp(`"+filepath.Join(dir, "cXXXXXXXX")+"')")
+	if code != 0 || len(out) != len(filepath.Join(dir, "cXXXXXXXX")) {
+		t.Fatalf("eight-character mkstemp: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("eight-character mkstemp did not create %q: %v", out, err)
 	}
 	out, errOut, code = runM4Context(t, dir, nil, "mkstemp(`relativeXXXXXX')")
 	if code != 0 || filepath.IsAbs(out) {
