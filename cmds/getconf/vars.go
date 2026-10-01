@@ -220,6 +220,12 @@ func systemValue(name string) (string, bool) {
 	if target, ok := compatibilityAliases[name]; ok {
 		name = target
 	}
+	// These optional development environments are outside the certified base
+	// XCU claim. Report the shipped product's capability, not the host libc's.
+	switch name {
+	case "_POSIX2_UPE", "_POSIX2_SW_DEV", "_POSIX2_C_DEV", "_POSIX2_FORT_DEV":
+		return undefined, true
+	}
 	if s, ok := platformConfstrValue(name); ok {
 		return s, true
 	}

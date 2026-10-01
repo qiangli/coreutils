@@ -395,6 +395,22 @@ _XOPEN_UUCP _XOPEN_VERSION`)
 	}
 }
 
+func TestUnclaimedDevelopmentOptionsAreUndefined(t *testing.T) {
+	for _, name := range []string{
+		"POSIX2_UPE", "POSIX2_SW_DEV", "POSIX2_C_DEV", "POSIX2_FORT_DEV",
+		"_POSIX2_UPE", "_POSIX2_SW_DEV", "_POSIX2_C_DEV", "_POSIX2_FORT_DEV",
+	} {
+		got, errs, code := runCmd(t, name)
+		if code != 0 || errs != "" || got != undefined {
+			t.Errorf("getconf %s = (%q, %q, %d), want (undefined, empty, 0)", name, got, errs, code)
+		}
+	}
+	got, errs, code := runCmd(t, "POSIX2_VERSION")
+	if code != 0 || errs != "" || got != strconv.FormatInt(posix2Version, 10) {
+		t.Errorf("getconf POSIX2_VERSION = (%q, %q, %d), want (%d, empty, 0)", got, errs, code, posix2Version)
+	}
+}
+
 func TestPathErrorsWriteNoStdoutAndFail(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows has no pathconf ABI and deliberately reports undefined")
