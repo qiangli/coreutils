@@ -952,6 +952,42 @@ func TestPAXStandardUTF8HeaderCharsetIsTranslated(t *testing.T) {
 	}
 }
 
+func TestBasicUSTARNameUsesLocalBytesWithoutPAXTranslation(t *testing.T) {
+	name := string([]byte{0xe4}) // a valid single-byte locale pathname
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "x", Typeflag: tar.TypeReg, Mode: 0o600, Format: tar.FormatUSTAR}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw.Bytes()[0] = 0xe4
+	setRawTarChecksum(raw.Bytes()[:512])
+	d := t.TempDir()
+	arc := filepath.Join(d, "raw.ustar")
+	if err := os.WriteFile(arc, raw.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range [][]string{{"LC_CTYPE=C"}, {"LC_CTYPE=de_DE.iso88591"}} {
+		out, errOut, code := execPaxEnv(t, d, env, "-f", arc)
+		if code != 0 || out != name+"\n" || errOut != "" {
+			t.Errorf("env=%v code=%d stdout=%q stderr=%q", env, code, out, errOut)
+		}
+	}
+}
+
+func TestPAXListingDoesNotTranslatePrivateRawUSTARFields(t *testing.T) {
+	rawName := string([]byte{0xe4})
+	h := &tar.Header{Name: "ä", Format: tar.FormatPAX, PAXRecords: map[string]string{
+		"path": "ä", "COREUTILS.internal.ustar.name": rawName,
+	}}
+	invalid := translatePAXHeaderToLocal(&tool.RunContext{Env: []string{"LANG=de_DE.iso88591"}}, h, "bypass", true)
+	if invalid.name || invalid.link || invalid.other || h.Name != rawName || h.PAXRecords["COREUTILS.internal.ustar.name"] != rawName {
+		t.Fatalf("header=%+v invalid=%+v", h, invalid)
+	}
+}
+
 func TestPAXReadBypassesUntranslatableOwnerForBypassAndRename(t *testing.T) {
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)

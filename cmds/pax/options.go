@@ -372,6 +372,25 @@ type paxInvalidHeaderFields struct {
 
 func translatePAXHeaderToLocal(rc *tool.RunContext, h *tar.Header, action string, listMode bool) paxInvalidHeaderFields {
 	var invalid paxInvalidHeaderFields
+	// A basic ustar header stores pathname and owner bytes in the locale's
+	// native encoding. Only pax extended records use the UTF-8 interchange
+	// encoding. Treating a raw ustar name as UTF-8 rejects valid local names
+	// (and breaks a pax -w | pax listing under single-byte locales).
+	// archive/tar reports FormatUnknown for a physical ustar header whose
+	// name bytes are not UTF-8. The option reader also attaches private raw
+	// header fields; those are not interchange-encoded pax records.
+	if h.Format != tar.FormatPAX {
+		basic := true
+		for key := range h.PAXRecords {
+			if !strings.HasPrefix(key, "COREUTILS.internal.ustar.") {
+				basic = false
+				break
+			}
+		}
+		if basic {
+			return invalid
+		}
+	}
 	hdrcharset := h.PAXRecords["hdrcharset"]
 	if hdrcharset == "BINARY" {
 		return invalid
@@ -414,7 +433,7 @@ func translatePAXHeaderToLocal(rc *tool.RunContext, h *tar.Header, action string
 	// therefore translates every string operand.
 	if listMode && h.PAXRecords != nil {
 		for key, value := range h.PAXRecords {
-			if key == "hdrcharset" || strings.HasPrefix(key, "COREUTILS.internal.cpio.filedata") {
+			if key == "hdrcharset" || strings.HasPrefix(key, "COREUTILS.internal.") {
 				continue
 			}
 			bad := false
