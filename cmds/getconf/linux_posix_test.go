@@ -193,7 +193,7 @@ func TestLinuxPathValuesAcceptNearPathMaxRelativeOperand(t *testing.T) {
 	for _, name := range []string{
 		"LINK_MAX", "NAME_MAX", "PATH_MAX", "PIPE_BUF",
 		"_POSIX_CHOWN_RESTRICTED", "_POSIX_NO_TRUNC", "FILESIZEBITS",
-		"SYMLINK_MAX", "POSIX2_SYMLINKS",
+		"SYMLINK_MAX", "POSIX2_SYMLINKS", "_POSIX_TIMESTAMP_RESOLUTION",
 	} {
 		var out, errb bytes.Buffer
 		rc := &tool.RunContext{
@@ -203,6 +203,13 @@ func TestLinuxPathValuesAcceptNearPathMaxRelativeOperand(t *testing.T) {
 		if code := run(rc, []string{name, relative}); code != 0 || out.Len() == 0 || errb.Len() != 0 {
 			t.Errorf("%s on %d-byte relative path = (stdout %q, stderr %q, exit %d)",
 				name, len(relative), out.String(), errb.String(), code)
+		}
+		if name == "_POSIX_TIMESTAMP_RESOLUTION" {
+			short, stderr, code := runCmd(t, name, base)
+			if code != 0 || stderr != "" || strings.TrimSpace(out.String()) != short {
+				t.Errorf("%s differs between near-limit relative path %q and short path %q",
+					name, strings.TrimSpace(out.String()), short)
+			}
 		}
 	}
 }

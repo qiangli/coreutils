@@ -142,6 +142,16 @@ func linuxNanosecondFilesystem(path string) bool {
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
 		clean = resolved
 	}
+	// Statfs accepts a near-PATH_MAX relative operand from the process cwd.
+	// Mountinfo paths are absolute, so compare against an absolute spelling
+	// without asking the kernel to resolve the overlong joined pathname.
+	if !filepath.IsAbs(clean) {
+		absolute, err := filepath.Abs(clean)
+		if err != nil {
+			return false
+		}
+		clean = absolute
+	}
 	bestLen, bestType := -1, ""
 	for _, line := range strings.Split(string(data), "\n") {
 		parts := strings.SplitN(line, " - ", 2)
