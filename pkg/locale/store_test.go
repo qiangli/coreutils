@@ -148,6 +148,23 @@ func TestPrivateStorePaths(t *testing.T) {
 	}
 }
 
+func TestSavePathPreservesUnwritableExistingFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can open a read-only file for writing")
+	}
+	path := filepath.Join(t.TempDir(), "locale")
+	const original = "existing locale data\n"
+	if err := os.WriteFile(path, []byte(original), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := SavePath(path, &Compiled{Name: "replacement"}); err == nil {
+		t.Fatal("SavePath replaced an unwritable existing output")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != original {
+		t.Fatalf("existing output = %q, %v; want unchanged %q", got, err, original)
+	}
+}
+
 func TestCollationPositionStore(t *testing.T) {
 	for _, position := range [][]bool{nil, {true}, {false, true}} {
 		c := &Compiled{Name: "position", Collation: &Collation{Backward: []bool{false}, Position: position, Elements: []CollatingElement{{Text: "a", Order: 1, Weights: [][]int{{1}}}}}}

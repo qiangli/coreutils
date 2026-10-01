@@ -14,6 +14,7 @@ package locale
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -314,6 +315,20 @@ func SavePath(path string, c *Compiled) error {
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	// A rename can replace a read-only existing file when its parent directory
+	// is writable. Check the destination's own write access before preparing
+	// the replacement, as localedef must fail for an unwritable output file.
+	if _, err := os.Lstat(path); err == nil {
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
