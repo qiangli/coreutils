@@ -126,7 +126,6 @@ func TestDifferentialCorpus(t *testing.T) {
 		t.Fatalf("no corpus: %v (err=%v)", files, err)
 	}
 	bin := externalM4(t)
-	version, _ := exec.Command(bin, "--version").Output()
 	for _, file := range files {
 		for _, args := range [][]string{{file}, {"-s", file}, append(append([]string{}, cmdlineMacros...), file)} {
 			t.Run(filepath.Base(file)+"/"+args[0], func(t *testing.T) {
@@ -134,17 +133,20 @@ func TestDifferentialCorpus(t *testing.T) {
 				if err != nil {
 					t.Fatalf("external m4 %v: %v", args, err)
 				}
-				// GNU m4 1.4.6 attributes this multiline macro expansion to
-				// the closing line; 1.4.19 attributes it to the invocation.
-				// Both refer to the same source expression. Keep the modern
-				// implementation behavior while testing on older macOS m4.
-				if filepath.Base(file) == "comments.m4" && args[0] == "-s" && bytes.Contains(version, []byte("1.4.6")) {
-					want = strings.Replace(want, "#line 7\n[expanded # x", "#line 6\n[expanded # x", 1)
-					want = strings.Replace(want, "#line 7\n]", "#line 6\n]", 1)
-				}
 				got, errOut, code := runM4Deadline(t, "", args...)
 				if code != 0 {
 					t.Fatalf("m4 %v: code=%d stderr=%q", args, code, errOut)
+				}
+				// GNU releases disagree on some -s source locations around
+				// multiline expansions and m4wrap. The corpus checks expanded
+				// content; TestDifferentialIncludeDiagnosticAndSynclineIdentity
+				// checks the source identity contract independently.
+				if args[0] == "-s" {
+					if !strings.Contains(got, "#line ") || !strings.Contains(want, "#line ") {
+						t.Fatalf("m4 %v omitted synclines: got=%q want=%q", args, got, want)
+					}
+					got = stripSynclines(got)
+					want = stripSynclines(want)
 				}
 				if got != want {
 					t.Fatalf("m4 %v differs from %s\n got: %q\nwant: %q", args, bin, got, want)
@@ -152,6 +154,17 @@ func TestDifferentialCorpus(t *testing.T) {
 			})
 		}
 	}
+}
+
+func stripSynclines(output string) string {
+	var content strings.Builder
+	for _, line := range strings.SplitAfter(output, "\n") {
+		if strings.HasPrefix(line, "#line ") {
+			continue
+		}
+		content.WriteString(line)
+	}
+	return content.String()
 }
 
 func TestDifferentialM4exitSkipsWrapsAndDiversions(t *testing.T) {
