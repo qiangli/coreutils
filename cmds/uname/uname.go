@@ -32,6 +32,12 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
+// cleanUnameField keeps the kernel's spacing intact. Only line breaks are
+// replaced, so one uname field cannot split the command's output into lines.
+func cleanUnameField(s string) string {
+	return strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
+}
+
 var cmd = &tool.Tool{
 	Name:     "uname",
 	Synopsis: "Print certain system information (default: the kernel name).",

@@ -3,8 +3,6 @@
 package unamecmd
 
 import (
-	"strings"
-
 	"golang.org/x/sys/unix"
 )
 
@@ -16,10 +14,7 @@ func probe() (sysinfo, error) {
 	if err := unix.Uname(&u); err != nil {
 		return sysinfo{}, err
 	}
-	clean := func(b []byte) string {
-		s := unix.ByteSliceToString(b)
-		return strings.Join(strings.Fields(s), " ")
-	}
+	clean := func(b []byte) string { return cleanUnameField(unix.ByteSliceToString(b)) }
 	return sysinfo{
 		sysname:          clean(u.Sysname[:]),
 		nodename:         clean(u.Nodename[:]),

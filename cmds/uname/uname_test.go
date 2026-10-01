@@ -53,6 +53,16 @@ func TestUnameDefaultIsKernelName(t *testing.T) {
 	}
 }
 
+func TestCleanUnameFieldPreservesKernelVersionSpacing(t *testing.T) {
+	const raw = "#142-Ubuntu Wed Sep  2 14:24:27 UTC 2026"
+	if got := cleanUnameField(raw); got != raw {
+		t.Fatalf("kernel version spacing = %q, want %q", got, raw)
+	}
+	if got, want := cleanUnameField("first\nsecond\rthird"), "first second third"; got != want {
+		t.Fatalf("kernel version line breaks = %q, want %q", got, want)
+	}
+}
+
 func TestUnameFields(t *testing.T) {
 	host, err := os.Hostname()
 	if err != nil {
