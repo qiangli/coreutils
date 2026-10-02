@@ -164,7 +164,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tabs` | `cmds/tabs` | — | POSIX/Unix utility | no | yes | 2 | 21 |
 | `tac` | `cmds/tac` | — | GNU Coreutils | yes | no | 1 | 6 |
-| `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 4 | 33 |
+| `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 4 | 34 |
 | `talk` | `cmds/talk` | — | POSIX/Unix utility | no | yes | 6 | 26 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 3 | 31 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |

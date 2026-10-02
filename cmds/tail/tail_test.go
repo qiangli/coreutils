@@ -89,6 +89,23 @@ func TestTail(t *testing.T) {
 	}
 }
 
+func TestHistoricalPlusLineCountPreservesExistingOperand(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "input", "first\nsecond\nthird\n")
+	var out, errs bytes.Buffer
+	rc := &tool.RunContext{Dir: dir, Env: []string{"POSIXLY_CORRECT=1"}, Stdio: tool.Stdio{Out: &out, Err: &errs}}
+	if code := cmd.Run(rc, []string{"+3", "input"}); code != 0 || errs.Len() != 0 || out.String() != "third\n" {
+		t.Fatalf("POSIX tail +3 input = (%q, %q, %d), want third line", out.String(), errs.String(), code)
+	}
+	writeFile(t, dir, "+3", "named-plus-file\n")
+	if out, errs, code := runTool(t, dir, "", "+3"); code != 0 || errs != "" || out != "named-plus-file\n" {
+		t.Fatalf("tail +3 existing file = (%q, %q, %d), want file contents", out, errs, code)
+	}
+	if out, errs, code := runTool(t, dir, "", "--", "+3"); code != 0 || errs != "" || out != "named-plus-file\n" {
+		t.Fatalf("tail -- +3 = (%q, %q, %d), want file contents", out, errs, code)
+	}
+}
+
 func TestTailHeaders(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a", "1\n2\n")

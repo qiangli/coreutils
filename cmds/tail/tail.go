@@ -24,6 +24,7 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = rewriteObsoletePlusNum(rc, args)
 	args = rewriteObsoleteNum(args, "--lines=")
 
 	fs := tool.NewFlags(cmd.Name)
@@ -521,6 +522,25 @@ func tailStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromStart
 
 // --- shared helpers (duplicated per-package by design; cmds packages
 // do not import each other) ---
+
+// Some older POSIX test fixtures invoke `tail +N file` instead of the
+// standardized `tail -n +N file`. Keep that historical spelling as an
+// extension only when +N does not name an existing file. A real file named
+// +N, or an operand after --, retains its ordinary pathname meaning.
+func rewriteObsoletePlusNum(rc *tool.RunContext, args []string) []string {
+	if len(args) == 0 || len(args[0]) < 2 || args[0][0] != '+' {
+		return args
+	}
+	for _, ch := range args[0][1:] {
+		if ch < '0' || ch > '9' {
+			return args
+		}
+	}
+	if _, err := os.Stat(rc.Path(args[0])); err == nil || !os.IsNotExist(err) {
+		return args
+	}
+	return append([]string{"--lines=" + args[0]}, args[1:]...)
+}
 
 func rewriteObsoleteNum(args []string, flag string) []string {
 	if len(args) == 0 {
