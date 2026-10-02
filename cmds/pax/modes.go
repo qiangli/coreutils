@@ -613,6 +613,10 @@ var openArchiveSink = func(path string, flags int, perm os.FileMode) (archiveSin
 
 // writeMode creates an archive from the named files.
 func writeMode(rc *tool.RunContext, o *options, files []string) int {
+	return writeModeWithStreamThreshold(rc, o, files, 1<<30)
+}
+
+func writeModeWithStreamThreshold(rc *tool.RunContext, o *options, files []string, threshold int64) int {
 	status := 0
 	if len(files) == 0 {
 		var inputStatus int
@@ -623,6 +627,7 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	if o.archive != "" {
 		archivePath = resolve(rc, o.archive)
 	}
+	streamLarge := shouldStreamLargePAX(rc, o, files, archivePath, threshold)
 	// -a and -u both have to read the archive they are about to extend. On a
 	// pipe there is nothing to read and nothing to seek back to, so the
 	// documented semantics cannot be honored - say so rather than silently
@@ -714,6 +719,10 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	var blockPrefix []byte
 	if archivePath != "" {
 		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		if streamLarge {
+			// The header pass after streaming needs to read the completed file.
+			flags = os.O_CREATE | os.O_RDWR | os.O_TRUNC
+		}
 		if appendExisting && len(existing) != 0 && !existingCPIOArchive {
 			flags = os.O_RDWR
 		}
@@ -797,7 +806,11 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		}
 	} else {
 		var logical bytes.Buffer
-		tw := tar.NewWriter(&logical)
+		logicalOut := io.Writer(&logical)
+		if streamLarge {
+			logicalOut = out
+		}
+		tw := tar.NewWriter(logicalOut)
 		globalInvalid, err := writeGlobalPAXHeader(rc, o, tw)
 		if globalInvalid {
 			fmt.Fprintln(rc.Err, "pax: global extended-header value cannot be translated; written as binary")
@@ -826,25 +839,27 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			status = 1
 		}
-		logicalData, err := patchLinkdataHeaders(logical.Bytes())
-		if err == nil {
-			logicalData, err = filterDeletedPAXRecords(logicalData, o.paxOptions)
-		}
-		if err == nil && o.format == "pax" {
-			logicalData, err = patchExtendedHeaderNames(logicalData, o.paxOptions.exthdrName)
-		}
-		if err == nil {
-			logicalData, err = patchRawMemberNames(logicalData, o.rawMemberNames)
-		}
-		if err == nil {
-			logicalData, err = normalizeTarChecksums(logicalData)
-		}
-		if err != nil {
-			fmt.Fprintf(rc.Err, "pax: %v\n", err)
-			status = 1
-		} else if _, err := out.Write(logicalData); err != nil {
-			fmt.Fprintf(rc.Err, "pax: %v\n", err)
-			status = 1
+		if !streamLarge {
+			logicalData, err := patchLinkdataHeaders(logical.Bytes())
+			if err == nil {
+				logicalData, err = filterDeletedPAXRecords(logicalData, o.paxOptions)
+			}
+			if err == nil && o.format == "pax" {
+				logicalData, err = patchExtendedHeaderNames(logicalData, o.paxOptions.exthdrName)
+			}
+			if err == nil {
+				logicalData, err = patchRawMemberNames(logicalData, o.rawMemberNames)
+			}
+			if err == nil {
+				logicalData, err = normalizeTarChecksums(logicalData)
+			}
+			if err != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				status = 1
+			} else if _, err := out.Write(logicalData); err != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				status = 1
+			}
 		}
 	}
 	if err := blocker.Close(); err != nil {
@@ -852,6 +867,12 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		status = 1
 	}
 	if file != nil {
+		if streamLarge && blocker.err == nil {
+			if err := patchStreamedPAXHeaders(file, o.rawMemberNames, o.paxOptions.exthdrName); err != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				status = 1
+			}
+		}
 		// A failed physical write may have changed bytes already, but truncating
 		// after it would compound the damage. Preparation failures above happen
 		// before the first write and therefore leave the archive untouched.
@@ -870,6 +891,33 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		}
 	}
 	return status
+}
+
+// The ordinary header transforms work on []byte and would retain the entire
+// archive. A large, plain single-file PAX write can instead stream its data
+// and patch only the 512-byte physical headers in the seekable archive.
+func shouldStreamLargePAX(rc *tool.RunContext, o *options, files []string, archivePath string, threshold int64) bool {
+	if archivePath == "" || o.format != "pax" || len(files) != 1 || o.appendMode ||
+		o.newerOnly || o.interactive || len(o.subst) != 0 ||
+		o.paxOptions.linkdata || o.paxOptions.times || o.paxOptions.invalidSet ||
+		len(o.paxOptions.deletes) != 0 || len(o.paxOptions.global) != 0 ||
+		len(o.paxOptions.local) != 0 || o.paxOptions.globalName != "" {
+		return false
+	}
+	path := resolve(rc, files[0])
+	if filepath.Clean(path) == filepath.Clean(archivePath) {
+		return false
+	}
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() < threshold {
+		return false
+	}
+	for _, c := range files[0] {
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // readPathnames reads the operand list from standard input, one pathname per

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path"
@@ -342,36 +343,119 @@ func patchRawMemberNames(data []byte, names []string) ([]byte, error) {
 			if index >= len(names) {
 				return nil, fmt.Errorf("tar member/name count mismatch")
 			}
-			name := filepath.ToSlash(names[index])
+			name := names[index]
 			index++
-			for i := 0; i < 100; i++ {
-				header[i] = 0
-			}
-			for i := 345; i < 500; i++ {
-				header[i] = 0
-			}
-			prefix, suffix := "", name
-			if len(name) > 100 {
-				cut := -1
-				for i := len(name) - 1; i >= 0; i-- {
-					if name[i] == '/' && i <= 155 && len(name)-i-1 <= 100 {
-						cut = i
-						break
-					}
-				}
-				if cut >= 0 {
-					prefix, suffix = name[:cut], name[cut+1:]
-				} else {
-					suffix = name[:min(len(name), 100)]
-				}
-			}
-			copy(header[:100], suffix)
-			copy(header[345:500], prefix)
+			restoreRawMemberName(header, name)
 			setRawTarChecksum(header)
 		}
 		off = next
 	}
 	return nil, fmt.Errorf("invalid tar archive: missing end markers")
+}
+
+func restoreRawMemberName(header []byte, name string) {
+	name = filepath.ToSlash(name)
+	for i := 0; i < 100; i++ {
+		header[i] = 0
+	}
+	for i := 345; i < 500; i++ {
+		header[i] = 0
+	}
+	prefix, suffix := "", name
+	if len(name) > 100 {
+		cut := -1
+		for i := len(name) - 1; i >= 0; i-- {
+			if name[i] == '/' && i <= 155 && len(name)-i-1 <= 100 {
+				cut = i
+				break
+			}
+		}
+		if cut >= 0 {
+			prefix, suffix = name[:cut], name[cut+1:]
+		} else {
+			suffix = name[:min(len(name), 100)]
+		}
+	}
+	copy(header[:100], suffix)
+	copy(header[345:500], prefix)
+}
+
+// patchStreamedPAXHeaders makes the same fixed-size name and checksum edits
+// as the in-memory path while retaining only two tar headers at a time.
+func patchStreamedPAXHeaders(file archiveSink, names []string, exthdrName string) error {
+	end, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	readHeader := func(off int64) ([]byte, error) {
+		if off < 0 || off+512 > end {
+			return nil, fmt.Errorf("truncated tar header")
+		}
+		if _, err := file.Seek(off, io.SeekStart); err != nil {
+			return nil, err
+		}
+		header := make([]byte, 512)
+		_, err := io.ReadFull(file, header)
+		return header, err
+	}
+	index := 0
+	for off := int64(0); off+512 <= end; {
+		header, err := readHeader(off)
+		if err != nil {
+			return err
+		}
+		if allZero(header) {
+			if index != len(names) {
+				return fmt.Errorf("tar member/name count mismatch")
+			}
+			return nil
+		}
+		size, err := rawTarSize(header)
+		if err != nil {
+			return err
+		}
+		if size < 0 || size > end-off-512 || size > (1<<63)-512 {
+			return fmt.Errorf("truncated tar member")
+		}
+		next := off + 512 + ((size + 511) &^ int64(511))
+		if next > end {
+			return fmt.Errorf("truncated tar member")
+		}
+		switch header[156] {
+		case tar.TypeXHeader:
+			member, err := readHeader(next)
+			if err != nil {
+				return fmt.Errorf("extended header has no member: %w", err)
+			}
+			name, err := expandExtendedHeaderName(exthdrName, rawTarName(member))
+			if err != nil {
+				return err
+			}
+			if err := setRawTarName(header, name); err != nil {
+				return err
+			}
+		case tar.TypeXGlobalHeader:
+		default:
+			if index >= len(names) {
+				return fmt.Errorf("tar member/name count mismatch")
+			}
+			restoreRawMemberName(header, names[index])
+			index++
+		}
+		setRawTarChecksum(header)
+		if _, err := file.Seek(off, io.SeekStart); err != nil {
+			return err
+		}
+		n, err := file.Write(header)
+		if err != nil {
+			return err
+		}
+		if n != len(header) {
+			return io.ErrShortWrite
+		}
+		off = next
+	}
+	return fmt.Errorf("invalid tar archive: missing end markers")
 }
 
 func parseRawPAXRecords(data []byte) (map[string]string, error) {
