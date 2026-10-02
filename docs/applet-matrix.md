@@ -92,7 +92,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 4 | 39 |
-| `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 25 |
+| `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 26 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 2 | 22 |
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 3 | 23 |
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 6 |
