@@ -685,6 +685,26 @@ func TestGrepBinary(t *testing.T) {
 	}
 }
 
+func TestGrepBinaryNULSeparatesRecordsForMatching(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		args        []string
+		wantCode    int
+	}{
+		{"trailing NUL is not matched by negated class", "0000000\x00", []string{"-q", "[^0-7]"}, 1},
+		{"content after NUL can match", "0000000\x00a", []string{"-q", "[^0-7]"}, 0},
+		{"literal whole record before NUL", "000\x00abc", []string{"-q", "-x", "000"}, 0},
+		{"text record unchanged", "0000000\n", []string{"-q", "[^0-7]"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errs, code := runGrep(t, "", tc.input, tc.args...)
+			if code != tc.wantCode || out != "" || errs != "" {
+				t.Fatalf("grep %q = (%d,%q,%q), want (%d,empty,empty)", tc.input, code, out, errs, tc.wantCode)
+			}
+		})
+	}
+}
+
 func TestGrepErrors(t *testing.T) {
 	dir := setupTree(t)
 	_, errb, code := runGrep(t, dir, "", "foo", "missing.txt")

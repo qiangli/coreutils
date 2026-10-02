@@ -96,6 +96,11 @@ func (g *grepper) searchStreamLit(r io.Reader, name string) {
 			} else if i := bytes.LastIndexByte(buf[:dataLen], '\n'); i >= 0 {
 				region = i + 1 // complete lines only
 			}
+			if binary {
+				if i := bytes.LastIndexByte(buf[:dataLen], 0); i >= 0 && i+1 > region {
+					region = i + 1
+				}
+			}
 			if region > 0 {
 				act := g.litChunk(buf[:region], name, binary, &selected, &lineNo)
 				dataLen = copy(buf, buf[region:dataLen])
@@ -152,7 +157,7 @@ var litNL = []byte{'\n'}
 // litChunk scans one region whose every line is complete (only the last
 // line of the stream may lack its '\n').
 func (g *grepper) litChunk(data []byte, name string, binary bool, selected, lineNo *int) litAction {
-	if !g.invert && !g.lineRegexp && len(g.lit) > 0 {
+	if !binary && !g.invert && !g.lineRegexp && len(g.lit) > 0 {
 		// Plain substring select: hunt occurrences across the whole
 		// region, touching line boundaries only around hits. Line
 		// numbers are recovered by counting the newlines skipped.
@@ -186,7 +191,13 @@ func (g *grepper) litChunk(data []byte, name string, binary bool, selected, line
 	// with -x only empty lines).
 	for len(data) > 0 {
 		var line []byte
-		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		i := bytes.IndexByte(data, '\n')
+		if binary {
+			if nul := bytes.IndexByte(data, 0); nul >= 0 && (i < 0 || nul < i) {
+				i = nul
+			}
+		}
+		if i >= 0 {
 			line, data = data[:i], data[i+1:]
 		} else {
 			line, data = data, nil

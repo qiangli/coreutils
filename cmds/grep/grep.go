@@ -1004,6 +1004,22 @@ func scanLinesKeepCR(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 
+// GNU grep may use NUL as a record separator after classifying input as
+// binary. In particular, a trailing NUL is not a character for a negated
+// class to match. Text input continues to use newline-only scanning.
+func scanBinaryLines(data []byte, atEOF bool) (int, []byte, error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\n\x00"); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 func (g *grepper) searchStream(r io.Reader, name string) {
 	if g.useLit {
 		g.searchStreamLit(r, name)
@@ -1025,7 +1041,11 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 	if g.maxCount != 0 { // -m 0 selects nothing and reads nothing
 		sc := bufio.NewScanner(br)
 		sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
-		sc.Split(scanLinesKeepCR)
+		if binary {
+			sc.Split(scanBinaryLines)
+		} else {
+			sc.Split(scanLinesKeepCR)
+		}
 		lineNo := 0
 		lastPrinted := 0
 		afterRemaining := 0

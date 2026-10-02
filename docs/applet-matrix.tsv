@@ -46,7 +46,7 @@ fmt	cmds/fmt		GNU Coreutils	yes	no	1	18
 fold	cmds/fold		GNU Coreutils	yes	yes	2	30
 gencat	cmds/gencat		POSIX/Unix utility	no	yes	2	2
 getconf	cmds/getconf		POSIX/Unix utility	no	yes	6	40
-grep	cmds/grep		POSIX/Unix utility	no	yes	4	49
+grep	cmds/grep		POSIX/Unix utility	no	yes	4	50
 groups	cmds/groups		GNU Coreutils	yes	no	1	1
 head	cmds/head		GNU Coreutils	yes	yes	1	13
 hostid	cmds/hostid		GNU Coreutils	yes	no	1	1
