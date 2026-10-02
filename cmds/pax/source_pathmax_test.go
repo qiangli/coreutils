@@ -157,6 +157,47 @@ func TestSourceDirectoryOperandNearPathMaxIsFullyArchived(t *testing.T) {
 	}
 }
 
+// A legal -f pathname can become too long only after pax joins it to the
+// embedding run directory. GA67 exercises the archive output path, not the
+// source operand, so keep this case separate from source traversal tests.
+func TestArchiveOutputNearPathMaxUsesRelativeResolution(t *testing.T) {
+	d := t.TempDir()
+	comps := nearLimitComponents(destinationPathMax - 1 - len("/a"))
+	if len(comps) < 2 {
+		t.Skip("host cannot construct a near-PATH_MAX archive name")
+	}
+	member := path.Join(append(comps, "a")...)
+	if len(member) != destinationPathMax-1 || len(d)+1+len(member) < destinationPathMax {
+		t.Skipf("fixture does not cross the absolute pathname limit: dir=%d member=%d", len(d), len(member))
+	}
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Skipf("root-relative operations unavailable: %v", err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll(path.Dir(member), 0o700); err != nil {
+		t.Skipf("host cannot create long archive parent: %v", err)
+	}
+	if err := root.WriteFile(member, nil, 0o600); err != nil {
+		t.Skipf("host cannot create long archive name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "source"), []byte("deep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := exec(t, d, "", "-w", "-f", member, "source"); code != 0 || errOut != "" {
+		t.Fatalf("write near-PATH_MAX archive = (%d, %q), want (0, empty)", code, errOut)
+	}
+	f, err := root.Open(member)
+	if err != nil {
+		t.Fatalf("open archive through root: %v", err)
+	}
+	defer f.Close()
+	h, err := tar.NewReader(f).Next()
+	if err != nil || h.Name != "source" {
+		t.Fatalf("first archived member = (%v, %v), want source", h, err)
+	}
+}
+
 // Every required output format must open a legal source pathname without
 // making it longer by resolving it against the embedding shell's directory.
 // The cpio lane used os.ReadFile on that synthesized absolute spelling even

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/pax"
@@ -611,6 +612,26 @@ var openArchiveSink = func(path string, flags int, perm os.FileMode) (archiveSin
 	return os.OpenFile(path, flags, perm)
 }
 
+// The archive operand may be a legal relative pathname even when resolve
+// makes its absolute spelling too long for one open(2) call. Retry only that
+// error, and only for a path confined beneath the run directory.
+func openArchiveSinkForRun(rc *tool.RunContext, member, full string, flags int, perm os.FileMode) (archiveSink, error) {
+	f, err := openArchiveSink(full, flags, perm)
+	if err == nil || !errors.Is(err, syscall.ENAMETOOLONG) || !rootRelativeSource(rc, member, full) {
+		return f, err
+	}
+	root, base, rootErr := sourceParentRoot(rc, member)
+	if rootErr != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, rootErr = root.OpenFile(base, flags, perm)
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	return f, nil
+}
+
 // writeMode creates an archive from the named files.
 func writeMode(rc *tool.RunContext, o *options, files []string) int {
 	return writeModeWithStreamThreshold(rc, o, files, 1<<30)
@@ -729,7 +750,7 @@ func writeModeWithStreamThreshold(rc *tool.RunContext, o *options, files []strin
 		var err error
 		// A newly created archive is an ordinary output file: POSIX specifies
 		// 0666 filtered by the invocation umask, not a hard-coded 0644.
-		file, err = openArchiveSink(archivePath, flags, 0o666)
+		file, err = openArchiveSinkForRun(rc, o.archive, archivePath, flags, 0o666)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
