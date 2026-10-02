@@ -100,6 +100,53 @@ func TestStreamedPAXEightGiBPhysicalSize(t *testing.T) {
 	}
 }
 
+func TestPAXAbsoluteOperandPhysicalAndLogicalNames(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "member")
+	if err := os.WriteFile(source, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		threshold int64
+	}{
+		{"streamed", 1},
+		{"buffered", 1 << 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			archive := filepath.Join(dir, tc.name+".pax")
+			o := &options{
+				write: true, archive: archive, format: "pax", blockBytes: 10240,
+				now: time.Now, paxOptions: paxOptions{invalid: "bypass"},
+			}
+			var diagnostics bytes.Buffer
+			rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{
+				In: strings.NewReader(""), Out: io.Discard, Err: &diagnostics,
+			}}
+			if code := writeModeWithStreamThreshold(rc, o, []string{source}, tc.threshold); code != 0 {
+				t.Fatalf("pax exited %d: %s", code, diagnostics.String())
+			}
+			data, err := os.ReadFile(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			extSize, err := rawTarSize(data[:512])
+			if err != nil {
+				t.Fatal(err)
+			}
+			memberOffset := 512 + int((extSize+511)&^511)
+			physical := rawTarName(data[memberOffset : memberOffset+512])
+			if physical != filepath.ToSlash(source) {
+				t.Fatalf("physical member name = %q, want absolute operand %q", physical, source)
+			}
+			h, err := tar.NewReader(bytes.NewReader(data)).Next()
+			if err != nil || h.Name != "member" || h.PAXRecords["path"] != "member" {
+				t.Fatalf("logical member = (%v, %v), want safe PAX path", h, err)
+			}
+		})
+	}
+}
+
 func TestLargePAXWriteKeepsArchiveOutOfHeap(t *testing.T) {
 	const size = 64 << 20
 	dir := t.TempDir()

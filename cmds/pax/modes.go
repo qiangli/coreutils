@@ -1323,6 +1323,17 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) (bool
 			rawMemberName += "/"
 		}
 		h.Format = tarFormat(o.format)
+		if h.Format == tar.FormatPAX && !o.read && fi.Mode().IsRegular() &&
+			filepath.IsAbs(name) && filepath.Clean(e.abs) == filepath.Clean(name) {
+			// Keep the operand spelling in the physical header so older
+			// header readers can identify it. PAX readers use the path record
+			// and retain the safe logical name selected above.
+			rawMemberName = filepath.ToSlash(name)
+			if h.PAXRecords == nil {
+				h.PAXRecords = make(map[string]string)
+			}
+			h.PAXRecords["path"] = archiveOut
+		}
 		if h.Format == tar.FormatPAX {
 			if err := translatePAXIdentityToArchive(rc, h, o.paxOptions.invalid); err != nil {
 				return err
