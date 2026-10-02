@@ -662,7 +662,7 @@ func TestOutputBackupAndRejectNamesFollowOutput(t *testing.T) {
 	}
 }
 
-func TestReverseRejectSwapsHeadersAndHunk(t *testing.T) {
+func TestReverseRejectSwapsHunkWithoutFilenameHeaders(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "f", "neither\n")
 	diff := "--- old-name\n+++ new-name\n@@ -1 +1 @@\n-old\n+new\n"
@@ -671,7 +671,10 @@ func TestReverseRejectSwapsHeadersAndHunk(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s", code, stderr)
 	}
 	reject := readFile(t, dir, "f.rej")
-	for _, want := range []string{"*** new-name\n", "--- old-name\n", "! new\n", "! old\n"} {
+	if !strings.HasPrefix(reject, "***************\n") || strings.Contains(reject, "new-name") || strings.Contains(reject, "old-name") {
+		t.Fatalf("reverse reject contains filename headers: %q", reject)
+	}
+	for _, want := range []string{"! new\n", "! old\n"} {
 		if !strings.Contains(reject, want) {
 			t.Fatalf("reverse reject %q lacks %q", reject, want)
 		}

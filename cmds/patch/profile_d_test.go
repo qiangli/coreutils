@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestContextRejectContainsOnlyFailedHunk(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "target.txt", "")
+	diff := "*** source.txt\n--- target.txt\n***************\n*** 1 ****\n! original\n--- 1 ----\n! changed\n"
+	_, stderr, code := runIn(t, dir, diff, "target.txt")
+	if code != 1 {
+		t.Fatalf("exit=%d stderr=%q, want a rejected hunk", code, stderr)
+	}
+	reject := readFile(t, dir, "target.txt.rej")
+	if !strings.HasPrefix(reject, "***************\n") || strings.Contains(reject, "source.txt") || strings.Contains(reject, "target.txt") {
+		t.Fatalf("reject includes filename headers instead of only the failed hunk: %q", reject)
+	}
+}
+
 // A copied-context, unified, or normal listing announces its own format. A
 // line of context that happens to read like an address-less ed command must
 // not turn the whole patch into an ed script, which previously left the file

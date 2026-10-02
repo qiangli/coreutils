@@ -655,7 +655,10 @@ func applyOneFile(rc *tool.RunContext, ro runOptions, fp patch.FilePatch) bool {
 		if ro.rejectFile != "" {
 			rejPath = resolveOperandPath(rc, ro.directory, ro.rejectFile)
 		}
-		rejData := patch.WriteRejectFormat(oldName, newName, fp.Format, res.Rejects)
+		// Each .rej file already belongs to one output pathname. POSIX requires
+		// the failed hunks in context format; copying input filename headers into
+		// that file changes the reject body and breaks context-hunk consumers.
+		rejData := patch.WriteRejectFormat("", "", fp.Format, res.Rejects)
 		flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 		if ro.rejectStarted[rejPath] {
 			flags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
