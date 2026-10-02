@@ -68,7 +68,7 @@ m4	cmds/m4		POSIX/Unix utility	no	yes	2	39
 mail	cmds/mailx	mailx	Bashy/other extension	no	no	4	37
 mailx	cmds/mailx		POSIX/Unix utility	no	yes	4	37
 make	cmds/make		POSIX/Unix utility	no	yes	4	35
-man	cmds/man		POSIX/Unix utility	no	yes	1	2
+man	cmds/man		POSIX/Unix utility	no	yes	1	4
 md5sum	cmds/md5sum		GNU Coreutils	yes	no	1	15
 mesg	cmds/mesg		POSIX/Unix utility	no	yes	2	10
 mkdir	cmds/mkdir		GNU Coreutils	yes	yes	4	41
