@@ -51,6 +51,28 @@ func TestIDDefault(t *testing.T) {
 	}
 }
 
+// A credential-changing utility can rebuild the same supplementary group set
+// in a different kernel order. The default report must remain stable so a
+// caller can compare identities before and after that change.
+func TestIDDefaultGroupOrderStableAcrossCredentialRebuild(t *testing.T) {
+	oldIDs, oldGroups, oldGroupName := processIDsFn, processGroupIDsFn, groupNameByIDFn
+	t.Cleanup(func() {
+		processIDsFn, processGroupIDsFn, groupNameByIDFn = oldIDs, oldGroups, oldGroupName
+	})
+	processIDsFn = func(bool) (string, string) { return "5002", "5002" }
+	groupNameByIDFn = func(string) string { return "" }
+	for _, groups := range [][]string{{"5002", "8", "5004"}, {"8", "5002", "5004"}} {
+		processGroupIDsFn = func() ([]string, error) { return groups, nil }
+		out, errb, code := runTool(t)
+		if code != 0 || errb != "" {
+			t.Fatalf("id with groups %v: code=%d err=%q", groups, code, errb)
+		}
+		if !strings.HasSuffix(out, " groups=5002,8,5004\n") {
+			t.Errorf("id with groups %v = %q, want primary group first", groups, out)
+		}
+	}
+}
+
 func TestIDOnlyFlags(t *testing.T) {
 	u := current(t)
 	cases := []struct {

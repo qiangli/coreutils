@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os/user"
+	"slices"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -252,6 +253,14 @@ func supplementaryGroupIDs(u *user.User, current bool) ([]string, error) {
 		gids, err := processGroupIDsFn()
 		if err != nil {
 			return nil, err
+		}
+		// Linux may reorder the supplementary vector when a new shell's
+		// credentials are installed. Keep the effective group first when it is
+		// already a supplementary member, matching the stable id -G order and
+		// allowing identity reports around newgrp to compare byte for byte.
+		_, effectiveGID := processIDsFn(false)
+		if slices.Contains(gids, effectiveGID) {
+			return uniqueNonempty(append([]string{effectiveGID}, gids...)), nil
 		}
 		return uniqueNonempty(gids), nil
 	}
