@@ -98,7 +98,6 @@ func (f *followFlag) Set(s string) error {
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
 	// Utility Syntax Guideline 10: the first operand ends option parsing.
 	// This is significant for portable archive pathnames such as "-d" and

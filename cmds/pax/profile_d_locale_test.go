@@ -118,6 +118,36 @@ func TestPAXPatternNotationNamedClass(t *testing.T) {
 	}
 }
 
+func TestPAXAttachedSubstitutionValueKeepsHelpAndVersionLetters(t *testing.T) {
+	d := t.TempDir()
+	for _, name := range []string{"a", "hV"} {
+		if err := os.WriteFile(filepath.Join(d, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := filepath.Join(d, "members.pax")
+	if _, errs, code := exec(t, d, "", "-w", "-f", archive, "a", "hV"); code != 0 || errs != "" {
+		t.Fatalf("write=(%d,%q)", code, errs)
+	}
+	for _, tc := range []struct {
+		arg, want string
+	}{
+		{"-s/[[:alpha:]]/_/", "_\n_V\n"},
+		{"-s/hV/_/", "a\n_\n"},
+	} {
+		out, errs, code := exec(t, d, "", "-f", archive, tc.arg)
+		if code != 0 || errs != "" || out != tc.want {
+			t.Errorf("%s=(%d,%q,%q), want (0,%q,%q)", tc.arg, code, out, errs, tc.want, "")
+		}
+	}
+	for _, arg := range []string{"-h", "-V"} {
+		out, errs, code := exec(t, d, "", arg)
+		if code != 0 || errs != "" || out == "" {
+			t.Errorf("%s=(%d,%q,%q), want nonempty help/version output", arg, code, out, errs)
+		}
+	}
+}
+
 func TestPAXDefaultWritePreservesRawCLocaleName(t *testing.T) {
 	d := t.TempDir()
 	name := string([]byte{0xe4})
