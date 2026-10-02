@@ -3,9 +3,10 @@ id: 4b42d2a2a229
 kind: bug
 title: 'pax: stream large PAX archive without whole-archive memory buffer'
 seq: 177
-status: todo
+status: assigned
 priority: p0
 created: 2026-10-02T00:05:03.403118Z
+assignee: codex-gpt6.1-sol
 sprint: 341
 sprint_id: 5f262cbb-e61a-5a5e-8361-c60190adf78f
 sprint_title: 'POSIX certification: base XCU claim, pure Go, Linux x86_64 - fresh baseline, failure list, final run'

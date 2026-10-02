@@ -399,6 +399,8 @@ func patchStreamedPAXHeaders(file archiveSink, names []string, exthdrName string
 		return header, err
 	}
 	index := 0
+	var extendedSize int64
+	hasExtendedSize := false
 	for off := int64(0); off+512 <= end; {
 		header, err := readHeader(off)
 		if err != nil {
@@ -423,6 +425,28 @@ func patchStreamedPAXHeaders(file archiveSink, names []string, exthdrName string
 		}
 		switch header[156] {
 		case tar.TypeXHeader:
+			hasExtendedSize = false
+			if size > 1<<20 {
+				return fmt.Errorf("extended header is too large for streamed header pass")
+			}
+			if _, err := file.Seek(off+512, io.SeekStart); err != nil {
+				return err
+			}
+			payload := make([]byte, size)
+			if _, err := io.ReadFull(file, payload); err != nil {
+				return err
+			}
+			records, err := parseRawPAXRecords(payload)
+			if err != nil {
+				return err
+			}
+			if value, ok := records["size"]; ok {
+				extendedSize, err = strconv.ParseInt(value, 10, 64)
+				if err != nil || extendedSize < 0 {
+					return fmt.Errorf("invalid extended size")
+				}
+				hasExtendedSize = true
+			}
 			member, err := readHeader(next)
 			if err != nil {
 				return fmt.Errorf("extended header has no member: %w", err)
@@ -438,6 +462,20 @@ func patchStreamedPAXHeaders(file archiveSink, names []string, exthdrName string
 		default:
 			if index >= len(names) {
 				return fmt.Errorf("tar member/name count mismatch")
+			}
+			if hasExtendedSize {
+				// PAX size overrides this legacy field. Keep the largest
+				// representable octal size there so physical-header readers can
+				// skip an 8 GiB member while PAX readers use the exact size.
+				if extendedSize > 0o77777777777 {
+					setRawTarSize(header, 0o77777777777)
+				}
+				size = extendedSize
+				hasExtendedSize = false
+				next = off + 512 + ((size + 511) &^ int64(511))
+				if size > end-off-512 || next > end {
+					return fmt.Errorf("truncated tar member")
+				}
 			}
 			restoreRawMemberName(header, names[index])
 			index++

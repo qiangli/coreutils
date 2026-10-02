@@ -61,6 +61,45 @@ func TestStreamedPAXHeaderPassMatchesMemoryPass(t *testing.T) {
 	}
 }
 
+func TestStreamedPAXEightGiBPhysicalSize(t *testing.T) {
+	const size = int64(8 << 30)
+	file, err := os.CreateTemp(t.TempDir(), "large-headers-*.pax")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	tw := tar.NewWriter(file)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "member", Mode: 0o644, Size: size, Format: tar.FormatPAX,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The header pass only seeks over member data. A sparse file exercises
+	// the real 8 GiB offsets without allocating or copying the payload.
+	const dataOffset = int64(3 * 512)
+	if err := file.Truncate(dataOffset + size + 1024); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchStreamedPAXHeaders(file, []string{"member"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	physical := make([]byte, 512)
+	if _, err := file.ReadAt(physical, 2*512); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rawTarSize(physical)
+	if err != nil || got != 0o77777777777 {
+		t.Fatalf("physical size = (%d, %v), want maximum octal size", got, err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	header, err := tar.NewReader(file).Next()
+	if err != nil || header.Size != size {
+		t.Fatalf("logical size = (%v, %v), want %d", header, err, size)
+	}
+}
+
 func TestLargePAXWriteKeepsArchiveOutOfHeap(t *testing.T) {
 	const size = 64 << 20
 	dir := t.TempDir()
