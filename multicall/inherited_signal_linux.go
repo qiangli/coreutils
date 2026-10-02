@@ -94,7 +94,39 @@ func InheritedIgnoredSignalNames() []string {
 	if !originalSignals.ok {
 		return nil
 	}
-	return ignoredSignalNames(&originalSignals.handlers)
+	names := ignoredSignalNames(&originalSignals.handlers)
+	// Go skips its initial snapshot for _SigDefault entries. Their inherited
+	// SIG_IGN actions are still live, so read those actions directly. Include
+	// SIGCONT as well as the three terminal-stop signals in this class.
+	return appendLiveIgnoredDefaultSignals(names, linuxSignalHandler)
+}
+
+func appendLiveIgnoredDefaultSignals(names []string, handler func(syscall.Signal) (uintptr, error)) []string {
+	for _, sig := range []struct {
+		number syscall.Signal
+		name   string
+	}{
+		{syscall.SIGCONT, "CONT"},
+		{syscall.SIGTSTP, "TSTP"},
+		{syscall.SIGTTIN, "TTIN"},
+		{syscall.SIGTTOU, "TTOU"},
+	} {
+		if disposition, err := handler(sig.number); err == nil && disposition == 1 {
+			// fwdSig is normally empty for these signals, but avoid a
+			// duplicate if a future Go runtime begins populating it.
+			found := false
+			for _, name := range names {
+				if name == sig.name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				names = append(names, sig.name)
+			}
+		}
+	}
+	return names
 }
 
 func ignoredSignalNames(handlers *[linuxNSIG]uintptr) []string {

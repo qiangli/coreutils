@@ -134,6 +134,41 @@ func TestInheritedIgnoredSignalNamesReadOnly(t *testing.T) {
 	}
 }
 
+func TestInheritedIgnoredDefaultSignalsReadOnly(t *testing.T) {
+	if !inheritedSignalSnapshotAvailable() {
+		t.Skip("test binary does not expose the runtime signal snapshot")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", "trap '' CONT TSTP TTIN TTOU; exec \"$1\" -test.run=^$", "sh", exe)
+	cmd.Env = append(os.Environ(), inheritedSignalMarker+"=snapshot")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read inherited signal snapshot: %v; output=%q", err, out)
+	}
+	names := strings.Split(string(out), ",")
+	for _, want := range []string{"CONT", "TSTP", "TTIN", "TTOU"} {
+		if !containsSignalName(names, want) {
+			t.Fatalf("snapshot=%q lacks inherited SIG%s ignore", out, want)
+		}
+	}
+}
+
+func TestAppendLiveIgnoredDefaultSignals(t *testing.T) {
+	got := appendLiveIgnoredDefaultSignals([]string{"CONT"}, func(sig syscall.Signal) (uintptr, error) {
+		if sig == syscall.SIGCONT || sig == syscall.SIGTTIN {
+			return 1, nil
+		}
+		return 0, nil
+	})
+	want := []string{"CONT", "TTIN"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("appendLiveIgnoredDefaultSignals = %v, want %v", got, want)
+	}
+}
+
 func TestIgnoredSignalNamesExactSet(t *testing.T) {
 	var handlers [linuxNSIG]uintptr
 	handlers[syscall.SIGABRT] = 1
