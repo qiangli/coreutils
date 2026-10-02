@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,6 +18,10 @@ import (
 )
 
 func runInheritedSignalHelper(mode string) {
+	if mode == "snapshot" {
+		_, _ = os.Stdout.WriteString(strings.Join(InheritedIgnoredSignalNames(), ","))
+		os.Exit(0)
+	}
 	preserveInheritedSignalDispositions()
 	switch mode {
 	case "term":
@@ -102,6 +107,53 @@ func runInheritedSignalHelper(mode string) {
 	default:
 		os.Exit(2)
 	}
+}
+
+func TestInheritedIgnoredSignalNamesReadOnly(t *testing.T) {
+	if !inheritedSignalSnapshotAvailable() {
+		t.Skip("test binary does not expose the runtime signal snapshot")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", "trap '' ABRT ALRM PIPE; exec \"$1\" -test.run=^$", "sh", exe)
+	cmd.Env = append(os.Environ(), inheritedSignalMarker+"=snapshot")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read inherited signal snapshot: %v; output=%q", err, out)
+	}
+	names := strings.Split(string(out), ",")
+	for _, want := range []string{"ABRT", "ALRM", "PIPE"} {
+		if !containsSignalName(names, want) {
+			t.Fatalf("snapshot=%q lacks inherited SIG%s ignore", out, want)
+		}
+	}
+	if containsSignalName(names, "TERM") {
+		t.Fatalf("snapshot=%q incorrectly marks default SIGTERM ignored", out)
+	}
+}
+
+func TestIgnoredSignalNamesExactSet(t *testing.T) {
+	var handlers [linuxNSIG]uintptr
+	handlers[syscall.SIGABRT] = 1
+	handlers[syscall.SIGALRM] = 1
+	handlers[syscall.SIGPIPE] = 1
+	handlers[syscall.SIGTERM] = 0
+	got := ignoredSignalNames(&handlers)
+	want := []string{"ABRT", "PIPE", "ALRM"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ignoredSignalNames = %v, want %v", got, want)
+	}
+}
+
+func containsSignalName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPreserveDefaultTerminalStop(t *testing.T) {

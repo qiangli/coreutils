@@ -85,6 +85,43 @@ func inheritedSignalSnapshotAvailable() bool {
 	return originalSignals.ok
 }
 
+// InheritedIgnoredSignalNames returns the caller's SIG_IGN dispositions before
+// the Go runtime replaced them. Bashy's one-file shell uses this read-only
+// snapshot when built without cgo; it does not change any process handler.
+// A nil result means no ignored signals or an unavailable ELF snapshot.
+func InheritedIgnoredSignalNames() []string {
+	originalSignals.Do(loadOriginalSignals)
+	if !originalSignals.ok {
+		return nil
+	}
+	return ignoredSignalNames(&originalSignals.handlers)
+}
+
+func ignoredSignalNames(handlers *[linuxNSIG]uintptr) []string {
+	signals := []struct {
+		number syscall.Signal
+		name   string
+	}{
+		{syscall.SIGHUP, "HUP"}, {syscall.SIGINT, "INT"},
+		{syscall.SIGQUIT, "QUIT"}, {syscall.SIGILL, "ILL"},
+		{syscall.SIGABRT, "ABRT"}, {syscall.SIGFPE, "FPE"},
+		{syscall.SIGSEGV, "SEGV"}, {syscall.SIGPIPE, "PIPE"},
+		{syscall.SIGALRM, "ALRM"}, {syscall.SIGTERM, "TERM"},
+		{syscall.SIGBUS, "BUS"}, {syscall.SIGUSR1, "USR1"},
+		{syscall.SIGUSR2, "USR2"}, {syscall.SIGTSTP, "TSTP"},
+		{syscall.SIGTTIN, "TTIN"}, {syscall.SIGTTOU, "TTOU"},
+		{syscall.SIGCONT, "CONT"}, {syscall.SIGXCPU, "XCPU"},
+		{syscall.SIGXFSZ, "XFSZ"},
+	}
+	var names []string
+	for _, signal := range signals {
+		if handlers[signal.number] == 1 {
+			names = append(names, signal.name)
+		}
+	}
+	return names
+}
+
 func loadOriginalSignals() {
 	path, err := os.Executable()
 	if err != nil {

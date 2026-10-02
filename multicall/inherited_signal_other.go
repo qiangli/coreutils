@@ -13,3 +13,7 @@ func preserveInheritedSignalDispositions() {}
 // therefore leaves SIGPIPEIgnored at its zero value (false), preserving the
 // existing non-Linux behavior.
 func inheritedSIGPIPEWasIgnored() bool { return false }
+
+// InheritedIgnoredSignalNames is Linux-specific: other platforms have no ELF
+// runtime.fwdSig snapshot to recover after Go runtime initialization.
+func InheritedIgnoredSignalNames() []string { return nil }
