@@ -244,6 +244,45 @@ func TestNohupClosedStdoutAndTerminalStderrRequiresNohupOut(t *testing.T) {
 	}
 }
 
+func TestNohupRuntimeReopenedStdoutUsesEntryProvenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty not supported in this test on windows")
+	}
+	ptm, pts, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty.Open failed: %v", err)
+	}
+	defer ptm.Close()
+	defer pts.Close()
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+
+	oldOpener, oldRunner := nohupOutputOpener, nohupCommandRunner
+	opens, runs := 0, 0
+	nohupOutputOpener = func(*tool.RunContext) (*os.File, string, error) {
+		opens++
+		return nil, "", errors.New("both nohup.out locations are unavailable")
+	}
+	nohupCommandRunner = func(*exec.Cmd) error { runs++; return nil }
+	t.Cleanup(func() { nohupOutputOpener, nohupCommandRunner = oldOpener, oldRunner })
+
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"PATH=/bin:/usr/bin", "POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: devNull, Err: pts},
+	}
+	if code := run(rc, []string{"sh", "-c", "exit 0"}); code != 0 || opens != 0 || runs != 1 {
+		t.Fatalf("explicit open /dev/null: code=%d opens=%d runs=%d, want 0/0/1", code, opens, runs)
+	}
+	rc.StdoutClosedOnEntry = true
+	if code := run(rc, []string{"sh", "-c", "exit 0"}); code != 127 || opens != 1 || runs != 1 {
+		t.Fatalf("runtime-reopened closed stdout: code=%d opens=%d runs=%d, want 127/1/1", code, opens, runs)
+	}
+}
+
 func TestNohupClosedStdoutUsesPermittedReplacementForUtility(t *testing.T) {
 	closedOut, err := os.CreateTemp(t.TempDir(), "closed-stdout")
 	if err != nil {

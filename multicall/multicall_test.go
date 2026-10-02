@@ -114,3 +114,19 @@ func TestProcessRunContextNativeCwd(t *testing.T) {
 		t.Error("FS is nil")
 	}
 }
+
+func TestProcessRunContextConsumesClosedStdoutProvenance(t *testing.T) {
+	t.Setenv("BASHY_EXEC_FD1_CLOSED", "1")
+	rc := processRunContext()
+	if !rc.StdoutClosedOnEntry {
+		t.Fatal("closed stdout provenance was lost at the Go process boundary")
+	}
+	if _, present := os.LookupEnv("BASHY_EXEC_FD1_CLOSED"); present {
+		t.Fatal("private closed stdout marker leaked into process environment")
+	}
+	for _, entry := range rc.Env {
+		if strings.HasPrefix(entry, "BASHY_EXEC_FD1_CLOSED=") {
+			t.Fatal("private closed stdout marker leaked into applet environment")
+		}
+	}
+}

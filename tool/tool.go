@@ -74,6 +74,12 @@ type RunContext struct {
 	// command process.
 	DedicatedProcess bool
 
+	// StdoutClosedOnEntry records a closed fd 1 observed by an owning shell
+	// before exec. The Go runtime reopens missing standard descriptors on Unix,
+	// so a standalone Go applet cannot recover this fact from os.Stdout.Stat.
+	// Embedded callers leave it false unless they have equivalent provenance.
+	StdoutClosedOnEntry bool
+
 	// ExitSignal is the process-boundary channel for a command wrapper
 	// (env, timeout, …) that ran a COMMAND which was terminated by a
 	// signal. When non-zero after Run returns, it is that signal's number.

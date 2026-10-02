@@ -79,7 +79,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	// the redirect diagnostic, even when the command is also missing.
 	inTerminal := rc.In != nil && isTerminal(rc.In)
 	outTerminal := rc.Out == nil || isTerminal(rc.Out)
-	outClosed := isClosedFile(rc.Out)
+	outClosed := rc.StdoutClosedOnEntry || isClosedFile(rc.Out)
 	errTerminal := rc.Err == nil || isTerminal(rc.Err)
 
 	var stdin io.Reader = rc.In

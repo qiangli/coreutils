@@ -84,15 +84,32 @@ func Dispatch(rc *tool.RunContext, name string, args []string) int {
 // exactly as they do for an execve'd GNU tool.
 func processRunContext() *tool.RunContext {
 	dir, _ := os.Getwd()
+	// A verified Bashy-owned exec can report that fd 1 was closed before the
+	// Go runtime reopened it. Consume the private marker at the process
+	// boundary so neither applets nor their children inherit it.
+	const closedStdoutMarker = "BASHY_EXEC_FD1_CLOSED"
+	markerPrefix := closedStdoutMarker + "="
+	env := os.Environ()
+	cleanEnv := env[:0]
+	stdoutClosed := false
+	for _, entry := range env {
+		if strings.HasPrefix(entry, markerPrefix) {
+			stdoutClosed = entry == markerPrefix+"1"
+			continue
+		}
+		cleanEnv = append(cleanEnv, entry)
+	}
+	_ = os.Unsetenv(closedStdoutMarker)
 	return &tool.RunContext{
-		Ctx:              context.Background(),
-		Dir:              dir,
-		DirIsProcessCwd:  true,
-		DedicatedProcess: true,
-		InvocationName:   os.Args[0],
-		Env:              os.Environ(),
-		FS:               tool.NewLocalFS(),
-		SIGPIPEIgnored:   inheritedSIGPIPEWasIgnored(),
+		Ctx:                 context.Background(),
+		Dir:                 dir,
+		DirIsProcessCwd:     true,
+		DedicatedProcess:    true,
+		InvocationName:      os.Args[0],
+		Env:                 cleanEnv,
+		FS:                  tool.NewLocalFS(),
+		SIGPIPEIgnored:      inheritedSIGPIPEWasIgnored(),
+		StdoutClosedOnEntry: stdoutClosed,
 		Stdio: tool.Stdio{
 			In:  os.Stdin,
 			Out: os.Stdout,
