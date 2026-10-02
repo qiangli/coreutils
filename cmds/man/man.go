@@ -7,8 +7,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
+
+	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -19,6 +22,11 @@ var cmd = &tool.Tool{
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
+
+var manIsTerminal = func(w io.Writer) bool {
+	f, ok := w.(interface{ Fd() uintptr })
+	return ok && term.IsTerminal(int(f.Fd()))
+}
 
 var shellHelp = map[string]string{
 	"alias":   "alias [name[=value] ...] — define or display aliases",
@@ -43,12 +51,17 @@ func run(rc *tool.RunContext, args []string) int {
 		keyword = true
 		args = args[1:]
 	}
+	terminated := false
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+		terminated = true
+	}
 	if len(args) == 0 {
 		fmt.Fprintln(rc.Err, "man: name operand required")
 		return 2
 	}
 	for _, name := range args {
-		if strings.HasPrefix(name, "-") {
+		if !terminated && strings.HasPrefix(name, "-") {
 			fmt.Fprintf(rc.Err, "man: unsupported option %s\n", name)
 			return 2
 		}
@@ -57,6 +70,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return search(rc, args)
 	}
 	status := 0
+	var output bytes.Buffer
 	for _, name := range args {
 		doc := documentation(rc, name)
 		if doc == "" {
@@ -64,10 +78,37 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := json.NewEncoder(rc.Out).Encode(tool.DocumentAsMCP(name, doc)); err != nil {
+		if err := json.NewEncoder(&output).Encode(tool.DocumentAsMCP(name, doc)); err != nil {
 			fmt.Fprintf(rc.Err, "man: %v\n", err)
 			return 1
 		}
+	}
+	if output.Len() == 0 {
+		return status
+	}
+	if manIsTerminal(rc.Out) {
+		pager := rc.Getenv("PAGER")
+		if pager == "" {
+			pager = "more"
+		}
+		sh := rc.ResolveCommand("sh")
+		if sh == "" {
+			fmt.Fprintln(rc.Err, "man: pager: sh not found")
+			return 1
+		}
+		child, err := rc.StartCommand(sh, []string{"-c", pager}, &output, rc.Out, rc.Err)
+		if err == nil {
+			err = child.Wait()
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "man: pager: %v\n", err)
+			return 1
+		}
+		return status
+	}
+	if _, err := io.Copy(rc.Out, &output); err != nil {
+		fmt.Fprintf(rc.Err, "man: %v\n", err)
+		return 1
 	}
 	return status
 }
