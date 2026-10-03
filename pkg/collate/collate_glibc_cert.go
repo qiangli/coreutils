@@ -32,6 +32,14 @@ static void cert_regfree(void *preg) { regfree((regex_t *)preg); }
 static const char *cert_langinfo(int item, uintptr_t loc) {
 	return nl_langinfo_l((nl_item)item, (locale_t)loc);
 }
+static char *cert_codeset(uintptr_t loc) {
+	locale_t previous = uselocale((locale_t)loc);
+	if (previous == (locale_t)0) return NULL;
+	const char *value = nl_langinfo(CODESET);
+	char *copy = value ? strdup(value) : NULL;
+	uselocale(previous);
+	return copy;
+}
 static int *cert_errno_location(void) { return __errno_location(); }
 */
 import "C"
@@ -68,6 +76,14 @@ func certLinkedLibc() (*libcBinding, error) {
 		regfree: func(preg unsafe.Pointer) { C.cert_regfree(preg) },
 		nlLanginfoL: func(item int32, loc uintptr) *byte {
 			return (*byte)(unsafe.Pointer(C.cert_langinfo(C.int(item), C.uintptr_t(loc))))
+		},
+		codesetL: func(loc uintptr) string {
+			value := C.cert_codeset(C.uintptr_t(loc))
+			if value == nil {
+				return ""
+			}
+			defer C.free(unsafe.Pointer(value))
+			return C.GoString(value)
 		},
 		errnoLocation: func() *int32 {
 			return (*int32)(unsafe.Pointer(C.cert_errno_location()))

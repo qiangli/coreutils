@@ -41,9 +41,13 @@ const (
 type libcBinding struct {
 	handle uintptr
 
-	newlocale     func(mask int32, locale string, base uintptr) uintptr
-	freelocale    func(loc uintptr)
-	nlLanginfoL   func(item int32, loc uintptr) *byte
+	newlocale   func(mask int32, locale string, base uintptr) uintptr
+	freelocale  func(loc uintptr)
+	nlLanginfoL func(item int32, loc uintptr) *byte
+	// Static glibc can report the C codeset through nl_langinfo_l even when
+	// the locale's character tables are loaded. The cert binding reads it
+	// through a temporary thread-local uselocale instead.
+	codesetL      func(loc uintptr) string
 	errnoLocation func() *int32
 
 	isalphaL  func(c int32, loc uintptr) int32
@@ -258,7 +262,14 @@ func classifyNewlocaleErrno(errno int32) error {
 // one of want. The read is bounded and the value is copied into Go memory
 // immediately, so nothing later dereferences the libc-owned pointer.
 func (b *libcBinding) verifyCodeset(loc uintptr, want []string) error {
-	cs, ok := goStringBounded(b.nlLanginfoL(codesetItem, loc), codesetLimit)
+	var cs string
+	var ok bool
+	if b.codesetL != nil {
+		cs = b.codesetL(loc)
+		ok = cs != "" && len(cs) < codesetLimit
+	} else {
+		cs, ok = goStringBounded(b.nlLanginfoL(codesetItem, loc), codesetLimit)
+	}
 	if !ok || !slices.Contains(want, cs) {
 		return ErrCodeset
 	}

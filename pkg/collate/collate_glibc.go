@@ -55,6 +55,7 @@ type libcBinding struct {
 	regexec       func(preg unsafe.Pointer, subject *byte, nmatch uintptr, matches unsafe.Pointer, flags int32) int32
 	regfree       func(preg unsafe.Pointer)
 	nlLanginfoL   func(item int32, loc uintptr) *byte
+	codesetL      func(loc uintptr) string
 	errnoLocation func() *int32
 }
 
@@ -281,7 +282,14 @@ func classifyNewlocaleErrno(errno int32) error {
 // value is copied into Go memory immediately, so nothing later dereferences the
 // libc-owned pointer.
 func (b *libcBinding) verifyCodeset(ctype uintptr) error {
-	cs, ok := goStringBounded(b.nlLanginfoL(codesetItem, ctype), codesetLimit)
+	var cs string
+	var ok bool
+	if b.codesetL != nil {
+		cs = b.codesetL(ctype)
+		ok = cs != "" && len(cs) < codesetLimit
+	} else {
+		cs, ok = goStringBounded(b.nlLanginfoL(codesetItem, ctype), codesetLimit)
+	}
 	if !ok {
 		return ErrCodeset
 	}

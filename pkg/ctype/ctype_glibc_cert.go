@@ -10,6 +10,7 @@ package ctype
 #include <locale.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static uintptr_t cert_newlocale(int mask, const char *name, uintptr_t base) {
 	return (uintptr_t)newlocale(mask, name, (locale_t)base);
@@ -17,6 +18,17 @@ static uintptr_t cert_newlocale(int mask, const char *name, uintptr_t base) {
 static void cert_freelocale(uintptr_t loc) { freelocale((locale_t)loc); }
 static const char *cert_langinfo(int item, uintptr_t loc) {
 	return nl_langinfo_l((nl_item)item, (locale_t)loc);
+}
+// Static glibc's nl_langinfo_l(CODESET) can expose the C locale before its
+// thread-local locale state has been selected. Read the same locale through
+// nl_langinfo while it is installed only on this thread, then restore it.
+static char *cert_codeset(uintptr_t loc) {
+	locale_t previous = uselocale((locale_t)loc);
+	if (previous == (locale_t)0) return NULL;
+	const char *value = nl_langinfo(CODESET);
+	char *copy = value ? strdup(value) : NULL;
+	uselocale(previous);
+	return copy;
 }
 static int *cert_errno_location(void) { return __errno_location(); }
 static int cert_ctype(int kind, int c, uintptr_t loc) {
@@ -59,6 +71,14 @@ func certLinkedLibc() (*libcBinding, error) {
 		freelocale: func(loc uintptr) { C.cert_freelocale(C.uintptr_t(loc)) },
 		nlLanginfoL: func(item int32, loc uintptr) *byte {
 			return (*byte)(unsafe.Pointer(C.cert_langinfo(C.int(item), C.uintptr_t(loc))))
+		},
+		codesetL: func(loc uintptr) string {
+			value := C.cert_codeset(C.uintptr_t(loc))
+			if value == nil {
+				return ""
+			}
+			defer C.free(unsafe.Pointer(value))
+			return C.GoString(value)
 		},
 		errnoLocation: func() *int32 {
 			return (*int32)(unsafe.Pointer(C.cert_errno_location()))
