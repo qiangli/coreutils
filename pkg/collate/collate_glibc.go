@@ -62,6 +62,9 @@ var (
 	libcOnce sync.Once
 	libcPtr  atomic.Pointer[libcBinding]
 	libcErr  error
+	// Set only by the bashy_cert CGO binding. A static executable must use
+	// its linked libc; dlopen("libc.so.6") loads a second libc namespace.
+	linkedLibc func() (*libcBinding, error)
 )
 
 // libc loads glibc once and returns the resolved binding. The load is atomic:
@@ -69,7 +72,11 @@ var (
 // completed binding is published via libcPtr and returned on every later call.
 func libc() (*libcBinding, error) {
 	libcOnce.Do(func() {
-		b, err := loadLibc("libc.so.6")
+		loader := linkedLibc
+		if loader == nil {
+			loader = func() (*libcBinding, error) { return loadLibc("libc.so.6") }
+		}
+		b, err := loader()
 		if err != nil {
 			libcErr = err
 			return
