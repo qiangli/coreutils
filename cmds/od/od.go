@@ -613,6 +613,13 @@ func dump(r io.Reader, w *bufio.Writer, o options) error {
 		_, err := fmt.Fprintln(w, formatOffset(offset, o.addrRadix))
 		return err
 	}
+	if o.posix {
+		// POSIX permits an empty final offset record with -A n (Austin
+		// Group issue 1017). Retain that record in POSIX mode; the GNU
+		// default omits it along with the address.
+		_, err := fmt.Fprintln(w)
+		return err
+	}
 	return nil
 }
 

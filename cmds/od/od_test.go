@@ -307,11 +307,44 @@ func TestODPOSIXNoAddressStartsWithFirstItem(t *testing.T) {
 	for _, value := range []string{"1", ""} {
 		for _, args := range [][]string{{"-A", "n", "-o"}, {"-An", "-o"}} {
 			out, errb, code := runODProfileEnv(t, runtimeProfile(), []string{"POSIXLY_CORRECT=" + value}, t.TempDir(), "12345678912345678912345678912\n", args...)
-			want := "031061 032063 033065 034067 030471 031462 032464 033466\n034470 031061 032063 033065 034067 030471 005062\n"
+			want := "031061 032063 033065 034067 030471 031462 032464 033466\n034470 031061 032063 033065 034067 030471 005062\n\n"
 			if out != want || errb != "" || code != 0 {
 				t.Errorf("POSIX od %v = (%q, %q, %d), want (%q, empty, 0)", args, out, errb, code, want)
 			}
 		}
+	}
+}
+
+// Austin Group issue 1017 permits retaining an empty final record under
+// -A n. POSIX mode selects that form; the default GNU form omits the record.
+func TestODPOSIXFinalRecord(t *testing.T) {
+	cases := []struct {
+		name, input string
+		args        []string
+		posix, gnu  string
+	}{
+		{"empty", "", []string{"-An", "-tx1"}, "\n", ""},
+		{"bytes", "AB", []string{"-An", "-tx1"}, "41 42\n\n", " 41 42\n"},
+		{"count", "ABC", []string{"-An", "-tx1", "-N1"}, "41\n\n", " 41\n"},
+		{"skip", "ABC", []string{"-An", "-tx1", "-j1", "-N1"}, "42\n\n", " 42\n"},
+		{"multiple-formats", "A", []string{"-An", "-tx1", "-tu1"}, "41\n 65\n\n", " 41\n  65\n"},
+		{"address", "AB", []string{"-Ad", "-tx1"}, "0000000 41 42\n0000002\n", "0000000 41 42\n0000002\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, posix := range []bool{false, true} {
+				var env []string
+				want := tc.gnu
+				if posix {
+					env = []string{"POSIXLY_CORRECT=1"}
+					want = tc.posix
+				}
+				out, errb, code := runODProfileEnv(t, runtimeProfile(), env, t.TempDir(), tc.input, tc.args...)
+				if out != want || errb != "" || code != 0 {
+					t.Errorf("POSIX=%v: got (%q, %q, %d), want (%q, empty, 0)", posix, out, errb, code, want)
+				}
+			}
+		})
 	}
 }
 
