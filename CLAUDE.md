@@ -244,11 +244,10 @@ old commits resolve here) and `docs/kb/`.
 
 ## Conventions
 
-- Sibling-path consumers: yoke, bashy, outpost and ycode use
-  `replace github.com/qiangli/coreutils => ../coreutils` (umbrella mount
-  `dhnt/coreutils`, or a flat standalone sibling — same rule as the other
-  qiangli/* deps; see the dhnt umbrella CLAUDE.md). This module replaces
-  only `../sh` and its own `./third_party/goawk`.
+- Consumers (yoke, bashy, outpost, ycode) require coreutils at a
+  pseudo-version and its goawk fork via a versioned replace onto
+  `github.com/qiangli/coreutils/third_party/goawk`. This module pins the sh
+  fork with a versioned replace and keeps its own `./third_party/goawk`.
 - New tools land with: implementation + table tests + a `--help` text +
   README catalog line. Cross-platform CI (ubuntu/macos/windows) must pass —
   the windows leg is the product, not an afterthought. Catch its compile
