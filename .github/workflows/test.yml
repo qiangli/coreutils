@@ -16,16 +16,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      # coreutils resolves one dep as a flat sibling: the sh engine
-      # (`replace mvdan.cc/sh/v3 => ../sh`). Clone it next door — CI is a
-      # standalone clone, not the dhnt umbrella, where it is already mounted
-      # as a submodule. Everything agentic lives in the yoke sibling and is
-      # NOT a dependency of this module (Sprint 208: yoke imports coreutils,
-      # never the reverse).
-      - name: Clone flat sibling (../sh)
-        shell: bash
-        run: |
-          git clone --quiet --depth 1 https://github.com/qiangli/sh.git ../sh
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
