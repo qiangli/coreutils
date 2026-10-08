@@ -25,8 +25,12 @@ func writeExe(t *testing.T, path, content string) {
 // pass this.)
 func TestResolveCommandPathUnsetDefaultPath(t *testing.T) {
 	rc := &RunContext{Dir: t.TempDir(), Env: []string{"HOME=/tmp"}}
-	if got := rc.ResolveCommand("echo"); got == "" {
-		t.Fatal("ResolveCommand(echo) with PATH unset returned \"\", want a resolved path (default search path)")
+	name := "echo"
+	if runtime.GOOS == "windows" {
+		name = "cmd.exe" // echo is a cmd builtin, not a file on PATH.
+	}
+	if got := rc.ResolveCommand(name); got == "" {
+		t.Fatalf("ResolveCommand(%s) with PATH unset returned empty", name)
 	}
 }
 
@@ -104,7 +108,13 @@ func TestResolveCommandFirstExecutableWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Earlier component: a non-executable "tool".
-	if err := os.WriteFile(filepath.Join(neDir, "tool"), []byte("x"), 0o644); err != nil {
+	if runtime.GOOS == "windows" {
+		// Windows has no executable bit. A directory is the portable
+		// earlier non-executable match.
+		if err := os.Mkdir(filepath.Join(neDir, "tool"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := os.WriteFile(filepath.Join(neDir, "tool"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Later component: an executable "tool".

@@ -26,6 +26,13 @@ func pinNoMounts(t *testing.T) {
 	t.Cleanup(func() { pathconv.SetMounts(old) })
 }
 
+func pinAllDrives(t *testing.T) {
+	t.Helper()
+	old := pathconv.LogicalDrives
+	pathconv.LogicalDrives = func() pathconv.DriveSet { return pathconv.AllDrives }
+	t.Cleanup(func() { pathconv.LogicalDrives = old })
+}
+
 const (
 	fixtureRoot = `C:\Users\r\AppData\Local\Temp\bash53-1\root`
 	fixtureTmp  = `C:\Users\r\AppData\Local\Temp\bash53-1\tmp`
@@ -38,6 +45,7 @@ const (
 // path specified" in array, comsub2, extglob, ifs) and cp /bin/sh could not
 // stat its source (rsh).
 func TestShellAbsModeMounts(t *testing.T) {
+	pinAllDrives(t)
 	m := fixtureMounts()
 	cases := []struct{ in, want string }{
 		{"/tmp/bash-test-7844", fixtureTmp + `\bash-test-7844`},
@@ -70,6 +78,7 @@ func TestShellAbsModeMounts(t *testing.T) {
 // when no BASHY_ROOT is set: /tmp is the host temp directory, a drive-less
 // /foo lands on the invocation directory's volume (C: when there is none).
 func TestShellAbsModeNoMounts(t *testing.T) {
+	pinAllDrives(t)
 	old := pathconv.TempDir
 	pathconv.TempDir = func() string { return `C:\Users\me\AppData\Local\Temp` }
 	defer func() { pathconv.TempDir = old }()

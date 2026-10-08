@@ -66,7 +66,7 @@ func shellAbsMode(m *pathconv.Mounts, dir, operand string, windows bool) string 
 // drive's, and the result is cleaned like every native path.
 func shellJoinMode(m *pathconv.Mounts, dir, operand string, windows bool) string {
 	if !windows {
-		return filepath.Join(dir, operand)
+		return path.Join(dir, operand)
 	}
 	nativeDir := shellDirMode(m, dir, true)
 	enc := pathconv.EncodeShellRelativeMode(operand, true)

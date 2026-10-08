@@ -367,7 +367,7 @@ func TestNormalizePath(t *testing.T) {
 			{`C:/foo`, `C:\foo`},
 			{`/foo/bar`, `C:\foo\bar`}, // drive-less: the interpreter's C: fallback
 			{`foo/bar/baz`, `foo\bar\baz`},
-			{`foo\bar`, `foo\bar`},
+			{`foo\bar`, `foo|bar`}, // shell-relative backslash is a filename character
 		}
 		for _, tt := range tests {
 			got := normalizePath(tt.in)
@@ -432,8 +432,8 @@ func TestResolveExecutableSubdir(t *testing.T) {
 
 	got := rc.ResolveExecutable("bin\\tool")
 	want := filepath.Join(dir, "bin", "tool.exe")
-	if !strings.EqualFold(got, want) {
-		t.Errorf("ResolveExecutable(%q) = %q, want %q", "bin\\tool", got, want)
+	if strings.EqualFold(got, want) {
+		t.Errorf("ResolveExecutable(%q) unexpectedly used a shell-relative backslash as a separator", "bin\\tool")
 	}
 
 	got2 := rc.ResolveExecutable("bin/tool")
@@ -501,7 +501,7 @@ func TestFromOSPath(t *testing.T) {
 			want string
 		}{
 			{`C:\foo\bar`, `/c/foo/bar`},
-			{`C:\`, `/c/`},
+			{`C:\`, `/c`},
 			{`C:\Users\Alice`, `/c/Users/Alice`},
 			{`c:\Foo\BAR`, `/c/Foo/BAR`}, // drive letter lowercased
 			{`D:\x`, `/d/x`},             // non-system drive round-trips now
@@ -759,10 +759,10 @@ func TestPathNativeProcessCwd(t *testing.T) {
 	// Valid on its own (one byte under the limit), overlong once joined
 	// with anything.
 	deepDir := root + strings.Repeat("d", pathLengthLimit-len(root))
-	operand := filepath.Join("sub", "file")
+	operand := "sub/file" // shell spelling; backslash is a filename character
 
 	native := &RunContext{Dir: deepDir, DirIsProcessCwd: true}
-	if got := native.Path(operand); got != operand {
+	if got := native.Path(operand); got != filepath.FromSlash(operand) {
 		t.Errorf("native overlong join: Path(%q) = %q, want the relative operand back", operand, got)
 	}
 
@@ -798,7 +798,7 @@ func TestPathPreservesTrailingDirectorySeparator(t *testing.T) {
 	sep := string(filepath.Separator)
 	root := testRoot()
 	rc := &RunContext{Dir: root + "work"}
-	operand := "link" + sep
+	operand := "link/" // shell spelling on both hosts
 	want := filepath.Join(root+"work", "link") + sep
 	if got := rc.Path(operand); got != want {
 		t.Fatalf("Path(%q) = %q, want terminating directory separator in %q", operand, got, want)

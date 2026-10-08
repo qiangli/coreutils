@@ -2,6 +2,7 @@ package tool
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -58,7 +59,9 @@ func (rc *RunContext) ResolveCommand(name string) string {
 		// ResolveExecutable is rc.Path on POSIX (joins rc.Dir) and applies
 		// PATHEXT on Windows, so a relative entry is relative to rc.Dir and a
 		// ".bat"/".exe" sibling is found when the bare name is given.
-		cand := rc.ResolveExecutable(filepath.Join(dir, name))
+		// PATH entries are shell spellings. filepath.Join inserts backslashes
+		// on Windows, where a relative shell backslash is a filename character.
+		cand := rc.ResolveExecutable(path.Join(dir, name))
 		if isExecutableFile(cand) {
 			return cand
 		}

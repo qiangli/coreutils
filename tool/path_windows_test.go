@@ -28,6 +28,7 @@ import (
 // tool_test.go.
 func TestShellSpecialPathMapping(t *testing.T) {
 	pinNoMounts(t)
+	pinAllDrives(t)
 	// Pin pathconv's temp-dir hook so the /tmp expectations are stable.
 	oldTempDir := pathconv.TempDir
 	pathconv.TempDir = func() string { return `C:\Users\me\AppData\Local\Temp` }
