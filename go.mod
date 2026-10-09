@@ -1,6 +1,8 @@
 module github.com/qiangli/coreutils
 
-go 1.26.5
+go 1.27
+
+toolchain go1.27.1
 
 require (
 	github.com/benhoyt/goawk v1.31.0
