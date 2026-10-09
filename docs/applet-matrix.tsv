@@ -129,7 +129,7 @@ talk	cmds/talk		POSIX/Unix utility	no	yes	6	26
 tee	cmds/tee		GNU Coreutils	yes	yes	3	31
 test	cmds/test		GNU Coreutils	yes	yes	3	32
 time	cmds/time		POSIX/Unix utility	no	yes	4	18
-timeout	cmds/timeout		GNU Coreutils	yes	no	1	5
+timeout	cmds/timeout		GNU Coreutils	yes	no	1	6
 touch	cmds/touch		GNU Coreutils	yes	yes	4	29
 tput	cmds/tput		POSIX/Unix utility	no	yes	1	18
 tr	cmds/tr		GNU Coreutils	yes	yes	4	35

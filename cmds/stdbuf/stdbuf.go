@@ -231,7 +231,7 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string) i
 
 func lookCommand(rc *tool.RunContext, name string) string {
 	if strings.ContainsAny(name, `/\`) {
-		p := rc.Path(name)
+		p := rc.ResolveExecutable(name)
 		if isExecFile(p) {
 			return p
 		}

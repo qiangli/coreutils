@@ -118,3 +118,34 @@ func TestTimeoutShortOptionSurface(t *testing.T) {
 		t.Fatalf("short options: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
 }
+
+// An explicit extensionless path to a Windows executable must resolve through
+// PATHEXT (as CreateProcess and env do), not fail with "No such file".
+func TestTimeoutExplicitPathUsesPATHEXT(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PATHEXT resolution is Windows-only")
+	}
+	src, err := os.ReadFile(os.Getenv("SystemRoot") + `\System32\cmd.exe`)
+	if err != nil {
+		t.Skipf("no cmd.exe to copy: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+`\prog.exe`, src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: dir,
+		Env: []string{"PATH=" + os.Getenv("PATH"), "PATHEXT=.COM;.EXE;.BAT;.CMD"},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	code := cmd.Run(rc, []string{"10", dir + `\prog`, "/c", "exit 0"})
+	if code != 0 || errb.String() != "" {
+		t.Fatalf("extensionless explicit path: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
