@@ -324,7 +324,7 @@ func NewScheduleCmd() *cobra.Command {
 	root.PersistentFlags().Bool("json", false, "machine-readable JSON envelope")
 	root.PersistentFlags().Bool("plain", false, "plain-text output (overrides $BASHY_AGENTIC)")
 	root.PersistentFlags().Bool("quiet", false, "minimal output")
-	root.AddCommand(addCmd(), listCmd(), rmCmd(), enableCmd(), disableCmd(), runCmd(), tickCmd(), daemonCmd(), startCmd(), statusCmd(), stopServiceCmd())
+	root.AddCommand(addCmd(), listCmd(), rmCmd(), enableCmd(), disableCmd(), runCmd(), tickCmd(), daemonCmd())
 	return root
 }
 
@@ -679,36 +679,22 @@ func daemonCmd() *cobra.Command {
 		Use:   "daemon",
 		Short: "Run a foreground scheduler loop, firing due jobs on an interval",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Own the service pidfile so `schedule status` is accurate even when the
-			// daemon is launched directly (not via `schedule start`), and so a clean
-			// exit removes it. StartService also writes it for race-free readiness.
-			lease, identity, err := claimDaemonLease()
+			// The service monitor owns lifecycle and status. This process-local
+			// admission lock only prevents duplicate scheduler loops.
+			lease, err := claimDaemonAdmission()
 			if err != nil {
 				return err
 			}
-			defer func() {
-				if current, readErr := readIdentity(servicePidPath()); readErr == nil && current == identity {
-					_ = os.Remove(servicePidPath())
-				}
-				_ = lease.Release()
-				_ = os.Remove(leasePath(identity))
-				_ = os.Remove(serviceStopPath(identity))
-			}()
+			defer lease.Release()
 			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: ticking every %s (state %s)\n", interval, statePath()); err != nil {
 				return err
 			}
 			t := time.NewTicker(interval)
 			defer t.Stop()
-			stopPoll := time.NewTicker(10 * time.Millisecond)
-			defer stopPoll.Stop()
 			for {
 				select {
 				case <-cmd.Context().Done():
 					return nil
-				case <-stopPoll.C:
-					if daemonStopRequested(identity) {
-						return nil
-					}
 				case <-t.C:
 					deliver, mailErr := DiscoverMailDelivery()
 					if mailErr != nil {
