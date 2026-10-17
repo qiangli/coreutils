@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package timeoutcmd
 
@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-// On non-unix (Windows) there are no POSIX signals to deliver to another
-// process; timeout falls back to terminating it. Any signal request is accepted
-// and treated as "terminate".
+// On platforms with neither POSIX signals nor Windows job objects, timeout falls
+// back to terminating the process.
 func signalByName(name string) os.Signal {
 	n := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(name)), "SIG")
 	if n == "" {
@@ -30,10 +29,26 @@ func signalByName(name string) os.Signal {
 
 func killSignal() os.Signal { return os.Kill }
 
+type procTree struct{}
+
+func createProcTree(c *exec.Cmd, foreground bool) *procTree {
+	return &procTree{}
+}
+
+func (t *procTree) started(c *exec.Cmd) {}
+
+func (t *procTree) signal(c *exec.Cmd, sig os.Signal) {
+	if c != nil && c.Process != nil {
+		_ = c.Process.Kill()
+	}
+}
+
+func (t *procTree) close() {}
+
 func setProcGroup(c *exec.Cmd) {}
 
 func signalCmd(c *exec.Cmd, sig os.Signal, foreground bool) {
-	if c.Process != nil {
+	if c != nil && c.Process != nil {
 		_ = c.Process.Kill()
 	}
 }

@@ -128,9 +128,8 @@ func run(rc *tool.RunContext, args []string) int {
 	c.Stdin = rc.In
 	c.Stdout = rc.Out
 	c.Stderr = rc.Err
-	if !o.foreground {
-		setProcGroup(c) // unix: own process group so the whole child tree is signalled
-	}
+	tree := createProcTree(c, o.foreground)
+	defer tree.close()
 
 	err = tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
@@ -143,6 +142,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 126
 	}
+	tree.started(c)
 
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
@@ -159,7 +159,7 @@ func run(rc *tool.RunContext, args []string) int {
 			if o.verbose {
 				fmt.Fprintf(rc.Err, "timeout: sending signal %s to command %q\n", o.signal, command[0])
 			}
-			signalCmd(c, sig, o.foreground)
+			tree.signal(c, sig)
 			if killAfter > 0 {
 				kt := time.NewTimer(killAfter)
 				select {
@@ -170,7 +170,7 @@ func run(rc *tool.RunContext, args []string) int {
 					if o.verbose {
 						fmt.Fprintf(rc.Err, "timeout: sending signal KILL to command %q\n", command[0])
 					}
-					signalCmd(c, killSignal(), o.foreground)
+					tree.signal(c, killSignal())
 					<-done
 					return 137
 				}

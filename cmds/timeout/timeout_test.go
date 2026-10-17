@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +150,129 @@ func TestTimeoutExplicitPathUsesPATHEXT(t *testing.T) {
 	code := cmd.Run(rc, []string{"10", dir + `\prog`, "/c", "exit 0"})
 	if code != 0 || errb.String() != "" {
 		t.Fatalf("extensionless explicit path: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
+func waitForProcessExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !isPidAlive(pid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return !isPidAlive(pid)
+}
+
+func TestHelperChildGrandchild(t *testing.T) {
+	role := os.Getenv("TIMEOUT_TEST_HELPER_ROLE")
+	if role == "" {
+		return
+	}
+	switch role {
+	case "child":
+		childPidFile := os.Getenv("TIMEOUT_CHILD_PID_FILE")
+		if childPidFile != "" {
+			_ = os.WriteFile(childPidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+		}
+		grandchildPidFile := os.Getenv("TIMEOUT_GRANDCHILD_PID_FILE")
+		exe, err := os.Executable()
+		if err != nil {
+			exe = os.Args[0]
+		}
+		var childEnv []string
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "TIMEOUT_TEST_HELPER_ROLE=") {
+				childEnv = append(childEnv, e)
+			}
+		}
+		cmd := exec.Command(exe, "-test.run=^TestHelperChildGrandchild$", "--")
+		cmd.Env = append(childEnv, "TIMEOUT_TEST_HELPER_ROLE=grandchild")
+		if err := cmd.Start(); err != nil {
+			os.Exit(2)
+		}
+		// Wait until grandchild has written its PID file
+		if grandchildPidFile != "" {
+			for i := 0; i < 150; i++ {
+				data, err := os.ReadFile(grandchildPidFile)
+				if err == nil && len(strings.TrimSpace(string(data))) > 0 {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+
+	case "grandchild":
+		grandchildPidFile := os.Getenv("TIMEOUT_GRANDCHILD_PID_FILE")
+		if grandchildPidFile != "" {
+			_ = os.WriteFile(grandchildPidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+}
+
+func TestTimeoutWindowsKillsChildTree(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only child tree kill test")
+	}
+
+	tempDir := t.TempDir()
+	childPidFile := filepath.Join(tempDir, "child.pid")
+	grandchildPidFile := filepath.Join(tempDir, "grandchild.pid")
+
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+
+	var out, errb bytes.Buffer
+	env := append(os.Environ(),
+		"TIMEOUT_TEST_HELPER_ROLE=child",
+		"TIMEOUT_CHILD_PID_FILE="+childPidFile,
+		"TIMEOUT_GRANDCHILD_PID_FILE="+grandchildPidFile,
+	)
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   tempDir,
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+
+	code := cmd.Run(rc, []string{"3s", exe, "-test.run=^TestHelperChildGrandchild$", "--"})
+	if code != 124 {
+		t.Fatalf("timeout exit code = %d, want 124; out=%q, err=%q", code, out.String(), errb.String())
+	}
+
+	childData, err := os.ReadFile(childPidFile)
+	if err != nil {
+		t.Fatalf("failed to read child PID file: %v", err)
+	}
+	childPid, err := strconv.Atoi(strings.TrimSpace(string(childData)))
+	if err != nil {
+		t.Fatalf("invalid child PID %q: %v", string(childData), err)
+	}
+
+	grandchildData, err := os.ReadFile(grandchildPidFile)
+	if err != nil {
+		t.Fatalf("failed to read grandchild PID file: %v", err)
+	}
+	grandchildPid, err := strconv.Atoi(strings.TrimSpace(string(grandchildData)))
+	if err != nil {
+		t.Fatalf("invalid grandchild PID %q: %v", string(grandchildData), err)
+	}
+
+	t.Cleanup(func() {
+		killPid(childPid)
+		killPid(grandchildPid)
+	})
+
+	if !waitForProcessExit(childPid, 5*time.Second) {
+		t.Errorf("child process %d is still alive after timeout", childPid)
+	}
+	if !waitForProcessExit(grandchildPid, 5*time.Second) {
+		t.Errorf("grandchild process %d is still alive after timeout", grandchildPid)
 	}
 }

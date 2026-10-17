@@ -38,6 +38,33 @@ func signalByName(name string) os.Signal {
 
 func killSignal() os.Signal { return syscall.SIGKILL }
 
+type procTree struct {
+	foreground bool
+}
+
+func createProcTree(c *exec.Cmd, foreground bool) *procTree {
+	if !foreground {
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	return &procTree{foreground: foreground}
+}
+
+func (t *procTree) started(c *exec.Cmd) {}
+
+func (t *procTree) signal(c *exec.Cmd, sig os.Signal) {
+	if c == nil || c.Process == nil {
+		return
+	}
+	if ssig, ok := sig.(syscall.Signal); ok && (t == nil || !t.foreground) {
+		if err := syscall.Kill(-c.Process.Pid, ssig); err == nil {
+			return
+		}
+	}
+	_ = c.Process.Signal(sig)
+}
+
+func (t *procTree) close() {}
+
 // setProcGroup puts the command in its own process group so the whole child tree
 // can be signalled together (GNU timeout's default).
 func setProcGroup(c *exec.Cmd) {
@@ -47,7 +74,7 @@ func setProcGroup(c *exec.Cmd) {
 // signalCmd sends sig to the command — to its process group (negative pid) unless
 // --foreground, so a wrapping shell's children also receive it.
 func signalCmd(c *exec.Cmd, sig os.Signal, foreground bool) {
-	if c.Process == nil {
+	if c == nil || c.Process == nil {
 		return
 	}
 	if ssig, ok := sig.(syscall.Signal); ok && !foreground {
