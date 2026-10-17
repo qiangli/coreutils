@@ -3,6 +3,7 @@
 package timeoutcmd
 
 import (
+	"os/exec"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -26,5 +27,11 @@ func killPid(pid int) {
 	if err == nil {
 		_ = windows.TerminateProcess(h, 1)
 		_ = windows.CloseHandle(h)
+	}
+}
+
+func setBreakawaySysProcAttr(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_BREAKAWAY_FROM_JOB | windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
 	}
 }

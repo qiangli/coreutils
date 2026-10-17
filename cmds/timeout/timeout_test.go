@@ -170,12 +170,13 @@ func TestHelperChildGrandchild(t *testing.T) {
 		return
 	}
 	switch role {
-	case "child":
+	case "child", "child_with_breakaway":
 		childPidFile := os.Getenv("TIMEOUT_CHILD_PID_FILE")
 		if childPidFile != "" {
 			_ = os.WriteFile(childPidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
 		}
 		grandchildPidFile := os.Getenv("TIMEOUT_GRANDCHILD_PID_FILE")
+		breakawayPidFile := os.Getenv("TIMEOUT_BREAKAWAY_PID_FILE")
 		exe, err := os.Executable()
 		if err != nil {
 			exe = os.Args[0]
@@ -191,6 +192,14 @@ func TestHelperChildGrandchild(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			os.Exit(2)
 		}
+		if role == "child_with_breakaway" {
+			cmdBreakaway := exec.Command(exe, "-test.run=^TestHelperChildGrandchild$", "--")
+			cmdBreakaway.Env = append(childEnv, "TIMEOUT_TEST_HELPER_ROLE=breakaway")
+			setBreakawaySysProcAttr(cmdBreakaway)
+			if err := cmdBreakaway.Start(); err != nil {
+				os.Exit(3)
+			}
+		}
 		// Wait until grandchild has written its PID file
 		if grandchildPidFile != "" {
 			for i := 0; i < 150; i++ {
@@ -201,13 +210,26 @@ func TestHelperChildGrandchild(t *testing.T) {
 				time.Sleep(20 * time.Millisecond)
 			}
 		}
+		// Wait until breakaway grandchild has written its PID file
+		if role == "child_with_breakaway" && breakawayPidFile != "" {
+			for i := 0; i < 150; i++ {
+				data, err := os.ReadFile(breakawayPidFile)
+				if err == nil && len(strings.TrimSpace(string(data))) > 0 {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
 
-	case "grandchild":
-		grandchildPidFile := os.Getenv("TIMEOUT_GRANDCHILD_PID_FILE")
-		if grandchildPidFile != "" {
-			_ = os.WriteFile(grandchildPidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	case "grandchild", "breakaway":
+		pidFile := os.Getenv("TIMEOUT_GRANDCHILD_PID_FILE")
+		if role == "breakaway" {
+			pidFile = os.Getenv("TIMEOUT_BREAKAWAY_PID_FILE")
+		}
+		if pidFile != "" {
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
 		}
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
@@ -274,5 +296,83 @@ func TestTimeoutWindowsKillsChildTree(t *testing.T) {
 	}
 	if !waitForProcessExit(grandchildPid, 5*time.Second) {
 		t.Errorf("grandchild process %d is still alive after timeout", grandchildPid)
+	}
+}
+
+func TestTimeoutWindowsBreakawayChildSurvives(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only breakaway child test")
+	}
+
+	tempDir := t.TempDir()
+	childPidFile := filepath.Join(tempDir, "child.pid")
+	grandchildPidFile := filepath.Join(tempDir, "grandchild.pid")
+	breakawayPidFile := filepath.Join(tempDir, "breakaway.pid")
+
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+
+	var out, errb bytes.Buffer
+	env := append(os.Environ(),
+		"TIMEOUT_TEST_HELPER_ROLE=child_with_breakaway",
+		"TIMEOUT_CHILD_PID_FILE="+childPidFile,
+		"TIMEOUT_GRANDCHILD_PID_FILE="+grandchildPidFile,
+		"TIMEOUT_BREAKAWAY_PID_FILE="+breakawayPidFile,
+	)
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   tempDir,
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+
+	code := cmd.Run(rc, []string{"3s", exe, "-test.run=^TestHelperChildGrandchild$", "--"})
+	if code != 124 {
+		t.Fatalf("timeout exit code = %d, want 124; out=%q, err=%q", code, out.String(), errb.String())
+	}
+
+	childData, err := os.ReadFile(childPidFile)
+	if err != nil {
+		t.Fatalf("failed to read child PID file: %v", err)
+	}
+	childPid, err := strconv.Atoi(strings.TrimSpace(string(childData)))
+	if err != nil {
+		t.Fatalf("invalid child PID %q: %v", string(childData), err)
+	}
+
+	grandchildData, err := os.ReadFile(grandchildPidFile)
+	if err != nil {
+		t.Fatalf("failed to read grandchild PID file: %v", err)
+	}
+	grandchildPid, err := strconv.Atoi(strings.TrimSpace(string(grandchildData)))
+	if err != nil {
+		t.Fatalf("invalid grandchild PID %q: %v", string(grandchildData), err)
+	}
+
+	breakawayData, err := os.ReadFile(breakawayPidFile)
+	if err != nil {
+		t.Fatalf("failed to read breakaway PID file: %v", err)
+	}
+	breakawayPid, err := strconv.Atoi(strings.TrimSpace(string(breakawayData)))
+	if err != nil {
+		t.Fatalf("invalid breakaway PID %q: %v", string(breakawayData), err)
+	}
+
+	t.Cleanup(func() {
+		killPid(childPid)
+		killPid(grandchildPid)
+		killPid(breakawayPid)
+	})
+
+	if !waitForProcessExit(childPid, 5*time.Second) {
+		t.Errorf("child process %d is still alive after timeout", childPid)
+	}
+	if !waitForProcessExit(grandchildPid, 5*time.Second) {
+		t.Errorf("normal grandchild process %d is still alive after timeout", grandchildPid)
+	}
+	if !isPidAlive(breakawayPid) {
+		t.Errorf("breakaway grandchild process %d is not alive after timeout, want alive", breakawayPid)
 	}
 }
