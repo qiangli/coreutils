@@ -83,6 +83,38 @@ func TestHostLocaleServiceabilityRunsConcurrentlyWithoutChangingListing(t *testi
 	}
 }
 
+func TestHostLocaleServiceabilityRetriesRefusalsSequentially(t *testing.T) {
+	var active atomic.Int32
+	provider := hostLocaleProvider{parallelism: 8, run: func(env, args []string) (string, string, error) {
+		if len(args) == 1 && args[0] == "-a" {
+			return "ru_RU.UTF-8\nen_US.UTF-8\nfr_FR.UTF-8\n", "", nil
+		}
+		if active.Add(1) > 1 {
+			time.Sleep(5 * time.Millisecond)
+			active.Add(-1)
+			return "", "busy", fmt.Errorf("overlapping host call")
+		}
+		defer active.Add(-1)
+		time.Sleep(5 * time.Millisecond)
+		name := strings.TrimPrefix(env[0], "LC_ALL=")
+		if len(args) == 0 {
+			return "LC_CTYPE=\"" + name + "\"\n", "", nil
+		}
+		if len(args) == 2 && args[0] == "-k" {
+			if args[1] == "LC_CTYPE" {
+				return "charmap=\"UTF-8\"\n", "", nil
+			}
+			return "yesstr=\"yes\"\n", "", nil
+		}
+		return "", "", fmt.Errorf("unexpected args %v", args)
+	}}
+	got := availableLocalesFromProvider(&provider)
+	want := []string{"C", "POSIX", "de_DE.ISO-8859-1", "de_DE.UTF-8", "en_US.UTF-8", "fr_FR.UTF-8", "ru_RU.UTF-8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("locale -a with a bridge that refuses overlapping calls = %v, want %v", got, want)
+	}
+}
+
 func TestCommandHostLocaleRunnerWaitsForOutput(t *testing.T) {
 	const helperEnv = "COREUTILS_LOCALE_RUNNER_HELPER"
 	if os.Getenv(helperEnv) == "1" {

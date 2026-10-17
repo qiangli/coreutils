@@ -61,6 +61,14 @@ func (p hostLocaleProvider) serviceable(names []string) []bool {
 	}
 	close(jobs)
 	wg.Wait()
+	// A host bridge may refuse overlapping calls (a WSL-backed provider on a
+	// busy Windows host answered nothing at parallelism 8 and everything at 1),
+	// so a refusal under concurrency is retried alone before it counts.
+	for i, ok := range valid {
+		if !ok {
+			valid[i] = p.serves(names[i])
+		}
+	}
 	return valid
 }
 
