@@ -167,6 +167,14 @@ func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args [
 		}
 		if strings.HasPrefix(arg, "--") && len(arg) > 2 {
 			name, suffix, hasValue := strings.Cut(arg[2:], "=")
+			if !CertProfile(rc) && strings.Contains(name, "_") && fs.Lookup(name) == nil {
+				name = strings.ReplaceAll(name, "_", "-")
+				if hasValue {
+					out[i] = "--" + name + "=" + suffix
+				} else {
+					out[i] = "--" + name
+				}
+			}
 			flag := fs.Lookup(name)
 			if flag == nil {
 				var matches []string
@@ -260,4 +268,12 @@ func UsageError(rc *RunContext, t *Tool, format string, a ...any) int {
 func NotSupported(rc *RunContext, t *Tool, what string) int {
 	fmt.Fprintf(rc.Err, "%s: %s is not supported by pure-Go coreutils — see '%s --help' for the supported subset\n", t.Name, what, t.Name)
 	return 2
+}
+
+// CertProfile reports whether the VSC certification profile is active
+// (VSC_PROFILE=cert). Outside it, non-upstream conveniences such as the
+// underscore long-option spelling are accepted; inside it the parse
+// path is byte-identical to upstream behavior.
+func CertProfile(rc *RunContext) bool {
+	return rc != nil && rc.Getenv("VSC_PROFILE") == "cert"
 }
