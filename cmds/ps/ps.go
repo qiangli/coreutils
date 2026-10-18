@@ -30,7 +30,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "ps",
 	Synopsis: "Report process status.",
-	Usage:    "ps [-aA] [-defl] [-g grouplist] [-G grouplist] [-n namelist] [-o format]... [-p proclist] [-t termlist] [-u userlist] [-U userlist]",
+	Usage:    "ps [-aA] [-defl] [-g grouplist] [-G grouplist] [-n namelist] [-o format]... [-p proclist] [-t termlist] [-u userlist] [-U userlist] [--json]",
 }
 
 type options struct {
@@ -121,6 +121,7 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	alle := fs.BoolP("every", "e", false, "select all processes")
 	full := fs.BoolP("full", "f", false, "show a full listing")
 	long := fs.BoolP("long", "l", false, "show a long listing")
+	jsonOut := fs.Bool("json", false, "emit a bashy-graph-v1 process stream")
 	sids := fs.StringSliceP("group", "g", nil, "select processes by session-leader ID LIST")
 	gids := fs.StringSliceP("Group", "G", nil, "select by real group LIST")
 	namelist := fs.StringP("name-list", "n", "", "alternate system name list")
@@ -198,6 +199,13 @@ func runWithSource(rc *tool.RunContext, args []string, source processSource, now
 	}
 	procs = selectedProcs
 	sort.Slice(procs, func(i, j int) bool { return procs[i].pid < procs[j].pid })
+	if *jsonOut {
+		if err := writeProcessGraph(rc.Out, procs); err != nil {
+			fmt.Fprintf(rc.Err, "ps: write error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	render := renderContext{now: now(), tf: tf, loc: tzenv.Location(rc.Env), multibyte: utf8Locale(locale.Resolve(rc.Env, locale.CType))}
 	if err := printTableWithContext(rc, procs, o.format, render, displayColumns(rc)); err != nil {
 		fmt.Fprintf(rc.Err, "ps: write error: %v\n", err)
