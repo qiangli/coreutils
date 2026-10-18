@@ -131,7 +131,8 @@ func ParseRequireOrder(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string
 func parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspersed bool) ([]string, int) {
 	AddHelpVersionAliases(fs)
 	var code int
-	args, code = expandLongOptionPrefixes(rc, t, fs, args, interspersed)
+	co := &commonOpts{}
+	args, code = expandLongOptionPrefixes(rc, t, fs, args, interspersed, co)
 	if code != -1 {
 		return nil, code
 	}
@@ -152,11 +153,15 @@ func parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspers
 		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", t.Name, Version)
 		return nil, 0
 	}
+	if code := co.apply(rc, t, fs); code != -1 {
+		return nil, code
+	}
 	return fs.Args(), -1
 }
 
-func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspersed bool) ([]string, int) {
+func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspersed bool, co *commonOpts) ([]string, int) {
 	out := append([]string(nil), args...)
+	var drop []bool
 	for i := 0; i < len(out); i++ {
 		arg := out[i]
 		if arg == "--" {
@@ -173,6 +178,24 @@ func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args [
 					out[i] = "--" + name + "=" + suffix
 				} else {
 					out[i] = "--" + name
+				}
+			}
+			if !CertProfile(rc) && fs.Lookup(name) == nil {
+				if n, ok := co.take(rc, t, fs, name, hasValue, suffix, out, i); ok {
+					if n < 0 {
+						return nil, 2
+					}
+					if drop == nil {
+						drop = make([]bool, len(out))
+					}
+					for k := 0; k < n; k++ {
+						drop[i+k] = true
+					}
+					if n == 0 {
+						out[i] = co.rewritten
+					}
+					i += max(n-1, 0)
+					continue
 				}
 			}
 			flag := fs.Lookup(name)
@@ -228,6 +251,15 @@ func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args [
 				}
 			}
 		}
+	}
+	if drop != nil {
+		kept := out[:0]
+		for i, a := range out {
+			if !drop[i] {
+				kept = append(kept, a)
+			}
+		}
+		out = kept
 	}
 	return out, -1
 }
