@@ -57,6 +57,9 @@ var readPromptLine = func() (string, error) {
 }
 
 func askPrompt(rc *tool.RunContext, prompt string) (string, error) {
+	if tool.PromptBlocked(rc, "patch") {
+		return "", errors.New("--no-input forbids prompting")
+	}
 	// POSIX specifies that patch does not use standard output; prompts and
 	// informational messages therefore belong on standard error.
 	if _, err := io.WriteString(rc.Err, prompt); err != nil {

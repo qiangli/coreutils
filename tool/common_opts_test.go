@@ -36,8 +36,8 @@ func runCommon(t *testing.T, env []string, own func(fs interface {
 
 func TestExplainNeverRuns(t *testing.T) {
 	r := runCommon(t, nil, nil, "--explain", "-a", "f1", "f2")
-	const want = "explain: sample\nusage: sample [OPTION]... [FILE]...\nflags: --all\noperands: f1 f2\n" +
-		"effects: none; arguments were parsed and validated only, the command was not executed\n"
+	const want = "explain: sample\nusage: sample [OPTION]... [FILE]...\nflags: --all\ncommon: --explain\noperands: f1 f2\n" +
+		"effects: not evaluated; the command was not executed and its side effects are not known to the argument parser\n"
 	if r.code != 0 || r.out != want || r.ops != nil {
 		t.Fatalf("%+v", r)
 	}
@@ -57,12 +57,57 @@ func TestNoInputKeepsStdin(t *testing.T) {
 	}
 }
 
-func TestNoInputRejectsPromptingFlag(t *testing.T) {
-	r := runCommon(t, nil, func(fs interface {
-		Bool(string, bool, string) *bool
-	}) { fs.Bool("interactive", false, "") }, "--no-input", "--interactive")
-	if r.code != 2 || !strings.Contains(r.err, "would prompt") || r.stdin != "piped" {
+func TestNoInputPromptBlocked(t *testing.T) {
+	rc := &RunContext{Stdio: Stdio{In: strings.NewReader("y\n"), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}}
+	if PromptBlocked(rc, "x") {
+		t.Fatal("blocked without --no-input")
+	}
+	rc.NoInput = true
+	if !PromptBlocked(rc, "x") || !PromptBlocked(rc, "x") {
+		t.Fatal("not blocked")
+	}
+	if got := rc.Err.(*bytes.Buffer).String(); strings.Count(got, "--no-input forbids prompting") != 1 {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestNoInputPromptExitDistinct(t *testing.T) {
+	tl := &Tool{Name: "prompty", Run: func(rc *RunContext, args []string) int {
+		PromptBlocked(rc, "prompty")
+		return 0
+	}}
+	Register(tl)
+	rc := &RunContext{Stdio: Stdio{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, NoInput: true}
+	if code := tl.Run(rc, nil); code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+}
+
+func TestExplainWithJSONFieldsStillExplains(t *testing.T) {
+	r := runCommon(t, nil, nil, "--explain", "--json", "--fields=a", "-a", "f")
+	if r.code != 0 || !strings.HasPrefix(r.out, "explain: sample\n") || !strings.Contains(r.out, "common: --explain --json --fields=a\n") ||
+		strings.Contains(r.out, "effects: none") || r.err != "" || r.stdin != "piped" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCommonOptionsInHelpOnlyOutsideCert(t *testing.T) {
+	help := func(env []string) string { return runCommon(t, env, nil, "--help").out }
+	if h := help(nil); !strings.Contains(h, "--no-input") || !strings.Contains(h, "--explain") || !strings.Contains(h, "--fields") {
+		t.Fatalf("missing from help: %s", h)
+	}
+	if h := help([]string{"VSC_PROFILE=cert"}); strings.Contains(h, "--no-input") || strings.Contains(h, "--json") {
+		t.Fatalf("leaked into cert help: %s", h)
+	}
+}
+
+func TestCommonOptionsDoNotAbbreviate(t *testing.T) {
+	tl := &Tool{Name: "sample", Usage: "sample"}
+	fs := NewFlags("sample")
+	d := fs.Bool("no-dereference", false, "")
+	_, code := Parse(&RunContext{Stdio: Stdio{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}}, tl, fs, []string{"--no-d"})
+	if code != -1 || !*d {
+		t.Fatalf("code=%d", code)
 	}
 }
 

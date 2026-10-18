@@ -349,6 +349,9 @@ func (m *mover) move(src, dst string) {
 }
 
 func (m *mover) confirm(dst string, unwritable bool) bool {
+	if tool.PromptBlocked(m.rc, "mv") {
+		return false
+	}
 	if unwritable {
 		fmt.Fprintf(m.rc.Err, "mv: replace '%s', overriding mode? ", dst)
 	} else {

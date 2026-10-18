@@ -729,6 +729,9 @@ func resolveExistingPrefix(path string) (string, error) {
 // locale, plus j/J for the provisioned de_DE locale — so only the line
 // terminator is stripped, never leading white space: " y" declines.
 func (c *copier) confirm(dst string) bool {
+	if tool.PromptBlocked(c.rc, "cp") {
+		return false
+	}
 	fmt.Fprintf(c.rc.Err, "cp: overwrite '%s'? ", dst)
 	line, err := c.in.ReadString('\n')
 	if err != nil && line == "" {

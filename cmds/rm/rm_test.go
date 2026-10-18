@@ -664,3 +664,26 @@ func TestRmInteractiveAfterForceNeedsOperand(t *testing.T) {
 		t.Errorf("rm -f -i: code=%d err=%q", code, errb)
 	}
 }
+
+func TestNoInputBlocksImplicitAndInteractivePrompts(t *testing.T) {
+	oldIsTerminal, oldWritable := isTerminal, writableForPrompt
+	t.Cleanup(func() { isTerminal, writableForPrompt = oldIsTerminal, oldWritable })
+	isTerminal = func(io.Reader) bool { return true }
+	writableForPrompt = func(string) bool { return false }
+	for _, args := range [][]string{{"--no-input", "f"}, {"--no-input", "-i", "f"}} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "f"), "x")
+		_, errb, code := runToolIn(t, dir, "y\n", args...)
+		if code != 2 || !strings.Contains(errb, "--no-input forbids prompting") {
+			t.Errorf("%v: code=%d err=%q", args, code, errb)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "f")); err != nil {
+			t.Errorf("%v: file removed", args)
+		}
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "f"), "x")
+	if _, _, code := runToolIn(t, dir, "", "--no-input", "-f", "f"); code != 0 {
+		t.Errorf("-f must not prompt: code=%d", code)
+	}
+}

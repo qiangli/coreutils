@@ -744,6 +744,9 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	var tty io.ReadCloser
 	var ttyReader *bufio.Reader
 	if o.interactive {
+		if tool.PromptBlocked(rc, "xargs") {
+			return 2
+		}
 		var err error
 		tty, err = ttyOpener()
 		if err != nil {
@@ -757,6 +760,10 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	// runOne executes one invocation, writing its output to stdout/stderr.
 	runOne := func(argv []string, stdout, stderr io.Writer) (stop bool) {
 		if o.interactive {
+			if tool.PromptBlocked(rc, "xargs") {
+				note(1)
+				return true
+			}
 			fmt.Fprintf(stderr, "%s?...", strings.Join(argv, " "))
 			line, err := ttyReader.ReadString('\n')
 			if err != nil && err != io.EOF {

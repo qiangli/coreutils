@@ -1196,6 +1196,9 @@ func (e *execExpr) flush(w *walker) {
 // only the line terminator is stripped, never leading whitespace, so
 // " y" declines.
 func (w *walker) confirm(util, path string) bool {
+	if tool.PromptBlocked(w.rc, "find") {
+		return false
+	}
 	fmt.Fprintf(w.rc.Err, "< %s ... %s > ? ", util, path)
 	line, err := w.stdin.ReadString('\n')
 	if err != nil && line == "" {

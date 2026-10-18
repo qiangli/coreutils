@@ -52,6 +52,11 @@ type RunContext struct {
 	Umask    fs.FileMode
 	UmaskSet bool
 
+	// NoInput is set by the --no-input common option (never in the cert
+	// profile). Prompting commands consult PromptBlocked before reading.
+	NoInput    bool
+	noInputHit bool
+
 	// SIGPIPEIgnored is true if the calling shell ignores SIGPIPE (e.g. trap '' PIPE).
 	SIGPIPEIgnored bool
 
@@ -254,6 +259,15 @@ var (
 func Register(t *Tool) {
 	if t == nil || t.Name == "" || t.Run == nil {
 		panic("tool: Register with empty Name or nil Run")
+	}
+	if run := t.Run; run != nil {
+		t.Run = func(rc *RunContext, args []string) int {
+			code := run(rc, args)
+			if rc != nil && rc.noInputHit && code < 2 {
+				return 2
+			}
+			return code
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()

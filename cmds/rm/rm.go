@@ -331,6 +331,9 @@ func (r *remover) verbosef(format string, a ...any) {
 }
 
 func (r *remover) confirm(op string) bool {
+	if tool.PromptBlocked(r.rc, "rm") {
+		return false
+	}
 	fmt.Fprintf(r.rc.Err, "rm: remove '%s'? ", op)
 	line, err := r.in.ReadString('\n')
 	if err != nil && line == "" {

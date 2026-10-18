@@ -132,6 +132,9 @@ func parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspers
 	AddHelpVersionAliases(fs)
 	var code int
 	co := &commonOpts{}
+	if !CertProfile(rc) {
+		co.register(fs)
+	}
 	args, code = expandLongOptionPrefixes(rc, t, fs, args, interspersed, co)
 	if code != -1 {
 		return nil, code
@@ -161,7 +164,6 @@ func parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspers
 
 func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspersed bool, co *commonOpts) ([]string, int) {
 	out := append([]string(nil), args...)
-	var drop []bool
 	for i := 0; i < len(out); i++ {
 		arg := out[i]
 		if arg == "--" {
@@ -180,23 +182,12 @@ func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args [
 					out[i] = "--" + name
 				}
 			}
-			if !CertProfile(rc) && fs.Lookup(name) == nil {
-				if n, ok := co.take(rc, t, fs, name, hasValue, suffix, out, i); ok {
-					if n < 0 {
-						return nil, 2
-					}
-					if drop == nil {
-						drop = make([]bool, len(out))
-					}
-					for k := 0; k < n; k++ {
-						drop[i+k] = true
-					}
-					if n == 0 {
-						out[i] = co.rewritten
-					}
-					i += max(n-1, 0)
-					continue
+			if name == "null" && !hasValue && co.isCommon("null") {
+				if co.takeNull(rc, t, fs) < 0 {
+					return nil, 2
 				}
+				out[i] = co.rewritten
+				continue
 			}
 			flag := fs.Lookup(name)
 			if flag == nil {
@@ -205,7 +196,7 @@ func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args [
 					// The framework's hidden -h/-V alias flags are parser plumbing, not
 					// GNU-style long options. Let exact uses parse as before, but do not
 					// let these internal names create prefix matches or ambiguities.
-					if f.Name == helpAliasFlag || f.Name == versionAliasFlag {
+					if f.Name == helpAliasFlag || f.Name == versionAliasFlag || co.isCommon(f.Name) {
 						return
 					}
 					if strings.HasPrefix(f.Name, name) {
@@ -251,15 +242,6 @@ func expandLongOptionPrefixes(rc *RunContext, t *Tool, fs *pflag.FlagSet, args [
 				}
 			}
 		}
-	}
-	if drop != nil {
-		kept := out[:0]
-		for i, a := range out {
-			if !drop[i] {
-				kept = append(kept, a)
-			}
-		}
-		out = kept
 	}
 	return out, -1
 }

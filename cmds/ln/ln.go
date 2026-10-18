@@ -210,6 +210,9 @@ func prepareOptionalExistingDestination(rc *tool.RunContext, reader *bufio.Reade
 		return false, false
 	}
 	if interactive {
+		if tool.PromptBlocked(rc, "ln") {
+			return false, false
+		}
 		fmt.Fprintf(rc.Err, "ln: replace '%s'? ", dest)
 		yes, err := readYes(reader)
 		if err != nil && err != io.EOF {
