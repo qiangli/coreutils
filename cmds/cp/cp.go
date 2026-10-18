@@ -22,9 +22,10 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "cp",
-	Synopsis: "Copy SOURCE to DEST, or multiple SOURCE(s) to DIRECTORY.",
-	Usage:    "cp [OPTION]... SOURCE DEST\n   or: cp [OPTION]... SOURCE... DIRECTORY",
+	PreviewLevel: "local-preview",
+	Name:         "cp",
+	Synopsis:     "Copy SOURCE to DEST, or multiple SOURCE(s) to DIRECTORY.",
+	Usage:        "cp [OPTION]... SOURCE DEST\n   or: cp [OPTION]... SOURCE... DIRECTORY",
 }
 
 // Run is wired in init: a literal would create an initialization
@@ -254,6 +255,13 @@ func (c *copier) copyEntry(src, dst string) {
 	fi, err := stat(c.path(src))
 	if err != nil {
 		c.errf("cannot stat '%s': %s", src, reason(err))
+		return
+	}
+	if fi.IsDir() && !c.recursive {
+		c.errf("-r not specified; omitting directory '%s'", src)
+		return
+	}
+	if !c.rc.Effect(fmt.Sprintf("copy from %q recursive=%t (includes selected backups, parents and attributes; overwrite policy not evaluated)", src, c.recursive), dst) {
 		return
 	}
 	switch {

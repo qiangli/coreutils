@@ -57,6 +57,11 @@ type RunContext struct {
 	NoInput    bool
 	noInputHit bool
 
+	dryRun    bool
+	effectErr error
+	// Effects contains the conditional local plan recorded by --dry-run.
+	Effects []PlannedEffect
+
 	// SIGPIPEIgnored is true if the calling shell ignores SIGPIPE (e.g. trap '' PIPE).
 	SIGPIPEIgnored bool
 
@@ -237,6 +242,8 @@ func (rc *RunContext) ResolveExecutable(name string) string {
 
 // Tool is one command.
 type Tool struct {
+	// PreviewLevel declares the effect preview contract; empty means unsupported.
+	PreviewLevel string
 	// Name is the command name exactly as upstream spells it.
 	Name string
 	// Synopsis is the one-line description shown in tool listings.
@@ -262,7 +269,15 @@ func Register(t *Tool) {
 	}
 	if run := t.Run; run != nil {
 		t.Run = func(rc *RunContext, args []string) int {
+			if rc != nil {
+				rc.dryRun = false
+				rc.effectErr = nil
+				rc.Effects = nil
+			}
 			code := run(rc, args)
+			if rc != nil && rc.effectErr != nil && code == 0 {
+				return 1
+			}
 			if rc != nil && rc.noInputHit && code < 2 {
 				return 2
 			}

@@ -22,13 +22,18 @@ type commonOpts struct {
 // register defines the agent options on fs (non-cert only). --null is a
 // scan-time alias for the command's native NUL spelling and never reaches
 // pflag as itself.
-func (co *commonOpts) register(fs *pflag.FlagSet) {
+func (co *commonOpts) register(fs *pflag.FlagSet, t *Tool) {
 	co.added = map[string]bool{}
 	add := func(name string, def func()) {
 		if fs.Lookup(name) == nil {
 			def()
 			co.added[name] = true
 		}
+	}
+	if t.PreviewLevel == "local-preview" {
+		add("dry-run", func() {
+			fs.Bool("dry-run", false, "record a conditional local effect plan without changing files; not a success guarantee")
+		})
 	}
 	add("explain", func() {
 		fs.Bool("explain", false, "print what would run, parsed and validated, and exit without executing")
@@ -98,6 +103,9 @@ func (co *commonOpts) apply(rc *RunContext, t *Tool, fs *pflag.FlagSet) int {
 			what = "--fields"
 		}
 		return NotSupported(rc, t, what+" (no native or declared structured output)")
+	}
+	if co.added["dry-run"] {
+		rc.dryRun = flagBool(fs, "dry-run")
 	}
 	if noInput {
 		rc.NoInput = true

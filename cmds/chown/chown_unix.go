@@ -39,6 +39,7 @@ var changeOwner = func(path string, uid, gid int, follow bool) error {
 }
 
 type chownOpts struct {
+	rc *tool.RunContext
 	options
 	uid int
 	gid int
@@ -52,7 +53,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 			return statusError(rc, "%v", err)
 		}
 	}
-	state := chownOpts{options: opts, uid: uid, gid: gid}
+	state := chownOpts{rc: rc, options: opts, uid: uid, gid: gid}
 	state.verbose = opts.verbose || opts.changes
 
 	exit := 0
@@ -94,7 +95,7 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts, output
 				// An output failure must affect the status, but ownership work
 				// continues for the rest of the hierarchy. Avoid retrying a
 				// writer that has already failed and report the error once.
-				if !*outputFailed {
+				if !rc.DryRun() && !*outputFailed {
 					if err := chownVerbose(rc.Out, name, changed, opts); err != nil {
 						fmt.Fprintf(rc.Err, "chown: write error: %v\n", err)
 						*outputFailed = true
@@ -161,6 +162,9 @@ func chownOne(path string, opts chownOpts) (changed bool, statErr, chownErr erro
 	}
 	changed = (opts.uid >= 0 && currentUID != opts.uid) ||
 		(opts.gid >= 0 && currentGID != opts.gid)
+	if opts.rc != nil && !opts.rc.Effect(fmt.Sprintf("chown uid=%d gid=%d dereference=%t", opts.uid, opts.gid, opts.affectReferent), path) {
+		return false, nil, nil
+	}
 	if err := changeOwner(path, opts.uid, opts.gid, opts.affectReferent); err != nil {
 		return false, nil, err
 	}

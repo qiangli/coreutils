@@ -204,6 +204,9 @@ func chmodPath(rc *tool.RunContext, change *modeChange, path, display string, op
 	}
 	oldBits := fileModeToBits(fi.Mode())
 	newBits := change.apply(oldBits, fi.IsDir(), opts.umask)
+	if !rc.Effect(fmt.Sprintf("chmod mode=%04o", newBits), display) {
+		return true
+	}
 	changed := oldBits != newBits
 	// POSIX specifies a chmod() action for every selected file, including
 	// when MODE computes to the bits it already has. The native call owns

@@ -19,9 +19,10 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "truncate",
-	Synopsis: "Shrink or extend the size of each FILE to the specified size.",
-	Usage:    "truncate OPTION... FILE...",
+	PreviewLevel: "local-preview",
+	Name:         "truncate",
+	Synopsis:     "Shrink or extend the size of each FILE to the specified size.",
+	Usage:        "truncate OPTION... FILE...",
 }
 
 // Run is wired in init: a literal would create an initialization cycle.
@@ -87,6 +88,9 @@ func run(rc *tool.RunContext, args []string) int {
 			if *noCreate {
 				continue // GNU: missing file with -c is silently skipped
 			}
+			if !rc.Effect(fmt.Sprintf("create and truncate size=%d relative=%d reference=%q", value, rel, *reference), name) {
+				continue
+			}
 			f, cerr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
 			if cerr != nil {
 				fmt.Fprintf(rc.Err, "truncate: cannot open '%s' for writing: %v\n", name, reason(cerr))
@@ -109,6 +113,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		if final < 0 {
 			final = 0
+		}
+		if !rc.Effect(fmt.Sprintf("truncate size=%d", final), name) {
+			continue
 		}
 		if err := os.Truncate(path, final); err != nil {
 			fmt.Fprintf(rc.Err, "truncate: failed to truncate '%s' at %d bytes: %v\n", name, final, reason(err))

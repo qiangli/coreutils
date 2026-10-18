@@ -19,9 +19,10 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "rmdir",
-	Synopsis: "Remove the DIRECTORY(ies), if they are empty.",
-	Usage:    "rmdir [OPTION]... DIRECTORY...",
+	PreviewLevel: "local-preview",
+	Name:         "rmdir",
+	Synopsis:     "Remove the DIRECTORY(ies), if they are empty.",
+	Usage:        "rmdir [OPTION]... DIRECTORY...",
 }
 
 // Run is wired in init: a literal would create an initialization
@@ -151,6 +152,9 @@ func (r *rm) remove1(op string) bool {
 	if !fi.IsDir() {
 		r.errf("failed to remove '%s': Not a directory", op)
 		return false
+	}
+	if !r.rc.Effect("rmdir (requires empty directory at execution)", op) {
+		return true
 	}
 	if err := removeDirectory(rp, fi); err != nil {
 		if r.ignoreNonEmpty && isNonEmpty(err) {

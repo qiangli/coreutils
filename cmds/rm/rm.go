@@ -31,9 +31,10 @@ import (
 var isFilesystemRoot = rootguard.IsRoot
 
 var cmd = &tool.Tool{
-	Name:     "rm",
-	Synopsis: "Remove (unlink) the FILE(s).",
-	Usage:    "rm [OPTION]... [FILE]...",
+	PreviewLevel: "local-preview",
+	Name:         "rm",
+	Synopsis:     "Remove (unlink) the FILE(s).",
+	Usage:        "rm [OPTION]... [FILE]...",
 }
 
 // Run is wired in init: a literal would create an initialization
@@ -147,6 +148,11 @@ func (r *remover) remove(op string) {
 		r.errf("it is dangerous to operate recursively on '%s'%s",
 			op, rootguard.AliasSuffix(op, rp))
 		return
+	}
+	if !fi.IsDir() || r.recursive || r.dir {
+		if !r.rc.Effect(fmt.Sprintf("remove recursive=%t (confirmation and permissions not evaluated)", r.recursive), op) {
+			return
+		}
 	}
 	if fi.IsDir() {
 		if !r.recursive && !r.dir {

@@ -23,9 +23,10 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "touch",
-	Synopsis: "Update the access and modification times of each FILE to the current time. Supports -t STAMP.",
-	Usage:    "touch [OPTION]... FILE...",
+	PreviewLevel: "local-preview",
+	Name:         "touch",
+	Synopsis:     "Update the access and modification times of each FILE to the current time. Supports -t STAMP.",
+	Usage:        "touch [OPTION]... FILE...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -242,6 +243,9 @@ func run(rc *tool.RunContext, args []string) int {
 					// we'd need to stat the parent. For now, just try creating a regular file.
 				}
 			}
+			if !rc.Effect("create and set timestamps", name) {
+				continue
+			}
 			f, cerr := rc.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
 			if cerr != nil {
 				fmt.Fprintf(rc.Err, "touch: cannot touch '%s': %v\n", name, reason(cerr))
@@ -251,6 +255,9 @@ func run(rc *tool.RunContext, args []string) int {
 			f.Close()
 		}
 
+		if !rc.Effect("set timestamps", name) {
+			continue
+		}
 		if err := setFileTimes(path, changeA, changeM, useNow, atime, mtime, !*noDeref); err != nil {
 			fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
 			exit = 1

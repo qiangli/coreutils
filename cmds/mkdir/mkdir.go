@@ -26,9 +26,10 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "mkdir",
-	Synopsis: "Create the DIRECTORY(ies), if they do not already exist.",
-	Usage:    "mkdir [OPTION]... DIRECTORY...",
+	PreviewLevel: "local-preview",
+	Name:         "mkdir",
+	Synopsis:     "Create the DIRECTORY(ies), if they do not already exist.",
+	Usage:        "mkdir [OPTION]... DIRECTORY...",
 }
 
 // Run is wired in init: a literal would create an initialization
@@ -196,6 +197,9 @@ func allDigits(s string) bool {
 func (m *maker) make(op string) {
 	if op == "" {
 		m.errf("cannot create directory '': No such file or directory")
+		return
+	}
+	if !m.rc.Effect(fmt.Sprintf("mkdir parents=%t (includes selected mode)", m.parents), op) {
 		return
 	}
 	if m.parents {

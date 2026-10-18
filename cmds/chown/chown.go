@@ -19,8 +19,9 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "chown",
-	Synopsis: "Change the owner and/or group of each FILE to OWNER and/or GROUP.",
+	PreviewLevel: "local-preview",
+	Name:         "chown",
+	Synopsis:     "Change the owner and/or group of each FILE to OWNER and/or GROUP.",
 	Usage: "chown [OPTION]... [OWNER][:[GROUP]] FILE...\n\n" +
 		"  -H  with -R, follow a symbolic link named on the command line\n" +
 		"  -L  with -R, follow every symbolic link to a directory\n" +

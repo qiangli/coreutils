@@ -25,9 +25,10 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "mv",
-	Synopsis: "Rename SOURCE to DEST, or move SOURCE(s) to DIRECTORY.",
-	Usage:    "mv [OPTION]... SOURCE DEST\n   or: mv [OPTION]... SOURCE... DIRECTORY",
+	PreviewLevel: "local-preview",
+	Name:         "mv",
+	Synopsis:     "Rename SOURCE to DEST, or move SOURCE(s) to DIRECTORY.",
+	Usage:        "mv [OPTION]... SOURCE DEST\n   or: mv [OPTION]... SOURCE... DIRECTORY",
 }
 
 // Run is wired in init: a literal would create an initialization
@@ -279,6 +280,9 @@ func (m *mover) move(src, dst string) {
 		if _, err := os.Lstat(dp); err == nil {
 			return // -n: silently skip; exit status unaffected
 		}
+	}
+	if !m.rc.Effect(fmt.Sprintf("move from %q (includes selected backups and cross-device fallback; overwrite policy not evaluated)", src), dst) {
+		return
 	}
 	if _, err := os.Lstat(dp); err == nil {
 		sameEntry := false

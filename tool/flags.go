@@ -133,7 +133,7 @@ func parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string, interspers
 	var code int
 	co := &commonOpts{}
 	if !CertProfile(rc) {
-		co.register(fs)
+		co.register(fs, t)
 	}
 	args, code = expandLongOptionPrefixes(rc, t, fs, args, interspersed, co)
 	if code != -1 {

@@ -56,8 +56,9 @@ type options struct {
 }
 
 var cmd = &tool.Tool{
-	Name:     "chmod",
-	Synopsis: "Change the mode of each FILE to MODE.",
+	PreviewLevel: "local-preview",
+	Name:         "chmod",
+	Synopsis:     "Change the mode of each FILE to MODE.",
 	Usage: "chmod [OPTION]... MODE[,MODE]... FILE...\n" +
 		"   or: chmod [OPTION]... OCTAL-MODE FILE...",
 }

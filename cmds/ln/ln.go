@@ -20,8 +20,9 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "ln",
-	Synopsis: "Make links between files (hard by default, symbolic with --symbolic).",
+	PreviewLevel: "local-preview",
+	Name:         "ln",
+	Synopsis:     "Make links between files (hard by default, symbolic with --symbolic).",
 	Usage: "ln [OPTION]... TARGET LINK_NAME\n" +
 		"   or: ln [OPTION]... TARGET\n" +
 		"   or: ln [OPTION]... TARGET... DIRECTORY",
@@ -159,6 +160,9 @@ func run(rc *tool.RunContext, args []string) int {
 				exit = 1
 				continue
 			}
+		}
+		if !rc.Effect(fmt.Sprintf("link from %q symbolic=%t (includes selected replacement and backup; confirmation not evaluated)", linkTarget, *symbolic), dest) {
+			continue
 		}
 		if *force {
 			if !prepareExistingDestination(rc, dest, destPath, backupMode, *suffix, false) {

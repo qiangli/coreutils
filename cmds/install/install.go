@@ -18,8 +18,9 @@ import (
 )
 
 var cmd = &tool.Tool{
-	Name:     "install",
-	Synopsis: "Copy files and set attributes, or create directories.",
+	PreviewLevel: "local-preview",
+	Name:         "install",
+	Synopsis:     "Copy files and set attributes, or create directories.",
 	Usage: "install [OPTION]... SOURCE DEST\n" +
 		"   or: install [OPTION]... SOURCE... DIRECTORY\n" +
 		"   or: install -d [OPTION]... DIRECTORY...",
@@ -200,6 +201,9 @@ func (in *installer) makeDir(name string) {
 		in.errf("cannot create directory '': No such file or directory")
 		return
 	}
+	if !in.rc.Effect(fmt.Sprintf("install directory and parents mode=%s", in.mode), name) {
+		return
+	}
 	created := !isDir(in.rc.Path(name))
 	if err := os.MkdirAll(in.rc.Path(name), 0o777); err != nil {
 		in.errf("cannot create directory '%s': %s", name, reason(err))
@@ -246,6 +250,9 @@ func (in *installer) copyFile(src, dst string, parents, preserveTs, compare bool
 	}
 	if fi.IsDir() {
 		in.errf("omitting directory '%s'", src)
+		return
+	}
+	if !in.rc.Effect(fmt.Sprintf("install from %q mode=%s parents=%t (includes selected backup and timestamps; content comparison not evaluated)", src, in.mode, parents), dst) {
 		return
 	}
 	if parents && !in.makeParentDir(dst) {
