@@ -5,7 +5,6 @@ description: When registering bashy agent sessions for who/write reachability, p
 status: candidate
 source:
     tool: codex-gpt-5.5-u
-    host: dragon
     episode: weave-issue-21
 created: "2026-08-26T09:11:55Z"
 ---

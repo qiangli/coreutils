@@ -10,7 +10,6 @@ status: validated
 evidence: Manifest contains exactly 10 active providers (make and bc later joined ed/patch/mail/mailx/talk as pure-Go applets); absence and OwnerGoApplet/SelGoApplet regressions pass; broad non-external go test and scripts/crossvet.sh pass.
 source:
     tool: codex-profile-d-sprint
-    host: dragon
 created: "2026-08-26T23:34:38Z"
 updated: "2026-08-26T23:34:43Z"
 supersedes: retained-provider-pins-need-a-separate-active-owner-set

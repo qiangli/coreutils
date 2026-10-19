@@ -10,7 +10,7 @@ assignee: codex-s88-hash9
 closed: 2026-09-30T15:33:59.823201Z
 ---
 
-Frozen Coreutils c747cab uncapped Profile D replay still reports pax:46=FAIL and nohup:21=FAIL. Reduce from tracked public-safe evidence and redacted category/count/hash tuples only; do not inspect or export licensed journals. Implement only concrete standards-aligned product causes, with smallest focused native tests on Dragon. Aurelia owns Novi exact replay, review, merge, push, pins, and cleanup.
+Frozen Coreutils c747cab uncapped Profile D replay still reports pax:46=FAIL and nohup:21=FAIL. Reduce from tracked public-safe evidence and redacted category/count/hash tuples only; do not inspect or export licensed journals. Implement only concrete standards-aligned product causes, with smallest focused native tests on dev-host. Aurelia owns Novi exact replay, review, merge, push, pins, and cleanup.
 
 ## Review 2026-09-30 (steward)
 

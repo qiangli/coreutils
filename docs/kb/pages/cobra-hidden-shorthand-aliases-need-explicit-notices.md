@@ -5,7 +5,6 @@ description: When retiring a shorthand flag in Cobra/pflag, ShorthandDeprecated 
 status: candidate
 source:
     tool: codex-gpt-5.5-y
-    host: dragon
     episode: weave-issue-25
 created: "2026-08-26T09:34:15Z"
 ---

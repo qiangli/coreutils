@@ -6,7 +6,6 @@ status: validated
 evidence: Validated by focused vectors, same-input/output regression coverage, race tests, and Linux/Darwin/Windows compile checks in Corrective Sprint 79 independent review.
 source:
     tool: codex-gpt5.6-terra-e
-    host: dragon
     episode: weave-issue-57
 created: "2026-08-25T02:42:08Z"
 updated: "2026-08-25T03:44:03Z"

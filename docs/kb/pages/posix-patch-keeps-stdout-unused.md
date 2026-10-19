@@ -5,7 +5,6 @@ description: When auditing the POSIX Issue 7 patch utility, route filename promp
 status: candidate
 source:
     tool: codex-gpt5.6-sol-f
-    host: dragon
     episode: weave-issue-6
 created: "2026-08-27T09:10:10Z"
 ---

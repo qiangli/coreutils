@@ -5,7 +5,6 @@ description: When mailx parses recipients from message headers, include Bcc alon
 status: candidate
 source:
     tool: codex-gpt5.4-mini-w
-    host: dragon
     episode: weave-issue-23
 created: "2026-08-27T18:03:22Z"
 ---

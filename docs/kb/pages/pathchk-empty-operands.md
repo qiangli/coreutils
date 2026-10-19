@@ -11,10 +11,9 @@ scope:
     repos:
         - coreutils
 status: validated
-evidence: GNU Coreutils 9.11 differential on Dragon; TestPathchkEmptyPathnameOptions; implementation commit 6f98ca29
+evidence: GNU Coreutils 9.11 differential on dev-host; TestPathchkEmptyPathnameOptions; implementation commit 6f98ca29
 source:
     tool: codex-gpt5.6-luna-q
-    host: dragon
     episode: weave-issue-641
 created: "2026-08-13T13:11:25Z"
 updated: "2026-08-19T20:23:36Z"

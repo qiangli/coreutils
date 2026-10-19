@@ -5,7 +5,6 @@ description: When a POSIX applet exposes its invocation name to the program lang
 status: candidate
 source:
     tool: codex-gpt-5.5-s
-    host: dragon
     episode: weave-issue-19
 created: "2026-08-27T16:58:42Z"
 ---

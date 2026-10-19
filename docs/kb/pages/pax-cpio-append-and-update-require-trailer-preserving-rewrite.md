@@ -5,7 +5,6 @@ description: POSIX pax -a and -u cannot append bytes after a cpio TRAILER!!! rec
 status: candidate
 source:
     tool: codex-gpt5.6-luna-u
-    host: dragon
     episode: weave-issue-21
 created: "2026-08-27T17:36:32Z"
 ---

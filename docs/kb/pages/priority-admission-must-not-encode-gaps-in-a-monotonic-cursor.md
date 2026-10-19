@@ -5,7 +5,6 @@ description: When a bounded inbox selects later high-priority records before ear
 status: candidate
 source:
     tool: codex-gpt5.6-sol-b
-    host: dragon
     episode: weave-issue-2
 created: "2026-08-29T21:03:10Z"
 ---

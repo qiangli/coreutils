@@ -5,7 +5,6 @@ description: When a Go helper uses x/sys/unix APIs that differ by GOOS, a runtim
 status: candidate
 source:
     tool: codex-gpt5.6-sol-o
-    host: dragon
     episode: weave-issue-41
 created: "2026-08-25T02:53:27Z"
 ---

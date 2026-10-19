@@ -62,7 +62,7 @@ delete that line when this lands.
 
 Toolchain: go1.27.1. You may be on darwin: the failure is LINUX-ONLY ({PATH_MAX} 4096 vs 1024), so do not
 declare victory from a darwin run. If podman works in your environment, the Linux check is
-  /Users/qiangli/.bashy/sprint/110/gate/linux-go-test.sh -count=1 <pkg> [-run X]
+  $HOME/.bashy/sprint/110/gate/linux-go-test.sh -count=1 <pkg> [-run X]
 (golang:1.27, ordinary user, pinned ../sh). Otherwise reason from the Linux regime and make the
 regression reproducible on darwin too where you can (a package-level seam, never a sleep).
 Scope: only the files named below plus test/known-failures.txt (delete the story's baseline line in the SAME commit).

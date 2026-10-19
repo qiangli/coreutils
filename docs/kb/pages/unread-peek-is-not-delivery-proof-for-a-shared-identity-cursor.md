@@ -5,7 +5,6 @@ description: When a resident agent and a test both read as the same inbox identi
 status: candidate
 source:
     tool: codex-gpt5.6-sol-k
-    host: dragon
     episode: weave-issue-11
 created: "2026-09-06T04:13:24Z"
 ---

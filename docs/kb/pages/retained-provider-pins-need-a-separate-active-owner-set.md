@@ -6,7 +6,6 @@ status: superseded
 evidence: Sprint 82 ed migration kept the GNU ed control pin while DispatchEntries excluded it; focused provider/owner tests and crossvet passed on windows, linux, darwin, js/wasm, wasip1/wasm, and aix.
 source:
     tool: codex-gpt5.6-sol-f
-    host: dragon
     episode: weave-issue-32
 created: "2026-08-26T17:46:36Z"
 updated: "2026-08-26T23:34:38Z"

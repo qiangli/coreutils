@@ -6,7 +6,6 @@ status: validated
 evidence: cmds/xargs/xargs_test.go TestXargsReplaceIssue7Limits and TestXargsReplaceAppliesOnlyToArgumentOperands; crossvet passes windows/linux/darwin/aix
 source:
     tool: codex-gpt5.6-luna-o
-    host: dragon
     episode: weave-issue-41
 created: "2026-08-25T03:13:14Z"
 updated: "2026-08-25T03:21:49Z"

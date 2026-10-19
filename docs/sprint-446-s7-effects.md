@@ -49,10 +49,10 @@ calls, shell-outs, short flags, or certification options were added.
   Includes write failure, reused contexts, underscore alias and false values.
 - Whole packages: `go test ./tool ./cmds/{rm,mv,cp,ln,chmod,chown,touch,mkdir,rmdir,truncate,install}`.
 - Vet/typecheck the same scope for darwin, windows, and linux. Full-tree
-  crossvet and heavy suites are intentionally deferred off Dragon.
+  crossvet and heavy suites are intentionally deferred off dev-host.
 - Cert golden: exact unknown-flag stderr/status for both spellings on all 11
   applets; help SHA256 fixtures captured from 8c2706f2. Separate before/after
   multicall binaries compare status/stdout/stderr for help, version, no operands,
   and both dry-run spellings (55 invocations).
 - Required remote bash-5.3 + POSIX/VSC acceptance gate is pending S2+S7 freeze,
-  per the operator's explicit instruction. No POSIX/VSC run on Dragon.
+  per the operator's explicit instruction. No POSIX/VSC run on dev-host.
