@@ -48,6 +48,8 @@ cd "$(git rev-parse --show-toplevel)"
 root=$(pwd -P)
 fail=0
 
+. scripts/lib-python.sh
+
 # ---------------------------------------------------------------------------
 # Allowlist for part (b): consciously-accepted non-ancestor pins.
 #
@@ -80,7 +82,7 @@ echo "consumer-build: (b) replace-ancestry check"
 # Emit "modulepath<TAB>version" for each `replace` with a remote version target
 # (filesystem replaces — ../sh, ./external/... — have an empty New.Version and
 # are skipped).
-replaces=$(go mod edit -json | python3 -c '
+replaces=$(go mod edit -json | py -c '
 import json, sys
 for r in (json.load(sys.stdin).get("Replace") or []):
     new = r.get("New", {})

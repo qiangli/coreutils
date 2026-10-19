@@ -38,11 +38,12 @@
 #        scripts/crossvet.sh windows    # a subset, for a fast inner loop
 set -e
 cd "$(git rev-parse --show-toplevel)"
+. scripts/lib-python.sh
 
 scripts/applet-test-coverage.sh
 scripts/validate-posix-required-commands.sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/posix_manifest_test.py
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/posix_manifest.py --check
+PYTHONDONTWRITEBYTECODE=1 py -m unittest scripts/posix_manifest_test.py
+PYTHONDONTWRITEBYTECODE=1 py scripts/posix_manifest.py --check
 
 targets=${*:-"windows linux darwin"}
 pkgs=$(go list ./...)

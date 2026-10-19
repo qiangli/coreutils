@@ -2,9 +2,10 @@
 # Preserve the established generated five-column A/B/C/D coverage contract.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+. scripts/lib-python.sh
 
 scripts/applet-matrix.py --check
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+PYTHONDONTWRITEBYTECODE=1 py - <<'PY'
 import csv
 from collections import Counter
 
