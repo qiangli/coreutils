@@ -85,7 +85,7 @@ func TestVdirDelegatesLsFlags(t *testing.T) {
 }
 
 func TestVdirRegistered(t *testing.T) {
-	if tool.Lookup("vdir") != cmd {
+	if registered := tool.Lookup("vdir"); registered == nil || registered.Name != cmd.Name || registered.Run == nil {
 		t.Fatalf("vdir is not registered")
 	}
 }

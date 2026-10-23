@@ -2,10 +2,54 @@ package locale
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestNormalizeUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		cat  Category
+		want string
+	}{
+		{"UTF-8 LANG", []string{"LANG=en_US.UTF-8"}, CType, "C.UTF-8"},
+		{"UTF-8 LC_ALL", []string{"LC_ALL=xx_YY.utf8"}, Time, "C.UTF-8"},
+		{"unknown codeset", []string{"LC_ALL=xx_YY.FOO"}, CType, "C"},
+		{"category precedence", []string{"LANG=xx_YY.FOO", "LC_TIME=de_DE.ISO-8859-1"}, Time, "de_DE.ISO-8859-1"},
+		{"cert provider", []string{"VSC_PROFILE=cert", "LC_ALL=de_DE.iso88591"}, Collate, "de_DE.iso88591"},
+		{"embedded time", []string{"LANG=de_DE.UTF-8"}, Time, "de_DE.UTF-8"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotEnv := NormalizeUnavailable(tc.env, tc.env, "date")
+			if got := Resolve(gotEnv, tc.cat); got != tc.want {
+				t.Fatalf("Resolve(normalized, %s) = %q, want %q", tc.cat, got, tc.want)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "custom.UTF-8.json"), []byte("malformed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"LOCPATH=" + dir, "LC_ALL=custom.UTF-8"}
+	gotEnv := NormalizeUnavailable(env, env, "sort")
+	if got := Resolve(gotEnv, Collate); got != "custom.UTF-8" {
+		t.Fatalf("compiled locale changed to %q", got)
+	}
+	relative := []string{"LOCPATH=.", "LC_ALL=custom.UTF-8"}
+	storeEnv := StoreEnvAt(relative, func(path string) string { return filepath.Join(dir, path) })
+	if got := Resolve(NormalizeUnavailable(relative, storeEnv, "sort"), Collate); got != "custom.UTF-8" {
+		t.Fatalf("relative compiled locale changed to %q", got)
+	}
+	certUTF8 := NormalizeUnavailable([]string{"VSC_PROFILE=cert", "LC_ALL=C.UTF-8"}, nil, "grep")
+	if !IsHostDefaultUTF8(certUTF8, CType) {
+		t.Fatal("explicit C.UTF-8 was not carried at the command boundary")
+	}
+}
 
 func TestResolve(t *testing.T) {
 	tests := []struct {

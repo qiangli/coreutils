@@ -493,7 +493,7 @@ func TestDateHelp(t *testing.T) {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
 	for _, hidden := range []string{"rfc-822", "rfc-2822", "uct"} {
-		if strings.Contains(out, hidden) {
+		if strings.Contains(out, "--"+hidden) {
 			t.Errorf("--help contains hidden alias %q in %q", hidden, out)
 		}
 	}

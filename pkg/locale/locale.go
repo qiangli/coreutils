@@ -108,6 +108,79 @@ func Resolve(env []string, cat Category) string {
 	return Default
 }
 
+// NormalizeUnavailable replaces unavailable locale selections with the POSIX
+// locale before a utility runs. A UTF-8 codeset keeps the C.UTF-8 character
+// model. Each category is resolved separately so an available LC_TIME or
+// LC_NUMERIC provider survives an unavailable setting in another category.
+// The caller supplies an invocation-resolved store environment; compiled
+// locale files always take precedence, including malformed files whose errors
+// must remain visible to their providers.
+func NormalizeUnavailable(env, storeEnv []string, utility string) []string {
+	categories := []Category{Collate, CType, Numeric, Messages, Monetary, Time}
+	values := make([]string, len(categories))
+	changed := false
+	profile, _ := getEnv(env, "VSC_PROFILE")
+	compiled := make(map[string]bool)
+	for i, cat := range categories {
+		original := Resolve(env, cat)
+		available, seen := compiled[original]
+		if !seen {
+			available = HasCompiledFile(storeEnv, original)
+			compiled[original] = available
+		}
+		values[i] = availableName(original, cat, utility, available)
+		changed = changed || values[i] != original ||
+			(profile == "cert" && isUTF8Codeset(original) && !available)
+	}
+	if !changed {
+		return env
+	}
+	// Empty LC_ALL releases its precedence over the category assignments.
+	// Keep the original environment intact for the embedding shell.
+	result := append(append([]string(nil), env...), "LC_ALL=", "_BASHY_LOCALE_FALLBACK=1")
+	for i, cat := range categories {
+		result = append(result, string(cat)+"="+values[i])
+	}
+	return result
+}
+
+func availableName(name string, cat Category, utility string, compiled bool) string {
+	if compiled {
+		return name
+	}
+	base, codeset := splitLocaleName(name)
+	code := normalizeCodeset(codeset)
+	_, _, modifier := strings.Cut(name, "@")
+	if (base == "C" || base == "POSIX") && ((!modifier && code == "") || code == "UTF8") {
+		return name
+	}
+	if strings.EqualFold(base, "de_DE") {
+		switch code {
+		case "ISO88591":
+			if !modifier || cat == Time || cat == Messages ||
+				(cat == Numeric && (utility == "od" || utility == "time")) {
+				return name
+			}
+		case "", "UTF8":
+			if cat == Time || cat == Messages ||
+				(cat == Numeric && (code == "UTF8" || utility == "od" || utility == "time")) ||
+				(code == "UTF8" && utility == "awk" && (cat == CType || cat == Collate)) ||
+				(cat == CType && utility == "iconv" && code == "") {
+				return name
+			}
+		case "ISO885915":
+			if cat == Messages || (cat == Numeric && (utility == "od" || utility == "time")) ||
+				(cat == CType && utility == "pax") {
+				return name
+			}
+		}
+	}
+	if code == "UTF8" {
+		return "C.UTF-8"
+	}
+	return "C"
+}
+
 // IsMacOSDefaultUTF8 reports whether the normal (non-certification) command
 // tier carries the resolved locale for cat as C semantics with UTF-8 text.
 // The name predates the widening below; IsHostDefaultUTF8 is the same
@@ -133,20 +206,25 @@ func IsMacOSDefaultUTF8(env []string, cat Category) bool {
 // and are handled by their callers as before — a non-UTF-8 charset the applet
 // cannot carry still draws its refusal.
 //
-// The VSC certification profile (VSC_PROFILE=cert) stays fail-closed: its
-// reviewed locale/provider matrix cannot be widened by the developer host's
-// default, so this returns false and the exact certified behavior is kept,
-// byte for byte.
+// The VSC certification profile (VSC_PROFILE=cert) stays fail-closed for raw
+// environments. NormalizeUnavailable marks a command invocation after it has
+// selected the bounded C.UTF-8 fallback; that invocation may carry UTF-8
+// while provisioned compiled locales still take precedence.
 func IsHostDefaultUTF8(env []string, cat Category) bool {
 	if cat == Collate {
 		if HasCompiledFile(env, Resolve(env, cat)) {
 			return false
 		}
 	}
-	if profile, ok := getEnv(env, "VSC_PROFILE"); ok && profile == "cert" {
+	if profile, ok := getEnv(env, "VSC_PROFILE"); ok && profile == "cert" && !fallbackApplied(env) {
 		return false
 	}
 	return isUTF8Codeset(Resolve(env, cat))
+}
+
+func fallbackApplied(env []string) bool {
+	v, _ := getEnv(env, "_BASHY_LOCALE_FALLBACK")
+	return v == "1"
 }
 
 // ResolveCarried is Resolve with the carried UTF-8 locales (see
