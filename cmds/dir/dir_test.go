@@ -72,7 +72,7 @@ func TestDirDelegatesLsFlags(t *testing.T) {
 }
 
 func TestDirRegistered(t *testing.T) {
-	if tool.Lookup("dir") != cmd {
+	if registered := tool.Lookup("dir"); registered == nil || registered.Name != cmd.Name || registered.Run == nil {
 		t.Fatalf("dir is not registered")
 	}
 }

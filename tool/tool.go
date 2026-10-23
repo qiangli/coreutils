@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/qiangli/coreutils/pkg/locale"
 )
 
 // Stdio is the three standard streams for one invocation.
@@ -292,11 +294,31 @@ func Register(t *Tool) {
 	registry[t.Name] = t
 }
 
-// Lookup returns the named tool, or nil.
+// Lookup returns the named tool, or nil. The returned Tool may be a copy so
+// its invocation can resolve unavailable locales without changing registry
+// state or the embedding shell's environment.
 func Lookup(name string) *Tool {
 	mu.RLock()
 	defer mu.RUnlock()
-	return registry[name]
+	t := registry[name]
+	if t == nil || name == "localedef" || name == "env" || name == "printenv" {
+		return t
+	}
+	// Registry lookups are the public command boundary for both multicall and
+	// embedded shells. Preserve the caller's environment and the registered
+	// tool while giving this invocation resolved locale-category values.
+	copy := *t
+	run := t.Run
+	copy.Run = func(rc *RunContext, args []string) int {
+		if rc == nil || (name == "locale" && len(args) == 0) {
+			return run(rc, args)
+		}
+		original := rc.Env
+		rc.Env = locale.NormalizeUnavailable(original, locale.StoreEnvAt(original, rc.Path), name)
+		defer func() { rc.Env = original }()
+		return run(rc, args)
+	}
+	return &copy
 }
 
 // Names returns all registered tool names, sorted.
