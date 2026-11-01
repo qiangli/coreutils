@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Bounded native-ABI probe; observes installed references without source access."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,8 +23,20 @@ def capture(argv):
             "stdout": result.stdout, "stderr": result.stderr}
 
 report = {"live_parent_pid": os.getpid(), "providers": [], "observations": []}
+profile = Path("/etc/apparmor.d/who")
+if profile.is_file():
+    (out / "apparmor-who-profile.txt").write_text(profile.read_text())
+# Same bytes under a temporary executable path isolate path-attached policy.
+# This does not change or disable any installed AppArmor profile.
+for provider in list(providers):
+    target = out / "reference-copies" / Path(provider).name
+    target.parent.mkdir(exist_ok=True)
+    shutil.copyfile(provider, target)
+    target.chmod(0o755)
+    providers.append(str(target))
 for provider in providers:
     report["providers"].append({"path": provider, "realpath": os.path.realpath(provider),
+        "sha256": hashlib.sha256(Path(provider).read_bytes()).hexdigest(),
         "version": capture([provider, "--version"]),
         "package": capture(["dpkg-query", "-S", os.path.realpath(provider)])})
 for kind in ("fixed", "live"):
@@ -38,6 +51,9 @@ for kind in ("fixed", "live"):
         result = capture(argv)
         if result["exit"]:
             raise SystemExit(json.dumps(result))
+    if kind == "fixed" and shutil.which("strace"):
+        report["trace"] = capture(["strace", "-f", "-e", "trace=openat", "-o",
+            str(out / "reference-openat.txt"), "/usr/bin/who", "-b", str(fixture)])
     for provider in providers:
         for args in (["-s", "-u"], ["-T"], ["-b"], ["-r"], ["-t"], ["-T", "-l"]):
             report["observations"].append({"fixture": kind,
