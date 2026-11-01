@@ -6,7 +6,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-26.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -15,6 +15,17 @@ jobs:
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/who-reference
         run: python3 scripts/probe-who-reference.py
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.27.2
+          cache: false
+      - name: Verify native who differential against identified GNU reference
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: go1.27.2
+          GOMAXPROCS: '2'
+          GOFLAGS: '-p=2'
+        run: go test -v ./cmds/who -run '^TestWhoNativeLinuxDifferential$' -count=1
       - if: always()
         uses: actions/upload-artifact@v4
         with:
