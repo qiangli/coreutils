@@ -3,7 +3,7 @@ id: d619f0425073
 kind: bug
 title: S557 verify native who reference identity and session fixtures
 seq: 189
-status: assigned
+status: done
 priority: p1
 created: 2026-11-01T17:02:00.83425Z
 assignee: s557-public-tooling
@@ -13,3 +13,14 @@ sprint_title: 'Bashy v1.0.0 preparation: split private/public development and re
 ---
 
 Hosted Ubuntu26 native who differential fails at -s -u: Bashy alice versus empty reference. Before changing semantics, capture reference implementation/version and compare original fixed PID333 and live-parent PID fixtures with available GNU and default who. Retain raw evidence; choose authoritative reference without masking product deviations.
+
+Measured diagnosis: hosted Ubuntu26 probe41329785585 records AppArmor EACCES
+opening the private utmp fixture from installed who/gnuwho paths. Identical
+reference copies read the same bytes; fixed and live PID fixtures behave alike.
+Uutils0.10 also differs from GNU9.7 for -s -u. The test now verifies GNU identity,
+records its SHA256/version, and runs identical reference bytes in its private
+fixture directory. No system profiles, fixture data or product semantics changed.
+
+Validation: hosted Ubuntu26 run41329925455 passes the native differential.
+GNU source was not consulted; evidence uses installed executables, traces and
+system policy. Ubuntu24 probe41329414855 independently passed original fixtures.
