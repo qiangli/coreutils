@@ -1,0 +1,23 @@
+name: Native who reference probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Observe default and GNU providers with fixed and live PIDs
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/who-reference
+        run: python3 scripts/probe-who-reference.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: who-reference
+          path: ${{ runner.temp }}/who-reference
+          if-no-files-found: error
