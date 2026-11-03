@@ -1264,7 +1264,7 @@ func (w *walker) spawn(path string, argv []string, isOK bool) (int, error) {
 	c.Stderr = w.rc.Err
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = w.rc.RunOwnedCommand(c)
+		err = tool.RunOwnedCommand(c)
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {

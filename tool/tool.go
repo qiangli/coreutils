@@ -16,7 +16,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,19 +41,6 @@ type RunContext struct {
 	Env []string // os.Environ() shape ("KEY=VALUE"); nil = empty environment
 	FS  *LocalFS // local OS filesystem with path translation; never nil in practice
 	Stdio
-
-	// ResolveDescriptorPath maps a shell-owned descriptor operand to its
-	// native path for this synchronous invocation. Ordinary paths return
-	// owned=false. The embedding shell retains the descriptor until Run
-	// returns; tools must not retain the resolved path afterward.
-	ResolveDescriptorPath func(path string) (native string, owned bool)
-
-	// PrepareChildDescriptors installs the embedding shell's inherited
-	// descriptors on a child command. Call its cleanup after Start returns,
-	// including failure: a started child owns its inherited copies. Cleanup
-	// must only close parent duplicates, never wait for the child. Nil leaves standalone
-	// process inheritance unchanged.
-	PrepareChildDescriptors func(*exec.Cmd) (cleanup func(), err error)
 
 	// InvocationName is argv[0] as supplied to the utility. Standalone
 	// multicall dispatch sets it to os.Args[0]; embedded callers may leave it
@@ -185,11 +171,6 @@ func IsAbsPath(operand string) bool { return isAbsPath(operand) }
 // the GNU binary. Below the limit the joined absolute form is returned
 // as always.
 func (rc *RunContext) Path(operand string) string {
-	if rc.ResolveDescriptorPath != nil {
-		if native, owned := rc.ResolveDescriptorPath(operand); owned {
-			return native
-		}
-	}
 	if isAbsPath(operand) || rc.Dir == "" {
 		return normalizePathIn(rc.Dir, operand)
 	}
@@ -217,11 +198,6 @@ func (rc *RunContext) Path(operand string) string {
 // appended to NativeDir with one separator. With no directory the operand
 // is returned as spelled.
 func (rc *RunContext) RawPath(operand string) string {
-	if rc.ResolveDescriptorPath != nil {
-		if native, owned := rc.ResolveDescriptorPath(operand); owned {
-			return native
-		}
-	}
 	if native, ok := NativeAbs(operand); ok {
 		return native
 	}

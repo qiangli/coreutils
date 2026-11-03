@@ -90,7 +90,7 @@ func runGNU(rc *tool.RunContext, c Case, opt perfOptions) (out, errb []byte, cod
 	var o, e bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &o, &e
 	code = 0
-	if err := rc.RunCommandWithDescriptors(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			code = ee.ExitCode()
 		} else {
@@ -110,9 +110,7 @@ func runBashyInproc(rc *tool.RunContext, c Case) (out, errb []byte, code int) {
 	var o, e bytes.Buffer
 	sub := &tool.RunContext{
 		Ctx: rc.Ctx, Dir: rc.Dir, Env: rc.Env, FS: rc.FS,
-		PrepareChildDescriptors: rc.PrepareChildDescriptors,
-		ResolveDescriptorPath:   rc.ResolveDescriptorPath,
-		Stdio:                   tool.Stdio{In: stdinReader(c.Stdin), Out: &o, Err: &e},
+		Stdio: tool.Stdio{In: stdinReader(c.Stdin), Out: &o, Err: &e},
 	}
 	code = t.Run(sub, c.Argv)
 	return o.Bytes(), e.Bytes(), code
