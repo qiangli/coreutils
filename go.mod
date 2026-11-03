@@ -28,7 +28,7 @@ require (
 // Sibling-path replace: ../sh resolves to the sh submodule inside the dhnt
 // umbrella, and to a flat sibling clone in a standalone checkout. Same
 // convention as ycode/outpost/bashy.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261103052328-f8ee4168f180
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261025021234-6663c93a2d3c
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the

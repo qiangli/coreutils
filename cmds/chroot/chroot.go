@@ -129,7 +129,7 @@ func runChroot(rc *tool.RunContext, root string, argv []string, skipChdir bool, 
 	setChroot(c, root, cred)
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = rc.RunOwnedCommand(c)
+		err = tool.RunOwnedCommand(c)
 	}
 	if err == nil {
 		return 0
