@@ -240,7 +240,7 @@ func runShellExec(rc *tool.RunContext, shell string, args ...string) (string, er
 	}
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errb
-	if err := c.Run(); err != nil {
+	if err := rc.RunCommandWithDescriptors(c); err != nil {
 		return out.String(), fmt.Errorf("%s %s: %v (stderr: %s)",
 			shell, strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}

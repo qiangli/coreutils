@@ -177,7 +177,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = nohupCommandRunner(c)
+		err = nohupCommandRunner(rc, c)
 	}
 	if err == nil {
 		return 0
@@ -244,7 +244,7 @@ func openNohupOutput(rc *tool.RunContext) (*os.File, string, error) {
 
 var nohupOutputOpener = openNohupOutput
 
-var nohupCommandRunner = func(c *exec.Cmd) error { return tool.RunOwnedCommand(c) }
+var nohupCommandRunner = func(rc *tool.RunContext, c *exec.Cmd) error { return rc.RunOwnedCommand(c) }
 
 func isClosedFile(w io.Writer) bool {
 	f, ok := w.(*os.File)

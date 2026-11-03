@@ -54,14 +54,16 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 			hc := interp.HandlerCtx(ctx)
 			umask := hc.Umask()
 			rc := &tool.RunContext{
-				Ctx:             ctx,
-				Dir:             hc.Dir,
-				Env:             envSlice(hc.Env),
-				FS:              tool.NewLocalFS(),
-				Umask:           umask,
-				UmaskSet:        true,
-				SIGPIPEIgnored:  hc.SignalIgnored("PIPE"),
-				DirIsProcessCwd: processCwdMatches(shellDirToOS(hc.Dir)),
+				Ctx:                     ctx,
+				Dir:                     hc.Dir,
+				Env:                     envSlice(hc.Env),
+				FS:                      tool.NewLocalFS(),
+				ResolveDescriptorPath:   descriptorPath(hc),
+				PrepareChildDescriptors: hc.PrepareChildDescriptors,
+				Umask:                   umask,
+				UmaskSet:                true,
+				SIGPIPEIgnored:          hc.SignalIgnored("PIPE"),
+				DirIsProcessCwd:         processCwdMatches(shellDirToOS(hc.Dir)),
 				Stdio: tool.Stdio{
 					In:  hc.Stdin,
 					Out: hc.Stdout,
@@ -122,4 +124,18 @@ func envSlice(env expand.Environ) []string {
 		return true
 	})
 	return out
+}
+
+// descriptorPath keeps applets in the invoking shell's descriptor namespace.
+// Both raw OS calls and LocalFS calls receive operands through RunContext.Path.
+func descriptorPath(hc interp.HandlerContext) func(string) (string, bool) {
+	return func(path string) (string, bool) {
+		native, owned, err := hc.ResolveOwnedDescriptor(path)
+		if owned && err != nil {
+			// A closed logical descriptor must never fall through to an
+			// unrelated descriptor belonging to the embedding process.
+			return "/dev/fd/-1", true
+		}
+		return native, owned
+	}
 }

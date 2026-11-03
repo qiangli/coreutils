@@ -98,7 +98,7 @@ func runWithLabel(rc *tool.RunContext, label string, argv []string) int {
 	c.Stderr = rc.Err
 	err := tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = tool.RunOwnedCommand(c)
+		err = rc.RunOwnedCommand(c)
 	}
 	if err == nil {
 		return 0

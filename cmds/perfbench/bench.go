@@ -188,7 +188,9 @@ func armExecutor(rc *tool.RunContext, arm Arm, w Workload, opt perfOptions) func
 		return func() int {
 			sub := &tool.RunContext{
 				Ctx: rc.Ctx, Dir: rc.Dir, Env: rc.Env, FS: rc.FS,
-				Stdio: tool.Stdio{In: nil, Out: io.Discard, Err: io.Discard},
+				PrepareChildDescriptors: rc.PrepareChildDescriptors,
+				ResolveDescriptorPath:   rc.ResolveDescriptorPath,
+				Stdio:                   tool.Stdio{In: nil, Out: io.Discard, Err: io.Discard},
 			}
 			return t.Run(sub, w.Argv[1:])
 		}
@@ -211,7 +213,7 @@ func execClosure(rc *tool.RunContext, bin string, args []string) func() int {
 		c.Env = rc.Env
 		c.Stdin = nil
 		c.Stdout, c.Stderr = io.Discard, io.Discard
-		if err := c.Run(); err != nil {
+		if err := rc.RunCommandWithDescriptors(c); err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
 				return ee.ExitCode()
 			}

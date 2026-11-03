@@ -34,7 +34,7 @@ func (rc *RunContext) StartCommand(path string, args []string, stdin io.Reader, 
 		if err := CheckExecBudget(c.Args, c.Env); err != nil {
 			return c, err
 		}
-		return c, StartOwnedCommand(c)
+		return c, rc.StartOwnedCommand(c)
 	}
 
 	c, err := start(path, args)

@@ -266,7 +266,7 @@ func TestNohupRuntimeReopenedStdoutUsesEntryProvenance(t *testing.T) {
 		opens++
 		return nil, "", errors.New("both nohup.out locations are unavailable")
 	}
-	nohupCommandRunner = func(*exec.Cmd) error { runs++; return nil }
+	nohupCommandRunner = func(*tool.RunContext, *exec.Cmd) error { runs++; return nil }
 	t.Cleanup(func() { nohupOutputOpener, nohupCommandRunner = oldOpener, oldRunner })
 
 	rc := &tool.RunContext{
@@ -294,7 +294,7 @@ func TestNohupClosedStdoutUsesPermittedReplacementForUtility(t *testing.T) {
 
 	oldRunner := nohupCommandRunner
 	invoked := false
-	nohupCommandRunner = func(c *exec.Cmd) error {
+	nohupCommandRunner = func(_ *tool.RunContext, c *exec.Cmd) error {
 		invoked = true
 		if isClosedFile(c.Stdout) {
 			return errors.New("executor rejected closed stdout")

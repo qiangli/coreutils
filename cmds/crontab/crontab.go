@@ -54,7 +54,7 @@ func defaultRunConfig() runConfig {
 			if err := tool.CheckExecBudget(ec.Args, ec.Env); err != nil {
 				return err
 			}
-			return tool.RunOwnedCommand(ec)
+			return rc.RunOwnedCommand(ec)
 		},
 	}
 }

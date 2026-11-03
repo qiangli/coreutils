@@ -64,6 +64,8 @@ github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55/go.mod h1:Om
 github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
 github.com/qiangli/sh/v3 v3.0.0-20261025021234-6663c93a2d3c h1:KmvBfGiXUn2eFBcS3ATtNG4SACJjpqnkeqoxtQHK09U=
 github.com/qiangli/sh/v3 v3.0.0-20261025021234-6663c93a2d3c/go.mod h1:tyFtJgC2PikzHoF5joV+bRq5JdGSisHLNPZNsh9nxgI=
+github.com/qiangli/sh/v3 v3.0.0-20261103041853-d77276f3355a h1:OjZA5U5Oehf4axNkMBP/TiGp8KGdT078ln6Juct0SgQ=
+github.com/qiangli/sh/v3 v3.0.0-20261103041853-d77276f3355a/go.mod h1:tyFtJgC2PikzHoF5joV+bRq5JdGSisHLNPZNsh9nxgI=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
 github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=

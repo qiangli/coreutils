@@ -133,7 +133,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	err = tool.CheckExecBudget(c.Args, c.Env)
 	if err == nil {
-		err = tool.StartOwnedCommand(c)
+		err = rc.StartOwnedCommand(c)
 	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "timeout: failed to run command %q: %v\n", command[0], err)
