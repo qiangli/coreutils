@@ -1,10 +1,19 @@
 # POSIX external providers
 
-Eight POSIX-required commands are deliberately not implemented in Go:
+Six POSIX commands are deliberately not implemented in Go
+(`pkg/posixprovider/manifest.tsv` is the canonical list):
 
 ```
-man  ctags  ar  nm  strip  ex  vi
+ctags  ar  nm  strip  ex  vi
 ```
+
+All six belong to the optional User Portability (`ex`, `vi`) or Software
+Development (`ctags`, `ar`, `nm`, `strip`) targets. **None is part of the base
+POSIX certification claim**, which is pure Go with zero external providers
+(102 mandatory targets via 92 Go applets + 10 shell commands; see the harness
+kit's `SPRINT-341-BASE-SCOPE.md`). Do not add providers or Go re-implementations
+of these names for certification. `man` is a Go applet (`cmds/man`); the
+man-db sections below are historical.
 
 They are **external providers**: the multicall owns the name and dispatches to
 a copy of the upstream program, built locally from a sha256-pinned source
@@ -58,7 +67,7 @@ provenance checks, exit/signal status, and every non-ctags provider retain the
 normal dispatch path. This is an I/O semantic adapter, not another ctags
 implementation or a host-PATH fallback.
 
-## The man provider's own manual
+## The man provider's own manual (historical — `man` is now Go)
 
 The man-db build installs its generated `man(1)` page beside the cached
 provider under `share/man/man1`, and provenance covers that page as well as the
@@ -152,7 +161,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all seven provider names, so plain bashy stays standalone-graceful
+unregisters all provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -191,7 +200,7 @@ recorded in provenance and the recipe revision invalidates older cached builds.
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the seven registered provider tools + the `posix-providers` applet |
+| `cmds/posixproviders/` | the registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `tools/posix-providers/man-relocation-test.sh` | explicit source-build probe for the relocated provider's own `man(1)` page |
 | `tools/posix-providers/patches/` | pinned, digest-verified provider source corrections recorded in provenance |
