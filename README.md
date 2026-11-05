@@ -1,6 +1,6 @@
 # coreutils
 
-The **certified POSIX package** of bashy's pure-Go agent userland: the 116
+The **POSIX implementation package** of bashy's pure-Go agent userland: the 116
 POSIX-required utility names ∪ the GNU coreutils programs, as Go applets
 with identical behavior on every major platform (Linux, macOS, Windows).
 
@@ -27,28 +27,25 @@ environment in a single Go process.
 
 ## POSIX certification boundary
 
-This repository is **not a complete POSIX Commands & Utilities
-implementation**. In the configured 116-name VSC-PCTS2016 POSIX08 scenario,
-the canonical Go inventory supplies 90 names and is absent for 26. The shell
-supplies 14 of those 26 and a **pinned POSIX external provider** supplies the
-remaining 10, leaving no external-provider gaps in the assembled Bashy
-Profiles C/D surface.
-See the generated [required-command coverage
-map](docs/posix-required-commands.md) and its separate, explicitly incomplete
-[interface evidence ledger](docs/posix-required-command-interfaces.md); do not
-infer the coreutils gap from the smaller assembled-Bashy number.
+No POSIX certification award is claimed. The required Sprint-341 base
+profile routes **102 mandatory VSC utility targets through 92 Go applets and
+10 Bashy shell commands, with zero external utility providers**, plus Go
+`gencat` (mandatory but without a VSC target row). `man` is implemented in Go.
 
-A provider is **not** a Go applet, and the matrix counts them separately so
-they can never be read as Go coverage: the multicall owns the NAME
-(`man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`)
-and dispatches to a copy of the upstream program built locally
-from a sha256-pinned source tarball. The pure-Go applets exclusively own `ed`,
-`patch`, `mail`/`mailx`, `talk`, `make`, and `bc`; there are no external-provider definitions
-or fallback for those names. Owning each active provider name is the point — before it,
-those names fell through to the host's `$PATH`, so a "Bashy-only" arm silently
-measured the distro's binaries. There is no fallback: an unprovisioned provider
-exits 127 with the command that fixes it. See
-[POSIX external providers](docs/posix-external-providers.md).
+The broader 116-name catalog includes optional targets. Its generated
+[coverage map](docs/posix-required-commands.md) records 96 registered Go names,
+14 shell-only names and six optional external-provider names (`ar`, `ctags`,
+`ex`, `nm`, `strip`, `vi`). These catalog counts are not the required-profile
+denominator. Optional providers do not enter the pure-Go base claim.
+See the [provider policy](docs/posix-external-providers.md) and
+[interface evidence ledger](docs/posix-required-command-interfaces.md).
+
+The final S561 integrated Profile D run recorded 9,270 PASS-group outcomes
+out of 9,337, with 4 FAIL, 54 UNRESOLVED and 9 INSPECT (67 non-passes),
+no regression. This is evidence for the exact assembled candidate, not
+certification of this library or every catalog interface.
+[Current status](docs/posix-vsc-pcts-status.md) and [S571](https://github.com/dhnt/umbrella/blob/main/docs/plan-s571-posix-certification-readiness.md) track
+remaining authority/manual decisions and certification readiness.
 
 The pure-Go [`cmds/localedef` applet](docs/localedef-parser.md) compiles locale
 sources into the Go store, including supported explicit collation orders.

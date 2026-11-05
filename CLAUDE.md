@@ -5,7 +5,7 @@ code in this repository.
 
 ## Overview
 
-`coreutils` is the **certified POSIX package** of the bashy userland: the
+`coreutils` is the **POSIX implementation package** of the bashy userland: the
 116 POSIX-required utility names ∪ the GNU coreutils programs, implemented as
 pure-Go applets with no cgo and no shell-out, so agentic consumers get **one
 identical toolset on every platform** — the load-bearing case is Windows

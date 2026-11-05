@@ -1,5 +1,28 @@
 # POSIX conformance status — VSC-PCTS
 
+## Latest integrated run: 2026-11-04 (S561)
+
+Frozen candidate: bashy `f1bcd711`, sh `74586fde`, coreutils `211789fa`,
+harness `0b2b185d`. Profile B shell isolation: 493/493 PASS group, zero blockers.
+Full Profile D: 117 sets, 9,337 test purposes; 9,270 PASS group, 4 FAIL,
+54 UNRESOLVED, 9 INSPECT. The **67 non-passes** match the previous full run;
+engineering closed with no regression, not a clean full-profile pass.
+
+The required base is 102 targets (92 Go applets + 10 Bashy shell commands),
+zero external utility providers, plus Go `gencat`. Full-catalog availability
+counts and earlier diagnostic denominators are separate from this claim.
+
+[Source evidence](https://github.com/qiangli/bashy/blob/main/docs/s561/a4-licensed-results.md) retains the exact candidate and artifact record.
+[S571](https://github.com/dhnt/umbrella/blob/main/docs/plan-s571-posix-certification-readiness.md) owns S355 authority rulings for 53 symlink setup results,
+`man:4` and four `more` failures, plus S377-supported manual decisions for
+nine current-journal INSPECT results. Packets remain unsent; full readiness
+and certification remain open. Preserve raw codes separately from dispositions.
+
+## Historical utility diagnostics
+
+The records below describe earlier candidates and provider layouts. Their
+ranked failure lists are not the current work queue; consult S571.
+
 The utilities half of the POSIX certification effort measures **this**
 repository: the coreutils multicall binary is placed on `PATH` ahead of the
 distro's tools and scored by The Open Group's VSC-PCTS2016 suite. (The other
@@ -9,7 +32,7 @@ Results are published for **conformance-work purposes** under Open Group ticket
 **#280298**. No "certified" / "passes the Open Group suite" claim is made or
 permitted, no Open Group mark is used, and the suite is never redistributed.
 
-## Latest: 2026-08-01, x86_64, both arms on one host
+## Historical: 2026-08-01, x86_64, both arms on one host
 
 SUT: coreutils `c495aaa` (bashy tag `vsc-pcts-2026-08-01`). Full POSIX08
 scenario, 121 test sets, per-tset 10-minute cap.
@@ -24,7 +47,7 @@ tests, so most volume cancels — `m4`, `bc`, `make`, `ctags`, `strip`, `ps` and
 `chown` fail *identically* in both arms, being utilities this repo does not
 ship or environment properties rather than defects here.
 
-### Remaining work, ranked
+### Remaining work at the 2026-08-01 snapshot, ranked
 
 ```
 find +40   sed +35   date +34   dd +20   cp +16   pr +15   env +12
