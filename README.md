@@ -19,8 +19,10 @@ box with nothing installed. Re-implementing the tools in pure Go (no
 cgo, no shell-out) is what makes that possible: the same code path
 everywhere, embedded directly into the consuming process.
 
-It pairs with [qiangli/sh](https://github.com/qiangli/sh) (a fork of
-`mvdan.cc/sh/v3` with an in-process bash interpreter): sh provides the
+Together with [qiangli/sh](https://github.com/qiangli/sh) (a fork of
+`mvdan.cc/sh/v3` with an in-process bash interpreter) it makes up
+[qiangli/bash](https://github.com/qiangli/bash), the pure-Go POSIX shell and
+userland: sh provides the
 shell, coreutils provides the userland. Wired together through the
 interpreter's `ExecHandler`, an agent gets a portable Unix-like
 environment in a single Go process.
