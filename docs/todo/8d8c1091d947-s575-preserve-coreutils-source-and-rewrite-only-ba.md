@@ -13,3 +13,5 @@ sprint_title: 'Layer separation: Classic <- Bash# <- Yoke import-graph delineati
 ---
 
 Mechanical module reference cutover only: all old sh imports point unchanged full qiangli/bash engine. Preserve implementation and all tests including foreign worker assertions. No shared-contract or DTO redesign, no sh stripping. Run official-image go build ./... with GOWORK=off.
+
+Regression result: all Go packages passed except TestLayerImports. Root cause: its shrink-only allowlist and banned package prefixes still named mvdan.cc/sh/v3 after the import namespace moved to github.com/qiangli/bash. Classification: relocation reference. Rename those package references only; preserve the allowlist cardinality, story marker, and assertions.

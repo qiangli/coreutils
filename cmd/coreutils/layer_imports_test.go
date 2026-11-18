@@ -15,14 +15,14 @@ import (
 // test fails so that the entry is promptly removed from this allowlist.
 var allowlist = map[string]string{
 	// Removing story: S4 6e4bb2e13140
-	"mvdan.cc/sh/v3/polyglot": "S4 6e4bb2e13140",
+	"github.com/qiangli/bash/polyglot": "S4 6e4bb2e13140",
 }
 
 // isBanned returns whether pkg matches any of the layer-boundary banned package
 // rules:
 //   - github.com/qiangli/yoke/...
 //   - bashsharp
-//   - mvdan.cc/sh/v3/{polyglot,gosource,lower,grammar}
+//   - github.com/qiangli/bash/{polyglot,gosource,lower,grammar}
 func isBanned(pkg string) (string, bool) {
 	if pkg == "github.com/qiangli/yoke" || strings.HasPrefix(pkg, "github.com/qiangli/yoke/") {
 		return "github.com/qiangli/yoke/...", true
@@ -31,13 +31,13 @@ func isBanned(pkg string) (string, bool) {
 		return "bashsharp", true
 	}
 	for _, prefix := range []string{
-		"mvdan.cc/sh/v3/polyglot",
-		"mvdan.cc/sh/v3/gosource",
-		"mvdan.cc/sh/v3/lower",
-		"mvdan.cc/sh/v3/grammar",
+		"github.com/qiangli/bash/polyglot",
+		"github.com/qiangli/bash/gosource",
+		"github.com/qiangli/bash/lower",
+		"github.com/qiangli/bash/grammar",
 	} {
 		if pkg == prefix || strings.HasPrefix(pkg, prefix+"/") {
-			return "mvdan.cc/sh/v3/{polyglot,gosource,lower,grammar}", true
+			return "github.com/qiangli/bash/{polyglot,gosource,lower,grammar}", true
 		}
 	}
 	return "", false
