@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // fixtureMounts is the mount table the Windows bash-5.3 fixture run

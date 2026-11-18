@@ -25,7 +25,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
-	"mvdan.cc/sh/v3/execbudget"
+	"github.com/qiangli/bash/execbudget"
 )
 
 var cmd = &tool.Tool{

@@ -14,7 +14,7 @@ import (
 	"io"
 	"os"
 
-	"mvdan.cc/sh/v3/polyglot"
+	"github.com/qiangli/bash/polyglot"
 )
 
 // SchemaVersion is stamped into every envelope's schema_version field.

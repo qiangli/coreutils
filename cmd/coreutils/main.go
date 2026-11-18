@@ -13,7 +13,7 @@ import (
 	"os"
 
 	"github.com/qiangli/coreutils/multicall"
-	"mvdan.cc/sh/v3/interp/ownedexec"
+	"github.com/qiangli/bash/interp/ownedexec"
 
 	_ "github.com/qiangli/coreutils/cmds/all"
 )

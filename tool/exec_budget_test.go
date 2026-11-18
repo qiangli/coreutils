@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"testing"
 
-	"mvdan.cc/sh/v3/execbudget"
+	"github.com/qiangli/bash/execbudget"
 )
 
 func TestStartCommandEnforcesAdvertisedExecBudget(t *testing.T) {

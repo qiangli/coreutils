@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/qiangli/coreutils/tool"
-	"mvdan.cc/sh/v3/execbudget"
+	"github.com/qiangli/bash/execbudget"
 )
 
 // Windows has no sysconf/pathconf. Rather than invent host numbers, the

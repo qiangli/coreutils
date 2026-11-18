@@ -17,9 +17,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/expand"
+	"github.com/qiangli/bash/interp"
+	"github.com/qiangli/bash/pathconv"
 
 	"github.com/qiangli/coreutils/tool"
 )

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // pathLengthLimit for Windows is the \\?\ namespace bound (~32767

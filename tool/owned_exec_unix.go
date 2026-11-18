@@ -4,7 +4,7 @@ package tool
 
 import (
 	"golang.org/x/sys/unix"
-	"mvdan.cc/sh/v3/interp/ownedexec"
+	"github.com/qiangli/bash/interp/ownedexec"
 	"os"
 	"os/exec"
 	"strconv"

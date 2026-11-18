@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"mvdan.cc/sh/v3/polyglot"
+	"github.com/qiangli/bash/polyglot"
 )
 
 // Sprint 221 B4 (Story-ID af2e56930f08): the sh foreign-worker error detail

@@ -4,7 +4,7 @@ import (
 	"os"
 	"syscall"
 
-	"mvdan.cc/sh/v3/execbudget"
+	"github.com/qiangli/bash/execbudget"
 )
 
 // CheckExecBudget applies Bashy's advertised combined argv and environment

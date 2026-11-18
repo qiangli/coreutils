@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/shell"
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/expand"
+	"github.com/qiangli/bash/interp"
+	"github.com/qiangli/bash/syntax"
 )
 
 // runSystem executes syscmd text with the repository's pure-Go POSIX shell.

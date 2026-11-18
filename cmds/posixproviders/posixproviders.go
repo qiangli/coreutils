@@ -60,7 +60,7 @@ import (
 	"github.com/qiangli/coreutils/cmds/posixproviders/internal/ctagsfifo"
 	"github.com/qiangli/coreutils/pkg/posixprovider"
 	"github.com/qiangli/coreutils/tool"
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // BuildScriptEnv names an explicit path to the build recipe, for a deployment

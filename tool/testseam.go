@@ -3,7 +3,7 @@ package tool
 import (
 	"runtime"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // The two seams below exist so an applet's OWN package tests can state what

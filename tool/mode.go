@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"os"
 
-	"mvdan.cc/sh/v3/winmode"
+	"github.com/qiangli/bash/winmode"
 )
 
 // This file is the framework's whole answer to "what is this file's mode"

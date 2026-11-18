@@ -5,7 +5,7 @@ package tool
 import (
 	"testing"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // TestShellSpecialPathMapping covers the Windows entry points end to end:

@@ -22,13 +22,11 @@ require (
 	golang.org/x/term v0.44.0
 	golang.org/x/text v0.38.0
 	lukechampine.com/blake3 v1.4.1
-	mvdan.cc/sh/v3 v3.13.1
 )
 
 // Sibling-path replace: ../sh resolves to the sh submodule inside the dhnt
 // umbrella, and to a flat sibling clone in a standalone checkout. Same
 // convention as ycode/outpost/bashy.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261025021234-6663c93a2d3c
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the
@@ -50,3 +48,5 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 )
+
+require github.com/qiangli/bash v0.0.0-20261117235306-adb3b4e0c28d

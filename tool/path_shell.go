@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // The shell-spelling resolvers below are the Windows path layer written

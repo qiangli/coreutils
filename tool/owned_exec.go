@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"mvdan.cc/sh/v3/interp/ownedexec"
+	"github.com/qiangli/bash/interp/ownedexec"
 )
 
 // StartOwnedCommand starts a child using Bashy's bounded frame only when its

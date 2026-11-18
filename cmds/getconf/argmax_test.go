@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"mvdan.cc/sh/v3/execbudget"
+	"github.com/qiangli/bash/execbudget"
 )
 
 func TestArgMaxMatchesShellExecBudget(t *testing.T) {

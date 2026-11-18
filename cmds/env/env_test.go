@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
-	"mvdan.cc/sh/v3/execbudget"
+	"github.com/qiangli/bash/execbudget"
 )
 
 type failingWriter struct{ err error }

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"mvdan.cc/sh/v3/interp/ownedexec"
+	"github.com/qiangli/bash/interp/ownedexec"
 )
 
 func TestMain(m *testing.M) {
