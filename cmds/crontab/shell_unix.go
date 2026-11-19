@@ -9,7 +9,11 @@ import (
 	"path/filepath"
 )
 
-func cronDefaultPATH() string { return "/usr/bin:/bin" }
+// defaultCronPATH is the implementation-defined cron utility search path.
+// Certification builds bind their verified Go-only namespace with -X.
+var defaultCronPATH = "/usr/bin:/bin"
+
+func cronDefaultPATH() string { return defaultCronPATH }
 func cronShellPath() (string, error) {
 	shell := schedule.DefaultShellPath()
 	if err := validateCronShell(shell); err != nil {
