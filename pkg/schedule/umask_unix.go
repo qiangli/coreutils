@@ -18,5 +18,5 @@ func commandWithUmask(command []string, mask uint32, set bool) *exec.Cmd {
 	args = append(args, command...)
 	// Use an absolute wrapper shell. Resolving "sh" here would consult the
 	// scheduler process PATH before the job's deliberately isolated Env applies.
-	return exec.Command("/bin/sh", args...)
+	return exec.Command(DefaultShellPath(), args...)
 }

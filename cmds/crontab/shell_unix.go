@@ -4,13 +4,14 @@ package crontabcmd
 
 import (
 	"fmt"
+	"github.com/qiangli/coreutils/pkg/schedule"
 	"os"
 	"path/filepath"
 )
 
 func cronDefaultPATH() string { return "/usr/bin:/bin" }
 func cronShellPath() (string, error) {
-	const shell = "/bin/sh"
+	shell := schedule.DefaultShellPath()
 	if err := validateCronShell(shell); err != nil {
 		return "", fmt.Errorf("default shell is unavailable: %w", err)
 	}
