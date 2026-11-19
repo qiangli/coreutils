@@ -3,11 +3,11 @@ id: b9ae26f5a33d
 kind: refactor
 title: S4A Consume the accepted Bash foundation and neutral error contract
 seq: 190
-status: assigned
+status: todo
 priority: p0
+labels:
+    - superseded-plan
 created: 2026-11-18T01:12:56.240539Z
-weave: 3
-assignee: agy-gemini3.8-flash
 sprint: 575
 sprint_id: 65ce85f5-87c0-5863-bf55-62de86f5df36
 sprint_title: 'Layer separation: Classic <- Bash# <- Yoke import-graph delineation'
