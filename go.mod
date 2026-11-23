@@ -4,26 +4,6 @@ go 1.27
 
 toolchain go1.27.4
 
-require (
-	github.com/benhoyt/goawk v1.31.0
-	github.com/creack/pty/v2 v2.0.1
-	github.com/ebitengine/purego v0.10.1
-	github.com/mattn/go-runewidth v0.0.23
-	github.com/opencontainers/selinux v1.13.1
-	github.com/robfig/cron/v3 v3.0.1
-	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
-	github.com/shirou/gopsutil/v4 v4.26.5
-	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
-	github.com/tjfoc/gmsm v1.4.1
-	github.com/tklauser/ps v0.0.5-0.20260804061010-39c4acb07b31
-	golang.org/x/crypto v0.53.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.44.0
-	golang.org/x/text v0.38.0
-	lukechampine.com/blake3 v1.4.1
-)
-
 // Sibling-path replace: ../sh resolves to the sh submodule inside the dhnt
 // umbrella, and to a flat sibling clone in a standalone checkout. Same
 // convention as ycode/outpost/bashy.
@@ -49,4 +29,23 @@ require (
 	golang.org/x/mod v0.36.0 // indirect
 )
 
-require github.com/qiangli/bash v0.0.0-20261117235306-adb3b4e0c28d
+require (
+	github.com/benhoyt/goawk v1.31.0
+	github.com/creack/pty/v2 v2.0.1
+	github.com/ebitengine/purego v0.10.1
+	github.com/mattn/go-runewidth v0.0.23
+	github.com/opencontainers/selinux v1.13.1
+	github.com/qiangli/bash v0.0.0-20261122134408-5c52281f7136
+	github.com/robfig/cron/v3 v3.0.1
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	github.com/shirou/gopsutil/v4 v4.26.5
+	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
+	github.com/tjfoc/gmsm v1.4.1
+	github.com/tklauser/ps v0.0.5-0.20260804061010-39c4acb07b31
+	golang.org/x/crypto v0.53.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.44.0
+	golang.org/x/text v0.38.0
+	lukechampine.com/blake3 v1.4.1
+)
