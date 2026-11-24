@@ -3,12 +3,15 @@ id: 4ca990dda016
 kind: bug
 title: R8 Repair stty isDelayMode prefix misclassification of cread and crt
 seq: 192
-status: todo
+status: done
 priority: p1
 created: 2026-11-24T11:35:52.505304Z
+assignee: codex-gpt6-sol
 sprint: 675
 sprint_id: 9b07aedb-77af-52d5-8af3-8035a213774c
 sprint_title: Investigate S575 POSIX residuals and prepare certification
+closed: 2026-11-24T12:16:58.632621Z
+closed_by: agy-gemini4-carbon
 ---
 
 Repair the confirmed `cmds/stty` prevalidation defect where `isDelayMode` (`cmds/stty/stty_termios.go:437-444`) matches mode prefixes (`"cr"`, `"nl"`, `"tab"`, `"bs"`, `"ff"`, `"vt"`), misclassifying accepted non-delay modes `cread`, `-cread`, and `crt` as output-delay modes so `validateMode` rejects them with `"<mode> is not supported on this platform"` before `setTermios` is called.
