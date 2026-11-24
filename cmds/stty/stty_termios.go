@@ -435,12 +435,13 @@ func setNamedDelay(word *termiosUint, mode string) {
 }
 
 func isDelayMode(mode string) bool {
-	for _, prefix := range []string{"cr", "nl", "tab", "bs", "ff", "vt"} {
-		if strings.HasPrefix(mode, prefix) && mode != "nl" {
-			return true
-		}
+	switch mode {
+	case "cr0", "cr1", "cr2", "cr3", "nl0", "nl1",
+		"tab0", "tab1", "tab2", "tab3", "tabs",
+		"bs0", "bs1", "ff0", "ff1", "vt0", "vt1":
+		return true
 	}
-	return mode == "tabs"
+	return false
 }
 
 func setDelay(word *termiosUint, mask, value uint64) {

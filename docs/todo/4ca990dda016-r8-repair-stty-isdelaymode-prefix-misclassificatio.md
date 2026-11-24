@@ -24,3 +24,9 @@ Repair the confirmed `cmds/stty` prevalidation defect where `isDelayMode` (`cmds
   3. Apply the one-predicate `isDelayMode` fix in `cmds/stty/stty_termios.go` and verify `go test -count=1 ./cmds/stty/...`, `./scripts/fmtcheck.sh`, and `./scripts/applet-test-coverage.sh` pass locally (wider cross-OS and full-repo/gate-host suites run on the gate host under manager claim).
   4. **Public repository hygiene**: NO certification authority ticket numbers, NO licensed test-suite script names or `/tset/` paths, NO restricted journal excerpts, NO hostnames/IPs/logins/home paths anywhere in code, comments, commit messages, or story summary.
   5. Rebase onto `origin/main` if needed so your branch fast-forwards cleanly, add a concise `## S675 R8 Summary` to this story file, commit in one clean commit (or story summary + fix commit) with `Agent: codex-gpt6-sol`, verify `git log -1`, and run `bashy sprint submit`.
+
+## S675 R8 Summary
+
+- Added failing-first tests for exact delay names, valid `cread`/`-cread`/`crt` PTY application, and invalid-mode controls. The valid-mode tests failed on the original predicate as expected.
+- Changed only `isDelayMode` to recognize the 17 exact delay names. `go test -count=1 ./cmds/stty/...` and `./scripts/applet-test-coverage.sh` pass; the changed Go files are gofmt-clean.
+- `./scripts/fmtcheck.sh` reports seven existing formatting differences outside `cmds/stty`; none were changed for this story.
