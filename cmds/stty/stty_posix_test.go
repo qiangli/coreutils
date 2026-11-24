@@ -46,6 +46,53 @@ func runStty(t *testing.T, tty *os.File, args []string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
+func TestSttyNonDelayModesReachTermios(t *testing.T) {
+	for _, mode := range []string{"cread", "-cread", "crt"} {
+		t.Run(mode, func(t *testing.T) {
+			tty := openTTY(t)
+			if mode == "crt" {
+				if err := applyMode(int(tty.Fd()), "-echoe"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := applyMode(int(tty.Fd()), mode); err != nil {
+				t.Fatalf("applyMode(%q): %v", mode, err)
+			}
+			if mode == "crt" {
+				state, err := getTermios(int(tty.Fd()))
+				if err != nil || state.Lflag&unix.ECHOE == 0 {
+					t.Fatalf("applyMode(crt) did not set ECHOE: state=%v err=%v", state, err)
+				}
+				if err := applyMode(int(tty.Fd()), "-echoe"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, _, errb := runStty(t, tty, []string{mode})
+			if code != 0 || errb != "" {
+				t.Fatalf("stty %q: code=%d stderr=%q", mode, code, errb)
+			}
+			if mode == "crt" {
+				state, err := getTermios(int(tty.Fd()))
+				if err != nil || state.Lflag&unix.ECHOE == 0 {
+					t.Fatalf("stty crt did not set ECHOE: state=%v err=%v", state, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSttyInvalidDelayAndNegationModes(t *testing.T) {
+	for _, mode := range []string{"-crt", "-cr0", "crbogus"} {
+		t.Run(mode, func(t *testing.T) {
+			tty := openTTY(t)
+			code, _, errb := runStty(t, tty, []string{mode})
+			if code != 2 || !strings.Contains(errb, "invalid argument") {
+				t.Fatalf("stty %q: code=%d stderr=%q", mode, code, errb)
+			}
+		})
+	}
+}
+
 func getWinsize(t *testing.T, tty *os.File) *unix.Winsize {
 	t.Helper()
 	win, err := unix.IoctlGetWinsize(int(tty.Fd()), unix.TIOCGWINSZ)

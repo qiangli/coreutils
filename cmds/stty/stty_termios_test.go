@@ -8,6 +8,31 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestIsDelayModeExactNames(t *testing.T) {
+	for _, mode := range []string{"cread", "crt", "nl"} {
+		if isDelayMode(mode) {
+			t.Errorf("isDelayMode(%q) = true, want false", mode)
+		}
+	}
+	for _, mode := range []string{
+		"cr0", "cr1", "cr2", "cr3", "nl0", "nl1",
+		"tab0", "tab1", "tab2", "tab3", "tabs",
+		"bs0", "bs1", "ff0", "ff1", "vt0", "vt1",
+	} {
+		if !isDelayMode(mode) {
+			t.Errorf("isDelayMode(%q) = false, want true", mode)
+		}
+	}
+}
+
+func TestValidateNonDelayModes(t *testing.T) {
+	for _, mode := range []string{"cread", "-cread", "crt"} {
+		if err := validateMode(mode); err != nil {
+			t.Errorf("validateMode(%q): %v", mode, err)
+		}
+	}
+}
+
 func TestApplyTermiosModeCbreak(t *testing.T) {
 	tio := &unix.Termios{Lflag: unix.ICANON | unix.ECHO}
 	applyTermiosMode(tio, "cbreak")
