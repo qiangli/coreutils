@@ -388,6 +388,7 @@ func addCmd() *cobra.Command {
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "scheduled %s (%s %s) next %s\n", j.ID, j.Kind, j.Spec, j.NextRun.Format(time.RFC3339))
 			}
+			HintIfEngineOff(cmd.ErrOrStderr(), "schedule")
 			return nil
 		},
 	}
@@ -412,11 +413,18 @@ func listCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			engine := engineStateFor(statePath(), s.Jobs, time.Now())
 			if scheduleOutputJSON(cmd) {
-				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "list", "jobs": publicJobs(s.Jobs)})
+				b, _ := json.Marshal(map[string]any{
+					"schema_version": "bashy-schedule-v1",
+					"kind":           "list",
+					"engine":         engine,
+					"jobs":           publicJobs(s.Jobs),
+				})
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
 				return nil
 			}
+			fmt.Fprintln(cmd.OutOrStdout(), formatEngineLine(engine))
 			if len(s.Jobs) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no scheduled jobs")
 				return nil
