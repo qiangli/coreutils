@@ -73,6 +73,15 @@ non-Coreutils commands such as `ps` use their own official upstream reference.
    capabilities that don't exist upstream are possible, but under
    clearly non-upstream spellings and documented as extensions.)
 
+## POSIX certification scope: read before certification work
+
+The certification claim covers a fixed set: 92 Go utilities, 10 shell
+commands and `gencat`. Fourteen optional utilities (`ar bg ctags ex fc fg
+jobs localedef make more nm strip talk vi`) are outside it. Work only inside
+the claimed set; do not diagnose, fix or raise questions about the optional
+ones, even when the test suite reports a failure there. The full list and the
+rules: [`docs/posix-certification-scope.md`](docs/posix-certification-scope.md).
+
 ## The agent contract
 
 Every tool: deterministic output (`LC_ALL=C` semantics, no locale/color/
