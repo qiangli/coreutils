@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"golang.org/x/term"
@@ -30,10 +32,14 @@ var manIsTerminal = func(w io.Writer) bool {
 
 var shellHelp = map[string]string{
 	"alias":   "alias [name[=value] ...] — define or display aliases",
+	"bg":      "bg [job_id ...] — run jobs in the background",
 	"cd":      "cd [-L|-P] [dir] — change the working directory",
 	"command": "command [-p] command_name [argument ...] — execute a simple command",
+	"fc":      "fc [-r] [-e editor] [first [last]] | fc -l [-nr] [first [last]] | fc -s [old=new] [command] — process command history list",
+	"fg":      "fg [job_id ...] — run jobs in the foreground",
 	"getopts": "getopts optstring name [arg ...] — parse utility options",
 	"hash":    "hash [utility ...] — remember or report utility locations",
+	"jobs":    "jobs [-l|-p] [job_id ...] — display status of jobs in the current session",
 	"read":    "read [-r] var... — read a line from standard input",
 	"sh":      "sh [-abCefhimnuvx] [-o option] [command_file [argument ...]] — shell command language",
 	"umask":   "umask [-S] [mask] — set or report the file mode creation mask",
@@ -140,7 +146,7 @@ func search(rc *tool.RunContext, terms []string) int {
 		}
 		patterns = append(patterns, p)
 	}
-	names := append(tool.Names(), "alias", "cd", "command", "getopts", "hash", "read", "sh", "umask", "unalias", "wait")
+	names := append(tool.Names(), slices.Sorted(maps.Keys(shellHelp))...)
 	seen := make(map[string]bool, len(names))
 	for _, name := range names {
 		if seen[name] || name == "posix-providers" || name == "posix-gate" {
