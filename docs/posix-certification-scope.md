@@ -21,9 +21,17 @@ certification work. It is hand-maintained; the generated 116-name inventory is
    coreutils binary or by the shell. A claimed name that resolves to a host
    binary is a defect in the test host, not an acceptable result.
 
-The suite always runs all 117 test sets (116 utility targets plus the shell),
-so results for the optional utilities appear in every journal. That does not
-bring them into scope.
+## Which tests to run
+
+- **Formal run:** the suite's own default scenario, unchanged (117 test sets).
+  The suite's guide requires it, so the scenario is never trimmed. The suite's
+  configuration answers declare the optional groups unsupported, and almost
+  all optional-utility tests then report UNSUPPORTED without executing.
+  Results for optional utilities still appear in the journal; they are
+  reported as outside the claim and are not worked on.
+- **Every other run** (diagnostic, rehearsal of a fix, regression check):
+  select only test sets of claimed utilities. Do not spend host time or agent
+  effort on a test set of an optional utility.
 
 ## In the claim: 102 utility targets, plus `gencat`
 

@@ -6,7 +6,10 @@ code in this repository.
 ## Overview
 
 `coreutils` is the **POSIX implementation package** of the bashy userland: the
-116 POSIX-required utility names ∪ the GNU coreutils programs, implemented as
+116 utility names the POSIX test suite targets ∪ the GNU coreutils programs.
+Of those 116, only 102 are required for the certification claim; the other 14
+(`ar bg ctags ex fc fg jobs localedef make more nm strip talk vi`) are
+optional and outside it. The applets are implemented as
 pure-Go applets with no cgo and no shell-out, so agentic consumers get **one
 identical toolset on every platform** — the load-bearing case is Windows
 hosts with nothing installed. It is a library first: consumers embed packages
@@ -56,7 +59,7 @@ non-Coreutils commands such as `ps` use their own official upstream reference.
    directly, exactly as the GNU binary does — see docs/commands.md's
    NO-list preamble. The **POSIX external providers** are the second,
    narrower exception and are explicitly not Go implementations: the
-   multicall owns ten POSIX-required names (m4, man, ctags, ar, nm, strip,
+   multicall owns ten POSIX utility names (m4, man, ctags, ar, nm, strip,
    ex, vi, lp, localedef) and dispatches to a locally built,
    provenance-checked copy of the upstream program. They exist so a
    "bashy-only" certification arm stops silently measuring the host's
