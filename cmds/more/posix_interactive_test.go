@@ -454,22 +454,90 @@ func TestPOSIXInitialCommandSeesLogicalFirstScreen(t *testing.T) {
 }
 
 func TestPOSIXEOFDispatch(t *testing.T) {
-	p, _, _ := memoryPager("1\n2\n3\n4\n", 2)
+	// Multi-file END (not last file): non-advancing commands execute in place.
+	p, out, errb := memoryPager("1\n2\n3\n4\n", 2)
 	p.files = []string{"fixture", "later"}
 	p.fileIndex, p.top, p.next = 0, 2, 4
-	if !p.execute(moreCommand{key: 'b'}, true) || p.fileIndex != 0 || p.top != 0 {
-		t.Fatalf("non-advancing EOF command file=%d top=%d", p.fileIndex, p.top)
+	if !p.execute(moreCommand{key: 'b'}, true) || p.fileIndex != 0 || p.top != 0 || p.quit {
+		t.Fatalf("multi-file EOF b: file=%d top=%d quit=%v", p.fileIndex, p.top, p.quit)
 	}
-	p.fileIndex = 1
-	p.top = 2
-	if p.execute(moreCommand{key: 'b'}, true) || !p.quit {
-		t.Fatalf("last-file EOF non-advance returned true or did not quit: quit=%v top=%d", p.quit, p.top)
+	if !p.execute(moreCommand{key: '/', arg: "3"}, true) || p.fileIndex != 0 || p.top != 2 || p.quit {
+		t.Fatalf("multi-file EOF /: file=%d top=%d quit=%v", p.fileIndex, p.top, p.quit)
+	}
+	errb.Reset()
+	if !p.execute(moreCommand{key: '='}, true) || p.fileIndex != 0 || p.quit || !strings.Contains(errb.String(), "line 4") {
+		t.Fatalf("multi-file EOF =: file=%d quit=%v stderr=%q", p.fileIndex, p.quit, errb.String())
+	}
+	out.Reset()
+	p.tty = commandTTY(strings.Repeat(" ", 8))
+	if !p.execute(moreCommand{key: 'h'}, true) || p.fileIndex != 0 || p.top != 2 || p.quit {
+		t.Fatalf("multi-file EOF h: file=%d top=%d quit=%v", p.fileIndex, p.top, p.quit)
+	}
+	if err := p.out.Flush(); err != nil || !strings.Contains(out.String(), "more commands") {
+		t.Fatalf("multi-file EOF h output=%q err=%v", out.String(), err)
+	}
+
+	// Last-file END: all 8 POSIX continuation keys (plus CR) must exit.
+	for _, key := range []byte{'f', 0x06, ' ', 'j', '\n', '\r', 'd', 0x04, 's'} {
+		lp, _, _ := memoryPager("1\n2\n3\n4\n", 2)
+		lp.files = []string{"fixture", "later"}
+		lp.fileIndex, lp.top, lp.next = 1, 2, 4
+		if lp.execute(moreCommand{key: key}, true) || !lp.quit {
+			t.Fatalf("last-file EOF advance key=%q did not exit: quit=%v", key, lp.quit)
+		}
+	}
+
+	// Last-file END: non-advancing commands (b, /, =, h) must execute without quitting.
+	lp, lout, lerr := memoryPager("1\n2\n3\n4\n", 2)
+	lp.files = []string{"fixture", "later"}
+	lp.fileIndex, lp.top, lp.next = 1, 2, 4
+	if !lp.execute(moreCommand{key: 'b'}, true) || lp.quit || lp.top != 0 {
+		t.Fatalf("last-file EOF b: quit=%v top=%d", lp.quit, lp.top)
+	}
+	if !lp.execute(moreCommand{key: '/', arg: "3"}, true) || lp.quit || lp.top != 2 {
+		t.Fatalf("last-file EOF / match: quit=%v top=%d stderr=%q", lp.quit, lp.top, lerr.String())
+	}
+	lerr.Reset()
+	if !lp.execute(moreCommand{key: '/', arg: "missing"}, true) || lp.quit || lp.top != 2 || !strings.Contains(lerr.String(), "pattern not found") {
+		t.Fatalf("last-file EOF / miss: quit=%v top=%d stderr=%q", lp.quit, lp.top, lerr.String())
+	}
+	lerr.Reset()
+	if !lp.execute(moreCommand{key: '='}, true) || lp.quit || !strings.Contains(lerr.String(), "line 4") {
+		t.Fatalf("last-file EOF =: quit=%v stderr=%q", lp.quit, lerr.String())
+	}
+	lout.Reset()
+	lp.tty = commandTTY(strings.Repeat(" ", 8))
+	if !lp.execute(moreCommand{key: 'h'}, true) || lp.quit || lp.top != 2 {
+		t.Fatalf("last-file EOF h: quit=%v top=%d", lp.quit, lp.top)
+	}
+	if err := lp.out.Flush(); err != nil || !strings.Contains(lout.String(), "more commands") {
+		t.Fatalf("last-file EOF h output=%q err=%v", lout.String(), err)
+	}
+	if !lp.execute(moreCommand{key: '?', arg: "1"}, true) || lp.quit || lp.top != 0 {
+		t.Fatalf("last-file EOF ? match: quit=%v top=%d stderr=%q", lp.quit, lp.top, lerr.String())
+	}
+
+	// Last-file END on a multi-file invocation: :p examines previous file instead of quitting.
+	navDir := t.TempDir()
+	for name, body := range map[string]string{"first": "alpha\n", "last": "omega\n"} {
+		if err := os.WriteFile(filepath.Join(navDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var navOut, navErr bytes.Buffer
+	navPager := &pager{
+		rc: &tool.RunContext{Ctx: context.Background(), Dir: navDir, Stdio: tool.Stdio{Out: &navOut, Err: &navErr}},
+		out: bufio.NewWriter(&navOut), o: options{screenful: 2, width: 80},
+		files: []string{"first", "last"}, marks: make(map[byte]displayPosition), suppressCommands: make(map[int]bool),
+	}
+	if !navPager.openFile(1) || !navPager.execute(moreCommand{key: ':', sub: 'p'}, true) || navPager.quit || navPager.fileIndex != 0 || navPager.doc.name != "first" {
+		t.Fatalf("last-file EOF :p: quit=%v fileIndex=%d name=%q stderr=%q", navPager.quit, navPager.fileIndex, navPager.doc.name, navErr.String())
 	}
 }
 
-func TestPOSIXEditorCommandExitsAtLastFileEOF(t *testing.T) {
+func TestPOSIXEditorCommandExecutesAtLastFileEOF(t *testing.T) {
 	p, _, errb := memoryPager("one\ntwo\n", 2)
-	p.files, p.fileIndex, p.top, p.next = []string{"fixture"}, 0, 0, 2
+	p.files, p.fileIndex, p.top, p.next = []string{"fixture"}, 0, 1, 2
 	dir := t.TempDir()
 	editor := filepath.Join(dir, "vi")
 	if err := os.WriteFile(editor, []byte("editor fixture"), 0o755); err != nil {
@@ -480,15 +548,76 @@ func TestPOSIXEditorCommandExitsAtLastFileEOF(t *testing.T) {
 	p.tty = &ttyChannel{}
 
 	orig := runEditor
-	called := false
-	runEditor = func(_ context.Context, _ *tool.RunContext, _ *ttyChannel, gotEditor string, line int, name string) error {
-		called = gotEditor == editor && line == 1 && strings.HasSuffix(name, "fixture")
+	calls := 0
+	var gotEditor, gotName string
+	var gotLine int
+	runEditor = func(_ context.Context, _ *tool.RunContext, _ *ttyChannel, ed string, line int, name string) error {
+		calls++
+		gotEditor, gotLine, gotName = ed, line, name
 		return nil
 	}
 	t.Cleanup(func() { runEditor = orig })
 
-	if p.execute(moreCommand{key: 'v'}, true) || !p.quit || called {
-		t.Fatalf("last-file EOF editor: quit=%v called=%v stderr=%q", p.quit, called, errb.String())
+	if !p.execute(moreCommand{key: 'v'}, true) || p.quit || calls != 1 || gotEditor != editor || gotLine != 2 || !strings.HasSuffix(gotName, "fixture") || p.top != 1 {
+		t.Fatalf("last-file EOF editor: quit=%v calls=%d editor=(%q,%d,%q) top=%d stderr=%q",
+			p.quit, calls, gotEditor, gotLine, gotName, p.top, errb.String())
+	}
+	if p.execute(moreCommand{key: ' '}, true) || !p.quit {
+		t.Fatalf("last-file EOF space after editor did not exit: quit=%v", p.quit)
+	}
+
+	// End-to-end interactive run: /final\n lands on last line at END prompt,
+	// v invokes editor at line 3 and resumes at END, then space exits 0.
+	fixturePath := filepath.Join(dir, "sample")
+	if err := os.WriteFile(fixturePath, []byte("one\ntwo\nfinal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls = 0
+	var runOut, runErr bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"EDITOR=vi", "PATH=" + dir},
+		Stdio: tool.Stdio{Out: &runOut, Err: &runErr},
+	}
+	withPagerTTY(t, rc.Out, commandTTY("/final\nv "), 3, 80)
+	if code := run(rc, []string{"sample"}); code != 0 {
+		t.Fatalf("run code=%d stderr=%q", code, runErr.String())
+	}
+	if calls != 1 || gotLine != 3 || !strings.HasSuffix(gotName, "sample") || !strings.Contains(runErr.String(), "sample: END)") {
+		t.Fatalf("interactive END v: calls=%d line=%d name=%q stderr=%q", calls, gotLine, gotName, runErr.String())
+	}
+}
+
+func TestPOSIXExitOnEOFUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"one": "1\n", "two": "2\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Single file with -e exits immediately after last line without prompting END.
+	var out1, err1 bytes.Buffer
+	reads1 := 0
+	tty1 := commandTTY("")
+	tty1.readCommand = func(context.Context) (byte, error) { reads1++; return 'q', nil }
+	rc1 := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out1, Err: &err1}}
+	withPagerTTY(t, rc1.Out, tty1, 3, 80)
+	if code := run(rc1, []string{"-e", "one"}); code != 0 || reads1 != 0 || out1.String() != "1\n" || strings.Contains(err1.String(), "END") {
+		t.Fatalf("single -e: code=%d reads=%d out=%q err=%q", code, reads1, out1.String(), err1.String())
+	}
+
+	// Multi-file with -e prompts at file 1 END, advances on space, and exits immediately at file 2 EOF.
+	var out2, err2 bytes.Buffer
+	reads2 := 0
+	tty2 := commandTTY(" ")
+	origRead := tty2.readCommand
+	tty2.readCommand = func(ctx context.Context) (byte, error) { reads2++; return origRead(ctx) }
+	rc2 := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out2, Err: &err2}}
+	withPagerTTY(t, rc2.Out, tty2, 3, 80)
+	if code := run(rc2, []string{"-e", "one", "two"}); code != 0 || reads2 != 1 || out2.String() != "1\n2\n" || !strings.Contains(err2.String(), "Next file: two") || strings.Contains(err2.String(), "two: END") {
+		t.Fatalf("multi -e: code=%d reads=%d out=%q err=%q", code, reads2, out2.String(), err2.String())
 	}
 }
 

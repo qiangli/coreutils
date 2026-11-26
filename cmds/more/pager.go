@@ -797,15 +797,12 @@ func (p *pager) execute(c moreCommand, eof bool) bool {
 }
 
 func (p *pager) executeCommand(c moreCommand, eof bool) bool {
-	if eof {
-		advance := advancesAtEOF(c)
+	if eof && advancesAtEOF(c) {
 		if p.fileIndex == len(p.files)-1 {
 			p.quit = true
 			return false
 		}
-		if advance {
-			return p.openReachable(p.fileIndex+1, 1, true)
-		}
+		return p.openReachable(p.fileIndex+1, 1, true)
 	}
 	n := count(c, 1)
 	switch c.key {
